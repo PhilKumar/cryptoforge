@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.scrip_cache/
+*.csv
+runs.json
+strategies.json
+node_modules/
+.DS_Store
+*.log

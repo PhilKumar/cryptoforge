@@ -1,0 +1,1078 @@
+"""
+app.py — CryptoForge FastAPI Backend
+Perpetual futures algo-trading platform powered by Delta Exchange.
+"""
+
+import asyncio, json, os, sys, inspect, time, hashlib, secrets
+from datetime import datetime, timedelta
+from typing import List, Optional
+from collections import defaultdict
+
+import pandas as pd
+import numpy as np
+
+# ── Guaranteed path fix ───────────────────────────────────────────
+_HERE = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+os.chdir(_HERE)
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import config
+from broker.delta import DeltaClient, get_candles_binance
+from engine.backtest import run_backtest, DEFAULT_ENTRY_CONDITIONS, DEFAULT_EXIT_CONDITIONS
+from engine.live import LiveEngine
+from engine.paper_trading import PaperTradingEngine
+
+# Initialize
+app = FastAPI(title="CryptoForge", version="1.0.0")
+app.add_middleware(CORSMiddleware,
+                   allow_origins=["*"],
+                   allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
+
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Auth middleware — protect all /api/ routes except auth + health
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    # Public routes
+    public = ("/", "/api/auth/login", "/api/auth/status", "/api/health", "/favicon.ico")
+    if path in public or path.startswith("/static"):
+        return await call_next(request)
+    # All /api/ routes require auth
+    if path.startswith("/api/"):
+        token = _get_session_token(request)
+        if not _validate_session(token):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+delta = DeltaClient()
+live_engine = LiveEngine(delta)
+paper_engine = PaperTradingEngine(delta)
+
+ws_clients: List[WebSocket] = []
+_live_task = None
+_paper_task = None
+
+
+# ── Authentication ────────────────────────────────────────────────
+AUTH_PIN = os.getenv("CRYPTOFORGE_PIN", os.getenv("CRYPTOFORGE_PASSWORD", "202603"))
+SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+_active_sessions: dict = {}
+
+def _create_session() -> str:
+    token = secrets.token_hex(32)
+    _active_sessions[token] = datetime.now() + timedelta(hours=24)
+    return token
+
+def _validate_session(token: str) -> bool:
+    if not token:
+        return False
+    exp = _active_sessions.get(token)
+    if not exp:
+        return False
+    if datetime.now() > exp:
+        _active_sessions.pop(token, None)
+        return False
+    return True
+
+def _get_session_token(request: Request) -> str:
+    token = request.cookies.get("cryptoforge_session", "")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    return token
+
+# ── Rate Limiting ─────────────────────────────────────────────────
+_rate_limits: dict = defaultdict(list)
+
+def check_rate_limit(endpoint: str, max_calls: int = 5, window_sec: int = 10):
+    now = time.time()
+    calls = _rate_limits[endpoint]
+    _rate_limits[endpoint] = [t for t in calls if now - t < window_sec]
+    if len(_rate_limits[endpoint]) >= max_calls:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Max {max_calls}/{window_sec}s.")
+    _rate_limits[endpoint].append(now)
+
+
+# ── Brute-Force Protection ────────────────────────────────────────
+_login_attempts: dict = defaultdict(list)   # ip -> [timestamps]
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_SEC = 300  # 5 minutes
+
+def _check_login_rate(ip: str):
+    """Raise 429 if too many failed login attempts from this IP."""
+    now = time.time()
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOGIN_LOCKOUT_SEC]
+    if len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 5 minutes.")
+
+def _record_failed_login(ip: str):
+    _login_attempts[ip].append(time.time())
+
+def _clear_login_attempts(ip: str):
+    _login_attempts.pop(ip, None)
+
+
+# ── Models ────────────────────────────────────────────────────────
+class BacktestRequest(BaseModel):
+    from_date: str = config.DEFAULT_FROM
+    to_date: str = config.DEFAULT_TO
+    symbol: str = "BTCUSDT"
+    initial_capital: float = config.DEFAULT_CAPITAL
+    leverage: int = 10
+    entry_conditions: Optional[List[dict]] = None
+    exit_conditions: Optional[List[dict]] = None
+    strategy_config: Optional[dict] = None
+
+class StrategyPayload(BaseModel):
+    run_name: str = ""
+    symbol: str = "BTCUSDT"
+    from_date: str = config.DEFAULT_FROM
+    to_date: str = config.DEFAULT_TO
+    initial_capital: float = 10000.0
+    leverage: int = 10
+    trade_side: str = "LONG"
+    position_size_pct: float = 100.0
+    stoploss_pct: float = 5.0
+    target_profit_pct: float = 10.0
+    max_trades_per_day: int = 5
+    indicators: List[str] = []
+    entry_conditions: Optional[List[dict]] = None
+    exit_conditions: Optional[List[dict]] = None
+    candle_interval: str = "5m"
+
+class OrderRequest(BaseModel):
+    symbol: str
+    size: float
+    side: str = "buy"
+    order_type: str = "market_order"
+    limit_price: Optional[float] = None
+    leverage: int = 10
+
+
+# ── Favicon ───────────────────────────────────────────────────────
+@app.get("/favicon.ico")
+async def favicon():
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#8b5cf6"/><text y=".9em" x="50" text-anchor="middle" font-size="70" font-family="sans-serif">⬡</text></svg>'
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+# ── Serve Frontend ────────────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def serve_frontend(request: Request):
+    token = _get_session_token(request)
+    if not _validate_session(token):
+        login_path = os.path.join(_HERE, "login.html")
+        if os.path.exists(login_path):
+            with open(login_path, encoding="utf-8") as f:
+                return HTMLResponse(f.read())
+        return HTMLResponse("<h2>login.html not found</h2>")
+    html_path = os.path.join(_HERE, "strategy.html")
+    if os.path.exists(html_path):
+        with open(html_path, encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    return HTMLResponse("<h2>strategy.html not found</h2>")
+
+
+# ── Auth Endpoints ────────────────────────────────────────────────
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    ip = request.client.host if request.client else "unknown"
+    _check_login_rate(ip)
+    body = await request.json()
+    password = body.get("password", "")
+    if password == AUTH_PIN:
+        _clear_login_attempts(ip)
+        token = _create_session()
+        resp = JSONResponse({"status": "ok", "message": "Login successful"})
+        resp.set_cookie("cryptoforge_session", token, max_age=86400, httponly=True, samesite="lax")
+        return resp
+    _record_failed_login(ip)
+    raise HTTPException(status_code=401, detail="Invalid PIN")
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    token = _get_session_token(request)
+    return {"authenticated": _validate_session(token)}
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    token = _get_session_token(request)
+    _active_sessions.pop(token, None)
+    resp = JSONResponse({"status": "ok"})
+    resp.delete_cookie("cryptoforge_session")
+    return resp
+
+
+# ── Health ────────────────────────────────────────────────────────
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "ok",
+        "time": str(datetime.now()),
+        "delta_configured": delta._is_configured(),
+        "live_running": live_engine.running,
+    }
+
+
+# ── Emergency Stop ────────────────────────────────────────────────
+@app.post("/api/emergency-stop")
+async def emergency_stop(request: Request):
+    """Emergency kill all running engines."""
+
+    results = {}
+    stopped = 0
+    for name, eng in [("paper", paper_engine), ("live", live_engine)]:
+        try:
+            if eng.running:
+                eng.stop()
+                results[name] = "stopped"
+                stopped += 1
+            else:
+                results[name] = "not_running"
+        except Exception as e:
+            results[name] = f"error: {str(e)}"
+
+    return {"status": "ok", "stopped": stopped, "results": results, "timestamp": str(datetime.now())}
+
+
+# ── Dashboard ─────────────────────────────────────────────────────
+@app.get("/api/dashboard/summary")
+async def dashboard_summary(request: Request):
+    """Get dashboard summary data."""
+
+    strats = _load()
+    runs = _load_runs()
+    paper_running = paper_engine.running
+    live_running = live_engine.running
+    paper_status = paper_engine.get_status() if paper_running else {}
+    live_status = live_engine.get_status() if live_running else {}
+
+    today_pnl = 0
+    if paper_running:
+        today_pnl += paper_status.get("total_pnl", 0)
+    if live_running:
+        today_pnl += live_status.get("total_pnl", 0)
+
+    best_run = worst_run = None
+    for r in runs:
+        pnl = r.get("total_pnl", 0)
+        if best_run is None or pnl > best_run.get("pnl", 0):
+            best_run = {"id": r.get("id"), "name": r.get("run_name", ""), "pnl": pnl}
+        if worst_run is None or pnl < worst_run.get("pnl", 0):
+            worst_run = {"id": r.get("id"), "name": r.get("run_name", ""), "pnl": pnl}
+
+    return {
+        "strategy_count": len(strats),
+        "backtest_count": len(runs),
+        "paper_running": paper_running,
+        "live_running": live_running,
+        "paper_strategy": paper_status.get("strategy_name", "") if paper_running else "",
+        "live_strategy": live_status.get("strategy_name", "") if live_running else "",
+        "today_pnl": round(today_pnl, 2),
+        "paper_pnl": round(paper_status.get("total_pnl", 0), 2) if paper_running else 0,
+        "live_pnl": round(live_status.get("total_pnl", 0), 2) if live_running else 0,
+        "best_run": best_run,
+        "worst_run": worst_run,
+    }
+
+
+# ── Broker Connection ────────────────────────────────────────────
+@app.post("/api/broker/check")
+async def check_broker():
+    try:
+        if not delta._is_configured():
+            return {"status": "not_configured", "broker": "Delta Exchange",
+                    "message": "Delta API credentials not configured."}
+        wallet = delta.get_wallet()
+        if isinstance(wallet, dict) and "error" not in wallet:
+            return {"status": "connected", "broker": "Delta Exchange",
+                    "message": "Broker connection active", "wallet": wallet}
+        return {"status": "error", "broker": "Delta Exchange",
+                "message": wallet.get("error", "Unknown error")}
+    except Exception as e:
+        return {"status": "error", "broker": "Delta Exchange",
+                "message": f"Connection error: {str(e)[:100]}"}
+
+@app.post("/api/broker/connect")
+async def connect_broker():
+    try:
+        if not delta._is_configured():
+            return {"status": "not_configured", "broker": "Delta Exchange",
+                    "message": "API credentials not configured. Update .env file."}
+        wallet = delta.get_wallet()
+        if isinstance(wallet, dict) and "error" not in wallet:
+            return {"status": "connected", "broker": "Delta Exchange",
+                    "message": "Connected to Delta Exchange", "wallet": wallet}
+        return {"status": "error", "broker": "Delta Exchange",
+                "message": str(wallet.get("error", "Unknown error"))}
+    except Exception as e:
+        return {"status": "error", "broker": "Delta Exchange",
+                "message": f"Connection failed: {str(e)[:100]}"}
+
+
+# ── Products & Leverage ──────────────────────────────────────────
+@app.get("/api/products")
+async def get_products():
+    """Get all available perpetual futures."""
+    try:
+        perps = delta.get_perpetual_futures()
+        return {"status": "ok", "count": len(perps), "products": perps}
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:100]}
+
+@app.get("/api/leverage/{symbol}")
+async def get_leverage(symbol: str):
+    """Get leverage options for a symbol."""
+    try:
+        info = delta.get_leverage_info(symbol)
+        return {"status": "ok", **info}
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:100]}
+
+@app.get("/api/cryptos")
+async def get_top_cryptos():
+    """Return Delta Exchange tradeable perpetual futures for the frontend."""
+    return config.TOP_25_CRYPTOS
+
+
+# ── Top 25 Market Data (CoinGecko) ───────────────────────────────
+_market_cache = {"data": None, "timestamp": 0, "ttl": 120}  # 2 min cache
+_STABLECOIN_SKIP = {'usdt','usdc','usds','dai','usde','tusd','busd','usdp','fdusd',
+                    'pyusd','gusd','frax','eurs','first-digital-usd','wbt','figr_heloc',
+                    'cc','usd1','rain','weth','steth','wbtc','cbbtc','cbeth','reth'}
+
+# Map CoinGecko symbol → Delta Exchange perp symbol (if tradeable)
+_CG_TO_DELTA = {
+    'btc': 'BTCUSDT', 'eth': 'ETHUSDT', 'sol': 'SOLUSDT',
+    'xrp': 'XRPUSDT', 'doge': 'DOGEUSDT', 'paxg': 'PAXGUSDT',
+}
+
+@app.get("/api/market/top25")
+async def get_market_top25():
+    """Fetch top 25 crypto coins by market cap from CoinGecko (excludes stablecoins)."""
+    global _market_cache
+    now = time.time()
+    if _market_cache["data"] and (now - _market_cache["timestamp"]) < _market_cache["ttl"]:
+        return _market_cache["data"]
+
+    try:
+        import requests as req
+        resp = req.get("https://api.coingecko.com/api/v3/coins/markets", params={
+            "vs_currency": "usd",
+            "order": "market_cap_desc",
+            "per_page": 50,
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "24h",
+        }, timeout=20)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        # Filter out stablecoins / wrapped tokens
+        filtered = [c for c in raw
+                    if c.get("symbol","").lower() not in _STABLECOIN_SKIP
+                    and c.get("id","") not in _STABLECOIN_SKIP][:25]
+
+        coins = []
+        for c in filtered:
+            sym = c.get("symbol", "").lower()
+            delta_sym = _CG_TO_DELTA.get(sym)
+            # Every coin gets a USDT trading symbol (Binance format)
+            trade_symbol = delta_sym or (c.get("symbol", "").upper() + "USDT")
+            coins.append({
+                "rank": len(coins) + 1,
+                "id": c.get("id", ""),
+                "symbol": c.get("symbol", "").upper(),
+                "name": c.get("name", ""),
+                "image": c.get("image", ""),
+                "price": c.get("current_price", 0),
+                "change_24h": round(c.get("price_change_percentage_24h", 0) or 0, 2),
+                "volume_24h": c.get("total_volume", 0),
+                "market_cap": c.get("market_cap", 0),
+                "high_24h": c.get("high_24h", 0),
+                "low_24h": c.get("low_24h", 0),
+                "ath": c.get("ath", 0),
+                "ath_change_pct": round(c.get("ath_change_percentage", 0) or 0, 1),
+                "circulating_supply": c.get("circulating_supply", 0),
+                "delta_tradeable": delta_sym is not None,
+                "delta_symbol": delta_sym,
+                "trade_symbol": trade_symbol,  # always present for backtest
+            })
+
+        result = {"status": "ok", "coins": coins, "timestamp": now}
+        _market_cache["data"] = result
+        _market_cache["timestamp"] = now
+        return result
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return {"status": "error", "message": str(e)[:200]}
+
+
+# ── Ticker ────────────────────────────────────────────────────────
+_ticker_cache = {"data": None, "timestamp": 0, "ttl": 30}
+
+def _safe_float(v, default=0.0):
+    """Safely convert to float, handling None, empty str, etc."""
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
+@app.get("/api/ticker")
+async def get_ticker():
+    """Fetch live prices for top cryptos."""
+    global _ticker_cache
+    if _ticker_cache["data"] and (time.time() - _ticker_cache["timestamp"]) < _ticker_cache["ttl"]:
+        return _ticker_cache["data"]
+
+    try:
+        tickers = delta.get_tickers_bulk()
+        # Build a map by symbol
+        ticker_map = {}
+        for t in tickers:
+            sym = t.get("symbol", "")
+            ticker_map[sym] = t
+
+        result = {"status": "ok", "tickers": {}}
+        for crypto in config.TOP_25_CRYPTOS:
+            sym = crypto["symbol"]
+            t = ticker_map.get(sym, {})
+
+            mark = _safe_float(t.get("mark_price"))
+            close = _safe_float(t.get("close"))
+            price = mark if mark > 0 else close
+            high_24h = _safe_float(t.get("high"))
+            low_24h = _safe_float(t.get("low"))
+            volume = _safe_float(t.get("volume"))
+            funding = _safe_float(t.get("funding_rate"))
+            oi = _safe_float(t.get("open_interest"))
+
+            # Compute 24h % change: (close - open) / open * 100
+            # Delta doesn't provide percent change, so estimate from low/high midpoint
+            open_price = _safe_float(t.get("open"))
+            if open_price > 0 and close > 0:
+                change_24h = ((close - open_price) / open_price) * 100
+            elif high_24h > 0 and low_24h > 0 and close > 0:
+                mid = (high_24h + low_24h) / 2
+                change_24h = ((close - mid) / mid) * 100
+            else:
+                change_24h = 0.0
+
+            # Turnover as dollar volume
+            turnover = _safe_float(t.get("turnover"))
+            dollar_vol = turnover if turnover > 0 else (volume * price)
+
+            result["tickers"][sym] = {
+                "symbol": sym,
+                "ticker": crypto["ticker"],
+                "name": crypto["name"],
+                "price": price,
+                "change_24h": round(change_24h, 2),
+                "volume_24h": dollar_vol,
+                "high_24h": high_24h,
+                "low_24h": low_24h,
+                "funding_rate": funding,
+                "open_interest": oi,
+            }
+
+        _ticker_cache["data"] = result
+        _ticker_cache["timestamp"] = time.time()
+        return result
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"[TICKER] Error: {e}")
+        return {"status": "error", "message": str(e)[:100]}
+
+@app.get("/api/ticker/{symbol}")
+async def get_single_ticker(symbol: str):
+    """Get ticker for a single symbol."""
+    try:
+        return delta.get_ticker(symbol)
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:100]}
+
+
+# ── Delta Exchange symbols (have perp futures) ───────────────────
+_DELTA_SYMBOLS = {'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'PAXGUSDT'}
+
+# ── Data Fetch ────────────────────────────────────────────────────
+def _fetch_data(symbol: str, from_date: str, to_date: str,
+                candle_interval: str = "5m") -> pd.DataFrame:
+    print(f"[DATA] Symbol={symbol}, Interval={candle_interval}, "
+          f"From={from_date}, To={to_date}")
+
+    # Try Delta Exchange first for supported symbols
+    if symbol in _DELTA_SYMBOLS:
+        df = delta.get_candles(symbol, resolution=candle_interval,
+                               start=from_date, end=to_date)
+        if not df.empty:
+            print(f"[DATA] Delta: {len(df)} candles: {df.index[0]} → {df.index[-1]}")
+            return df
+        print(f"[DATA] Delta returned no data for {symbol}, trying Binance...")
+
+    # Fallback: Binance public API (works for any major crypto)
+    df = get_candles_binance(symbol, resolution=candle_interval,
+                             start=from_date, end=to_date)
+    if not df.empty:
+        print(f"[DATA] Binance: {len(df)} candles: {df.index[0]} → {df.index[-1]}")
+        return df
+
+    raise Exception(f"No candle data for {symbol} (tried Delta + Binance)")
+
+
+# ── Backtest ──────────────────────────────────────────────────────
+@app.post("/api/backtest")
+async def api_run_backtest(payload: StrategyPayload):
+    try:
+        print(f"\n{'='*60}")
+        print(f"[BACKTEST] Run: {payload.run_name}")
+        print(f"[BACKTEST] Symbol: {payload.symbol}, Leverage: {payload.leverage}x")
+        print(f"[BACKTEST] Side: {payload.trade_side}, Interval: {payload.candle_interval}")
+        print(f"[BACKTEST] Indicators: {payload.indicators}")
+        print(f"{'='*60}")
+
+        df_raw = _fetch_data(
+            symbol=payload.symbol,
+            from_date=payload.from_date,
+            to_date=payload.to_date,
+            candle_interval=payload.candle_interval,
+        )
+
+        if df_raw.empty:
+            return {"status": "error", "message": "No data returned."}
+
+        strategy_config = payload.model_dump()
+        results = run_backtest(
+            df_raw=df_raw,
+            entry_conditions=payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS,
+            exit_conditions=payload.exit_conditions or DEFAULT_EXIT_CONDITIONS,
+            strategy_config=strategy_config,
+        )
+
+        if results.get("status") == "success":
+            runs = _load_runs()
+            max_id = max([r.get("id", 0) for r in runs], default=0)
+            run_entry = {
+                "id": max_id + 1,
+                "run_name": payload.run_name,
+                "symbol": payload.symbol,
+                "from_date": payload.from_date,
+                "to_date": payload.to_date,
+                "leverage": payload.leverage,
+                "trade_side": payload.trade_side,
+                "stoploss_pct": payload.stoploss_pct,
+                "target_profit_pct": payload.target_profit_pct,
+                "indicators": payload.indicators,
+                "entry_conditions": payload.entry_conditions,
+                "exit_conditions": payload.exit_conditions,
+                "candle_interval": payload.candle_interval,
+                "stats": results["stats"],
+                "monthly": results.get("monthly", []),
+                "day_of_week": results.get("day_of_week", []),
+                "trade_count": results["stats"]["total_trades"],
+                "total_pnl": results["stats"]["total_pnl"],
+                "created_at": str(datetime.now()),
+                "trades": results.get("trades", []),
+                "equity": results.get("equity", []),
+            }
+            runs.append(run_entry)
+            _save_runs(runs)
+            results["run_id"] = run_entry["id"]
+
+        return results
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+
+# ── Live Engine ───────────────────────────────────────────────────
+@app.post("/api/live/start")
+async def live_start(payload: StrategyPayload):
+    global _live_task
+    if live_engine.running:
+        return {"status": "already_running"}
+
+    strategy_dict = {
+        "run_name": payload.run_name or "Live Strategy",
+        "symbol": payload.symbol,
+        "leverage": payload.leverage,
+        "trade_side": payload.trade_side,
+        "indicators": payload.indicators or [],
+        "max_trades_per_day": payload.max_trades_per_day,
+        "stoploss_pct": payload.stoploss_pct,
+        "target_profit_pct": payload.target_profit_pct,
+        "initial_capital": payload.initial_capital,
+        "position_size_pct": payload.position_size_pct,
+        "candle_interval": payload.candle_interval,
+        "poll_interval": 30,
+    }
+
+    live_engine.configure(
+        strategy=strategy_dict,
+        entry_conditions=payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS,
+        exit_conditions=payload.exit_conditions or DEFAULT_EXIT_CONDITIONS,
+        deploy_config={},
+    )
+
+    async def broadcast(event: dict):
+        for ws in ws_clients.copy():
+            try:
+                await ws.send_json({"source": "live", **event})
+            except:
+                if ws in ws_clients:
+                    ws_clients.remove(ws)
+
+    _live_task = asyncio.create_task(live_engine.start(callback=broadcast))
+    return {"status": "started", "message": "Live trading started with REAL orders"}
+
+@app.post("/api/live/stop")
+async def live_stop():
+    global _live_task
+    live_engine.stop()
+    if _live_task and not _live_task.done():
+        _live_task.cancel()
+        try: await _live_task
+        except asyncio.CancelledError: pass
+    _live_task = None
+    return {"status": "stopped"}
+
+@app.get("/api/live/status")
+async def live_status():
+    return live_engine.get_status()
+
+
+# ── Paper Trading ─────────────────────────────────────────────────
+@app.post("/api/paper/start")
+async def paper_start(payload: StrategyPayload):
+    global _paper_task
+    if paper_engine.running:
+        return {"status": "already_running"}
+
+    strategy_dict = {
+        "run_name": payload.run_name,
+        "symbol": payload.symbol,
+        "leverage": payload.leverage,
+        "trade_side": payload.trade_side,
+        "indicators": payload.indicators or [],
+        "max_trades_per_day": payload.max_trades_per_day,
+        "stoploss_pct": payload.stoploss_pct,
+        "target_profit_pct": payload.target_profit_pct,
+        "initial_capital": payload.initial_capital,
+        "position_size_pct": payload.position_size_pct,
+        "candle_interval": payload.candle_interval,
+        "poll_interval": 30,
+    }
+
+    paper_engine.configure(
+        strategy=strategy_dict,
+        entry_conditions=payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS,
+        exit_conditions=payload.exit_conditions or DEFAULT_EXIT_CONDITIONS,
+    )
+
+    async def broadcast(event: dict):
+        for ws in ws_clients.copy():
+            try:
+                await ws.send_json({"source": "paper", **event})
+            except:
+                if ws in ws_clients:
+                    ws_clients.remove(ws)
+
+    _paper_task = asyncio.create_task(paper_engine.start(callback=broadcast))
+    return {"status": "started", "message": "Paper trading started"}
+
+@app.post("/api/paper/stop")
+async def paper_stop():
+    global _paper_task
+    paper_engine.stop()
+    if _paper_task and not _paper_task.done():
+        _paper_task.cancel()
+        try: await _paper_task
+        except asyncio.CancelledError: pass
+    _paper_task = None
+    return {"status": "stopped"}
+
+@app.get("/api/paper/status")
+async def paper_status():
+    return paper_engine.get_status()
+
+
+# ── Orders / Positions ────────────────────────────────────────────
+@app.post("/api/orders/place")
+async def place_order(req: OrderRequest):
+    check_rate_limit("place_order", max_calls=3, window_sec=5)
+    try:
+        product = delta.get_product_by_symbol(req.symbol)
+        if not product:
+            raise HTTPException(status_code=404, detail=f"Product {req.symbol} not found")
+        result = delta.place_order(
+            product_id=product["id"], size=req.size, side=req.side,
+            order_type=req.order_type, limit_price=req.limit_price,
+            leverage=req.leverage,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/orders")
+async def get_orders():
+    try:
+        orders = delta.get_orders()
+        return {"status": "success", "data": orders}
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:100], "data": []}
+
+@app.get("/api/positions")
+async def get_positions():
+    try:
+        positions = delta.get_positions()
+        return {"status": "success", "data": positions}
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:100], "data": []}
+
+@app.get("/api/wallet")
+async def get_wallet():
+    try:
+        return delta.get_wallet()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Broker Trade History ─────────────────────────────────────────
+@app.get("/api/broker/trades")
+async def get_broker_trades():
+    """Get filled order history from Delta Exchange."""
+    try:
+        orders = delta.get_order_history()
+        return {"status": "ok", "trades": orders}
+    except Exception as e:
+        return {"status": "error", "trades": [], "message": str(e)[:100]}
+
+@app.get("/api/portfolio/summary")
+async def get_portfolio_summary():
+    """Aggregated portfolio data: balance, positions, recent trades."""
+    try:
+        wallet = delta.get_wallet()
+        positions = delta.get_positions()
+        orders = delta.get_order_history()
+
+        # Extract USDT balance
+        usdt_balance = 0.0
+        if isinstance(wallet, dict):
+            # Delta wallet can be a list of balances or a dict
+            if isinstance(wallet, list):
+                for w in wallet:
+                    if w.get("asset_symbol", "").upper() in ("USDT", "USD"):
+                        usdt_balance = float(w.get("available_balance", 0))
+            elif "available_balance" in wallet:
+                usdt_balance = float(wallet["available_balance"])
+            elif isinstance(wallet.get("result"), list):
+                for w in wallet["result"]:
+                    if w.get("asset_symbol", "").upper() in ("USDT", "USD"):
+                        usdt_balance = float(w.get("available_balance", 0))
+
+        # Calc unrealized P&L from open positions
+        unrealized_pnl = 0.0
+        open_positions = []
+        for p in (positions or []):
+            upnl = float(p.get("unrealized_pnl", 0))
+            unrealized_pnl += upnl
+            if float(p.get("size", 0)) != 0:
+                open_positions.append({
+                    "symbol": p.get("product_symbol", p.get("symbol", "")),
+                    "size": p.get("size", 0),
+                    "side": "LONG" if float(p.get("size", 0)) > 0 else "SHORT",
+                    "entry_price": p.get("entry_price", 0),
+                    "mark_price": p.get("mark_price", p.get("mark_price", 0)),
+                    "unrealized_pnl": upnl,
+                    "realized_pnl": float(p.get("realized_pnl", 0)),
+                    "margin": p.get("margin", 0),
+                    "liquidation_price": p.get("liquidation_price", 0),
+                    "leverage": p.get("leverage", ""),
+                })
+
+        return {
+            "status": "ok",
+            "balance": round(usdt_balance, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "open_positions": open_positions,
+            "filled_orders": orders[:50] if orders else [],
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:200],
+                "balance": 0, "unrealized_pnl": 0,
+                "open_positions": [], "filled_orders": []}
+
+
+# ── Strategy CRUD ─────────────────────────────────────────────────
+STRAT_FILE = "strategies.json"
+RUNS_FILE = "runs.json"
+
+def _load():
+    if os.path.exists(STRAT_FILE):
+        try:
+            with open(STRAT_FILE) as f: return json.load(f)
+        except: return []
+    return []
+
+def _save(d):
+    with open(STRAT_FILE, 'w') as f: json.dump(d, f, indent=2)
+
+def _load_runs():
+    if os.path.exists(RUNS_FILE):
+        try:
+            with open(RUNS_FILE) as f: return json.load(f)
+        except: return []
+    return []
+
+def _save_runs(d):
+    with open(RUNS_FILE, 'w') as f: json.dump(d, f, indent=2)
+
+@app.get("/api/strategies")
+async def get_strategies():
+    return _load()
+
+@app.post("/api/strategies")
+async def save_strategy(strategy: dict):
+    strats = _load()
+    max_id = max([s.get("id", 0) for s in strats], default=0)
+    strategy.update({"id": max_id + 1, "created_at": str(datetime.now()),
+                     "version": 1, "versions": [{"version": 1, "saved_at": str(datetime.now())}]})
+    strats.append(strategy)
+    _save(strats)
+    return strategy
+
+@app.delete("/api/strategies/{sid}")
+async def delete_strategy(sid: int):
+    _save([s for s in _load() if s.get("id") != sid])
+    return {"deleted": sid}
+
+@app.put("/api/strategies/{sid}")
+async def update_strategy(sid: int, updates: dict):
+    strats = _load()
+    for s in strats:
+        if s.get("id") == sid:
+            ver = s.get("version", 1) + 1
+            versions = s.get("versions", [])
+            versions.append({"version": ver, "saved_at": str(datetime.now())})
+            if len(versions) > 20: versions = versions[-20:]
+            s.update(updates)
+            s["version"] = ver
+            s["versions"] = versions
+            s["updated_at"] = str(datetime.now())
+            break
+    _save(strats)
+    return {"updated": sid}
+
+@app.get("/api/runs")
+async def get_runs():
+    runs = _load_runs()
+    return [{k: v for k, v in r.items() if k not in ("trades", "equity")} for r in runs]
+
+@app.get("/api/runs/{rid}")
+async def get_run(rid: int):
+    for r in _load_runs():
+        if r.get("id") == rid: return r
+    raise HTTPException(status_code=404, detail="Run not found")
+
+@app.delete("/api/runs/{rid}")
+async def delete_run(rid: int):
+    runs = _load_runs()
+    _save_runs([r for r in runs if r.get("id") != rid])
+    return {"deleted": rid}
+
+@app.get("/api/runs/{rid}/csv")
+async def export_run_csv(rid: int):
+    import io, csv
+    runs = _load_runs()
+    run = None
+    for r in runs:
+        if r.get("id") == rid: run = r; break
+    if not run: raise HTTPException(status_code=404, detail="Run not found")
+    trades = run.get("trades", [])
+    if not trades: raise HTTPException(status_code=404, detail="No trades")
+    output = io.StringIO()
+    fields = ["id","entry_time","exit_time","entry_price","exit_price","pnl","cumulative",
+              "exit_reason","side","leverage","size"]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction='ignore')
+    writer.writeheader()
+    for t in trades: writer.writerow(t)
+    output.seek(0)
+    name = run.get("run_name", f"run_{rid}").replace(" ", "_")
+    return StreamingResponse(
+        iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={name}_trades.csv"})
+
+@app.get("/api/funding/{symbol}")
+async def get_funding_rates(symbol: str):
+    """Get funding rate history."""
+    try:
+        rates = delta.get_funding_history(symbol)
+        return {"status": "ok", "data": rates}
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:100]}
+
+
+# ── Strategy Validation ───────────────────────────────────────────
+@app.post("/api/validate-strategy")
+async def validate_strategy(request: Request):
+    """Deep validation of strategy before deployment."""
+    body = await request.json()
+    errors = []
+    warnings = []
+
+    symbol = body.get("symbol", "")
+    if not symbol:
+        errors.append("No trading symbol selected")
+
+    entry = body.get("entry_conditions", [])
+    exit_conds = body.get("exit_conditions", [])
+    if not entry:
+        errors.append("No entry conditions defined")
+    if not exit_conds:
+        warnings.append("No exit conditions — trades will only close at SL/TP")
+
+    leverage = body.get("leverage", 10)
+    if leverage > 50:
+        warnings.append(f"High leverage ({leverage}x) — liquidation risk is significant")
+    if leverage > 100:
+        errors.append(f"Extreme leverage ({leverage}x) — very high liquidation risk")
+
+    sl_pct = body.get("stoploss_pct", 0)
+    tp_pct = body.get("target_profit_pct", 0)
+    if sl_pct and tp_pct and tp_pct < sl_pct:
+        warnings.append(f"Risk:Reward unfavorable — SL {sl_pct}% vs Target {tp_pct}%")
+    if sl_pct == 0:
+        warnings.append("No stop-loss set — unlimited downside risk")
+
+    max_trades = body.get("max_trades_per_day", 5)
+    if max_trades > 20:
+        warnings.append(f"High trade frequency ({max_trades}/day) — check for overtrading")
+
+    position_size = body.get("position_size_pct", 100)
+    if position_size > 100:
+        warnings.append(f"Position size {position_size}% exceeds capital")
+
+    # Check for contradictory conditions
+    for c in entry:
+        lhs = c.get("left", "")
+        op = c.get("operator", "")
+        rhs = c.get("right", "")
+        for c2 in entry:
+            if c2 is c:
+                continue
+            if c2.get("left") == lhs and c2.get("right") == rhs:
+                if (op in ("is_above", "crosses_above") and
+                        c2.get("operator") in ("is_below", "crosses_below")):
+                    errors.append(f"Contradictory: {lhs} both above and below {rhs}")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "summary": {
+            "symbol": symbol,
+            "entry_conditions": len(entry),
+            "exit_conditions": len(exit_conds),
+            "leverage": leverage,
+            "sl_pct": sl_pct,
+            "tp_pct": tp_pct,
+        }
+    }
+
+
+# ── CSV Exports ───────────────────────────────────────────────────
+@app.get("/api/paper/trades/csv")
+async def export_paper_trades_csv():
+    """Export paper trading trades to CSV."""
+    import io, csv
+    if not paper_engine or not paper_engine.closed_trades:
+        raise HTTPException(status_code=404, detail="No paper trades available")
+    output = io.StringIO()
+    fields = ["id", "symbol", "side", "entry_time", "exit_time",
+              "entry_price", "exit_price", "notional", "leverage",
+              "margin", "pnl", "exit_reason"]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction='ignore')
+    writer.writeheader()
+    for t in paper_engine.closed_trades:
+        writer.writerow({k: (str(v) if k in ('entry_time', 'exit_time') else v)
+                         for k, v in t.items() if k in fields})
+    output.seek(0)
+    name = f"paper_trades_{datetime.now().strftime('%Y%m%d')}"
+    return StreamingResponse(
+        iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={name}.csv"})
+
+
+@app.get("/api/live/trades/csv")
+async def export_live_trades_csv():
+    """Export live trading trades to CSV."""
+    import io, csv
+    if not live_engine or not live_engine.closed_trades:
+        raise HTTPException(status_code=404, detail="No live trades available")
+    output = io.StringIO()
+    fields = ["id", "symbol", "side", "entry_time", "exit_time",
+              "entry_price", "exit_price", "notional", "leverage",
+              "margin", "pnl", "exit_reason", "order_id"]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction='ignore')
+    writer.writeheader()
+    for t in live_engine.closed_trades:
+        writer.writerow({k: (str(v) if k in ('entry_time', 'exit_time') else v)
+                         for k, v in t.items() if k in fields})
+    output.seek(0)
+    name = f"live_trades_{datetime.now().strftime('%Y%m%d')}"
+    return StreamingResponse(
+        iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={name}.csv"})
+
+
+# ── WebSocket ─────────────────────────────────────────────────────
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    # Authenticate WebSocket via session cookie
+    token = ws.cookies.get("cryptoforge_session", "")
+    if not _validate_session(token):
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+    await ws.accept()
+    ws_clients.append(ws)
+    try:
+        while True:
+            paper_st = paper_engine.get_status()
+            live_st = live_engine.get_status()
+            await ws.send_json({
+                "type": "status",
+                "paper": paper_st,
+                "live": live_st,
+                "paper_running": paper_st.get("running", False),
+                "live_running": live_st.get("running", False),
+            })
+            await asyncio.sleep(5)
+    except (WebSocketDisconnect, Exception):
+        if ws in ws_clients:
+            ws_clients.remove(ws)
+
+
+# ── Run ───────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    print("=" * 60)
+    print("  CryptoForge — Starting Backend")
+    print(f"  Open: http://{config.APP_HOST}:{config.APP_PORT}")
+    print("=" * 60)
+    uvicorn.run("app:app", host=config.APP_HOST, port=config.APP_PORT,
+                reload=False, log_level="info")

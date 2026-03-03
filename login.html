@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CryptoForge — Unlock</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', sans-serif;
+    background: #05070e;
+    background-image:
+      radial-gradient(ellipse 700px 500px at 30% 20%, rgba(139,92,246,0.08) 0%, transparent 70%),
+      radial-gradient(ellipse 600px 600px at 70% 80%, rgba(236,72,153,0.06) 0%, transparent 70%),
+      radial-gradient(ellipse 800px 300px at 50% 0%, rgba(245,158,11,0.04) 0%, transparent 60%);
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    color: #e2e8f0;
+    overflow: hidden;
+  }
+  .unlock-card {
+    background: linear-gradient(160deg, rgba(20,24,40,0.92), rgba(12,16,28,0.88));
+    border: 1px solid rgba(255,255,255,0.08);
+    border-top: 1px solid rgba(255,255,255,0.14);
+    border-radius: 24px;
+    padding: 48px 40px 40px;
+    width: 340px;
+    backdrop-filter: blur(40px) saturate(1.5);
+    box-shadow: 0 0 60px rgba(139,92,246,0.08), 0 25px 60px rgba(0,0,0,0.5),
+                inset 0 1px 0 rgba(255,255,255,0.08);
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .unlock-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(139,92,246,0.4), rgba(236,72,153,0.3), transparent);
+  }
+  .unlock-card::after {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 40%;
+    background: linear-gradient(180deg, rgba(139,92,246,0.04) 0%, transparent 100%);
+    pointer-events: none; border-radius: 24px 24px 0 0;
+  }
+  .brand-icon {
+    font-size: 48px; margin-bottom: 6px;
+    background: linear-gradient(135deg, #8b5cf6, #ec4899);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 20px rgba(139,92,246,0.3));
+  }
+  .brand-name {
+    font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800;
+    background: linear-gradient(135deg, #c4b5fd, #f9a8d4);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 4px; letter-spacing: 2px;
+  }
+  .brand-sub { font-size: 11px; color: rgba(255,255,255,0.35); margin-bottom: 32px; letter-spacing: 1px; }
+  .unlock-title { font-size: 14px; color: rgba(255,255,255,0.5); margin-bottom: 24px; font-weight: 500; }
+  .pin-dots { display: flex; justify-content: center; gap: 12px; margin-bottom: 30px; }
+  .pin-dot {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid rgba(139,92,246,0.3);
+    background: transparent;
+    transition: all 0.2s;
+  }
+  .pin-dot.filled {
+    background: linear-gradient(135deg, #8b5cf6, #ec4899);
+    border-color: #8b5cf6;
+    box-shadow: 0 0 12px rgba(139,92,246,0.4);
+  }
+  .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; position: relative; z-index: 2; }
+  .key {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    color: #e2e8f0; font-size: 22px; font-weight: 600;
+    padding: 16px 0; cursor: pointer;
+    transition: all 0.15s;
+    font-family: 'JetBrains Mono', monospace;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  .key:hover { background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.2); }
+  .key:active { transform: scale(0.95); background: rgba(139,92,246,0.2); }
+  .key.fn { font-size: 18px; color: rgba(255,255,255,0.4); }
+  .key.fn:hover { color: #f87171; }
+  .error-msg {
+    color: #f87171; font-size: 12px; margin-top: 16px;
+    min-height: 18px; font-weight: 500;
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-8px); }
+    40%, 80% { transform: translateX(8px); }
+  }
+  @keyframes unlockPulse {
+    0% { box-shadow: 0 0 0 0 rgba(139,92,246,0.5); }
+    70% { box-shadow: 0 0 0 30px rgba(139,92,246,0); }
+    100% { box-shadow: 0 0 0 0 rgba(139,92,246,0); }
+  }
+  .shake { animation: shake 0.4s ease; }
+  .unlocking { animation: unlockPulse 0.6s ease; }
+</style>
+</head>
+<body>
+<div class="unlock-card" id="unlock-card">
+  <div class="brand-icon">⬡</div>
+  <div class="brand-name">CRYPTOFORGE</div>
+  <div class="brand-sub">Futures • Algorithms • Alpha</div>
+  <div class="unlock-title">Enter PIN</div>
+  <div class="pin-dots" id="pin-dots">
+    <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+    <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+  </div>
+  <div class="keypad">
+    <div class="key" onclick="addDigit('1')">1</div>
+    <div class="key" onclick="addDigit('2')">2</div>
+    <div class="key" onclick="addDigit('3')">3</div>
+    <div class="key" onclick="addDigit('4')">4</div>
+    <div class="key" onclick="addDigit('5')">5</div>
+    <div class="key" onclick="addDigit('6')">6</div>
+    <div class="key" onclick="addDigit('7')">7</div>
+    <div class="key" onclick="addDigit('8')">8</div>
+    <div class="key" onclick="addDigit('9')">9</div>
+    <div class="key fn" onclick="clearAll()">✕</div>
+    <div class="key" onclick="addDigit('0')">0</div>
+    <div class="key fn" onclick="removeDigit()">⌫</div>
+  </div>
+  <div class="error-msg" id="error-msg"></div>
+</div>
+<script>
+let pin = '';
+const dots = document.querySelectorAll('.pin-dot');
+const card = document.getElementById('unlock-card');
+const errEl = document.getElementById('error-msg');
+
+function updateDots() {
+  dots.forEach((d, i) => d.classList.toggle('filled', i < pin.length));
+}
+function addDigit(d) {
+  if (pin.length >= 6) return;
+  pin += d; updateDots();
+  if (pin.length === 6) setTimeout(tryUnlock, 200);
+}
+function removeDigit() { pin = pin.slice(0, -1); updateDots(); errEl.textContent = ''; }
+function clearAll() { pin = ''; updateDots(); errEl.textContent = ''; }
+
+async function tryUnlock() {
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({password: pin}), credentials: 'same-origin'
+    });
+    if (r.ok) {
+      card.classList.add('unlocking');
+      setTimeout(() => window.location.reload(), 500);
+    } else {
+      card.classList.add('shake');
+      errEl.textContent = 'Wrong PIN';
+      setTimeout(() => { card.classList.remove('shake'); pin = ''; updateDots(); }, 500);
+    }
+  } catch(e) {
+    errEl.textContent = 'Connection error';
+    pin = ''; updateDots();
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key >= '0' && e.key <= '9') addDigit(e.key);
+  else if (e.key === 'Backspace') removeDigit();
+  else if (e.key === 'Escape') clearAll();
+});
+</script>
+</body>
+</html>

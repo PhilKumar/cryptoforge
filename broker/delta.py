@@ -1,0 +1,530 @@
+"""
+broker/delta.py — Delta Exchange API Wrapper
+Handles: historical candles, order placement, positions, wallet,
+         product info & leverage for perpetual futures.
+Docs: https://docs.delta.exchange/
+"""
+
+import requests
+import asyncio
+import pandas as pd
+import hashlib
+import hmac
+import json
+import time as _time
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
+
+
+class DeltaClient:
+    """Delta Exchange REST API client for perpetual futures."""
+
+    def __init__(self):
+        self.api_key = config.DELTA_API_KEY
+        self.api_secret = config.DELTA_API_SECRET
+        self.base_url = config.DELTA_BASE_URL
+        self._products_cache = None
+        self._products_ts = 0
+        self._CACHE_TTL = 3600  # 1 hour
+
+    def _is_configured(self) -> bool:
+        return (self.api_key != "YOUR_API_KEY_HERE" and
+                self.api_secret != "YOUR_API_SECRET_HERE" and
+                len(self.api_key) > 5)
+
+    # ── Auth Signature ────────────────────────────────────────────
+    def _sign(self, method: str, path: str, query_string: str = "", body: str = "") -> dict:
+        """Generate HMAC-SHA256 signature for Delta Exchange API.
+        Delta docs: signature_string = method + timestamp + route_path + query_string + body
+        route_path must include the /v2 prefix.
+        """
+        timestamp = str(int(_time.time()))
+        # path already starts with / (e.g. "/wallet/balances")
+        # prepend /v2 to match the actual URL path Delta expects
+        route_path = "/v2" + path
+        message = method + timestamp + route_path + query_string + body
+        signature = hmac.new(
+            self.api_secret.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        return {
+            "api-key": self.api_key,
+            "timestamp": timestamp,
+            "signature": signature,
+            "Content-Type": "application/json",
+        }
+
+    def _get(self, path: str, params: dict = None, auth: bool = False) -> dict:
+        url = f"{self.base_url}{path}"
+        # Build query string for signature (must match what requests sends)
+        query_string = ""
+        if auth and params:
+            from urllib.parse import urlencode
+            query_string = "?" + urlencode(sorted(params.items()))
+        headers = self._sign("GET", path, query_string=query_string) if auth else {"Content-Type": "application/json"}
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"[DELTA] HTTP Error: {e.response.status_code} - {e.response.text[:200]}")
+            raise
+        except Exception as e:
+            print(f"[DELTA] Request error: {e}")
+            raise
+
+    def _post(self, path: str, data: dict = None) -> dict:
+        url = f"{self.base_url}{path}"
+        body = json.dumps(data) if data else ""
+        headers = self._sign("POST", path, body=body)
+        try:
+            resp = requests.post(url, data=body, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"[DELTA] HTTP Error: {e.response.status_code} - {e.response.text[:200]}")
+            raise
+        except Exception as e:
+            print(f"[DELTA] Request error: {e}")
+            raise
+
+    def _delete(self, path: str, data: dict = None) -> dict:
+        url = f"{self.base_url}{path}"
+        body = json.dumps(data) if data else ""
+        headers = self._sign("DELETE", path, body=body)
+        try:
+            resp = requests.delete(url, data=body, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            print(f"[DELTA] Delete error: {e}")
+            raise
+
+    # ── Async wrappers (non-blocking for asyncio event loop) ──────
+    async def async_get(self, path: str, params: dict = None, auth: bool = False) -> dict:
+        return await asyncio.to_thread(self._get, path, params, auth)
+
+    async def async_post(self, path: str, data: dict = None) -> dict:
+        return await asyncio.to_thread(self._post, path, data)
+
+    async def async_delete(self, path: str, data: dict = None) -> dict:
+        return await asyncio.to_thread(self._delete, path, data)
+
+    async def async_get_candles(self, symbol: str, **kwargs) -> pd.DataFrame:
+        return await asyncio.to_thread(self.get_candles, symbol, **kwargs)
+
+    # ── Products (Instruments) ────────────────────────────────────
+    def get_products(self, force_refresh: bool = False) -> list:
+        """Fetch all available products from Delta Exchange."""
+        now = _time.time()
+        if self._products_cache and (now - self._products_ts) < self._CACHE_TTL and not force_refresh:
+            return self._products_cache
+
+        print("[DELTA] Fetching products...")
+        resp = self._get("/products")
+        products = resp.get("result", [])
+        self._products_cache = products
+        self._products_ts = now
+        print(f"[DELTA] Got {len(products)} products")
+        return products
+
+    def get_perpetual_futures(self) -> list:
+        """Get only perpetual futures contracts."""
+        products = self.get_products()
+        perps = [p for p in products if p.get("contract_type") == "perpetual_futures"
+                 and p.get("state") == "live"]
+        return perps
+
+    def get_product_by_symbol(self, symbol: str) -> Optional[dict]:
+        """Find a product by its symbol (e.g., BTCUSD)."""
+        products = self.get_products()
+        for p in products:
+            if p.get("symbol", "").upper() == symbol.upper():
+                return p
+        return None
+
+    def get_leverage_info(self, symbol: str) -> dict:
+        """Get max leverage and available leverage options for a symbol."""
+        product = self.get_product_by_symbol(symbol)
+        if not product:
+            return {"max_leverage": 100, "default": 10, "options": [1, 2, 3, 5, 10, 20, 50, 100]}
+
+        # initial_margin is in PERCENT (e.g. 1 = 1%), so max_lev = 100 / initial_margin
+        initial_margin = float(product.get("initial_margin", 1))
+        max_lev = int(100 / initial_margin) if initial_margin > 0 else 100
+        maintenance_margin = float(product.get("maintenance_margin", 0.5))
+
+        # Delta also provides default_leverage directly
+        default_lev_raw = product.get("default_leverage")
+        default_lev = int(float(default_lev_raw)) if default_lev_raw else min(10, max_lev)
+
+        # Build standard leverage options up to max
+        standard = [1, 2, 3, 5, 10, 15, 20, 25, 50, 75, 100, 125, 150, 200]
+        options = [x for x in standard if x <= max_lev]
+        if max_lev not in options:
+            options.append(max_lev)
+
+        return {
+            "max_leverage": max_lev,
+            "default": default_lev,
+            "options": sorted(options),
+            "initial_margin": initial_margin,
+            "maintenance_margin": maintenance_margin,
+        }
+
+    # ── Historical Candles ────────────────────────────────────────
+    def get_candles(self, symbol: str, resolution: str = "5m",
+                    start: str = None, end: str = None) -> pd.DataFrame:
+        """
+        Fetch OHLCV candle data.
+        resolution: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1d, 7d, 30d, 1w, 2w
+        """
+        # Map resolution to Delta API format
+        res_map = {
+            "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h",
+            "1d": "1d", "1w": "1w", "1D": "1d", "1W": "1w",
+        }
+        delta_res = res_map.get(resolution, "5m")
+
+        # Convert dates to timestamps
+        if start:
+            start_ts = int(datetime.strptime(start, "%Y-%m-%d").timestamp())
+        else:
+            start_ts = int((datetime.utcnow() - timedelta(days=30)).timestamp())
+
+        if end:
+            end_ts = int(datetime.strptime(end, "%Y-%m-%d").timestamp())
+        else:
+            end_ts = int(datetime.utcnow().timestamp())
+
+        # Delta API candles endpoint
+        # Chunk into segments (Delta has limits per request)
+        all_candles = []
+        chunk_start = start_ts
+
+        # Determine seconds per candle for chunking
+        sec_map = {
+            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+            "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600,
+            "1d": 86400, "1w": 604800,
+        }
+        secs_per_candle = sec_map.get(delta_res, 300)
+        max_candles_per_req = 500
+        chunk_size = secs_per_candle * max_candles_per_req
+
+        chunk_num = 0
+        while chunk_start < end_ts:
+            chunk_end = min(chunk_start + chunk_size, end_ts)
+            chunk_num += 1
+
+            params = {
+                "symbol": symbol,
+                "resolution": delta_res,
+                "start": chunk_start,
+                "end": chunk_end,
+            }
+
+            try:
+                resp = self._get("/history/candles", params=params)
+                candles = resp.get("result", [])
+                if candles:
+                    all_candles.extend(candles)
+                    print(f"[DELTA] Candles chunk {chunk_num}: {len(candles)} bars")
+                else:
+                    print(f"[DELTA] Candles chunk {chunk_num}: empty")
+            except Exception as e:
+                print(f"[DELTA] Candles chunk {chunk_num} error: {e}")
+
+            chunk_start = chunk_end
+
+        if not all_candles:
+            print(f"[DELTA] No candle data for {symbol}")
+            return pd.DataFrame()
+
+        # Build DataFrame
+        df = pd.DataFrame(all_candles)
+        # Delta returns: time, open, high, low, close, volume
+        if "time" in df.columns:
+            # time is unix timestamp
+            df["datetime"] = pd.to_datetime(df["time"], unit="s", utc=True)
+        elif "t" in df.columns:
+            df["datetime"] = pd.to_datetime(df["t"], unit="s", utc=True)
+
+        rename_map = {}
+        for orig, target in [("o", "open"), ("h", "high"), ("l", "low"),
+                              ("c", "close"), ("v", "volume")]:
+            if orig in df.columns:
+                rename_map[orig] = target
+        if rename_map:
+            df.rename(columns=rename_map, inplace=True)
+
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        if "datetime" in df.columns:
+            df.set_index("datetime", inplace=True)
+            df.sort_index(inplace=True)
+            df = df[~df.index.duplicated(keep='first')]
+
+        # Keep only OHLCV
+        keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+        df = df[keep]
+
+        print(f"[DELTA] Total: {len(df)} candles for {symbol} ({delta_res})")
+        return df
+
+    # ── Live Ticker (Mark Price / LTP) ────────────────────────────
+    def get_ticker(self, symbol: str) -> dict:
+        """Get latest ticker data for a symbol."""
+        try:
+            resp = self._get(f"/tickers/{symbol}")
+            result = resp.get("result", {})
+            return {
+                "symbol": symbol,
+                "mark_price": float(result.get("mark_price", 0)),
+                "last_price": float(result.get("close", result.get("last_price", 0))),
+                "volume_24h": float(result.get("volume", 0)),
+                "turnover_24h": float(result.get("turnover", 0)),
+                "open_interest": float(result.get("open_interest", 0)),
+                "funding_rate": float(result.get("funding_rate", 0)),
+                "price_change_24h": float(result.get("price_change_percent_24h", 0)),
+                "high_24h": float(result.get("high", 0)),
+                "low_24h": float(result.get("low", 0)),
+            }
+        except Exception as e:
+            print(f"[DELTA] Ticker error for {symbol}: {e}")
+            return {"symbol": symbol, "mark_price": 0, "last_price": 0}
+
+    def get_tickers_bulk(self) -> list:
+        """Get tickers for all products."""
+        try:
+            resp = self._get("/tickers")
+            return resp.get("result", [])
+        except Exception as e:
+            print(f"[DELTA] Bulk tickers error: {e}")
+            return []
+
+    # ── Wallet / Balance ──────────────────────────────────────────
+    def get_wallet(self) -> dict:
+        """Get wallet balances."""
+        if not self._is_configured():
+            return {"error": "API not configured"}
+        try:
+            resp = self._get("/wallet/balances", auth=True)
+            return resp.get("result", {})
+        except Exception as e:
+            print(f"[DELTA] Wallet error: {e}")
+            return {"error": str(e)}
+
+    # ── Positions ─────────────────────────────────────────────────
+    def get_positions(self) -> list:
+        """Get open positions."""
+        if not self._is_configured():
+            return []
+        try:
+            resp = self._get("/positions", auth=True)
+            return resp.get("result", [])
+        except Exception as e:
+            print(f"[DELTA] Positions error: {e}")
+            return []
+
+    def get_position(self, product_id: int) -> dict:
+        """Get position for a specific product."""
+        if not self._is_configured():
+            return {}
+        try:
+            resp = self._get(f"/positions", params={"product_id": product_id}, auth=True)
+            results = resp.get("result", [])
+            for p in results:
+                if p.get("product_id") == product_id:
+                    return p
+            return {}
+        except Exception as e:
+            print(f"[DELTA] Position error: {e}")
+            return {}
+
+    # ── Orders ────────────────────────────────────────────────────
+    def place_order(self, product_id: int, size: float, side: str,
+                    order_type: str = "market_order",
+                    limit_price: float = None,
+                    leverage: int = 10,
+                    reduce_only: bool = False) -> dict:
+        """
+        Place a futures order.
+        side: 'buy' or 'sell'
+        order_type: 'market_order' or 'limit_order'
+        """
+        if not self._is_configured():
+            return {"error": "API not configured"}
+
+        data = {
+            "product_id": product_id,
+            "size": int(size),
+            "side": side,
+            "order_type": order_type,
+            "reduce_only": reduce_only,
+        }
+        if order_type == "limit_order" and limit_price:
+            data["limit_price"] = str(limit_price)
+
+        try:
+            resp = self._post("/orders", data)
+            return resp.get("result", resp)
+        except Exception as e:
+            print(f"[DELTA] Order error: {e}")
+            return {"error": str(e)}
+
+    def cancel_order(self, order_id: int, product_id: int) -> dict:
+        """Cancel an open order."""
+        if not self._is_configured():
+            return {"error": "API not configured"}
+        try:
+            resp = self._delete("/orders", {"id": order_id, "product_id": product_id})
+            return resp.get("result", resp)
+        except Exception as e:
+            print(f"[DELTA] Cancel error: {e}")
+            return {"error": str(e)}
+
+    def get_orders(self, product_id: int = None, state: str = "open") -> list:
+        """Get orders. state: open, closed, cancelled"""
+        if not self._is_configured():
+            return []
+        try:
+            params = {"state": state}
+            if product_id:
+                params["product_id"] = product_id
+            resp = self._get("/orders", params=params, auth=True)
+            return resp.get("result", [])
+        except Exception as e:
+            print(f"[DELTA] Orders error: {e}")
+            return []
+
+    def get_order_history(self) -> list:
+        """Get recent filled orders."""
+        if not self._is_configured():
+            return []
+        try:
+            resp = self._get("/orders/history", params={"page_size": 100}, auth=True)
+            return resp.get("result", [])
+        except Exception as e:
+            print(f"[DELTA] Order history error: {e}")
+            return []
+
+    # ── Set Leverage ──────────────────────────────────────────────
+    def set_leverage(self, product_id: int, leverage: int) -> dict:
+        """Change leverage for a product."""
+        if not self._is_configured():
+            return {"error": "API not configured"}
+        try:
+            resp = self._post("/orders/leverage", {
+                "product_id": product_id,
+                "leverage": str(leverage),
+            })
+            return resp.get("result", resp)
+        except Exception as e:
+            print(f"[DELTA] Set leverage error: {e}")
+            return {"error": str(e)}
+
+    # ── Funding Rate History ──────────────────────────────────────
+    def get_funding_history(self, symbol: str) -> list:
+        """Get funding rate history for a perpetual contract."""
+        try:
+            product = self.get_product_by_symbol(symbol)
+            if not product:
+                return []
+            product_id = product.get("id")
+            resp = self._get(f"/funding_rates", params={"product_id": product_id})
+            return resp.get("result", [])
+        except Exception as e:
+            print(f"[DELTA] Funding rate error: {e}")
+            return []
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Binance Public API — fallback candle source for non-Delta symbols
+# ═══════════════════════════════════════════════════════════════════
+
+def get_candles_binance(symbol: str, resolution: str = "5m",
+                        start: str = None, end: str = None) -> pd.DataFrame:
+    """
+    Fetch OHLCV candle data from Binance public API (no API key needed).
+    symbol: e.g. 'ADAUSDT', 'BNBUSDT'
+    resolution: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1d, 1w
+    """
+    res_map = {
+        "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+        "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h",
+        "1d": "1d", "1D": "1d", "1w": "1w", "1W": "1w",
+    }
+    interval = res_map.get(resolution, "5m")
+
+    from datetime import datetime, timedelta
+
+    if start:
+        start_ms = int(datetime.strptime(start, "%Y-%m-%d").timestamp() * 1000)
+    else:
+        start_ms = int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)
+
+    if end:
+        end_ms = int(datetime.strptime(end, "%Y-%m-%d").timestamp() * 1000)
+    else:
+        end_ms = int(datetime.utcnow().timestamp() * 1000)
+
+    all_candles = []
+    chunk_start = start_ms
+    chunk_num = 0
+
+    while chunk_start < end_ms:
+        chunk_num += 1
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "startTime": chunk_start,
+            "endTime": end_ms,
+            "limit": 1000,  # Binance max per request
+        }
+        try:
+            resp = requests.get("https://api.binance.com/api/v3/klines",
+                                params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data:
+                break
+            all_candles.extend(data)
+            print(f"[BINANCE] Chunk {chunk_num}: {len(data)} candles for {symbol}")
+            # Move past the last candle's close time
+            chunk_start = data[-1][6] + 1  # closeTime + 1ms
+            if len(data) < 1000:
+                break  # No more data
+        except Exception as e:
+            print(f"[BINANCE] Chunk {chunk_num} error: {e}")
+            break
+
+    if not all_candles:
+        print(f"[BINANCE] No candle data for {symbol}")
+        return pd.DataFrame()
+
+    # Binance klines: [openTime, open, high, low, close, volume, closeTime, ...]
+    df = pd.DataFrame(all_candles, columns=[
+        "open_time", "open", "high", "low", "close", "volume",
+        "close_time", "quote_volume", "trades", "taker_buy_base",
+        "taker_buy_quote", "ignore"
+    ])
+
+    df["datetime"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df.set_index("datetime", inplace=True)
+    df.sort_index(inplace=True)
+    df = df[~df.index.duplicated(keep='first')]
+    df = df[["open", "high", "low", "close", "volume"]]
+
+    print(f"[BINANCE] Total: {len(df)} candles for {symbol} ({interval})")
+    return df
