@@ -155,6 +155,8 @@ class PaperTradingEngine:
             "data": data or {},
         }
         self.event_log.append(event)
+        if len(self.event_log) > 500:
+            self.event_log = self.event_log[-300:]
         ts = event["time"].strftime("%H:%M:%S")
         print(f"[PAPER] [{ts}] [{event_type.upper()}] {message}")
 

@@ -54,8 +54,11 @@ def eval_condition(row, cond, prev_row=None):
     except:
         return False
 
-    lv_f = float(lv)
-    rv_f = float(rv)
+    try:
+        lv_f = float(lv)
+        rv_f = float(rv)
+    except (TypeError, ValueError):
+        return False
 
     # Crossover detection
     if op == "crosses_above":
@@ -282,7 +285,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
                      if losses and sum(t["pnl"] for t in losses) != 0 else 0)
 
     # Max drawdown
-    peak = capital
+    peak = equity_curve[0]["value"] if equity_curve else capital
     max_dd = 0
     for eq in equity_curve:
         val = eq["value"]

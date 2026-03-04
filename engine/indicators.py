@@ -211,67 +211,72 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
     df["current_volume"] = df["volume"] if "volume" in df.columns else 0
 
     for ind_string in ui_indicators:
-        parts = ind_string.split("_")
-        name = parts[0]
+        try:
+            parts = ind_string.split("_")
+            name = parts[0]
 
-        if name == "EMA":
-            period = int(parts[1])
-            df[ind_string] = ema(df["close"], period)
+            if name == "EMA":
+                period = int(parts[1])
+                df[ind_string] = ema(df["close"], period)
 
-        elif name == "SMA":
-            period = int(parts[1])
-            df[ind_string] = sma(df["close"], period)
+            elif name == "SMA":
+                period = int(parts[1])
+                df[ind_string] = sma(df["close"], period)
 
-        elif name == "RSI":
-            period = int(parts[1])
-            df[ind_string] = rsi(df["close"], period)
+            elif name == "RSI":
+                period = int(parts[1])
+                df[ind_string] = rsi(df["close"], period)
 
-        elif name == "Supertrend":
-            period = int(parts[1])
-            mult = float(parts[2])
-            st_df = supertrend(df, period=period, multiplier=mult)
-            df[ind_string] = st_df["supertrend"]
-            df[f"{ind_string}_dir"] = st_df["supertrend_dir"]
+            elif name == "Supertrend":
+                period = int(parts[1])
+                mult = float(parts[2])
+                st_df = supertrend(df, period=period, multiplier=mult)
+                df[ind_string] = st_df["supertrend"]
+                df[f"{ind_string}_dir"] = st_df["supertrend_dir"]
 
-        elif name == "MACD":
-            fast = int(parts[1]) if len(parts) > 1 else 12
-            slow = int(parts[2]) if len(parts) > 2 else 26
-            sig = int(parts[3]) if len(parts) > 3 else 9
-            macd_df = macd(df["close"], fast, slow, sig)
-            df[f"MACD_line"] = macd_df["macd_line"]
-            df[f"MACD_signal"] = macd_df["macd_signal"]
-            df[f"MACD_histogram"] = macd_df["macd_histogram"]
+            elif name == "MACD":
+                fast = int(parts[1]) if len(parts) > 1 else 12
+                slow = int(parts[2]) if len(parts) > 2 else 26
+                sig = int(parts[3]) if len(parts) > 3 else 9
+                macd_df = macd(df["close"], fast, slow, sig)
+                df[f"MACD_line"] = macd_df["macd_line"]
+                df[f"MACD_signal"] = macd_df["macd_signal"]
+                df[f"MACD_histogram"] = macd_df["macd_histogram"]
 
-        elif name == "BB":
-            period = int(parts[1]) if len(parts) > 1 else 20
-            std = float(parts[2]) if len(parts) > 2 else 2.0
-            bb_df = bollinger_bands(df["close"], period, std)
-            df["BB_upper"] = bb_df["bb_upper"]
-            df["BB_middle"] = bb_df["bb_middle"]
-            df["BB_lower"] = bb_df["bb_lower"]
-            df["BB_width"] = bb_df["bb_width"]
+            elif name == "BB":
+                period = int(parts[1]) if len(parts) > 1 else 20
+                std = float(parts[2]) if len(parts) > 2 else 2.0
+                bb_df = bollinger_bands(df["close"], period, std)
+                df["BB_upper"] = bb_df["bb_upper"]
+                df["BB_middle"] = bb_df["bb_middle"]
+                df["BB_lower"] = bb_df["bb_lower"]
+                df["BB_width"] = bb_df["bb_width"]
 
-        elif name == "VWAP":
-            df["VWAP"] = vwap(df)
+            elif name == "VWAP":
+                df["VWAP"] = vwap(df)
 
-        elif name == "ATR":
-            period = int(parts[1]) if len(parts) > 1 else 14
-            df[ind_string] = atr(df, period)
+            elif name == "ATR":
+                period = int(parts[1]) if len(parts) > 1 else 14
+                df[ind_string] = atr(df, period)
 
-        elif name == "StochRSI":
-            period = int(parts[1]) if len(parts) > 1 else 14
-            srsi = stochastic_rsi(df["close"], period)
-            df["StochRSI_K"] = srsi["stoch_rsi_k"]
-            df["StochRSI_D"] = srsi["stoch_rsi_d"]
+            elif name == "StochRSI":
+                period = int(parts[1]) if len(parts) > 1 else 14
+                srsi = stochastic_rsi(df["close"], period)
+                df["StochRSI_K"] = srsi["stoch_rsi_k"]
+                df["StochRSI_D"] = srsi["stoch_rsi_d"]
 
-        elif name == "CPR":
-            cpr_df = cpr(df)
-            for col in ["CPR_pivot", "CPR_bc", "CPR_tc", "CPR_R1", "CPR_S1",
-                         "CPR_R2", "CPR_S2", "CPR_R3", "CPR_S3"]:
-                if col in cpr_df.columns:
-                    df[col] = cpr_df[col]
+            elif name == "CPR":
+                cpr_df = cpr(df)
+                for col in ["CPR_pivot", "CPR_bc", "CPR_tc", "CPR_R1", "CPR_S1",
+                             "CPR_R2", "CPR_S2", "CPR_R3", "CPR_S3"]:
+                    if col in cpr_df.columns:
+                        df[col] = cpr_df[col]
 
-        elif name in ("Current", "Previous"):
-            pass
+            elif name in ("Current", "Previous"):
+                pass
+
+        except (IndexError, ValueError, KeyError) as e:
+            print(f"[INDICATORS] Skipping malformed indicator '{ind_string}': {e}")
+            continue
 
     return df

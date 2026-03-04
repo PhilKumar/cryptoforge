@@ -54,6 +54,8 @@ ws_clients: List[WebSocket] = []
 
 # ── Authentication ────────────────────────────────────────────────
 AUTH_PIN = os.getenv("CRYPTOFORGE_PIN", os.getenv("CRYPTOFORGE_PASSWORD", "202603"))
+if AUTH_PIN == "202603":
+    print("[WARNING] Using default PIN '202603'. Set CRYPTOFORGE_PIN env var for production.")
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 _SESSION_FILE = os.path.join(_HERE, ".sessions.json")
 
@@ -72,8 +74,10 @@ def _load_sessions() -> dict:
 
 def _save_sessions(sessions: dict):
     try:
-        with open(_SESSION_FILE, "w") as f:
+        tmp = _SESSION_FILE + ".tmp"
+        with open(tmp, "w") as f:
             f.write(json.dumps(sessions))
+        os.replace(tmp, _SESSION_FILE)
     except Exception:
         pass
 
@@ -136,13 +140,14 @@ async def auth_middleware(request: Request, call_next):
 # ── Rate Limiting ─────────────────────────────────────────────────
 _rate_limits: dict = defaultdict(list)
 
-def check_rate_limit(endpoint: str, max_calls: int = 5, window_sec: int = 10):
+def check_rate_limit(endpoint: str, max_calls: int = 5, window_sec: int = 10, client_ip: str = "global"):
+    key = f"{endpoint}:{client_ip}"
     now = time.time()
-    calls = _rate_limits[endpoint]
-    _rate_limits[endpoint] = [t for t in calls if now - t < window_sec]
-    if len(_rate_limits[endpoint]) >= max_calls:
+    calls = _rate_limits[key]
+    _rate_limits[key] = [t for t in calls if now - t < window_sec]
+    if len(_rate_limits[key]) >= max_calls:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Max {max_calls}/{window_sec}s.")
-    _rate_limits[endpoint].append(now)
+    _rate_limits[key].append(now)
 
 
 # ── Brute-Force Protection ────────────────────────────────────────
@@ -353,7 +358,7 @@ async def dashboard_summary(request: Request):
                 if created.startswith(today_str):
                     paper_pnl_val = r.get("total_pnl", 0)
                     paper_trades_val = r.get("trade_count", len(r.get("trades", [])))
-                break
+                break  # only check most recent paper run
 
     if live_statuses:
         live_pnl_val = sum(s.get("total_pnl", 0) for s in live_statuses)
@@ -657,7 +662,8 @@ async def api_run_backtest(payload: StrategyPayload):
         print(f"[BACKTEST] Indicators: {payload.indicators}")
         print(f"{'='*60}")
 
-        df_raw = _fetch_data(
+        df_raw = await asyncio.to_thread(
+            _fetch_data,
             symbol=payload.symbol,
             from_date=payload.from_date,
             to_date=payload.to_date,
@@ -747,7 +753,9 @@ async def live_start(payload: StrategyPayload):
     )
     engine.running = True
     engine.event_log = []
-    engine.open_trades = []
+    # Preserve any restored open_trades from _load_state() to avoid orphaning exchange positions
+    if not engine.open_trades:
+        engine.open_trades = []
     engine.closed_trades = []
     engine.trades_today = 0
 
@@ -839,7 +847,9 @@ async def paper_start(payload: StrategyPayload):
     )
     engine.running = True
     engine.event_log = []
-    engine.open_trades = []
+    # Preserve any restored open_trades from _load_state()
+    if not engine.open_trades:
+        engine.open_trades = []
     engine.closed_trades = []
     engine.trades_today = 0
 
@@ -978,13 +988,12 @@ async def get_portfolio_summary():
 
         # Extract USDT balance
         usdt_balance = 0.0
-        if isinstance(wallet, dict):
-            # Delta wallet can be a list of balances or a dict
-            if isinstance(wallet, list):
-                for w in wallet:
-                    if w.get("asset_symbol", "").upper() in ("USDT", "USD"):
-                        usdt_balance = float(w.get("available_balance", 0))
-            elif "available_balance" in wallet:
+        if isinstance(wallet, list):
+            for w in wallet:
+                if w.get("asset_symbol", "").upper() in ("USDT", "USD"):
+                    usdt_balance = float(w.get("available_balance", 0))
+        elif isinstance(wallet, dict):
+            if "available_balance" in wallet:
                 usdt_balance = float(wallet["available_balance"])
             elif isinstance(wallet.get("result"), list):
                 for w in wallet["result"]:
@@ -1214,7 +1223,9 @@ def _load():
     return []
 
 def _save(d):
-    with open(STRAT_FILE, 'w') as f: json.dump(d, f, indent=2)
+    tmp = STRAT_FILE + '.tmp'
+    with open(tmp, 'w') as f: json.dump(d, f, indent=2)
+    os.replace(tmp, STRAT_FILE)
 
 def _load_runs():
     if os.path.exists(RUNS_FILE):
@@ -1224,7 +1235,9 @@ def _load_runs():
     return []
 
 def _save_runs(d):
-    with open(RUNS_FILE, 'w') as f: json.dump(d, f, indent=2)
+    tmp = RUNS_FILE + '.tmp'
+    with open(tmp, 'w') as f: json.dump(d, f, indent=2)
+    os.replace(tmp, RUNS_FILE)
 
 @app.get("/api/strategies")
 async def get_strategies():

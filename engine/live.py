@@ -156,6 +156,8 @@ class LiveEngine:
             "data": data or {},
         }
         self.event_log.append(event)
+        if len(self.event_log) > 500:
+            self.event_log = self.event_log[-300:]
         ts = event["time"].strftime("%H:%M:%S")
         print(f"[LIVE] [{ts}] [{event_type.upper()}] {message}")
 
@@ -268,6 +270,9 @@ class LiveEngine:
                                         order_type="market_order",
                                         leverage=leverage,
                                     )
+                                    if isinstance(result, dict) and result.get("error"):
+                                        self.log_event("error", f"Order rejected: {result['error']}")
+                                        continue
                                     order_id = result.get("id", "placed")
                                     self.log_event("order", f"Order placed: {side} {size} {symbol} (ID: {order_id})")
                                 except Exception as e:
@@ -319,18 +324,27 @@ class LiveEngine:
                         if exit_reason:
                             # Place exit order on exchange
                             close_side = "sell" if trade_side == "LONG" else "buy"
+                            exit_ok = True
                             if product_id:
                                 try:
-                                    self.broker.place_order(
+                                    exit_result = self.broker.place_order(
                                         product_id=product_id,
                                         size=trade.get("size", 1),
                                         side=close_side,
                                         order_type="market_order",
                                         reduce_only=True,
                                     )
-                                    self.log_event("order", f"Exit order placed: {close_side} {trade.get('size', 1)} {symbol}")
+                                    if isinstance(exit_result, dict) and exit_result.get("error"):
+                                        self.log_event("error", f"Exit order rejected: {exit_result['error']} — will retry")
+                                        exit_ok = False
+                                    else:
+                                        self.log_event("order", f"Exit order placed: {close_side} {trade.get('size', 1)} {symbol}")
                                 except Exception as e:
-                                    self.log_event("error", f"Exit order failed: {e}")
+                                    self.log_event("error", f"Exit order failed: {e} — will retry")
+                                    exit_ok = False
+
+                            if not exit_ok:
+                                continue  # Don't close locally if exchange order failed
 
                             self.total_pnl += trade_pnl
                             self.daily_pnl += trade_pnl

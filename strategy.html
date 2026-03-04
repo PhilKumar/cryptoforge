@@ -1793,7 +1793,7 @@ function showPage(pageId, btn) {
   if (pageId === 'market-page') refreshMarket();
   if (pageId === 'results-page') { loadRuns(); fetchStrategies(); }
   if (pageId === 'live-page') startLiveMonitor();
-  if (pageId === 'portfolio-page') { loadPortfolioData(); loadPortfolioHistory(); }
+  if (pageId === 'portfolio-page') { loadPortfolioData(); }
   // Stop live monitor when leaving live page
   if (pageId !== 'live-page') stopLiveMonitor();
 }
@@ -2355,7 +2355,7 @@ async function viewRun(rid) {
       ['Total Trades', s.total_trades || 0],
       ['Win Rate', (s.win_rate || 0) + '%'],
       ['Total P&L', '$' + (s.total_pnl || 0).toFixed(2), s.total_pnl >= 0],
-      ['Profit Factor', s.profit_factor || 0],
+      ['Profit Factor', (parseFloat(s.profit_factor) || 0).toFixed(2)],
       ['Max Drawdown', (s.max_drawdown || 0).toFixed(1) + '%'],
       ['Return', (s.total_return_pct || 0).toFixed(1) + '%'],
       ['Avg Win', '$' + (s.avg_win || 0).toFixed(2)],
@@ -2593,6 +2593,10 @@ async function startPaper() {
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
     candle_interval: document.getElementById('b-interval').value,
+    order_type: document.getElementById('deploy-order-type') ? document.getElementById('deploy-order-type').value : 'market',
+    margin_mode: document.getElementById('deploy-margin-mode') ? document.getElementById('deploy-margin-mode').value : 'cross',
+    sl_reference: document.getElementById('deploy-sl-ref') ? document.getElementById('deploy-sl-ref').value : 'signal',
+    tp_reference: document.getElementById('deploy-tp-ref') ? document.getElementById('deploy-tp-ref').value : 'signal',
   };
   try {
     const r = await fetch('/api/paper/start', {
@@ -2641,6 +2645,10 @@ async function startLive() {
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
     candle_interval: document.getElementById('b-interval').value,
+    order_type: document.getElementById('deploy-order-type') ? document.getElementById('deploy-order-type').value : 'market',
+    margin_mode: document.getElementById('deploy-margin-mode') ? document.getElementById('deploy-margin-mode').value : 'cross',
+    sl_reference: document.getElementById('deploy-sl-ref') ? document.getElementById('deploy-sl-ref').value : 'signal',
+    tp_reference: document.getElementById('deploy-tp-ref') ? document.getElementById('deploy-tp-ref').value : 'signal',
   };
   try {
     const r = await fetch('/api/live/start', {
@@ -2737,18 +2745,24 @@ function updatePanel(prefix, data) {
 
     // Recent trades table
     var tbody = el(prefix + '-trades-body');
+    var emptyDiv = el(prefix + '-trades-empty');
     if (tbody && data.recent_trades && data.recent_trades.length > 0) {
-      tbody.innerHTML = data.recent_trades.slice(0, 10).map(function(t) {
+      if (emptyDiv) emptyDiv.style.display = 'none';
+      tbody.innerHTML = data.recent_trades.slice(0, 10).map(function(t, idx) {
         var tpnl = parseFloat(t.pnl) || 0;
         return '<tr>' +
+          '<td>' + (idx + 1) + '</td>' +
           '<td>' + (t.symbol || data.symbol || '--') + '</td>' +
           '<td>' + (t.side || '--') + '</td>' +
           '<td>$' + (parseFloat(t.entry_price) || 0).toFixed(2) + '</td>' +
           '<td>$' + (parseFloat(t.exit_price) || 0).toFixed(2) + '</td>' +
           '<td style="color:' + (tpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:600;">$' + tpnl.toFixed(2) + '</td>' +
           '<td>' + (t.exit_reason || '--') + '</td>' +
+          '<td>' + (t.exit_time || t.time || '--') + '</td>' +
           '</tr>';
       }).join('');
+    } else {
+      if (emptyDiv) emptyDiv.style.display = 'block';
     }
   } else {
     if (prefix === 'paper') resetPaperPanel(); else resetLivePanel();
@@ -2813,7 +2827,8 @@ function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data);
+      let data;
+      try { data = JSON.parse(e.data); } catch(err) { console.warn('WS parse error:', err); return; }
       // Handle periodic status updates from server (multi-engine)
       if (data.type === 'status') {
         if (data.paper) updatePanel('paper', data.paper);
@@ -3030,7 +3045,7 @@ async function runComparison() {
       ['Total Trades', sa.total_trades, sb.total_trades],
       ['Win Rate', (sa.win_rate || 0) + '%', (sb.win_rate || 0) + '%'],
       ['Total P&L', '$' + (sa.total_pnl || 0).toFixed(2), '$' + (sb.total_pnl || 0).toFixed(2), sa.total_pnl, sb.total_pnl],
-      ['Profit Factor', sa.profit_factor || 0, sb.profit_factor || 0],
+      ['Profit Factor', (parseFloat(sa.profit_factor) || 0).toFixed(2), (parseFloat(sb.profit_factor) || 0).toFixed(2)],
       ['Max Drawdown', (sa.max_drawdown || 0).toFixed(1) + '%', (sb.max_drawdown || 0).toFixed(1) + '%'],
       ['Return', (sa.total_return_pct || 0).toFixed(1) + '%', (sb.total_return_pct || 0).toFixed(1) + '%', sa.total_return_pct, sb.total_return_pct],
       ['Avg Win', '$' + (sa.avg_win || 0).toFixed(2), '$' + (sb.avg_win || 0).toFixed(2)],
