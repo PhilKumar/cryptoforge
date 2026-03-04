@@ -2,170 +2,323 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>CryptoForge — Unlock</title>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #05070e; --card: rgba(20,24,40,0.6); --border: rgba(37,42,56,0.5);
+    --text: #e8eaf0; --muted: #6b7394; --accent: #8b5cf6; --accent2: #ec4899; --danger: #ef4444;
+  }
   body {
     font-family: 'Outfit', sans-serif;
-    background: #05070e;
+    background: #050710;
     background-image:
-      radial-gradient(ellipse 700px 500px at 30% 20%, rgba(139,92,246,0.08) 0%, transparent 70%),
-      radial-gradient(ellipse 600px 600px at 70% 80%, rgba(236,72,153,0.06) 0%, transparent 70%),
-      radial-gradient(ellipse 800px 300px at 50% 0%, rgba(245,158,11,0.04) 0%, transparent 60%);
-    min-height: 100vh;
-    display: flex; align-items: center; justify-content: center;
-    color: #e2e8f0;
+      radial-gradient(ellipse 800px 600px at 20% 30%, rgba(139,92,246,0.06) 0%, transparent 70%),
+      radial-gradient(ellipse 600px 500px at 80% 70%, rgba(236,72,153,0.04) 0%, transparent 70%);
+    color: var(--text); min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
     overflow: hidden;
   }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background:
+      radial-gradient(900px 600px at 15% 20%, rgba(180,130,255,0.08), transparent 60%),
+      radial-gradient(800px 520px at 85% 25%, rgba(236,72,153,0.06), transparent 60%);
+    pointer-events: none; z-index: -1;
+  }
+
   .unlock-card {
-    background: linear-gradient(160deg, rgba(20,24,40,0.92), rgba(12,16,28,0.88));
+    background: linear-gradient(160deg, rgba(25,28,45,0.95), rgba(15,18,32,0.9), rgba(12,16,28,0.92));
     border: 1px solid rgba(255,255,255,0.08);
-    border-top: 1px solid rgba(255,255,255,0.14);
-    border-radius: 24px;
-    padding: 48px 40px 40px;
-    width: 340px;
-    backdrop-filter: blur(40px) saturate(1.5);
-    box-shadow: 0 0 60px rgba(139,92,246,0.08), 0 25px 60px rgba(0,0,0,0.5),
-                inset 0 1px 0 rgba(255,255,255,0.08);
+    border-top: 1px solid rgba(255,255,255,0.15);
+    border-radius: 28px;
+    padding: 44px 36px 36px;
+    width: 380px;
+    max-width: 92vw;
+    backdrop-filter: blur(40px) saturate(1.4);
+    box-shadow: 0 0 1px rgba(255,255,255,0.1), 0 0 60px rgba(139,92,246,0.04), 0 30px 80px rgba(0,0,0,0.5);
     text-align: center;
     position: relative;
     overflow: hidden;
   }
   .unlock-card::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(139,92,246,0.4), rgba(236,72,153,0.3), transparent);
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.15) 20%, rgba(139,92,246,0.3) 40%, rgba(236,72,153,0.25) 60%, rgba(255,255,255,0.15) 80%, transparent 95%);
   }
   .unlock-card::after {
-    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 40%;
-    background: linear-gradient(180deg, rgba(139,92,246,0.04) 0%, transparent 100%);
-    pointer-events: none; border-radius: 24px 24px 0 0;
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 40%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent);
+    border-radius: 28px 28px 0 0;
+    pointer-events: none;
   }
+
   .brand-icon {
-    font-size: 48px; margin-bottom: 6px;
+    font-size: 52px; margin-bottom: 8px;
     background: linear-gradient(135deg, #8b5cf6, #ec4899);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     filter: drop-shadow(0 0 20px rgba(139,92,246,0.3));
+    position: relative; z-index: 1;
   }
-  .brand-name {
-    font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800;
+  .unlock-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 22px; font-weight: 700;
+    letter-spacing: -0.5px; margin-bottom: 2px;
     background: linear-gradient(135deg, #c4b5fd, #f9a8d4);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    margin-bottom: 4px; letter-spacing: 2px;
+    position: relative; z-index: 1;
   }
-  .brand-sub { font-size: 11px; color: rgba(255,255,255,0.35); margin-bottom: 32px; letter-spacing: 1px; }
-  .unlock-title { font-size: 14px; color: rgba(255,255,255,0.5); margin-bottom: 24px; font-weight: 500; }
-  .pin-dots { display: flex; justify-content: center; gap: 12px; margin-bottom: 30px; }
+  .unlock-sub {
+    color: var(--muted); font-size: 11px;
+    letter-spacing: 2px; text-transform: uppercase;
+    margin-bottom: 28px;
+    position: relative; z-index: 1;
+  }
+
+  .pin-dots {
+    display: flex; justify-content: center; gap: 12px;
+    margin-bottom: 28px;
+    position: relative; z-index: 1;
+  }
   .pin-dot {
-    width: 16px; height: 16px; border-radius: 50%;
-    border: 2px solid rgba(139,92,246,0.3);
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid rgba(139,92,246,0.25);
     background: transparent;
-    transition: all 0.2s;
+    transition: all 0.2s ease;
   }
   .pin-dot.filled {
     background: linear-gradient(135deg, #8b5cf6, #ec4899);
-    border-color: #8b5cf6;
+    border-color: var(--accent);
     box-shadow: 0 0 12px rgba(139,92,246,0.4);
   }
-  .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; position: relative; z-index: 2; }
+  .pin-dot.error {
+    background: var(--danger);
+    border-color: var(--danger);
+    box-shadow: 0 0 12px rgba(239,68,68,0.4);
+  }
+  .pin-dot.success {
+    background: #22c55e;
+    border-color: #22c55e;
+    box-shadow: 0 0 12px rgba(34,197,94,0.4);
+  }
+
+  .keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    max-width: 260px;
+    margin: 0 auto 20px;
+    position: relative; z-index: 1;
+  }
   .key {
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 14px;
-    color: #e2e8f0; font-size: 22px; font-weight: 600;
-    padding: 16px 0; cursor: pointer;
-    transition: all 0.15s;
-    font-family: 'JetBrains Mono', monospace;
-    -webkit-tap-highlight-color: transparent;
+    color: var(--text);
+    font-family: 'Outfit', sans-serif;
+    font-size: 22px;
+    font-weight: 600;
+    padding: 16px 0;
+    cursor: pointer;
+    transition: all 0.15s ease;
     user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    position: relative;
+    overflow: hidden;
   }
-  .key:hover { background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.2); }
-  .key:active { transform: scale(0.95); background: rgba(139,92,246,0.2); }
-  .key.fn { font-size: 18px; color: rgba(255,255,255,0.4); }
-  .key.fn:hover { color: #f87171; }
-  .error-msg {
-    color: #f87171; font-size: 12px; margin-top: 16px;
-    min-height: 18px; font-weight: 500;
+  .key::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.06), transparent);
+    border-radius: 14px 14px 0 0;
+    pointer-events: none;
   }
+  .key:hover {
+    background: rgba(139,92,246,0.1);
+    border-color: rgba(139,92,246,0.18);
+    transform: scale(1.02);
+  }
+  .key:active {
+    transform: scale(0.96);
+    background: rgba(139,92,246,0.15);
+    border-color: rgba(139,92,246,0.25);
+  }
+  .key.fn {
+    font-size: 18px;
+    color: var(--muted);
+    background: rgba(255,255,255,0.02);
+  }
+  .key.fn:active { background: rgba(255,255,255,0.06); }
+
+  .unlock-status {
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 20px;
+    margin-bottom: 8px;
+    transition: all 0.3s ease;
+    position: relative; z-index: 1;
+  }
+  .unlock-status.error { color: var(--danger); }
+  .unlock-status.success { color: #22c55e; }
+
+  .unlock-footer {
+    color: rgba(255,255,255,0.2);
+    font-size: 10px;
+    margin-top: 16px;
+    letter-spacing: 0.5px;
+    position: relative; z-index: 1;
+  }
+
   @keyframes shake {
     0%, 100% { transform: translateX(0); }
-    20%, 60% { transform: translateX(-8px); }
-    40%, 80% { transform: translateX(8px); }
-  }
-  @keyframes unlockPulse {
-    0% { box-shadow: 0 0 0 0 rgba(139,92,246,0.5); }
-    70% { box-shadow: 0 0 0 30px rgba(139,92,246,0); }
-    100% { box-shadow: 0 0 0 0 rgba(139,92,246,0); }
+    20% { transform: translateX(-10px); }
+    40% { transform: translateX(10px); }
+    60% { transform: translateX(-6px); }
+    80% { transform: translateX(6px); }
   }
   .shake { animation: shake 0.4s ease; }
-  .unlocking { animation: unlockPulse 0.6s ease; }
+
+  @keyframes unlockPulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.9; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .unlock-pulse { animation: unlockPulse 0.5s ease; }
 </style>
 </head>
 <body>
+
 <div class="unlock-card" id="unlock-card">
   <div class="brand-icon">⬡</div>
-  <div class="brand-name">CRYPTOFORGE</div>
-  <div class="brand-sub">Futures • Algorithms • Alpha</div>
-  <div class="unlock-title">Enter PIN</div>
+  <div class="unlock-title">CryptoForge</div>
+  <div class="unlock-sub">Enter PIN to unlock</div>
+
   <div class="pin-dots" id="pin-dots">
-    <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
-    <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+    <div class="pin-dot" data-i="0"></div>
+    <div class="pin-dot" data-i="1"></div>
+    <div class="pin-dot" data-i="2"></div>
+    <div class="pin-dot" data-i="3"></div>
+    <div class="pin-dot" data-i="4"></div>
+    <div class="pin-dot" data-i="5"></div>
   </div>
-  <div class="keypad">
-    <div class="key" onclick="addDigit('1')">1</div>
-    <div class="key" onclick="addDigit('2')">2</div>
-    <div class="key" onclick="addDigit('3')">3</div>
-    <div class="key" onclick="addDigit('4')">4</div>
-    <div class="key" onclick="addDigit('5')">5</div>
-    <div class="key" onclick="addDigit('6')">6</div>
-    <div class="key" onclick="addDigit('7')">7</div>
-    <div class="key" onclick="addDigit('8')">8</div>
-    <div class="key" onclick="addDigit('9')">9</div>
-    <div class="key fn" onclick="clearAll()">✕</div>
-    <div class="key" onclick="addDigit('0')">0</div>
-    <div class="key fn" onclick="removeDigit()">⌫</div>
+
+  <div class="unlock-status" id="unlock-status">Enter your 6-digit PIN</div>
+
+  <div class="keypad" id="keypad">
+    <button class="key" data-val="1">1</button>
+    <button class="key" data-val="2">2</button>
+    <button class="key" data-val="3">3</button>
+    <button class="key" data-val="4">4</button>
+    <button class="key" data-val="5">5</button>
+    <button class="key" data-val="6">6</button>
+    <button class="key" data-val="7">7</button>
+    <button class="key" data-val="8">8</button>
+    <button class="key" data-val="9">9</button>
+    <button class="key fn" data-val="clear">&#x2715;</button>
+    <button class="key" data-val="0">0</button>
+    <button class="key fn" data-val="back">&#x232b;</button>
   </div>
-  <div class="error-msg" id="error-msg"></div>
+
+  <div class="unlock-footer">Session-secured &middot; Auto-locks after 24h</div>
 </div>
+
 <script>
+const PIN_LENGTH = 6;
 let pin = '';
+let locked = false;
+
 const dots = document.querySelectorAll('.pin-dot');
+const status = document.getElementById('unlock-status');
 const card = document.getElementById('unlock-card');
-const errEl = document.getElementById('error-msg');
 
 function updateDots() {
-  dots.forEach((d, i) => d.classList.toggle('filled', i < pin.length));
+  dots.forEach((dot, i) => {
+    dot.classList.remove('filled', 'error', 'success');
+    if (i < pin.length) dot.classList.add('filled');
+  });
 }
-function addDigit(d) {
-  if (pin.length >= 6) return;
-  pin += d; updateDots();
-  if (pin.length === 6) setTimeout(tryUnlock, 200);
+
+function setError(msg) {
+  status.textContent = msg;
+  status.className = 'unlock-status error';
+  dots.forEach(d => { d.classList.remove('filled'); d.classList.add('error'); });
+  card.classList.add('shake');
+  setTimeout(() => {
+    card.classList.remove('shake');
+    pin = '';
+    updateDots();
+    status.textContent = 'Enter your 6-digit PIN';
+    status.className = 'unlock-status';
+    locked = false;
+  }, 800);
 }
-function removeDigit() { pin = pin.slice(0, -1); updateDots(); errEl.textContent = ''; }
-function clearAll() { pin = ''; updateDots(); errEl.textContent = ''; }
+
+function setSuccess() {
+  status.textContent = 'Unlocked! Redirecting...';
+  status.className = 'unlock-status success';
+  dots.forEach(d => { d.classList.remove('filled'); d.classList.add('success'); });
+  card.classList.add('unlock-pulse');
+}
 
 async function tryUnlock() {
+  if (locked) return;
+  locked = true;
+  status.textContent = 'Verifying...';
+  status.className = 'unlock-status';
   try {
-    const r = await fetch('/api/auth/login', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({password: pin}), credentials: 'same-origin'
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pin }),
+      credentials: 'same-origin'
     });
-    if (r.ok) {
-      card.classList.add('unlocking');
-      setTimeout(() => window.location.reload(), 500);
+    if (res.ok) {
+      setSuccess();
+      setTimeout(() => { window.location.href = '/'; }, 400);
     } else {
-      card.classList.add('shake');
-      errEl.textContent = 'Wrong PIN';
-      setTimeout(() => { card.classList.remove('shake'); pin = ''; updateDots(); }, 500);
+      setError('Wrong PIN. Try again.');
     }
-  } catch(e) {
-    errEl.textContent = 'Connection error';
-    pin = ''; updateDots();
+  } catch (e) {
+    setError('Connection error.');
   }
 }
 
-document.addEventListener('keydown', e => {
+function addDigit(d) {
+  if (locked || pin.length >= PIN_LENGTH) return;
+  pin += d;
+  updateDots();
+  if (pin.length === PIN_LENGTH) {
+    setTimeout(tryUnlock, 150);
+  }
+}
+
+function removeDigit() {
+  if (locked || pin.length === 0) return;
+  pin = pin.slice(0, -1);
+  updateDots();
+}
+
+function clearAll() {
+  if (locked) return;
+  pin = '';
+  updateDots();
+}
+
+document.getElementById('keypad').addEventListener('click', (e) => {
+  const btn = e.target.closest('.key');
+  if (!btn) return;
+  const val = btn.dataset.val;
+  if (val === 'clear') clearAll();
+  else if (val === 'back') removeDigit();
+  else addDigit(val);
+});
+
+document.addEventListener('keydown', (e) => {
   if (e.key >= '0' && e.key <= '9') addDigit(e.key);
   else if (e.key === 'Backspace') removeDigit();
   else if (e.key === 'Escape') clearAll();

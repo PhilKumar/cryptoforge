@@ -323,6 +323,22 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
     for d in dow_map.values():
         d["pnl"] = round(d["pnl"], 2)
 
+    # Yearly breakdown
+    yearly = {}
+    for t in trades:
+        year_key = t["entry_time"][:4]
+        if year_key not in yearly:
+            yearly[year_key] = {"year": year_key, "trades": 0, "pnl": 0, "wins": 0, "losses": 0}
+        yearly[year_key]["trades"] += 1
+        yearly[year_key]["pnl"] += t["pnl"]
+        if t["pnl"] > 0:
+            yearly[year_key]["wins"] += 1
+        else:
+            yearly[year_key]["losses"] += 1
+    yearly_list = sorted(yearly.values(), key=lambda x: x["year"])
+    for y in yearly_list:
+        y["pnl"] = round(y["pnl"], 2)
+
     stats = {
         "total_trades": total_trades,
         "winning_trades": len(wins),
@@ -354,5 +370,6 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
         "trades": trades,
         "equity": eq_out,
         "monthly": monthly_list,
+        "yearly": yearly_list,
         "day_of_week": list(dow_map.values()),
     }

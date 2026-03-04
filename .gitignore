@@ -8,3 +8,8 @@ strategies.json
 node_modules/
 .DS_Store
 *.log
+*.bak
+_test_*.py
+_validate*.py
+*.sessions.json
+*_state_*.json

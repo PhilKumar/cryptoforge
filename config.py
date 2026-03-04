@@ -13,7 +13,8 @@ DELTA_API_KEY    = os.getenv('DELTA_API_KEY', 'YOUR_API_KEY_HERE')
 DELTA_API_SECRET = os.getenv('DELTA_API_SECRET', 'YOUR_API_SECRET_HERE')
 
 # ── Delta Exchange Base URLs ────────────────────────────────
-DELTA_BASE_URL = "https://api.delta.exchange/v2"
+# India: api.india.delta.exchange  |  Global: api.delta.exchange
+DELTA_BASE_URL = os.getenv('DELTA_BASE_URL', 'https://api.india.delta.exchange/v2')
 
 # ── App Settings ────────────────────────────────────────────
 APP_HOST = os.getenv('APP_HOST', '127.0.0.1')

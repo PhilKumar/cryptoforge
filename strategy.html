@@ -759,6 +759,128 @@
   }
   @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ── Multi-Engine Live Monitor Tabs ── */
+  .live-tabs-bar {
+    display: flex; gap: 0; overflow-x: auto;
+    background: rgba(10,14,28,0.6);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 12px; margin-bottom: 16px; padding: 4px;
+  }
+  .live-tab-btn {
+    padding: 10px 20px; border: none; background: transparent;
+    color: var(--muted); font-weight: 600; font-size: 13px;
+    font-family: 'Outfit', sans-serif; cursor: pointer;
+    border-radius: 8px; white-space: nowrap; transition: all 0.2s;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .live-tab-btn:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .live-tab-btn.active { background: rgba(139,92,246,0.15); color: var(--accent); }
+  .live-tab-btn .lt-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    animation: livePulse 2s infinite;
+  }
+  .live-tab-btn .lt-dot.paper { background: var(--green); }
+  .live-tab-btn .lt-dot.live { background: var(--red); }
+  .live-combined-pnl {
+    padding: 10px 20px; font-family: 'JetBrains Mono', monospace;
+    font-weight: 700; font-size: 15px; display: flex; align-items: center;
+    gap: 6px; margin-left: auto; white-space: nowrap;
+  }
+
+  /* ── Signal/Indicator Table ── */
+  .signal-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px; margin-bottom: 14px;
+  }
+  .signal-item {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 8px; padding: 10px; text-align: center;
+  }
+  .signal-item .si-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px; }
+  .signal-item .si-value { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
+
+  /* ── Strategy List Styles ── */
+  .strat-folder-group { margin-bottom: 16px; }
+  .strat-folder-header {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    background: rgba(139,92,246,0.06); border: 1px solid rgba(139,92,246,0.08);
+    border-radius: 10px; cursor: pointer; font-weight: 700; font-size: 14px;
+    transition: background 0.2s; margin-bottom: 6px;
+  }
+  .strat-folder-header:hover { background: rgba(139,92,246,0.1); }
+  .strat-folder-header .folder-icon { font-size: 16px; }
+  .strat-folder-header .folder-count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .strat-folder-body { display: block; }
+  .strat-folder-body.collapsed { display: none; }
+  .strat-row {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.03); transition: background 0.2s;
+  }
+  .strat-row:hover { background: rgba(255,255,255,0.02); }
+  .strat-row .sr-name { font-weight: 700; flex: 1; }
+  .strat-row .sr-meta { font-size: 12px; color: var(--muted); }
+  .strat-actions { display: flex; gap: 6px; }
+  .strat-actions button {
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px; padding: 4px 10px; font-size: 11px; color: var(--muted);
+    cursor: pointer; transition: all 0.2s; font-family: 'Outfit', sans-serif; font-weight: 600;
+  }
+  .strat-actions button:hover { background: rgba(139,92,246,0.1); color: var(--text); border-color: rgba(139,92,246,0.2); }
+
+  /* ── Monthly Daily Grid (Portfolio) ── */
+  .monthly-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .monthly-nav-btn {
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    color: var(--text); font-weight: 600; font-size: 14px;
+    transition: all 0.2s; font-family: 'Outfit', sans-serif;
+  }
+  .monthly-nav-btn:hover { background: rgba(139,92,246,0.12); border-color: var(--accent); }
+  .monthly-grid-days {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 6px; margin-bottom: 16px;
+  }
+  .day-cell {
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 8px; padding: 10px 6px; text-align: center;
+    transition: transform 0.15s;
+  }
+  .day-cell:hover { transform: scale(1.05); }
+  .day-cell .dc-day { font-size: 10px; color: var(--muted); font-weight: 600; margin-bottom: 3px; }
+  .day-cell .dc-pnl { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; }
+  .day-cell .dc-trades { font-size: 9px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Yearly Monthly Table ── */
+  .ytd-grid {
+    display: grid; grid-template-columns: repeat(13, 1fr); gap: 4px;
+    font-size: 12px; text-align: center;
+  }
+  .ytd-header { font-weight: 700; color: var(--muted); font-size: 11px; padding: 8px 2px; }
+  .ytd-cell {
+    padding: 8px 4px; border-radius: 6px; font-family: 'JetBrains Mono', monospace;
+    font-weight: 600; font-size: 11px;
+  }
+  .ytd-year-label { font-weight: 700; font-size: 12px; color: var(--text); padding: 8px 2px; }
+
+  /* ── View Strategy Modal ── */
+  .vs-section { margin-bottom: 16px; }
+  .vs-section h4 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .vs-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .vs-cond-row { padding: 6px 10px; background: rgba(255,255,255,0.02); border-radius: 6px; margin-bottom: 4px; font-size: 13px; }
+
+  /* ── Light theme additions ── */
+  [data-theme="light"] .live-tabs-bar { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.06); }
+  [data-theme="light"] .live-tab-btn.active { background: rgba(139,92,246,0.1); }
+  [data-theme="light"] .signal-item { background: rgba(0,0,0,0.02); border-color: rgba(0,0,0,0.04); }
+  [data-theme="light"] .strat-folder-header { background: rgba(139,92,246,0.06); border-color: rgba(139,92,246,0.1); }
+  [data-theme="light"] .strat-row:hover { background: rgba(0,0,0,0.02); }
+  [data-theme="light"] .strat-actions button { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.06); }
+  [data-theme="light"] .day-cell { background: rgba(0,0,0,0.02); border-color: rgba(0,0,0,0.04); }
+  [data-theme="light"] .monthly-nav-btn { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.08); }
 </style>
 </head>
 <body>
@@ -868,6 +990,14 @@
       <div class="stat-value" id="dash-pnl">$0.00</div>
     </div>
     <div class="stat-box">
+      <div class="stat-label">Paper P&L</div>
+      <div class="stat-value" id="dash-paper-pnl" style="font-size:20px;">$0.00</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Live P&L</div>
+      <div class="stat-value" id="dash-live-pnl" style="font-size:20px;">$0.00</div>
+    </div>
+    <div class="stat-box">
       <div class="stat-label">Paper Status</div>
       <div class="stat-value" id="dash-paper" style="font-size: 16px;">Idle</div>
     </div>
@@ -879,6 +1009,12 @@
       <div class="stat-label">Broker</div>
       <div class="stat-value" id="dash-broker" style="font-size: 14px;">Delta Exchange</div>
     </div>
+  </div>
+
+  <!-- Active Engines Quick View -->
+  <div class="card" id="dash-engines-card" style="display:none;">
+    <h3 style="margin-bottom:12px;">⚡ Active Engines</h3>
+    <div id="dash-engines-list"></div>
   </div>
 
   <div class="card">
@@ -951,6 +1087,60 @@
 </div>
 
 
+<!-- ═══ VIEW STRATEGY MODAL ═══ -->
+<div id="view-strategy-overlay" class="cf-modal-overlay" style="display:none;">
+  <div class="cf-modal" style="max-width:600px;text-align:left;max-height:85vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h3 id="vs-title" style="font-size:18px;">Strategy Details</h3>
+      <button class="btn btn-outline btn-sm" onclick="closeViewStrategy()" style="padding:6px 12px;">✕</button>
+    </div>
+    <div class="vs-section">
+      <h4>Configuration</h4>
+      <div id="vs-config" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
+    </div>
+    <div class="vs-section">
+      <h4>Indicators</h4>
+      <div id="vs-indicators" class="vs-tags"></div>
+    </div>
+    <div class="vs-section">
+      <h4>Entry Conditions</h4>
+      <div id="vs-entry-conds"></div>
+    </div>
+    <div class="vs-section">
+      <h4>Exit Conditions</h4>
+      <div id="vs-exit-conds"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;">
+      <button class="btn btn-primary btn-sm" onclick="editStrategyFromView()">📝 Edit in Builder</button>
+      <button class="btn btn-success btn-sm" onclick="deployStrategyFromView()">🚀 Deploy</button>
+      <button class="btn btn-outline btn-sm" onclick="closeViewStrategy()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MOVE FOLDER MODAL ═══ -->
+<div id="move-folder-overlay" class="cf-modal-overlay" style="display:none;">
+  <div class="cf-modal" style="max-width:400px;">
+    <div class="cf-modal-icon">📁</div>
+    <div class="cf-modal-title">Move Strategy</div>
+    <div class="cf-modal-msg">Select a folder to move this strategy to:</div>
+    <select id="move-folder-select" style="width:100%;margin-bottom:12px;">
+      <option value="Default">Default</option>
+      <option value="Favorites">Favorites</option>
+      <option value="Testing">Testing</option>
+      <option value="Live">Live</option>
+      <option value="Archive">Archive</option>
+      <option value="_custom">Custom folder...</option>
+    </select>
+    <input type="text" id="move-folder-custom" placeholder="Custom folder name" style="display:none;margin-bottom:12px;">
+    <div class="cf-modal-actions">
+      <button class="btn btn-sm btn-outline" onclick="closeMoveFolder()">Cancel</button>
+      <button class="btn btn-sm btn-primary" onclick="confirmMoveTo()">Move</button>
+    </div>
+  </div>
+</div>
+
+
 <!-- ═══════════════════════════════════════════════════════
      PAGE 2: MARKET OVERVIEW — TOP 25 COINS
      ═══════════════════════════════════════════════════════ -->
@@ -1004,6 +1194,19 @@
         <div class="input-group">
           <label>Strategy Name</label>
           <input type="text" id="b-name" placeholder="My BTC Strategy" value="BTC Trend Follow">
+        </div>
+
+        <div class="input-group">
+          <label>Folder</label>
+          <select id="b-folder" onchange="onFolderChange()">
+            <option value="Default">Default</option>
+            <option value="Favorites">Favorites</option>
+            <option value="Testing">Testing</option>
+            <option value="Live">Live</option>
+            <option value="Archive">Archive</option>
+            <option value="_custom">Custom...</option>
+          </select>
+          <input type="text" id="b-folder-custom" placeholder="Custom folder name" style="display:none;margin-top:6px;">
         </div>
 
         <div class="input-group">
@@ -1145,6 +1348,17 @@
   <div id="results-list">
     <div style="color: var(--muted); text-align: center; padding: 40px;">No backtest runs yet.</div>
   </div>
+
+  <!-- Saved Strategies Section -->
+  <div class="card" style="margin-top:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h3>💾 Saved Strategies</h3>
+      <button class="btn btn-outline btn-sm" onclick="fetchStrategies()">🔄 Refresh</button>
+    </div>
+    <div id="strategies-list">
+      <div style="color:var(--muted);text-align:center;padding:20px;">No saved strategies yet.</div>
+    </div>
+  </div>
   <div id="result-detail" style="display: none;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
       <h3 id="rd-title" style="flex:1;">--</h3>
@@ -1202,6 +1416,12 @@
       </div>
     </div>
 
+    <!-- Yearly Breakdown -->
+    <div class="card">
+      <h3 style="margin-bottom: 12px;">📅 Yearly Breakdown</h3>
+      <div id="rd-yearly" style="overflow-x:auto;"></div>
+    </div>
+
     <!-- Day of Week Analysis -->
     <div class="card">
       <h3 style="margin-bottom: 14px;">📅 Day of Week Analysis</h3>
@@ -1221,9 +1441,23 @@
      PAGE 5: LIVE TRADING
      ═══════════════════════════════════════════════════════ -->
 <div id="live-page" class="page-section">
-  <h2 style="margin-bottom: 18px;">Live & Paper Trading</h2>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+    <h2>Live & Paper Trading</h2>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline btn-sm" onclick="loadLiveMonitor()">🔄 Refresh</button>
+    </div>
+  </div>
 
-  <!-- Paper Trading Panel -->
+  <!-- Multi-Engine Tab Bar -->
+  <div class="live-tabs-bar" id="live-tabs-bar">
+    <div class="live-tab-btn active" onclick="selectLiveTab(-1)">📊 Overview</div>
+  </div>
+
+  <!-- Multi-Engine Panel (dynamically rendered) -->
+  <div id="live-engine-panel"></div>
+
+  <!-- Paper Trading Panel (Overview / Single Engine) -->
+  <div id="paper-panel-wrap">
   <div class="trading-panel" id="paper-panel">
     <div class="trading-panel-header">
       <div style="display:flex;align-items:center;gap:12px;">
@@ -1309,7 +1543,9 @@
     </div>
     <div id="live-trades-empty" style="color: var(--muted); font-size: 14px; text-align:center; padding:20px;">No closed trades yet</div>
   </div>
-</div>
+  </div><!-- end paper-panel-wrap -->
+
+</div><!-- end live-page -->
 
 
 <!-- ═══════════════════════════════════════════════════════
@@ -1401,6 +1637,23 @@
       <div class="stat-box"><div class="stat-label">Live P&L</div><div class="stat-value" id="pf-live-pnl">$0.00</div></div>
       <div class="stat-box"><div class="stat-label">Trades</div><div class="stat-value" id="pf-live-trades">0</div></div>
     </div>
+  </div>
+
+  <!-- Monthly Daily P&L Grid -->
+  <div class="card" style="margin-top:20px;">
+    <div class="monthly-nav">
+      <button class="monthly-nav-btn" onclick="changeMonthlyMonth(-1)">← Prev</button>
+      <h3 id="monthly-title">Monthly P&L</h3>
+      <button class="monthly-nav-btn" onclick="changeMonthlyMonth(1)">Next →</button>
+    </div>
+    <div id="monthly-daily-grid" class="monthly-grid-days"></div>
+    <div id="monthly-daily-table" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- Year-to-Date Monthly Table -->
+  <div class="card" style="margin-top:20px;">
+    <h3 style="margin-bottom:14px;">📅 Year-to-Date Performance</h3>
+    <div id="ytd-table" style="overflow-x:auto;"></div>
   </div>
 </div>
 
@@ -1532,11 +1785,17 @@ function showPage(pageId, btn) {
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.getElementById(pageId).classList.add('active-page');
   if (btn) btn.classList.add('active');
+  // Persist active tab
+  var tabName = pageId.replace('-page', '');
+  localStorage.setItem('cf_active_tab', tabName);
 
   if (pageId === 'dashboard-page') loadDashboard();
   if (pageId === 'market-page') refreshMarket();
-  if (pageId === 'results-page') loadRuns();
-  if (pageId === 'portfolio-page') loadPortfolioData();
+  if (pageId === 'results-page') { loadRuns(); fetchStrategies(); }
+  if (pageId === 'live-page') startLiveMonitor();
+  if (pageId === 'portfolio-page') { loadPortfolioData(); loadPortfolioHistory(); }
+  // Stop live monitor when leaving live page
+  if (pageId !== 'live-page') stopLiveMonitor();
 }
 
 // ── Theme Toggle ───────────────────────────────────────────
@@ -1807,12 +2066,45 @@ async function loadDashboard() {
     pnlEl.textContent = '$' + pnl.toFixed(2);
     pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
 
-    document.getElementById('dash-paper').textContent = d.paper_running ? '🟢 Running' : 'Idle';
-    document.getElementById('dash-live').textContent = d.live_running ? '🔴 LIVE' : 'Idle';
+    // Paper/Live P&L split
+    var paperPnl = d.paper_pnl || 0;
+    var livePnl = d.live_pnl || 0;
+    var ppEl = document.getElementById('dash-paper-pnl');
+    if (ppEl) { ppEl.textContent = '$' + paperPnl.toFixed(2); ppEl.style.color = paperPnl >= 0 ? 'var(--green)' : 'var(--red)'; }
+    var lpEl = document.getElementById('dash-live-pnl');
+    if (lpEl) { lpEl.textContent = '$' + livePnl.toFixed(2); lpEl.style.color = livePnl >= 0 ? 'var(--green)' : 'var(--red)'; }
+
+    document.getElementById('dash-paper').textContent = d.paper_running ? '🟢 Running (' + (d.paper_count || 1) + ')' : 'Idle';
+    document.getElementById('dash-live').textContent = d.live_running ? '🔴 LIVE (' + (d.live_count || 1) + ')' : 'Idle';
     document.getElementById('dash-live').style.color = d.live_running ? 'var(--red)' : '';
 
     // Kill switch visibility
     document.getElementById('kill-switch-btn').classList.toggle('hidden', !d.paper_running && !d.live_running);
+
+    // Active engines
+    var engCard = document.getElementById('dash-engines-card');
+    var engList = document.getElementById('dash-engines-list');
+    if (engCard && engList) {
+      if (d.paper_running || d.live_running) {
+        engCard.style.display = 'block';
+        try {
+          var er = await fetch('/api/engines/all', { credentials: 'same-origin' });
+          var ed = await er.json();
+          var engines = ed.engines || [];
+          if (engines.length > 0) {
+            engList.innerHTML = engines.map(function(e) {
+              var ep = parseFloat(e.total_pnl) || 0;
+              return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border);">'
+                + '<div><b>' + (e.strategy_name || e.run_name || '') + '</b> <span class="tag ' + (e.mode === 'paper' ? 'tag-green' : 'tag-red') + '">' + (e.mode || '') + '</span></div>'
+                + '<div style="font-family:JetBrains Mono;font-weight:700;color:' + (ep >= 0 ? 'var(--green)' : 'var(--red)') + '">$' + ep.toFixed(2) + '</div>'
+                + '</div>';
+            }).join('');
+          } else { engCard.style.display = 'none'; }
+        } catch(e2) { engCard.style.display = 'none'; }
+      } else {
+        engCard.style.display = 'none';
+      }
+    }
 
     // Load recent runs
     const rr = await fetch('/api/runs', { credentials: 'same-origin' });
@@ -2031,6 +2323,8 @@ async function loadRuns() {
             <span class="tag tag-purple">${r.symbol || ''} ${r.leverage || 1}x</span>
             <span class="tag ${r.total_pnl >= 0 ? 'tag-green' : 'tag-red'}">$${(r.total_pnl||0).toFixed(2)}</span>
             <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
+                    onclick="event.stopPropagation();copyEditRun(${r.id})" title="Copy & Edit">📝</button>
+            <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
                     onclick="event.stopPropagation();deleteRun(${r.id})">🗑</button>
           </span>
         </div>
@@ -2135,6 +2429,9 @@ async function viewRun(rid) {
 
     // Day of Week Analysis
     renderDOW(run.day_of_week || []);
+
+    // Yearly Breakdown
+    renderYearlyBreakdown(run.yearly || []);
 
     // P&L Heatmap
     renderHeatmap(monthly);
@@ -2262,6 +2559,10 @@ async function saveStrategy() {
     exit_conditions: exitConditions,
     stoploss_pct: parseFloat(document.getElementById('b-sl').value),
     target_profit_pct: parseFloat(document.getElementById('b-tp').value),
+    folder: getSelectedFolder(),
+    initial_capital: parseFloat(document.getElementById('b-capital').value) || 10000,
+    position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
+    candle_interval: document.getElementById('b-interval').value,
   };
   try {
     await fetch('/api/strategies', {
@@ -2270,6 +2571,7 @@ async function saveStrategy() {
       body: JSON.stringify(payload),
     });
     cfToast('Strategy saved!', 'success');
+    fetchStrategies();
   } catch(e) { cfToast('Save failed: ' + e.message, 'error'); }
 }
 
@@ -2512,10 +2814,19 @@ function connectWS() {
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     ws.onmessage = (e) => {
       const data = JSON.parse(e.data);
-      // Handle periodic status updates from server
+      // Handle periodic status updates from server (multi-engine)
       if (data.type === 'status') {
         if (data.paper) updatePanel('paper', data.paper);
         if (data.live) updatePanel('live', data.live);
+        // Update engines if we get full engine data
+        if (data.engines) {
+          _liveEngines = data.engines;
+          if (document.getElementById('live-page').classList.contains('active-page')) {
+            renderLiveTabs();
+            if (_liveSelectedTab >= 0) renderLivePanel(_liveEngines[_liveSelectedTab], _liveSelectedTab);
+            else renderLiveOverview();
+          }
+        }
         var killBtn = document.getElementById('kill-switch-btn');
         if (killBtn) killBtn.classList.toggle('hidden', !data.paper_running && !data.live_running);
         var dot = document.getElementById('live-tab-dot');
@@ -2765,6 +3076,34 @@ function renderDOW(dowData) {
       '<div class="dow-trades">' + d.trades + ' trades</div>' +
       '</div>';
   }).join('');
+}
+
+// ── Yearly Breakdown ───────────────────────────────────────
+function renderYearlyBreakdown(yearlyData) {
+  var cont = document.getElementById('rd-yearly');
+  if (!cont) return;
+  if (!yearlyData || yearlyData.length === 0) {
+    cont.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;">No yearly data available.</div>';
+    return;
+  }
+  var html = '<table class="trade-table"><thead><tr>';
+  html += '<th>Year</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>P&L</th><th>Return %</th>';
+  html += '</tr></thead><tbody>';
+  yearlyData.forEach(function(y) {
+    var pnl = y.pnl || 0;
+    var winRate = y.trades > 0 ? ((y.wins || 0) / y.trades * 100).toFixed(1) : '0.0';
+    html += '<tr>';
+    html += '<td style="font-weight:700;">' + (y.year || '') + '</td>';
+    html += '<td>' + (y.trades || 0) + '</td>';
+    html += '<td style="color:var(--green);">' + (y.wins || 0) + '</td>';
+    html += '<td style="color:var(--red);">' + (y.losses || 0) + '</td>';
+    html += '<td>' + winRate + '%</td>';
+    html += '<td style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + pnl.toFixed(2) + '</td>';
+    html += '<td>' + (y.return_pct || 0).toFixed(1) + '%</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  cont.innerHTML = html;
 }
 
 // ── P&L Heatmap ────────────────────────────────────────────
@@ -3088,10 +3427,635 @@ async function loadPortfolioData() {
     var pfLiveTrades = document.getElementById('pf-live-trades');
     if (pfLiveTrades) pfLiveTrades.textContent = live.trades_today || live.closed_trades || 0;
 
+    // Load portfolio history for monthly/yearly grids
+    loadPortfolioHistory();
+
   } catch(e) {
     console.error('Portfolio load error:', e);
     cfToast('Failed to load portfolio data', 'error');
   }
+}
+
+// ── Folder Helper ──────────────────────────────────────────
+function onFolderChange() {
+  var sel = document.getElementById('b-folder');
+  var custom = document.getElementById('b-folder-custom');
+  if (sel && custom) {
+    custom.style.display = sel.value === '_custom' ? 'block' : 'none';
+  }
+}
+
+function getSelectedFolder() {
+  var sel = document.getElementById('b-folder');
+  if (sel && sel.value === '_custom') {
+    return document.getElementById('b-folder-custom').value || 'Default';
+  }
+  return sel ? sel.value : 'Default';
+}
+
+// ── Saved Strategies ───────────────────────────────────────
+let _savedStrategies = [];
+let _viewStrategyId = null;
+let _moveStrategyId = null;
+
+async function fetchStrategies() {
+  try {
+    var r = await fetch('/api/strategies', { credentials: 'same-origin' });
+    _savedStrategies = await r.json();
+    renderStrategiesList();
+  } catch(e) { console.error('fetchStrategies error:', e); }
+}
+
+function renderStrategiesList() {
+  var cont = document.getElementById('strategies-list');
+  if (!cont) return;
+  if (!_savedStrategies || _savedStrategies.length === 0) {
+    cont.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;">No saved strategies yet. Build one in the Strategy Builder!</div>';
+    return;
+  }
+  // Group by folder
+  var folders = {};
+  _savedStrategies.forEach(function(s) {
+    var f = s.folder || 'Default';
+    if (!folders[f]) folders[f] = [];
+    folders[f].push(s);
+  });
+  var html = '';
+  Object.keys(folders).sort().forEach(function(folder) {
+    var strats = folders[folder];
+    html += '<div class="strat-folder-group">';
+    html += '<div class="strat-folder-header" onclick="toggleFolder(this)">';
+    html += '<span class="folder-icon">📁</span> ' + folder;
+    html += '<span class="folder-count">' + strats.length + ' strategies</span>';
+    html += '</div>';
+    html += '<div class="strat-folder-body">';
+    strats.forEach(function(s) {
+      html += '<div class="strat-row">';
+      html += '<div style="flex:1;">';
+      html += '<div class="sr-name">' + (s.run_name || 'Untitled') + '</div>';
+      html += '<div class="sr-meta">' + (s.symbol || '') + ' • ' + (s.leverage || 1) + 'x • ' + (s.trade_side || '') + '</div>';
+      html += '</div>';
+      html += '<div class="strat-actions">';
+      html += '<button onclick="viewStrategy(\'' + s.id + '\')">👁 View</button>';
+      html += '<button onclick="loadStrategyToBuilder(\'' + s.id + '\')">📝 Edit</button>';
+      html += '<button onclick="openMoveFolder(\'' + s.id + '\')">📁 Move</button>';
+      html += '<button onclick="copyStrategy(\'' + s.id + '\')">📋 Copy</button>';
+      html += '<button onclick="deleteStrategy(\'' + s.id + '\')">🗑</button>';
+      html += '</div>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  });
+  cont.innerHTML = html;
+}
+
+function toggleFolder(headerEl) {
+  var body = headerEl.nextElementSibling;
+  if (body) body.classList.toggle('collapsed');
+}
+
+async function viewStrategy(sid) {
+  _viewStrategyId = sid;
+  var s = _savedStrategies.find(function(x) { return x.id == sid; });
+  if (!s) { cfToast('Strategy not found', 'error'); return; }
+  document.getElementById('vs-title').textContent = s.run_name || 'Strategy Details';
+  // Config grid
+  var cfg = [
+    ['Symbol', s.symbol || '--'],
+    ['Side', s.trade_side || '--'],
+    ['Leverage', (s.leverage || 1) + 'x'],
+    ['Stop Loss', (s.stoploss_pct || 0) + '%'],
+    ['Take Profit', (s.target_profit_pct || 0) + '%'],
+    ['Folder', s.folder || 'Default'],
+  ];
+  document.getElementById('vs-config').innerHTML = cfg.map(function(c) {
+    return '<div class="ti-item"><div class="ti-label">' + c[0] + '</div><div class="ti-value">' + c[1] + '</div></div>';
+  }).join('');
+  // Indicators
+  var inds = s.indicators || [];
+  document.getElementById('vs-indicators').innerHTML = inds.length > 0
+    ? inds.map(function(ind) { return '<span class="tag tag-purple">' + ind + '</span>'; }).join('')
+    : '<span style="color:var(--muted);font-size:13px;">No indicators</span>';
+  // Conditions
+  var formatConds = function(conds) {
+    if (!conds || conds.length === 0) return '<div style="color:var(--muted);font-size:13px;">No conditions</div>';
+    return conds.map(function(c, i) {
+      var prefix = i > 0 ? '<span style="color:var(--accent);font-weight:700;">' + (c.connector || 'AND') + '</span> ' : '';
+      var rightVal = c.right === 'number' ? (c.right_number_value || 0) : c.right;
+      return '<div class="vs-cond-row">' + prefix + c.left + ' <b>' + (c.operator || '').replace(/_/g, ' ') + '</b> ' + rightVal + '</div>';
+    }).join('');
+  };
+  document.getElementById('vs-entry-conds').innerHTML = formatConds(s.entry_conditions);
+  document.getElementById('vs-exit-conds').innerHTML = formatConds(s.exit_conditions);
+  document.getElementById('view-strategy-overlay').style.display = 'flex';
+}
+
+function closeViewStrategy() {
+  document.getElementById('view-strategy-overlay').style.display = 'none';
+}
+
+function editStrategyFromView() {
+  closeViewStrategy();
+  if (_viewStrategyId) loadStrategyToBuilder(_viewStrategyId);
+}
+
+function deployStrategyFromView() {
+  closeViewStrategy();
+  if (_viewStrategyId) {
+    loadStrategyToBuilder(_viewStrategyId);
+    setTimeout(openDeployModal, 300);
+  }
+}
+
+async function loadStrategyToBuilder(sid) {
+  var s = _savedStrategies.find(function(x) { return x.id == sid; });
+  if (!s) { cfToast('Strategy not found', 'error'); return; }
+  // Load into builder state
+  document.getElementById('b-name').value = s.run_name || '';
+  selectedCrypto = s.symbol || 'BTCUSDT';
+  selectedSide = s.trade_side || 'LONG';
+  selectedLeverage = s.leverage || 10;
+  indicators = [...(s.indicators || [])];
+  entryConditions = (s.entry_conditions || []).map(function(c) { return {...c}; });
+  exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
+  if (s.stoploss_pct) document.getElementById('b-sl').value = s.stoploss_pct;
+  if (s.target_profit_pct) document.getElementById('b-tp').value = s.target_profit_pct;
+  // Set folder
+  var folderSel = document.getElementById('b-folder');
+  if (folderSel) {
+    var found = false;
+    for (var i = 0; i < folderSel.options.length; i++) {
+      if (folderSel.options[i].value === (s.folder || 'Default')) { folderSel.selectedIndex = i; found = true; break; }
+    }
+    if (!found) { folderSel.value = '_custom'; document.getElementById('b-folder-custom').value = s.folder || ''; onFolderChange(); }
+    else onFolderChange();
+  }
+  // Update UI
+  showPage('builder-page', document.getElementById('nav-builder'));
+  initCryptoSelector();
+  renderLeverage(leverageOptions, selectedLeverage);
+  setSide(selectedSide);
+  renderIndicators();
+  renderConditions('entry');
+  renderConditions('exit');
+  cfToast('Strategy loaded: ' + (s.run_name || 'Untitled'), 'success');
+}
+
+async function copyStrategy(sid) {
+  var s = _savedStrategies.find(function(x) { return x.id == sid; });
+  if (!s) return;
+  var newName = generateCopyName(s.run_name || 'Untitled');
+  var payload = {...s, run_name: newName};
+  delete payload.id;
+  delete payload.created_at;
+  try {
+    await fetch('/api/strategies', {
+      method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    cfToast('Strategy copied as: ' + newName, 'success');
+    fetchStrategies();
+  } catch(e) { cfToast('Copy failed: ' + e.message, 'error'); }
+}
+
+function generateCopyName(name) {
+  if (name.match(/_copy(_\d+)?$/)) {
+    var base = name.replace(/_copy(_\d+)?$/, '');
+    var num = 2;
+    var match = name.match(/_copy_(\d+)$/);
+    if (match) num = parseInt(match[1]) + 1;
+    return base + '_copy_' + num;
+  }
+  return name + '_copy';
+}
+
+async function deleteStrategy(sid) {
+  var ok = await cfConfirm('Delete this saved strategy permanently?', 'Delete Strategy', '🗑️');
+  if (!ok) return;
+  try {
+    await fetch('/api/strategies/' + sid, { method: 'DELETE', credentials: 'same-origin' });
+    cfToast('Strategy deleted', 'success');
+    fetchStrategies();
+  } catch(e) { cfToast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── Move Strategy Folder ───────────────────────────────────
+function openMoveFolder(sid) {
+  _moveStrategyId = sid;
+  document.getElementById('move-folder-select').value = 'Default';
+  document.getElementById('move-folder-custom').style.display = 'none';
+  document.getElementById('move-folder-overlay').style.display = 'flex';
+  // Set up change handler
+  document.getElementById('move-folder-select').onchange = function() {
+    document.getElementById('move-folder-custom').style.display = this.value === '_custom' ? 'block' : 'none';
+  };
+}
+
+function closeMoveFolder() {
+  document.getElementById('move-folder-overlay').style.display = 'none';
+}
+
+async function confirmMoveTo() {
+  var sel = document.getElementById('move-folder-select').value;
+  var folder = sel === '_custom' ? (document.getElementById('move-folder-custom').value || 'Default') : sel;
+  closeMoveFolder();
+  try {
+    await fetch('/api/strategies/' + _moveStrategyId, {
+      method: 'PUT', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({folder: folder}),
+    });
+    cfToast('Strategy moved to ' + folder, 'success');
+    fetchStrategies();
+  } catch(e) { cfToast('Move failed: ' + e.message, 'error'); }
+}
+
+// ── Copy/Edit Run from Results ─────────────────────────────
+async function copyEditRun(runId) {
+  try {
+    var r = await fetch('/api/runs/' + runId, { credentials: 'same-origin' });
+    var run = await r.json();
+    copyEditStrategy(run);
+  } catch(e) { cfToast('Failed to load run', 'error'); }
+}
+
+function copyEditStrategy(data) {
+  document.getElementById('b-name').value = (data.run_name || 'Untitled') + '_edit';
+  selectedCrypto = data.symbol || 'BTCUSDT';
+  selectedSide = data.trade_side || 'LONG';
+  selectedLeverage = data.leverage || 10;
+  indicators = [...(data.indicators || [])];
+  entryConditions = (data.entry_conditions || []).map(function(c) { return {...c}; });
+  exitConditions = (data.exit_conditions || []).map(function(c) { return {...c}; });
+  if (data.stoploss_pct) document.getElementById('b-sl').value = data.stoploss_pct;
+  if (data.target_profit_pct) document.getElementById('b-tp').value = data.target_profit_pct;
+  if (data.initial_capital) document.getElementById('b-capital').value = data.initial_capital;
+  if (data.position_size_pct) document.getElementById('b-possize').value = data.position_size_pct;
+  if (data.candle_interval) document.getElementById('b-interval').value = data.candle_interval;
+  // Navigate to builder
+  showPage('builder-page', document.getElementById('nav-builder'));
+  initCryptoSelector();
+  renderLeverage(leverageOptions, selectedLeverage);
+  setSide(selectedSide);
+  renderIndicators();
+  renderConditions('entry');
+  renderConditions('exit');
+  cfToast('Run loaded for editing', 'success');
+}
+
+// ── Multi-Engine Live Monitor ──────────────────────────────
+let _liveMonitorInterval = null;
+let _liveEngines = [];
+let _liveSelectedTab = -1; // -1 = overview
+
+function startLiveMonitor() {
+  loadLiveMonitor();
+  if (_liveMonitorInterval) clearInterval(_liveMonitorInterval);
+  _liveMonitorInterval = setInterval(loadLiveMonitor, 5000);
+}
+
+function stopLiveMonitor() {
+  if (_liveMonitorInterval) { clearInterval(_liveMonitorInterval); _liveMonitorInterval = null; }
+}
+
+async function loadLiveMonitor() {
+  try {
+    var r = await fetch('/api/engines/all', { credentials: 'same-origin' });
+    var data = await r.json();
+    _liveEngines = data.engines || [];
+    renderLiveTabs();
+    if (_liveSelectedTab >= 0 && _liveSelectedTab < _liveEngines.length) {
+      renderLivePanel(_liveEngines[_liveSelectedTab], _liveSelectedTab);
+    } else {
+      renderLiveOverview();
+    }
+    // Also update the simple paper/live panels
+    pollLiveStatus();
+  } catch(e) { console.error('loadLiveMonitor error:', e); }
+}
+
+function selectLiveTab(idx) {
+  _liveSelectedTab = idx;
+  // Update tab active states
+  document.querySelectorAll('.live-tab-btn').forEach(function(btn, i) {
+    btn.classList.toggle('active', (idx === -1 && i === 0) || (idx >= 0 && i === idx + 1));
+  });
+  if (idx >= 0 && idx < _liveEngines.length) {
+    renderLivePanel(_liveEngines[idx], idx);
+  } else {
+    renderLiveOverview();
+  }
+}
+
+function renderLiveTabs() {
+  var bar = document.getElementById('live-tabs-bar');
+  if (!bar) return;
+  var combinedPnl = 0;
+  _liveEngines.forEach(function(e) { combinedPnl += parseFloat(e.total_pnl) || 0; });
+  var html = '<div class="live-tab-btn ' + (_liveSelectedTab === -1 ? 'active' : '') + '" onclick="selectLiveTab(-1)">📊 Overview</div>';
+  _liveEngines.forEach(function(e, i) {
+    var dotClass = e.mode === 'paper' ? 'paper' : 'live';
+    var label = (e.strategy_name || e.run_name || 'Engine') + ' (' + (e.mode || 'paper') + ')';
+    html += '<div class="live-tab-btn ' + (_liveSelectedTab === i ? 'active' : '') + '" onclick="selectLiveTab(' + i + ')">';
+    html += '<span class="lt-dot ' + dotClass + '"></span>' + label;
+    html += '</div>';
+  });
+  if (_liveEngines.length > 0) {
+    var pnlColor = combinedPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    html += '<div class="live-combined-pnl"><span style="color:var(--muted);font-size:12px;">Combined:</span> <span style="color:' + pnlColor + '">$' + combinedPnl.toFixed(2) + '</span></div>';
+  }
+  bar.innerHTML = html;
+}
+
+function renderLiveOverview() {
+  var panel = document.getElementById('live-engine-panel');
+  if (!panel) return;
+  if (_liveEngines.length === 0) {
+    panel.innerHTML = '<div class="card" style="text-align:center;padding:40px;color:var(--muted);">No engines running. Start a paper or live trade from the Builder page.</div>';
+    return;
+  }
+  var html = '<div class="stats-grid" style="margin-bottom:16px;">';
+  var totalPnl = 0, totalTrades = 0, paperCount = 0, liveCount = 0;
+  _liveEngines.forEach(function(e) {
+    totalPnl += parseFloat(e.total_pnl) || 0;
+    totalTrades += (e.trades_today || 0);
+    if (e.mode === 'paper') paperCount++; else liveCount++;
+  });
+  html += '<div class="stat-box"><div class="stat-label">Running Engines</div><div class="stat-value" style="color:var(--accent);">' + _liveEngines.length + '</div></div>';
+  html += '<div class="stat-box"><div class="stat-label">Paper / Live</div><div class="stat-value">' + paperCount + ' / ' + liveCount + '</div></div>';
+  html += '<div class="stat-box"><div class="stat-label">Combined P&L</div><div class="stat-value" style="color:' + (totalPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">$' + totalPnl.toFixed(2) + '</div></div>';
+  html += '<div class="stat-box"><div class="stat-label">Total Trades Today</div><div class="stat-value">' + totalTrades + '</div></div>';
+  html += '</div>';
+  // Brief cards for each engine
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">';
+  _liveEngines.forEach(function(e, i) {
+    var pnl = parseFloat(e.total_pnl) || 0;
+    var modeIcon = e.mode === 'paper' ? '📄' : '🔴';
+    var modeBadge = e.mode === 'paper' ? '<span class="tp-badge running">PAPER</span>' : '<span class="tp-badge live">LIVE</span>';
+    html += '<div class="card" style="cursor:pointer;" onclick="selectLiveTab(' + i + ')">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
+    html += '<div style="display:flex;gap:8px;align-items:center;">' + modeIcon + '<b>' + (e.strategy_name || e.run_name || 'Engine') + '</b></div>';
+    html += modeBadge;
+    html += '</div>';
+    html += '<div class="trading-info-grid">';
+    html += '<div class="ti-item"><div class="ti-label">Symbol</div><div class="ti-value">' + (e.symbol || '--') + '</div></div>';
+    html += '<div class="ti-item"><div class="ti-label">P&L</div><div class="ti-value" style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + '">$' + pnl.toFixed(2) + '</div></div>';
+    html += '<div class="ti-item"><div class="ti-label">Trades</div><div class="ti-value">' + (e.trades_today || 0) + '</div></div>';
+    html += '<div class="ti-item"><div class="ti-label">Leverage</div><div class="ti-value">' + (e.leverage || 1) + 'x</div></div>';
+    html += '</div>';
+    html += '<div style="margin-top:10px;"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();stopEngine(\'' + (e.run_id || '') + '\',\'' + (e.mode || 'paper') + '\')">⏹ Stop</button></div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  panel.innerHTML = html;
+}
+
+function renderLivePanel(d, idx) {
+  var panel = document.getElementById('live-engine-panel');
+  if (!panel || !d) return;
+  var pnl = parseFloat(d.total_pnl) || 0;
+  var modeIcon = d.mode === 'paper' ? '📄' : '🔴';
+  var modeLabel = d.mode === 'paper' ? 'Paper' : 'Live';
+  var html = '<div class="trading-panel">';
+  // Header
+  html += '<div class="trading-panel-header">';
+  html += '<div style="display:flex;align-items:center;gap:12px;">';
+  html += '<span style="font-size:22px;">' + modeIcon + '</span>';
+  html += '<div><h3 style="margin:0;">' + (d.strategy_name || d.run_name || 'Engine') + '</h3>';
+  html += '<div style="font-size:11px;color:var(--muted);margin-top:2px;">' + modeLabel + ' • ' + (d.symbol || '') + ' • ' + (d.leverage || 1) + 'x</div></div>';
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center;">';
+  html += '<span class="tp-badge ' + (d.mode === 'paper' ? 'running' : 'live') + '">' + (d.mode === 'paper' ? 'RUNNING' : 'LIVE') + '</span>';
+  html += '<button class="btn btn-outline btn-sm" onclick="downloadEngineCSV(\'' + (d.run_id || '') + '\',\'' + (d.mode || '') + '\')">📥</button>';
+  html += '<button class="btn btn-danger btn-sm" onclick="stopEngine(\'' + (d.run_id || '') + '\',\'' + (d.mode || 'paper') + '\')">⏹ Stop</button>';
+  html += '</div></div>';
+  // Stats grid
+  html += '<div class="trading-info-grid">';
+  html += '<div class="ti-item"><div class="ti-label">Total P&L</div><div class="ti-value" style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + pnl.toFixed(2) + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Daily P&L</div><div class="ti-value">$' + ((d.daily_pnl || 0)).toFixed(2) + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Trades Today</div><div class="ti-value">' + (d.trades_today || 0) + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Open</div><div class="ti-value">' + (d.open_positions || 0) + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Closed</div><div class="ti-value">' + (d.closed_trades || 0) + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Side</div><div class="ti-value" style="color:' + ((d.trade_side||'').toLowerCase() === 'long' ? 'var(--green)' : 'var(--red)') + '">' + (d.trade_side || '--') + '</div></div>';
+  html += '</div>';
+  // Current Indicators/Signals
+  var indicators = d.current_indicators || {};
+  var indKeys = Object.keys(indicators);
+  if (indKeys.length > 0) {
+    html += '<h4 style="margin:16px 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📊 Current Indicators</h4>';
+    html += '<div class="signal-grid">';
+    indKeys.forEach(function(k) {
+      var v = indicators[k];
+      var formatted = typeof v === 'number' ? (v > 100 ? v.toFixed(2) : v.toFixed(4)) : v;
+      html += '<div class="signal-item"><div class="si-label">' + k + '</div><div class="si-value">' + formatted + '</div></div>';
+    });
+    html += '</div>';
+  }
+  // Current Candle
+  var candle = d.current_candle || {};
+  if (candle.close) {
+    html += '<h4 style="margin:16px 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">🕯️ Current Candle</h4>';
+    html += '<div class="signal-grid">';
+    ['open','high','low','close','volume'].forEach(function(k) {
+      if (candle[k] !== undefined) {
+        var val = k === 'volume' ? parseFloat(candle[k]).toLocaleString() : '$' + parseFloat(candle[k]).toFixed(2);
+        html += '<div class="signal-item"><div class="si-label">' + k.toUpperCase() + '</div><div class="si-value">' + val + '</div></div>';
+      }
+    });
+    html += '</div>';
+  }
+  // Event Log
+  var events = d.event_log || [];
+  if (events.length > 0) {
+    html += '<h4 style="margin:16px 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📋 Event Log</h4>';
+    html += '<div class="trade-log-panel" style="max-height:200px;">';
+    events.slice(-30).reverse().forEach(function(ev) {
+      var ts = ev.time || '';
+      var msg = ev.message || ev.event || '';
+      var typeClass = (msg.toLowerCase().includes('entry') || msg.toLowerCase().includes('buy')) ? 'log-entry-signal' :
+                      (msg.toLowerCase().includes('exit') || msg.toLowerCase().includes('sell')) ? 'log-exit-signal' :
+                      msg.toLowerCase().includes('error') ? 'log-error' : 'log-info';
+      html += '<div class="log-entry"><span class="log-time">' + ts + '</span> <span class="' + typeClass + '">' + msg + '</span></div>';
+    });
+    html += '</div>';
+  }
+  // Closed Trades Table
+  var trades = d.recent_trades || [];
+  if (trades.length > 0) {
+    html += '<h4 style="margin:16px 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📊 Completed Trades</h4>';
+    html += '<div style="overflow-x:auto;"><table class="trade-table"><thead><tr>';
+    html += '<th>#</th><th>Symbol</th><th>Side</th><th>Entry $</th><th>Exit $</th><th>P&L</th><th>Reason</th>';
+    html += '</tr></thead><tbody>';
+    trades.slice(0, 20).forEach(function(t, i) {
+      var tpnl = parseFloat(t.pnl) || 0;
+      html += '<tr><td>' + (i + 1) + '</td>';
+      html += '<td>' + (t.symbol || d.symbol || '--') + '</td>';
+      html += '<td><span class="tag ' + ((t.side||'').toLowerCase() === 'long' ? 'tag-green' : 'tag-red') + '">' + (t.side || '--') + '</span></td>';
+      html += '<td>$' + (parseFloat(t.entry_price) || 0).toFixed(2) + '</td>';
+      html += '<td>$' + (parseFloat(t.exit_price) || 0).toFixed(2) + '</td>';
+      html += '<td style="color:' + (tpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + tpnl.toFixed(2) + '</td>';
+      html += '<td>' + reasonTag(t.exit_reason || '') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+  panel.innerHTML = html;
+}
+
+async function stopEngine(runId, mode) {
+  var ok = await cfConfirm('Stop this ' + mode + ' engine?', 'Stop Engine', '⏹️');
+  if (!ok) return;
+  var endpoint = mode === 'live' ? '/api/live/stop' : '/api/paper/stop';
+  try {
+    await fetch(endpoint, {
+      method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({run_id: runId}),
+    });
+    cfToast('Engine stopped', 'success');
+    setTimeout(loadLiveMonitor, 500);
+  } catch(e) { cfToast('Stop failed: ' + e.message, 'error'); }
+}
+
+async function downloadEngineCSV(runId, mode) {
+  try {
+    var endpoint = mode === 'live' ? '/api/live/trades/csv' : '/api/paper/trades/csv';
+    if (runId) endpoint += '?run_id=' + encodeURIComponent(runId);
+    var r = await fetch(endpoint, { credentials: 'same-origin' });
+    if (r.ok) {
+      var blob = await r.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = mode + '_trades_' + (runId || 'all') + '.csv'; a.click();
+      URL.revokeObjectURL(url);
+      cfToast('Trades exported', 'success');
+    } else {
+      cfToast('No trades to export', 'warning');
+    }
+  } catch(e) { cfToast('Export failed', 'error'); }
+}
+
+// ── Portfolio Monthly/Yearly P&L ───────────────────────────
+let _portfolioHistory = null;
+let _monthlyViewMonth = null; // YYYY-MM
+
+async function loadPortfolioHistory() {
+  try {
+    var r = await fetch('/api/portfolio/history', { credentials: 'same-origin' });
+    _portfolioHistory = await r.json();
+    if (!_monthlyViewMonth) {
+      var now = new Date();
+      _monthlyViewMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    }
+    renderMonthlyDailyGrid();
+    renderYearlyMonthlyTable();
+  } catch(e) { console.error('Portfolio history error:', e); }
+}
+
+function changeMonthlyMonth(delta) {
+  if (!_monthlyViewMonth) {
+    var now = new Date();
+    _monthlyViewMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  }
+  var parts = _monthlyViewMonth.split('-');
+  var yr = parseInt(parts[0]);
+  var mo = parseInt(parts[1]) + delta;
+  if (mo < 1) { yr--; mo = 12; }
+  if (mo > 12) { yr++; mo = 1; }
+  _monthlyViewMonth = yr + '-' + String(mo).padStart(2, '0');
+  renderMonthlyDailyGrid();
+}
+
+function renderMonthlyDailyGrid() {
+  var titleEl = document.getElementById('monthly-title');
+  var gridEl = document.getElementById('monthly-daily-grid');
+  var tableEl = document.getElementById('monthly-daily-table');
+  if (!titleEl || !gridEl) return;
+  if (!_monthlyViewMonth) {
+    var now = new Date();
+    _monthlyViewMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  }
+  var parts = _monthlyViewMonth.split('-');
+  var yr = parseInt(parts[0]);
+  var mo = parseInt(parts[1]);
+  var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  titleEl.textContent = monthNames[mo - 1] + ' ' + yr + ' P&L';
+  var daily = (_portfolioHistory && _portfolioHistory.daily) ? _portfolioHistory.daily : {};
+  // Generate days in month
+  var daysInMonth = new Date(yr, mo, 0).getDate();
+  var html = '';
+  var totalPnl = 0;
+  var totalTrades = 0;
+  var dayData = [];
+  for (var d = 1; d <= daysInMonth; d++) {
+    var key = yr + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    var data = daily[key] || { pnl: 0, trades: 0 };
+    totalPnl += data.pnl || 0;
+    totalTrades += data.trades || 0;
+    dayData.push({day: d, key: key, pnl: data.pnl || 0, trades: data.trades || 0});
+    var pnlVal = data.pnl || 0;
+    var color = pnlVal > 0 ? 'var(--green)' : pnlVal < 0 ? 'var(--red)' : 'var(--muted)';
+    var bg = pnlVal > 0 ? 'rgba(34,197,94,0.06)' : pnlVal < 0 ? 'rgba(239,68,68,0.06)' : '';
+    html += '<div class="day-cell" style="background:' + bg + ';">';
+    html += '<div class="dc-day">' + d + '</div>';
+    html += '<div class="dc-pnl" style="color:' + color + '">$' + pnlVal.toFixed(2) + '</div>';
+    if (data.trades) html += '<div class="dc-trades">' + data.trades + ' trades</div>';
+    html += '</div>';
+  }
+  gridEl.innerHTML = html;
+  // Summary below
+  if (tableEl) {
+    tableEl.innerHTML = '<div style="display:flex;gap:20px;padding:12px;background:rgba(255,255,255,0.02);border-radius:10px;">'
+      + '<div><span style="color:var(--muted);font-size:12px;">Monthly P&L:</span> <span style="font-weight:700;color:' + (totalPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">$' + totalPnl.toFixed(2) + '</span></div>'
+      + '<div><span style="color:var(--muted);font-size:12px;">Total Trades:</span> <span style="font-weight:700;">' + totalTrades + '</span></div>'
+      + '</div>';
+  }
+}
+
+function renderYearlyMonthlyTable() {
+  var cont = document.getElementById('ytd-table');
+  if (!cont) return;
+  if (!_portfolioHistory || !_portfolioHistory.monthly) {
+    cont.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;">No historical data available yet.</div>';
+    return;
+  }
+  var monthly = _portfolioHistory.monthly || {};
+  var monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  // Collect years
+  var years = {};
+  Object.keys(monthly).forEach(function(key) {
+    var parts = key.split('-');
+    var yr = parts[0];
+    var mo = parseInt(parts[1]) - 1;
+    if (!years[yr]) years[yr] = new Array(12).fill(null);
+    years[yr][mo] = monthly[key];
+  });
+  var yearKeys = Object.keys(years).sort();
+  if (yearKeys.length === 0) {
+    cont.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;">No historical data available.</div>';
+    return;
+  }
+  var html = '<div class="ytd-grid">';
+  // Headers
+  html += '<div class="ytd-header">Year</div>';
+  monthNames.forEach(function(m) { html += '<div class="ytd-header">' + m + '</div>'; });
+  // Rows
+  yearKeys.forEach(function(yr) {
+    html += '<div class="ytd-year-label">' + yr + '</div>';
+    years[yr].forEach(function(data) {
+      if (data === null) {
+        html += '<div class="ytd-cell" style="color:var(--muted);">—</div>';
+      } else {
+        var pnl = data.pnl || 0;
+        var color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        var bg = pnl >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
+        html += '<div class="ytd-cell" style="background:' + bg + ';color:' + color + ';" title="$' + pnl.toFixed(2) + ' (' + (data.trades || 0) + ' trades)">$' + (Math.abs(pnl) >= 1000 ? (pnl/1000).toFixed(1) + 'K' : pnl.toFixed(0)) + '</div>';
+      }
+    });
+  });
+  html += '</div>';
+  cont.innerHTML = html;
 }
 
 // ── Init ───────────────────────────────────────────────────
@@ -3103,9 +4067,16 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshTopbarTicker();
   connectWS();
   requestNotificationPermission();
+  fetchStrategies();
   setInterval(refreshTopbarTicker, 30000);
   setInterval(pollLiveStatus, 10000);
-  setInterval(loadPortfolioData, 60000);
+  setInterval(function() { if (document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData(); }, 60000);
+  // Restore last active tab
+  var savedTab = localStorage.getItem('cf_active_tab');
+  if (savedTab) {
+    var tabBtn = document.getElementById('nav-' + savedTab);
+    if (tabBtn) showPage(savedTab + '-page', tabBtn);
+  }
 });
 </script>
 </body>

@@ -1,33 +1,144 @@
 """
 engine/live.py — CryptoForge Live Trading Engine
-Perpetual futures auto-trading via Delta Exchange.
+Perpetual futures auto-trading via Delta Exchange with REAL orders.
+Production-ready: state persistence, event logging, indicator tracking, multi-engine support.
 """
 
 import asyncio
-from datetime import datetime
+import json as _json
+import math
+import os
+import sys
+from datetime import datetime, date as date_type, timedelta
 from typing import Callable, Optional
-import sys, os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from engine.indicators import compute_dynamic_indicators
 from engine.backtest import eval_condition_group
 import config
 
+# ── State File ────────────────────────────────────────────────
+_STATE_DIR = os.path.dirname(os.path.dirname(__file__))
+_DEFAULT_STATE_FILE = os.path.join(_STATE_DIR, "live_state.json")
+
 
 class LiveEngine:
-    """Live perpetual futures trading engine with Delta Exchange."""
+    """Live perpetual futures trading engine with Delta Exchange.
+    Multi-engine ready (keyed by run_id). State-persistent across restarts."""
 
-    def __init__(self, broker):
+    def __init__(self, broker, run_id: str = None):
         self.broker = broker
         self.running = False
+        self.run_id = run_id
+        self.session_date = None
+
+        # Per-instance state file
+        if run_id:
+            safe_id = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in run_id)
+            self._state_file = os.path.join(_STATE_DIR, f"live_state_{safe_id}.json")
+        else:
+            self._state_file = _DEFAULT_STATE_FILE
+
+        # Strategy configuration
         self.strategy = {}
         self.entry_conditions = []
         self.exit_conditions = []
         self.deploy_config = {}
+
+        # Trading state
+        self.in_trade = False
         self.open_trades = []
         self.closed_trades = []
         self.total_pnl = 0.0
         self.trades_today = 0
+        self.daily_pnl = 0.0
+        self.max_daily_loss = 0.0
         self._last_trade_date = None
+
+        # Live data tracking for UI
+        self.current_indicators = {}
+        self.current_candle = {}
+
+        # Event logging
+        self.event_log = []
+
+        # Restore last session
+        self._load_state()
+
+    # ── STATE PERSISTENCE ─────────────────────────────────────
+    def _save_state(self):
+        """Persist current session state to disk."""
+        try:
+            state = {
+                "session_date": str(self.session_date) if self.session_date else None,
+                "strategy_name": self.strategy.get("run_name", ""),
+                "symbol": self.strategy.get("symbol", ""),
+                "in_trade": self.in_trade,
+                "open_trades": self.open_trades,
+                "closed_trades": self.closed_trades,
+                "trades_today": self.trades_today,
+                "daily_pnl": self.daily_pnl,
+                "total_pnl": self.total_pnl,
+                "current_candle": self.current_candle,
+                "current_indicators": {
+                    k: (v if not isinstance(v, float) or not math.isnan(v) else None)
+                    for k, v in self.current_indicators.items()
+                },
+                "event_log": [
+                    {"time": e["time"].strftime("%Y-%m-%d %H:%M:%S") if isinstance(e["time"], datetime) else str(e["time"]),
+                     "type": e["type"], "message": e["message"]}
+                    for e in self.event_log[-100:]
+                ],
+                "saved_at": str(datetime.utcnow()),
+            }
+            with open(self._state_file, "w") as f:
+                _json.dump(state, f, indent=2, default=str)
+        except Exception as e:
+            print(f"[LIVE] State save failed: {e}")
+
+    def _load_state(self):
+        """Load last session state from disk."""
+        try:
+            if not os.path.exists(self._state_file):
+                return
+            with open(self._state_file, "r") as f:
+                state = _json.load(f)
+
+            saved_date = state.get("session_date")
+            today = str(date_type.today())
+            if saved_date != today:
+                print(f"[LIVE] Stale state from {saved_date} (today={today}) — ignoring")
+                return
+
+            self.session_date = date_type.today()
+            self.in_trade = state.get("in_trade", False)
+            self.open_trades = state.get("open_trades", [])
+            self.closed_trades = state.get("closed_trades", [])
+            self.trades_today = state.get("trades_today", 0)
+            self.daily_pnl = state.get("daily_pnl", 0.0)
+            self.total_pnl = state.get("total_pnl", 0.0)
+            self.current_candle = state.get("current_candle", {})
+            self.current_indicators = state.get("current_indicators", {})
+
+            if state.get("strategy_name"):
+                self.strategy["run_name"] = state["strategy_name"]
+            if state.get("symbol"):
+                self.strategy["symbol"] = state["symbol"]
+
+            raw_log = state.get("event_log", [])
+            for entry in raw_log:
+                try:
+                    t = datetime.strptime(entry["time"], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    t = datetime.utcnow()
+                self.event_log.append({"time": t, "type": entry["type"],
+                                       "message": entry["message"], "data": {}})
+
+            n = len(self.closed_trades)
+            pnl = sum(t.get("pnl", 0) for t in self.closed_trades)
+            print(f"[LIVE] Restored state: {n} trades, P&L=${pnl:,.2f}")
+        except Exception as e:
+            print(f"[LIVE] State load failed: {e}")
 
     def configure(self, strategy: dict, entry_conditions: list,
                   exit_conditions: list, deploy_config: dict = None):
@@ -35,13 +146,24 @@ class LiveEngine:
         self.entry_conditions = entry_conditions
         self.exit_conditions = exit_conditions
         self.deploy_config = deploy_config or {}
+        self.log_event("info", f"Strategy configured: {strategy.get('run_name', 'Unnamed')}")
+
+    def log_event(self, event_type: str, message: str, data: dict = None):
+        event = {
+            "time": datetime.utcnow(),
+            "type": event_type,
+            "message": message,
+            "data": data or {},
+        }
+        self.event_log.append(event)
+        ts = event["time"].strftime("%H:%M:%S")
+        print(f"[LIVE] [{ts}] [{event_type.upper()}] {message}")
 
     async def start(self, callback: Callable = None):
         self.running = True
-        self.open_trades = []
-        self.closed_trades = []
-        self.total_pnl = 0.0
-        self.trades_today = 0
+        self.session_date = date_type.today()
+        self.daily_pnl = 0.0
+        self.max_daily_loss = float(self.strategy.get("max_daily_loss", 0) or 0)
 
         symbol = self.strategy.get("symbol", "BTCUSDT")
         leverage = int(self.strategy.get("leverage", 10))
@@ -55,16 +177,27 @@ class LiveEngine:
         position_size_pct = float(self.strategy.get("position_size_pct", 100))
         candle_interval = self.strategy.get("candle_interval", "5m")
 
-        # Get product ID
+        # Get product ID for real orders
         product = self.broker.get_product_by_symbol(symbol)
         product_id = product.get("id") if product else None
 
-        # Set leverage
+        # Set leverage on exchange
         if product_id:
-            self.broker.set_leverage(product_id, leverage)
+            try:
+                self.broker.set_leverage(product_id, leverage)
+                self.log_event("info", f"Leverage set to {leverage}x on {symbol}")
+            except Exception as e:
+                self.log_event("warn", f"Could not set leverage: {e}")
+
+        self.log_event("start", f"LIVE Trading Engine Started — {symbol} {leverage}x {trade_side}")
+        self.log_event("info", f"Timeframe: {candle_interval} | SL: {sl_pct}% | TP: {tp_pct}%")
+        self.log_event("info", f"Max trades/day: {max_tpd} | Capital: ${capital:,.0f}")
+        self.log_event("warn", "REAL MONEY — Orders will be placed on Delta Exchange")
+        if self.max_daily_loss > 0:
+            self.log_event("info", f"Max daily loss: ${self.max_daily_loss:,.0f}")
 
         if callback:
-            await callback({"type": "started", "symbol": symbol, "leverage": leverage})
+            await callback({"type": "started", "symbol": symbol, "leverage": leverage, "mode": "live"})
 
         while self.running:
             try:
@@ -73,14 +206,22 @@ class LiveEngine:
 
                 if today != self._last_trade_date:
                     self.trades_today = 0
+                    self.daily_pnl = 0.0
                     self._last_trade_date = today
 
-                # Fetch enough candle history for indicators (3 days)
-                from datetime import timedelta
+                # Max daily loss check
+                if self.max_daily_loss > 0 and self.daily_pnl <= -self.max_daily_loss:
+                    self.log_event("warn", f"Max daily loss hit (${self.daily_pnl:,.2f}) — pausing entries")
+                    await asyncio.sleep(poll_interval)
+                    continue
+
+                # Fetch candle history for indicators
                 lookback = now - timedelta(days=3)
-                df = await self.broker.async_get_candles(symbol, resolution=candle_interval,
-                                             start=lookback.strftime("%Y-%m-%d"),
-                                             end=now.strftime("%Y-%m-%d"))
+                df = await self.broker.async_get_candles(
+                    symbol, resolution=candle_interval,
+                    start=lookback.strftime("%Y-%m-%d"),
+                    end=now.strftime("%Y-%m-%d"),
+                )
                 if df.empty:
                     await asyncio.sleep(poll_interval)
                     continue
@@ -90,32 +231,51 @@ class LiveEngine:
                 prev = df.iloc[-2] if len(df) > 1 else row
                 price = float(row["close"])
 
-                # Check open positions
+                # Update UI tracking
+                self.current_candle = {
+                    "time": str(row.name) if hasattr(row, 'name') else str(now),
+                    "open": float(row.get("open", 0)),
+                    "high": float(row.get("high", 0)),
+                    "low": float(row.get("low", 0)),
+                    "close": price,
+                    "volume": float(row.get("volume", 0)),
+                }
+                self.current_indicators = {}
+                for ind in indicators:
+                    col = ind.lower()
+                    for c in df.columns:
+                        if c.lower().startswith(col) or col in c.lower():
+                            val = row.get(c)
+                            if val is not None and not (isinstance(val, float) and math.isnan(val)):
+                                self.current_indicators[c] = round(float(val), 6)
+
                 in_trade = len(self.open_trades) > 0
 
                 if not in_trade:
                     if self.trades_today < max_tpd:
                         if eval_condition_group(row, self.entry_conditions, prev):
-                            # Calculate position size from capital (matching paper engine)
                             margin = capital * (position_size_pct / 100)
                             notional = margin * leverage
-                            # Size in contracts (notional / price, rounded to int)
                             size = max(1, int(notional / price))
                             side = "buy" if trade_side == "LONG" else "sell"
 
+                            order_id = "sim"
                             if product_id:
-                                result = self.broker.place_order(
-                                    product_id=product_id,
-                                    size=size, side=side,
-                                    order_type="market_order",
-                                    leverage=leverage,
-                                )
-                                order_id = result.get("id", "sim")
-                            else:
-                                order_id = "sim"
+                                try:
+                                    result = self.broker.place_order(
+                                        product_id=product_id,
+                                        size=size, side=side,
+                                        order_type="market_order",
+                                        leverage=leverage,
+                                    )
+                                    order_id = result.get("id", "placed")
+                                    self.log_event("order", f"Order placed: {side} {size} {symbol} (ID: {order_id})")
+                                except Exception as e:
+                                    self.log_event("error", f"Order failed: {e}")
+                                    continue
 
                             trade = {
-                                "id": len(self.closed_trades) + 1,
+                                "id": len(self.closed_trades) + len(self.open_trades) + 1,
                                 "symbol": symbol,
                                 "side": trade_side,
                                 "entry_price": price,
@@ -127,12 +287,15 @@ class LiveEngine:
                                 "order_id": order_id,
                             }
                             self.open_trades.append(trade)
+                            self.in_trade = True
                             self.trades_today += 1
+                            self.log_event("entry", f"ENTRY {trade_side} {symbol} @ ${price:,.2f} (size={size})")
 
                             if callback:
                                 await callback({"type": "entry", "trade": trade, "price": price})
+
+                            self._save_state()
                 else:
-                    # Check exit
                     for trade in self.open_trades[:]:
                         ep = trade["entry_price"]
                         if trade_side == "LONG":
@@ -141,31 +304,38 @@ class LiveEngine:
                             pnl_pct = (ep - price) / ep * 100
 
                         lev_pnl_pct = pnl_pct * leverage
+                        trade_pnl = trade["notional"] * (pnl_pct / 100)
                         exit_reason = None
 
                         if sl_pct > 0 and lev_pnl_pct <= -sl_pct:
                             exit_reason = "Stop Loss"
                         elif tp_pct > 0 and lev_pnl_pct >= tp_pct:
                             exit_reason = "Take Profit"
+                        elif lev_pnl_pct <= -90:
+                            exit_reason = "Liquidation"
                         elif eval_condition_group(row, self.exit_conditions, prev):
                             exit_reason = "Signal Exit"
 
                         if exit_reason:
-                            # Place exit order
+                            # Place exit order on exchange
                             close_side = "sell" if trade_side == "LONG" else "buy"
                             if product_id:
-                                self.broker.place_order(
-                                    product_id=product_id,
-                                    size=trade["size"],
-                                    side=close_side,
-                                    order_type="market_order",
-                                    reduce_only=True,
-                                )
+                                try:
+                                    self.broker.place_order(
+                                        product_id=product_id,
+                                        size=trade.get("size", 1),
+                                        side=close_side,
+                                        order_type="market_order",
+                                        reduce_only=True,
+                                    )
+                                    self.log_event("order", f"Exit order placed: {close_side} {trade.get('size', 1)} {symbol}")
+                                except Exception as e:
+                                    self.log_event("error", f"Exit order failed: {e}")
 
-                            # PnL based on notional value (no double-counting leverage)
-                            trade_pnl = trade["notional"] * (pnl_pct / 100)
                             self.total_pnl += trade_pnl
-                            capital += trade_pnl  # Update capital for next trade sizing
+                            self.daily_pnl += trade_pnl
+                            capital += trade_pnl
+                            capital = max(capital, 0)
 
                             closed = {
                                 **trade,
@@ -176,28 +346,44 @@ class LiveEngine:
                             }
                             self.closed_trades.append(closed)
                             self.open_trades.remove(trade)
+                            if not self.open_trades:
+                                self.in_trade = False
+
+                            emoji = "+" if trade_pnl >= 0 else ""
+                            self.log_event("exit", f"EXIT {exit_reason} {symbol} @ ${price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}")
 
                             if callback:
-                                await callback({"type": "exit", "trade": closed, "total_pnl": self.total_pnl})
+                                await callback({
+                                    "type": "exit", "trade": closed,
+                                    "total_pnl": round(self.total_pnl, 2)
+                                })
+
+                            self._save_state()
+
+                # Periodic state save
+                self._save_state()
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"[LIVE] Error: {e}")
+                self.log_event("error", str(e))
                 if callback:
                     await callback({"type": "error", "message": str(e)})
 
             await asyncio.sleep(poll_interval)
 
+        self.log_event("stop", "Live Trading Engine Stopped")
+        self._save_state()
+
     def stop(self):
         self.running = False
-        # Note: open positions remain on the exchange.
-        # The emergency-stop endpoint or manual intervention should be used
-        # to close positions if needed.
 
     def get_status(self) -> dict:
         return {
             "running": self.running,
+            "run_id": self.run_id or "",
+            "mode": "live",
             "strategy_name": self.strategy.get("run_name", ""),
             "run_name": self.strategy.get("run_name", ""),
             "symbol": self.strategy.get("symbol", ""),
@@ -208,6 +394,14 @@ class LiveEngine:
             "closed_trades": len(self.closed_trades),
             "trades_today": self.trades_today,
             "total_pnl": round(self.total_pnl, 2),
+            "daily_pnl": round(self.daily_pnl, 2),
             "open_trades": self.open_trades,
             "recent_trades": self.closed_trades[-10:],
+            "current_candle": self.current_candle,
+            "current_indicators": self.current_indicators,
+            "event_log": [
+                {"time": e["time"].strftime("%H:%M:%S") if isinstance(e["time"], datetime) else str(e["time"]),
+                 "type": e["type"], "message": e["message"]}
+                for e in self.event_log[-50:]
+            ],
         }
