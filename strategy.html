@@ -357,10 +357,19 @@
   /* ── Builder Grid ── */
   .builder-grid {
     display: grid;
-    grid-template-columns: 300px 1fr;
+    grid-template-columns: 380px 1fr;
     gap: 16px;
   }
   @media (max-width: 900px) { .builder-grid { grid-template-columns: 1fr; } }
+
+  /* ── Builder 2-column form rows ── */
+  .form-row-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: start;
+  }
+  .form-row-2 .input-group { margin-bottom: 14px; }
 
   /* ── Crypto Select ── */
   .crypto-grid {
@@ -1303,18 +1312,18 @@
           <div class="leverage-selector" id="leverage-selector"></div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div class="form-row-2">
           <div class="input-group">
             <label>Capital ($)</label>
             <input type="number" id="b-capital" value="10000">
           </div>
           <div class="input-group">
-            <label>Position Size %</label>
-            <input type="number" id="b-possize" value="100" min="1" max="100">
+            <label>Position Size</label>
+            <input type="number" id="b-possize" value="100" min="1">
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div class="form-row-2">
           <div class="input-group">
             <label>Stop Loss %</label>
             <input type="number" id="b-sl" value="5" step="0.5">
@@ -1325,7 +1334,7 @@
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div class="form-row-2">
           <div class="input-group">
             <label>Trailing SL %</label>
             <input type="number" id="b-trail" value="0" step="0.5" min="0" title="0 = disabled. Trails profit by this % from peak.">
@@ -1336,7 +1345,7 @@
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div class="form-row-2">
           <div class="input-group">
             <label>From Date</label>
             <input type="date" id="b-from" value="2025-01-01">
@@ -1347,7 +1356,7 @@
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div class="form-row-2">
           <div class="input-group">
             <label>Candle Interval</label>
             <select id="b-interval">
@@ -1577,7 +1586,7 @@
     <div id="paper-strategy-selector" style="background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.15);border-radius:10px;padding:14px 18px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <label style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;">Load Strategy:</label>
-        <select id="paper-strat-select" style="flex:1;min-width:200px;padding:8px 12px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:'Outfit',sans-serif;">
+        <select id="paper-strat-select" style="flex:1;min-width:200px;padding:8px 12px;background:rgba(12,16,28,0.7);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:'Outfit',sans-serif;">
           <option value="">— Select a saved strategy —</option>
         </select>
         <button class="btn btn-success btn-sm" id="paper-start-btn" onclick="startPaperFromSelector()" style="padding:8px 20px;">▶ Start Paper</button>
@@ -1869,6 +1878,40 @@ function cfPrompt(title, label, defaultVal) {
   });
 }
 
+// ── Select Modal (dropdown instead of text input) ──────────
+function cfSelect(title, label, options, defaultVal) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'cf-modal-overlay';
+    var optHtml = options.map(function(o) {
+      var sel = (o.value === defaultVal) ? ' selected' : '';
+      return '<option value="' + o.value + '"' + sel + '>' + o.label + '</option>';
+    }).join('');
+    overlay.innerHTML = '<div class="cf-modal">'
+      + '<div class="cf-modal-icon">⚙️</div>'
+      + '<div class="cf-modal-title">' + title + '</div>'
+      + '<div class="cf-modal-msg">' + label + '</div>'
+      + '<select id="cf-select-val" style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:Outfit,sans-serif;margin-bottom:16px;">' + optHtml + '</select>'
+      + '<div class="cf-modal-actions">'
+      + '<button class="btn btn-sm btn-outline" data-act="cancel">Cancel</button>'
+      + '<button class="btn btn-sm btn-primary" data-act="ok">OK</button>'
+      + '</div></div>';
+    function finish(val) { overlay.remove(); resolve(val); }
+    overlay.addEventListener('click', function(e) {
+      var act = e.target.dataset.act;
+      if (act === 'cancel') finish(null);
+      if (act === 'ok') finish(document.getElementById('cf-select-val').value);
+      if (e.target === overlay) finish(null);
+    });
+    overlay.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') finish(document.getElementById('cf-select-val').value);
+      if (e.key === 'Escape') finish(null);
+    });
+    document.body.appendChild(overlay);
+    setTimeout(function() { document.getElementById('cf-select-val').focus(); }, 50);
+  });
+}
+
 // ── Toast Notifications ────────────────────────────────────
 function cfToast(msg, type) {
   type = type || 'info';
@@ -2063,11 +2106,12 @@ async function addIndicator(name) {
     if (!adxP) return; label = 'ADX_' + adxP;
   }
   else if (name === 'CPR') {
-    var tf = await cfPrompt('CPR Indicator', 'Select timeframe:<br><select id="_cpr_tf_sel" style="width:100%;padding:8px;margin-top:8px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:14px;"><option value="Day" selected>Day</option><option value="Week">Week</option><option value="Month">Month</option></select>', 'Day');
+    var tf = await cfSelect('CPR Indicator', 'Select timeframe:', [
+      {value:'Day', label:'Day'},
+      {value:'Week', label:'Week'},
+      {value:'Month', label:'Month'}
+    ], 'Day');
     if (!tf) return;
-    // Read the select value if dialog had it
-    var selEl = document.getElementById('_cpr_tf_sel');
-    if (selEl) tf = selEl.value;
     label = 'CPR_' + tf;
   }
   // else VWAP is just 'VWAP'
@@ -2103,6 +2147,11 @@ function getIndicatorOptions() {
   html += '<option value="current_open">Current Open</option>';
   html += '<option value="current_high">Current High</option>';
   html += '<option value="current_low">Current Low</option>';
+  html += '</optgroup>';
+
+  // ── Custom Number (always visible near top) ──
+  html += '<optgroup label="── Custom Value ──">';
+  html += '<option value="number">Number (e.g. 30, 70)</option>';
   html += '</optgroup>';
 
   // ── Moving Averages ──
@@ -2154,7 +2203,7 @@ function getIndicatorOptions() {
     html += '<optgroup label="── Trend ──">';
     hasST.forEach(ind => {
       html += `<option value="${ind}">${ind} (Price Level)</option>`;
-      html += `<option value="${ind}_dir">${ind} Direction (1=Bull, -1=Bear)</option>`;
+      html += `<option value="${ind}_dir">${ind} Direction</option>`;
     });
     hasADX.forEach(ind => {
       html += `<option value="${ind}">${ind}</option>`;
@@ -2177,16 +2226,16 @@ function getIndicatorOptions() {
     html += '<option value="CPR_R1">R1</option>';
     html += '<option value="CPR_R2">R2</option>';
     html += '<option value="CPR_R3">R3</option>';
+    html += '<option value="CPR_R4">R4</option>';
+    html += '<option value="CPR_R5">R5</option>';
     html += '<option value="CPR_S1">S1</option>';
     html += '<option value="CPR_S2">S2</option>';
     html += '<option value="CPR_S3">S3</option>';
+    html += '<option value="CPR_S4">S4</option>';
+    html += '<option value="CPR_S5">S5</option>';
     html += '</optgroup>';
   }
 
-  // ── Custom Value ──
-  html += '<optgroup label="── Value ──">';
-  html += '<option value="number">Number (custom)</option>';
-  html += '</optgroup>';
   return html;
 }
 
@@ -2474,12 +2523,49 @@ async function runBacktest() {
   btn.disabled = true; btn.textContent = '⏳ Running...';
   btn.classList.add('loading');
 
+  // Navigate to results page immediately with a countdown timer
+  showPage('results-page', document.getElementById('nav-results'));
+  var countdownSec = 15;
+  var countdownEl = document.getElementById('results-list');
+  function renderCountdown(sec) {
+    countdownEl.innerHTML = '<div style="text-align:center;padding:60px 20px;">'
+      + '<div style="font-size:48px;margin-bottom:16px;">⏳</div>'
+      + '<div style="font-size:20px;font-weight:700;margin-bottom:8px;">Running Backtest...</div>'
+      + '<div style="font-size:14px;color:var(--muted);margin-bottom:20px;">' + payload.run_name + ' • ' + payload.symbol + ' • ' + payload.candle_interval + '</div>'
+      + '<div style="font-size:42px;font-weight:800;font-family:JetBrains Mono;color:var(--accent);">' + sec + 's</div>'
+      + '<div style="font-size:12px;color:var(--muted);margin-top:8px;">Fetching candle data & computing indicators...</div>'
+      + '</div>';
+  }
+  renderCountdown(countdownSec);
+  var countdownTimer = setInterval(function() {
+    countdownSec--;
+    if (countdownSec > 0) renderCountdown(countdownSec);
+    else {
+      clearInterval(countdownTimer);
+      countdownEl.innerHTML = '<div style="text-align:center;padding:60px 20px;">'
+        + '<div style="font-size:48px;margin-bottom:16px;">⏳</div>'
+        + '<div style="font-size:20px;font-weight:700;margin-bottom:8px;">Still running...</div>'
+        + '<div style="font-size:14px;color:var(--muted);">Processing large dataset, please wait...</div>'
+        + '</div>';
+    }
+  }, 1000);
+
   try {
     const r = await fetch('/api/backtest', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    clearInterval(countdownTimer);
+
+    if (!r.ok) {
+      var errText = '';
+      try { var ed = await r.json(); errText = ed.message || ed.detail || r.statusText; } catch(_) { errText = r.status + ' ' + r.statusText; }
+      await cfAlert('Backtest failed: ' + errText, 'Error', '❌');
+      await loadRuns();
+      return;
+    }
+
     const d = await r.json();
 
     if (d.status === 'success') {
@@ -2493,9 +2579,12 @@ async function runBacktest() {
       if (d.run_id) { viewRun(d.run_id); }
     } else {
       await cfAlert('Backtest failed: ' + (d.message || 'Unknown error'), 'Error', '❌');
+      await loadRuns();
     }
   } catch(e) {
+    clearInterval(countdownTimer);
     await cfAlert('Error: ' + e.message, 'Error', '❌');
+    await loadRuns();
   } finally {
     btn.disabled = false; btn.textContent = '⚡ Run Backtest'; btn.classList.remove('loading');
   }

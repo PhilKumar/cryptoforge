@@ -224,6 +224,10 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
         daily_df["S2"] = daily_df["pivot"] - (daily_df["high"] - daily_df["low"])
         daily_df["R3"] = daily_df["high"] + 2 * (daily_df["pivot"] - daily_df["low"])
         daily_df["S3"] = daily_df["low"] - 2 * (daily_df["high"] - daily_df["pivot"])
+        daily_df["R4"] = daily_df["R3"] + (daily_df["high"] - daily_df["low"])
+        daily_df["S4"] = daily_df["S3"] - (daily_df["high"] - daily_df["low"])
+        daily_df["R5"] = daily_df["R4"] + (daily_df["high"] - daily_df["low"])
+        daily_df["S5"] = daily_df["S4"] - (daily_df["high"] - daily_df["low"])
         return daily_df
 
     if is_intraday and hasattr(d.index, 'date'):
@@ -235,7 +239,7 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
             agg = _calc_pivots(agg)
             agg = agg.shift(1)
             mapped_key = period_key
-            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3"]:
+            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3", "R4", "S4", "R5", "S5"]:
                 mapping = agg[col].to_dict()
                 d[f"CPR_{col}"] = mapped_key.map(mapping).values
         elif tf == "month":
@@ -245,7 +249,7 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
             agg = _calc_pivots(agg)
             agg = agg.shift(1)
             mapped_key = pd.Series(d.index.to_period('M').astype(str), index=d.index)
-            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3"]:
+            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3", "R4", "S4", "R5", "S5"]:
                 mapping = agg[col].to_dict()
                 d[f"CPR_{col}"] = mapped_key.map(mapping).values
         else:
@@ -256,7 +260,7 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
             daily = daily.shift(1)
             # Map back to intraday rows
             date_series = pd.Series(d.index.date, index=d.index)
-            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3"]:
+            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3", "R4", "S4", "R5", "S5"]:
                 mapping = daily[col].to_dict()
                 d[f"CPR_{col}"] = date_series.map(mapping).values
     else:
@@ -273,6 +277,10 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
         d["CPR_S2"] = d["CPR_pivot"] - (prev_h - prev_l)
         d["CPR_R3"] = prev_h + 2 * (d["CPR_pivot"] - prev_l)
         d["CPR_S3"] = prev_l - 2 * (prev_h - d["CPR_pivot"])
+        d["CPR_R4"] = d["CPR_R3"] + (prev_h - prev_l)
+        d["CPR_S4"] = d["CPR_S3"] - (prev_h - prev_l)
+        d["CPR_R5"] = d["CPR_R4"] + (prev_h - prev_l)
+        d["CPR_S5"] = d["CPR_S4"] - (prev_h - prev_l)
 
     return d
 
@@ -355,7 +363,8 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
                 tf = parts[1] if len(parts) > 1 else "Day"
                 cpr_df = cpr(df, timeframe=tf)
                 for col in ["CPR_pivot", "CPR_bc", "CPR_tc", "CPR_R1", "CPR_S1",
-                             "CPR_R2", "CPR_S2", "CPR_R3", "CPR_S3"]:
+                             "CPR_R2", "CPR_S2", "CPR_R3", "CPR_S3",
+                             "CPR_R4", "CPR_S4", "CPR_R5", "CPR_S5"]:
                     if col in cpr_df.columns:
                         df[col] = cpr_df[col]
 
