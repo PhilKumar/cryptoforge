@@ -46,6 +46,10 @@ def eval_condition(row, cond, prev_row=None):
 
     try:
         if lv is None or rv is None:
+            if lv is None:
+                print(f"[CONDITION] ⚠ Left '{left}' not found in row — available columns: {sorted([c for c in row.index if not c.startswith('_')])[:20]}")
+            if rv is None and r not in ("true", "false", "number"):
+                print(f"[CONDITION] ⚠ Right '{r}' not found in row")
             return False
         if isinstance(lv, float) and pd.isna(lv):
             return False
@@ -106,7 +110,8 @@ def eval_condition(row, cond, prev_row=None):
 
 def eval_condition_group(row, conditions, prev_row=None):
     if not conditions:
-        return False
+        print("[CONDITION] ⚠ Empty conditions list — returning True (no filter)")
+        return True
     result = eval_condition(row, conditions[0], prev_row)
     for c in conditions[1:]:
         v = eval_condition(row, c, prev_row)
@@ -119,10 +124,10 @@ def eval_condition_group(row, conditions, prev_row=None):
 
 
 DEFAULT_ENTRY_CONDITIONS = [
-    {"left": "current_close", "operator": "is_above", "right": "EMA_20_5m", "connector": "AND"}
+    {"left": "current_close", "operator": "is_above", "right": "EMA_20", "connector": "AND"}
 ]
 DEFAULT_EXIT_CONDITIONS = [
-    {"left": "current_close", "operator": "is_below", "right": "EMA_20_5m", "connector": "AND"}
+    {"left": "current_close", "operator": "is_below", "right": "EMA_20", "connector": "AND"}
 ]
 
 

@@ -219,12 +219,15 @@ class PaperTradingEngine:
         trade_side = self.strategy.get("trade_side", "LONG").upper()
         sl_pct = float(self.strategy.get("stoploss_pct", 5))
         tp_pct = float(self.strategy.get("target_profit_pct", 10))
+        trailing_sl_pct = float(self.strategy.get("trailing_sl_pct", 0))
         capital = float(self.strategy.get("initial_capital", config.DEFAULT_CAPITAL))
         position_size_pct = float(self.strategy.get("position_size_pct", 100))
         candle_interval = self.strategy.get("candle_interval", "5m")
 
         self.log_event("start", f"Paper Trading Engine Started — {symbol} {leverage}x {trade_side}")
         self.log_event("info", f"Timeframe: {candle_interval} | SL: {sl_pct}% | TP: {tp_pct}%")
+        if trailing_sl_pct > 0:
+            self.log_event("info", f"Trailing SL: {trailing_sl_pct}% from best price")
         self.log_event("info", f"Max trades/day: {max_tpd} | Capital: ${capital:,.0f}")
         if self.max_daily_loss > 0:
             self.log_event("info", f"Max daily loss: ${self.max_daily_loss:,.0f}")
@@ -305,6 +308,7 @@ class PaperTradingEngine:
                                 "notional": round(notional, 2),
                                 "leverage": leverage,
                                 "margin": round(margin, 2),
+                                "best_price": price,  # for trailing SL
                             }
                             self.open_trades.append(trade)
                             self.in_trade = True
@@ -329,13 +333,28 @@ class PaperTradingEngine:
                         trade_pnl = trade["notional"] * (pnl_pct / 100)
                         exit_reason = None
 
-                        if sl_pct > 0 and lev_pnl_pct <= -sl_pct:
+                        # Trailing SL: track best price and trail from there
+                        if trailing_sl_pct > 0:
+                            best = trade.get("best_price", ep)
+                            if trade_side == "LONG":
+                                best = max(best, check_price)
+                                trail_trigger = best * (1 - trailing_sl_pct / 100)
+                                if check_price <= trail_trigger and pnl_pct > 0:
+                                    exit_reason = f"Trailing SL ({trailing_sl_pct}%)"
+                            else:
+                                best = min(best, check_price)
+                                trail_trigger = best * (1 + trailing_sl_pct / 100)
+                                if check_price >= trail_trigger and pnl_pct > 0:
+                                    exit_reason = f"Trailing SL ({trailing_sl_pct}%)"
+                            trade["best_price"] = best
+
+                        if not exit_reason and sl_pct > 0 and lev_pnl_pct <= -sl_pct:
                             exit_reason = "Stop Loss"
-                        elif tp_pct > 0 and lev_pnl_pct >= tp_pct:
+                        elif not exit_reason and tp_pct > 0 and lev_pnl_pct >= tp_pct:
                             exit_reason = "Take Profit"
-                        elif lev_pnl_pct <= -90:
+                        elif not exit_reason and lev_pnl_pct <= -90:
                             exit_reason = "Liquidation"
-                        elif eval_condition_group(row, self.exit_conditions, prev):
+                        elif not exit_reason and eval_condition_group(row, self.exit_conditions, prev):
                             exit_reason = "Signal Exit"
 
                         if exit_reason:

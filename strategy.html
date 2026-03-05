@@ -421,10 +421,10 @@
     display: flex; gap: 8px; align-items: center; margin-bottom: 4px;
     padding: 10px; background: rgba(255,255,255,0.02);
     border: 1px solid rgba(255,255,255,0.04);
-    border-radius: 10px;
+    border-radius: 10px; flex-wrap: wrap;
   }
   .condition-row select, .condition-row input {
-    padding: 8px 10px; font-size: 13px; min-width: 0;
+    padding: 8px 10px; font-size: 13px; min-width: 0; flex: 1 1 120px;
   }
   .condition-row .remove-cond {
     background: none; border: none; color: var(--red);
@@ -570,8 +570,11 @@
   .tp-badge.live { background: rgba(239,68,68,0.15); color: var(--red); animation: livePulse 2s infinite; }
   .tp-badge.idle, .tp-badge-stopped, .tp-badge.stopped { background: rgba(255,255,255,0.05); color: var(--muted); }
   .trading-info-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    display: grid; grid-template-columns: repeat(4, 1fr);
     gap: 12px; margin-bottom: 16px;
+  }
+  @media (max-width: 768px) {
+    .trading-info-grid { grid-template-columns: repeat(2, 1fr); }
   }
   .ti-item {
     background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.04);
@@ -1567,9 +1570,19 @@
       <div style="display:flex;align-items:center;gap:10px;">
         <span class="tp-badge tp-badge-stopped" id="paper-badge">STOPPED</span>
         <button class="btn btn-outline btn-sm" onclick="downloadPaperCSV()" title="Export trades">📥</button>
-        <button class="btn btn-success btn-sm" id="paper-start-btn" onclick="startPaper()">▶ Start</button>
         <button class="btn btn-danger btn-sm" onclick="stopPaper()">⏹ Stop</button>
       </div>
+    </div>
+    <!-- Strategy Selector (shown when paper is not running) -->
+    <div id="paper-strategy-selector" style="background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.15);border-radius:10px;padding:14px 18px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <label style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;">Load Strategy:</label>
+        <select id="paper-strat-select" style="flex:1;min-width:200px;padding:8px 12px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:'Outfit',sans-serif;">
+          <option value="">— Select a saved strategy —</option>
+        </select>
+        <button class="btn btn-success btn-sm" id="paper-start-btn" onclick="startPaperFromSelector()" style="padding:8px 20px;">▶ Start Paper</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;">Select a saved strategy or build one in the Strategy Builder first. The strategy's indicators and conditions will be used.</div>
     </div>
     <div class="trading-info-grid" id="paper-info">
       <div class="ti-item"><div class="ti-label">Symbol</div><div class="ti-value" id="pi-symbol">—</div></div>
@@ -1583,7 +1596,7 @@
     </div>
     <h4 style="margin-bottom:8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📋 Activity Log</h4>
     <div class="trade-log-panel" id="paper-log">
-      <div class="log-entry"><span class="log-info">Paper engine idle. Configure a strategy in Builder and click Start.</span></div>
+      <div class="log-entry"><span class="log-info">Paper engine idle. Select a strategy above and click Start Paper.</span></div>
     </div>
 
     <!-- Paper Recent Trades Table -->
@@ -1595,6 +1608,7 @@
       </table>
     </div>
   </div>
+  </div><!-- end paper-panel-wrap -->
 
   <!-- Live Trading Panel -->
   <div class="trading-panel">
@@ -1640,7 +1654,6 @@
     </div>
     <div id="live-trades-empty" style="color: var(--muted); font-size: 14px; text-align:center; padding:20px;">No closed trades yet</div>
   </div>
-  </div><!-- end paper-panel-wrap -->
 
 </div><!-- end live-page -->
 
@@ -2049,7 +2062,14 @@ async function addIndicator(name) {
     var adxP = await cfPrompt('ADX Indicator', 'Enter ADX period:', '14');
     if (!adxP) return; label = 'ADX_' + adxP;
   }
-  else if (name === 'CPR') { label = 'CPR'; }
+  else if (name === 'CPR') {
+    var tf = await cfPrompt('CPR Indicator', 'Select timeframe:<br><select id="_cpr_tf_sel" style="width:100%;padding:8px;margin-top:8px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:14px;"><option value="Day" selected>Day</option><option value="Week">Week</option><option value="Month">Month</option></select>', 'Day');
+    if (!tf) return;
+    // Read the select value if dialog had it
+    var selEl = document.getElementById('_cpr_tf_sel');
+    if (selEl) tf = selEl.value;
+    label = 'CPR_' + tf;
+  }
   // else VWAP is just 'VWAP'
 
   if (!indicators.includes(label)) {
@@ -2133,8 +2153,8 @@ function getIndicatorOptions() {
   if (hasST.length || hasADX.length || hasVWAP) {
     html += '<optgroup label="── Trend ──">';
     hasST.forEach(ind => {
-      html += `<option value="${ind}">${ind}</option>`;
-      html += `<option value="${ind}_dir">${ind} Direction</option>`;
+      html += `<option value="${ind}">${ind} (Price Level)</option>`;
+      html += `<option value="${ind}_dir">${ind} Direction (1=Bull, -1=Bear)</option>`;
     });
     hasADX.forEach(ind => {
       html += `<option value="${ind}">${ind}</option>`;
@@ -2146,8 +2166,11 @@ function getIndicatorOptions() {
   }
 
   // ── Support/Resistance (CPR) ──
-  if (indicators.includes('CPR')) {
-    html += '<optgroup label="── Support / Resistance ──">';
+  const hasCPR = indicators.some(i => i.startsWith('CPR'));
+  if (hasCPR) {
+    const cprInd = indicators.find(i => i.startsWith('CPR'));
+    const cprLabel = cprInd || 'CPR';
+    html += '<optgroup label="── Support / Resistance (' + cprLabel + ') ──">';
     html += '<option value="CPR_pivot">CPR Pivot</option>';
     html += '<option value="CPR_bc">CPR BC (Bottom)</option>';
     html += '<option value="CPR_tc">CPR TC (Top)</option>';
@@ -2836,6 +2859,66 @@ async function saveStrategy() {
 }
 
 // ── Live / Paper Trading ───────────────────────────────────
+
+// Populate the paper trading strategy dropdown
+function populatePaperStrategyDropdown() {
+  var sel = document.getElementById('paper-strat-select');
+  if (!sel) return;
+  var current = sel.value;
+  sel.innerHTML = '<option value="">— Select a saved strategy —</option>';
+  // Add Builder option
+  sel.innerHTML += '<option value="__builder__">📝 Use Current Builder Settings</option>';
+  // Add saved strategies
+  if (_savedStrategies && _savedStrategies.length) {
+    _savedStrategies.forEach(function(s) {
+      var lbl = (s.run_name || 'Untitled') + ' — ' + (s.symbol || '') + ' ' + (s.leverage || 1) + 'x ' + (s.trade_side || '');
+      sel.innerHTML += '<option value="' + s.id + '">' + lbl + '</option>';
+    });
+  }
+  if (current) sel.value = current;
+}
+
+async function startPaperFromSelector() {
+  var sel = document.getElementById('paper-strat-select');
+  var choice = sel ? sel.value : '';
+  if (!choice) {
+    cfToast('Please select a strategy first', 'warning');
+    return;
+  }
+  if (choice === '__builder__') {
+    // Validate builder has indicators/conditions
+    if (!indicators || indicators.length === 0) {
+      await cfAlert('No indicators configured in Builder. Please add at least one indicator first.', 'Missing Indicators', '⚠️');
+      return;
+    }
+    if (!entryConditions || entryConditions.length === 0) {
+      var ok = await cfConfirm('No entry conditions set. The engine will use the default (Close > EMA_20). Continue?', 'No Entry Conditions', '⚠️');
+      if (!ok) return;
+    }
+    return startPaper();
+  }
+  // Load from saved strategy
+  var s = _savedStrategies.find(function(x) { return x.id == choice; });
+  if (!s) { cfToast('Strategy not found', 'error'); return; }
+  // Validate
+  if (!s.indicators || s.indicators.length === 0) {
+    await cfAlert('This strategy has no indicators. Please edit it first in the Builder.', 'Missing Indicators', '⚠️');
+    return;
+  }
+  // Load strategy into builder vars (for startPaper to read)
+  document.getElementById('b-name').value = s.run_name || 'Paper';
+  selectedCrypto = s.symbol || 'BTCUSDT';
+  selectedSide = s.trade_side || 'LONG';
+  selectedLeverage = s.leverage || 10;
+  indicators = [...(s.indicators || [])];
+  entryConditions = (s.entry_conditions || []).map(function(c) { return {...c}; });
+  exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
+  if (s.stoploss_pct) document.getElementById('b-sl').value = s.stoploss_pct;
+  if (s.target_profit_pct) document.getElementById('b-tp').value = s.target_profit_pct;
+  cfToast('Loaded strategy: ' + (s.run_name || 'Untitled'), 'info');
+  return startPaper();
+}
+
 async function startPaper() {
   var btn = document.getElementById('paper-start-btn');
   if (btn) { btn.classList.add('loading'); btn.disabled = true; }
@@ -2868,11 +2951,12 @@ async function startPaper() {
     });
     const d = await r.json();
     if (d.status === 'ok' || d.status === 'started') {
-      cfToast('Paper trading started: ' + selectedCrypto + ' ' + selectedLeverage + 'x', 'success');
-      showPage('live-page', document.getElementById('nav-live'));
+      cfToast('Paper trading started: ' + payload.symbol + ' ' + payload.leverage + 'x', 'success');
+      // Hide strategy selector when running
+      var selectorDiv = document.getElementById('paper-strategy-selector');
+      if (selectorDiv) selectorDiv.style.display = 'none';
     } else if (d.status === 'already_running') {
       cfToast('Paper engine already running.', 'warning');
-      showPage('live-page', document.getElementById('nav-live'));
     } else {
       await cfAlert(d.message || d.status, 'Paper Start', '⚠️');
     }
@@ -2886,6 +2970,9 @@ async function stopPaper() {
   if (!ok) return;
   await fetch('/api/paper/stop', { method: 'POST', credentials: 'same-origin' });
   resetPaperPanel();
+  // Show strategy selector again
+  var selectorDiv = document.getElementById('paper-strategy-selector');
+  if (selectorDiv) selectorDiv.style.display = '';
   cfToast('Paper engine stopped', 'info');
   pollLiveStatus();
 }
@@ -2983,6 +3070,12 @@ function updatePanel(prefix, data) {
   var el = function(id) { return document.getElementById(id); };
   var badge = el(prefix + '-badge');
   var pfx = prefix === 'paper' ? 'pi' : 'li';
+
+  // Toggle paper strategy selector visibility
+  if (prefix === 'paper') {
+    var selectorDiv = el('paper-strategy-selector');
+    if (selectorDiv) selectorDiv.style.display = data.running ? 'none' : '';
+  }
 
   if (data.running) {
     if (badge) {
@@ -3746,6 +3839,7 @@ async function fetchStrategies() {
     var r = await fetch('/api/strategies', { credentials: 'same-origin' });
     _savedStrategies = await r.json();
     renderStrategiesList();
+    populatePaperStrategyDropdown();
   } catch(e) { console.error('fetchStrategies error:', e); }
 }
 

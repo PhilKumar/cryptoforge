@@ -191,6 +191,7 @@ class StrategyPayload(BaseModel):
     position_size_pct: float = 100.0
     stoploss_pct: float = 5.0
     target_profit_pct: float = 10.0
+    trailing_sl_pct: float = 0.0
     max_trades_per_day: int = 5
     max_daily_loss: float = 0.0
     indicators: List[str] = []
@@ -732,6 +733,7 @@ async def live_start(payload: StrategyPayload):
         "max_trades_per_day": payload.max_trades_per_day,
         "stoploss_pct": payload.stoploss_pct,
         "target_profit_pct": payload.target_profit_pct,
+        "trailing_sl_pct": payload.trailing_sl_pct,
         "initial_capital": payload.initial_capital,
         "position_size_pct": payload.position_size_pct,
         "candle_interval": payload.candle_interval,
@@ -828,6 +830,7 @@ async def paper_start(payload: StrategyPayload):
         "max_trades_per_day": payload.max_trades_per_day,
         "stoploss_pct": payload.stoploss_pct,
         "target_profit_pct": payload.target_profit_pct,
+        "trailing_sl_pct": payload.trailing_sl_pct,
         "initial_capital": payload.initial_capital,
         "position_size_pct": payload.position_size_pct,
         "candle_interval": payload.candle_interval,

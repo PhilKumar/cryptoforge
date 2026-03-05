@@ -195,13 +195,15 @@ def stochastic_rsi(series: pd.Series, rsi_period: int = 14,
                         index=series.index)
 
 
-def cpr(df: pd.DataFrame) -> pd.DataFrame:
+def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
     """Central Pivot Range (CPR) with support/resistance levels.
-    Uses previous day's high/low/close to calculate today's pivot levels.
-    For intraday data, groups by date and shifts forward.
+    Supports Day, Week, and Month timeframes.
+    Uses previous period's high/low/close to calculate pivot levels.
     """
     d = df.copy()
-    # Determine if data is intraday or daily
+    tf = timeframe.lower() if timeframe else "day"
+
+    # Determine if data is intraday
     if len(d) > 1:
         diff = (d.index[1] - d.index[0]) if hasattr(d.index, '__getitem__') else pd.Timedelta(hours=1)
         if hasattr(diff, 'total_seconds'):
@@ -211,25 +213,52 @@ def cpr(df: pd.DataFrame) -> pd.DataFrame:
     else:
         is_intraday = False
 
+    def _calc_pivots(daily_df):
+        """Calculate pivot levels from aggregated HLC data."""
+        daily_df["pivot"] = (daily_df["high"] + daily_df["low"] + daily_df["close"]) / 3
+        daily_df["bc"] = (daily_df["high"] + daily_df["low"]) / 2
+        daily_df["tc"] = 2 * daily_df["pivot"] - daily_df["bc"]
+        daily_df["R1"] = 2 * daily_df["pivot"] - daily_df["low"]
+        daily_df["S1"] = 2 * daily_df["pivot"] - daily_df["high"]
+        daily_df["R2"] = daily_df["pivot"] + (daily_df["high"] - daily_df["low"])
+        daily_df["S2"] = daily_df["pivot"] - (daily_df["high"] - daily_df["low"])
+        daily_df["R3"] = daily_df["high"] + 2 * (daily_df["pivot"] - daily_df["low"])
+        daily_df["S3"] = daily_df["low"] - 2 * (daily_df["high"] - daily_df["pivot"])
+        return daily_df
+
     if is_intraday and hasattr(d.index, 'date'):
-        # Group by date, use previous day's HLC
-        daily = d.groupby(d.index.date).agg({"high": "max", "low": "min", "close": "last"})
-        daily["pivot"] = (daily["high"] + daily["low"] + daily["close"]) / 3
-        daily["bc"] = (daily["high"] + daily["low"]) / 2
-        daily["tc"] = 2 * daily["pivot"] - daily["bc"]
-        daily["r1"] = 2 * daily["pivot"] - daily["low"]
-        daily["s1"] = 2 * daily["pivot"] - daily["high"]
-        daily["r2"] = daily["pivot"] + (daily["high"] - daily["low"])
-        daily["s2"] = daily["pivot"] - (daily["high"] - daily["low"])
-        daily["r3"] = daily["high"] + 2 * (daily["pivot"] - daily["low"])
-        daily["s3"] = daily["low"] - 2 * (daily["high"] - daily["pivot"])
-        # Shift by one day — today's CPR uses yesterday's HLC
-        daily = daily.shift(1)
-        # Map back to intraday rows
-        date_series = pd.Series(d.index.date, index=d.index)
-        for col in ["pivot", "bc", "tc", "r1", "s1", "r2", "s2", "r3", "s3"]:
-            mapping = daily[col].to_dict()
-            d[f"CPR_{col}"] = date_series.map(mapping).values
+        if tf == "week":
+            # Weekly CPR: group by ISO week
+            period_key = d.index.to_series().dt.isocalendar().apply(lambda x: f"{x.year}-W{x.week:02d}", axis=1)
+            period_key.index = d.index
+            agg = d.groupby(period_key).agg({"high": "max", "low": "min", "close": "last"})
+            agg = _calc_pivots(agg)
+            agg = agg.shift(1)
+            mapped_key = period_key
+            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3"]:
+                mapping = agg[col].to_dict()
+                d[f"CPR_{col}"] = mapped_key.map(mapping).values
+        elif tf == "month":
+            # Monthly CPR: group by year-month
+            period_key = d.index.to_period('M').astype(str)
+            agg = d.groupby(period_key).agg({"high": "max", "low": "min", "close": "last"})
+            agg = _calc_pivots(agg)
+            agg = agg.shift(1)
+            mapped_key = pd.Series(d.index.to_period('M').astype(str), index=d.index)
+            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3"]:
+                mapping = agg[col].to_dict()
+                d[f"CPR_{col}"] = mapped_key.map(mapping).values
+        else:
+            # Daily CPR (default): group by date, use previous day's HLC
+            daily = d.groupby(d.index.date).agg({"high": "max", "low": "min", "close": "last"})
+            daily = _calc_pivots(daily)
+            # Shift by one day — today's CPR uses yesterday's HLC
+            daily = daily.shift(1)
+            # Map back to intraday rows
+            date_series = pd.Series(d.index.date, index=d.index)
+            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3"]:
+                mapping = daily[col].to_dict()
+                d[f"CPR_{col}"] = date_series.map(mapping).values
     else:
         # Daily data — use previous bar's HLC
         prev_h = d["high"].shift(1)
@@ -322,7 +351,9 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
                 df["StochRSI_D"] = srsi["stoch_rsi_d"]
 
             elif name == "CPR":
-                cpr_df = cpr(df)
+                # Support CPR_Day, CPR_Week, CPR_Month or plain CPR
+                tf = parts[1] if len(parts) > 1 else "Day"
+                cpr_df = cpr(df, timeframe=tf)
                 for col in ["CPR_pivot", "CPR_bc", "CPR_tc", "CPR_R1", "CPR_S1",
                              "CPR_R2", "CPR_S2", "CPR_R3", "CPR_S3"]:
                     if col in cpr_df.columns:
