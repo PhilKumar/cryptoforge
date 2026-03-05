@@ -156,6 +156,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
     leverage = int(sc.get("leverage", 10))
     sl_pct = float(sc.get("stoploss_pct", 5))
     tp_pct = float(sc.get("target_profit_pct", 10))
+    trail_pct = float(sc.get("trailing_sl_pct", 0))  # 0 = disabled
     max_tpd = int(sc.get("max_trades_per_day", config.MAX_TRADES_PER_DAY))
     indicators = sc.get("indicators", []) or []
     side = sc.get("trade_side", "LONG").upper()  # LONG or SHORT
@@ -176,6 +177,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
     entry_size = 0  # notional position size in USD
     trades_today = 0
     last_trade_date = None
+    peak_pnl_pct = 0.0  # for trailing SL
 
     for i in range(1, len(df)):
         row = df.iloc[i]
@@ -198,6 +200,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
                 in_trade = True
                 entry_price = price
                 entry_time = ts
+                peak_pnl_pct = 0.0  # reset trailing tracker
                 # Position size = (capital * position_size_pct/100) * leverage
                 margin_used = capital * (position_size_pct / 100)
                 entry_size = margin_used * leverage
@@ -213,10 +216,17 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
             lev_pnl_pct = pnl_pct * leverage
             trade_pnl = entry_size * (pnl_pct / 100)
 
+            # Track peak for trailing SL
+            if lev_pnl_pct > peak_pnl_pct:
+                peak_pnl_pct = lev_pnl_pct
+
             exit_reason = None
 
+            # Trailing stop-loss (triggers once profit exceeds trail_pct then pulls back)
+            if trail_pct > 0 and peak_pnl_pct >= trail_pct and lev_pnl_pct <= (peak_pnl_pct - trail_pct):
+                exit_reason = "Trailing SL"
             # Stop-loss
-            if sl_pct > 0 and lev_pnl_pct <= -sl_pct:
+            elif sl_pct > 0 and lev_pnl_pct <= -sl_pct:
                 exit_reason = "Stop Loss"
             # Take profit
             elif tp_pct > 0 and lev_pnl_pct >= tp_pct:
@@ -415,6 +425,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
         "final_capital": round(capital, 2),
         "total_fees": round(total_fees, 2),
         "fee_pct": fee_pct,
+        "trailing_sl_pct": trail_pct,
         "leverage": leverage,
         "side": side,
     }

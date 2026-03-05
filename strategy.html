@@ -64,9 +64,19 @@
     padding: 24px;
     margin-bottom: 16px;
     backdrop-filter: blur(30px) saturate(1.3);
-    box-shadow: 0 0 1px rgba(255,255,255,0.06), 0 8px 32px rgba(0,0,0,0.4),
+    -webkit-backdrop-filter: blur(30px) saturate(1.3);
+    box-shadow: 0 0 1px rgba(255,255,255,0.06), 0 0 25px rgba(139,92,246,0.02), 0 8px 32px rgba(0,0,0,0.4),
                 inset 0 1px 0 rgba(255,255,255,0.06);
     position: relative;
+  }
+  .card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.02) 35%, transparent 70%);
+    pointer-events: none;
+    mix-blend-mode: screen;
   }
 
   .stat-box {
@@ -75,13 +85,34 @@
     border-top: 1px solid rgba(255,255,255,0.12);
     border-radius: 14px;
     padding: 22px 24px;
-    backdrop-filter: blur(30px);
-    box-shadow: 0 4px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08);
-    transition: transform 0.2s, box-shadow 0.2s;
+    backdrop-filter: blur(30px) saturate(1.3);
+    -webkit-backdrop-filter: blur(30px) saturate(1.3);
+    box-shadow: 0 0 1px rgba(255,255,255,0.08), 0 0 30px rgba(139,92,246,0.025), 0 4px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
     position: relative;
     overflow: hidden;
   }
-  .stat-box:hover { transform: translateY(-2px); border-color: rgba(139,92,246,0.15); }
+  .stat-box::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.02) 40%, transparent 75%);
+    pointer-events: none;
+  }
+  .stat-box::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), rgba(139,92,246,0.15), rgba(255,255,255,0.12), transparent);
+    pointer-events: none;
+  }
+  .stat-box:hover {
+    transform: translateY(-2px);
+    border-color: rgba(139,92,246,0.15);
+    box-shadow: 0 0 1px rgba(255,255,255,0.12), 0 0 40px rgba(139,92,246,0.06), 0 8px 40px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12);
+  }
   .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; font-weight: 600; }
   .stat-value { font-size: 26px; font-weight: 700; font-family: 'JetBrains Mono', monospace; letter-spacing: -0.5px; }
 
@@ -109,41 +140,70 @@
 
   /* ── Buttons ── */
   .btn {
-    padding: 12px 24px;
-    border-radius: 12px;
-    border: none;
+    padding: 11px 24px;
+    border-radius: 999px;
+    border: 1px solid var(--btn-border, rgba(139,92,246,0.45));
     font-weight: 700;
     font-family: 'Outfit', sans-serif;
     font-size: 14px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    background: var(--btn-bg, linear-gradient(180deg, rgba(139,92,246,0.25) 0%, rgba(100,60,200,0.45) 100%));
+    color: var(--btn-color, rgb(167,139,250));
+    box-shadow: 0 6px 14px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.25);
+    position: relative;
+    overflow: hidden;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+  }
+  .btn::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 6%;
+    width: 88%;
+    height: 42%;
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,255,255,0.03));
+    pointer-events: none;
+  }
+  .btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 16px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.28);
+    filter: saturate(1.06);
+  }
+  .btn:active {
+    transform: translateY(1px);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.28), inset 0 2px 2px rgba(0,0,0,0.22);
   }
   .btn-primary {
-    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
-    color: white;
-    box-shadow: 0 4px 16px rgba(139,92,246,0.3);
+    --btn-bg: linear-gradient(180deg, rgba(139,92,246,0.3) 0%, rgba(100,60,200,0.5) 100%);
+    --btn-color: rgb(167,139,250);
+    --btn-border: rgba(139,92,246,0.5);
   }
-  .btn-primary:hover { box-shadow: 0 6px 24px rgba(139,92,246,0.4); transform: translateY(-1px); }
+  .btn-primary:hover { filter: saturate(1.1); }
   .btn-danger {
-    background: linear-gradient(135deg, #ef4444, #dc2626);
-    color: white;
-    box-shadow: 0 4px 16px rgba(239,68,68,0.3);
+    --btn-bg: linear-gradient(180deg, rgba(239,68,68,0.25) 0%, rgba(180,40,40,0.45) 100%);
+    --btn-color: rgb(248,113,113);
+    --btn-border: rgba(239,68,68,0.45);
   }
   .btn-success {
-    background: linear-gradient(135deg, #22c55e, #16a34a);
-    color: white;
-    box-shadow: 0 4px 16px rgba(34,197,94,0.3);
+    --btn-bg: linear-gradient(180deg, rgba(34,197,94,0.3) 0%, rgba(20,150,70,0.5) 100%);
+    --btn-color: rgb(74,222,128);
+    --btn-border: rgba(34,197,94,0.5);
   }
   .btn-outline {
-    background: transparent;
-    border: 1px solid rgba(255,255,255,0.1);
-    color: var(--text);
+    --btn-bg: transparent;
+    --btn-color: var(--text);
+    --btn-border: rgba(255,255,255,0.1);
+    box-shadow: none;
+    text-shadow: none;
   }
-  .btn-outline:hover { background: rgba(255,255,255,0.04); }
-  .btn-sm { padding: 8px 16px; font-size: 13px; border-radius: 8px; }
+  .btn-outline::before { display: none; }
+  .btn-outline:hover { --btn-bg: rgba(255,255,255,0.04); box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+  .btn-sm { padding: 7px 14px; font-size: 13px; border-radius: 999px; }
 
   /* ── Topbar ── */
   .app-topbar {
@@ -358,7 +418,7 @@
 
   /* ── Conditions UI ── */
   .condition-row {
-    display: flex; gap: 8px; align-items: center; margin-bottom: 8px;
+    display: flex; gap: 8px; align-items: center; margin-bottom: 4px;
     padding: 10px; background: rgba(255,255,255,0.02);
     border: 1px solid rgba(255,255,255,0.04);
     border-radius: 10px;
@@ -369,6 +429,19 @@
   .condition-row .remove-cond {
     background: none; border: none; color: var(--red);
     cursor: pointer; font-size: 16px; padding: 4px;
+  }
+  .condition-connector {
+    display: flex; justify-content: center; align-items: center; margin: 2px 0;
+  }
+  .condition-connector select {
+    background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.3);
+    color: var(--accent); font-weight: 700; font-size: 11px; text-align: center;
+    padding: 3px 16px; border-radius: 10px; cursor: pointer; letter-spacing: 1px;
+  }
+  .condition-connector .logic-label {
+    background: rgba(139,92,246,0.08); border: 1px solid rgba(139,92,246,0.2);
+    color: var(--accent); font-weight: 600; font-size: 11px; text-align: center;
+    padding: 3px 16px; border-radius: 10px; letter-spacing: 1px;
   }
 
   /* ── Trade Table ── */
@@ -1251,6 +1324,17 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
           <div class="input-group">
+            <label>Trailing SL %</label>
+            <input type="number" id="b-trail" value="0" step="0.5" min="0" title="0 = disabled. Trails profit by this % from peak.">
+          </div>
+          <div class="input-group">
+            <label>Fee % (per side)</label>
+            <input type="number" id="b-fee" value="0.05" step="0.01" min="0">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="input-group">
             <label>From Date</label>
             <input type="date" id="b-from" value="2025-01-01">
           </div>
@@ -1265,12 +1349,16 @@
             <label>Candle Interval</label>
             <select id="b-interval">
               <option value="1m">1 Minute</option>
+              <option value="3m">3 Minutes</option>
               <option value="5m" selected>5 Minutes</option>
               <option value="15m">15 Minutes</option>
               <option value="30m">30 Minutes</option>
               <option value="1h">1 Hour</option>
+              <option value="2h">2 Hours</option>
               <option value="4h">4 Hours</option>
+              <option value="6h">6 Hours</option>
               <option value="1d">1 Day</option>
+              <option value="1w">1 Week</option>
             </select>
           </div>
           <div class="input-group">
@@ -1294,6 +1382,7 @@
           <button class="btn btn-outline btn-sm" onclick="addIndicator('BB')">Bollinger</button>
           <button class="btn btn-outline btn-sm" onclick="addIndicator('VWAP')">VWAP</button>
           <button class="btn btn-outline btn-sm" onclick="addIndicator('ATR')">ATR</button>
+          <button class="btn btn-outline btn-sm" onclick="addIndicator('ADX')">ADX</button>
           <button class="btn btn-outline btn-sm" onclick="addIndicator('StochRSI')">StochRSI</button>
           <button class="btn btn-outline btn-sm" onclick="addIndicator('CPR')">CPR</button>
         </div>
@@ -1956,6 +2045,10 @@ async function addIndicator(name) {
     var atrP = await cfPrompt('ATR Indicator', 'Enter ATR period:', '14');
     if (!atrP) return; label = 'ATR_' + atrP;
   } else if (name === 'StochRSI') { label = 'StochRSI_14'; }
+  else if (name === 'ADX') {
+    var adxP = await cfPrompt('ADX Indicator', 'Enter ADX period:', '14');
+    if (!adxP) return; label = 'ADX_' + adxP;
+  }
   else if (name === 'CPR') { label = 'CPR'; }
   // else VWAP is just 'VWAP'
 
@@ -1977,44 +2070,101 @@ function renderIndicators() {
   document.getElementById('indicator-list').innerHTML = indicators.map((ind, i) => `
     <span class="tag tag-purple" style="cursor:pointer;" onclick="removeIndicator(${i})">${ind} ✕</span>
   `).join('');
+  // Sync condition dropdowns when indicators change
+  renderConditions('entry');
+  renderConditions('exit');
 }
 
 // ── Conditions ─────────────────────────────────────────────
 function getIndicatorOptions() {
-  let opts = '<option value="current_close">Current Close</option>';
-  opts += '<option value="current_open">Current Open</option>';
-  opts += '<option value="current_high">Current High</option>';
-  opts += '<option value="current_low">Current Low</option>';
-  indicators.forEach(ind => {
-    opts += `<option value="${ind}">${ind}</option>`;
-    if (ind.startsWith('MACD')) {
-      opts += '<option value="MACD_line">MACD Line</option>';
-      opts += '<option value="MACD_signal">MACD Signal</option>';
-      opts += '<option value="MACD_histogram">MACD Histogram</option>';
+  // ── Price Data ──
+  let html = '<optgroup label="── Price Data ──">';
+  html += '<option value="current_close">Current Close</option>';
+  html += '<option value="current_open">Current Open</option>';
+  html += '<option value="current_high">Current High</option>';
+  html += '<option value="current_low">Current Low</option>';
+  html += '</optgroup>';
+
+  // ── Moving Averages ──
+  const mas = indicators.filter(i => i.startsWith('EMA') || i.startsWith('SMA'));
+  if (mas.length) {
+    html += '<optgroup label="── Moving Averages ──">';
+    mas.forEach(ind => { html += `<option value="${ind}">${ind}</option>`; });
+    html += '</optgroup>';
+  }
+
+  // ── Oscillators (RSI, MACD, StochRSI) ──
+  const hasRSI = indicators.filter(i => i.startsWith('RSI'));
+  const hasMACD = indicators.some(i => i.startsWith('MACD'));
+  const hasStoch = indicators.some(i => i.startsWith('StochRSI'));
+  if (hasRSI.length || hasMACD || hasStoch) {
+    html += '<optgroup label="── Oscillators ──">';
+    hasRSI.forEach(ind => { html += `<option value="${ind}">${ind}</option>`; });
+    if (hasMACD) {
+      html += '<option value="MACD_line">MACD Line</option>';
+      html += '<option value="MACD_signal">MACD Signal</option>';
+      html += '<option value="MACD_histogram">MACD Histogram</option>';
     }
-    if (ind.startsWith('BB')) {
-      opts += '<option value="BB_upper">BB Upper</option>';
-      opts += '<option value="BB_middle">BB Middle</option>';
-      opts += '<option value="BB_lower">BB Lower</option>';
+    if (hasStoch) {
+      html += '<option value="StochRSI_K">StochRSI K</option>';
+      html += '<option value="StochRSI_D">StochRSI D</option>';
     }
-    if (ind.startsWith('StochRSI')) {
-      opts += '<option value="StochRSI_K">StochRSI K</option>';
-      opts += '<option value="StochRSI_D">StochRSI D</option>';
+    html += '</optgroup>';
+  }
+
+  // ── Volatility (BB, ATR) ──
+  const hasBB = indicators.some(i => i.startsWith('BB'));
+  const hasATR = indicators.filter(i => i.startsWith('ATR'));
+  if (hasBB || hasATR.length) {
+    html += '<optgroup label="── Volatility ──">';
+    if (hasBB) {
+      html += '<option value="BB_upper">BB Upper</option>';
+      html += '<option value="BB_middle">BB Middle</option>';
+      html += '<option value="BB_lower">BB Lower</option>';
     }
-    if (ind === 'CPR') {
-      opts += '<option value="CPR_pivot">CPR Pivot</option>';
-      opts += '<option value="CPR_bc">CPR BC (Bottom)</option>';
-      opts += '<option value="CPR_tc">CPR TC (Top)</option>';
-      opts += '<option value="CPR_R1">CPR R1</option>';
-      opts += '<option value="CPR_R2">CPR R2</option>';
-      opts += '<option value="CPR_R3">CPR R3</option>';
-      opts += '<option value="CPR_S1">CPR S1</option>';
-      opts += '<option value="CPR_S2">CPR S2</option>';
-      opts += '<option value="CPR_S3">CPR S3</option>';
-    }
-  });
-  opts += '<option value="number">Number</option>';
-  return opts;
+    hasATR.forEach(ind => { html += `<option value="${ind}">${ind}</option>`; });
+    html += '</optgroup>';
+  }
+
+  // ── Trend (Supertrend, ADX, VWAP) ──
+  const hasST = indicators.filter(i => i.startsWith('Supertrend'));
+  const hasADX = indicators.filter(i => i.startsWith('ADX'));
+  const hasVWAP = indicators.includes('VWAP');
+  if (hasST.length || hasADX.length || hasVWAP) {
+    html += '<optgroup label="── Trend ──">';
+    hasST.forEach(ind => {
+      html += `<option value="${ind}">${ind}</option>`;
+      html += `<option value="${ind}_dir">${ind} Direction</option>`;
+    });
+    hasADX.forEach(ind => {
+      html += `<option value="${ind}">${ind}</option>`;
+      html += `<option value="${ind}_plus">${ind} +DI</option>`;
+      html += `<option value="${ind}_minus">${ind} -DI</option>`;
+    });
+    if (hasVWAP) html += '<option value="VWAP">VWAP</option>';
+    html += '</optgroup>';
+  }
+
+  // ── Support/Resistance (CPR) ──
+  if (indicators.includes('CPR')) {
+    html += '<optgroup label="── Support / Resistance ──">';
+    html += '<option value="CPR_pivot">CPR Pivot</option>';
+    html += '<option value="CPR_bc">CPR BC (Bottom)</option>';
+    html += '<option value="CPR_tc">CPR TC (Top)</option>';
+    html += '<option value="CPR_R1">R1</option>';
+    html += '<option value="CPR_R2">R2</option>';
+    html += '<option value="CPR_R3">R3</option>';
+    html += '<option value="CPR_S1">S1</option>';
+    html += '<option value="CPR_S2">S2</option>';
+    html += '<option value="CPR_S3">S3</option>';
+    html += '</optgroup>';
+  }
+
+  // ── Custom Value ──
+  html += '<optgroup label="── Value ──">';
+  html += '<option value="number">Number (custom)</option>';
+  html += '</optgroup>';
+  return html;
 }
 
 function addCondition(type) {
@@ -2041,22 +2191,33 @@ function renderConditions(type) {
   const cont = document.getElementById(type + '-conditions');
   const opts = getIndicatorOptions();
 
-  cont.innerHTML = arr.map((c, i) => `
+  cont.innerHTML = arr.map((c, i) => {
+    // Connector div between rows (not inside condition-row)
+    let connectorHtml = '';
+    if (i > 0) {
+      connectorHtml = `<div class="condition-connector">
+        <select onchange="updateCondition('${type}',${i},'connector',this.value)">
+          <option value="AND" ${c.connector==='AND'?'selected':''}>AND</option>
+          <option value="OR" ${c.connector==='OR'?'selected':''}>OR</option>
+        </select>
+      </div>`;
+    }
+    return `${connectorHtml}
     <div class="condition-row">
-      ${i > 0 ? `<select style="width:70px;" onchange="updateCondition('${type}',${i},'connector',this.value)">
-        <option ${c.connector==='AND'?'selected':''}>AND</option>
-        <option ${c.connector==='OR'?'selected':''}>OR</option>
-      </select>` : '<span style="width:70px;font-size:12px;color:var(--muted);">IF</span>'}
+      ${i === 0 ? '<span class="logic-label" style="min-width:40px;text-align:center;font-size:11px;font-weight:700;color:var(--accent);letter-spacing:1px;">IF</span>' : ''}
       <select onchange="updateCondition('${type}',${i},'left',this.value)">
         ${opts.replace(`value="${c.left}"`, `value="${c.left}" selected`)}
       </select>
-      <select style="width:140px;" onchange="updateCondition('${type}',${i},'operator',this.value)">
+      <select style="min-width:150px;" onchange="updateCondition('${type}',${i},'operator',this.value)">
         <option value="crosses_above" ${c.operator==='crosses_above'?'selected':''}>Crosses Above</option>
         <option value="crosses_below" ${c.operator==='crosses_below'?'selected':''}>Crosses Below</option>
         <option value="is_above" ${c.operator==='is_above'?'selected':''}>Is Above</option>
         <option value="is_below" ${c.operator==='is_below'?'selected':''}>Is Below</option>
+        <option value="==" ${c.operator==='=='?'selected':''}>== (Equals)</option>
         <option value=">=" ${c.operator==='>='?'selected':''}>>=</option>
         <option value="<=" ${c.operator==='<='?'selected':''}><=</option>
+        <option value="is_true" ${c.operator==='is_true'?'selected':''}>Is True</option>
+        <option value="is_false" ${c.operator==='is_false'?'selected':''}>Is False</option>
       </select>
       <select onchange="updateCondition('${type}',${i},'right',this.value)">
         ${opts.replace(`value="${c.right}"`, `value="${c.right}" selected`)}
@@ -2064,8 +2225,8 @@ function renderConditions(type) {
       ${c.right === 'number' ? `<input type="number" style="width:80px;" value="${c.right_number_value||0}"
         onchange="updateCondition('${type}',${i},'right_number_value',this.value)">` : ''}
       <button class="remove-cond" onclick="removeCondition('${type}',${i})">✕</button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 // ── Dashboard ──────────────────────────────────────────────
@@ -2271,6 +2432,8 @@ async function runBacktest() {
     position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
+    trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
+    fee_pct: parseFloat(document.getElementById('b-fee').value) || 0.05,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     indicators: indicators,
     entry_conditions: entryConditions.map(c => ({
@@ -2654,6 +2817,8 @@ async function saveStrategy() {
     exit_conditions: exitConditions,
     stoploss_pct: parseFloat(document.getElementById('b-sl').value),
     target_profit_pct: parseFloat(document.getElementById('b-tp').value),
+    trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
+    fee_pct: parseFloat(document.getElementById('b-fee').value) || 0.05,
     folder: getSelectedFolder(),
     initial_capital: parseFloat(document.getElementById('b-capital').value) || 10000,
     position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
@@ -2685,6 +2850,8 @@ async function startPaper() {
     initial_capital: parseFloat(document.getElementById('b-capital').value) || 10000,
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
+    trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
+    fee_pct: parseFloat(document.getElementById('b-fee').value) || 0.05,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
     candle_interval: document.getElementById('b-interval').value,
@@ -2737,6 +2904,8 @@ async function startLive() {
     initial_capital: parseFloat(document.getElementById('b-capital').value) || 10000,
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
+    trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
+    fee_pct: parseFloat(document.getElementById('b-fee').value) || 0.05,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
     candle_interval: document.getElementById('b-interval').value,
@@ -3327,6 +3496,7 @@ async function validateStrategy() {
       exit_conditions: exitConditions,
       stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
       target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
+      trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
     };
     var r = await fetch('/api/validate-strategy', {
       method: 'POST', credentials: 'same-origin',

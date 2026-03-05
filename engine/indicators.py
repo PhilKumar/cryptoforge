@@ -70,6 +70,44 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.ewm(span=period, adjust=False).mean()
 
 
+def adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Average Directional Index (ADX) with +DI and -DI."""
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    prev_close = close.shift(1)
+
+    # True Range
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    # Directional Movement
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0),
+                        index=df.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0),
+                         index=df.index)
+
+    # Smoothed with EMA
+    atr_smooth = tr.ewm(span=period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(span=period, adjust=False).mean() / atr_smooth)
+    minus_di = 100 * (minus_dm.ewm(span=period, adjust=False).mean() / atr_smooth)
+
+    # ADX
+    dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di))
+    adx_line = dx.ewm(span=period, adjust=False).mean()
+
+    return pd.DataFrame({
+        "adx": adx_line,
+        "adx_plus": plus_di,
+        "adx_minus": minus_di,
+    }, index=df.index)
+
+
 def supertrend(df: pd.DataFrame, period: int = 10,
                multiplier: float = 3.0) -> pd.DataFrame:
     """SuperTrend indicator using numpy for performance."""
@@ -125,11 +163,22 @@ def supertrend(df: pd.DataFrame, period: int = 10,
 
 
 def vwap(df: pd.DataFrame) -> pd.Series:
-    """Volume Weighted Average Price — resets daily by default for crypto."""
+    """Volume Weighted Average Price — resets daily (UTC midnight) for crypto."""
     typical = (df["high"] + df["low"] + df["close"]) / 3
-    cum_tp_vol = (typical * df["volume"]).cumsum()
-    cum_vol = df["volume"].cumsum()
-    return cum_tp_vol / cum_vol
+    tp_vol = typical * df["volume"]
+
+    # If index is datetime, reset accumulation daily
+    if hasattr(df.index, 'date'):
+        dates = pd.Series(df.index.date, index=df.index)
+        cum_tp_vol = tp_vol.groupby(dates).cumsum()
+        cum_vol = df["volume"].groupby(dates).cumsum()
+    else:
+        # Fallback: simple cumulative (no date info)
+        cum_tp_vol = tp_vol.cumsum()
+        cum_vol = df["volume"].cumsum()
+
+    result = cum_tp_vol / cum_vol
+    return result
 
 
 def stochastic_rsi(series: pd.Series, rsi_period: int = 14,
@@ -258,6 +307,13 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
             elif name == "ATR":
                 period = int(parts[1]) if len(parts) > 1 else 14
                 df[ind_string] = atr(df, period)
+
+            elif name == "ADX":
+                period = int(parts[1]) if len(parts) > 1 else 14
+                adx_df = adx(df, period)
+                df[ind_string] = adx_df["adx"]
+                df[f"{ind_string}_plus"] = adx_df["adx_plus"]
+                df[f"{ind_string}_minus"] = adx_df["adx_minus"]
 
             elif name == "StochRSI":
                 period = int(parts[1]) if len(parts) > 1 else 14

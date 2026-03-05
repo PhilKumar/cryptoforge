@@ -2,6 +2,7 @@
 engine/paper_trading.py — CryptoForge Paper Trading Engine
 Simulated perpetual futures trading using real-time market data from Delta Exchange / Binance.
 Production-ready: state persistence, event logging, indicator tracking, multi-engine support.
+WebSocket-enhanced: real-time ticker for instant SL/TP checks between REST polls.
 """
 
 import asyncio
@@ -16,6 +17,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from engine.indicators import compute_dynamic_indicators
 from engine.backtest import eval_condition_group
 import config
+
+# Try to import WebSocket feed (optional enhancement)
+try:
+    from engine.ws_feed import DeltaWSFeed
+    _HAS_WS = True
+except ImportError:
+    _HAS_WS = False
 
 # ── State File ────────────────────────────────────────────────
 _STATE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -58,6 +66,10 @@ class PaperTradingEngine:
         self.current_indicators = {}
         self.current_candle = {}
         self._prev_row = None
+
+        # WebSocket feed for real-time price (optional)
+        self._ws_feed = None
+        self._ws_price = None  # latest price from WS ticker
 
         # Event logging
         self.event_log = []
@@ -160,6 +172,39 @@ class PaperTradingEngine:
         ts = event["time"].strftime("%H:%M:%S")
         print(f"[PAPER] [{ts}] [{event_type.upper()}] {message}")
 
+    async def _start_ws_feed(self, symbol: str):
+        """Try to start WebSocket feed for real-time price updates."""
+        if not _HAS_WS:
+            return
+        try:
+            self._ws_feed = DeltaWSFeed()
+
+            def _on_ticker(sym, ticker):
+                try:
+                    mark = ticker.get("mark_price") or ticker.get("close") or ticker.get("last_price")
+                    if mark:
+                        self._ws_price = float(mark)
+                except (TypeError, ValueError):
+                    pass
+
+            self._ws_feed.on_ticker = _on_ticker
+            await self._ws_feed.connect()
+            await self._ws_feed.subscribe_ticker(symbol)
+            self.log_event("info", f"WebSocket ticker connected for {symbol}")
+        except Exception as e:
+            self.log_event("warn", f"WebSocket feed unavailable: {e} — using REST only")
+            self._ws_feed = None
+
+    async def _stop_ws_feed(self):
+        """Disconnect WebSocket feed."""
+        if self._ws_feed:
+            try:
+                await self._ws_feed.disconnect()
+            except Exception:
+                pass
+            self._ws_feed = None
+            self._ws_price = None
+
     async def start(self, callback: Callable = None):
         self.running = True
         self.session_date = date_type.today()
@@ -183,6 +228,9 @@ class PaperTradingEngine:
         self.log_event("info", f"Max trades/day: {max_tpd} | Capital: ${capital:,.0f}")
         if self.max_daily_loss > 0:
             self.log_event("info", f"Max daily loss: ${self.max_daily_loss:,.0f}")
+
+        # Start WebSocket feed for real-time price
+        await self._start_ws_feed(symbol)
 
         if callback:
             await callback({"type": "started", "symbol": symbol, "mode": "paper"})
@@ -218,6 +266,10 @@ class PaperTradingEngine:
                 row = df.iloc[-1]
                 prev = df.iloc[-2] if len(df) > 1 else row
                 price = float(row["close"])
+
+                # Use WebSocket ticker price if available (more real-time than REST candle close)
+                ws_price = self._ws_price
+                exit_price = ws_price if ws_price is not None else price
 
                 # Update UI tracking
                 self.current_candle = {
@@ -266,10 +318,12 @@ class PaperTradingEngine:
                 else:
                     for trade in self.open_trades[:]:
                         ep = trade["entry_price"]
+                        # Use real-time WS price for SL/TP, REST price for signals
+                        check_price = exit_price
                         if trade_side == "LONG":
-                            pnl_pct = (price - ep) / ep * 100
+                            pnl_pct = (check_price - ep) / ep * 100
                         else:
-                            pnl_pct = (ep - price) / ep * 100
+                            pnl_pct = (ep - check_price) / ep * 100
 
                         lev_pnl_pct = pnl_pct * leverage
                         trade_pnl = trade["notional"] * (pnl_pct / 100)
@@ -292,7 +346,7 @@ class PaperTradingEngine:
 
                             closed = {
                                 **trade,
-                                "exit_price": price,
+                                "exit_price": check_price,
                                 "exit_time": str(now),
                                 "pnl": round(trade_pnl, 2),
                                 "exit_reason": exit_reason,
@@ -303,7 +357,7 @@ class PaperTradingEngine:
                                 self.in_trade = False
 
                             emoji = "+" if trade_pnl >= 0 else ""
-                            self.log_event("exit", f"EXIT {exit_reason} {symbol} @ ${price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}")
+                            self.log_event("exit", f"EXIT {exit_reason} {symbol} @ ${check_price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}")
 
                             if callback:
                                 await callback({
@@ -328,6 +382,7 @@ class PaperTradingEngine:
 
         # Final state save on stop
         self.log_event("stop", "Paper Trading Engine Stopped")
+        await self._stop_ws_feed()
         self._save_state()
 
     def stop(self):
