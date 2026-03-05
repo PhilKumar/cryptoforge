@@ -29,6 +29,22 @@ class DeltaClient:
         self._products_cache = None
         self._products_ts = 0
         self._CACHE_TTL = 3600  # 1 hour
+        # Delta India uses USD suffix (BTCUSD), NOT USDT (BTCUSDT)
+        self._is_india = getattr(config, 'DELTA_REGION', 'india').lower() == 'india'
+
+    @staticmethod
+    def to_delta_symbol(symbol: str) -> str:
+        """Convert Binance-style XXXUSDT to Delta India XXXUSD format."""
+        if symbol and symbol.upper().endswith("USDT"):
+            return symbol[:-1]  # strip trailing 'T'
+        return symbol
+
+    @staticmethod
+    def from_delta_symbol(symbol: str) -> str:
+        """Convert Delta India XXXUSD back to Binance-style XXXUSDT format."""
+        if symbol and symbol.upper().endswith("USD") and not symbol.upper().endswith("USDT"):
+            return symbol + "T"
+        return symbol
 
     def _is_configured(self) -> bool:
         return (self.api_key != "YOUR_API_KEY_HERE" and
@@ -253,6 +269,9 @@ class DeltaClient:
 
     def get_product_by_symbol(self, symbol: str) -> Optional[dict]:
         """Find a product by its symbol (e.g., BTCUSD)."""
+        # Delta India uses USD suffix, map from USDT
+        if self._is_india:
+            symbol = self.to_delta_symbol(symbol)
         products = self.get_products()
         for p in products:
             if p.get("symbol", "").upper() == symbol.upper():
@@ -261,6 +280,9 @@ class DeltaClient:
 
     def get_leverage_info(self, symbol: str) -> dict:
         """Get max leverage and available leverage options for a symbol."""
+        # Delta India uses USD suffix, map from USDT
+        if self._is_india:
+            symbol = self.to_delta_symbol(symbol)
         product = self.get_product_by_symbol(symbol)
         if not product:
             return {"max_leverage": 100, "default": 10, "options": [1, 2, 3, 5, 10, 20, 50, 100]}
@@ -295,6 +317,9 @@ class DeltaClient:
         Fetch OHLCV candle data.
         resolution: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1d, 7d, 30d, 1w, 2w
         """
+        # Delta India uses USD suffix (e.g. BTCUSD), map from USDT
+        if self._is_india:
+            symbol = self.to_delta_symbol(symbol)
         # Map resolution to Delta API format
         res_map = {
             "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
@@ -394,6 +419,9 @@ class DeltaClient:
     # ── Live Ticker (Mark Price / LTP) ────────────────────────────
     def get_ticker(self, symbol: str) -> dict:
         """Get latest ticker data for a symbol."""
+        # Delta India uses USD suffix (e.g. BTCUSD), map from USDT
+        if self._is_india:
+            symbol = self.to_delta_symbol(symbol)
         try:
             resp = self._get(f"/tickers/{symbol}")
             result = resp.get("result", {})

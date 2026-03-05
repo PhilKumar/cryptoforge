@@ -10,13 +10,20 @@ import json as _json
 import math
 import os
 import sys
-from datetime import datetime, date as date_type, timedelta
+from datetime import datetime, date as date_type, timedelta, timezone
 from typing import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from engine.indicators import compute_dynamic_indicators
 from engine.backtest import eval_condition_group
 import config
+
+# IST timezone (UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def _now_ist() -> datetime:
+    """Return current time in IST."""
+    return datetime.now(IST)
 
 # Try to import WebSocket feed (optional enhancement)
 try:
@@ -101,7 +108,7 @@ class PaperTradingEngine:
                      "type": e["type"], "message": e["message"]}
                     for e in self.event_log[-100:]
                 ],
-                "saved_at": str(datetime.utcnow()),
+                "saved_at": str(_now_ist()),
             }
             with open(self._state_file, "w") as f:
                 _json.dump(state, f, indent=2, default=str)
@@ -142,7 +149,7 @@ class PaperTradingEngine:
                 try:
                     t = datetime.strptime(entry["time"], "%Y-%m-%d %H:%M:%S")
                 except Exception:
-                    t = datetime.utcnow()
+                    t = _now_ist()
                 self.event_log.append({"time": t, "type": entry["type"],
                                        "message": entry["message"], "data": {}})
 
@@ -161,7 +168,7 @@ class PaperTradingEngine:
 
     def log_event(self, event_type: str, message: str, data: dict = None):
         event = {
-            "time": datetime.utcnow(),
+            "time": _now_ist(),
             "type": event_type,
             "message": message,
             "data": data or {},
@@ -169,7 +176,7 @@ class PaperTradingEngine:
         self.event_log.append(event)
         if len(self.event_log) > 500:
             self.event_log = self.event_log[-300:]
-        ts = event["time"].strftime("%H:%M:%S")
+        ts = event["time"].strftime("%H:%M:%S IST")
         print(f"[PAPER] [{ts}] [{event_type.upper()}] {message}")
 
     async def _start_ws_feed(self, symbol: str):
@@ -240,7 +247,7 @@ class PaperTradingEngine:
 
         while self.running:
             try:
-                now = datetime.utcnow()
+                now = _now_ist()
                 today = now.date()
 
                 if today != self._last_trade_date:
@@ -428,7 +435,7 @@ class PaperTradingEngine:
             "current_candle": self.current_candle,
             "current_indicators": self.current_indicators,
             "event_log": [
-                {"time": e["time"].strftime("%H:%M:%S") if isinstance(e["time"], datetime) else str(e["time"]),
+                {"time": e["time"].strftime("%H:%M:%S IST") if isinstance(e["time"], datetime) else str(e["time"]),
                  "type": e["type"], "message": e["message"]}
                 for e in self.event_log[-50:]
             ],

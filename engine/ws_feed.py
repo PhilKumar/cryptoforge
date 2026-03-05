@@ -104,6 +104,14 @@ class DeltaWSFeed:
         self.reconnect_count = 0
         self.last_error = ""
 
+    @staticmethod
+    def _to_delta_symbol(symbol: str) -> str:
+        """Convert Binance-style XXXUSDT to Delta India XXXUSD format."""
+        region = os.getenv("DELTA_REGION", getattr(config, "DELTA_REGION", "india")).lower()
+        if region == "india" and symbol and symbol.upper().endswith("USDT"):
+            return symbol[:-1]  # strip trailing 'T'
+        return symbol
+
     # ── Properties ──────────────────────────────────────────────
     @property
     def connected(self) -> bool:
@@ -239,11 +247,15 @@ class DeltaWSFeed:
     # ── Subscribe / Unsubscribe ─────────────────────────────────
     async def subscribe_candles(self, symbol: str, resolution: str):
         """Subscribe to candlestick updates."""
+        # Delta India uses USD suffix (BTCUSD), map from USDT
+        symbol = self._to_delta_symbol(symbol)
         channel = f"candlestick_{resolution}_{symbol}"
         await self._send_subscribe(channel)
 
     async def subscribe_ticker(self, symbol: str):
         """Subscribe to real-time ticker."""
+        # Delta India uses USD suffix (BTCUSD), map from USDT
+        symbol = self._to_delta_symbol(symbol)
         channel = f"v2/ticker/{symbol}"
         await self._send_subscribe(channel)
 
