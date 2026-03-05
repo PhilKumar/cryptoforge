@@ -105,6 +105,8 @@ class DeltaClient:
             raise
 
     # ── Async wrappers (non-blocking for asyncio event loop) ──────
+    # These use asyncio.to_thread for compatibility with the sync methods.
+    # For true async (aiohttp), use the native_async_* methods below.
     async def async_get(self, path: str, params: dict = None, auth: bool = False) -> dict:
         return await asyncio.to_thread(self._get, path, params, auth)
 
@@ -116,6 +118,116 @@ class DeltaClient:
 
     async def async_get_candles(self, symbol: str, **kwargs) -> pd.DataFrame:
         return await asyncio.to_thread(self.get_candles, symbol, **kwargs)
+
+    # ── Native Async (aiohttp) — enterprise-grade ─────────────────
+    _aio_session = None
+
+    async def _ensure_aio_session(self):
+        """Lazy-create a shared aiohttp session."""
+        if self._aio_session is None or self._aio_session.closed:
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            self._aio_session = aiohttp.ClientSession(timeout=timeout)
+
+    async def aio_close(self):
+        """Close the aiohttp session (call on shutdown)."""
+        if self._aio_session and not self._aio_session.closed:
+            await self._aio_session.close()
+
+    async def _aio_get(self, path: str, params: dict = None, auth: bool = False) -> dict:
+        """Native async GET using aiohttp."""
+        import aiohttp
+        await self._ensure_aio_session()
+        url = f"{self.base_url}{path}"
+        query_string = ""
+        if auth and params:
+            from urllib.parse import urlencode
+            query_string = "?" + urlencode(sorted(params.items()))
+        headers = self._sign("GET", path, query_string=query_string) if auth else {"Content-Type": "application/json"}
+        async with self._aio_session.get(url, params=params, headers=headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def _aio_post(self, path: str, data: dict = None) -> dict:
+        """Native async POST using aiohttp."""
+        import aiohttp
+        await self._ensure_aio_session()
+        url = f"{self.base_url}{path}"
+        body = json.dumps(data) if data else ""
+        headers = self._sign("POST", path, body=body)
+        async with self._aio_session.post(url, data=body, headers=headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    # ── Redundant Order Verification ──────────────────────────────
+    async def place_order_verified(self, product_id: int, size: float, side: str,
+                                    order_type: str = "market_order",
+                                    limit_price: float = None,
+                                    leverage: int = 10,
+                                    reduce_only: bool = False,
+                                    max_verify_attempts: int = 3) -> dict:
+        """
+        Place an order and verify it was filled.
+        1. Place order via REST
+        2. Wait 2s, then query order status
+        3. Cross-check against positions
+        4. Retry verification up to max_verify_attempts times
+        Returns enriched order dict with 'verified' flag.
+        """
+        # Place the order
+        result = self.place_order(
+            product_id=product_id, size=size, side=side,
+            order_type=order_type, limit_price=limit_price,
+            leverage=leverage, reduce_only=reduce_only,
+        )
+
+        if isinstance(result, dict) and result.get("error"):
+            return {**result, "verified": False}
+
+        order_id = result.get("id")
+        if not order_id:
+            print(f"[DELTA] Order placed but no ID returned: {result}")
+            return {**result, "verified": False}
+
+        print(f"[DELTA] Order {order_id} placed — verifying fill...")
+
+        # Verification loop
+        for attempt in range(max_verify_attempts):
+            await asyncio.sleep(2)  # Wait for fill
+
+            try:
+                # Check order status
+                orders = await asyncio.to_thread(self.get_orders, product_id, "closed")
+                filled = None
+                for o in (orders or []):
+                    if o.get("id") == order_id:
+                        filled = o
+                        break
+
+                if filled and filled.get("state") in ("filled", "closed"):
+                    print(f"[DELTA] Order {order_id} VERIFIED filled (attempt {attempt + 1})")
+
+                    # Cross-check position
+                    position = await asyncio.to_thread(self.get_position, product_id)
+                    if position:
+                        pos_size = abs(float(position.get("size", 0)))
+                        expected_size = abs(float(size))
+                        if pos_size > 0:
+                            print(f"[DELTA] Position confirmed: size={pos_size}")
+                        else:
+                            print(f"[DELTA] WARNING: Position size is 0 after fill "
+                                  f"(expected ~{expected_size})")
+
+                    return {**result, "verified": True, "fill_status": filled.get("state"),
+                            "verified_at_attempt": attempt + 1}
+
+                print(f"[DELTA] Order {order_id} not yet filled (attempt {attempt + 1})")
+
+            except Exception as e:
+                print(f"[DELTA] Verify error (attempt {attempt + 1}): {e}")
+
+        print(f"[DELTA] Order {order_id} UNVERIFIED after {max_verify_attempts} attempts")
+        return {**result, "verified": False, "verified_at_attempt": max_verify_attempts}
 
     # ── Products (Instruments) ────────────────────────────────────
     def get_products(self, force_refresh: bool = False) -> list:

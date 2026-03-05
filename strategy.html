@@ -1018,7 +1018,7 @@
   </div>
 
   <div class="card">
-    <h3 style="margin-bottom: 12px;">Recent Backtest Runs</h3>
+    <h3 style="margin-bottom: 12px;">Recent Runs</h3>
     <div id="dash-runs-list" style="color: var(--muted); font-size: 14px;">No runs yet. Go to Builder to create one.</div>
   </div>
 
@@ -1325,8 +1325,16 @@
      ═══════════════════════════════════════════════════════ -->
 <div id="results-page" class="page-section">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
-    <h2>Backtest Results</h2>
-    <button class="btn btn-outline btn-sm" onclick="toggleCompare()">⚖️ Compare Runs</button>
+    <h2>📊 All Runs</h2>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <div id="runs-filter-bar" style="display: flex; gap: 6px;">
+        <button class="btn btn-sm runs-filter-btn active" data-filter="all" onclick="filterRuns('all', this)" style="font-size: 11px; padding: 5px 12px; background: var(--accent); color: #000;">All</button>
+        <button class="btn btn-sm runs-filter-btn" data-filter="backtest" onclick="filterRuns('backtest', this)" style="font-size: 11px; padding: 5px 12px; background: rgba(59,130,246,0.15); color: rgb(96,165,250); border: 1px solid rgba(59,130,246,0.3);">Backtest</button>
+        <button class="btn btn-sm runs-filter-btn" data-filter="paper" onclick="filterRuns('paper', this)" style="font-size: 11px; padding: 5px 12px; background: rgba(245,158,11,0.15); color: rgb(251,191,36); border: 1px solid rgba(245,158,11,0.3);">Paper</button>
+        <button class="btn btn-sm runs-filter-btn" data-filter="live" onclick="filterRuns('live', this)" style="font-size: 11px; padding: 5px 12px; background: rgba(139,92,246,0.15); color: rgb(167,139,250); border: 1px solid rgba(139,92,246,0.3);">Live</button>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="toggleCompare()">⚖️ Compare</button>
+    </div>
   </div>
 
   <!-- Compare Panel (hidden by default) -->
@@ -1346,7 +1354,7 @@
   </div>
 
   <div id="results-list">
-    <div style="color: var(--muted); text-align: center; padding: 40px;">No backtest runs yet.</div>
+    <div style="color: var(--muted); text-align: center; padding: 40px;">No runs yet.</div>
   </div>
 
   <!-- Saved Strategies Section -->
@@ -1654,6 +1662,13 @@
   <div class="card" style="margin-top:20px;">
     <h3 style="margin-bottom:14px;">📅 Year-to-Date Performance</h3>
     <div id="ytd-table" style="overflow-x:auto;"></div>
+  </div>
+
+  <!-- Paper Trading Runs -->
+  <div class="card" style="margin-top:20px;">
+    <h3 style="margin-bottom:14px;">📝 Paper Trading Runs</h3>
+    <div id="portfolio-paper-runs"></div>
+    <div id="portfolio-paper-runs-empty" style="text-align:center; padding:20px; color:var(--muted);">No paper trading runs yet. Start paper trading from the Live page.</div>
   </div>
 </div>
 
@@ -2116,8 +2131,8 @@ async function loadDashboard() {
       cont.innerHTML = runs.slice(-5).reverse().map(r => `
         <div class="run-card" onclick="viewRun(${r.id})">
           <div class="rc-header">
-            <span class="rc-name">${r.run_name || 'Run #' + r.id}</span>
-            <span class="tag ${r.total_pnl >= 0 ? 'tag-green' : 'tag-red'}">$${(r.total_pnl||0).toFixed(2)}</span>
+            <span class="rc-name">${_getModeBadge(r.mode)} ${r.run_name || 'Run #' + r.id}</span>
+            <span class="tag ${(r.total_pnl||0) >= 0 ? 'tag-green' : 'tag-red'}">$${(r.total_pnl||0).toFixed(2)}</span>
           </div>
           <div class="rc-meta">${r.symbol || ''} • ${r.leverage || 1}x • ${r.trade_count || 0} trades • ${r.created_at?.slice(0,10) || ''}</div>
         </div>
@@ -2287,7 +2302,7 @@ async function runBacktest() {
       await cfModal('Backtest Complete', '<div style="font-size:15px;margin-bottom:10px;">'
         + '<b>' + (d.stats.total_trades || 0) + '</b> trades executed</div>'
         + '<div style="font-size:22px;font-weight:800;font-family:JetBrains Mono;' + pnlColor + '">$' + pnl.toFixed(2) + '</div>'
-        + '<div style="margin-top:6px;font-size:12px;">Win Rate: ' + (d.stats.win_rate || 0) + '% • Max DD: ' + (d.stats.max_drawdown || 0).toFixed(1) + '%</div>',
+        + '<div style="margin-top:6px;font-size:12px;">Win Rate: ' + (d.stats.win_rate || 0) + '% • Max DD: ' + (d.stats.max_drawdown || 0).toFixed(1) + '% • Sharpe: ' + (parseFloat(d.stats.sharpe_ratio) || 0).toFixed(2) + '</div>',
         '📊', [{label:'View Results', cls:'btn-primary'}]);
       if (d.run_id) { viewRun(d.run_id); }
     } else {
@@ -2300,37 +2315,114 @@ async function runBacktest() {
   }
 }
 
-// ── Results ────────────────────────────────────────────────
+// ── Results (All Runs: Backtest / Paper / Live) ───────────
+let _allRunsCache = [];
+let _currentRunFilter = 'all';
+
+function _getModeBadge(mode) {
+  const m = (mode || 'backtest').toLowerCase();
+  if (m === 'paper') return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:rgba(245,158,11,0.15);color:rgb(251,191,36);border:1px solid rgba(245,158,11,0.3);">PAPER</span>';
+  if (m === 'live' || m === 'auto' || m === 'real') return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:rgba(139,92,246,0.15);color:rgb(167,139,250);border:1px solid rgba(139,92,246,0.3);">LIVE</span>';
+  return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:rgba(59,130,246,0.15);color:rgb(96,165,250);border:1px solid rgba(59,130,246,0.3);">BACKTEST</span>';
+}
+
+function _normalizeMode(mode) {
+  const m = (mode || 'backtest').toLowerCase();
+  if (m === 'live' || m === 'auto' || m === 'real') return 'live';
+  if (m === 'paper') return 'paper';
+  return 'backtest';
+}
+
+function _buildRunCards(runs) {
+  if (!runs.length) return '<div style="color:var(--muted);text-align:center;padding:40px;">No runs found.</div>';
+  return runs.map(r => `
+    <div class="run-card" onclick="viewRun(${r.id})">
+      <div class="rc-header">
+        <span class="rc-name">${_getModeBadge(r.mode)} ${r.run_name || 'Run #' + r.id}</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <span class="tag tag-purple">${r.symbol || ''} ${r.leverage || 1}x</span>
+          <span class="tag ${(r.total_pnl||0) >= 0 ? 'tag-green' : 'tag-red'}">$${(r.total_pnl||0).toFixed(2)}</span>
+          <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
+                  onclick="event.stopPropagation();copyEditRun(${r.id})" title="Copy & Edit">📝</button>
+          <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
+                  onclick="event.stopPropagation();deleteRun(${r.id})">🗑</button>
+        </span>
+      </div>
+      <div class="rc-meta">${r.trade_count||0} trades • ${r.created_at?.slice(0,16)||''} • WR: ${r.stats?.win_rate||0}%</div>
+    </div>
+  `).join('');
+}
+
+function filterRuns(mode, btn) {
+  _currentRunFilter = mode;
+  document.querySelectorAll('.runs-filter-btn').forEach(b => {
+    b.classList.remove('active');
+    b.style.background = '';
+    const f = b.getAttribute('data-filter');
+    if (f === 'all') { b.style.background = 'rgba(255,255,255,0.08)'; b.style.color = 'var(--muted)'; }
+    else if (f === 'backtest') { b.style.background = 'rgba(59,130,246,0.15)'; b.style.color = 'rgb(96,165,250)'; }
+    else if (f === 'paper') { b.style.background = 'rgba(245,158,11,0.15)'; b.style.color = 'rgb(251,191,36)'; }
+    else if (f === 'live') { b.style.background = 'rgba(139,92,246,0.15)'; b.style.color = 'rgb(167,139,250)'; }
+  });
+  if (btn) {
+    btn.classList.add('active');
+    if (mode === 'all') { btn.style.background = 'var(--accent)'; btn.style.color = '#000'; }
+    else if (mode === 'backtest') { btn.style.background = 'rgb(59,130,246)'; btn.style.color = '#fff'; }
+    else if (mode === 'paper') { btn.style.background = 'rgb(245,158,11)'; btn.style.color = '#000'; }
+    else if (mode === 'live') { btn.style.background = 'rgb(139,92,246)'; btn.style.color = '#fff'; }
+  }
+  _renderFilteredRuns();
+}
+
+function _renderFilteredRuns() {
+  const cont = document.getElementById('results-list');
+  if (!cont) return;
+  let filtered = _allRunsCache;
+  if (_currentRunFilter !== 'all') {
+    filtered = _allRunsCache.filter(r => _normalizeMode(r.mode) === _currentRunFilter);
+  }
+  cont.style.display = 'block';
+  if (!filtered.length) {
+    cont.innerHTML = '<div style="color:var(--muted);text-align:center;padding:40px;">No ' + (_currentRunFilter === 'all' ? '' : _currentRunFilter + ' ') + 'runs yet.</div>';
+  } else {
+    cont.innerHTML = _buildRunCards(filtered);
+  }
+}
+
+function _renderPortfolioPaperRuns(runs) {
+  const container = document.getElementById('portfolio-paper-runs');
+  const empty = document.getElementById('portfolio-paper-runs-empty');
+  if (!container) return;
+  const paperRuns = runs.filter(r => _normalizeMode(r.mode) === 'paper');
+  if (!paperRuns.length) {
+    if (empty) empty.style.display = 'block';
+    container.innerHTML = '';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  container.innerHTML = paperRuns.map(r => `
+    <div class="run-card" onclick="viewRun(${r.id})" style="padding:12px 16px;">
+      <div class="rc-header">
+        <span class="rc-name">${r.run_name || 'Run #' + r.id}</span>
+        <span class="tag ${(r.total_pnl||0) >= 0 ? 'tag-green' : 'tag-red'}">$${(r.total_pnl||0).toFixed(2)}</span>
+      </div>
+      <div class="rc-meta">${r.trade_count||0} trades • ${r.created_at?.slice(0,16)||''} • WR: ${r.stats?.win_rate||0}%</div>
+    </div>
+  `).join('');
+}
+
 async function loadRuns() {
   try {
     const r = await fetch('/api/runs', { credentials: 'same-origin' });
     const runs = await r.json();
-    const cont = document.getElementById('results-list');
+    _allRunsCache = runs.slice().reverse();
     document.getElementById('result-detail').style.display = 'none';
 
-    if (runs.length === 0) {
-      cont.innerHTML = '<div style="color:var(--muted);text-align:center;padding:40px;">No backtest runs yet.</div>';
-      cont.style.display = 'block';
-      return;
-    }
-
-    cont.style.display = 'block';
-    cont.innerHTML = runs.reverse().map(r => `
-      <div class="run-card" onclick="viewRun(${r.id})">
-        <div class="rc-header">
-          <span class="rc-name">${r.run_name || 'Run #' + r.id}</span>
-          <span style="display:flex;gap:8px;align-items:center;">
-            <span class="tag tag-purple">${r.symbol || ''} ${r.leverage || 1}x</span>
-            <span class="tag ${r.total_pnl >= 0 ? 'tag-green' : 'tag-red'}">$${(r.total_pnl||0).toFixed(2)}</span>
-            <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
-                    onclick="event.stopPropagation();copyEditRun(${r.id})" title="Copy & Edit">📝</button>
-            <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
-                    onclick="event.stopPropagation();deleteRun(${r.id})">🗑</button>
-          </span>
-        </div>
-        <div class="rc-meta">${r.trade_count||0} trades • ${r.created_at?.slice(0,16)||''} • WR: ${r.stats?.win_rate||0}%</div>
-      </div>
-    `).join('');
+    // Apply current filter
+    _renderFilteredRuns();
+    
+    // Update portfolio paper runs
+    _renderPortfolioPaperRuns(_allRunsCache);
   } catch(e) { console.error(e); }
 }
 
@@ -2357,6 +2449,10 @@ async function viewRun(rid) {
       ['Total P&L', '$' + (s.total_pnl || 0).toFixed(2), s.total_pnl >= 0],
       ['Profit Factor', (parseFloat(s.profit_factor) || 0).toFixed(2)],
       ['Max Drawdown', (s.max_drawdown || 0).toFixed(1) + '%'],
+      ['Sharpe Ratio', (parseFloat(s.sharpe_ratio) || 0).toFixed(2)],
+      ['Calmar Ratio', (parseFloat(s.calmar_ratio) || 0).toFixed(2)],
+      ['Expectancy', '$' + (parseFloat(s.expectancy) || 0).toFixed(2)],
+      ['Avg Duration', s.avg_trade_duration || '—'],
       ['Return', (s.total_return_pct || 0).toFixed(1) + '%'],
       ['Avg Win', '$' + (s.avg_win || 0).toFixed(2)],
       ['Avg Loss', '$' + (s.avg_loss || 0).toFixed(2)],
@@ -2534,7 +2630,7 @@ function closeDetail() {
 }
 
 async function deleteRun(rid) {
-  var ok = await cfConfirm('This will permanently delete this backtest run. This cannot be undone.', 'Delete Run?', '🗑️');
+  var ok = await cfConfirm('This will permanently delete this run. This cannot be undone.', 'Delete Run?', '🗑️');
   if (!ok) return;
   try {
     await fetch(`/api/runs/${rid}`, { method: 'DELETE', credentials: 'same-origin' });
@@ -3047,6 +3143,9 @@ async function runComparison() {
       ['Total P&L', '$' + (sa.total_pnl || 0).toFixed(2), '$' + (sb.total_pnl || 0).toFixed(2), sa.total_pnl, sb.total_pnl],
       ['Profit Factor', (parseFloat(sa.profit_factor) || 0).toFixed(2), (parseFloat(sb.profit_factor) || 0).toFixed(2)],
       ['Max Drawdown', (sa.max_drawdown || 0).toFixed(1) + '%', (sb.max_drawdown || 0).toFixed(1) + '%'],
+      ['Sharpe Ratio', (parseFloat(sa.sharpe_ratio) || 0).toFixed(2), (parseFloat(sb.sharpe_ratio) || 0).toFixed(2)],
+      ['Calmar Ratio', (parseFloat(sa.calmar_ratio) || 0).toFixed(2), (parseFloat(sb.calmar_ratio) || 0).toFixed(2)],
+      ['Expectancy', '$' + (parseFloat(sa.expectancy) || 0).toFixed(2), '$' + (parseFloat(sb.expectancy) || 0).toFixed(2)],
       ['Return', (sa.total_return_pct || 0).toFixed(1) + '%', (sb.total_return_pct || 0).toFixed(1) + '%', sa.total_return_pct, sb.total_return_pct],
       ['Avg Win', '$' + (sa.avg_win || 0).toFixed(2), '$' + (sb.avg_win || 0).toFixed(2)],
       ['Avg Loss', '$' + (sa.avg_loss || 0).toFixed(2), '$' + (sb.avg_loss || 0).toFixed(2)],

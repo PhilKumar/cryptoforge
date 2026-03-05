@@ -284,16 +284,69 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
     profit_factor = (sum(t["pnl"] for t in wins) / abs(sum(t["pnl"] for t in losses))
                      if losses and sum(t["pnl"] for t in losses) != 0 else 0)
 
+    # Expectancy = (win_rate × avg_win) − (loss_rate × avg_loss)
+    loss_rate = (len(losses) / total_trades * 100) if total_trades > 0 else 0
+    expectancy = (win_rate / 100 * avg_win) - (loss_rate / 100 * abs(avg_loss)) if total_trades > 0 else 0
+
     # Max drawdown
+    initial_capital = float(sc.get("initial_capital", config.DEFAULT_CAPITAL))
     peak = equity_curve[0]["value"] if equity_curve else capital
     max_dd = 0
+    max_dd_dollar = 0
     for eq in equity_curve:
         val = eq["value"]
         if val > peak:
             peak = val
-        dd = (peak - val) / peak * 100
-        if dd > max_dd:
-            max_dd = dd
+        dd_pct = (peak - val) / peak * 100
+        dd_dollar = peak - val
+        if dd_pct > max_dd:
+            max_dd = dd_pct
+            max_dd_dollar = dd_dollar
+
+    # ── Sharpe Ratio (annualized, crypto = 365 days) ──────────
+    sharpe_ratio = 0.0
+    calmar_ratio = 0.0
+    if len(equity_curve) > 1:
+        eq_values = np.array([e["value"] for e in equity_curve])
+        # Daily returns: group equity curve by date, take last value per day
+        eq_dates = {}
+        for e in equity_curve:
+            d = e["time"][:10]
+            eq_dates[d] = e["value"]
+        daily_vals = list(eq_dates.values())
+        if len(daily_vals) > 1:
+            daily_returns = np.diff(daily_vals) / np.array(daily_vals[:-1])
+            mean_daily = np.mean(daily_returns)
+            std_daily = np.std(daily_returns, ddof=1)
+            if std_daily > 0:
+                sharpe_ratio = (mean_daily / std_daily) * np.sqrt(365)  # crypto = 365 trading days
+
+            # Calmar Ratio = annualized return / max drawdown
+            total_days = len(daily_vals)
+            if total_days > 0 and max_dd > 0:
+                total_return_dec = (daily_vals[-1] - daily_vals[0]) / daily_vals[0]
+                ann_return = ((1 + total_return_dec) ** (365 / max(total_days, 1))) - 1
+                calmar_ratio = (ann_return * 100) / max_dd
+
+    # Average trade duration
+    avg_duration_str = ""
+    if trades:
+        durations = []
+        for t in trades:
+            try:
+                entry_dt = datetime.strptime(t["entry_time"][:19], "%Y-%m-%d %H:%M:%S")
+                exit_dt = datetime.strptime(t["exit_time"][:19], "%Y-%m-%d %H:%M:%S")
+                durations.append((exit_dt - entry_dt).total_seconds())
+            except:
+                pass
+        if durations:
+            avg_secs = sum(durations) / len(durations)
+            if avg_secs < 3600:
+                avg_duration_str = f"{avg_secs / 60:.0f}m"
+            elif avg_secs < 86400:
+                avg_duration_str = f"{avg_secs / 3600:.1f}h"
+            else:
+                avg_duration_str = f"{avg_secs / 86400:.1f}d"
 
     # Monthly breakdown
     monthly = {}
@@ -352,8 +405,13 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
         "avg_loss": round(avg_loss, 2),
         "profit_factor": round(profit_factor, 2),
         "max_drawdown": round(max_dd, 2),
-        "total_return_pct": round(cum_pnl / float(sc.get("initial_capital", config.DEFAULT_CAPITAL)) * 100, 2),
-        "initial_capital": float(sc.get("initial_capital", config.DEFAULT_CAPITAL)),
+        "max_drawdown_dollar": round(max_dd_dollar, 2),
+        "sharpe_ratio": round(sharpe_ratio, 2),
+        "calmar_ratio": round(calmar_ratio, 2),
+        "expectancy": round(expectancy, 2),
+        "avg_trade_duration": avg_duration_str,
+        "total_return_pct": round(cum_pnl / initial_capital * 100, 2),
+        "initial_capital": initial_capital,
         "final_capital": round(capital, 2),
         "total_fees": round(total_fees, 2),
         "fee_pct": fee_pct,

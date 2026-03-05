@@ -13,8 +13,25 @@ DELTA_API_KEY    = os.getenv('DELTA_API_KEY', 'YOUR_API_KEY_HERE')
 DELTA_API_SECRET = os.getenv('DELTA_API_SECRET', 'YOUR_API_SECRET_HERE')
 
 # ── Delta Exchange Base URLs ────────────────────────────────
-# India: api.india.delta.exchange  |  Global: api.delta.exchange
-DELTA_BASE_URL = os.getenv('DELTA_BASE_URL', 'https://api.india.delta.exchange/v2')
+# Testnet toggle: set DELTA_TESTNET=true to use Delta testnet
+# Same API signatures — just swap keys and this flag
+DELTA_TESTNET = os.getenv('DELTA_TESTNET', 'false').lower() == 'true'
+DELTA_REGION  = os.getenv('DELTA_REGION', 'india').lower()  # 'india' or 'global'
+
+if DELTA_TESTNET:
+    DELTA_BASE_URL = 'https://testnet-api.delta.exchange/v2'
+    DELTA_WS_URL   = 'wss://testnet-socket.delta.exchange'
+elif DELTA_REGION == 'global':
+    DELTA_BASE_URL = 'https://api.delta.exchange/v2'
+    DELTA_WS_URL   = 'wss://socket.delta.exchange'
+else:
+    DELTA_BASE_URL = 'https://api.india.delta.exchange/v2'
+    DELTA_WS_URL   = 'wss://socket.india.delta.exchange'
+
+# ── Database (optional — for bulk candle storage) ───────────
+# Set USE_TIMESCALEDB=true and DATABASE_URL to enable
+DATABASE_URL     = os.getenv('DATABASE_URL', '')
+USE_TIMESCALEDB  = os.getenv('USE_TIMESCALEDB', 'false').lower() == 'true'
 
 # ── App Settings ────────────────────────────────────────────
 APP_HOST = os.getenv('APP_HOST', '127.0.0.1')
