@@ -4114,6 +4114,7 @@ function renderLivePanel(d, idx) {
   if (running) {
     html += '<button class="btn btn-danger btn-sm" onclick="stopEngine(\'' + runId + '\',\'' + mode + '\')" style="padding:6px 14px;">⏹ Stop</button>';
   }
+  html += '<button class="btn btn-outline btn-sm" onclick="viewEngineDetails(\'' + runId + '\',\'' + mode + '\')" style="padding:6px 14px;">👁️ View</button>';
   html += '<button class="btn btn-outline btn-sm" onclick="downloadEngineCSV(\'' + runId + '\',\'' + mode + '\')" style="padding:6px 14px;">📥 CSV</button>';
   html += '</div></div>';
 
@@ -4211,7 +4212,7 @@ function renderLivePanel(d, idx) {
   } else {
     closedTrades.forEach(function(t) {
       var tpnl = parseFloat(t.pnl) || 0;
-      var fmtTime = function(ts) { if (!ts) return '—'; var s = String(ts); var m = s.match(/(\\d{2}:\\d{2}:\\d{2})/); return m ? m[1] : s.slice(-8); };
+      var fmtTime = function(ts) { if (!ts) return '—'; var s = String(ts); var m = s.match(/(\d{2}:\d{2}:\d{2})/); return m ? m[1] + ' IST' : s.slice(0, 19); };
       html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
       html += '<td style="padding:7px 10px;">' + (t.symbol || d.symbol || '—') + '</td>';
       html += '<td style="padding:7px 10px;">' + fmtTime(t.entry_time) + '</td>';
@@ -4260,6 +4261,46 @@ async function downloadEngineCSV(runId, mode) {
       cfToast('No trades to export', 'warning');
     }
   } catch(e) { cfToast('Export failed', 'error'); }
+}
+
+function viewEngineDetails(runId, mode) {
+  // Show a detailed overlay with full trade stats
+  var engines = _liveEngines || [];
+  var d = engines.find(function(e) { return e.run_id === runId; });
+  if (!d) { cfToast('Engine data not available', 'warning'); return; }
+
+  var trades = d.recent_trades || [];
+  var pnl = d.total_pnl || 0;
+  var winners = trades.filter(function(t) { return (t.pnl || 0) > 0; });
+  var losers = trades.filter(function(t) { return (t.pnl || 0) <= 0; });
+  var winRate = trades.length ? (winners.length / trades.length * 100).toFixed(1) : '0.0';
+  var avgWin = winners.length ? (winners.reduce(function(s,t){return s + t.pnl;}, 0) / winners.length).toFixed(2) : '0.00';
+  var avgLoss = losers.length ? (losers.reduce(function(s,t){return s + t.pnl;}, 0) / losers.length).toFixed(2) : '0.00';
+  var bestTrade = trades.length ? Math.max.apply(null, trades.map(function(t){return t.pnl||0;})) : 0;
+  var worstTrade = trades.length ? Math.min.apply(null, trades.map(function(t){return t.pnl||0;})) : 0;
+
+  var name = d.strategy_name || d.run_name || 'Engine';
+  var html = '<div style="max-width:600px;margin:0 auto;">';
+  html += '<h3 style="margin:0 0 16px;font-size:18px;">' + name + ' — ' + (d.symbol || '') + '</h3>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">';
+  html += '<div class="ti-item"><div class="ti-label">Total P&L</div><div class="ti-value" style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + pnl.toFixed(2) + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Win Rate</div><div class="ti-value">' + winRate + '%</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Total Trades</div><div class="ti-value">' + trades.length + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Winners / Losers</div><div class="ti-value" style="color:var(--green);">' + winners.length + '<span style="color:var(--muted);"> / </span><span style="color:var(--red);">' + losers.length + '</span></div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Avg Win</div><div class="ti-value" style="color:var(--green);">$' + avgWin + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Avg Loss</div><div class="ti-value" style="color:var(--red);">$' + avgLoss + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Best Trade</div><div class="ti-value" style="color:var(--green);">$' + bestTrade.toFixed(2) + '</div></div>';
+  html += '<div class="ti-item"><div class="ti-label">Worst Trade</div><div class="ti-value" style="color:var(--red);">$' + worstTrade.toFixed(2) + '</div></div>';
+  html += '</div>';
+
+  // Config details
+  html += '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;padding:12px;font-size:12px;">';
+  html += '<div style="margin-bottom:4px;"><b>Mode:</b> ' + (mode || 'paper') + '  |  <b>Leverage:</b> ' + (d.leverage || 1) + 'x  |  <b>Side:</b> ' + (d.side || d.trade_side || '') + '</div>';
+  html += '<div><b>Run ID:</b> <span style="font-family:monospace;font-size:10px;color:var(--muted);">' + runId + '</span></div>';
+  html += '</div>';
+  html += '</div>';
+
+  cfAlert(html, 'Engine Details — ' + name, '📊');
 }
 
 // ── Portfolio Monthly/Yearly P&L ───────────────────────────

@@ -343,7 +343,7 @@ class LiveEngine:
                                 "symbol": symbol,
                                 "side": trade_side,
                                 "entry_price": price,
-                                "entry_time": str(now),
+                                "entry_time": now.strftime("%Y-%m-%d %H:%M:%S"),
                                 "size": size,
                                 "notional": round(notional, 2),
                                 "margin": round(margin, 2),
@@ -415,7 +415,7 @@ class LiveEngine:
                             closed = {
                                 **trade,
                                 "exit_price": check_price,
-                                "exit_time": str(now),
+                                "exit_time": now.strftime("%Y-%m-%d %H:%M:%S"),
                                 "pnl": round(trade_pnl, 2),
                                 "exit_reason": exit_reason,
                             }

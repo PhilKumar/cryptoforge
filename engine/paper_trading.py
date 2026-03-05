@@ -311,7 +311,7 @@ class PaperTradingEngine:
                                 "symbol": symbol,
                                 "side": trade_side,
                                 "entry_price": price,
-                                "entry_time": str(now),
+                                "entry_time": now.strftime("%Y-%m-%d %H:%M:%S"),
                                 "notional": round(notional, 2),
                                 "leverage": leverage,
                                 "margin": round(margin, 2),
@@ -373,7 +373,7 @@ class PaperTradingEngine:
                             closed = {
                                 **trade,
                                 "exit_price": check_price,
-                                "exit_time": str(now),
+                                "exit_time": now.strftime("%Y-%m-%d %H:%M:%S"),
                                 "pnl": round(trade_pnl, 2),
                                 "exit_reason": exit_reason,
                             }

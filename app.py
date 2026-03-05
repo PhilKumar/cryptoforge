@@ -30,6 +30,31 @@ from engine.backtest import run_backtest, DEFAULT_ENTRY_CONDITIONS, DEFAULT_EXIT
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 
+# ── Shutdown hook: auto-save running engines to runs.json ─────
+def _shutdown_save_engines():
+    """Save all running paper/live engines to runs.json on shutdown."""
+    for run_id, engine in list(paper_engines.items()):
+        if engine.running:
+            try:
+                status = engine.get_status()
+                engine.stop()
+                _save_engine_run_to_history(status, "paper")
+                print(f"[SHUTDOWN] Saved paper engine {run_id}")
+            except Exception as e:
+                print(f"[SHUTDOWN] Failed to save paper engine {run_id}: {e}")
+    for run_id, engine in list(live_engines.items()):
+        if engine.running:
+            try:
+                status = engine.get_status()
+                engine.stop()
+                _save_engine_run_to_history(status, "live")
+                print(f"[SHUTDOWN] Saved live engine {run_id}")
+            except Exception as e:
+                print(f"[SHUTDOWN] Failed to save live engine {run_id}: {e}")
+
+import atexit
+atexit.register(_shutdown_save_engines)
+
 # Initialize
 app = FastAPI(title="CryptoForge", version="2.0.0")
 app.add_middleware(CORSMiddleware,
@@ -559,11 +584,15 @@ async def get_ticker():
 
     try:
         tickers = delta.get_tickers_bulk()
-        # Build a map by symbol
+        # Build a map by symbol — convert Delta India symbols (BTCUSD→BTCUSDT)
         ticker_map = {}
         for t in tickers:
             sym = t.get("symbol", "")
             ticker_map[sym] = t
+            # Also map USDT variant so config lookups work
+            usdt_sym = delta.from_delta_symbol(sym)
+            if usdt_sym != sym:
+                ticker_map[usdt_sym] = t
 
         result = {"status": "ok", "tickers": {}}
         for crypto in config.TOP_25_CRYPTOS:
@@ -675,7 +704,8 @@ async def api_run_backtest(payload: StrategyPayload):
             return {"status": "error", "message": "No data returned."}
 
         strategy_config = payload.model_dump()
-        results = run_backtest(
+        results = await asyncio.to_thread(
+            run_backtest,
             df_raw=df_raw,
             entry_conditions=payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS,
             exit_conditions=payload.exit_conditions or DEFAULT_EXIT_CONDITIONS,
@@ -1414,13 +1444,22 @@ async def validate_strategy(request: Request):
 async def export_paper_trades_csv(run_id: str = ""):
     """Export paper trading trades to CSV."""
     import io, csv
+    trades = []
     engine = paper_engines.get(run_id) if run_id else None
     if not engine:
         for e in paper_engines.values():
             if hasattr(e, 'closed_trades') and e.closed_trades:
                 engine = e
                 break
-    if not engine or not hasattr(engine, 'closed_trades') or not engine.closed_trades:
+    if engine and hasattr(engine, 'closed_trades') and engine.closed_trades:
+        trades = engine.closed_trades
+    else:
+        # Fallback: load from runs.json
+        runs = _load_runs()
+        paper_runs = [r for r in runs if r.get('mode') == 'paper' and r.get('trades')]
+        if paper_runs:
+            trades = paper_runs[-1]['trades']
+    if not trades:
         raise HTTPException(status_code=404, detail="No paper trades available")
     output = io.StringIO()
     fields = ["id", "symbol", "side", "entry_time", "exit_time",
@@ -1428,7 +1467,7 @@ async def export_paper_trades_csv(run_id: str = ""):
               "margin", "pnl", "exit_reason"]
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction='ignore')
     writer.writeheader()
-    for t in engine.closed_trades:
+    for t in trades:
         writer.writerow({k: (str(v) if k in ('entry_time', 'exit_time') else v)
                          for k, v in t.items() if k in fields})
     output.seek(0)
@@ -1442,13 +1481,22 @@ async def export_paper_trades_csv(run_id: str = ""):
 async def export_live_trades_csv(run_id: str = ""):
     """Export live trading trades to CSV."""
     import io, csv
+    trades = []
     engine = live_engines.get(run_id) if run_id else None
     if not engine:
         for e in live_engines.values():
             if hasattr(e, 'closed_trades') and e.closed_trades:
                 engine = e
                 break
-    if not engine or not hasattr(engine, 'closed_trades') or not engine.closed_trades:
+    if engine and hasattr(engine, 'closed_trades') and engine.closed_trades:
+        trades = engine.closed_trades
+    else:
+        # Fallback: load from runs.json
+        runs = _load_runs()
+        live_runs = [r for r in runs if r.get('mode') == 'live' and r.get('trades')]
+        if live_runs:
+            trades = live_runs[-1]['trades']
+    if not trades:
         raise HTTPException(status_code=404, detail="No live trades available")
     output = io.StringIO()
     fields = ["id", "symbol", "side", "entry_time", "exit_time",
@@ -1456,7 +1504,7 @@ async def export_live_trades_csv(run_id: str = ""):
               "margin", "pnl", "exit_reason", "order_id"]
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction='ignore')
     writer.writeheader()
-    for t in engine.closed_trades:
+    for t in trades:
         writer.writerow({k: (str(v) if k in ('entry_time', 'exit_time') else v)
                          for k, v in t.items() if k in fields})
     output.seek(0)
