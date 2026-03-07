@@ -3076,11 +3076,11 @@ function fmtUSDPrice(usd) {
 
 function updateTopbarTicker(id, price, change) {
   const priceEl = document.getElementById('tk-' + id);
-  const usdEl = document.getElementById('tk-' + id + '-usd');
+  const subEl = document.getElementById('tk-' + id + '-usd');
   const chgEl = document.getElementById('tk-' + id + '-chg');
   if (price > 0) {
-    priceEl.textContent = fmtINRPrice(price);
-    if (usdEl) usdEl.textContent = fmtUSDPrice(price);
+    priceEl.textContent = fmtUSDPrice(price);
+    if (subEl) subEl.textContent = fmtINRPrice(price);
     const c = change || 0;
     chgEl.textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
     chgEl.style.color = c >= 0 ? 'var(--green)' : 'var(--red)';
