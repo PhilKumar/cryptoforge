@@ -5,6 +5,7 @@ Handles: historical candles, order placement, positions, wallet,
 Docs: https://docs.delta.exchange/
 """
 
+import logging
 import requests
 import asyncio
 import pandas as pd
@@ -17,6 +18,80 @@ from typing import Optional, Dict, List
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
+
+_delta_log = logging.getLogger("cryptoforge.delta")
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _request_with_retry(
+    method: str,
+    url: str,
+    *,
+    headers: dict,
+    data: str = None,
+    params: dict = None,
+    timeout: int = 30,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> "requests.Response":
+    """HTTP request with exponential backoff on transient failures."""
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.request(
+                method, url, headers=headers, data=data,
+                params=params, timeout=timeout,
+            )
+            if resp.status_code not in _RETRYABLE_STATUSES:
+                return resp
+            last_exc = Exception(f"Delta API {resp.status_code}: {resp.text[:200]}")
+            _delta_log.warning(f"[DELTA] {method} {url} → {resp.status_code} (attempt {attempt+1}/{max_retries})")
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            last_exc = e
+            _delta_log.warning(f"[DELTA] {method} {url} network error (attempt {attempt+1}/{max_retries}): {e}")
+        if attempt < max_retries - 1:
+            _time.sleep(base_delay * (2 ** attempt))  # 1s, 2s, 4s …
+    raise last_exc
+
+
+class _CircuitBreaker:
+    """Opens after `failure_threshold` consecutive failures; resets after `recovery_timeout` s."""
+    CLOSED = "closed"
+    OPEN   = "open"
+
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 60.0):
+        self._threshold = failure_threshold
+        self._timeout   = recovery_timeout
+        self._failures  = 0
+        self._state     = self.CLOSED
+        self._opened_at = 0.0
+
+    def call_allowed(self) -> bool:
+        if self._state == self.CLOSED:
+            return True
+        if _time.time() - self._opened_at >= self._timeout:
+            return True
+        return False
+
+    def record_success(self):
+        self._failures = 0
+        self._state    = self.CLOSED
+
+    def record_failure(self):
+        self._failures += 1
+        if self._failures >= self._threshold:
+            if self._state != self.OPEN:
+                _delta_log.error(f"[DELTA] Circuit breaker OPEN after {self._failures} consecutive failures")
+            self._state     = self.OPEN
+            self._opened_at = _time.time()
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+
+_circuit_breaker = _CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
 
 
 class DeltaClient:
@@ -75,37 +150,46 @@ class DeltaClient:
         }
 
     def _get(self, path: str, params: dict = None, auth: bool = False) -> dict:
+        if not _circuit_breaker.call_allowed():
+            raise Exception("Delta API circuit breaker is OPEN — broker unavailable")
         url = f"{self.base_url}{path}"
-        # Build query string for signature (must match what requests sends)
         query_string = ""
         if auth and params:
             from urllib.parse import urlencode
             query_string = "?" + urlencode(sorted(params.items()))
         headers = self._sign("GET", path, query_string=query_string) if auth else {"Content-Type": "application/json"}
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            resp = _request_with_retry("GET", url, headers=headers, params=params, timeout=30)
             resp.raise_for_status()
+            _circuit_breaker.record_success()
             return resp.json()
         except requests.exceptions.HTTPError as e:
-            print(f"[DELTA] HTTP Error: {e.response.status_code} - {e.response.text[:200]}")
+            _circuit_breaker.record_failure()
+            _delta_log.warning(f"[DELTA] GET {path} HTTP {e.response.status_code}: {e.response.text[:200]}")
             raise
         except Exception as e:
-            print(f"[DELTA] Request error: {e}")
+            _circuit_breaker.record_failure()
+            _delta_log.warning(f"[DELTA] GET {path} error: {e}")
             raise
 
     def _post(self, path: str, data: dict = None) -> dict:
+        if not _circuit_breaker.call_allowed():
+            raise Exception("Delta API circuit breaker is OPEN — broker unavailable")
         url = f"{self.base_url}{path}"
         body = json.dumps(data) if data else ""
         headers = self._sign("POST", path, body=body)
         try:
-            resp = requests.post(url, data=body, headers=headers, timeout=30)
+            resp = _request_with_retry("POST", url, headers=headers, data=body, timeout=30)
             resp.raise_for_status()
+            _circuit_breaker.record_success()
             return resp.json()
         except requests.exceptions.HTTPError as e:
-            print(f"[DELTA] HTTP Error: {e.response.status_code} - {e.response.text[:200]}")
+            _circuit_breaker.record_failure()
+            _delta_log.warning(f"[DELTA] POST {path} HTTP {e.response.status_code}: {e.response.text[:200]}")
             raise
         except Exception as e:
-            print(f"[DELTA] Request error: {e}")
+            _circuit_breaker.record_failure()
+            _delta_log.warning(f"[DELTA] POST {path} error: {e}")
             raise
 
     def _delete(self, path: str, data: dict = None) -> dict:

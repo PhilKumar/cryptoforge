@@ -7,6 +7,13 @@ import pandas as pd
 import numpy as np
 
 
+def _clean(s):
+    """Replace ±Inf with NaN so they never propagate into condition evaluation."""
+    if isinstance(s, pd.DataFrame):
+        return s.replace([np.inf, -np.inf], np.nan)
+    return s.replace([np.inf, -np.inf], np.nan)
+
+
 def ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
@@ -21,8 +28,8 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
     avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return _clean(100 - (100 / (1 + rs)))
 
 
 def macd(series: pd.Series, fast: int = 12, slow: int = 26,
@@ -47,13 +54,13 @@ def bollinger_bands(series: pd.Series, period: int = 20,
     std = series.rolling(window=period).std()
     upper = middle + std_dev * std
     lower = middle - std_dev * std
-    width = (upper - lower) / middle * 100
-    return pd.DataFrame({
+    width = (upper - lower) / middle.replace(0, np.nan) * 100
+    return _clean(pd.DataFrame({
         "bb_upper": upper,
         "bb_middle": middle,
         "bb_lower": lower,
         "bb_width": width,
-    }, index=series.index)
+    }, index=series.index))
 
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -94,18 +101,20 @@ def adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
 
     # Smoothed with EMA
     atr_smooth = tr.ewm(span=period, adjust=False).mean()
-    plus_di = 100 * (plus_dm.ewm(span=period, adjust=False).mean() / atr_smooth)
-    minus_di = 100 * (minus_dm.ewm(span=period, adjust=False).mean() / atr_smooth)
+    atr_safe = atr_smooth.replace(0, np.nan)
+    plus_di = 100 * (plus_dm.ewm(span=period, adjust=False).mean() / atr_safe)
+    minus_di = 100 * (minus_dm.ewm(span=period, adjust=False).mean() / atr_safe)
 
     # ADX
-    dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di))
+    di_sum = (plus_di + minus_di).replace(0, np.nan)
+    dx = 100 * ((plus_di - minus_di).abs() / di_sum)
     adx_line = dx.ewm(span=period, adjust=False).mean()
 
-    return pd.DataFrame({
+    return _clean(pd.DataFrame({
         "adx": adx_line,
         "adx_plus": plus_di,
         "adx_minus": minus_di,
-    }, index=df.index)
+    }, index=df.index))
 
 
 def supertrend(df: pd.DataFrame, period: int = 10,
@@ -177,8 +186,7 @@ def vwap(df: pd.DataFrame) -> pd.Series:
         cum_tp_vol = tp_vol.cumsum()
         cum_vol = df["volume"].cumsum()
 
-    result = cum_tp_vol / cum_vol
-    return result
+    return _clean(cum_tp_vol / cum_vol.replace(0, np.nan))
 
 
 def stochastic_rsi(series: pd.Series, rsi_period: int = 14,
@@ -188,11 +196,12 @@ def stochastic_rsi(series: pd.Series, rsi_period: int = 14,
     rsi_val = rsi(series, rsi_period)
     min_rsi = rsi_val.rolling(window=stoch_period).min()
     max_rsi = rsi_val.rolling(window=stoch_period).max()
-    stoch_k = 100 * (rsi_val - min_rsi) / (max_rsi - min_rsi)
+    denom = (max_rsi - min_rsi).replace(0, np.nan)
+    stoch_k = 100 * (rsi_val - min_rsi) / denom
     stoch_k = stoch_k.rolling(window=k_smooth).mean()
     stoch_d = stoch_k.rolling(window=d_smooth).mean()
-    return pd.DataFrame({"stoch_rsi_k": stoch_k, "stoch_rsi_d": stoch_d},
-                        index=series.index)
+    return _clean(pd.DataFrame({"stoch_rsi_k": stoch_k, "stoch_rsi_d": stoch_d},
+                               index=series.index))
 
 
 def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:

@@ -1,0 +1,12 @@
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv"]
+skips = ["B101", "B311"]   # B101=assert, B311=random (not crypto)
+severity = "medium"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "F841"]    # E501=line-too-long (handled by ruff-format), F841=unused var
