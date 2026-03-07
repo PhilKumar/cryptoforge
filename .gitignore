@@ -13,3 +13,7 @@ _test_*.py
 _validate*.py
 *.sessions.json
 *_state_*.json
+*.pem
+*.tmp
+.sessions.json
+live_state_*.json
