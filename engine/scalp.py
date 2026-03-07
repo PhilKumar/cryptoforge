@@ -79,13 +79,13 @@ class ScalpTrade:
         self.status: str = "open"
 
     def _compute_pnl(self, price: float) -> float:
-        """Unrealized PnL in USD (notional basis, no funding/fees)."""
+        """Unrealized PnL in USD. size = notional in USD (1 contract = $1)."""
         if not price or not self.entry_price or self.entry_price == 0:
             return 0.0
         if self.side == "LONG":
-            return (price - self.entry_price) / self.entry_price * self.size * self.entry_price
+            return (price - self.entry_price) / self.entry_price * self.size
         else:
-            return (self.entry_price - price) / self.entry_price * self.size * self.entry_price
+            return (self.entry_price - price) / self.entry_price * self.size
 
     def check_exit(self, price: float) -> Optional[str]:
         """Returns exit reason string if an exit rule fires, else None."""
@@ -132,6 +132,9 @@ class ScalpTrade:
             "exit_reason": self.exit_reason,
             "exit_order_id": self.exit_order_id,
             "pnl": round(self._compute_pnl(self.current_price), 2),
+            "unrealized_pnl": round(self._compute_pnl(self.current_price), 2),
+            "qty_usdt": round(self.size / max(self.leverage, 1), 2),
+            "mark_price": self.current_price,
             "status": self.status,
             "mode": self.mode,
         }
@@ -246,7 +249,8 @@ class ScalpEngine:
             "entry",
             f"{mode_label}✅ SCALP ENTER: {side} {symbol} @ ${entry_price:,.4f} "
             f"size={size} lev={leverage}x orderId={order_id} "
-            f"tp=${trade.target_price or 'none'} sl=${trade.sl_price or 'none'}",
+            f"tp=${trade.target_price or 'none'} sl=${trade.sl_price or 'none'} "
+            f"tp_usd=${trade.target_usd or 'none'} sl_usd=${trade.sl_usd or 'none'}",
         )
 
         if not self._running:
