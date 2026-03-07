@@ -5173,7 +5173,7 @@ function cfInitScalpPage() {
   cfLoadScalpStatus();
   cfLoadScalpHistory();
   if (!_cfScalpPollTimer) {
-    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 5000);
+    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 2000);
   }
 }
 
@@ -5197,7 +5197,7 @@ async function cfLoadScalpStatus() {
     const dot = document.getElementById('cf-scalp-status-dot');
     const label = document.getElementById('cf-scalp-status-label');
     if (dot) dot.style.background = running ? 'var(--green)' : 'var(--muted)';
-    if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : 'Scanning') : 'Engine Idle';
+    if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : 'Monitoring') : 'Engine Idle';
     const openCount = document.getElementById('cf-scalp-open-count');
     if (openCount) openCount.textContent = open.length + ' open trade' + (open.length !== 1 ? 's' : '');
     const sessionPnl = document.getElementById('cf-scalp-session-pnl');
