@@ -13,7 +13,7 @@ GREEN_PORT=9001
 PORT_FILE="$HOME/.${APP}-active-port"
 UPSTREAM_CONF="/etc/nginx/conf.d/${APP}-upstream.conf"
 
-HEALTH_PATH="/health"
+HEALTH_PATH="/api/health"
 HEALTH_TIMEOUT=30
 DRAIN_TIMEOUT=30
 

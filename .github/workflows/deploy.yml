@@ -40,7 +40,7 @@ jobs:
       - name: Verify deployment
         run: |
           sleep 3
-          ssh deploy-target "curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/health && echo ' ✅ Health OK' || echo ' ❌ Health FAILED'"
+          ssh deploy-target "curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health && echo ' ✅ Health OK' || echo ' ❌ Health FAILED'"
 
       - name: Post-deploy summary
         if: always()
