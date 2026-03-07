@@ -1,14 +1,22 @@
+# ═══════════════════════════════════════════════════════════════
+#  CryptoForge — systemd template unit for blue-green deploys
+#  Install as: /etc/systemd/system/cryptoforge@.service
+#  Usage:      systemctl start cryptoforge@9000
+#              systemctl start cryptoforge@9001
+#  The %i expands to the port number after the @ sign.
+#  APP_PORT env var overrides config.py's default.
+# ═══════════════════════════════════════════════════════════════
 [Unit]
-Description=CryptoForge FastAPI Backend — Crypto Perpetual Futures Platform
+Description=CryptoForge Crypto Trading Platform (port %i)
 After=network.target
 
 [Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/cryptoforge
-Environment="PATH=/home/ubuntu/cryptoforge/venv/bin"
-EnvironmentFile=/home/ubuntu/cryptoforge/.env
-ExecStart=/home/ubuntu/cryptoforge/venv/bin/uvicorn app:app --host 0.0.0.0 --port 9000 --workers 2
-Restart=always
+User=ec2-user
+WorkingDirectory=/home/ec2-user/cryptoforge
+EnvironmentFile=/home/ec2-user/cryptoforge/.env
+Environment="APP_PORT=%i"
+ExecStart=/home/ec2-user/cryptoforge/venv/bin/python3 app.py
+Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal

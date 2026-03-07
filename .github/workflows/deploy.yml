@@ -1,0 +1,48 @@
+# ═══════════════════════════════════════════════════════════════
+#  CryptoForge — Push-to-Deploy (Zero Downtime, Blue-Green)
+# ═══════════════════════════════════════════════════════════════
+name: Deploy CryptoForge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cryptoforge
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName ${{ secrets.SERVER_HOST }}
+            User ${{ secrets.SERVER_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking accept-new
+          EOF
+
+      - name: Run zero-downtime deploy
+        run: |
+          ssh deploy-target "cd ~/cryptoforge && git fetch origin main && git reset --hard origin/main && bash deploy/cd-deploy.sh"
+
+      - name: Verify deployment
+        run: |
+          sleep 3
+          ssh deploy-target "curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/health && echo ' ✅ Health OK' || echo ' ❌ Health FAILED'"
+
+      - name: Post-deploy summary
+        if: always()
+        run: |
+          ssh deploy-target "echo '── CryptoForge Deploy Status ──' && systemctl is-active cryptoforge@\$(cat ~/.cryptoforge-active-port) && echo 'Active port:' \$(cat ~/.cryptoforge-active-port)"
