@@ -1280,6 +1280,9 @@
     <button id="nav-results" class="nav-tab" onclick="showPage('results-page', this)">
       <span class="tab-icon">📈</span><span class="tab-label">Results</span>
     </button>
+    <button id="nav-scalp" class="nav-tab" onclick="showPage('scalp-page', this); cfInitScalpPage();">
+      <span class="tab-icon" id="cf-scalp-dot">⚡</span><span class="tab-label">Scalp</span>
+    </button>
   </div>
 </div>
 </div><!-- /sticky-shell -->
@@ -1914,6 +1917,133 @@
     <div id="portfolio-paper-runs-empty" style="text-align:center; padding:20px; color:var(--muted);">No paper trading runs yet. Start paper trading from the Live page.</div>
   </div>
 </div>
+
+
+<!-- ═══════════════════════════════════════════════════════
+     SCALP PAGE
+     ═══════════════════════════════════════════════════════ -->
+<div id="scalp-page" class="page-section">
+
+  <!-- Engine Status Bar -->
+  <div class="card" style="padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span id="cf-scalp-status-dot" style="width:9px;height:9px;border-radius:50%;background:var(--muted);display:inline-block;flex-shrink:0;"></span>
+      <span style="font-size:13px;font-weight:600;" id="cf-scalp-status-label">Engine Idle</span>
+    </div>
+    <div style="flex:1;min-width:120px;font-size:12px;color:var(--muted);" id="cf-scalp-open-count">0 open trades</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:12px;color:var(--muted);">Session P&L:</span>
+      <span style="font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;" id="cf-scalp-session-pnl">$0.00</span>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="cfLoadScalpStatus()">↻ Refresh</button>
+  </div>
+
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start;">
+
+    <!-- ── Entry Form ── -->
+    <div class="card" style="padding:20px;">
+      <h3 style="margin:0 0 16px 0;font-size:15px;font-weight:700;">New Scalp Entry</h3>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+
+        <div style="grid-column:span 2;">
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Symbol</label>
+          <select id="cf-scalp-symbol" onchange="cfUpdateScalpSymbol()" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
+            <option value="BTCUSDT">BTC/USDT</option>
+            <option value="ETHUSDT">ETH/USDT</option>
+            <option value="SOLUSDT">SOL/USDT</option>
+            <option value="BNBUSDT">BNB/USDT</option>
+            <option value="XRPUSDT">XRP/USDT</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Quantity (USDT)</label>
+          <input type="number" id="cf-scalp-qty" value="100" min="1" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+        </div>
+
+        <div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Leverage</label>
+          <select id="cf-scalp-leverage" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="5">5×</option>
+            <option value="10" selected>10×</option>
+            <option value="20">20×</option>
+            <option value="50">50×</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Stop Loss %</label>
+          <input type="number" id="cf-scalp-sl" value="0.5" min="0.1" step="0.1" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+        </div>
+
+        <div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Target %</label>
+          <input type="number" id="cf-scalp-tp" value="1.0" min="0.1" step="0.1" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+        </div>
+
+        <div style="grid-column:span 2;">
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Mode</label>
+          <select id="cf-scalp-mode" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
+            <option value="paper" selected>📄 Paper</option>
+            <option value="live">🔴 Live</option>
+          </select>
+        </div>
+
+        <div style="grid-column:span 2;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
+          <button class="btn" onclick="cfSubmitScalp('BUY')" style="--btn-bg:linear-gradient(180deg,rgba(52,211,153,0.2)0%,rgba(16,185,129,0.35)100%);--btn-border:rgba(52,211,153,0.4);--btn-color:#34d399;font-weight:700;padding:11px;">▲ BUY</button>
+          <button class="btn" onclick="cfSubmitScalp('SELL')" style="--btn-bg:linear-gradient(180deg,rgba(248,113,113,0.2)0%,rgba(239,68,68,0.35)100%);--btn-border:rgba(248,113,113,0.4);--btn-color:#f87171;font-weight:700;padding:11px;">▼ SELL</button>
+        </div>
+      </div>
+      <div id="cf-scalp-entry-status" style="margin-top:12px;font-size:12px;min-height:18px;color:var(--muted);"></div>
+    </div>
+
+    <!-- ── Right Panel: Active Trades + History ── -->
+    <div>
+
+      <!-- Active Positions -->
+      <div class="card" style="padding:20px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <h3 style="margin:0;font-size:15px;font-weight:700;">Active Positions</h3>
+          <span style="font-size:12px;color:var(--muted);" id="cf-scalp-active-count">0 open</span>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="trade-table" id="cf-scalp-active-table">
+            <thead><tr>
+              <th>Symbol</th><th>Side</th><th>Qty (USDT)</th><th>Entry</th>
+              <th>Mark</th><th>Unreal. P&L</th><th>Action</th>
+            </tr></thead>
+            <tbody id="cf-scalp-active-body">
+              <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Trade History -->
+      <div class="card" style="padding:20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <h3 style="margin:0;font-size:15px;font-weight:700;">Trade History</h3>
+          <button class="btn btn-outline btn-sm" onclick="cfLoadScalpHistory()">↻ Load</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="trade-table" id="cf-scalp-history-table">
+            <thead><tr>
+              <th>Time</th><th>Symbol</th><th>Side</th><th>Entry</th>
+              <th>Exit</th><th>P&L</th><th>Reason</th>
+            </tr></thead>
+            <tbody id="cf-scalp-history-body">
+              <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /right panel -->
+  </div><!-- /grid -->
+</div><!-- /scalp-page -->
 
 
 <!-- ═══════════════════════════════════════════════════════
@@ -4778,6 +4908,158 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tabBtn) showPage(savedTab + '-page', tabBtn);
   }
 });
+
+// ══════════════════════════════════════════════════════
+// CRYPTO SCALP ENGINE
+// ══════════════════════════════════════════════════════
+
+var _cfScalpPollTimer = null;
+
+function cfInitScalpPage() {
+  cfLoadScalpStatus();
+  cfLoadScalpHistory();
+  if (!_cfScalpPollTimer) {
+    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 5000);
+  }
+}
+
+// Also stop polling when leaving scalp page
+var _origShowPage = showPage;
+showPage = function(pageId, btn) {
+  if (pageId !== 'scalp-page' && _cfScalpPollTimer) {
+    clearInterval(_cfScalpPollTimer);
+    _cfScalpPollTimer = null;
+  }
+  _origShowPage(pageId, btn);
+};
+
+async function cfLoadScalpStatus() {
+  try {
+    const r = await fetch('/api/scalp/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    const open = d.open_trades || [];
+    const running = d.running || open.length > 0;
+    const dot = document.getElementById('cf-scalp-status-dot');
+    const label = document.getElementById('cf-scalp-status-label');
+    if (dot) dot.style.background = running ? 'var(--green)' : 'var(--muted)';
+    if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : 'Scanning') : 'Engine Idle';
+    const openCount = document.getElementById('cf-scalp-open-count');
+    if (openCount) openCount.textContent = open.length + ' open trade' + (open.length !== 1 ? 's' : '');
+    const sessionPnl = document.getElementById('cf-scalp-session-pnl');
+    if (sessionPnl) {
+      const pnl = d.total_pnl || 0;
+      sessionPnl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+      sessionPnl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
+    }
+    const engDot = document.getElementById('cf-scalp-dot');
+    if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+    cfRenderActivePositions(open);
+  } catch(e) { /* engine may not be running */ }
+}
+
+function cfRenderActivePositions(open) {
+  const body = document.getElementById('cf-scalp-active-body');
+  const countEl = document.getElementById('cf-scalp-active-count');
+  if (!body) return;
+  if (countEl) countEl.textContent = open.length + ' open';
+  if (!open.length) {
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>';
+    return;
+  }
+  body.innerHTML = open.map(t => {
+    const pnl = t.unrealized_pnl || 0;
+    const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
+    const sideColor = t.side === 'BUY' ? 'var(--green)' : 'var(--red)';
+    return `<tr>
+      <td style="font-weight:600;">${t.symbol || '—'}</td>
+      <td style="color:${sideColor};font-weight:700;">${t.side || '—'}</td>
+      <td>$${(t.qty_usdt || t.quantity || 0).toFixed(2)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price || 0).toFixed(4)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;">$${(t.mark_price || t.current_price || 0).toFixed(4)}</td>
+      <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</td>
+      <td><button class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="cfExitScalpTrade('${t.trade_id || t.id}')">Exit</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function cfLoadScalpHistory() {
+  try {
+    const r = await fetch('/api/scalp/trades');
+    if (!r.ok) return;
+    const trades = await r.json();
+    const body = document.getElementById('cf-scalp-history-body');
+    if (!body) return;
+    if (!trades.length) {
+      body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
+      return;
+    }
+    body.innerHTML = trades.slice().reverse().map(t => {
+      const pnl = t.pnl || 0;
+      const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
+      const sideColor = (t.side || t.transaction_type) === 'BUY' ? 'var(--green)' : 'var(--red)';
+      const time = (t.exit_time || t.entry_time || '').toString().slice(11, 16) || '—';
+      return `<tr>
+        <td style="font-size:11px;color:var(--muted);">${time}</td>
+        <td style="font-weight:600;">${t.symbol || '—'}</td>
+        <td style="color:${sideColor};font-weight:700;">${t.side || t.transaction_type || '—'}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price||0).toFixed(4)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">$${(t.exit_price||0).toFixed(4)}</td>
+        <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</td>
+        <td style="font-size:11px;color:var(--muted);">${t.exit_reason || '—'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { /* no history */ }
+}
+
+async function cfSubmitScalp(direction) {
+  const symbol = document.getElementById('cf-scalp-symbol').value;
+  const qty = parseFloat(document.getElementById('cf-scalp-qty').value) || 100;
+  const leverage = parseInt(document.getElementById('cf-scalp-leverage').value) || 10;
+  const sl = parseFloat(document.getElementById('cf-scalp-sl').value) || 0.5;
+  const tp = parseFloat(document.getElementById('cf-scalp-tp').value) || 1.0;
+  const mode = document.getElementById('cf-scalp-mode').value;
+  const statusEl = document.getElementById('cf-scalp-entry-status');
+  if (statusEl) statusEl.textContent = 'Submitting…';
+  try {
+    const res = await fetch('/api/scalp/enter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, side: direction, qty_usdt: qty, leverage, stop_loss_pct: sl, take_profit_pct: tp, mode })
+    });
+    const d = await res.json();
+    if (d.status === 'ok' || d.status === 'entered' || d.trade_id) {
+      if (statusEl) { statusEl.textContent = direction + ' entered ✓'; statusEl.style.color = 'var(--green)'; }
+      cfToast(`Scalp ${direction} entered on ${symbol}`, 'success');
+      setTimeout(() => { cfLoadScalpStatus(); cfLoadScalpHistory(); }, 800);
+    } else {
+      if (statusEl) { statusEl.textContent = d.message || d.status || 'Error'; statusEl.style.color = 'var(--red)'; }
+      cfToast(d.message || 'Entry failed', 'danger');
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = 'Network error'; statusEl.style.color = 'var(--red)'; }
+    cfToast('Network error submitting scalp', 'danger');
+  }
+}
+
+async function cfExitScalpTrade(tradeId) {
+  try {
+    const res = await fetch('/api/scalp/exit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trade_id: tradeId })
+    });
+    const d = await res.json();
+    if (d.status === 'ok' || d.status === 'exited') {
+      cfToast('Position closed', 'success');
+      setTimeout(() => { cfLoadScalpStatus(); cfLoadScalpHistory(); }, 500);
+    } else {
+      cfToast(d.message || 'Exit failed', 'danger');
+    }
+  } catch(e) { cfToast('Network error exiting trade', 'danger'); }
+}
+
+function cfUpdateScalpSymbol() { /* placeholder for future mark-price updates */ }
 </script>
 </body>
 </html>
