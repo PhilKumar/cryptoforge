@@ -34,6 +34,7 @@ from broker.delta import DeltaClient, get_candles_binance
 from engine.backtest import DEFAULT_ENTRY_CONDITIONS, DEFAULT_EXIT_CONDITIONS, run_backtest
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
+from engine.scalp import ScalpEngine
 
 
 # ── Shutdown hook: auto-save running engines to runs.json ─────
@@ -1839,6 +1840,89 @@ async def export_live_trades_csv(run_id: str = ""):
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={name}.csv"},
     )
+
+
+# ── Scalp Engine ──────────────────────────────────────────────────
+_scalp_engine: Optional[ScalpEngine] = None
+_SCALP_FILE = os.path.join(_HERE, "scalp_trades.json")
+
+
+def _load_scalp_trades():
+    if os.path.exists(_SCALP_FILE):
+        try:
+            with open(_SCALP_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def _save_scalp_trades(trades):
+    tmp = _SCALP_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(trades, f, indent=2, default=str)
+    os.replace(tmp, _SCALP_FILE)
+
+
+def _get_scalp_engine():
+    global _scalp_engine
+    if _scalp_engine is None:
+        _scalp_engine = ScalpEngine(delta)
+    return _scalp_engine
+
+
+@app.get("/api/scalp/status")
+async def scalp_status():
+    eng = _get_scalp_engine()
+    status = eng.get_status()
+    status["file_trades"] = list(reversed(_load_scalp_trades()[-50:]))
+    return status
+
+
+@app.get("/api/scalp/trades")
+async def scalp_trades():
+    return _load_scalp_trades()
+
+
+@app.post("/api/scalp/enter")
+async def scalp_enter(request: Request):
+    body = await request.json()
+    eng = _get_scalp_engine()
+    symbol = body.get("symbol", "BTCUSDT")
+    raw_side = body.get("side", "BUY").upper()
+    side = "LONG" if raw_side == "BUY" else "SHORT"
+    qty_usdt = float(body.get("qty_usdt", 100))
+    leverage = int(body.get("leverage", 10))
+    mode = body.get("mode", "paper")
+
+    # Convert USDT qty to contract size (1 contract = 1 USD on Delta)
+    size = int(qty_usdt * leverage)
+
+    result = await eng.enter_trade(
+        symbol=symbol,
+        side=side,
+        size=size,
+        leverage=leverage,
+        target_pct=float(body.get("take_profit_pct", 0)),
+        sl_pct=float(body.get("stop_loss_pct", 0)),
+        target_usd=float(body.get("tp_usd", 0)),
+        sl_usd=float(body.get("sl_usd", 0)),
+        mode=mode,
+    )
+    return result
+
+
+@app.post("/api/scalp/exit")
+async def scalp_exit(request: Request):
+    body = await request.json()
+    trade_id = int(body.get("trade_id", 0))
+    eng = _get_scalp_engine()
+    result = await eng.exit_trade(trade_id, reason="manual")
+    if result.get("status") == "ok" and result.get("trade"):
+        trades = _load_scalp_trades()
+        trades.append(result["trade"])
+        _save_scalp_trades(trades)
+    return result
 
 
 # ── WebSocket ─────────────────────────────────────────────────────
