@@ -1151,6 +1151,153 @@
   }
   .market-card .mc-price,
   .market-card .mc-change { font-family: 'JetBrains Mono', monospace; }
+
+  /* ═══ MOBILE RESPONSIVE — Comprehensive ═══ */
+
+  @media (max-width: 767px) {
+    /* -- Global -- */
+    body { padding: 0 !important; }
+    .page-section { padding: 12px !important; }
+
+    /* -- Topbar: show ticker on mobile instead of hiding -- */
+    .topbar-ticker {
+      display: flex !important; /* override 1100px hide */
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      flex-shrink: 1;
+      min-width: 0;
+    }
+    .topbar-ticker::-webkit-scrollbar { display: none; }
+    .ticker-cell { min-width: 80px; padding: 4px 10px; }
+    .ticker-cell .tc-label { font-size: 8px; }
+    .ticker-cell .tc-price { font-size: 11px; }
+    .ticker-cell .tc-usd { font-size: 8px; }
+    .ticker-cell .tc-change { font-size: 9px; }
+
+    .app-topbar {
+      flex-wrap: wrap;
+      padding: 8px 10px !important;
+      gap: 6px;
+    }
+    .topbar-brand-text { font-size: 14px; }
+    .topbar-brand-sub { display: none; }
+    .topbar-brand img, .topbar-brand svg { height: 26px; width: 26px; }
+    .topbar-right { gap: 4px; }
+    .topbar-clock { font-size: 10px; }
+
+    /* -- Asset switcher: compact -- */
+    .asset-switcher { padding: 6px 10px !important; gap: 4px !important; }
+    .asset-switcher-label { display: none; }
+    .asset-pill { padding: 4px 10px; font-size: 11px; gap: 4px; }
+    .asset-pill .ap-name { display: none; }
+    .inr-rate-badge { font-size: 9px; padding: 2px 6px; }
+
+    /* -- Funding bar: horizontal scroll, no wrap -- */
+    .funding-bar {
+      flex-wrap: nowrap !important;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      padding: 5px 10px !important;
+      gap: 6px !important;
+    }
+    .funding-bar::-webkit-scrollbar { display: none; }
+    .funding-chip { flex-shrink: 0; font-size: 11px !important; padding: 4px 10px !important; white-space: nowrap; }
+
+    /* -- Nav tabs: horizontal scroll, hidden scrollbar -- */
+    .nav-bar { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    .nav-bar::-webkit-scrollbar { display: none; }
+    .nav-tabs { flex-wrap: nowrap !important; min-width: max-content; }
+    .nav-tab { padding: 10px 12px !important; font-size: 12px !important; flex-shrink: 0; white-space: nowrap; }
+    .nav-tab .tab-label { display: none; }
+    .nav-tab .tab-icon { font-size: 18px; }
+
+    /* -- Dashboard stats grid: 2-col -- */
+    .stats-grid { grid-template-columns: 1fr 1fr !important; }
+
+    /* -- Builder grid: single column -- */
+    .builder-grid { grid-template-columns: 1fr !important; }
+    .form-row-2 { grid-template-columns: 1fr !important; }
+    /* Builder action buttons: wrap */
+    #builder-page div[style*="display: flex"][style*="gap: 8px"] { flex-wrap: wrap; }
+
+    /* -- Results: filter bar wrap, detail grids stack -- */
+    #results-page div[style*="display: flex"][style*="gap: 8px"][style*="align-items: center"] { flex-wrap: wrap; }
+    .compare-grid { grid-template-columns: 1fr !important; }
+    .dow-grid { grid-template-columns: repeat(4, 1fr) !important; }
+
+    /* -- Live page: panels stack -- */
+    .trading-info-grid { grid-template-columns: 1fr 1fr !important; }
+    #live-tabs-bar { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    #live-tabs-bar::-webkit-scrollbar { display: none; }
+
+    /* -- Portfolio: stack grids -- */
+    #portfolio-page div[style*="grid-template-columns: 1fr 1fr"] {
+      grid-template-columns: 1fr !important;
+    }
+    .monthly-grid-days { grid-template-columns: repeat(5, 1fr) !important; }
+
+    /* -- Scalp page: stack form + trades -- */
+    #scalp-page div[style*="grid-template-columns:340px"] {
+      grid-template-columns: 1fr !important;
+    }
+    /* BUY/SELL touch targets */
+    #scalp-page .btn[onclick*="cfSubmitScalp"] {
+      min-height: 48px;
+      font-size: 15px !important;
+    }
+    /* Engine status bar: stack */
+    #scalp-page > .card:first-child { flex-direction: column; align-items: flex-start !important; gap: 10px !important; }
+
+    /* -- Market table: horizontal scroll -- */
+    #market-page .card { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+    .trade-table { min-width: 600px; }
+
+    /* -- Modals: full-width on mobile -- */
+    .cf-modal {
+      min-width: 0 !important;
+      width: 92vw !important;
+      max-width: 92vw !important;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 20px !important;
+    }
+    .deploy-modal-inner { max-width: 100% !important; }
+
+    /* -- Buttons: adequate touch targets -- */
+    .btn { min-height: 44px; }
+    .btn-sm { min-height: 38px; padding: 8px 14px !important; }
+
+    /* -- Kill switch: bottom-center on mobile -- */
+    .kill-switch {
+      right: 50% !important;
+      transform: translateX(50%);
+      bottom: 16px !important;
+    }
+
+    /* -- Cards: tighter padding -- */
+    .card { padding: 14px !important; }
+    .template-grid { grid-template-columns: 1fr !important; }
+  }
+
+  /* Small phones (< 400px) */
+  @media (max-width: 400px) {
+    .ticker-cell { min-width: 68px; padding: 3px 6px; }
+    .ticker-cell .tc-price { font-size: 10px; }
+    .stats-grid { grid-template-columns: 1fr !important; }
+    .trading-info-grid { grid-template-columns: 1fr !important; }
+    .nav-tab { padding: 8px 10px !important; }
+    #scalp-page div[style*="grid-template-columns:1fr 1fr"][style*="gap:10px"] {
+      grid-template-columns: 1fr !important;
+    }
+  }
+
+  /* Tablet (768px - 1024px) */
+  @media (min-width: 768px) and (max-width: 1024px) {
+    .builder-grid { grid-template-columns: 260px 1fr !important; }
+    .stats-grid { grid-template-columns: repeat(3, 1fr) !important; }
+  }
 </style>
 </head>
 <body>
@@ -1473,7 +1620,7 @@
     <button class="btn btn-outline btn-sm" onclick="refreshMarket()">🔄 Refresh</button>
   </div>
   <!-- Top 25 Table -->
-  <div class="card" style="padding: 0; overflow: hidden;">
+  <div class="card" style="padding: 0; overflow: hidden; overflow-x: auto;">
     <table class="trade-table" id="market-table" style="font-size: 14px;">
       <thead>
         <tr>
