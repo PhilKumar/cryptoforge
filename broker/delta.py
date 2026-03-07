@@ -18,12 +18,19 @@ from typing import Optional
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
 _delta_log = logging.getLogger("cryptoforge.delta")
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
+# ── Persistent HTTP Session (keeps TCP+TLS warm to Delta servers) ──
+_http_session = requests.Session()
+_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=10, max_retries=0)
+_http_session.mount("https://", _adapter)
+_http_session.mount("http://", _adapter)
 
 
 def _request_with_retry(
@@ -41,7 +48,7 @@ def _request_with_retry(
     last_exc = None
     for attempt in range(max_retries):
         try:
-            resp = requests.request(
+            resp = _http_session.request(
                 method,
                 url,
                 headers=headers,
@@ -234,12 +241,17 @@ class DeltaClient:
     _aio_session = None
 
     async def _ensure_aio_session(self):
-        """Lazy-create a shared aiohttp session."""
+        """Lazy-create a shared aiohttp session with connection pooling."""
         if self._aio_session is None or self._aio_session.closed:
             import aiohttp
 
-            timeout = aiohttp.ClientTimeout(total=30, connect=10)
-            self._aio_session = aiohttp.ClientSession(timeout=timeout)
+            connector = aiohttp.TCPConnector(
+                limit=20,  # max parallel connections
+                keepalive_timeout=60,  # keep TCP warm for 60s
+                enable_cleanup_closed=True,
+            )
+            timeout = aiohttp.ClientTimeout(total=30, connect=5)
+            self._aio_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
     async def aio_close(self):
         """Close the aiohttp session (call on shutdown)."""
@@ -812,7 +824,7 @@ def get_candles_binance(symbol: str, resolution: str = "5m", start: str = None, 
             "limit": 1000,  # Binance max per request
         }
         try:
-            resp = requests.get("https://api.binance.com/api/v3/klines", params=params, timeout=30)
+            resp = _http_session.get("https://api.binance.com/api/v3/klines", params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
             if not data:
