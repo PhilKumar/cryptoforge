@@ -308,6 +308,7 @@
   .ticker-cell:hover { background: rgba(255,255,255,0.03); }
   .ticker-cell .tc-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; margin-bottom: 2px; }
   .ticker-cell .tc-price { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 13px; letter-spacing: -0.2px; line-height: 1; }
+  .ticker-cell .tc-usd { font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 500; color: var(--muted); margin-top: 2px; letter-spacing: -0.2px; opacity: 0.7; }
   .ticker-cell .tc-change { font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500; margin-top: 2px; }
 
   .topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -1178,16 +1179,19 @@
     <div class="ticker-cell">
       <div class="tc-label">BTC</div>
       <div class="tc-price" id="tk-btc">--</div>
+      <div class="tc-usd" id="tk-btc-usd"></div>
       <div class="tc-change" id="tk-btc-chg">--</div>
     </div>
     <div class="ticker-cell">
       <div class="tc-label">ETH</div>
       <div class="tc-price" id="tk-eth">--</div>
+      <div class="tc-usd" id="tk-eth-usd"></div>
       <div class="tc-change" id="tk-eth-chg">--</div>
     </div>
     <div class="ticker-cell">
       <div class="tc-label">SOL</div>
       <div class="tc-price" id="tk-sol">--</div>
+      <div class="tc-usd" id="tk-sol-usd"></div>
       <div class="tc-change" id="tk-sol-chg">--</div>
     </div>
   </div>
@@ -2832,11 +2836,20 @@ async function refreshMarket() {
   } catch(e) {}
 }
 
+function fmtUSDPrice(usd) {
+  if (!usd || isNaN(usd)) return '$0.00';
+  if (usd >= 1) return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (usd >= 0.01) return '$' + usd.toFixed(4);
+  return '$' + usd.toFixed(6);
+}
+
 function updateTopbarTicker(id, price, change) {
   const priceEl = document.getElementById('tk-' + id);
+  const usdEl = document.getElementById('tk-' + id + '-usd');
   const chgEl = document.getElementById('tk-' + id + '-chg');
   if (price > 0) {
     priceEl.textContent = fmtINRPrice(price);
+    if (usdEl) usdEl.textContent = fmtUSDPrice(price);
     const c = change || 0;
     chgEl.textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
     chgEl.style.color = c >= 0 ? 'var(--green)' : 'var(--red)';
