@@ -29,6 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import alerter
 import config
 from broker.delta import DeltaClient, get_candles_binance
 from engine.backtest import DEFAULT_ENTRY_CONDITIONS, DEFAULT_EXIT_CONDITIONS, run_backtest
@@ -604,6 +605,7 @@ async def connect_broker():
             "message": str(wallet.get("error", "Unknown error")) if isinstance(wallet, dict) else "Invalid response",
         }
     except Exception as e:
+        alerter.alert("Broker Connect Failed", f"Error: {e}", level="warn")
         return {"status": "error", "broker": "Delta Exchange", "message": f"Connection failed: {str(e)[:100]}"}
 
 
@@ -1190,6 +1192,7 @@ async def place_order(req: OrderRequest):
         )
         return result
     except Exception as e:
+        alerter.alert("Order Failed", f"Symbol: {req.symbol}\nSide: {req.side}\nSize: {req.size}\nError: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1898,18 +1901,27 @@ async def scalp_enter(request: Request):
     # Convert USDT qty to contract size (1 contract = 1 USD on Delta)
     size = int(qty_usdt * leverage)
 
-    result = await eng.enter_trade(
-        symbol=symbol,
-        side=side,
-        size=size,
-        leverage=leverage,
-        target_pct=float(body.get("take_profit_pct", 0)),
-        sl_pct=float(body.get("stop_loss_pct", 0)),
-        target_usd=float(body.get("tp_usd", 0)),
-        sl_usd=float(body.get("sl_usd", 0)),
-        mode=mode,
-    )
-    return result
+    try:
+        result = await eng.enter_trade(
+            symbol=symbol,
+            side=side,
+            size=size,
+            leverage=leverage,
+            target_pct=float(body.get("take_profit_pct", 0)),
+            sl_pct=float(body.get("stop_loss_pct", 0)),
+            target_usd=float(body.get("tp_usd", 0)),
+            sl_usd=float(body.get("sl_usd", 0)),
+            mode=mode,
+        )
+        if result.get("status") == "error":
+            alerter.alert(
+                "Scalp Entry Failed",
+                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {result.get('message', 'unknown')}",
+            )
+        return result
+    except Exception as e:
+        alerter.alert("Scalp Entry Error", f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/scalp/exit")
@@ -1917,12 +1929,18 @@ async def scalp_exit(request: Request):
     body = await request.json()
     trade_id = int(body.get("trade_id", 0))
     eng = _get_scalp_engine()
-    result = await eng.exit_trade(trade_id, reason="manual")
-    if result.get("status") == "ok" and result.get("trade"):
-        trades = _load_scalp_trades()
-        trades.append(result["trade"])
-        _save_scalp_trades(trades)
-    return result
+    try:
+        result = await eng.exit_trade(trade_id, reason="manual")
+        if result.get("status") == "ok" and result.get("trade"):
+            trades = _load_scalp_trades()
+            trades.append(result["trade"])
+            _save_scalp_trades(trades)
+        elif result.get("status") == "error":
+            alerter.alert("Scalp Exit Failed", f"Trade ID: {trade_id}\nError: {result.get('message', 'unknown')}")
+        return result
+    except Exception as e:
+        alerter.alert("Scalp Exit Error", f"Trade ID: {trade_id}\nError: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── WebSocket ─────────────────────────────────────────────────────

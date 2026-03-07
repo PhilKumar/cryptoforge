@@ -1,0 +1,129 @@
+name: Playwright E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-cryptoforge:
+    name: E2E — CryptoForge
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python (for the FastAPI dev server) ──
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      # ── Node.js (for Playwright) ──
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Create e2e-tests directory & install
+        run: |
+          mkdir -p ../e2e-tests
+          cat > ../e2e-tests/package.json << 'PKGJSON'
+          {
+            "name": "e2e-tests",
+            "version": "1.0.0",
+            "devDependencies": { "@playwright/test": "^1.58.0" }
+          }
+          PKGJSON
+          cd ../e2e-tests
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Copy test files
+        run: |
+          cp -r e2e-tests/playwright.config.ts ../e2e-tests/ 2>/dev/null || true
+          cp -r e2e-tests/tsconfig.json ../e2e-tests/ 2>/dev/null || true
+          cp -r e2e-tests/tests ../e2e-tests/ 2>/dev/null || true
+
+      # ── Start CryptoForge server ──
+      - name: Start CryptoForge dev server
+        env:
+          CRYPTOFORGE_PIN: "123456"
+          DELTA_API_KEY: "e2e-dummy"
+          DELTA_API_SECRET: "e2e-dummy-secret"
+        run: |
+          uvicorn app:app --host 0.0.0.0 --port 8001 &
+          echo "Waiting for server..."
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8001/login > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:8001/login > /dev/null || (echo "Server failed to start" && exit 1)
+          echo "CryptoForge is up on :8001"
+
+      # ── Run Playwright tests ──
+      - name: Run Playwright tests
+        env:
+          E2E_PIN: "123456"
+        working-directory: ../e2e-tests
+        run: npx playwright test --project=cryptoforge
+
+      # ── Upload artifacts on failure ──
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-cryptoforge
+          path: |
+            ../e2e-tests/playwright-report/
+            ../e2e-tests/test-results/
+          retention-days: 14
+
+  # ── Deploy (only on push to main, gated on E2E passing) ──────
+  deploy-cryptoforge:
+    name: Deploy — CryptoForge
+    needs: [e2e-cryptoforge]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: deploy-cryptoforge
+      cancel-in-progress: false
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName ${{ secrets.SERVER_HOST }}
+            User ${{ secrets.SERVER_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking accept-new
+          EOF
+
+      - name: Run zero-downtime deploy
+        run: |
+          ssh deploy-target "cd ~/cryptoforge && git fetch origin main && git reset --hard origin/main && bash deploy/cd-deploy.sh"
+
+      - name: Verify deployment
+        run: |
+          sleep 3
+          ssh deploy-target "curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health && echo ' ✅ Health OK' || echo ' ❌ Health FAILED'"
+
+      - name: Post-deploy summary
+        if: always()
+        run: |
+          ssh deploy-target "echo '── CryptoForge Deploy Status ──' && systemctl is-active cryptoforge@\$(cat ~/.cryptoforge-active-port) && echo 'Active port:' \$(cat ~/.cryptoforge-active-port)"
