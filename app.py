@@ -186,6 +186,27 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ── Redis (lazy singleton) ────────────────────────────────────────
+_redis_client = None
+_redis_checked = False
+
+
+def _get_redis():
+    global _redis_client, _redis_checked
+    if _redis_checked:
+        return _redis_client
+    _redis_checked = True
+    try:
+        import redis as _redis_lib
+
+        r = _redis_lib.Redis(host="localhost", port=6379, db=0, decode_responses=True, socket_timeout=1)
+        r.ping()
+        _redis_client = r
+    except Exception:
+        _redis_client = None
+    return _redis_client
+
+
 # ── Rate Limiting ─────────────────────────────────────────────────
 _rate_limits: dict = defaultdict(list)  # fallback when Redis unavailable
 _RL_PREFIX = "cryptoforge:rl:"
