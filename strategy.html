@@ -690,13 +690,25 @@
   .asset-switcher {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 20px;
     background: rgba(8,11,22,0.75);
     border: 1px solid rgba(255,255,255,0.04);
     border-top: none;
     backdrop-filter: blur(20px);
+    overflow: hidden;
   }
+  .asset-pills-scroll {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .asset-pills-scroll::-webkit-scrollbar { display: none; }
   .asset-switcher-label {
     font-size: 10px;
     font-weight: 700;
@@ -1118,24 +1130,45 @@
 <!-- Quick Asset Switcher -->
 <div class="asset-switcher" id="asset-switcher">
   <span class="asset-switcher-label">Trade</span>
-  <div class="asset-pill active" id="ap-BTCUSDT" onclick="setQuickAsset('BTCUSDT',this)">
-    <span class="ap-icon">₿</span> BTC <span class="ap-name">Bitcoin</span>
-  </div>
-  <div class="asset-pill" id="ap-ETHUSDT" onclick="setQuickAsset('ETHUSDT',this)">
-    <span class="ap-icon">Ξ</span> ETH <span class="ap-name">Ethereum</span>
-  </div>
-  <div class="asset-pill" id="ap-SOLUSDT" onclick="setQuickAsset('SOLUSDT',this)">
-    <span class="ap-icon">◎</span> SOL <span class="ap-name">Solana</span>
-  </div>
-  <div class="asset-pill-divider"></div>
-  <div class="asset-pill" id="ap-XRPUSDT" onclick="setQuickAsset('XRPUSDT',this)">
-    <span class="ap-icon">✕</span> XRP
-  </div>
-  <div class="asset-pill" id="ap-DOGEUSDT" onclick="setQuickAsset('DOGEUSDT',this)">
-    <span class="ap-icon">Ð</span> DOGE
-  </div>
-  <div class="asset-pill" id="ap-PAXGUSDT" onclick="setQuickAsset('PAXGUSDT',this)">
-    <span class="ap-icon">🥇</span> PAXG
+  <div class="asset-pills-scroll">
+    <div class="asset-pill active" id="ap-BTCUSDT" onclick="setQuickAsset('BTCUSDT',this)">
+      <span class="ap-icon">₿</span> BTC <span class="ap-name">Bitcoin</span>
+    </div>
+    <div class="asset-pill" id="ap-ETHUSDT" onclick="setQuickAsset('ETHUSDT',this)">
+      <span class="ap-icon">Ξ</span> ETH <span class="ap-name">Ethereum</span>
+    </div>
+    <div class="asset-pill" id="ap-SOLUSDT" onclick="setQuickAsset('SOLUSDT',this)">
+      <span class="ap-icon">◎</span> SOL <span class="ap-name">Solana</span>
+    </div>
+    <div class="asset-pill-divider"></div>
+    <div class="asset-pill" id="ap-XRPUSDT" onclick="setQuickAsset('XRPUSDT',this)">
+      <span class="ap-icon">✕</span> XRP
+    </div>
+    <div class="asset-pill" id="ap-DOGEUSDT" onclick="setQuickAsset('DOGEUSDT',this)">
+      <span class="ap-icon">Ð</span> DOGE
+    </div>
+    <div class="asset-pill" id="ap-PAXGUSDT" onclick="setQuickAsset('PAXGUSDT',this)">
+      <span class="ap-icon">🥇</span> PAXG
+    </div>
+    <div class="asset-pill-divider"></div>
+    <div class="asset-pill" id="ap-BNBUSDT" onclick="setQuickAsset('BNBUSDT',this)">
+      <span class="ap-icon">◈</span> BNB
+    </div>
+    <div class="asset-pill" id="ap-ADAUSDT" onclick="setQuickAsset('ADAUSDT',this)">
+      <span class="ap-icon">₳</span> ADA
+    </div>
+    <div class="asset-pill" id="ap-AVAXUSDT" onclick="setQuickAsset('AVAXUSDT',this)">
+      <span class="ap-icon">△</span> AVAX
+    </div>
+    <div class="asset-pill" id="ap-LINKUSDT" onclick="setQuickAsset('LINKUSDT',this)">
+      <span class="ap-icon">⬡</span> LINK
+    </div>
+    <div class="asset-pill" id="ap-DOTUSDT" onclick="setQuickAsset('DOTUSDT',this)">
+      <span class="ap-icon">●</span> DOT
+    </div>
+    <div class="asset-pill" id="ap-MATICUSDT" onclick="setQuickAsset('MATICUSDT',this)">
+      <span class="ap-icon">⬟</span> MATIC
+    </div>
   </div>
   <span class="inr-rate-badge" id="inr-rate-badge">₹84.5/USD</span>
 </div>
@@ -1156,8 +1189,15 @@
 <!-- ═══ NAV TABS ═══ -->
 <div class="nav-bar">
   <div class="nav-tabs">
+    <button id="nav-live" class="nav-tab" onclick="showPage('live-page', this)">
+      <span class="live-dot" id="live-tab-dot"></span>
+      <span class="tab-icon">🔴</span><span class="tab-label">Live</span>
+    </button>
     <button id="nav-dashboard" class="nav-tab active" onclick="showPage('dashboard-page', this)">
       <span class="tab-icon">📊</span><span class="tab-label">Dashboard</span>
+    </button>
+    <button id="nav-portfolio" class="nav-tab" onclick="showPage('portfolio-page', this)">
+      <span class="tab-icon">💼</span><span class="tab-label">Portfolio</span>
     </button>
     <button id="nav-market" class="nav-tab" onclick="showPage('market-page', this)">
       <span class="tab-icon">🌐</span><span class="tab-label">Market</span>
@@ -1167,13 +1207,6 @@
     </button>
     <button id="nav-results" class="nav-tab" onclick="showPage('results-page', this)">
       <span class="tab-icon">📈</span><span class="tab-label">Results</span>
-    </button>
-    <button id="nav-live" class="nav-tab" onclick="showPage('live-page', this)">
-      <span class="tab-icon">🔴</span><span class="tab-label">Live</span>
-      <span class="live-dot" id="live-tab-dot"></span>
-    </button>
-    <button id="nav-portfolio" class="nav-tab" onclick="showPage('portfolio-page', this)">
-      <span class="tab-icon">💼</span><span class="tab-label">Portfolio</span>
     </button>
   </div>
 </div>
