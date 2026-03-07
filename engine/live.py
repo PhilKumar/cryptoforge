@@ -10,24 +10,28 @@ import json as _json
 import math
 import os
 import sys
-from datetime import datetime, date as date_type, timedelta, timezone
-from typing import Callable, Optional
+from datetime import date as date_type
+from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from engine.indicators import compute_dynamic_indicators
-from engine.backtest import eval_condition_group
 import config
+from engine.backtest import eval_condition_group
+from engine.indicators import compute_dynamic_indicators
 
 # IST timezone (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
+
 
 def _now_ist() -> datetime:
     """Return current time in IST."""
     return datetime.now(IST)
 
+
 # Try to import WebSocket feed (optional enhancement)
 try:
     from engine.ws_feed import DeltaWSFeed
+
     _HAS_WS = True
 except ImportError:
     _HAS_WS = False
@@ -69,6 +73,8 @@ class LiveEngine:
         self.daily_pnl = 0.0
         self.max_daily_loss = 0.0
         self._last_trade_date = None
+        self.capital = 0.0  # effective capital, persisted across restarts
+        self._trades_lock = asyncio.Lock()  # guards open_trades + closed_trades mutations
 
         # Live data tracking for UI
         self.current_indicators = {}
@@ -98,14 +104,20 @@ class LiveEngine:
                 "trades_today": self.trades_today,
                 "daily_pnl": self.daily_pnl,
                 "total_pnl": self.total_pnl,
+                "capital": self.capital,
                 "current_candle": self.current_candle,
                 "current_indicators": {
                     k: (v if not isinstance(v, float) or not math.isnan(v) else None)
                     for k, v in self.current_indicators.items()
                 },
                 "event_log": [
-                    {"time": e["time"].strftime("%Y-%m-%d %H:%M:%S") if isinstance(e["time"], datetime) else str(e["time"]),
-                     "type": e["type"], "message": e["message"]}
+                    {
+                        "time": e["time"].strftime("%Y-%m-%d %H:%M:%S")
+                        if isinstance(e["time"], datetime)
+                        else str(e["time"]),
+                        "type": e["type"],
+                        "message": e["message"],
+                    }
                     for e in self.event_log[-100:]
                 ],
                 "saved_at": str(_now_ist()),
@@ -136,6 +148,7 @@ class LiveEngine:
             self.trades_today = state.get("trades_today", 0)
             self.daily_pnl = state.get("daily_pnl", 0.0)
             self.total_pnl = state.get("total_pnl", 0.0)
+            self.capital = state.get("capital", 0.0)
             self.current_candle = state.get("current_candle", {})
             self.current_indicators = state.get("current_indicators", {})
 
@@ -150,8 +163,7 @@ class LiveEngine:
                     t = datetime.strptime(entry["time"], "%Y-%m-%d %H:%M:%S")
                 except Exception:
                     t = _now_ist()
-                self.event_log.append({"time": t, "type": entry["type"],
-                                       "message": entry["message"], "data": {}})
+                self.event_log.append({"time": t, "type": entry["type"], "message": entry["message"], "data": {}})
 
             n = len(self.closed_trades)
             pnl = sum(t.get("pnl", 0) for t in self.closed_trades)
@@ -159,8 +171,7 @@ class LiveEngine:
         except Exception as e:
             print(f"[LIVE] State load failed: {e}")
 
-    def configure(self, strategy: dict, entry_conditions: list,
-                  exit_conditions: list, deploy_config: dict = None):
+    def configure(self, strategy: dict, entry_conditions: list, exit_conditions: list, deploy_config: dict = None):
         self.strategy = strategy
         self.entry_conditions = entry_conditions
         self.exit_conditions = exit_conditions
@@ -227,7 +238,10 @@ class LiveEngine:
         trade_side = self.strategy.get("trade_side", "LONG").upper()
         sl_pct = float(self.strategy.get("stoploss_pct", 5))
         tp_pct = float(self.strategy.get("target_profit_pct", 10))
-        capital = float(self.strategy.get("initial_capital", config.DEFAULT_CAPITAL))
+        initial_capital = float(self.strategy.get("initial_capital", config.DEFAULT_CAPITAL))
+        # Restore effective capital from state (persisted across restarts); fall back to initial
+        capital = self.capital if self.capital > 0 else initial_capital
+        self.capital = capital
         position_size_pct = float(self.strategy.get("position_size_pct", 100))
         candle_interval = self.strategy.get("candle_interval", "5m")
 
@@ -275,7 +289,8 @@ class LiveEngine:
                 # Fetch candle history for indicators
                 lookback = now - timedelta(days=3)
                 df = await self.broker.async_get_candles(
-                    symbol, resolution=candle_interval,
+                    symbol,
+                    resolution=candle_interval,
                     start=lookback.strftime("%Y-%m-%d"),
                     end=now.strftime("%Y-%m-%d"),
                 )
@@ -294,7 +309,7 @@ class LiveEngine:
 
                 # Update UI tracking
                 self.current_candle = {
-                    "time": str(row.name) if hasattr(row, 'name') else str(now),
+                    "time": str(row.name) if hasattr(row, "name") else str(now),
                     "open": float(row.get("open", 0)),
                     "high": float(row.get("high", 0)),
                     "low": float(row.get("low", 0)),
@@ -325,7 +340,8 @@ class LiveEngine:
                                 try:
                                     result = self.broker.place_order(
                                         product_id=product_id,
-                                        size=size, side=side,
+                                        size=size,
+                                        side=side,
                                         order_type="market_order",
                                         leverage=leverage,
                                     )
@@ -349,9 +365,11 @@ class LiveEngine:
                                 "margin": round(margin, 2),
                                 "leverage": leverage,
                                 "order_id": order_id,
+                                "_exit_attempts": 0,  # tracks failed exit order attempts
                             }
-                            self.open_trades.append(trade)
-                            self.in_trade = True
+                            async with self._trades_lock:
+                                self.open_trades.append(trade)
+                                self.in_trade = True
                             self.trades_today += 1
                             self.log_event("entry", f"ENTRY {trade_side} {symbol} @ ${price:,.2f} (size={size})")
 
@@ -377,7 +395,7 @@ class LiveEngine:
                             exit_reason = "Stop Loss"
                         elif tp_pct > 0 and lev_pnl_pct >= tp_pct:
                             exit_reason = "Take Profit"
-                        elif lev_pnl_pct <= -90:
+                        elif lev_pnl_pct <= config.LIQUIDATION_THRESHOLD:
                             exit_reason = "Liquidation"
                         elif eval_condition_group(row, self.exit_conditions, prev):
                             exit_reason = "Signal Exit"
@@ -396,12 +414,37 @@ class LiveEngine:
                                         reduce_only=True,
                                     )
                                     if isinstance(exit_result, dict) and exit_result.get("error"):
-                                        self.log_event("error", f"Exit order rejected: {exit_result['error']} — will retry")
+                                        trade["_exit_attempts"] = trade.get("_exit_attempts", 0) + 1
+                                        attempt = trade["_exit_attempts"]
+                                        self.log_event(
+                                            "error",
+                                            f"Exit order rejected (attempt {attempt}/3): " f"{exit_result['error']}",
+                                        )
+                                        if attempt >= 3:
+                                            self.log_event(
+                                                "error",
+                                                f"CRITICAL: Exit failed 3 times for trade "
+                                                f"{trade.get('id')} ({trade_side} {symbol}). "
+                                                f"MANUAL INTERVENTION REQUIRED. Engine stopping.",
+                                            )
+                                            self.running = False
                                         exit_ok = False
                                     else:
-                                        self.log_event("order", f"Exit order placed: {close_side} {trade.get('size', 1)} {symbol}")
+                                        self.log_event(
+                                            "order", f"Exit order placed: {close_side} {trade.get('size', 1)} {symbol}"
+                                        )
                                 except Exception as e:
-                                    self.log_event("error", f"Exit order failed: {e} — will retry")
+                                    trade["_exit_attempts"] = trade.get("_exit_attempts", 0) + 1
+                                    attempt = trade["_exit_attempts"]
+                                    self.log_event("error", f"Exit order failed (attempt {attempt}/3): {e}")
+                                    if attempt >= 3:
+                                        self.log_event(
+                                            "error",
+                                            f"CRITICAL: Exit failed 3 times for trade "
+                                            f"{trade.get('id')} ({trade_side} {symbol}). "
+                                            f"MANUAL INTERVENTION REQUIRED. Engine stopping.",
+                                        )
+                                        self.running = False
                                     exit_ok = False
 
                             if not exit_ok:
@@ -419,19 +462,20 @@ class LiveEngine:
                                 "pnl": round(trade_pnl, 2),
                                 "exit_reason": exit_reason,
                             }
-                            self.closed_trades.append(closed)
-                            self.open_trades.remove(trade)
-                            if not self.open_trades:
-                                self.in_trade = False
+                            async with self._trades_lock:
+                                self.closed_trades.append(closed)
+                                self.open_trades.remove(trade)
+                                if not self.open_trades:
+                                    self.in_trade = False
 
                             emoji = "+" if trade_pnl >= 0 else ""
-                            self.log_event("exit", f"EXIT {exit_reason} {symbol} @ ${check_price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}")
+                            self.log_event(
+                                "exit",
+                                f"EXIT {exit_reason} {symbol} @ ${check_price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}",
+                            )
 
                             if callback:
-                                await callback({
-                                    "type": "exit", "trade": closed,
-                                    "total_pnl": round(self.total_pnl, 2)
-                                })
+                                await callback({"type": "exit", "trade": closed, "total_pnl": round(self.total_pnl, 2)})
 
                             self._save_state()
 
@@ -476,8 +520,11 @@ class LiveEngine:
             "current_candle": self.current_candle,
             "current_indicators": self.current_indicators,
             "event_log": [
-                {"time": e["time"].strftime("%H:%M:%S IST") if isinstance(e["time"], datetime) else str(e["time"]),
-                 "type": e["type"], "message": e["message"]}
+                {
+                    "time": e["time"].strftime("%H:%M:%S IST") if isinstance(e["time"], datetime) else str(e["time"]),
+                    "type": e["type"],
+                    "message": e["message"],
+                }
                 for e in self.event_log[-50:]
             ],
         }

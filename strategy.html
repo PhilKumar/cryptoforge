@@ -2256,16 +2256,39 @@ function cfModal(title, msg, icon, buttons) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'cf-modal-overlay';
-    const btnsHtml = buttons.map((b, i) => {
+
+    const modal = document.createElement('div');
+    modal.className = 'cf-modal';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'cf-modal-icon';
+    iconEl.textContent = icon || '💎';           // textContent: never executes HTML
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'cf-modal-title';
+    titleEl.textContent = title;                  // safe — no innerHTML
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'cf-modal-msg';
+    msgEl.textContent = msg;                      // safe — server error strings can't XSS
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'cf-modal-actions';
+    buttons.forEach(function(b, i) {
       const cls = b.cls || (i === buttons.length - 1 ? 'btn-primary' : 'btn-outline');
-      return '<button class="btn btn-sm ' + cls + '" data-idx="' + i + '">' + b.label + '</button>';
-    }).join('');
-    overlay.innerHTML = '<div class="cf-modal">'
-      + '<div class="cf-modal-icon">' + (icon || '💎') + '</div>'
-      + '<div class="cf-modal-title">' + title + '</div>'
-      + '<div class="cf-modal-msg">' + msg + '</div>'
-      + '<div class="cf-modal-actions">' + btnsHtml + '</div>'
-      + '</div>';
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm ' + cls;
+      btn.dataset.idx = i;
+      btn.textContent = b.label;
+      actionsEl.appendChild(btn);
+    });
+
+    modal.appendChild(iconEl);
+    modal.appendChild(titleEl);
+    modal.appendChild(msgEl);
+    modal.appendChild(actionsEl);
+    overlay.appendChild(modal);
+
     overlay.addEventListener('click', function(e) {
       var btn = e.target.closest('[data-idx]');
       if (btn) { overlay.remove(); resolve(parseInt(btn.dataset.idx)); }
@@ -2291,15 +2314,41 @@ function cfPrompt(title, label, defaultVal) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'cf-modal-overlay';
-    overlay.innerHTML = '<div class="cf-modal">'
-      + '<div class="cf-modal-icon">⚙️</div>'
-      + '<div class="cf-modal-title">' + title + '</div>'
-      + '<div class="cf-modal-msg">' + label + '</div>'
-      + '<input type="text" class="cf-prompt-input" id="cf-prompt-val" value="' + (defaultVal || '') + '" autocomplete="off">'
-      + '<div class="cf-modal-actions">'
-      + '<button class="btn btn-sm btn-outline" data-act="cancel">Cancel</button>'
-      + '<button class="btn btn-sm btn-primary" data-act="ok">OK</button>'
-      + '</div></div>';
+
+    const modal = document.createElement('div');
+    modal.className = 'cf-modal';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'cf-modal-icon';
+    iconEl.textContent = '⚙️';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'cf-modal-title';
+    titleEl.textContent = title;
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'cf-modal-msg';
+    labelEl.textContent = label;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cf-prompt-input';
+    input.id = 'cf-prompt-val';
+    input.value = defaultVal || '';
+    input.autocomplete = 'off';
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'cf-modal-actions';
+    actionsEl.innerHTML = '<button class="btn btn-sm btn-outline" data-act="cancel">Cancel</button>'
+      + '<button class="btn btn-sm btn-primary" data-act="ok">OK</button>';
+
+    modal.appendChild(iconEl);
+    modal.appendChild(titleEl);
+    modal.appendChild(labelEl);
+    modal.appendChild(input);
+    modal.appendChild(actionsEl);
+    overlay.appendChild(modal);
+
     function finish(val) { overlay.remove(); resolve(val); }
     overlay.addEventListener('click', function(e) {
       var act = e.target.dataset.act;
@@ -2321,19 +2370,45 @@ function cfSelect(title, label, options, defaultVal) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'cf-modal-overlay';
-    var optHtml = options.map(function(o) {
-      var sel = (o.value === defaultVal) ? ' selected' : '';
-      return '<option value="' + o.value + '"' + sel + '>' + o.label + '</option>';
-    }).join('');
-    overlay.innerHTML = '<div class="cf-modal">'
-      + '<div class="cf-modal-icon">⚙️</div>'
-      + '<div class="cf-modal-title">' + title + '</div>'
-      + '<div class="cf-modal-msg">' + label + '</div>'
-      + '<select id="cf-select-val" style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:Outfit,sans-serif;margin-bottom:16px;">' + optHtml + '</select>'
-      + '<div class="cf-modal-actions">'
-      + '<button class="btn btn-sm btn-outline" data-act="cancel">Cancel</button>'
-      + '<button class="btn btn-sm btn-primary" data-act="ok">OK</button>'
-      + '</div></div>';
+
+    const modal = document.createElement('div');
+    modal.className = 'cf-modal';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'cf-modal-icon';
+    iconEl.textContent = '⚙️';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'cf-modal-title';
+    titleEl.textContent = title;
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'cf-modal-msg';
+    labelEl.textContent = label;
+
+    const sel = document.createElement('select');
+    sel.id = 'cf-select-val';
+    sel.style.cssText = 'width:100%;padding:10px 12px;background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:Outfit,sans-serif;margin-bottom:16px;';
+    options.forEach(function(o) {
+      const opt = document.createElement('option');
+      opt.value = o.value;            // value is data attribute — safe
+      opt.textContent = o.label;      // textContent: option labels can't XSS
+      if (o.value === defaultVal) opt.selected = true;
+      sel.appendChild(opt);
+    });
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'cf-modal-actions';
+    actionsEl.innerHTML = '<button class="btn btn-sm btn-outline" data-act="cancel">Cancel</button>'
+      + '<button class="btn btn-sm btn-primary" data-act="ok">OK</button>';
+
+    modal.appendChild(iconEl);
+    modal.appendChild(titleEl);
+    modal.appendChild(labelEl);
+    modal.appendChild(sel);
+    modal.appendChild(actionsEl);
+    overlay.appendChild(modal);
+
     function finish(val) { overlay.remove(); resolve(val); }
     overlay.addEventListener('click', function(e) {
       var act = e.target.dataset.act;
@@ -2358,8 +2433,17 @@ function cfToast(msg, type) {
   if (!container) return;
   var toast = document.createElement('div');
   toast.className = 'cf-toast ' + type;
-  toast.innerHTML = '<span class="cf-toast-icon">' + (icons[type] || 'ℹ️') + '</span>'
-    + '<span class="cf-toast-msg">' + msg + '</span>';
+
+  var iconEl = document.createElement('span');
+  iconEl.className = 'cf-toast-icon';
+  iconEl.textContent = icons[type] || 'ℹ️';   // textContent: no HTML execution
+
+  var msgEl = document.createElement('span');
+  msgEl.className = 'cf-toast-msg';
+  msgEl.textContent = msg;                      // safe — broker error strings can't XSS
+
+  toast.appendChild(iconEl);
+  toast.appendChild(msgEl);
   container.appendChild(toast);
   setTimeout(function() { if (toast.parentNode) toast.remove(); }, 4200);
 }

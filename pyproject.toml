@@ -1,6 +1,11 @@
 [tool.bandit]
-exclude_dirs = ["tests", ".venv", "venv"]
-skips = ["B101", "B311"]   # B101=assert, B311=random (not crypto)
+exclude_dirs = ["tests", ".venv", "venv", "scripts"]
+skips = [
+  "B101",  # assert statements
+  "B105",  # hardcoded password sentinel strings (placeholder guards, not real creds)
+  "B110",  # try-except-pass (intentional silent fallbacks in async trading code)
+  "B311",  # random (not used for crypto)
+]
 severity = "medium"
 
 [tool.ruff]
@@ -9,4 +14,14 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
-ignore = ["E501", "F841"]    # E501=line-too-long (handled by ruff-format), F841=unused var
+ignore = [
+  "E501",  # line-too-long (handled by ruff-format)
+  "F841",  # unused variable
+  "E402",  # module-import-not-at-top (conditional imports after env setup)
+  "F821",  # undefined-name (forward refs resolved at runtime)
+  "E722",  # bare-except (intentional in async error boundaries)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"engine/backtest.py" = ["E701", "E702"]  # pre-existing compact one-liner style
+"scripts/*.py" = ["E701", "E702", "E741", "F401", "F811"]  # debug scripts

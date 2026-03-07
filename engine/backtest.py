@@ -3,14 +3,24 @@ engine/backtest.py — CryptoForge Backtest Engine
 Perpetual futures backtesting with leverage, funding rates, and liquidation.
 """
 
-import pandas as pd
+import os
+import re
+import sys
+from datetime import datetime, time
+
 import numpy as np
-from datetime import datetime, time, date
-from typing import List, Optional
-import sys, os
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from engine.indicators import compute_dynamic_indicators
+
+
+def _safe_field(name) -> str:
+    """Strip non-printable/control characters from user-supplied field names before logging."""
+    return re.sub(r"[^\x20-\x7E]", "?", str(name))[:80]
+
+
 import config
+from engine.indicators import compute_dynamic_indicators
 
 
 # ── Time Parser ────────────────────────────────────────────────────
@@ -47,15 +57,17 @@ def eval_condition(row, cond, prev_row=None):
     try:
         if lv is None or rv is None:
             if lv is None:
-                print(f"[CONDITION] ⚠ Left '{left}' not found in row — available columns: {sorted([c for c in row.index if not c.startswith('_')])[:20]}")
+                print(
+                    f"[CONDITION] ⚠ Left '{_safe_field(left)}' not found in row — available columns: {sorted([c for c in row.index if not c.startswith('_')])[:20]}"
+                )
             if rv is None and r not in ("true", "false", "number"):
-                print(f"[CONDITION] ⚠ Right '{r}' not found in row")
+                print(f"[CONDITION] ⚠ Right '{_safe_field(r)}' not found in row")
             return False
         if isinstance(lv, float) and pd.isna(lv):
             return False
         if not isinstance(rv, bool) and isinstance(rv, float) and pd.isna(rv):
             return False
-    except:
+    except Exception:
         return False
 
     try:
@@ -69,8 +81,11 @@ def eval_condition(row, cond, prev_row=None):
         if prev_row is None:
             return lv_f > rv_f
         plv = prev_row.get("close") if left == "current_close" else prev_row.get(left)
-        prv = (prev_row.get("close") if r == "current_close" else
-               (float(cond.get("right_number_value", 0)) if r == "number" else prev_row.get(r)))
+        prv = (
+            prev_row.get("close")
+            if r == "current_close"
+            else (float(cond.get("right_number_value", 0)) if r == "number" else prev_row.get(r))
+        )
         try:
             plv_f = float(plv)
             prv_f = float(prv)
@@ -82,8 +97,11 @@ def eval_condition(row, cond, prev_row=None):
         if prev_row is None:
             return lv_f < rv_f
         plv = prev_row.get("close") if left == "current_close" else prev_row.get(left)
-        prv = (prev_row.get("close") if r == "current_close" else
-               (float(cond.get("right_number_value", 0)) if r == "number" else prev_row.get(r)))
+        prv = (
+            prev_row.get("close")
+            if r == "current_close"
+            else (float(cond.get("right_number_value", 0)) if r == "number" else prev_row.get(r))
+        )
         try:
             plv_f = float(plv)
             prv_f = float(prv)
@@ -110,8 +128,9 @@ def eval_condition(row, cond, prev_row=None):
 
 def eval_condition_group(row, conditions, prev_row=None):
     if not conditions:
-        print("[CONDITION] ⚠ Empty conditions list — returning True (no filter)")
-        return True
+        # Fail-safe: empty conditions = no signal. Returning True would cause
+        # the engine to enter a trade on every single candle with real money.
+        return False
     result = eval_condition(row, conditions[0], prev_row)
     for c in conditions[1:]:
         v = eval_condition(row, c, prev_row)
@@ -123,12 +142,8 @@ def eval_condition_group(row, conditions, prev_row=None):
     return result
 
 
-DEFAULT_ENTRY_CONDITIONS = [
-    {"left": "current_close", "operator": "is_above", "right": "EMA_20", "connector": "AND"}
-]
-DEFAULT_EXIT_CONDITIONS = [
-    {"left": "current_close", "operator": "is_below", "right": "EMA_20", "connector": "AND"}
-]
+DEFAULT_ENTRY_CONDITIONS = [{"left": "current_close", "operator": "is_above", "right": "EMA_20", "connector": "AND"}]
+DEFAULT_EXIT_CONDITIONS = [{"left": "current_close", "operator": "is_below", "right": "EMA_20", "connector": "AND"}]
 
 
 # ── Trade Helpers ──────────────────────────────────────────────────
@@ -149,8 +164,7 @@ def _mk(id_, et, xt, ep, xp, pnl, reason, cum, side="LONG", leverage=1, size=1):
 
 
 # ── Backtest Runner ────────────────────────────────────────────────
-def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
-                 strategy_config=None):
+def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_config=None):
     if entry_conditions is None:
         entry_conditions = DEFAULT_ENTRY_CONDITIONS
     if exit_conditions is None:
@@ -188,7 +202,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
         row = df.iloc[i]
         prev = df.iloc[i - 1]
         ts = df.index[i]
-        current_date = ts.date() if hasattr(ts, 'date') else ts
+        current_date = ts.date() if hasattr(ts, "date") else ts
 
         # Reset daily trade count
         if current_date != last_trade_date:
@@ -237,7 +251,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
             elif tp_pct > 0 and lev_pnl_pct >= tp_pct:
                 exit_reason = "Take Profit"
             # Liquidation check (simplified)
-            elif lev_pnl_pct <= -90:
+            elif lev_pnl_pct <= config.LIQUIDATION_THRESHOLD:
                 exit_reason = "Liquidation"
             # Exit conditions met
             elif eval_condition_group(row, exit_conditions, prev):
@@ -253,12 +267,21 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
                 cum_pnl += trade_pnl
                 capital += trade_pnl  # compound capital
                 tid += 1
-                trades.append(_mk(
-                    tid, entry_time, ts, entry_price, price,
-                    trade_pnl, exit_reason, cum_pnl,
-                    side=side, leverage=leverage,
-                    size=round(entry_size, 2),
-                ))
+                trades.append(
+                    _mk(
+                        tid,
+                        entry_time,
+                        ts,
+                        entry_price,
+                        price,
+                        trade_pnl,
+                        exit_reason,
+                        cum_pnl,
+                        side=side,
+                        leverage=leverage,
+                        size=round(entry_size, 2),
+                    )
+                )
                 in_trade = False
 
         equity_curve.append({"time": str(ts)[:19], "value": round(capital, 2)})
@@ -281,12 +304,21 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
         cum_pnl += trade_pnl
         capital += trade_pnl
         tid += 1
-        trades.append(_mk(
-            tid, entry_time, ts, entry_price, price,
-            trade_pnl, "End of Data", cum_pnl,
-            side=side, leverage=leverage,
-            size=round(entry_size, 2),
-        ))
+        trades.append(
+            _mk(
+                tid,
+                entry_time,
+                ts,
+                entry_price,
+                price,
+                trade_pnl,
+                "End of Data",
+                cum_pnl,
+                side=side,
+                leverage=leverage,
+                size=round(entry_size, 2),
+            )
+        )
 
     # ── Stats ─────────────────────────────────────────────────────
     total_trades = len(trades)
@@ -296,8 +328,11 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None,
     win_rate = (len(wins) / total_trades * 100) if total_trades > 0 else 0
     avg_win = (sum(t["pnl"] for t in wins) / len(wins)) if wins else 0
     avg_loss = (sum(t["pnl"] for t in losses) / len(losses)) if losses else 0
-    profit_factor = (sum(t["pnl"] for t in wins) / abs(sum(t["pnl"] for t in losses))
-                     if losses and sum(t["pnl"] for t in losses) != 0 else 0)
+    profit_factor = (
+        sum(t["pnl"] for t in wins) / abs(sum(t["pnl"] for t in losses))
+        if losses and sum(t["pnl"] for t in losses) != 0
+        else 0
+    )
 
     # Expectancy = (win_rate × avg_win) − (loss_rate × avg_loss)
     loss_rate = (len(losses) / total_trades * 100) if total_trades > 0 else 0

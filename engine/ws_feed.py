@@ -29,21 +29,19 @@ import json
 import os
 import sys
 import time as _time
-from datetime import datetime
-from typing import Callable, Optional, Dict, List, Set
+from typing import Callable, Optional, Set
 
 import aiohttp
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
-
 # ── Constants ──────────────────────────────────────────────────────
-HEARTBEAT_INTERVAL = 25     # seconds (Delta timeout is 30s)
-RECONNECT_BASE = 1.0        # initial reconnect delay
-RECONNECT_MAX = 32.0        # max reconnect delay
+HEARTBEAT_INTERVAL = 25  # seconds (Delta timeout is 30s)
+RECONNECT_BASE = 1.0  # initial reconnect delay
+RECONNECT_MAX = 32.0  # max reconnect delay
 RECONNECT_MULTIPLIER = 2.0  # exponential multiplier
-MAX_RECONNECT_ATTEMPTS = 50 # before giving up completely
+MAX_RECONNECT_ATTEMPTS = 50  # before giving up completely
 
 
 class DeltaWSFeed:
@@ -65,10 +63,7 @@ class DeltaWSFeed:
             self._ws_url = "wss://testnet-socket.delta.exchange"
         else:
             region = os.getenv("DELTA_REGION", "india").lower()
-            self._ws_url = (
-                "wss://socket.india.delta.exchange" if region == "india"
-                else "wss://socket.delta.exchange"
-            )
+            self._ws_url = "wss://socket.india.delta.exchange" if region == "india" else "wss://socket.delta.exchange"
 
         self._api_key = config.DELTA_API_KEY
         self._api_secret = config.DELTA_API_SECRET
@@ -87,17 +82,18 @@ class DeltaWSFeed:
         self._pending_auth_channels: Set[str] = set()
 
         # Callbacks
-        self.on_candle: Optional[Callable] = None    # (symbol, resolution, candle_dict)
-        self.on_ticker: Optional[Callable] = None    # (symbol, ticker_dict)
-        self.on_order: Optional[Callable] = None     # (order_dict)
+        self.on_candle: Optional[Callable] = None  # (symbol, resolution, candle_dict)
+        self.on_ticker: Optional[Callable] = None  # (symbol, ticker_dict)
+        self.on_order: Optional[Callable] = None  # (order_dict)
         self.on_position: Optional[Callable] = None  # (position_dict)
-        self.on_error: Optional[Callable] = None     # (error_str)
-        self.on_connect: Optional[Callable] = None   # ()
+        self.on_error: Optional[Callable] = None  # (error_str)
+        self.on_connect: Optional[Callable] = None  # ()
         self.on_disconnect: Optional[Callable] = None  # (reason_str)
 
         # Tasks
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._reader_task: Optional[asyncio.Task] = None
+        self._connect_task: Optional[asyncio.Task] = None
 
         # Stats
         self.messages_received = 0
@@ -167,7 +163,7 @@ class DeltaWSFeed:
                 self._connected = True
                 self._reconnect_attempt = 0
                 self._last_message_time = _time.time()
-                print(f"[WS] Connected to Delta Exchange WebSocket")
+                print("[WS] Connected to Delta Exchange WebSocket")
 
                 # Authenticate if API keys are configured
                 if self._api_key and self._api_key != "YOUR_API_KEY_HERE":
@@ -189,6 +185,11 @@ class DeltaWSFeed:
                             await result
                     except Exception as e:
                         print(f"[WS] on_connect callback error: {e}")
+
+                # Cancel any stale tasks before creating new ones
+                for _t in (self._reader_task, self._heartbeat_task):
+                    if _t and not _t.done():
+                        _t.cancel()
 
                 # Start reader and heartbeat tasks
                 self._reader_task = asyncio.create_task(self._reader_loop())
@@ -219,8 +220,10 @@ class DeltaWSFeed:
                     RECONNECT_MAX,
                 )
                 self.reconnect_count += 1
-                print(f"[WS] Reconnecting in {delay:.1f}s "
-                      f"(attempt {self._reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS})")
+                print(
+                    f"[WS] Reconnecting in {delay:.1f}s "
+                    f"(attempt {self._reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS})"
+                )
                 await asyncio.sleep(delay)
 
         if self._running:
@@ -282,10 +285,12 @@ class DeltaWSFeed:
             return
         self._subscribed_channels.discard(channel)
         try:
-            await self._ws.send_json({
-                "type": "unsubscribe",
-                "payload": {"channels": [{"name": channel}]},
-            })
+            await self._ws.send_json(
+                {
+                    "type": "unsubscribe",
+                    "payload": {"channels": [{"name": channel}]},
+                }
+            )
         except Exception as e:
             print(f"[WS] Unsubscribe error: {e}")
 
@@ -324,9 +329,7 @@ class DeltaWSFeed:
                     print(f"[WS] Error: {self._ws.exception()}")
                     break
 
-                elif msg.type in (aiohttp.WSMsgType.CLOSE,
-                                  aiohttp.WSMsgType.CLOSING,
-                                  aiohttp.WSMsgType.CLOSED):
+                elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
                     print(f"[WS] Connection closed: {msg.data}")
                     break
 
@@ -350,10 +353,12 @@ class DeltaWSFeed:
                 except Exception:
                     pass
 
-            # Auto-reconnect
+            # Auto-reconnect — cancel any in-flight connect task before spawning a new one
             if self._running:
                 print("[WS] Initiating reconnect...")
-                asyncio.create_task(self._do_connect())
+                if self._connect_task and not self._connect_task.done():
+                    self._connect_task.cancel()
+                self._connect_task = asyncio.create_task(self._do_connect())
 
     # ── Message Dispatch ────────────────────────────────────────
     async def _dispatch(self, data: dict):
@@ -484,14 +489,12 @@ class DeltaWSFeed:
             "messages_received": self.messages_received,
             "reconnect_count": self.reconnect_count,
             "last_error": self.last_error,
-            "uptime_seconds": int(_time.time() - self._last_message_time)
-                             if self._last_message_time > 0 else 0,
+            "uptime_seconds": int(_time.time() - self._last_message_time) if self._last_message_time > 0 else 0,
         }
 
 
 # ── Convenience: Create feed with candle callback ───────────────
-async def create_candle_feed(symbol: str, resolution: str,
-                              callback: Callable) -> DeltaWSFeed:
+async def create_candle_feed(symbol: str, resolution: str, callback: Callable) -> DeltaWSFeed:
     """Quick helper to create a WebSocket feed for a single candle stream."""
     feed = DeltaWSFeed()
     feed.on_candle = callback

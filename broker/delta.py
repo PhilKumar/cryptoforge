@@ -5,17 +5,20 @@ Handles: historical candles, order placement, positions, wallet,
 Docs: https://docs.delta.exchange/
 """
 
-import logging
-import requests
 import asyncio
-import pandas as pd
 import hashlib
 import hmac
 import json
+import logging
+import os
+import sys
 import time as _time
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
-import sys, os
+from typing import Optional
+
+import pandas as pd
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
@@ -39,32 +42,36 @@ def _request_with_retry(
     for attempt in range(max_retries):
         try:
             resp = requests.request(
-                method, url, headers=headers, data=data,
-                params=params, timeout=timeout,
+                method,
+                url,
+                headers=headers,
+                data=data,
+                params=params,
+                timeout=timeout,
             )
             if resp.status_code not in _RETRYABLE_STATUSES:
                 return resp
             last_exc = Exception(f"Delta API {resp.status_code}: {resp.text[:200]}")
             _delta_log.warning(f"[DELTA] {method} {url} → {resp.status_code} (attempt {attempt+1}/{max_retries})")
-        except (requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout) as e:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             last_exc = e
             _delta_log.warning(f"[DELTA] {method} {url} network error (attempt {attempt+1}/{max_retries}): {e}")
         if attempt < max_retries - 1:
-            _time.sleep(base_delay * (2 ** attempt))  # 1s, 2s, 4s …
+            _time.sleep(base_delay * (2**attempt))  # 1s, 2s, 4s …
     raise last_exc
 
 
 class _CircuitBreaker:
     """Opens after `failure_threshold` consecutive failures; resets after `recovery_timeout` s."""
+
     CLOSED = "closed"
-    OPEN   = "open"
+    OPEN = "open"
 
     def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 60.0):
         self._threshold = failure_threshold
-        self._timeout   = recovery_timeout
-        self._failures  = 0
-        self._state     = self.CLOSED
+        self._timeout = recovery_timeout
+        self._failures = 0
+        self._state = self.CLOSED
         self._opened_at = 0.0
 
     def call_allowed(self) -> bool:
@@ -76,14 +83,14 @@ class _CircuitBreaker:
 
     def record_success(self):
         self._failures = 0
-        self._state    = self.CLOSED
+        self._state = self.CLOSED
 
     def record_failure(self):
         self._failures += 1
         if self._failures >= self._threshold:
             if self._state != self.OPEN:
                 _delta_log.error(f"[DELTA] Circuit breaker OPEN after {self._failures} consecutive failures")
-            self._state     = self.OPEN
+            self._state = self.OPEN
             self._opened_at = _time.time()
 
     @property
@@ -105,7 +112,7 @@ class DeltaClient:
         self._products_ts = 0
         self._CACHE_TTL = 3600  # 1 hour
         # Delta India uses USD suffix (BTCUSD), NOT USDT (BTCUSDT)
-        self._is_india = getattr(config, 'DELTA_REGION', 'india').lower() == 'india'
+        self._is_india = getattr(config, "DELTA_REGION", "india").lower() == "india"
 
     @staticmethod
     def to_delta_symbol(symbol: str) -> str:
@@ -122,9 +129,9 @@ class DeltaClient:
         return symbol
 
     def _is_configured(self) -> bool:
-        return (self.api_key != "YOUR_API_KEY_HERE" and
-                self.api_secret != "YOUR_API_SECRET_HERE" and
-                len(self.api_key) > 5)
+        return (
+            self.api_key != "YOUR_API_KEY_HERE" and self.api_secret != "YOUR_API_SECRET_HERE" and len(self.api_key) > 5
+        )
 
     # ── Auth Signature ────────────────────────────────────────────
     def _sign(self, method: str, path: str, query_string: str = "", body: str = "") -> dict:
@@ -137,11 +144,7 @@ class DeltaClient:
         # prepend /v2 to match the actual URL path Delta expects
         route_path = "/v2" + path
         message = method + timestamp + route_path + query_string + body
-        signature = hmac.new(
-            self.api_secret.encode('utf-8'),
-            message.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
+        signature = hmac.new(self.api_secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
         return {
             "api-key": self.api_key,
             "timestamp": timestamp,
@@ -156,6 +159,7 @@ class DeltaClient:
         query_string = ""
         if auth and params:
             from urllib.parse import urlencode
+
             query_string = "?" + urlencode(sorted(params.items()))
         headers = self._sign("GET", path, query_string=query_string) if auth else {"Content-Type": "application/json"}
         try:
@@ -196,12 +200,19 @@ class DeltaClient:
         url = f"{self.base_url}{path}"
         body = json.dumps(data) if data else ""
         headers = self._sign("DELETE", path, body=body)
+        _circuit_breaker.check()
         try:
-            resp = requests.delete(url, data=body, headers=headers, timeout=30)
+            resp = _request_with_retry("DELETE", url, headers=headers, data=body, timeout=30)
             resp.raise_for_status()
+            _circuit_breaker.record_success()
             return resp.json()
+        except requests.exceptions.HTTPError as e:
+            _circuit_breaker.record_failure()
+            _delta_log.warning(f"[DELTA] DELETE {path} HTTP {e.response.status_code}: {e.response.text[:200]}")
+            raise
         except Exception as e:
-            print(f"[DELTA] Delete error: {e}")
+            _circuit_breaker.record_failure()
+            _delta_log.warning(f"[DELTA] DELETE {path} error: {e}")
             raise
 
     # ── Async wrappers (non-blocking for asyncio event loop) ──────
@@ -226,6 +237,7 @@ class DeltaClient:
         """Lazy-create a shared aiohttp session."""
         if self._aio_session is None or self._aio_session.closed:
             import aiohttp
+
             timeout = aiohttp.ClientTimeout(total=30, connect=10)
             self._aio_session = aiohttp.ClientSession(timeout=timeout)
 
@@ -234,38 +246,84 @@ class DeltaClient:
         if self._aio_session and not self._aio_session.closed:
             await self._aio_session.close()
 
-    async def _aio_get(self, path: str, params: dict = None, auth: bool = False) -> dict:
-        """Native async GET using aiohttp."""
+    async def _aio_get(
+        self, path: str, params: dict = None, auth: bool = False, max_retries: int = 3, base_delay: float = 1.0
+    ) -> dict:
+        """Native async GET using aiohttp — with circuit breaker + exponential backoff retry."""
         import aiohttp
+
+        _circuit_breaker.check()
         await self._ensure_aio_session()
         url = f"{self.base_url}{path}"
         query_string = ""
         if auth and params:
             from urllib.parse import urlencode
+
             query_string = "?" + urlencode(sorted(params.items()))
         headers = self._sign("GET", path, query_string=query_string) if auth else {"Content-Type": "application/json"}
-        async with self._aio_session.get(url, params=params, headers=headers) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                async with self._aio_session.get(url, params=params, headers=headers) as resp:
+                    if resp.status in _RETRYABLE_STATUSES:
+                        last_exc = Exception(f"Delta API {resp.status}")
+                        _delta_log.warning(
+                            f"[DELTA] aio GET {path} → {resp.status} (attempt {attempt+1}/{max_retries})"
+                        )
+                    else:
+                        resp.raise_for_status()
+                        _circuit_breaker.record_success()
+                        return await resp.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_exc = e
+                _delta_log.warning(f"[DELTA] aio GET {path} transient error: {e} (attempt {attempt+1}/{max_retries})")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(base_delay * (2**attempt))
+        _circuit_breaker.record_failure()
+        raise last_exc or Exception(f"aio GET {path} failed after {max_retries} attempts")
 
-    async def _aio_post(self, path: str, data: dict = None) -> dict:
-        """Native async POST using aiohttp."""
+    async def _aio_post(self, path: str, data: dict = None, max_retries: int = 3, base_delay: float = 1.0) -> dict:
+        """Native async POST using aiohttp — with circuit breaker + exponential backoff retry."""
         import aiohttp
+
+        _circuit_breaker.check()
         await self._ensure_aio_session()
         url = f"{self.base_url}{path}"
         body = json.dumps(data) if data else ""
         headers = self._sign("POST", path, body=body)
-        async with self._aio_session.post(url, data=body, headers=headers) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                async with self._aio_session.post(url, data=body, headers=headers) as resp:
+                    if resp.status in _RETRYABLE_STATUSES:
+                        last_exc = Exception(f"Delta API {resp.status}")
+                        _delta_log.warning(
+                            f"[DELTA] aio POST {path} → {resp.status} (attempt {attempt+1}/{max_retries})"
+                        )
+                    else:
+                        resp.raise_for_status()
+                        _circuit_breaker.record_success()
+                        return await resp.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_exc = e
+                _delta_log.warning(f"[DELTA] aio POST {path} transient error: {e} (attempt {attempt+1}/{max_retries})")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(base_delay * (2**attempt))
+        _circuit_breaker.record_failure()
+        raise last_exc or Exception(f"aio POST {path} failed after {max_retries} attempts")
 
     # ── Redundant Order Verification ──────────────────────────────
-    async def place_order_verified(self, product_id: int, size: float, side: str,
-                                    order_type: str = "market_order",
-                                    limit_price: float = None,
-                                    leverage: int = 10,
-                                    reduce_only: bool = False,
-                                    max_verify_attempts: int = 3) -> dict:
+    async def place_order_verified(
+        self,
+        product_id: int,
+        size: float,
+        side: str,
+        order_type: str = "market_order",
+        limit_price: float = None,
+        leverage: int = 10,
+        reduce_only: bool = False,
+        max_verify_attempts: int = 3,
+    ) -> dict:
         """
         Place an order and verify it was filled.
         1. Place order via REST
@@ -276,9 +334,13 @@ class DeltaClient:
         """
         # Place the order
         result = self.place_order(
-            product_id=product_id, size=size, side=side,
-            order_type=order_type, limit_price=limit_price,
-            leverage=leverage, reduce_only=reduce_only,
+            product_id=product_id,
+            size=size,
+            side=side,
+            order_type=order_type,
+            limit_price=limit_price,
+            leverage=leverage,
+            reduce_only=reduce_only,
         )
 
         if isinstance(result, dict) and result.get("error"):
@@ -299,7 +361,7 @@ class DeltaClient:
                 # Check order status
                 orders = await asyncio.to_thread(self.get_orders, product_id, "closed")
                 filled = None
-                for o in (orders or []):
+                for o in orders or []:
                     if o.get("id") == order_id:
                         filled = o
                         break
@@ -315,11 +377,14 @@ class DeltaClient:
                         if pos_size > 0:
                             print(f"[DELTA] Position confirmed: size={pos_size}")
                         else:
-                            print(f"[DELTA] WARNING: Position size is 0 after fill "
-                                  f"(expected ~{expected_size})")
+                            print(f"[DELTA] WARNING: Position size is 0 after fill " f"(expected ~{expected_size})")
 
-                    return {**result, "verified": True, "fill_status": filled.get("state"),
-                            "verified_at_attempt": attempt + 1}
+                    return {
+                        **result,
+                        "verified": True,
+                        "fill_status": filled.get("state"),
+                        "verified_at_attempt": attempt + 1,
+                    }
 
                 print(f"[DELTA] Order {order_id} not yet filled (attempt {attempt + 1})")
 
@@ -347,8 +412,7 @@ class DeltaClient:
     def get_perpetual_futures(self) -> list:
         """Get only perpetual futures contracts."""
         products = self.get_products()
-        perps = [p for p in products if p.get("contract_type") == "perpetual_futures"
-                 and p.get("state") == "live"]
+        perps = [p for p in products if p.get("contract_type") == "perpetual_futures" and p.get("state") == "live"]
         return perps
 
     def get_product_by_symbol(self, symbol: str) -> Optional[dict]:
@@ -395,8 +459,7 @@ class DeltaClient:
         }
 
     # ── Historical Candles ────────────────────────────────────────
-    def get_candles(self, symbol: str, resolution: str = "5m",
-                    start: str = None, end: str = None) -> pd.DataFrame:
+    def get_candles(self, symbol: str, resolution: str = "5m", start: str = None, end: str = None) -> pd.DataFrame:
         """
         Fetch OHLCV candle data.
         resolution: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1d, 7d, 30d, 1w, 2w
@@ -406,9 +469,19 @@ class DeltaClient:
             symbol = self.to_delta_symbol(symbol)
         # Map resolution to Delta API format
         res_map = {
-            "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h",
-            "1d": "1d", "1w": "1w", "1D": "1d", "1W": "1w",
+            "1m": "1m",
+            "3m": "3m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "1h": "1h",
+            "2h": "2h",
+            "4h": "4h",
+            "6h": "6h",
+            "1d": "1d",
+            "1w": "1w",
+            "1D": "1d",
+            "1W": "1w",
         }
         delta_res = res_map.get(resolution, "5m")
 
@@ -430,9 +503,17 @@ class DeltaClient:
 
         # Determine seconds per candle for chunking
         sec_map = {
-            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-            "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600,
-            "1d": 86400, "1w": 604800,
+            "1m": 60,
+            "3m": 180,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "1h": 3600,
+            "2h": 7200,
+            "4h": 14400,
+            "6h": 21600,
+            "1d": 86400,
+            "1w": 604800,
         }
         secs_per_candle = sec_map.get(delta_res, 300)
         max_candles_per_req = 500
@@ -477,8 +558,7 @@ class DeltaClient:
             df["datetime"] = pd.to_datetime(df["t"], unit="s", utc=True)
 
         rename_map = {}
-        for orig, target in [("o", "open"), ("h", "high"), ("l", "low"),
-                              ("c", "close"), ("v", "volume")]:
+        for orig, target in [("o", "open"), ("h", "high"), ("l", "low"), ("c", "close"), ("v", "volume")]:
             if orig in df.columns:
                 rename_map[orig] = target
         if rename_map:
@@ -491,7 +571,7 @@ class DeltaClient:
         if "datetime" in df.columns:
             df.set_index("datetime", inplace=True)
             df.sort_index(inplace=True)
-            df = df[~df.index.duplicated(keep='first')]
+            df = df[~df.index.duplicated(keep="first")]
 
         # Keep only OHLCV
         keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
@@ -563,7 +643,7 @@ class DeltaClient:
         if not self._is_configured():
             return {}
         try:
-            resp = self._get(f"/positions", params={"product_id": product_id}, auth=True)
+            resp = self._get("/positions", params={"product_id": product_id}, auth=True)
             results = resp.get("result", [])
             for p in results:
                 if p.get("product_id") == product_id:
@@ -574,11 +654,16 @@ class DeltaClient:
             return {}
 
     # ── Orders ────────────────────────────────────────────────────
-    def place_order(self, product_id: int, size: float, side: str,
-                    order_type: str = "market_order",
-                    limit_price: float = None,
-                    leverage: int = 10,
-                    reduce_only: bool = False) -> dict:
+    def place_order(
+        self,
+        product_id: int,
+        size: float,
+        side: str,
+        order_type: str = "market_order",
+        limit_price: float = None,
+        leverage: int = 10,
+        reduce_only: bool = False,
+    ) -> dict:
         """
         Place a futures order.
         side: 'buy' or 'sell'
@@ -646,10 +731,13 @@ class DeltaClient:
         if not self._is_configured():
             return {"error": "API not configured"}
         try:
-            resp = self._post("/orders/leverage", {
-                "product_id": product_id,
-                "leverage": str(leverage),
-            })
+            resp = self._post(
+                "/orders/leverage",
+                {
+                    "product_id": product_id,
+                    "leverage": str(leverage),
+                },
+            )
             return resp.get("result", resp)
         except Exception as e:
             print(f"[DELTA] Set leverage error: {e}")
@@ -663,7 +751,7 @@ class DeltaClient:
             if not product:
                 return []
             product_id = product.get("id")
-            resp = self._get(f"/funding_rates", params={"product_id": product_id})
+            resp = self._get("/funding_rates", params={"product_id": product_id})
             return resp.get("result", [])
         except Exception as e:
             print(f"[DELTA] Funding rate error: {e}")
@@ -674,17 +762,27 @@ class DeltaClient:
 #  Binance Public API — fallback candle source for non-Delta symbols
 # ═══════════════════════════════════════════════════════════════════
 
-def get_candles_binance(symbol: str, resolution: str = "5m",
-                        start: str = None, end: str = None) -> pd.DataFrame:
+
+def get_candles_binance(symbol: str, resolution: str = "5m", start: str = None, end: str = None) -> pd.DataFrame:
     """
     Fetch OHLCV candle data from Binance public API (no API key needed).
     symbol: e.g. 'ADAUSDT', 'BNBUSDT'
     resolution: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1d, 1w
     """
     res_map = {
-        "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
-        "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h",
-        "1d": "1d", "1D": "1d", "1w": "1w", "1W": "1w",
+        "1m": "1m",
+        "3m": "3m",
+        "5m": "5m",
+        "15m": "15m",
+        "30m": "30m",
+        "1h": "1h",
+        "2h": "2h",
+        "4h": "4h",
+        "6h": "6h",
+        "1d": "1d",
+        "1D": "1d",
+        "1w": "1w",
+        "1W": "1w",
     }
     interval = res_map.get(resolution, "5m")
 
@@ -714,8 +812,7 @@ def get_candles_binance(symbol: str, resolution: str = "5m",
             "limit": 1000,  # Binance max per request
         }
         try:
-            resp = requests.get("https://api.binance.com/api/v3/klines",
-                                params=params, timeout=30)
+            resp = requests.get("https://api.binance.com/api/v3/klines", params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
             if not data:
@@ -735,11 +832,23 @@ def get_candles_binance(symbol: str, resolution: str = "5m",
         return pd.DataFrame()
 
     # Binance klines: [openTime, open, high, low, close, volume, closeTime, ...]
-    df = pd.DataFrame(all_candles, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_volume", "trades", "taker_buy_base",
-        "taker_buy_quote", "ignore"
-    ])
+    df = pd.DataFrame(
+        all_candles,
+        columns=[
+            "open_time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "close_time",
+            "quote_volume",
+            "trades",
+            "taker_buy_base",
+            "taker_buy_quote",
+            "ignore",
+        ],
+    )
 
     df["datetime"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
     for col in ["open", "high", "low", "close", "volume"]:
@@ -747,7 +856,7 @@ def get_candles_binance(symbol: str, resolution: str = "5m",
 
     df.set_index("datetime", inplace=True)
     df.sort_index(inplace=True)
-    df = df[~df.index.duplicated(keep='first')]
+    df = df[~df.index.duplicated(keep="first")]
     df = df[["open", "high", "low", "close", "volume"]]
 
     print(f"[BINANCE] Total: {len(df)} candles for {symbol} ({interval})")

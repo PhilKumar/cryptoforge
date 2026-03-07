@@ -11,7 +11,7 @@ Completely isolated from LiveEngine and PaperTradingEngine.
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
 def _now_utc():
@@ -24,19 +24,19 @@ class ScalpTrade:
     def __init__(
         self,
         trade_id: int,
-        symbol: str,              # e.g. BTCUSDT
-        side: str,                # LONG or SHORT
+        symbol: str,  # e.g. BTCUSDT
+        side: str,  # LONG or SHORT
         product_id: int,
-        size: int,                # contract units
+        size: int,  # contract units
         entry_price: float,
         leverage: int = 10,
         # Exit rules (at least one should be set)
-        target_price: float = 0.0,    # absolute price to take profit
-        sl_price: float = 0.0,         # absolute SL price
-        target_pct: float = 0.0,       # leveraged % gain target
-        sl_pct: float = 0.0,           # leveraged % loss SL
-        target_usd: float = 0.0,       # fixed $ profit target
-        sl_usd: float = 0.0,           # fixed $ loss SL
+        target_price: float = 0.0,  # absolute price to take profit
+        sl_price: float = 0.0,  # absolute SL price
+        target_pct: float = 0.0,  # leveraged % gain target
+        sl_pct: float = 0.0,  # leveraged % loss SL
+        target_usd: float = 0.0,  # fixed $ profit target
+        sl_usd: float = 0.0,  # fixed $ loss SL
         order_id: str = "",
         entry_time: Optional[datetime] = None,
         mode: str = "live",
@@ -169,8 +169,8 @@ class ScalpEngine:
     async def enter_trade(
         self,
         symbol: str,
-        side: str,              # LONG or SHORT
-        size: int,              # contracts
+        side: str,  # LONG or SHORT
+        size: int,  # contracts
         leverage: int = 10,
         target_price: float = 0.0,
         sl_price: float = 0.0,
@@ -242,10 +242,12 @@ class ScalpEngine:
         self.open_trades[self._trade_counter] = trade
 
         mode_label = "[PAPER] " if mode == "paper" else ""
-        self._log("entry",
+        self._log(
+            "entry",
             f"{mode_label}✅ SCALP ENTER: {side} {symbol} @ ${entry_price:,.4f} "
             f"size={size} lev={leverage}x orderId={order_id} "
-            f"tp=${trade.target_price or 'none'} sl=${trade.sl_price or 'none'}")
+            f"tp=${trade.target_price or 'none'} sl=${trade.sl_price or 'none'}",
+        )
 
         if not self._running:
             self.start()
@@ -361,10 +363,40 @@ class ScalpEngine:
                     order_type="market_order",
                     reduce_only=True,
                 )
-                if isinstance(result, dict) and not result.get("error"):
-                    exit_order_id = str(result.get("id", "closed"))
+                if isinstance(result, dict) and result.get("error"):
+                    # Broker rejected the exit — leave trade open so monitor retries.
+                    # Increment attempt counter; after 3 failures alert and halt engine.
+                    trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
+                    self._log(
+                        "error",
+                        f"Exit order REJECTED for trade {trade.trade_id} "
+                        f"(attempt {trade._exit_attempts}): {result['error']}",
+                    )
+                    if trade._exit_attempts >= 3:
+                        self._log(
+                            "error",
+                            f"CRITICAL: Exit failed 3 times for trade {trade.trade_id} "
+                            f"({trade.side} {trade.symbol}). MANUAL INTERVENTION REQUIRED. "
+                            f"Engine stopping to prevent further exposure.",
+                        )
+                        self.stop()
+                    return  # keep in open_trades — monitor will retry next cycle
+                exit_order_id = str(result.get("id", "closed"))
             except Exception as e:
-                self._log("error", f"Exit order failed for trade {trade.trade_id}: {e}")
+                trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
+                self._log(
+                    "error",
+                    f"Exit order FAILED for trade {trade.trade_id} " f"(attempt {trade._exit_attempts}): {e}",
+                )
+                if trade._exit_attempts >= 3:
+                    self._log(
+                        "error",
+                        f"CRITICAL: Exit failed 3 times for trade {trade.trade_id} "
+                        f"({trade.side} {trade.symbol}). MANUAL INTERVENTION REQUIRED. "
+                        f"Engine stopping to prevent further exposure.",
+                    )
+                    self.stop()
+                return  # keep in open_trades — monitor will retry next cycle
 
         exit_price = trade.current_price
         pnl = trade._compute_pnl(exit_price)
