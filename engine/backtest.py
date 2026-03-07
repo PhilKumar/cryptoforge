@@ -198,9 +198,10 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     last_trade_date = None
     peak_pnl_pct = 0.0  # for trailing SL
 
-    for i in range(1, len(df)):
+    for i in range(2, len(df)):
         row = df.iloc[i]
         prev = df.iloc[i - 1]
+        prev_prev = df.iloc[i - 2]
         ts = df.index[i]
         current_date = ts.date() if hasattr(ts, "date") else ts
 
@@ -210,14 +211,16 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
             last_trade_date = current_date
 
         price = float(row["close"])
+        h = float(row.get("high", price))
+        lo = float(row.get("low", price))
 
         if not in_trade:
-            # Check entry
+            # Check entry (evaluate PREV candle to avoid look-ahead, enter at current open)
             if trades_today >= max_tpd:
                 continue
-            if eval_condition_group(row, entry_conditions, prev):
+            if eval_condition_group(prev, entry_conditions, prev_prev):
                 in_trade = True
-                entry_price = price
+                entry_price = float(row["open"])
                 entry_time = ts
                 peak_pnl_pct = 0.0  # reset trailing tracker
                 # Position size = (capital * position_size_pct/100) * leverage
@@ -225,39 +228,54 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
                 entry_size = margin_used * leverage
                 trades_today += 1
         else:
-            # Check exit conditions
+            # Check exit conditions using OHLC worst/best-case
             if side == "LONG":
+                worst_pnl_pct = (lo - entry_price) / entry_price * 100
+                best_pnl_pct = (h - entry_price) / entry_price * 100
                 pnl_pct = (price - entry_price) / entry_price * 100
             else:
+                worst_pnl_pct = (entry_price - h) / entry_price * 100
+                best_pnl_pct = (entry_price - lo) / entry_price * 100
                 pnl_pct = (entry_price - price) / entry_price * 100
 
             # Leveraged P&L
+            worst_lev = worst_pnl_pct * leverage
+            best_lev = best_pnl_pct * leverage
             lev_pnl_pct = pnl_pct * leverage
             trade_pnl = entry_size * (pnl_pct / 100)
 
-            # Track peak for trailing SL
-            if lev_pnl_pct > peak_pnl_pct:
-                peak_pnl_pct = lev_pnl_pct
+            # Track peak for trailing SL (use best case within candle)
+            if best_lev > peak_pnl_pct:
+                peak_pnl_pct = best_lev
 
             exit_reason = None
 
             # Trailing stop-loss (triggers once profit exceeds trail_pct then pulls back)
-            if trail_pct > 0 and peak_pnl_pct >= trail_pct and lev_pnl_pct <= (peak_pnl_pct - trail_pct):
+            if trail_pct > 0 and peak_pnl_pct >= trail_pct and worst_lev <= (peak_pnl_pct - trail_pct):
                 exit_reason = "Trailing SL"
-            # Stop-loss
-            elif sl_pct > 0 and lev_pnl_pct <= -sl_pct:
+            # Stop-loss (worst-case intra-candle)
+            elif sl_pct > 0 and worst_lev <= -sl_pct:
                 exit_reason = "Stop Loss"
-            # Take profit
-            elif tp_pct > 0 and lev_pnl_pct >= tp_pct:
+            # Take profit (best-case intra-candle)
+            elif tp_pct > 0 and best_lev >= tp_pct:
                 exit_reason = "Take Profit"
-            # Liquidation check (simplified)
-            elif lev_pnl_pct <= config.LIQUIDATION_THRESHOLD:
+            # Liquidation check (worst-case intra-candle)
+            elif worst_lev <= config.LIQUIDATION_THRESHOLD:
                 exit_reason = "Liquidation"
-            # Exit conditions met
-            elif eval_condition_group(row, exit_conditions, prev):
+            # Exit conditions met (evaluate prev candle, exit at current open)
+            elif eval_condition_group(prev, exit_conditions, prev_prev):
                 exit_reason = "Signal Exit"
 
             if exit_reason:
+                # For signal exits, use candle open price
+                if exit_reason == "Signal Exit":
+                    exit_price = float(row["open"])
+                    if side == "LONG":
+                        pnl_pct = (exit_price - entry_price) / entry_price * 100
+                    else:
+                        pnl_pct = (entry_price - exit_price) / entry_price * 100
+                    trade_pnl = entry_size * (pnl_pct / 100)
+                    price = exit_price
                 # Calculate fees (entry + exit)
                 entry_fee = entry_size * (fee_pct / 100)
                 exit_fee = entry_size * (1 + pnl_pct / 100) * (fee_pct / 100)
