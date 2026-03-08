@@ -9,6 +9,8 @@ Register with FastAPI in app.py:
 Call AFTER app = FastAPI(...) and BEFORE any route definitions.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import traceback
