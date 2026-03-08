@@ -523,6 +523,13 @@
     color: var(--accent); font-weight: 600; font-size: 11px; text-align: center;
     padding: 3px 16px; border-radius: 10px; letter-spacing: 1px;
   }
+  /* Current Candle optgroup highlight */
+  .condition-row select optgroup[label*="Current Candle"] {
+    color: #38bdf8; font-weight: 700; font-style: normal;
+  }
+  .condition-row select optgroup[label*="Current Candle"] option {
+    color: #38bdf8; font-weight: 600;
+  }
 
   /* ── Trade Table ── */
   .trade-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -2816,12 +2823,13 @@ function renderIndicators() {
 
 // ── Conditions ─────────────────────────────────────────────
 function getIndicatorOptions() {
-  // ── Price Data ──
-  let html = '<optgroup label="── Price Data ──">';
-  html += '<option value="current_close">Current Close</option>';
-  html += '<option value="current_open">Current Open</option>';
-  html += '<option value="current_high">Current High</option>';
-  html += '<option value="current_low">Current Low</option>';
+  // ── Current Candle (live price action) ──
+  let html = '<optgroup label="🕯️ Current Candle">';
+  html += '<option value="current_open">Current Candle — Open</option>';
+  html += '<option value="current_high">Current Candle — High</option>';
+  html += '<option value="current_low">Current Candle — Low</option>';
+  html += '<option value="current_close">Current Candle — Close</option>';
+  html += '<option value="current_volume">Current Candle — Volume</option>';
   html += '</optgroup>';
 
   // ── Custom Number (always visible near top) ──
