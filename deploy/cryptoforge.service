@@ -4,7 +4,8 @@
 #  Usage:      systemctl start cryptoforge@9000
 #              systemctl start cryptoforge@9001
 #  The %i expands to the port number after the @ sign.
-#  APP_PORT env var overrides config.py's default.
+#  Port is passed directly via --port %i; APP_PORT in .env is ignored for
+#  the bind address to avoid load_dotenv() overriding the systemd value.
 # ═══════════════════════════════════════════════════════════════
 [Unit]
 Description=CryptoForge Crypto Trading Platform (port %i)
@@ -14,8 +15,7 @@ After=network.target
 User=ec2-user
 WorkingDirectory=/home/ec2-user/cryptoforge
 EnvironmentFile=/home/ec2-user/cryptoforge/.env
-Environment="APP_PORT=%i"
-ExecStart=/home/ec2-user/cryptoforge/venv/bin/python3 app.py
+ExecStart=/home/ec2-user/cryptoforge/venv/bin/uvicorn app:app --host 127.0.0.1 --port %i --log-level info
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
