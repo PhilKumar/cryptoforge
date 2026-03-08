@@ -37,22 +37,34 @@ def _parse_time(val):
 
 
 # ── Condition Evaluator ────────────────────────────────────────────
+_PRICE_MAP = {
+    "current_open": "open",
+    "current_high": "high",
+    "current_low": "low",
+    "current_close": "close",
+    "current_volume": "volume",
+}
+
+
+def _resolve_value(row, key, cond=None):
+    """Map a condition field name to the actual DataFrame column value."""
+    if key in _PRICE_MAP:
+        return row.get(_PRICE_MAP[key])
+    if key == "number":
+        return float(cond.get("right_number_value", 0)) if cond else 0.0
+    if key in ("true", "false"):
+        return key == "true"
+    return row.get(key)
+
+
 def eval_condition(row, cond, prev_row=None):
     left = cond["left"]
     op = cond["operator"]
 
     # Standard indicator conditions
-    lv = row.get("close") if left == "current_close" else row.get(left)
+    lv = _resolve_value(row, left)
     r = cond["right"]
-
-    if r == "current_close":
-        rv = row.get("close")
-    elif r == "number":
-        rv = float(cond.get("right_number_value", 0))
-    elif r in ("true", "false"):
-        rv = r == "true"
-    else:
-        rv = row.get(r)
+    rv = _resolve_value(row, r, cond)
 
     try:
         if lv is None or rv is None:
@@ -80,12 +92,8 @@ def eval_condition(row, cond, prev_row=None):
     if op == "crosses_above":
         if prev_row is None:
             return lv_f > rv_f
-        plv = prev_row.get("close") if left == "current_close" else prev_row.get(left)
-        prv = (
-            prev_row.get("close")
-            if r == "current_close"
-            else (float(cond.get("right_number_value", 0)) if r == "number" else prev_row.get(r))
-        )
+        plv = _resolve_value(prev_row, left)
+        prv = _resolve_value(prev_row, r, cond)
         try:
             plv_f = float(plv)
             prv_f = float(prv)
@@ -96,12 +104,8 @@ def eval_condition(row, cond, prev_row=None):
     elif op == "crosses_below":
         if prev_row is None:
             return lv_f < rv_f
-        plv = prev_row.get("close") if left == "current_close" else prev_row.get(left)
-        prv = (
-            prev_row.get("close")
-            if r == "current_close"
-            else (float(cond.get("right_number_value", 0)) if r == "number" else prev_row.get(r))
-        )
+        plv = _resolve_value(prev_row, left)
+        prv = _resolve_value(prev_row, r, cond)
         try:
             plv_f = float(plv)
             prv_f = float(prv)
