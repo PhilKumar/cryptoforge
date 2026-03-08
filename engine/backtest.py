@@ -142,8 +142,11 @@ def eval_condition_group(row, conditions, prev_row=None):
     return result
 
 
-DEFAULT_ENTRY_CONDITIONS = [{"left": "current_close", "operator": "is_above", "right": "EMA_20", "connector": "AND"}]
-DEFAULT_EXIT_CONDITIONS = [{"left": "current_close", "operator": "is_below", "right": "EMA_20", "connector": "AND"}]
+# Default conditions reference the 1m EMA column (interval suffix added by compute_dynamic_indicators).
+# app.py injects "EMA_20_1m" into the indicators list whenever these defaults are used,
+# so the column is guaranteed to exist in the dataframe.
+DEFAULT_ENTRY_CONDITIONS = [{"left": "current_close", "operator": "is_above", "right": "EMA_20_1m", "connector": "AND"}]
+DEFAULT_EXIT_CONDITIONS = [{"left": "current_close", "operator": "is_below", "right": "EMA_20_1m", "connector": "AND"}]
 
 
 # ── Trade Helpers ──────────────────────────────────────────────────

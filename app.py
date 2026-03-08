@@ -1078,11 +1078,28 @@ async def paper_start(payload: StrategyPayload):
     if run_id in paper_engines and paper_engines[run_id].running:
         return {"status": "already_running", "run_id": run_id}
 
+    # When the caller sends no conditions, fall back to EMA-crossover defaults.
+    # Ensure the required EMA indicator is in the indicators list so compute_dynamic_indicators
+    # actually produces the column — without this the column is missing and the condition
+    # always evaluates False, leaving the engine stuck in "Scanning" forever.
+    effective_entry = payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS
+    effective_exit = payload.exit_conditions or DEFAULT_EXIT_CONDITIONS
+    if not payload.entry_conditions:
+        interval = payload.candle_interval or "1m"
+        ema_col = f"EMA_20_{interval}"
+        # Patch both the condition references and the indicators list to match
+        effective_entry = [{"left": "current_close", "operator": "is_above", "right": ema_col, "connector": "AND"}]
+        effective_exit = [{"left": "current_close", "operator": "is_below", "right": ema_col, "connector": "AND"}]
+        inds = list(strategy_dict.get("indicators") or [])
+        if ema_col not in inds:
+            inds.append(ema_col)
+        strategy_dict["indicators"] = inds
+
     engine = PaperTradingEngine(delta, run_id=run_id)
     engine.configure(
         strategy=strategy_dict,
-        entry_conditions=payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS,
-        exit_conditions=payload.exit_conditions or DEFAULT_EXIT_CONDITIONS,
+        entry_conditions=effective_entry,
+        exit_conditions=effective_exit,
     )
     engine.running = True
     engine.event_log = []

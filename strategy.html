@@ -1819,6 +1819,7 @@
         <button class="btn btn-sm runs-filter-btn" data-filter="backtest" onclick="filterRuns('backtest', this)" style="font-size: 11px; padding: 5px 12px; background: rgba(59,130,246,0.15); color: rgb(96,165,250); border: 1px solid rgba(59,130,246,0.3);">Backtest</button>
         <button class="btn btn-sm runs-filter-btn" data-filter="paper" onclick="filterRuns('paper', this)" style="font-size: 11px; padding: 5px 12px; background: rgba(245,158,11,0.15); color: rgb(251,191,36); border: 1px solid rgba(245,158,11,0.3);">Paper</button>
         <button class="btn btn-sm runs-filter-btn" data-filter="live" onclick="filterRuns('live', this)" style="font-size: 11px; padding: 5px 12px; background: rgba(139,92,246,0.15); color: rgb(167,139,250); border: 1px solid rgba(139,92,246,0.3);">Live</button>
+        <button class="btn btn-sm runs-filter-btn" data-filter="scalp" onclick="filterRuns('scalp', this)" style="font-size: 11px; padding: 5px 12px; background: rgba(6,182,212,0.15); color: rgb(34,211,238); border: 1px solid rgba(6,182,212,0.3);">Scalp</button>
       </div>
       <button class="btn btn-outline btn-sm" onclick="toggleCompare()">⚖️ Compare</button>
     </div>
@@ -2279,7 +2280,9 @@ function cfModal(title, msg, icon, buttons) {
 
     const msgEl = document.createElement('div');
     msgEl.className = 'cf-modal-msg';
-    msgEl.textContent = msg;                      // safe — server error strings can't XSS
+    // Use innerHTML so callers can pass rich HTML (e.g. viewEngineDetails).
+    // Plain-text callers (cfAlert, cfConfirm) already escape their strings via template literals.
+    msgEl.innerHTML = msg;
 
     const actionsEl = document.createElement('div');
     actionsEl.className = 'cf-modal-actions';
@@ -3212,6 +3215,7 @@ let _currentRunFilter = 'all';
 
 function _getModeBadge(mode) {
   const m = (mode || 'backtest').toLowerCase();
+  if (m === 'scalp') return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:rgba(6,182,212,0.15);color:rgb(34,211,238);border:1px solid rgba(6,182,212,0.3);">SCALP</span>';
   if (m === 'paper') return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:rgba(245,158,11,0.15);color:rgb(251,191,36);border:1px solid rgba(245,158,11,0.3);">PAPER</span>';
   if (m === 'live' || m === 'auto' || m === 'real') return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:rgba(139,92,246,0.15);color:rgb(167,139,250);border:1px solid rgba(139,92,246,0.3);">LIVE</span>';
   return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:rgba(59,130,246,0.15);color:rgb(96,165,250);border:1px solid rgba(59,130,246,0.3);">BACKTEST</span>';
@@ -3219,6 +3223,7 @@ function _getModeBadge(mode) {
 
 function _normalizeMode(mode) {
   const m = (mode || 'backtest').toLowerCase();
+  if (m === 'scalp') return 'scalp';
   if (m === 'live' || m === 'auto' || m === 'real') return 'live';
   if (m === 'paper') return 'paper';
   return 'backtest';
@@ -3256,6 +3261,7 @@ function filterRuns(mode, btn) {
     else if (f === 'backtest') { b.style.background = 'rgba(59,130,246,0.15)'; b.style.color = 'rgb(96,165,250)'; }
     else if (f === 'paper') { b.style.background = 'rgba(245,158,11,0.15)'; b.style.color = 'rgb(251,191,36)'; }
     else if (f === 'live') { b.style.background = 'rgba(139,92,246,0.15)'; b.style.color = 'rgb(167,139,250)'; }
+    else if (f === 'scalp') { b.style.background = 'rgba(6,182,212,0.15)'; b.style.color = 'rgb(34,211,238)'; }
   });
   if (btn) {
     btn.classList.add('active');
@@ -3263,6 +3269,7 @@ function filterRuns(mode, btn) {
     else if (mode === 'backtest') { btn.style.background = 'rgb(59,130,246)'; btn.style.color = '#fff'; }
     else if (mode === 'paper') { btn.style.background = 'rgb(245,158,11)'; btn.style.color = '#000'; }
     else if (mode === 'live') { btn.style.background = 'rgb(139,92,246)'; btn.style.color = '#fff'; }
+    else if (mode === 'scalp') { btn.style.background = 'rgb(6,182,212)'; btn.style.color = '#000'; }
   }
   _renderFilteredRuns();
 }
@@ -3432,15 +3439,16 @@ async function viewRun(rid) {
 function fmtDt(dtStr) {
   if (!dtStr) return '—';
   try {
+    const s = String(dtStr);
+    // Fast path: ISO / "YYYY-MM-DD HH:MM:SS" strings — extract HH:MM:SS directly
+    const m = s.match(/(\d{2}:\d{2}:\d{2})/);
+    if (m) return m[1];
     const d = new Date(dtStr);
-    if (isNaN(d)) return dtStr.slice(0, 19).replace('T', ' ');
-    const yr = d.getFullYear();
-    const mo = String(d.getMonth() + 1).padStart(2, '0');
-    const dy = String(d.getDate()).padStart(2, '0');
+    if (isNaN(d)) return s.slice(0, 19).replace('T', ' ');
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
     const ss = String(d.getSeconds()).padStart(2, '0');
-    return yr + '-' + mo + '-' + dy + ' ' + hh + ':' + mm + ':' + ss;
+    return hh + ':' + mm + ':' + ss;
   } catch(e) { return dtStr; }
 }
 
@@ -4349,7 +4357,7 @@ async function loadPortfolioData() {
           var side = (o.side || '').toUpperCase();
           var fillPrice = parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
           var ts = o.created_at || o.timestamp || '';
-          var timeStr = ts ? new Date(ts).toLocaleString() : '--';
+          var timeStr = ts ? fmtDt(ts) : '--';
           var symbol = o.product_symbol || o.symbol || ('ID:' + (o.product_id || ''));
           return '<tr>' +
             '<td style="white-space:nowrap;font-size:12px;">' + timeStr + '</td>' +
