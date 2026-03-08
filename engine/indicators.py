@@ -181,7 +181,6 @@ def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> p
 
     result = df.copy()
     result["supertrend"] = st
-    result["supertrend_dir"] = st_dir
     return result
 
 
@@ -340,7 +339,6 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
                 mult = float(parts[2])
                 st_df = supertrend(df, period=period, multiplier=mult)
                 df[ind_string] = st_df["supertrend"]
-                df[f"{ind_string}_dir"] = st_df["supertrend_dir"]
 
             elif name == "MACD":
                 fast = int(parts[1]) if len(parts) > 1 else 12
