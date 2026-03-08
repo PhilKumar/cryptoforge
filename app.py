@@ -2014,6 +2014,23 @@ async def scalp_exit(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.put("/api/scalp/trades/{trade_id}/targets")
+async def update_scalp_targets(trade_id: int, request: Request):
+    """Modify TP/SL for an active scalp trade."""
+    body = await request.json()
+    eng = _get_scalp_engine()
+    kwargs = {}
+    for key in ("target_price", "sl_price", "target_usd", "sl_usd"):
+        if key in body and body[key] is not None:
+            kwargs[key] = float(body[key])
+    if not kwargs:
+        raise HTTPException(status_code=400, detail="No target fields provided")
+    result = await eng.update_trade_targets(trade_id, **kwargs)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
 # ── WebSocket ─────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):

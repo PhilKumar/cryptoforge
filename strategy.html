@@ -2322,10 +2322,10 @@
           <table class="trade-table" id="cf-scalp-active-table">
             <thead><tr>
               <th>Symbol</th><th>Side</th><th>Qty (USDT)</th><th>Entry</th>
-              <th>Mark</th><th>Unreal. P&L</th><th>Action</th>
+              <th>Mark</th><th>Unreal. P&L</th><th>TP $</th><th>SL $</th><th>Action</th>
             </tr></thead>
             <tbody id="cf-scalp-active-body">
-              <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
+              <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
             </tbody>
           </table>
         </div>
@@ -5499,7 +5499,7 @@ function cfRenderActivePositions(open) {
 
   if (!open.length) {
     _cfOpenTradeIds = [];
-    body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>';
     return;
   }
 
@@ -5523,6 +5523,8 @@ function cfRenderActivePositions(open) {
         : isLoss
           ? 'background:rgba(248,113,113,0.05);border-left:3px solid rgba(248,113,113,0.5);'
           : 'border-left:3px solid transparent;';
+      const tpVal = t.target_usd || 0;
+      const slVal = t.sl_usd || 0;
       return `<tr data-tid="${tid}" style="${rowBg}">
         <td style="font-weight:600;">${t.symbol || '—'}</td>
         <td>${sideTag}</td>
@@ -5530,7 +5532,12 @@ function cfRenderActivePositions(open) {
         <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price || 0).toFixed(4)}</td>
         <td data-field="mark" style="font-family:'JetBrains Mono',monospace;">$${(t.mark_price || t.current_price || 0).toFixed(4)}</td>
         <td data-field="pnl" style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</td>
-        <td><button class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="cfExitScalpTrade('${tid}')">Exit</button></td>
+        <td><input type="number" id="cf-tp-${tid}" value="${tpVal}" step="1" min="0" style="width:62px;font-size:11px;padding:3px 5px;font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:4px;color:var(--green);text-align:right;"></td>
+        <td><input type="number" id="cf-sl-${tid}" value="${slVal}" step="1" min="0" style="width:62px;font-size:11px;padding:3px 5px;font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:4px;color:var(--red);text-align:right;"></td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-outline btn-sm" id="cf-set-btn-${tid}" style="font-size:10px;padding:4px 7px;margin-right:3px;" onclick="cfModifyScalpTrade('${tid}')">Set</button>
+          <button class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="cfExitScalpTrade('${tid}')">Exit</button>
+        </td>
       </tr>`;
     }).join('');
   } else {
@@ -5611,6 +5618,46 @@ async function cfExitScalpTrade(tradeId) {
       cfToast(d.message || 'Exit failed', 'danger');
     }
   } catch(e) { cfToast('Network error exiting trade', 'danger'); }
+}
+
+async function cfModifyScalpTrade(tradeId) {
+  const btn = document.getElementById('cf-set-btn-' + tradeId);
+  const tpInput = document.getElementById('cf-tp-' + tradeId);
+  const slInput = document.getElementById('cf-sl-' + tradeId);
+  if (!tpInput || !slInput) return;
+
+  const newTP = parseFloat(tpInput.value) || 0;
+  const newSL = parseFloat(slInput.value) || 0;
+
+  if (newTP <= 0 && newSL <= 0) {
+    cfToast('Set at least one of TP or SL', 'danger');
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+
+  try {
+    const payload = {};
+    if (newTP > 0) payload.target_usd = newTP;
+    if (newSL > 0) payload.sl_usd = newSL;
+
+    const res = await fetch('/api/scalp/trades/' + tradeId + '/targets', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await res.json();
+    if (d.status === 'ok') {
+      cfToast(`Trade #${tradeId} updated — TP: $${newTP || '—'}  SL: $${newSL || '—'}`, 'success');
+      setTimeout(cfLoadScalpStatus, 300);
+    } else {
+      cfToast(d.message || d.detail || 'Update failed', 'danger');
+    }
+  } catch(e) {
+    cfToast('Error: ' + e.message, 'danger');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Set'; }
+  }
 }
 
 function cfUpdateScalpSymbol() { /* placeholder for future mark-price updates */ }
