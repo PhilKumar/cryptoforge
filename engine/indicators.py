@@ -156,9 +156,7 @@ def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> p
     upper = upper_raw.copy()
     lower = lower_raw.copy()
     st = np.zeros(n)
-    st_dir = np.zeros(n, dtype=int)
     st[0] = lower[0]
-    st_dir[0] = 1
 
     for i in range(1, n):
         lower[i] = lower_raw[i] if (lower_raw[i] > lower[i - 1] or close[i - 1] < lower[i - 1]) else lower[i - 1]
@@ -167,17 +165,13 @@ def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> p
         if st[i - 1] == upper[i - 1]:
             if close[i] > upper[i]:
                 st[i] = lower[i]
-                st_dir[i] = 1
             else:
                 st[i] = upper[i]
-                st_dir[i] = -1
         else:
             if close[i] < lower[i]:
                 st[i] = upper[i]
-                st_dir[i] = -1
             else:
                 st[i] = lower[i]
-                st_dir[i] = 1
 
     result = df.copy()
     result["supertrend"] = st
