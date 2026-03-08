@@ -1855,81 +1855,7 @@
       <div style="color:var(--muted);text-align:center;padding:20px;">No saved strategies yet.</div>
     </div>
   </div>
-  <div id="result-detail" style="display: none;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
-      <h3 id="rd-title" style="flex:1;">--</h3>
-      <div style="display: flex; gap: 8px;">
-        <button class="btn btn-outline btn-sm" onclick="exportCSV()">📥 Export CSV</button>
-        <button class="btn btn-outline btn-sm" onclick="closeDetail()">← Back</button>
-      </div>
-    </div>
-    <div class="stats-grid" id="rd-stats"></div>
-
-    <!-- Full-Panel Equity Chart -->
-    <div class="card" id="rd-equity" style="min-height: 320px; padding: 20px;"></div>
-
-    <!-- Trade Log with sortable headers + pagination -->
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3>Trade Log</h3>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:12px;color:var(--muted);">Per page:</span>
-          <select class="page-size-select" id="trades-per-page" onchange="renderTradesPage(1)">
-            <option value="10" selected>10</option>
-            <option value="20">20</option>
-            <option value="30">30</option>
-            <option value="50">50</option>
-          </select>
-        </div>
-      </div>
-      <div style="overflow-x: auto;">
-        <table class="trade-table" id="rd-trades">
-          <thead><tr>
-            <th class="sortable-th" data-col="id" onclick="sortTrades('id')"># <span class="sort-icon" id="sort-id">▲</span></th>
-            <th class="sortable-th" data-col="entry_time" onclick="sortTrades('entry_time')">Entry Time <span class="sort-icon" id="sort-entry_time">▲</span></th>
-            <th class="sortable-th" data-col="exit_time" onclick="sortTrades('exit_time')">Exit Time <span class="sort-icon" id="sort-exit_time">▲</span></th>
-            <th class="sortable-th" data-col="entry_price" onclick="sortTrades('entry_price')">Entry ₹ <span class="sort-icon" id="sort-entry_price">▲</span></th>
-            <th class="sortable-th" data-col="exit_price" onclick="sortTrades('exit_price')">Exit ₹ <span class="sort-icon" id="sort-exit_price">▲</span></th>
-            <th class="sortable-th" data-col="side" onclick="sortTrades('side')">Side <span class="sort-icon" id="sort-side">▲</span></th>
-            <th class="sortable-th" data-col="leverage" onclick="sortTrades('leverage')">Lev <span class="sort-icon" id="sort-leverage">▲</span></th>
-            <th class="sortable-th" data-col="pnl" onclick="sortTrades('pnl')">P&L <span class="sort-icon" id="sort-pnl">▲</span></th>
-            <th class="sortable-th" data-col="exit_reason" onclick="sortTrades('exit_reason')">Reason <span class="sort-icon" id="sort-exit_reason">▲</span></th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="pagination-bar" id="trades-pagination"></div>
-    </div>
-
-    <!-- Monthly Breakdown -->
-    <div class="card">
-      <h3 style="margin-bottom: 12px;">Monthly Breakdown</h3>
-      <div style="overflow-x: auto;">
-        <table class="trade-table" id="rd-monthly">
-          <thead><tr><th>Month</th><th>Trades</th><th>Wins</th><th>Losses</th><th>P&L</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Yearly Breakdown -->
-    <div class="card">
-      <h3 style="margin-bottom: 12px;">📅 Yearly Breakdown</h3>
-      <div id="rd-yearly" style="overflow-x:auto;"></div>
-    </div>
-
-    <!-- Day of Week Analysis -->
-    <div class="card">
-      <h3 style="margin-bottom: 14px;">📅 Day of Week Analysis</h3>
-      <div class="dow-grid" id="rd-dow"></div>
-    </div>
-
-    <!-- P&L Heatmap -->
-    <div class="card">
-      <h3 style="margin-bottom: 14px;">🗓️ Monthly P&L Heatmap</h3>
-      <div id="rd-heatmap" style="overflow-x:auto;"></div>
-    </div>
-  </div>
+  <!-- Run detail modal is rendered as a fixed overlay; see #run-detail-modal below -->
 </div>
 
 
@@ -3316,7 +3242,7 @@ async function loadRuns() {
     const r = await fetch('/api/runs', { credentials: 'same-origin' });
     const runs = await r.json();
     _allRunsCache = runs.slice().reverse();
-    document.getElementById('result-detail').style.display = 'none';
+    closeRunModal();
 
     // Apply current filter
     _renderFilteredRuns();
@@ -3332,18 +3258,19 @@ async function viewRun(rid) {
     const r = await fetch(`/api/runs/${rid}`, { credentials: 'same-origin' });
     const run = await r.json();
 
-    document.getElementById('results-list').style.display = 'none';
-    document.getElementById('result-detail').style.display = 'block';
-    document.getElementById('rd-title').textContent = `${run.run_name || 'Run'} — ${run.symbol || ''} ${run.leverage || 1}x`;
+    const mode = (run.mode || 'backtest').toLowerCase();
+    const isScalp = mode === 'scalp';
+    const showAnalysis = mode === 'backtest' || mode === 'live' || mode === 'auto';
 
-    // Ensure results page is visible (without re-triggering loadRuns)
-    document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active-page'));
-    document.getElementById('results-page').classList.add('active-page');
-    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-    document.getElementById('nav-results').classList.add('active');
+    document.getElementById('rd-title').textContent =
+      `${run.run_name || 'Run'} — ${run.symbol || ''} ${run.leverage || 1}x`;
 
-    // ── Scalp trade: show simple card, skip backtest analytics ──
-    if ((run.mode || '').toLowerCase() === 'scalp') {
+    // Show/hide equity curve and analytics sections
+    document.getElementById('rd-equity-wrap').style.display = showAnalysis ? 'block' : 'none';
+    document.getElementById('rd-analysis-extra').style.display = showAnalysis ? 'block' : 'none';
+
+    // ── Stats area ──────────────────────────────────────────
+    if (isScalp) {
       const t = (run.trades || [])[0] || {};
       const pnl = run.total_pnl || t.pnl || 0;
       const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
@@ -3353,7 +3280,7 @@ async function viewRun(rid) {
           <div style="font-weight:600;font-size:14px;">${val}</div>
         </div>`;
       document.getElementById('rd-stats').innerHTML =
-        `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 24px;font-size:13px;margin-bottom:4px;">
+        `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 24px;font-size:13px;margin-bottom:16px;">
           ${row('Symbol', t.symbol || run.symbol || '—')}
           ${row('Side', t.side || run.trade_side || '—')}
           ${row('Leverage', (t.leverage || run.leverage || 1) + '×')}
@@ -3371,108 +3298,94 @@ async function viewRun(rid) {
             <div style="font-weight:700;font-size:22px;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${fmtINR(pnl)}</div>
           </div>
         </div>`;
-      document.getElementById('rd-equity').innerHTML =
-        '<h3 style="margin-bottom:8px;">Equity Curve</h3>'
-        + '<div style="text-align:center;padding:40px 0;color:var(--muted);">Not applicable for individual scalp trades</div>';
-      _currentTrades = run.trades || [];
-      _tradesSortCol = 'id';
-      _tradesSortAsc = true;
-      renderTradesPage(1);
-      document.querySelector('#rd-monthly tbody').innerHTML = '';
-      document.getElementById('rd-dow').innerHTML = '';
-      document.getElementById('rd-yearly').innerHTML = '';
-      return;
+    } else {
+      // Paper / Backtest / Live — aggregate stats grid
+      const s = run.stats || {};
+      document.getElementById('rd-stats').innerHTML = [
+        ['Total Trades', s.total_trades || 0],
+        ['Win Rate', (s.win_rate || 0) + '%'],
+        ['Total P&L', fmtINR(s.total_pnl || 0), s.total_pnl >= 0],
+        ['Profit Factor', (parseFloat(s.profit_factor) || 0).toFixed(2)],
+        ['Max Drawdown', (s.max_drawdown || 0).toFixed(1) + '%'],
+        ['Sharpe Ratio', (parseFloat(s.sharpe_ratio) || 0).toFixed(2)],
+        ['Calmar Ratio', (parseFloat(s.calmar_ratio) || 0).toFixed(2)],
+        ['Expectancy', fmtINR(parseFloat(s.expectancy) || 0)],
+        ['Avg Duration', s.avg_trade_duration || '—'],
+        ['Return', (s.total_return_pct || 0).toFixed(1) + '%'],
+        ['Avg Win', fmtINR(s.avg_win || 0)],
+        ['Avg Loss', fmtINR(s.avg_loss || 0)],
+        ['Fees Paid', fmtINR(s.total_fees || 0)],
+        ['Final Capital', fmtINR(s.final_capital || s.initial_capital || 0)],
+      ].map(([label, val, isGreen]) => `
+        <div class="stat-box">
+          <div class="stat-label">${label}</div>
+          <div class="stat-value" ${isGreen !== undefined ? `style="color:${isGreen?'var(--green)':'var(--red)'}"` : ''}>${val}</div>
+        </div>
+      `).join('');
     }
 
-    const s = run.stats || {};
-    document.getElementById('rd-stats').innerHTML = [
-      ['Total Trades', s.total_trades || 0],
-      ['Win Rate', (s.win_rate || 0) + '%'],
-      ['Total P&L', fmtINR(s.total_pnl || 0), s.total_pnl >= 0],
-      ['Profit Factor', (parseFloat(s.profit_factor) || 0).toFixed(2)],
-      ['Max Drawdown', (s.max_drawdown || 0).toFixed(1) + '%'],
-      ['Sharpe Ratio', (parseFloat(s.sharpe_ratio) || 0).toFixed(2)],
-      ['Calmar Ratio', (parseFloat(s.calmar_ratio) || 0).toFixed(2)],
-      ['Expectancy', fmtINR(parseFloat(s.expectancy) || 0)],
-      ['Avg Duration', s.avg_trade_duration || '—'],
-      ['Return', (s.total_return_pct || 0).toFixed(1) + '%'],
-      ['Avg Win', fmtINR(s.avg_win || 0)],
-      ['Avg Loss', fmtINR(s.avg_loss || 0)],
-      ['Fees Paid', fmtINR(s.total_fees || 0)],
-      ['Final Capital', fmtINR(s.final_capital || s.initial_capital || 0)],
-    ].map(([label, val, isGreen]) => `
-      <div class="stat-box">
-        <div class="stat-label">${label}</div>
-        <div class="stat-value" ${isGreen !== undefined ? `style="color:${isGreen?'var(--green)':'var(--red)'}"` : ''}>${val}</div>
-      </div>
-    `).join('');
-
-    // ── Full-Panel Equity Chart with X/Y Axes ──
-    const eq = run.equity || [];
-    const eqDiv = document.getElementById('rd-equity');
-    if (eq.length > 1) {
-      const values = eq.map(e => e.value);
-      const minV = Math.min(...values);
-      const maxV = Math.max(...values);
-      const range = maxV - minV || 1;
-      const padL = 70, padR = 10, padT = 16, padB = 10;
-      const W = 1000, H = 280;
-      const cW = W - padL - padR, cH = H - padT - padB;
-      const pts = values.map((v, i) => `${padL + (i / (values.length - 1)) * cW},${padT + cH - ((v - minV) / range) * cH}`).join(' ');
-      const fillPts = `${padL},${padT + cH} ${pts} ${padL + cW},${padT + cH}`;
-      const eqColor = values[values.length - 1] >= values[0] ? '#22c55e' : '#ef4444';
-      // Get theme-aware muted color from CSS custom property
-      const computedMuted = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || 'rgba(255,255,255,0.4)';
-      const labelFill = computedMuted;
-
-      // Y-axis price labels (5 ticks)
-      let yLabels = '';
-      for (let i = 0; i <= 4; i++) {
-        const v = minV + (range * i / 4);
-        const y = padT + cH - (cH * i / 4);
-        yLabels += '<text x="' + (padL - 8) + '" y="' + (y + 4) + '" text-anchor="end" fill="' + labelFill + '" font-size="11" font-family="JetBrains Mono">' + fmtINR(v, 0) + '</text>';
-        yLabels += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="rgba(128,128,128,0.08)"/>';
+    // ── Equity chart (backtest/live only) ───────────────────
+    if (showAnalysis) {
+      const eq = run.equity || [];
+      const eqDiv = document.getElementById('rd-equity');
+      if (eq.length > 1) {
+        const values = eq.map(e => e.value);
+        const minV = Math.min(...values);
+        const maxV = Math.max(...values);
+        const range = maxV - minV || 1;
+        const padL = 70, padR = 10, padT = 16, padB = 10;
+        const W = 1000, H = 280;
+        const cW = W - padL - padR, cH = H - padT - padB;
+        const pts = values.map((v, i) => `${padL + (i / (values.length - 1)) * cW},${padT + cH - ((v - minV) / range) * cH}`).join(' ');
+        const fillPts = `${padL},${padT + cH} ${pts} ${padL + cW},${padT + cH}`;
+        const eqColor = values[values.length - 1] >= values[0] ? '#22c55e' : '#ef4444';
+        const labelFill = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || 'rgba(255,255,255,0.4)';
+        let yLabels = '';
+        for (let i = 0; i <= 4; i++) {
+          const v = minV + (range * i / 4);
+          const y = padT + cH - (cH * i / 4);
+          yLabels += '<text x="' + (padL - 8) + '" y="' + (y + 4) + '" text-anchor="end" fill="' + labelFill + '" font-size="11" font-family="JetBrains Mono">' + fmtINR(v, 0) + '</text>';
+          yLabels += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="rgba(128,128,128,0.08)"/>';
+        }
+        eqDiv.innerHTML = '<h3 style="margin-bottom:8px;">Equity Curve</h3>'
+          + '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:260px;display:block;">'
+          + '<defs><linearGradient id="eqg" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0%" stop-color="' + eqColor + '" stop-opacity="0.18"/>'
+          + '<stop offset="100%" stop-color="' + eqColor + '" stop-opacity="0"/>'
+          + '</linearGradient></defs>'
+          + yLabels
+          + '<polygon points="' + fillPts + '" fill="url(#eqg)"/>'
+          + '<polyline points="' + pts + '" fill="none" stroke="' + eqColor + '" stroke-width="2.5" stroke-linejoin="round"/>'
+          + '</svg>';
+      } else {
+        eqDiv.innerHTML = '<h3 style="margin-bottom:8px;">Equity Curve</h3>'
+          + '<div style="text-align:center;padding:60px 0;color:var(--muted);">Not enough data for equity chart</div>';
       }
 
-      eqDiv.innerHTML = '<h3 style="margin-bottom:8px;">Equity Curve</h3>'
-        + '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:260px;display:block;">'
-        + '<defs><linearGradient id="eqg" x1="0" y1="0" x2="0" y2="1">'
-        + '<stop offset="0%" stop-color="' + eqColor + '" stop-opacity="0.18"/>'
-        + '<stop offset="100%" stop-color="' + eqColor + '" stop-opacity="0"/>'
-        + '</linearGradient></defs>'
-        + yLabels
-        + '<polygon points="' + fillPts + '" fill="url(#eqg)"/>'
-        + '<polyline points="' + pts + '" fill="none" stroke="' + eqColor + '" stroke-width="2.5" stroke-linejoin="round"/>'
-        + '</svg>';
-    } else {
-      eqDiv.innerHTML = '<h3 style="margin-bottom:8px;">Equity Curve</h3>'
-        + '<div style="text-align:center;padding:60px 0;color:var(--muted);">Not enough data for equity chart</div>';
+      // Monthly breakdown
+      const monthly = run.monthly || [];
+      document.querySelector('#rd-monthly tbody').innerHTML = monthly.map(m => `
+        <tr>
+          <td>${m.month}</td><td>${m.trades}</td><td>${m.wins||0}</td><td>${m.losses||0}</td>
+          <td style="color:${m.pnl>=0?'var(--green)':'var(--red)'}">${fmtINR(m.pnl||0)}</td>
+        </tr>
+      `).join('');
+      renderDOW(run.day_of_week || []);
+      renderYearlyBreakdown(run.yearly || []);
+      renderHeatmap(monthly);
     }
 
-    // ── Trade Log with sort & pagination ──
+    // ── Trade log (always) ──────────────────────────────────
     _currentTrades = (run.trades || []).map(t => ({...t}));
     _tradesSortCol = 'id';
     _tradesSortAsc = true;
     renderTradesPage(1);
 
-    // Monthly
-    const mbody = document.querySelector('#rd-monthly tbody');
-    const monthly = run.monthly || [];
-    mbody.innerHTML = monthly.map(m => `
-      <tr>
-        <td>${m.month}</td><td>${m.trades}</td><td>${m.wins||0}</td><td>${m.losses||0}</td>
-        <td style="color:${m.pnl>=0?'var(--green)':'var(--red)'}">${fmtINR(m.pnl||0)}</td>
-      </tr>
-    `).join('');
-
-    // Day of Week Analysis
-    renderDOW(run.day_of_week || []);
-
-    // Yearly Breakdown
-    renderYearlyBreakdown(run.yearly || []);
-
-    // P&L Heatmap
-    renderHeatmap(monthly);
+    // ── Open modal ──────────────────────────────────────────
+    const modal = document.getElementById('run-detail-modal');
+    modal.style.display = 'flex';
+    modal.querySelector('[style*="overflow-y:auto"]').scrollTop = 0;
+    document.body.style.overflow = 'hidden';
 
   } catch(e) { console.error(e); cfAlert('Failed to load run details.', 'Error', '❌'); }
 }
@@ -3567,10 +3480,11 @@ function renderTradesPage(page) {
   pag.innerHTML = '<div class="pagination-info">' + info + '</div><div class="pagination-controls">' + btns + '</div>';
 }
 
-function closeDetail() {
-  document.getElementById('result-detail').style.display = 'none';
-  document.getElementById('results-list').style.display = 'block';
+function closeRunModal() {
+  document.getElementById('run-detail-modal').style.display = 'none';
+  document.body.style.overflow = '';
 }
+function closeDetail() { closeRunModal(); }
 
 async function deleteRun(rid) {
   var ok = await cfConfirm('This will permanently delete this run. This cannot be undone.', 'Delete Run?', '🗑️');
@@ -5370,6 +5284,114 @@ async function cfExitScalpTrade(tradeId) {
 }
 
 function cfUpdateScalpSymbol() { /* placeholder for future mark-price updates */ }
+
+// Close run-detail modal on ESC key
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    const m = document.getElementById('run-detail-modal');
+    if (m && m.style.display === 'flex') closeRunModal();
+  }
+});
 </script>
+
+<!-- ═══════════════════════════════════════════════════════
+     RUN DETAIL MODAL (fixed overlay, opened by viewRun())
+     ═══════════════════════════════════════════════════════ -->
+<div id="run-detail-modal"
+     style="display:none; position:fixed; inset:0; z-index:9000;
+            background:rgba(0,0,0,0.75); backdrop-filter:blur(4px);
+            display:none; align-items:center; justify-content:center; padding:16px;"
+     onclick="if(event.target===this)closeRunModal()">
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:12px;
+              width:95vw; max-width:1000px; max-height:90vh;
+              display:flex; flex-direction:column; overflow:hidden;">
+
+    <!-- Sticky header -->
+    <div style="display:flex; justify-content:space-between; align-items:center;
+                padding:16px 24px; border-bottom:1px solid var(--border);
+                flex-shrink:0; background:var(--card); border-radius:12px 12px 0 0;">
+      <h3 id="rd-title" style="margin:0; font-size:15px; font-weight:700; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">--</h3>
+      <div style="display:flex; gap:8px; align-items:center; flex-shrink:0; margin-left:12px;">
+        <button class="btn btn-outline btn-sm" onclick="exportCSV()" style="font-size:11px; padding:5px 10px;">📥 Export CSV</button>
+        <button onclick="closeRunModal()"
+                style="background:rgba(255,255,255,0.05); border:1px solid var(--border); border-radius:6px;
+                       color:var(--muted); font-size:18px; line-height:1; width:30px; height:30px;
+                       cursor:pointer; display:flex; align-items:center; justify-content:center;"
+                title="Close">✕</button>
+      </div>
+    </div>
+
+    <!-- Scrollable body -->
+    <div style="overflow-y:auto; padding:20px 24px; flex:1;">
+
+      <!-- Stats grid (always shown; content varies by mode) -->
+      <div class="stats-grid" id="rd-stats" style="margin-bottom:16px;"></div>
+
+      <!-- Equity curve — hidden for scalp/paper -->
+      <div id="rd-equity-wrap">
+        <div class="card" id="rd-equity" style="min-height:300px; padding:20px; margin-bottom:16px;"></div>
+      </div>
+
+      <!-- Trade Log (always shown) -->
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h3>Trade Log</h3>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--muted);">Per page:</span>
+            <select class="page-size-select" id="trades-per-page" onchange="renderTradesPage(1)">
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+              <option value="50">50</option>
+            </select>
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="trade-table" id="rd-trades">
+            <thead><tr>
+              <th class="sortable-th" data-col="id" onclick="sortTrades('id')"># <span class="sort-icon" id="sort-id">▲</span></th>
+              <th class="sortable-th" data-col="entry_time" onclick="sortTrades('entry_time')">Entry Time <span class="sort-icon" id="sort-entry_time">▲</span></th>
+              <th class="sortable-th" data-col="exit_time" onclick="sortTrades('exit_time')">Exit Time <span class="sort-icon" id="sort-exit_time">▲</span></th>
+              <th class="sortable-th" data-col="entry_price" onclick="sortTrades('entry_price')">Entry ₹ <span class="sort-icon" id="sort-entry_price">▲</span></th>
+              <th class="sortable-th" data-col="exit_price" onclick="sortTrades('exit_price')">Exit ₹ <span class="sort-icon" id="sort-exit_price">▲</span></th>
+              <th class="sortable-th" data-col="side" onclick="sortTrades('side')">Side <span class="sort-icon" id="sort-side">▲</span></th>
+              <th class="sortable-th" data-col="leverage" onclick="sortTrades('leverage')">Lev <span class="sort-icon" id="sort-leverage">▲</span></th>
+              <th class="sortable-th" data-col="pnl" onclick="sortTrades('pnl')">P&amp;L <span class="sort-icon" id="sort-pnl">▲</span></th>
+              <th class="sortable-th" data-col="exit_reason" onclick="sortTrades('exit_reason')">Reason <span class="sort-icon" id="sort-exit_reason">▲</span></th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="pagination-bar" id="trades-pagination"></div>
+      </div>
+
+      <!-- Analysis sections — hidden for scalp/paper -->
+      <div id="rd-analysis-extra">
+        <div class="card" style="margin-bottom:16px;">
+          <h3 style="margin-bottom:12px;">Monthly Breakdown</h3>
+          <div style="overflow-x:auto;">
+            <table class="trade-table" id="rd-monthly">
+              <thead><tr><th>Month</th><th>Trades</th><th>Wins</th><th>Losses</th><th>P&amp;L</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3 style="margin-bottom:12px;">📅 Yearly Breakdown</h3>
+          <div id="rd-yearly" style="overflow-x:auto;"></div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3 style="margin-bottom:14px;">📅 Day of Week Analysis</h3>
+          <div class="dow-grid" id="rd-dow"></div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3 style="margin-bottom:14px;">🗓️ Monthly P&amp;L Heatmap</h3>
+          <div id="rd-heatmap" style="overflow-x:auto;"></div>
+        </div>
+      </div>
+
+    </div><!-- end scrollable body -->
+  </div><!-- end modal panel -->
+</div><!-- end #run-detail-modal -->
 </body>
 </html>
