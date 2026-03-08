@@ -5365,8 +5365,7 @@ document.addEventListener('DOMContentLoaded', () => {
 var _cfScalpPollTimer = null;
 
 function cfInitScalpPage() {
-  cfLoadScalpStatus();
-  cfLoadScalpHistory();
+  cfLoadScalpStatus();  // also renders Trade History from status response
   if (!_cfScalpPollTimer) {
     _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 2000);
   }
@@ -5417,6 +5416,48 @@ async function cfLoadScalpStatus() {
     const engDot = document.getElementById('cf-scalp-dot');
     if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
     cfRenderActivePositions(open);
+
+    // Trade History — merge in-memory closed_trades + file_trades, deduplicate
+    const body = document.getElementById('cf-scalp-history-body');
+    if (body) {
+      const memTrades = d.closed_trades || [];
+      const fileTrades = d.file_trades || [];
+      const seen = new Set();
+      const allTrades = [];
+      // In-memory first (most recent), then file (historical)
+      [...memTrades, ...fileTrades].forEach(t => {
+        const id = t.trade_id;
+        if (id !== undefined && !seen.has(id)) {
+          seen.add(id);
+          allTrades.push(t);
+        }
+      });
+      if (!allTrades.length) {
+        body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
+      } else {
+        body.innerHTML = allTrades.map(t => {
+          const grossPnl = t.pnl || 0;
+          const fees = t.fees || (t.size ? Math.round(t.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
+          const netPnl = t.net_pnl !== undefined ? t.net_pnl : Math.round((grossPnl - fees) * 100) / 100;
+          const grossColor = grossPnl > 0 ? 'var(--green)' : grossPnl < 0 ? 'var(--red)' : 'var(--muted)';
+          const netColor = netPnl > 0 ? 'var(--green)' : netPnl < 0 ? 'var(--red)' : 'var(--muted)';
+          const side = t.side || t.transaction_type || '';
+          const sideColor = (side === 'LONG' || side === 'BUY') ? 'var(--green)' : 'var(--red)';
+          const time = (t.exit_time || t.entry_time || '').toString().slice(11, 16) || '—';
+          return `<tr>
+            <td style="font-size:11px;color:var(--muted);">${time}</td>
+            <td style="font-weight:600;">${t.symbol || '—'}</td>
+            <td style="color:${sideColor};font-weight:700;">${side}</td>
+            <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price||0).toFixed(4)}</td>
+            <td style="font-family:'JetBrains Mono',monospace;">$${(t.exit_price||0).toFixed(4)}</td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">${fmtINR(fees)}</td>
+            <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${grossColor};">${grossPnl >= 0 ? '+' : ''}${fmtINR(grossPnl)}</td>
+            <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${netColor};">${netPnl >= 0 ? '+' : ''}${fmtINR(netPnl)}</td>
+            <td style="font-size:11px;color:var(--muted);">${t.exit_reason || '—'}</td>
+          </tr>`;
+        }).join('');
+      }
+    }
 
     // Event Log
     const logEl = document.getElementById('cf-scalp-event-log');

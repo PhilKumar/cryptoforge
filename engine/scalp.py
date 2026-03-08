@@ -333,12 +333,12 @@ class ScalpEngine:
     # ── Internal monitoring ───────────────────────────────────────
 
     async def _monitor_loop(self):
-        """Poll prices every ~2s and trigger auto-exits."""
+        """Poll prices every ~1s and trigger auto-exits."""
         while self._running:
             try:
                 trades = list(self.open_trades.items())
                 if not trades:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                     continue
 
                 price_map = await self._fetch_all_prices(trades)
@@ -356,7 +356,7 @@ class ScalpEngine:
                         await self._close_trade(trade, reason)
             except Exception as e:
                 self._log("error", f"Monitor error: {e}")
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
     async def _fetch_all_prices(self, trades: list) -> dict:
         """Fetch mark prices for all unique symbols via bulk ticker call.
