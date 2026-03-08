@@ -11,7 +11,7 @@ Completely isolated from LiveEngine and PaperTradingEngine.
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 def _now_utc():
@@ -78,14 +78,24 @@ class ScalpTrade:
         self.pnl: float = 0.0
         self.status: str = "open"
 
+    # Delta Exchange India: taker 0.05%, 18% GST on fees
+    TAKER_FEE_RATE = 0.0005
+    GST_RATE = 0.18
+
     def _compute_pnl(self, price: float) -> float:
-        """Unrealized PnL in USD. size = notional in USD (1 contract = $1)."""
+        """Gross PnL in USD (before fees). size = notional in USD (1 contract = $1)."""
         if not price or not self.entry_price or self.entry_price == 0:
             return 0.0
         if self.side == "LONG":
             return (price - self.entry_price) / self.entry_price * self.size
         else:
             return (self.entry_price - price) / self.entry_price * self.size
+
+    def _compute_fees(self, exit_price: float = 0.0) -> float:
+        """Trading fees in USD. Entry side always charged; exit side only if exit_price > 0."""
+        fee_per_side = self.size * self.TAKER_FEE_RATE * (1 + self.GST_RATE)
+        sides = 2 if exit_price > 0 else 1  # open = entry only, closed = entry + exit
+        return round(sides * fee_per_side, 4)
 
     def check_exit(self, price: float) -> Optional[str]:
         """Returns exit reason string if an exit rule fires, else None."""
@@ -112,6 +122,8 @@ class ScalpTrade:
         return None
 
     def to_dict(self) -> dict:
+        gross_pnl = round(self._compute_pnl(self.current_price), 2)
+        fees = self._compute_fees(self.exit_price)
         return {
             "trade_id": self.trade_id,
             "symbol": self.symbol,
@@ -131,8 +143,10 @@ class ScalpTrade:
             "exit_price": self.exit_price,
             "exit_reason": self.exit_reason,
             "exit_order_id": self.exit_order_id,
-            "pnl": round(self._compute_pnl(self.current_price), 2),
-            "unrealized_pnl": round(self._compute_pnl(self.current_price), 2),
+            "pnl": gross_pnl,
+            "fees": fees,
+            "net_pnl": round(gross_pnl - fees, 2),
+            "unrealized_pnl": gross_pnl,
             "qty_usdt": round(self.size / max(self.leverage, 1), 2),
             "mark_price": self.current_price,
             "status": self.status,
@@ -147,8 +161,10 @@ class ScalpEngine:
     • Uses bulk ticker fetch for all symbols in one REST call.
     """
 
-    def __init__(self, delta_client):
+    def __init__(self, delta_client, on_trade_closed: Optional[Callable[[dict], None]] = None):
         self.delta = delta_client
+        # Callback invoked with trade dict whenever a trade is closed (for disk persistence).
+        self._on_trade_closed = on_trade_closed
         self.open_trades: Dict[int, ScalpTrade] = {}
         self.closed_trades: list = []
         self.event_log: list = []
@@ -278,16 +294,39 @@ class ScalpEngine:
         return {"status": "ok", "trade": trade.to_dict()}
 
     def get_status(self) -> dict:
-        open_list = [t.to_dict() for t in self.open_trades.values()]
-        realized = sum(t.get("pnl", 0) for t in self.closed_trades)
-        unrealized = sum(t._compute_pnl(t.current_price) for t in self.open_trades.values())
+        today_utc = _now_utc().date()
+
+        def _exit_date(t: dict):
+            try:
+                et = t.get("exit_time")
+                if et:
+                    return datetime.fromisoformat(str(et).split(".")[0]).date()
+            except Exception:
+                pass
+            return None
+
+        today_closed = [t for t in self.closed_trades if _exit_date(t) == today_utc]
+        session_realized = round(sum(t.get("net_pnl", t.get("pnl", 0)) for t in today_closed), 2)
+        session_fees = round(sum(t.get("fees", 0) for t in today_closed), 2)
+        # Unrealized: gross P&L minus entry-only fee for each open position
+        session_unrealized = round(
+            sum(t._compute_pnl(t.current_price) - t._compute_fees(0.0) for t in self.open_trades.values()),
+            2,
+        )
+
         return {
             "running": self._running,
             "in_trade": len(self.open_trades) > 0,
-            "open_trades": open_list,
+            "open_trades": [t.to_dict() for t in self.open_trades.values()],
             "closed_trades": list(reversed(self.closed_trades[-50:])),
             "event_log": list(reversed(self.event_log[-100:])),
-            "total_pnl": round(realized + unrealized, 2),
+            # All-time realized net (after fees)
+            "total_pnl": round(sum(t.get("net_pnl", t.get("pnl", 0)) for t in self.closed_trades), 2),
+            # Today's session fields (used by Session P&L display)
+            "session_realized_pnl": session_realized,
+            "session_unrealized_pnl": session_unrealized,
+            "session_fees": session_fees,
+            "session_pnl": round(session_realized + session_unrealized, 2),
         }
 
     # ── Internal monitoring ───────────────────────────────────────
@@ -416,8 +455,16 @@ class ScalpEngine:
         trade.pnl = round(pnl, 2)
         trade.status = "closed"
 
-        self.closed_trades.append(trade.to_dict())
+        closed_dict = trade.to_dict()
+        self.closed_trades.append(closed_dict)
         del self.open_trades[trade.trade_id]
+
+        # Persist to disk via callback (handles both auto and manual exits uniformly)
+        if self._on_trade_closed:
+            try:
+                self._on_trade_closed(closed_dict)
+            except Exception as _e:
+                self._log("error", f"Trade persistence callback failed: {_e}")
 
         pnl_sign = "+" if pnl >= 0 else ""
         self._log(

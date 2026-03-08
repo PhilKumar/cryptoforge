@@ -1925,10 +1925,22 @@ def _save_scalp_trades(trades):
     os.replace(tmp, _SCALP_FILE)
 
 
+def _scalp_persist_trade(trade: dict) -> None:
+    """Persist a single closed scalp trade to disk (auto + manual exits)."""
+    try:
+        trades = _load_scalp_trades()
+        # Deduplicate by trade_id to avoid double-writes
+        if not any(t.get("trade_id") == trade.get("trade_id") for t in trades):
+            trades.append(trade)
+            _save_scalp_trades(trades)
+    except Exception as e:
+        print(f"[SCALP] Failed to persist trade: {e}")
+
+
 def _get_scalp_engine():
     global _scalp_engine
     if _scalp_engine is None:
-        _scalp_engine = ScalpEngine(delta)
+        _scalp_engine = ScalpEngine(delta, on_trade_closed=_scalp_persist_trade)
     return _scalp_engine
 
 
@@ -1989,10 +2001,9 @@ async def scalp_exit(request: Request):
     eng = _get_scalp_engine()
     try:
         result = await eng.exit_trade(trade_id, reason="manual")
+        # Persistence is handled by the engine's on_trade_closed callback.
+        # _save_scalp_trade_to_history for the Results page:
         if result.get("status") == "ok" and result.get("trade"):
-            trades = _load_scalp_trades()
-            trades.append(result["trade"])
-            _save_scalp_trades(trades)
             _save_scalp_trade_to_history(result["trade"])
         elif result.get("status") == "error":
             alerter.alert("Scalp Exit Failed", f"Trade ID: {trade_id}\nError: {result.get('message', 'unknown')}")
