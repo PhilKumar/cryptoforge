@@ -1368,6 +1368,43 @@ def _save_engine_run_to_history(status: dict, mode: str):
         print(f"[{mode.upper()}] Failed to save run to history: {e}")
 
 
+def _save_scalp_trade_to_history(trade: dict) -> None:
+    """Save a single closed scalp trade as a run entry in runs.json."""
+    try:
+        pnl = round(trade.get("pnl", 0), 2)
+        runs = _load_runs()
+        max_id = max((r.get("id", 0) for r in runs), default=0)
+        symbol = trade.get("symbol", "")
+        side = trade.get("side", "")
+        run_entry = {
+            "id": max_id + 1,
+            "mode": "scalp",
+            "run_name": f"Scalp {symbol} {side}",
+            "symbol": symbol,
+            "leverage": trade.get("leverage", 1),
+            "trade_side": side,
+            "status": "completed",
+            "started_at": str(trade.get("entry_time", "")),
+            "stopped_at": str(trade.get("exit_time", "")),
+            "trade_count": 1,
+            "total_pnl": pnl,
+            "stats": {
+                "total_trades": 1,
+                "winning_trades": 1 if pnl > 0 else 0,
+                "losing_trades": 1 if pnl <= 0 else 0,
+                "win_rate": 100.0 if pnl > 0 else 0.0,
+                "total_pnl": pnl,
+            },
+            "trades": [trade],
+            "created_at": str(datetime.now()),
+        }
+        runs.append(run_entry)
+        _save_runs(runs)
+        print(f"[SCALP] Saved trade #{trade.get('trade_id')} to runs.json: P&L=${pnl}")
+    except Exception as e:
+        print(f"[SCALP] Failed to save trade to history: {e}")
+
+
 # ── Combined Engines Status (Multi-Strategy Monitor) ─────────────
 @app.get("/api/engines/all")
 async def engines_all():
@@ -1956,6 +1993,7 @@ async def scalp_exit(request: Request):
             trades = _load_scalp_trades()
             trades.append(result["trade"])
             _save_scalp_trades(trades)
+            _save_scalp_trade_to_history(result["trade"])
         elif result.get("status") == "error":
             alerter.alert("Scalp Exit Failed", f"Trade ID: {trade_id}\nError: {result.get('message', 'unknown')}")
         return result
