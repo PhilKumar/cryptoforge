@@ -308,9 +308,10 @@ class ScalpEngine:
         today_closed = [t for t in self.closed_trades if _exit_date(t) == today_utc]
         session_realized = round(sum(t.get("net_pnl", t.get("pnl", 0)) for t in today_closed), 2)
         session_fees = round(sum(t.get("fees", 0) for t in today_closed), 2)
-        # Unrealized: gross P&L minus entry-only fee for each open position
+        # Unrealized: gross P&L only (fees deducted at close time in net_pnl).
+        # This matches what Active Positions displays so the user isn't confused.
         session_unrealized = round(
-            sum(t._compute_pnl(t.current_price) - t._compute_fees(0.0) for t in self.open_trades.values()),
+            sum(t._compute_pnl(t.current_price) for t in self.open_trades.values()),
             2,
         )
 
