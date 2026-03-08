@@ -51,10 +51,10 @@ jobs:
           uvicorn app:app --host 0.0.0.0 --port 8001 &
           echo "Waiting for server..."
           for i in $(seq 1 30); do
-            curl -sf http://localhost:8001/login > /dev/null 2>&1 && break
+            curl -sf http://localhost:8001/api/health > /dev/null 2>&1 && break
             sleep 1
           done
-          curl -sf http://localhost:8001/login > /dev/null || (echo "Server failed to start" && exit 1)
+          curl -sf http://localhost:8001/api/health > /dev/null || (echo "Server failed to start" && exit 1)
           echo "CryptoForge is up on :8001"
 
       # ── Run Playwright tests ──
