@@ -14,11 +14,18 @@ import { test, expect, Page } from '@playwright/test';
 const PIN = process.env.E2E_PIN || '123456';
 
 // ── Auth helper ─────────────────────────────────────────────
+// Login page is a PIN-pad served at GET /. There is no text input —
+// each digit is a <button class="key" data-val="N">.
+// After the 6th digit the page POSTs /api/auth/login and replaces
+// itself with strategy.html (same URL, different content).
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.fill('input[type="password"], input[name="pin"]', PIN);
-  await page.click('button[type="submit"], button:has-text("Login"), button:has-text("Enter")');
-  await page.waitForURL(/\/$|\/strategy/, { timeout: 10_000 });
+  await page.goto('/');
+  // Click each digit of the PIN in order
+  for (const digit of PIN.split('')) {
+    await page.click(`button.key[data-val="${digit}"]`);
+  }
+  // Wait for the authenticated shell (nav bar rendered by strategy.html)
+  await page.waitForSelector('.nav-tab', { timeout: 10_000 });
 }
 
 // ── Deploy a paper strategy and return its run_id ───────────
@@ -56,7 +63,7 @@ test.describe('Phase 1 — UI & Rendering', () => {
   // ── Bug 1: View modal must not contain raw HTML tag strings ─
   test('View modal renders HTML — no raw <div> text visible', async ({ page }) => {
     // Navigate to execution / live-monitor page
-    await page.click('#nav-live, [data-page="live"], button:has-text("Live"), a:has-text("Live")');
+    await page.click('#nav-live');
 
     // Start a paper engine so there is an active panel to inspect
     const runId = await deployPaperStrategy(page);
@@ -86,7 +93,7 @@ test.describe('Phase 1 — UI & Rendering', () => {
   // ── Bug 2: Timestamps must be HH:MM:SS ──────────────────────
   test('Trade table timestamps match HH:MM:SS format', async ({ page }) => {
     await page.goto('/');
-    await page.click('#nav-results, [data-page="results"], button:has-text("Results"), a:has-text("Results")');
+    await page.click('#nav-results');
 
     // If there are trades in the table, every non-dash time cell matches HH:MM:SS
     const timeCells = page.locator('td[style*="white-space:nowrap"]');
@@ -111,7 +118,7 @@ test.describe('Phase 2 — Results Filtering', () => {
 
   test.beforeEach(async ({ page }) => {
     await login(page);
-    await page.click('#nav-results, [data-page="results"], button:has-text("Results"), a:has-text("Results")');
+    await page.click('#nav-results');
   });
 
   // ── Bug 3: Paper filter ──────────────────────────────────────
