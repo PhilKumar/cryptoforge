@@ -30,9 +30,13 @@ async function login(page: Page) {
 
 // ── Deploy a paper strategy and return its run_id ───────────
 async function deployPaperStrategy(page: Page): Promise<string> {
+  const RUN_NAME = 'E2E-Paper-Test';
+  // Stop any leftover engine with this name (retry-safe)
+  await page.request.post('/api/paper/stop', { data: { run_id: RUN_NAME } });
+
   const resp = await page.request.post('/api/paper/start', {
     data: {
-      run_name: 'E2E-Paper-Test',
+      run_name: RUN_NAME,
       symbol: 'BTCUSDT',
       leverage: 10,
       trade_side: 'LONG',
@@ -46,8 +50,8 @@ async function deployPaperStrategy(page: Page): Promise<string> {
   });
   expect(resp.status()).toBe(200);
   const body = await resp.json();
-  expect(body.status).toBe('started');
-  return body.run_id as string;
+  expect(['started', 'already_running']).toContain(body.status);
+  return (body.run_id ?? RUN_NAME) as string;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -82,9 +86,10 @@ test.describe('Phase 1 — UI & Rendering', () => {
     expect(modalText).not.toMatch(/<h3\s/i);
     expect(modalText).not.toMatch(/<span\s/i);
 
-    // Sanity: expected rendered content is present as text, not markup
-    expect(modalText).toContain('Total P&L');
-    expect(modalText).toContain('Win Rate');
+    // Sanity: expected rendered content is present as text, not markup.
+    // .ti-label uses CSS text-transform:uppercase so innerText returns uppercase.
+    expect(modalText.toUpperCase()).toContain('TOTAL P&L');
+    expect(modalText.toUpperCase()).toContain('WIN RATE');
 
     // Tear-down
     await page.request.post('/api/paper/stop', { data: { run_id: runId } });
