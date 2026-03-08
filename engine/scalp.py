@@ -168,7 +168,7 @@ class ScalpEngine:
         self.open_trades: Dict[int, ScalpTrade] = {}
         self.closed_trades: list = []
         self.event_log: list = []
-        self._trade_counter: int = 0
+        self._trade_counter: int = int(_now_utc().timestamp() * 1000)
         self._running: bool = False
         self._task: Optional[asyncio.Task] = None
 

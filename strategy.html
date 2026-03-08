@@ -5451,11 +5451,9 @@ async function cfLoadScalpStatus() {
     const memTrades = d.closed_trades || [];
     const fileTrades = d.file_trades || [];
     [...memTrades, ...fileTrades].forEach(t => {
-      const id = t.trade_id;
-      if (id !== undefined) {
-        // Update existing or add new — newer data wins
-        _cfTradeCache.set(id, t);
-      }
+      // Composite key — trade_id resets to 1 on engine restart, so include entry_time
+      const id = (t.trade_id || '') + '|' + (t.entry_time || '');
+      _cfTradeCache.set(id, t);
     });
 
     const body = document.getElementById('cf-scalp-history-body');

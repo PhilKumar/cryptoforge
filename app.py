@@ -1929,8 +1929,9 @@ def _scalp_persist_trade(trade: dict) -> None:
     """Persist a single closed scalp trade to disk (auto + manual exits)."""
     try:
         trades = _load_scalp_trades()
-        # Deduplicate by trade_id to avoid double-writes
-        if not any(t.get("trade_id") == trade.get("trade_id") for t in trades):
+        # Deduplicate by trade_id + entry_time (trade_id can repeat across restarts)
+        key = (trade.get("trade_id"), trade.get("entry_time"))
+        if not any((t.get("trade_id"), t.get("entry_time")) == key for t in trades):
             trades.append(trade)
             _save_scalp_trades(trades)
     except Exception as e:
