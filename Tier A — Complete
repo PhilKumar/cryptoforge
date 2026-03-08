@@ -581,6 +581,7 @@ L4	Move liquidation threshold -90 to config.LIQUIDATION_THRESHOLD
 L5	Move _fix_*.py / _inspect_*.py debug scripts to a scripts/ directory
 L6	Add asyncio.Lock around open_trades / closed_trades mutation in LiveEngine
 L7	CI: Add a pytest stage alongside the existing ruff + bandit stage
+
 Testing Stack Recommendation
 Given the Python/FastAPI backend + vanilla JS frontend:
 
@@ -591,5 +592,50 @@ Broker mocking	responses / aioresponses	Mock Delta/Dhan REST and WS calls withou
 E2E	Playwright	Python API, headless Chrome, simulates real user login → backtest → deploy flow; better fit than Cypress for a Python-first team
 Indicator math	pytest + numpy.testing.assert_allclose	Verify EMA, RSI, Supertrend, CPR output against known reference values
 Security regression	bandit (already in CI) + safety for dependency CVEs	Add safety check to CI alongside bandit
+
 Architecture Summary
 Both systems are fundamentally well-designed at the macro level: clean broker abstraction, proper async event loop usage, circuit breaker on broker calls, state persistence across restarts, and a working reconnect strategy. The issues above are fixable in isolation without a rewrite. Fix the three critical live-trading bugs (H3, H4, H8) before any further live deployments, and rotate your API keys immediately.
+
+============================================================================================================================================================================
+
+Role: Senior Full-Stack Architect and Lead Python Security Engineer.
+
+Context: I am upgrading my trading terminal (AlgoForge/CryptoForge) from a single-user system to a multi-tenant platform supporting 5+ individual users. My stack is Python (FastAPI) on the backend and Vanilla HTML/JS + Tailwind on the frontend.
+
+Objective: I need a complete technical roadmap and the exact code implementation to achieve data isolation. Users must only see their own trades, and the system must use their specific broker API keys to execute trades. I also need the exact Git commands to do this on a separate feature branch.
+
+Please provide a structured implementation plan covering the following pillars:
+
+1. The Git Feature Branch Workflow
+
+Provide the exact terminal commands to create a new branch (e.g., feature/multi-tenant), commit these changes over time, and safely merge them back into main once tested.
+
+2. Database Schema & Data Isolation (SQL/SQLAlchemy)
+
+Provide the updated database models. Every existing table (Orders, Backtests, Settings) now needs a user_id foreign key.
+
+Show me how to create a Users table that stores their username, hashed password, and encrypted broker API keys. (Do not store Dhan/Delta keys in plaintext!). Provide the Python utility function (e.g., using cryptography.fernet) to encrypt/decrypt these keys before sending them to the broker.
+
+3. Backend Request Scoping (FastAPI Dependency)
+
+I can no longer rely on a global .env file for API keys.
+
+Provide a FastAPI dependency (e.g., get_current_user) that reads the user's session token, fetches their specific user_id, decrypts their specific API keys from the database, and injects them into the execution route.
+
+Show an example of how a route like /api/scalp/entry must be rewritten to filter by user_id so User A can never accidentally close User B's trade.
+
+4. Frontend State Management (Vanilla JS)
+
+How should my Vanilla JS frontend handle the login state?
+
+Provide the Javascript fetch wrapper logic that ensures the user's session token (JWT or session cookie) is attached to every single API request to the backend.
+
+Execution Format:
+
+Start with the Git workflow commands.
+
+Provide the Database Models and Encryption utility.
+
+Provide the FastAPI dependency and an updated execution route example.
+
+Keep explanations concise; focus on the production-ready code.

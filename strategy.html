@@ -2878,7 +2878,6 @@ function getIndicatorOptions() {
     html += '<optgroup label="── Trend ──">';
     hasST.forEach(ind => {
       html += `<option value="${ind}">${ind} (Price Level)</option>`;
-      html += `<option value="${ind}_dir">${ind} Direction</option>`;
     });
     hasADX.forEach(ind => {
       html += `<option value="${ind}">${ind}</option>`;
