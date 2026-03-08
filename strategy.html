@@ -3342,6 +3342,48 @@ async function viewRun(rid) {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     document.getElementById('nav-results').classList.add('active');
 
+    // ── Scalp trade: show simple card, skip backtest analytics ──
+    if ((run.mode || '').toLowerCase() === 'scalp') {
+      const t = (run.trades || [])[0] || {};
+      const pnl = run.total_pnl || t.pnl || 0;
+      const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      const row = (label, val) =>
+        `<div style="padding:10px 0;border-bottom:1px solid var(--border);">
+          <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">${label}</div>
+          <div style="font-weight:600;font-size:14px;">${val}</div>
+        </div>`;
+      document.getElementById('rd-stats').innerHTML =
+        `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 24px;font-size:13px;margin-bottom:4px;">
+          ${row('Symbol', t.symbol || run.symbol || '—')}
+          ${row('Side', t.side || run.trade_side || '—')}
+          ${row('Leverage', (t.leverage || run.leverage || 1) + '×')}
+          ${row('Entry Price', t.entry_price ? fmtINRPrice(t.entry_price) : '—')}
+          ${row('Exit Price', t.exit_price ? fmtINRPrice(t.exit_price) : '—')}
+          ${row('Qty (USDT)', t.qty_usdt ? '$' + t.qty_usdt : '—')}
+          ${row('Entry Time', fmtDt(t.entry_time) || '—')}
+          ${row('Exit Time', fmtDt(t.exit_time) || '—')}
+          ${row('Exit Reason', t.exit_reason || '—')}
+          ${row('Mode', t.mode || 'paper')}
+          ${row('Target', t.target_usd ? '$' + t.target_usd : '—')}
+          ${row('Stop Loss', t.sl_usd ? '$' + t.sl_usd : '—')}
+          <div style="padding:10px 0;border-bottom:1px solid var(--border);grid-column:span 3;">
+            <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">P&amp;L</div>
+            <div style="font-weight:700;font-size:22px;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${fmtINR(pnl)}</div>
+          </div>
+        </div>`;
+      document.getElementById('rd-equity').innerHTML =
+        '<h3 style="margin-bottom:8px;">Equity Curve</h3>'
+        + '<div style="text-align:center;padding:40px 0;color:var(--muted);">Not applicable for individual scalp trades</div>';
+      _currentTrades = run.trades || [];
+      _tradesSortCol = 'id';
+      _tradesSortAsc = true;
+      renderTradesPage(1);
+      document.querySelector('#rd-monthly tbody').innerHTML = '';
+      document.getElementById('rd-dow').innerHTML = '';
+      document.getElementById('rd-yearly').innerHTML = '';
+      return;
+    }
+
     const s = run.stats || {};
     document.getElementById('rd-stats').innerHTML = [
       ['Total Trades', s.total_trades || 0],
