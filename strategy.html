@@ -1632,7 +1632,7 @@
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
       <span class="tab-label">Dashboard</span>
     </button>
-    <button id="nav-scalp" class="nav-tab" onclick="showPage('scalp-page', this); cfInitScalpPage();">
+    <button id="nav-scalp" class="nav-tab" onclick="showPage('scalp-page', this);">
       <span class="tab-icon" id="cf-scalp-dot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
       <span class="tab-label">Scalp</span>
     </button>
@@ -2335,7 +2335,6 @@
       <div class="card" style="padding:20px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
           <h3 style="margin:0;font-size:15px;font-weight:700;">Trade History</h3>
-          <button class="btn btn-outline btn-sm" onclick="cfLoadScalpHistory()">↻ Load</button>
         </div>
         <div style="overflow-x:auto;">
           <table class="trade-table" id="cf-scalp-history-table">
@@ -2644,6 +2643,7 @@ function showPage(pageId, btn) {
   if (pageId === 'results-page') { loadRuns(); fetchStrategies(); }
   if (pageId === 'live-page') startLiveMonitor();
   if (pageId === 'portfolio-page') { loadPortfolioData(); }
+  if (pageId === 'scalp-page') cfInitScalpPage();
   // Stop live monitor when leaving live page
   if (pageId !== 'live-page') stopLiveMonitor();
 }
@@ -5363,15 +5363,19 @@ document.addEventListener('DOMContentLoaded', () => {
 // ══════════════════════════════════════════════════════
 
 var _cfScalpPollTimer = null;
+// Persistent trade cache — never loses trades across polls
+var _cfTradeCache = new Map();
+// Track which open trade IDs we've rendered (for targeted updates)
+var _cfOpenTradeIds = [];
 
 function cfInitScalpPage() {
-  cfLoadScalpStatus();  // also renders Trade History from status response
+  cfLoadScalpStatus();
   if (!_cfScalpPollTimer) {
-    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 2000);
+    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 1000);
   }
 }
 
-// Also stop polling when leaving scalp page
+// Stop polling when leaving scalp page
 var _origShowPage = showPage;
 showPage = function(pageId, btn) {
   if (pageId !== 'scalp-page' && _cfScalpPollTimer) {
@@ -5381,6 +5385,28 @@ showPage = function(pageId, btn) {
   _origShowPage(pageId, btn);
 };
 
+function _cfTradeRow(t) {
+  const grossPnl = t.pnl || 0;
+  const fees = t.fees || (t.size ? Math.round(t.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
+  const netPnl = t.net_pnl !== undefined ? t.net_pnl : Math.round((grossPnl - fees) * 100) / 100;
+  const grossColor = grossPnl > 0 ? 'var(--green)' : grossPnl < 0 ? 'var(--red)' : 'var(--muted)';
+  const netColor = netPnl > 0 ? 'var(--green)' : netPnl < 0 ? 'var(--red)' : 'var(--muted)';
+  const side = t.side || t.transaction_type || '';
+  const sideColor = (side === 'LONG' || side === 'BUY') ? 'var(--green)' : 'var(--red)';
+  const time = (t.exit_time || t.entry_time || '').toString().slice(11, 16) || '—';
+  return `<tr>
+    <td style="font-size:11px;color:var(--muted);">${time}</td>
+    <td style="font-weight:600;">${t.symbol || '—'}</td>
+    <td style="color:${sideColor};font-weight:700;">${side}</td>
+    <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price||0).toFixed(4)}</td>
+    <td style="font-family:'JetBrains Mono',monospace;">$${(t.exit_price||0).toFixed(4)}</td>
+    <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">${fmtINR(fees)}</td>
+    <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${grossColor};">${grossPnl >= 0 ? '+' : ''}${fmtINR(grossPnl)}</td>
+    <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${netColor};">${netPnl >= 0 ? '+' : ''}${fmtINR(netPnl)}</td>
+    <td style="font-size:11px;color:var(--muted);">${t.exit_reason || '—'}</td>
+  </tr>`;
+}
+
 async function cfLoadScalpStatus() {
   try {
     const r = await fetch('/api/scalp/status');
@@ -5388,21 +5414,25 @@ async function cfLoadScalpStatus() {
     const d = await r.json();
     const open = d.open_trades || [];
     const running = d.running || open.length > 0;
+
+    // Status indicators
     const dot = document.getElementById('cf-scalp-status-dot');
     const label = document.getElementById('cf-scalp-status-label');
     if (dot) dot.style.background = running ? 'var(--green)' : 'var(--muted)';
     if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : 'Monitoring') : 'Engine Idle';
     const openCount = document.getElementById('cf-scalp-open-count');
     if (openCount) openCount.textContent = open.length + ' open trade' + (open.length !== 1 ? 's' : '');
+    const engDot = document.getElementById('cf-scalp-dot');
+    if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+
+    // Session P&L
     const sessionPnlEl = document.getElementById('cf-scalp-session-pnl');
     if (sessionPnlEl) {
-      // session_pnl = today's realized (UTC) + current open unrealized — no double-count.
-      // Falls back to computing locally if backend field absent.
       let pnl;
       if (d.session_pnl !== undefined) {
         pnl = d.session_pnl;
       } else {
-        const todayUtc = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+        const todayUtc = new Date().toISOString().slice(0, 10);
         const todayRealized = (d.closed_trades || [])
           .filter(t => t.exit_time && String(t.exit_time).startsWith(todayUtc))
           .reduce((s, t) => s + (t.pnl || 0), 0);
@@ -5413,49 +5443,34 @@ async function cfLoadScalpStatus() {
       sessionPnlEl.textContent = sign + fmtINR(pnl);
       sessionPnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
     }
-    const engDot = document.getElementById('cf-scalp-dot');
-    if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+
+    // Active Positions — targeted DOM updates (no full innerHTML replace)
     cfRenderActivePositions(open);
 
-    // Trade History — merge in-memory closed_trades + file_trades, deduplicate
+    // Trade History — merge into persistent cache, never lose trades
+    const memTrades = d.closed_trades || [];
+    const fileTrades = d.file_trades || [];
+    [...memTrades, ...fileTrades].forEach(t => {
+      const id = t.trade_id;
+      if (id !== undefined) {
+        // Update existing or add new — newer data wins
+        _cfTradeCache.set(id, t);
+      }
+    });
+
     const body = document.getElementById('cf-scalp-history-body');
     if (body) {
-      const memTrades = d.closed_trades || [];
-      const fileTrades = d.file_trades || [];
-      const seen = new Set();
-      const allTrades = [];
-      // In-memory first (most recent), then file (historical)
-      [...memTrades, ...fileTrades].forEach(t => {
-        const id = t.trade_id;
-        if (id !== undefined && !seen.has(id)) {
-          seen.add(id);
-          allTrades.push(t);
-        }
+      const allTrades = Array.from(_cfTradeCache.values());
+      // Sort by exit_time descending (most recent first)
+      allTrades.sort((a, b) => {
+        const ta = a.exit_time || a.entry_time || '';
+        const tb = b.exit_time || b.entry_time || '';
+        return String(tb).localeCompare(String(ta));
       });
       if (!allTrades.length) {
         body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
       } else {
-        body.innerHTML = allTrades.map(t => {
-          const grossPnl = t.pnl || 0;
-          const fees = t.fees || (t.size ? Math.round(t.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
-          const netPnl = t.net_pnl !== undefined ? t.net_pnl : Math.round((grossPnl - fees) * 100) / 100;
-          const grossColor = grossPnl > 0 ? 'var(--green)' : grossPnl < 0 ? 'var(--red)' : 'var(--muted)';
-          const netColor = netPnl > 0 ? 'var(--green)' : netPnl < 0 ? 'var(--red)' : 'var(--muted)';
-          const side = t.side || t.transaction_type || '';
-          const sideColor = (side === 'LONG' || side === 'BUY') ? 'var(--green)' : 'var(--red)';
-          const time = (t.exit_time || t.entry_time || '').toString().slice(11, 16) || '—';
-          return `<tr>
-            <td style="font-size:11px;color:var(--muted);">${time}</td>
-            <td style="font-weight:600;">${t.symbol || '—'}</td>
-            <td style="color:${sideColor};font-weight:700;">${side}</td>
-            <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price||0).toFixed(4)}</td>
-            <td style="font-family:'JetBrains Mono',monospace;">$${(t.exit_price||0).toFixed(4)}</td>
-            <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">${fmtINR(fees)}</td>
-            <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${grossColor};">${grossPnl >= 0 ? '+' : ''}${fmtINR(grossPnl)}</td>
-            <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${netColor};">${netPnl >= 0 ? '+' : ''}${fmtINR(netPnl)}</td>
-            <td style="font-size:11px;color:var(--muted);">${t.exit_reason || '—'}</td>
-          </tr>`;
-        }).join('');
+        body.innerHTML = allTrades.map(_cfTradeRow).join('');
       }
     }
 
@@ -5483,70 +5498,69 @@ function cfRenderActivePositions(open) {
   const countEl = document.getElementById('cf-scalp-active-count');
   if (!body) return;
   if (countEl) countEl.textContent = open.length + ' open';
+
   if (!open.length) {
+    _cfOpenTradeIds = [];
     body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>';
     return;
   }
-  body.innerHTML = open.map(t => {
-    const pnl = t.unrealized_pnl || 0;
-    const isProfit = pnl > 0;
-    const isLoss = pnl < 0;
-    const pnlColor = isProfit ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
-    const sideTag = t.side === 'BUY' || t.side === 'LONG'
-      ? `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:rgba(52,211,153,0.15);color:#34d399;font-weight:700;font-size:11px;letter-spacing:0.3px;">${t.side}</span>`
-      : `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:rgba(248,113,113,0.15);color:#f87171;font-weight:700;font-size:11px;letter-spacing:0.3px;">${t.side || '—'}</span>`;
-    // Row tint: green pulse for profit, red pulse for loss
-    const rowBg = isProfit
-      ? 'background:rgba(52,211,153,0.05);border-left:3px solid rgba(52,211,153,0.5);'
-      : isLoss
-        ? 'background:rgba(248,113,113,0.05);border-left:3px solid rgba(248,113,113,0.5);'
-        : 'border-left:3px solid transparent;';
-    return `<tr style="${rowBg}">
-      <td style="font-weight:600;">${t.symbol || '—'}</td>
-      <td>${sideTag}</td>
-      <td style="font-family:'JetBrains Mono',monospace;">$${(t.qty_usdt || t.quantity || 0).toFixed(2)}</td>
-      <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price || 0).toFixed(4)}</td>
-      <td style="font-family:'JetBrains Mono',monospace;">$${(t.mark_price || t.current_price || 0).toFixed(4)}</td>
-      <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</td>
-      <td><button class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="cfExitScalpTrade('${t.trade_id || t.id}')">Exit</button></td>
-    </tr>`;
-  }).join('');
-}
 
-async function cfLoadScalpHistory() {
-  try {
-    const r = await fetch('/api/scalp/trades');
-    if (!r.ok) return;
-    const trades = await r.json();
-    const body = document.getElementById('cf-scalp-history-body');
-    if (!body) return;
-    if (!trades.length) {
-      body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
-      return;
-    }
-    body.innerHTML = trades.slice().reverse().map(t => {
-      const grossPnl = t.pnl || 0;
-      // Retroactively compute fees for legacy trades missing the field
-      const fees = t.fees || (t.size ? Math.round(t.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
-      const netPnl = t.net_pnl !== undefined ? t.net_pnl : Math.round((grossPnl - fees) * 100) / 100;
-      const grossColor = grossPnl > 0 ? 'var(--green)' : grossPnl < 0 ? 'var(--red)' : 'var(--muted)';
-      const netColor = netPnl > 0 ? 'var(--green)' : netPnl < 0 ? 'var(--red)' : 'var(--muted)';
-      const side = t.side || t.transaction_type || '';
-      const sideColor = (side === 'LONG' || side === 'BUY') ? 'var(--green)' : 'var(--red)';
-      const time = (t.exit_time || t.entry_time || '').toString().slice(11, 16) || '—';
-      return `<tr>
-        <td style="font-size:11px;color:var(--muted);">${time}</td>
+  // Check if the set of open trade IDs changed — if so, full re-render
+  const newIds = open.map(t => t.trade_id || t.id).join(',');
+  const needFullRender = newIds !== _cfOpenTradeIds.join(',');
+
+  if (needFullRender) {
+    _cfOpenTradeIds = open.map(t => t.trade_id || t.id);
+    body.innerHTML = open.map(t => {
+      const tid = t.trade_id || t.id;
+      const pnl = t.unrealized_pnl || 0;
+      const isProfit = pnl > 0;
+      const isLoss = pnl < 0;
+      const pnlColor = isProfit ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
+      const sideTag = t.side === 'BUY' || t.side === 'LONG'
+        ? `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:rgba(52,211,153,0.15);color:#34d399;font-weight:700;font-size:11px;letter-spacing:0.3px;">${t.side}</span>`
+        : `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:rgba(248,113,113,0.15);color:#f87171;font-weight:700;font-size:11px;letter-spacing:0.3px;">${t.side || '—'}</span>`;
+      const rowBg = isProfit
+        ? 'background:rgba(52,211,153,0.05);border-left:3px solid rgba(52,211,153,0.5);'
+        : isLoss
+          ? 'background:rgba(248,113,113,0.05);border-left:3px solid rgba(248,113,113,0.5);'
+          : 'border-left:3px solid transparent;';
+      return `<tr data-tid="${tid}" style="${rowBg}">
         <td style="font-weight:600;">${t.symbol || '—'}</td>
-        <td style="color:${sideColor};font-weight:700;">${t.side || t.transaction_type || '—'}</td>
-        <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price||0).toFixed(4)}</td>
-        <td style="font-family:'JetBrains Mono',monospace;">$${(t.exit_price||0).toFixed(4)}</td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">${fmtINR(fees)}</td>
-        <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${grossColor};">${grossPnl >= 0 ? '+' : ''}${fmtINR(grossPnl)}</td>
-        <td style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${netColor};">${netPnl >= 0 ? '+' : ''}${fmtINR(netPnl)}</td>
-        <td style="font-size:11px;color:var(--muted);">${t.exit_reason || '—'}</td>
+        <td>${sideTag}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">$${(t.qty_usdt || t.quantity || 0).toFixed(2)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">$${(t.entry_price || 0).toFixed(4)}</td>
+        <td data-field="mark" style="font-family:'JetBrains Mono',monospace;">$${(t.mark_price || t.current_price || 0).toFixed(4)}</td>
+        <td data-field="pnl" style="font-weight:700;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</td>
+        <td><button class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="cfExitScalpTrade('${tid}')">Exit</button></td>
       </tr>`;
     }).join('');
-  } catch(e) { /* no history */ }
+  } else {
+    // Targeted update — only mark price + P&L cells, no flicker
+    open.forEach(t => {
+      const tid = t.trade_id || t.id;
+      const row = body.querySelector(`tr[data-tid="${tid}"]`);
+      if (!row) return;
+      const pnl = t.unrealized_pnl || 0;
+      const isProfit = pnl > 0;
+      const isLoss = pnl < 0;
+      const pnlColor = isProfit ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
+      const markCell = row.querySelector('[data-field="mark"]');
+      const pnlCell = row.querySelector('[data-field="pnl"]');
+      if (markCell) markCell.textContent = '$' + (t.mark_price || t.current_price || 0).toFixed(4);
+      if (pnlCell) {
+        pnlCell.textContent = (pnl >= 0 ? '+' : '') + fmtINR(pnl);
+        pnlCell.style.color = pnlColor;
+      }
+      // Update row tint
+      const rowBg = isProfit
+        ? 'background:rgba(52,211,153,0.05);border-left:3px solid rgba(52,211,153,0.5);'
+        : isLoss
+          ? 'background:rgba(248,113,113,0.05);border-left:3px solid rgba(248,113,113,0.5);'
+          : 'border-left:3px solid transparent;';
+      row.style.cssText = rowBg;
+    });
+  }
 }
 
 async function cfSubmitScalp(direction) {
@@ -5573,7 +5587,7 @@ async function cfSubmitScalp(direction) {
     if (d.status === 'ok' || d.status === 'entered' || d.trade_id) {
       if (statusEl) { statusEl.textContent = direction + ' entered ✓'; statusEl.style.color = 'var(--green)'; }
       cfToast(`Scalp ${direction} entered on ${symbol}`, 'success');
-      setTimeout(() => { cfLoadScalpStatus(); cfLoadScalpHistory(); }, 800);
+      setTimeout(cfLoadScalpStatus, 500);
     } else {
       if (statusEl) { statusEl.textContent = d.message || d.status || 'Error'; statusEl.style.color = 'var(--red)'; }
       cfToast(d.message || 'Entry failed', 'danger');
@@ -5594,7 +5608,7 @@ async function cfExitScalpTrade(tradeId) {
     const d = await res.json();
     if (d.status === 'ok' || d.status === 'exited') {
       cfToast('Position closed', 'success');
-      setTimeout(() => { cfLoadScalpStatus(); cfLoadScalpHistory(); }, 500);
+      setTimeout(cfLoadScalpStatus, 300);
     } else {
       cfToast(d.message || 'Exit failed', 'danger');
     }
