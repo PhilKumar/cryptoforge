@@ -2350,6 +2350,14 @@
         </div>
       </div>
 
+      <!-- Event Log -->
+      <div class="card" style="padding:20px;">
+        <h3 style="margin:0 0 14px;font-size:15px;font-weight:700;">Event Log</h3>
+        <div id="cf-scalp-event-log" style="max-height:220px;overflow-y:auto;font-size:12px;font-family:'JetBrains Mono',monospace;">
+          <div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>
+        </div>
+      </div>
+
     </div><!-- /right panel -->
   </div><!-- /grid -->
 </div><!-- /scalp-page -->
@@ -5409,6 +5417,23 @@ async function cfLoadScalpStatus() {
     const engDot = document.getElementById('cf-scalp-dot');
     if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
     cfRenderActivePositions(open);
+
+    // Event Log
+    const logEl = document.getElementById('cf-scalp-event-log');
+    if (logEl) {
+      const events = d.event_log || [];
+      if (!events.length) {
+        logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>';
+      } else {
+        const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
+        logEl.innerHTML = events.map(e =>
+          `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">` +
+          `<span style="color:var(--muted);margin-right:8px;">${e.time || ''}</span>` +
+          `<span style="color:${evtColors[e.level || e.type] || 'var(--text-dim)'};">${e.msg || e.message || ''}</span>` +
+          `</div>`
+        ).join('');
+      }
+    }
   } catch(e) { /* engine may not be running */ }
 }
 
@@ -5460,11 +5485,13 @@ async function cfLoadScalpHistory() {
     }
     body.innerHTML = trades.slice().reverse().map(t => {
       const grossPnl = t.pnl || 0;
-      const fees = t.fees || 0;
+      // Retroactively compute fees for legacy trades missing the field
+      const fees = t.fees || (t.size ? Math.round(t.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
       const netPnl = t.net_pnl !== undefined ? t.net_pnl : Math.round((grossPnl - fees) * 100) / 100;
       const grossColor = grossPnl > 0 ? 'var(--green)' : grossPnl < 0 ? 'var(--red)' : 'var(--muted)';
       const netColor = netPnl > 0 ? 'var(--green)' : netPnl < 0 ? 'var(--red)' : 'var(--muted)';
-      const sideColor = (t.side || t.transaction_type) === 'BUY' ? 'var(--green)' : 'var(--red)';
+      const side = t.side || t.transaction_type || '';
+      const sideColor = (side === 'LONG' || side === 'BUY') ? 'var(--green)' : 'var(--red)';
       const time = (t.exit_time || t.entry_time || '').toString().slice(11, 16) || '—';
       return `<tr>
         <td style="font-size:11px;color:var(--muted);">${time}</td>
