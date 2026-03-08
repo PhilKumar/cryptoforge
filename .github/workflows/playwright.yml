@@ -35,25 +35,11 @@ jobs:
         with:
           node-version: 20
 
-      - name: Create e2e-tests directory & install
+      - name: Install Playwright deps
+        working-directory: e2e-tests
         run: |
-          mkdir -p ../e2e-tests
-          cat > ../e2e-tests/package.json << 'PKGJSON'
-          {
-            "name": "e2e-tests",
-            "version": "1.0.0",
-            "devDependencies": { "@playwright/test": "^1.58.0" }
-          }
-          PKGJSON
-          cd ../e2e-tests
           npm install
           npx playwright install --with-deps chromium
-
-      - name: Copy test files
-        run: |
-          cp -r e2e-tests/playwright.config.ts ../e2e-tests/ 2>/dev/null || true
-          cp -r e2e-tests/tsconfig.json ../e2e-tests/ 2>/dev/null || true
-          cp -r e2e-tests/tests ../e2e-tests/ 2>/dev/null || true
 
       # ── Start CryptoForge server ──
       - name: Start CryptoForge dev server
@@ -75,7 +61,7 @@ jobs:
       - name: Run Playwright tests
         env:
           E2E_PIN: "123456"
-        working-directory: ../e2e-tests
+        working-directory: e2e-tests
         run: npx playwright test --project=cryptoforge
 
       # ── Upload artifacts on failure ──
@@ -85,8 +71,8 @@ jobs:
         with:
           name: playwright-report-cryptoforge
           path: |
-            ../e2e-tests/playwright-report/
-            ../e2e-tests/test-results/
+            e2e-tests/playwright-report/
+            e2e-tests/test-results/
           retention-days: 14
 
   # ── Deploy (only on push to main, gated on E2E passing) ──────
