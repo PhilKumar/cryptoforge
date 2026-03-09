@@ -45,4 +45,4 @@ jobs:
       - name: Post-deploy summary
         if: always()
         run: |
-          ssh deploy-target "echo '── CryptoForge Deploy Status ──' && systemctl is-active cryptoforge@\$(cat ~/.cryptoforge-active-port) && echo 'Active port:' \$(cat ~/.cryptoforge-active-port)"
+          ssh deploy-target "echo '── CryptoForge Deploy Status ──' && echo 'State:' \$(systemctl is-active cryptoforge@\$(cat ~/.cryptoforge-active-port)) && echo 'Active port:' \$(cat ~/.cryptoforge-active-port)"
