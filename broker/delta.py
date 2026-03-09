@@ -644,7 +644,7 @@ class DeltaClient:
         if not self._is_configured():
             return []
         try:
-            resp = self._get("/positions", auth=True)
+            resp = self._get("/positions/margined", auth=True)
             return resp.get("result", [])
         except Exception as e:
             print(f"[DELTA] Positions error: {e}")

@@ -1,1 +1,1 @@
-from .delta import DeltaClient
+from .delta import DeltaClient as DeltaClient

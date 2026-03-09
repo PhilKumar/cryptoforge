@@ -10,24 +10,28 @@ import json as _json
 import math
 import os
 import sys
-from datetime import datetime, date as date_type, timedelta, timezone
+from datetime import date as date_type
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from engine.indicators import compute_dynamic_indicators
-from engine.backtest import eval_condition_group
 import config
+from engine.backtest import eval_condition_group
+from engine.indicators import compute_dynamic_indicators
 
 # IST timezone (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
+
 
 def _now_ist() -> datetime:
     """Return current time in IST."""
     return datetime.now(IST)
 
+
 # Try to import WebSocket feed (optional enhancement)
 try:
     from engine.ws_feed import DeltaWSFeed
+
     _HAS_WS = True
 except ImportError:
     _HAS_WS = False
@@ -104,8 +108,13 @@ class PaperTradingEngine:
                     for k, v in self.current_indicators.items()
                 },
                 "event_log": [
-                    {"time": e["time"].strftime("%Y-%m-%d %H:%M:%S") if isinstance(e["time"], datetime) else str(e["time"]),
-                     "type": e["type"], "message": e["message"]}
+                    {
+                        "time": e["time"].strftime("%Y-%m-%d %H:%M:%S")
+                        if isinstance(e["time"], datetime)
+                        else str(e["time"]),
+                        "type": e["type"],
+                        "message": e["message"],
+                    }
                     for e in self.event_log[-100:]
                 ],
                 "saved_at": str(_now_ist()),
@@ -150,8 +159,7 @@ class PaperTradingEngine:
                     t = datetime.strptime(entry["time"], "%Y-%m-%d %H:%M:%S")
                 except Exception:
                     t = _now_ist()
-                self.event_log.append({"time": t, "type": entry["type"],
-                                       "message": entry["message"], "data": {}})
+                self.event_log.append({"time": t, "type": entry["type"], "message": entry["message"], "data": {}})
 
             n = len(self.closed_trades)
             pnl = sum(t.get("pnl", 0) for t in self.closed_trades)
@@ -159,8 +167,7 @@ class PaperTradingEngine:
         except Exception as e:
             print(f"[PAPER] State load failed: {e}")
 
-    def configure(self, strategy: dict, entry_conditions: list,
-                  exit_conditions: list):
+    def configure(self, strategy: dict, entry_conditions: list, exit_conditions: list):
         self.strategy = strategy
         self.entry_conditions = entry_conditions
         self.exit_conditions = exit_conditions
@@ -264,7 +271,8 @@ class PaperTradingEngine:
                 # Fetch candle history for indicators
                 lookback = now - timedelta(days=3)
                 df = await self.broker.async_get_candles(
-                    symbol, resolution=candle_interval,
+                    symbol,
+                    resolution=candle_interval,
                     start=lookback.strftime("%Y-%m-%d"),
                     end=now.strftime("%Y-%m-%d"),
                 )
@@ -283,7 +291,7 @@ class PaperTradingEngine:
 
                 # Update UI tracking
                 self.current_candle = {
-                    "time": str(row.name) if hasattr(row, 'name') else str(now),
+                    "time": str(row.name) if hasattr(row, "name") else str(now),
                     "open": float(row.get("open", 0)),
                     "high": float(row.get("high", 0)),
                     "low": float(row.get("low", 0)),
@@ -320,7 +328,9 @@ class PaperTradingEngine:
                             self.open_trades.append(trade)
                             self.in_trade = True
                             self.trades_today += 1
-                            self.log_event("entry", f"ENTRY {trade_side} {symbol} @ ${price:,.2f} (${notional:,.0f} notional)")
+                            self.log_event(
+                                "entry", f"ENTRY {trade_side} {symbol} @ ${price:,.2f} (${notional:,.0f} notional)"
+                            )
 
                             if callback:
                                 await callback({"type": "entry", "trade": trade, "price": price})
@@ -383,13 +393,19 @@ class PaperTradingEngine:
                                 self.in_trade = False
 
                             emoji = "+" if trade_pnl >= 0 else ""
-                            self.log_event("exit", f"EXIT {exit_reason} {symbol} @ ${check_price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}")
+                            self.log_event(
+                                "exit",
+                                f"EXIT {exit_reason} {symbol} @ ${check_price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}",
+                            )
 
                             if callback:
-                                await callback({
-                                    "type": "exit", "trade": closed,
-                                    "total_pnl": round(self.total_pnl, 2),
-                                })
+                                await callback(
+                                    {
+                                        "type": "exit",
+                                        "trade": closed,
+                                        "total_pnl": round(self.total_pnl, 2),
+                                    }
+                                )
 
                             self._save_state()
 
@@ -435,8 +451,11 @@ class PaperTradingEngine:
             "current_candle": self.current_candle,
             "current_indicators": self.current_indicators,
             "event_log": [
-                {"time": e["time"].strftime("%H:%M:%S IST") if isinstance(e["time"], datetime) else str(e["time"]),
-                 "type": e["type"], "message": e["message"]}
+                {
+                    "time": e["time"].strftime("%H:%M:%S IST") if isinstance(e["time"], datetime) else str(e["time"]),
+                    "type": e["type"],
+                    "message": e["message"],
+                }
                 for e in self.event_log[-50:]
             ],
         }

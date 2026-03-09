@@ -11,37 +11,39 @@ Architecture:
     aiohttp.ClientSession → Semaphore(8) → Paginator → DataFrame / PostgreSQL
 """
 
+import argparse
 import asyncio
-import aiohttp
-import hashlib
-import hmac
-import json
 import os
 import sys
-import time
-import argparse
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
+import aiohttp
 import pandas as pd
-import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-import config
 
 # ── Constants ──────────────────────────────────────────────────────
-MAX_CANDLES_PER_REQUEST = 2000        # Delta Exchange limit
-BINANCE_MAX_PER_REQUEST = 1000        # Binance limit
-MAX_CONCURRENT_REQUESTS = 8           # aiohttp concurrency cap
-REQUEST_DELAY_SEC = 0.12              # ~8 req/sec safe rate for Delta
+MAX_CANDLES_PER_REQUEST = 2000  # Delta Exchange limit
+BINANCE_MAX_PER_REQUEST = 1000  # Binance limit
+MAX_CONCURRENT_REQUESTS = 8  # aiohttp concurrency cap
+REQUEST_DELAY_SEC = 0.12  # ~8 req/sec safe rate for Delta
 MAX_RETRIES = 5
 BACKOFF_BASE = 2.0
 BACKOFF_CAP = 60.0
 
 RESOLUTION_SECONDS = {
-    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-    "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600,
-    "1d": 86400, "1w": 604800,
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "2h": 7200,
+    "4h": 14400,
+    "6h": 21600,
+    "1d": 86400,
+    "1w": 604800,
 }
 
 # Symbols available on Delta Exchange (rest go to Binance fallback)
@@ -74,8 +76,7 @@ class AsyncDataDownloader:
         else:
             region = os.getenv("DELTA_REGION", "india").lower()
             self._delta_base = (
-                "https://api.india.delta.exchange/v2" if region == "india"
-                else "https://api.delta.exchange/v2"
+                "https://api.india.delta.exchange/v2" if region == "india" else "https://api.delta.exchange/v2"
             )
         self._binance_base = "https://api.binance.com/api/v3"
 
@@ -124,9 +125,7 @@ class AsyncDataDownloader:
                 """)
                 # Try to create hypertable (only works if TimescaleDB extension is present)
                 try:
-                    await conn.execute(
-                        "SELECT create_hypertable('candles', 'time', if_not_exists => true);"
-                    )
+                    await conn.execute("SELECT create_hypertable('candles', 'time', if_not_exists => true);")
                     print("[DATA] TimescaleDB hypertable ready")
                 except Exception:
                     print("[DATA] Standard PostgreSQL table (no TimescaleDB extension)")
@@ -143,8 +142,7 @@ class AsyncDataDownloader:
             self.use_db = False
 
     # ── HTTP Request with Retry ─────────────────────────────────
-    async def _fetch_with_retry(self, url: str, params: dict,
-                                source: str = "delta") -> Optional[dict]:
+    async def _fetch_with_retry(self, url: str, params: dict, source: str = "delta") -> Optional[dict]:
         """
         Fetch JSON with exponential backoff on failure.
         Returns parsed JSON or None on exhausted retries.
@@ -163,8 +161,8 @@ class AsyncDataDownloader:
                         if resp.status == 429:
                             # Rate limited — respect Retry-After or backoff
                             retry_after = resp.headers.get("Retry-After")
-                            wait = float(retry_after) if retry_after else min(
-                                BACKOFF_BASE ** (attempt + 1), BACKOFF_CAP
+                            wait = (
+                                float(retry_after) if retry_after else min(BACKOFF_BASE ** (attempt + 1), BACKOFF_CAP)
                             )
                             print(f"[DATA] 429 Rate Limited ({source}) — waiting {wait:.1f}s")
                             await asyncio.sleep(wait)
@@ -199,8 +197,7 @@ class AsyncDataDownloader:
         return None
 
     # ── Delta Exchange Candle Fetcher ───────────────────────────
-    async def _fetch_delta_chunk(self, symbol: str, resolution: str,
-                                  start_ts: int, end_ts: int) -> List[dict]:
+    async def _fetch_delta_chunk(self, symbol: str, resolution: str, start_ts: int, end_ts: int) -> List[dict]:
         """Fetch one chunk of candles from Delta Exchange."""
         url = f"{self._delta_base}/history/candles"
         params = {
@@ -215,8 +212,7 @@ class AsyncDataDownloader:
         return []
 
     # ── Binance Candle Fetcher ──────────────────────────────────
-    async def _fetch_binance_chunk(self, symbol: str, interval: str,
-                                    start_ms: int, end_ms: int) -> List[list]:
+    async def _fetch_binance_chunk(self, symbol: str, interval: str, start_ms: int, end_ms: int) -> List[list]:
         """Fetch one chunk of candles from Binance public API."""
         url = f"{self._binance_base}/klines"
         params = {
@@ -230,8 +226,7 @@ class AsyncDataDownloader:
         return data if isinstance(data, list) else []
 
     # ── Paginated Download — Delta Exchange ─────────────────────
-    async def download_delta(self, symbol: str, resolution: str,
-                              start_date: str, end_date: str) -> pd.DataFrame:
+    async def download_delta(self, symbol: str, resolution: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Download candles from Delta Exchange with 2000-candle pagination.
 
@@ -244,10 +239,8 @@ class AsyncDataDownloader:
         Returns:
             DataFrame with datetime index, OHLCV columns
         """
-        start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").replace(
-            tzinfo=timezone.utc).timestamp())
-        end_ts = int(datetime.strptime(end_date, "%Y-%m-%d").replace(
-            tzinfo=timezone.utc).timestamp())
+        start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+        end_ts = int(datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
         secs_per_candle = RESOLUTION_SECONDS.get(resolution, 300)
         chunk_seconds = secs_per_candle * MAX_CANDLES_PER_REQUEST
@@ -261,8 +254,7 @@ class AsyncDataDownloader:
             cursor = chunk_end
 
         total_chunks = len(chunks)
-        print(f"[DELTA] Downloading {symbol} {resolution}: "
-              f"{start_date} → {end_date} ({total_chunks} chunks)")
+        print(f"[DELTA] Downloading {symbol} {resolution}: " f"{start_date} → {end_date} ({total_chunks} chunks)")
 
         # Fetch all chunks concurrently (bounded by semaphore)
         all_candles = []
@@ -272,17 +264,13 @@ class AsyncDataDownloader:
             if candles:
                 all_candles.extend(candles)
             if (idx + 1) % 20 == 0 or idx + 1 == total_chunks:
-                print(f"[DELTA] Progress: {idx + 1}/{total_chunks} chunks "
-                      f"({len(all_candles)} candles)")
+                print(f"[DELTA] Progress: {idx + 1}/{total_chunks} chunks " f"({len(all_candles)} candles)")
 
         # Process in batches to control memory and rate
         batch_size = MAX_CONCURRENT_REQUESTS
         for batch_start in range(0, total_chunks, batch_size):
-            batch = chunks[batch_start:batch_start + batch_size]
-            tasks = [
-                fetch_chunk(batch_start + i, s, e)
-                for i, (s, e) in enumerate(batch)
-            ]
+            batch = chunks[batch_start : batch_start + batch_size]
+            tasks = [fetch_chunk(batch_start + i, s, e) for i, (s, e) in enumerate(batch)]
             await asyncio.gather(*tasks)
             # Small inter-batch delay
             await asyncio.sleep(0.1)
@@ -294,16 +282,13 @@ class AsyncDataDownloader:
         return self._candles_to_df(all_candles, source="delta")
 
     # ── Paginated Download — Binance ────────────────────────────
-    async def download_binance(self, symbol: str, resolution: str,
-                                start_date: str, end_date: str) -> pd.DataFrame:
+    async def download_binance(self, symbol: str, resolution: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Download candles from Binance public API with 1000-candle pagination.
         No API key required.
         """
-        start_ms = int(datetime.strptime(start_date, "%Y-%m-%d").replace(
-            tzinfo=timezone.utc).timestamp() * 1000)
-        end_ms = int(datetime.strptime(end_date, "%Y-%m-%d").replace(
-            tzinfo=timezone.utc).timestamp() * 1000)
+        start_ms = int(datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+        end_ms = int(datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
 
         secs_per_candle = RESOLUTION_SECONDS.get(resolution, 300)
         chunk_ms = secs_per_candle * BINANCE_MAX_PER_REQUEST * 1000
@@ -316,8 +301,7 @@ class AsyncDataDownloader:
             cursor = chunk_end
 
         total_chunks = len(chunks)
-        print(f"[BINANCE] Downloading {symbol} {resolution}: "
-              f"{start_date} → {end_date} ({total_chunks} chunks)")
+        print(f"[BINANCE] Downloading {symbol} {resolution}: " f"{start_date} → {end_date} ({total_chunks} chunks)")
 
         all_candles = []
 
@@ -326,16 +310,12 @@ class AsyncDataDownloader:
             if candles:
                 all_candles.extend(candles)
             if (idx + 1) % 20 == 0 or idx + 1 == total_chunks:
-                print(f"[BINANCE] Progress: {idx + 1}/{total_chunks} chunks "
-                      f"({len(all_candles)} candles)")
+                print(f"[BINANCE] Progress: {idx + 1}/{total_chunks} chunks " f"({len(all_candles)} candles)")
 
         batch_size = MAX_CONCURRENT_REQUESTS
         for batch_start in range(0, total_chunks, batch_size):
-            batch = chunks[batch_start:batch_start + batch_size]
-            tasks = [
-                fetch_chunk(batch_start + i, s, e)
-                for i, (s, e) in enumerate(batch)
-            ]
+            batch = chunks[batch_start : batch_start + batch_size]
+            tasks = [fetch_chunk(batch_start + i, s, e) for i, (s, e) in enumerate(batch)]
             await asyncio.gather(*tasks)
             await asyncio.sleep(0.1)
 
@@ -346,8 +326,7 @@ class AsyncDataDownloader:
         return self._candles_to_df(all_candles, source="binance")
 
     # ── Smart Download (Delta first, Binance fallback) ──────────
-    async def download(self, symbol: str, resolution: str,
-                       start_date: str, end_date: str) -> pd.DataFrame:
+    async def download(self, symbol: str, resolution: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Smart download: try Delta Exchange first for supported symbols,
         fall back to Binance public API.
@@ -369,8 +348,9 @@ class AsyncDataDownloader:
         return df
 
     # ── Bulk Download (multiple symbols × resolutions) ──────────
-    async def bulk_download(self, symbols: List[str], resolutions: List[str],
-                            start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
+    async def bulk_download(
+        self, symbols: List[str], resolutions: List[str], start_date: str, end_date: str
+    ) -> Dict[str, pd.DataFrame]:
         """
         Download candles for multiple symbol × resolution combinations.
         Returns dict keyed by 'SYMBOL_RESOLUTION'.
@@ -394,8 +374,7 @@ class AsyncDataDownloader:
                     df = await self.download(symbol, resolution, start_date, end_date)
                     results[key] = df
                     if not df.empty:
-                        print(f"[BULK] ✓ {key}: {len(df)} candles "
-                              f"({df.index[0]} → {df.index[-1]})")
+                        print(f"[BULK] ✓ {key}: {len(df)} candles " f"({df.index[0]} → {df.index[-1]})")
                     else:
                         print(f"[BULK] ✗ {key}: No data")
                 except Exception as e:
@@ -405,8 +384,7 @@ class AsyncDataDownloader:
                 completed += 1
 
         print(f"\n{'='*50}")
-        print(f"[BULK] Download complete: {self._request_count} requests, "
-              f"{self._error_count} errors")
+        print(f"[BULK] Download complete: {self._request_count} requests, " f"{self._error_count} errors")
         for key, df in results.items():
             status = f"{len(df)} candles" if not df.empty else "EMPTY"
             print(f"  {key}: {status}")
@@ -422,11 +400,23 @@ class AsyncDataDownloader:
 
         if source == "binance":
             # Binance: [[openTime, O, H, L, C, V, closeTime, ...], ...]
-            df = pd.DataFrame(candles, columns=[
-                "open_time", "open", "high", "low", "close", "volume",
-                "close_time", "quote_volume", "trades", "taker_buy_base",
-                "taker_buy_quote", "ignore"
-            ])
+            df = pd.DataFrame(
+                candles,
+                columns=[
+                    "open_time",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "close_time",
+                    "quote_volume",
+                    "trades",
+                    "taker_buy_base",
+                    "taker_buy_quote",
+                    "ignore",
+                ],
+            )
             df["datetime"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
         else:
             # Delta: [{time, open, high, low, close, volume}, ...]
@@ -437,8 +427,7 @@ class AsyncDataDownloader:
                 df["datetime"] = pd.to_datetime(df["t"], unit="s", utc=True)
             # Handle short-form column names
             rename_map = {}
-            for orig, target in [("o", "open"), ("h", "high"), ("l", "low"),
-                                  ("c", "close"), ("v", "volume")]:
+            for orig, target in [("o", "open"), ("h", "high"), ("l", "low"), ("c", "close"), ("v", "volume")]:
                 if orig in df.columns:
                     rename_map[orig] = target
             if rename_map:
@@ -465,34 +454,38 @@ class AsyncDataDownloader:
 
         rows = []
         for ts, row in df.iterrows():
-            rows.append((
-                ts.to_pydatetime(),
-                symbol,
-                resolution,
-                float(row["open"]),
-                float(row["high"]),
-                float(row["low"]),
-                float(row["close"]),
-                float(row.get("volume", 0)),
-            ))
+            rows.append(
+                (
+                    ts.to_pydatetime(),
+                    symbol,
+                    resolution,
+                    float(row["open"]),
+                    float(row["high"]),
+                    float(row["low"]),
+                    float(row["close"]),
+                    float(row.get("volume", 0)),
+                )
+            )
 
         try:
             async with self._db_pool.acquire() as conn:
                 # Use COPY for bulk insert (fastest), with conflict handling
-                await conn.executemany("""
+                await conn.executemany(
+                    """
                     INSERT INTO candles (time, symbol, resolution, open, high, low, close, volume)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     ON CONFLICT (time, symbol, resolution) DO UPDATE
                     SET open = EXCLUDED.open, high = EXCLUDED.high,
                         low = EXCLUDED.low, close = EXCLUDED.close,
                         volume = EXCLUDED.volume
-                """, rows)
+                """,
+                    rows,
+                )
             print(f"[DB] Saved {len(rows)} candles for {symbol} {resolution}")
         except Exception as e:
             print(f"[DB] Save error: {e}")
 
-    async def load_from_db(self, symbol: str, resolution: str,
-                           start_date: str, end_date: str) -> pd.DataFrame:
+    async def load_from_db(self, symbol: str, resolution: str, start_date: str, end_date: str) -> pd.DataFrame:
         """Load candles from database."""
         if not self._db_pool:
             await self._ensure_db()
@@ -501,15 +494,19 @@ class AsyncDataDownloader:
 
         try:
             async with self._db_pool.acquire() as conn:
-                rows = await conn.fetch("""
+                rows = await conn.fetch(
+                    """
                     SELECT time, open, high, low, close, volume
                     FROM candles
                     WHERE symbol = $1 AND resolution = $2
                       AND time >= $3 AND time <= $4
                     ORDER BY time ASC
-                """, symbol, resolution,
-                   datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc),
-                   datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc))
+                """,
+                    symbol,
+                    resolution,
+                    datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc),
+                    datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc),
+                )
 
             if not rows:
                 return pd.DataFrame()
@@ -523,8 +520,7 @@ class AsyncDataDownloader:
             return pd.DataFrame()
 
     # ── Gap Detection ───────────────────────────────────────────
-    def detect_gaps(self, df: pd.DataFrame, resolution: str,
-                    tolerance: float = 1.5) -> List[Tuple[datetime, datetime]]:
+    def detect_gaps(self, df: pd.DataFrame, resolution: str, tolerance: float = 1.5) -> List[Tuple[datetime, datetime]]:
         """
         Detect gaps in candle data where the time difference between
         consecutive candles exceeds tolerance × expected interval.
@@ -554,8 +550,7 @@ class AsyncDataDownloader:
 
         return gaps
 
-    async def fill_gaps(self, df: pd.DataFrame, symbol: str,
-                        resolution: str) -> pd.DataFrame:
+    async def fill_gaps(self, df: pd.DataFrame, symbol: str, resolution: str) -> pd.DataFrame:
         """Detect and fill gaps by fetching missing chunks."""
         gaps = self.detect_gaps(df, resolution)
         if not gaps:
@@ -575,8 +570,7 @@ class AsyncDataDownloader:
         return df
 
     # ── Incremental Sync ────────────────────────────────────────
-    async def incremental_sync(self, symbol: str, resolution: str,
-                                existing_df: pd.DataFrame = None) -> pd.DataFrame:
+    async def incremental_sync(self, symbol: str, resolution: str, existing_df: pd.DataFrame = None) -> pd.DataFrame:
         """
         Only fetch new candles since the last timestamp in existing data.
         Useful for keeping a local cache up-to-date.
@@ -602,25 +596,20 @@ class AsyncDataDownloader:
 
 # ── CLI Entry Point ─────────────────────────────────────────────
 async def main():
-    parser = argparse.ArgumentParser(
-        description="CryptoForge Data Downloader — Async bulk candle download"
+    parser = argparse.ArgumentParser(description="CryptoForge Data Downloader — Async bulk candle download")
+    parser.add_argument(
+        "--symbols",
+        nargs="+",
+        default=["BTCUSDT", "ETHUSDT"],
+        help="Symbols to download (e.g. BTCUSDT ETHUSDT SOLUSDT)",
     )
-    parser.add_argument("--symbols", nargs="+", default=["BTCUSDT", "ETHUSDT"],
-                        help="Symbols to download (e.g. BTCUSDT ETHUSDT SOLUSDT)")
-    parser.add_argument("--resolutions", nargs="+", default=["5m"],
-                        help="Candle resolutions (e.g. 1m 3m 5m)")
-    parser.add_argument("--years", type=float, default=1,
-                        help="Years of history to download (default: 1)")
-    parser.add_argument("--start", type=str, default=None,
-                        help="Start date YYYY-MM-DD (overrides --years)")
-    parser.add_argument("--end", type=str, default=None,
-                        help="End date YYYY-MM-DD (default: today)")
-    parser.add_argument("--to-db", action="store_true",
-                        help="Store results in PostgreSQL/TimescaleDB")
-    parser.add_argument("--to-csv", action="store_true",
-                        help="Save results as CSV files")
-    parser.add_argument("--output-dir", type=str, default="data",
-                        help="Directory for CSV output (default: data/)")
+    parser.add_argument("--resolutions", nargs="+", default=["5m"], help="Candle resolutions (e.g. 1m 3m 5m)")
+    parser.add_argument("--years", type=float, default=1, help="Years of history to download (default: 1)")
+    parser.add_argument("--start", type=str, default=None, help="Start date YYYY-MM-DD (overrides --years)")
+    parser.add_argument("--end", type=str, default=None, help="End date YYYY-MM-DD (default: today)")
+    parser.add_argument("--to-db", action="store_true", help="Store results in PostgreSQL/TimescaleDB")
+    parser.add_argument("--to-csv", action="store_true", help="Save results as CSV files")
+    parser.add_argument("--output-dir", type=str, default="data", help="Directory for CSV output (default: data/)")
     args = parser.parse_args()
 
     end_date = args.end or datetime.utcnow().strftime("%Y-%m-%d")
@@ -631,7 +620,7 @@ async def main():
         start_date = start_dt.strftime("%Y-%m-%d")
 
     print(f"{'='*60}")
-    print(f"  CryptoForge Data Downloader")
+    print("  CryptoForge Data Downloader")
     print(f"  Symbols:     {', '.join(args.symbols)}")
     print(f"  Resolutions: {', '.join(args.resolutions)}")
     print(f"  Period:      {start_date} → {end_date}")
@@ -658,7 +647,7 @@ async def main():
 
         # Print summary statistics
         print(f"\n{'='*60}")
-        print(f"  Download Summary")
+        print("  Download Summary")
         print(f"{'='*60}")
         total_candles = sum(len(df) for df in results.values() if not df.empty)
         print(f"  Total candles: {total_candles:,}")
