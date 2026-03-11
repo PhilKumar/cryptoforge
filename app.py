@@ -2022,6 +2022,18 @@ def _scalp_persist_trade(trade: dict) -> None:
     except Exception as e:
         print(f"[SCALP] Failed to persist trade: {e}")
 
+    # Telegram alert for auto-exits (TP/SL hits from monitor loop)
+    reason = trade.get("exit_reason", trade.get("reason", "auto"))
+    if reason != "manual":  # manual exits already alerted in scalp_exit
+        pnl = round(trade.get("pnl", 0), 2)
+        alerter.alert(
+            "Scalp Exit",
+            f"Symbol: {trade.get('symbol', '—')}\nSide: {trade.get('side', '')}\n"
+            f"P&L: ${pnl:,.2f}\nReason: {reason}\n"
+            f"Entry: ${trade.get('entry_price', 0):,.2f}\nExit: ${trade.get('exit_price', 0):,.2f}",
+            level="info" if pnl >= 0 else "warn",
+        )
+
 
 def _get_scalp_engine():
     global _scalp_engine
@@ -2074,6 +2086,13 @@ async def scalp_enter(request: Request):
                 "Scalp Entry Failed",
                 f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {result.get('message', 'unknown')}",
             )
+        elif result.get("status") == "ok":
+            price = result.get("trade", {}).get("entry_price", 0)
+            alerter.alert(
+                "Scalp Entry",
+                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nSize: {size} contracts\nLeverage: {leverage}x\nEntry: ${price:,.2f}",
+                level="info",
+            )
         return result
     except Exception as e:
         alerter.alert("Scalp Entry Error", f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {e}")
@@ -2091,6 +2110,13 @@ async def scalp_exit(request: Request):
         # _save_scalp_trade_to_history for the Results page:
         if result.get("status") == "ok" and result.get("trade"):
             _save_scalp_trade_to_history(result["trade"])
+            t = result["trade"]
+            pnl = round(t.get("pnl", 0), 2)
+            alerter.alert(
+                "Scalp Exit",
+                f"Symbol: {t.get('symbol', '—')}\nSide: {t.get('side', '')}\nP&L: ${pnl:,.2f}\nReason: manual\nEntry: ${t.get('entry_price', 0):,.2f}\nExit: ${t.get('exit_price', 0):,.2f}",
+                level="info" if pnl >= 0 else "warn",
+            )
         elif result.get("status") == "error":
             alerter.alert("Scalp Exit Failed", f"Trade ID: {trade_id}\nError: {result.get('message', 'unknown')}")
         return result
