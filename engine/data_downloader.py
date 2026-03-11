@@ -254,7 +254,7 @@ class AsyncDataDownloader:
             cursor = chunk_end
 
         total_chunks = len(chunks)
-        print(f"[DELTA] Downloading {symbol} {resolution}: " f"{start_date} → {end_date} ({total_chunks} chunks)")
+        print(f"[DELTA] Downloading {symbol} {resolution}: {start_date} → {end_date} ({total_chunks} chunks)")
 
         # Fetch all chunks concurrently (bounded by semaphore)
         all_candles = []
@@ -264,7 +264,7 @@ class AsyncDataDownloader:
             if candles:
                 all_candles.extend(candles)
             if (idx + 1) % 20 == 0 or idx + 1 == total_chunks:
-                print(f"[DELTA] Progress: {idx + 1}/{total_chunks} chunks " f"({len(all_candles)} candles)")
+                print(f"[DELTA] Progress: {idx + 1}/{total_chunks} chunks ({len(all_candles)} candles)")
 
         # Process in batches to control memory and rate
         batch_size = MAX_CONCURRENT_REQUESTS
@@ -301,7 +301,7 @@ class AsyncDataDownloader:
             cursor = chunk_end
 
         total_chunks = len(chunks)
-        print(f"[BINANCE] Downloading {symbol} {resolution}: " f"{start_date} → {end_date} ({total_chunks} chunks)")
+        print(f"[BINANCE] Downloading {symbol} {resolution}: {start_date} → {end_date} ({total_chunks} chunks)")
 
         all_candles = []
 
@@ -310,7 +310,7 @@ class AsyncDataDownloader:
             if candles:
                 all_candles.extend(candles)
             if (idx + 1) % 20 == 0 or idx + 1 == total_chunks:
-                print(f"[BINANCE] Progress: {idx + 1}/{total_chunks} chunks " f"({len(all_candles)} candles)")
+                print(f"[BINANCE] Progress: {idx + 1}/{total_chunks} chunks ({len(all_candles)} candles)")
 
         batch_size = MAX_CONCURRENT_REQUESTS
         for batch_start in range(0, total_chunks, batch_size):
@@ -366,15 +366,15 @@ class AsyncDataDownloader:
         for symbol in symbols:
             for resolution in resolutions:
                 key = f"{symbol}_{resolution}"
-                print(f"\n{'─'*50}")
+                print(f"\n{'─' * 50}")
                 print(f"[BULK] [{completed + 1}/{total}] {key}")
-                print(f"{'─'*50}")
+                print(f"{'─' * 50}")
 
                 try:
                     df = await self.download(symbol, resolution, start_date, end_date)
                     results[key] = df
                     if not df.empty:
-                        print(f"[BULK] ✓ {key}: {len(df)} candles " f"({df.index[0]} → {df.index[-1]})")
+                        print(f"[BULK] ✓ {key}: {len(df)} candles ({df.index[0]} → {df.index[-1]})")
                     else:
                         print(f"[BULK] ✗ {key}: No data")
                 except Exception as e:
@@ -383,12 +383,12 @@ class AsyncDataDownloader:
 
                 completed += 1
 
-        print(f"\n{'='*50}")
-        print(f"[BULK] Download complete: {self._request_count} requests, " f"{self._error_count} errors")
+        print(f"\n{'=' * 50}")
+        print(f"[BULK] Download complete: {self._request_count} requests, {self._error_count} errors")
         for key, df in results.items():
             status = f"{len(df)} candles" if not df.empty else "EMPTY"
             print(f"  {key}: {status}")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
 
         return results
 
@@ -619,14 +619,14 @@ async def main():
         start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=int(args.years * 365.25))
         start_date = start_dt.strftime("%Y-%m-%d")
 
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print("  CryptoForge Data Downloader")
     print(f"  Symbols:     {', '.join(args.symbols)}")
     print(f"  Resolutions: {', '.join(args.resolutions)}")
     print(f"  Period:      {start_date} → {end_date}")
     print(f"  Database:    {'Yes' if args.to_db else 'No'}")
     print(f"  CSV Output:  {'Yes' if args.to_csv else 'No'}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     downloader = AsyncDataDownloader(use_db=args.to_db)
     try:
@@ -646,9 +646,9 @@ async def main():
                     print(f"[CSV] Saved {path} ({len(df)} rows)")
 
         # Print summary statistics
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("  Download Summary")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         total_candles = sum(len(df) for df in results.values() if not df.empty)
         print(f"  Total candles: {total_candles:,}")
         print(f"  API requests:  {downloader._request_count}")

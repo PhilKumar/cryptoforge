@@ -220,10 +220,7 @@ class DeltaWSFeed:
                     RECONNECT_MAX,
                 )
                 self.reconnect_count += 1
-                print(
-                    f"[WS] Reconnecting in {delay:.1f}s "
-                    f"(attempt {self._reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS})"
-                )
+                print(f"[WS] Reconnecting in {delay:.1f}s (attempt {self._reconnect_attempt}/{MAX_RECONNECT_ATTEMPTS})")
                 await asyncio.sleep(delay)
 
         if self._running:

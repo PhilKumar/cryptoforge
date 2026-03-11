@@ -59,10 +59,10 @@ def _request_with_retry(
             if resp.status_code not in _RETRYABLE_STATUSES:
                 return resp
             last_exc = Exception(f"Delta API {resp.status_code}: {resp.text[:200]}")
-            _delta_log.warning(f"[DELTA] {method} {url} → {resp.status_code} (attempt {attempt+1}/{max_retries})")
+            _delta_log.warning(f"[DELTA] {method} {url} → {resp.status_code} (attempt {attempt + 1}/{max_retries})")
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             last_exc = e
-            _delta_log.warning(f"[DELTA] {method} {url} network error (attempt {attempt+1}/{max_retries}): {e}")
+            _delta_log.warning(f"[DELTA] {method} {url} network error (attempt {attempt + 1}/{max_retries}): {e}")
         if attempt < max_retries - 1:
             _time.sleep(base_delay * (2**attempt))  # 1s, 2s, 4s …
     raise last_exc
@@ -280,7 +280,7 @@ class DeltaClient:
                     if resp.status in _RETRYABLE_STATUSES:
                         last_exc = Exception(f"Delta API {resp.status}")
                         _delta_log.warning(
-                            f"[DELTA] aio GET {path} → {resp.status} (attempt {attempt+1}/{max_retries})"
+                            f"[DELTA] aio GET {path} → {resp.status} (attempt {attempt + 1}/{max_retries})"
                         )
                     else:
                         resp.raise_for_status()
@@ -288,7 +288,7 @@ class DeltaClient:
                         return await resp.json()
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exc = e
-                _delta_log.warning(f"[DELTA] aio GET {path} transient error: {e} (attempt {attempt+1}/{max_retries})")
+                _delta_log.warning(f"[DELTA] aio GET {path} transient error: {e} (attempt {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
                 await asyncio.sleep(base_delay * (2**attempt))
         _circuit_breaker.record_failure()
@@ -310,7 +310,7 @@ class DeltaClient:
                     if resp.status in _RETRYABLE_STATUSES:
                         last_exc = Exception(f"Delta API {resp.status}")
                         _delta_log.warning(
-                            f"[DELTA] aio POST {path} → {resp.status} (attempt {attempt+1}/{max_retries})"
+                            f"[DELTA] aio POST {path} → {resp.status} (attempt {attempt + 1}/{max_retries})"
                         )
                     else:
                         resp.raise_for_status()
@@ -318,7 +318,9 @@ class DeltaClient:
                         return await resp.json()
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exc = e
-                _delta_log.warning(f"[DELTA] aio POST {path} transient error: {e} (attempt {attempt+1}/{max_retries})")
+                _delta_log.warning(
+                    f"[DELTA] aio POST {path} transient error: {e} (attempt {attempt + 1}/{max_retries})"
+                )
             if attempt < max_retries - 1:
                 await asyncio.sleep(base_delay * (2**attempt))
         _circuit_breaker.record_failure()
@@ -389,7 +391,7 @@ class DeltaClient:
                         if pos_size > 0:
                             print(f"[DELTA] Position confirmed: size={pos_size}")
                         else:
-                            print(f"[DELTA] WARNING: Position size is 0 after fill " f"(expected ~{expected_size})")
+                            print(f"[DELTA] WARNING: Position size is 0 after fill (expected ~{expected_size})")
 
                     return {
                         **result,

@@ -904,7 +904,7 @@ _DELTA_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "PAXGU
 
 # ── Data Fetch ────────────────────────────────────────────────────
 def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str = "5m") -> pd.DataFrame:
-    print(f"[DATA] Symbol={symbol}, Interval={candle_interval}, " f"From={from_date}, To={to_date}")
+    print(f"[DATA] Symbol={symbol}, Interval={candle_interval}, From={from_date}, To={to_date}")
 
     # Try Delta Exchange first for supported symbols
     if symbol in _DELTA_SYMBOLS:
@@ -927,12 +927,12 @@ def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str 
 @app.post("/api/backtest")
 async def api_run_backtest(payload: StrategyPayload):
     try:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"[BACKTEST] Run: {payload.run_name}")
         print(f"[BACKTEST] Symbol: {payload.symbol}, Leverage: {payload.leverage}x")
         print(f"[BACKTEST] Side: {payload.trade_side}, Interval: {payload.candle_interval}")
         print(f"[BACKTEST] Indicators: {payload.indicators}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         df_raw = await asyncio.to_thread(
             _fetch_data,

@@ -418,7 +418,7 @@ class LiveEngine:
                                         attempt = trade["_exit_attempts"]
                                         self.log_event(
                                             "error",
-                                            f"Exit order rejected (attempt {attempt}/3): " f"{exit_result['error']}",
+                                            f"Exit order rejected (attempt {attempt}/3): {exit_result['error']}",
                                         )
                                         if attempt >= 3:
                                             self.log_event(

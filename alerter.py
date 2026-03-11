@@ -101,7 +101,7 @@ def alert(title: str, body: str, level: str = "error") -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # HTML for Telegram
-    html = f"{icon} <b>[CryptoForge] {title}</b>\n" f"<code>{ts}</code>\n\n" f"{body}"
+    html = f"{icon} <b>[CryptoForge] {title}</b>\n<code>{ts}</code>\n\n{body}"
     # Plain for Discord
     plain = f"{icon} **[CryptoForge] {title}**\n`{ts}`\n\n{body}"
 

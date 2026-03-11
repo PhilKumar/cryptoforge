@@ -434,7 +434,7 @@ class ScalpEngine:
                 trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
                 self._log(
                     "error",
-                    f"Exit order FAILED for trade {trade.trade_id} " f"(attempt {trade._exit_attempts}): {e}",
+                    f"Exit order FAILED for trade {trade.trade_id} (attempt {trade._exit_attempts}): {e}",
                 )
                 if trade._exit_attempts >= 3:
                     self._log(
