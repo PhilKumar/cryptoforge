@@ -17,3 +17,4 @@ _validate*.py
 *.tmp
 .sessions.json
 live_state_*.json
+Tier A*
