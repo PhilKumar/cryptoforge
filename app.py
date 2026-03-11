@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import alerter
-import config
+import config  # must be first — calls load_dotenv()
 from broker.delta import DeltaClient, get_candles_binance
 from engine.backtest import DEFAULT_ENTRY_CONDITIONS, DEFAULT_EXIT_CONDITIONS, run_backtest
 from engine.live import LiveEngine
