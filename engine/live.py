@@ -500,6 +500,7 @@ class LiveEngine:
         self.running = False
 
     def get_status(self) -> dict:
+        closed_rows = self.closed_trades[-200:]
         return {
             "running": self.running,
             "run_id": self.run_id or "",
@@ -512,11 +513,12 @@ class LiveEngine:
             "side": self.strategy.get("trade_side", "LONG"),
             "open_positions": len(self.open_trades),
             "closed_trades": len(self.closed_trades),
+            "closed_trade_rows": closed_rows,
             "trades_today": self.trades_today,
             "total_pnl": round(self.total_pnl, 2),
             "daily_pnl": round(self.daily_pnl, 2),
             "open_trades": self.open_trades,
-            "recent_trades": self.closed_trades[-10:],
+            "recent_trades": closed_rows[-10:],
             "current_candle": self.current_candle,
             "current_indicators": self.current_indicators,
             "event_log": [

@@ -1520,6 +1520,7 @@ async def engines_all():
                         "mode": "paper",
                         "open_positions": 0,
                         "closed_trades": len(trades),
+                        "closed_trade_rows": trades[-200:],
                         "total_pnl": last.get("total_pnl", 0),
                         "trades_today": len(trades),
                         "strategy_name": last.get("run_name", "Last Paper Run"),

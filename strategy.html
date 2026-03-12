@@ -3732,19 +3732,7 @@ async function viewRun(rid) {
 
 // ── Trade Log: Full Dates, Sort, Pagination ────────────────
 function fmtDt(dtStr) {
-  if (!dtStr) return '—';
-  try {
-    const s = String(dtStr);
-    // Fast path: ISO / "YYYY-MM-DD HH:MM:SS" strings — extract HH:MM:SS directly
-    const m = s.match(/(\d{2}:\d{2}:\d{2})/);
-    if (m) return m[1];
-    const d = new Date(dtStr);
-    if (isNaN(d)) return s.slice(0, 19).replace('T', ' ');
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    return hh + ':' + mm + ':' + ss;
-  } catch(e) { return dtStr; }
+  return _fmtTradeDateTime(dtStr);
 }
 
 function reasonTag(reason) {
@@ -5114,6 +5102,221 @@ function copyEditStrategy(data) {
 let _liveMonitorInterval = null;
 let _liveEngines = [];
 let _liveSelectedTab = 0; // index of selected tab
+let _liveTradeFilters = {};
+let _liveTradeSelections = {};
+
+function _escapeJsString(str) {
+  return String(str == null ? '' : str).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function _escapeHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function _getLiveEngineByRunId(runId) {
+  for (var i = 0; i < _liveEngines.length; i++) {
+    if ((_liveEngines[i].run_id || '') === runId) return _liveEngines[i];
+  }
+  return _liveEngines[_liveSelectedTab] || null;
+}
+
+function _getLiveTradeState(runId) {
+  if (!_liveTradeFilters[runId]) _liveTradeFilters[runId] = { mode: 'all', query: '' };
+  if (!_liveTradeSelections[runId]) _liveTradeSelections[runId] = {};
+  return {
+    filters: _liveTradeFilters[runId],
+    selected: _liveTradeSelections[runId],
+  };
+}
+
+function _getLiveTradeRowKey(trade) {
+  if (trade && trade.id !== undefined && trade.id !== null && trade.id !== '') return 'id:' + trade.id;
+  return [
+    trade && trade.symbol || '',
+    trade && trade.side || '',
+    trade && trade.entry_time || '',
+    trade && trade.exit_time || '',
+    trade && trade.entry_price || '',
+  ].join('|');
+}
+
+function _getLiveClosedTradeRows(data) {
+  var rows = [];
+  if (Array.isArray(data.closed_trade_rows) && data.closed_trade_rows.length) rows = data.closed_trade_rows.slice();
+  else if (Array.isArray(data.recent_trades) && data.recent_trades.length) rows = data.recent_trades.slice();
+  return rows.reverse();
+}
+
+function _getTradeDateParts(raw) {
+  if (!raw || raw === 'None') return { date: '—', time: '—', label: '—' };
+  var s = String(raw).trim().replace('T', ' ');
+  var full = s.match(/(\d{4})-(\d{2})-(\d{2}).*?(\d{2}:\d{2}:\d{2})/);
+  if (full) {
+    var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var monthIdx = Math.max(0, Math.min(11, parseInt(full[2], 10) - 1));
+    var date = full[3] + ' ' + months[monthIdx] + ' ' + full[1];
+    var time = full[4] + ' IST';
+    return { date: date, time: time, label: date + ', ' + time };
+  }
+  var timeOnly = s.match(/(\d{2}:\d{2}:\d{2})/);
+  if (timeOnly) return { date: '—', time: timeOnly[1] + ' IST', label: timeOnly[1] + ' IST' };
+  return { date: s, time: '', label: s };
+}
+
+function _fmtTradeDateTime(raw) {
+  var parts = _getTradeDateParts(raw);
+  if (parts.date === '—') return parts.label;
+  return parts.time ? (parts.date + ', ' + parts.time) : parts.date;
+}
+
+function _fmtUsd(usd) {
+  var n = parseFloat(usd);
+  if (isNaN(n)) n = 0;
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _filterLiveClosedTrades(rows, filters) {
+  var mode = (filters.mode || 'all').toLowerCase();
+  var query = (filters.query || '').trim().toLowerCase();
+  return rows.filter(function(t) {
+    var side = String(t.side || '').toUpperCase();
+    var pnl = parseFloat(t.pnl) || 0;
+    if (mode === 'long' && side !== 'LONG') return false;
+    if (mode === 'short' && side !== 'SHORT') return false;
+    if (mode === 'wins' && pnl < 0) return false;
+    if (mode === 'losses' && pnl >= 0) return false;
+    if (!query) return true;
+    var hay = [
+      t.id,
+      t.symbol,
+      t.side,
+      t.exit_reason,
+      _fmtTradeDateTime(t.entry_time),
+      _fmtTradeDateTime(t.exit_time),
+      t.leverage,
+      t.size,
+      t.notional,
+    ].join(' ').toLowerCase();
+    return hay.indexOf(query) !== -1;
+  });
+}
+
+function _rerenderLiveTradeTable(runId) {
+  var eng = _getLiveEngineByRunId(runId);
+  if (!eng) return;
+  renderLivePanel(eng, _liveSelectedTab);
+}
+
+function _setLiveTradeFilter(runId, mode) {
+  _getLiveTradeState(runId).filters.mode = mode;
+  _rerenderLiveTradeTable(runId);
+}
+
+function _setLiveTradeQuery(runId, query) {
+  _getLiveTradeState(runId).filters.query = query;
+  _rerenderLiveTradeTable(runId);
+}
+
+function _toggleLiveTradeCheck(runId, tradeKey, checked) {
+  var sel = _getLiveTradeState(runId).selected;
+  if (checked) sel[tradeKey] = true;
+  else delete sel[tradeKey];
+  _rerenderLiveTradeTable(runId);
+}
+
+function _toggleAllLiveTradeChecks(runId, checked) {
+  var eng = _getLiveEngineByRunId(runId);
+  if (!eng) return;
+  var state = _getLiveTradeState(runId);
+  var visible = _filterLiveClosedTrades(_getLiveClosedTradeRows(eng), state.filters);
+  visible.forEach(function(t) {
+    var key = _getLiveTradeRowKey(t);
+    if (checked) state.selected[key] = true;
+    else delete state.selected[key];
+  });
+  _rerenderLiveTradeTable(runId);
+}
+
+function _clearLiveTradeSelection(runId) {
+  _liveTradeSelections[runId] = {};
+  _rerenderLiveTradeTable(runId);
+}
+
+function _exportLiveTradeSelection(runId) {
+  var eng = _getLiveEngineByRunId(runId);
+  if (!eng) return;
+  var rows = _getLiveClosedTradeRows(eng);
+  var selected = _getLiveTradeState(runId).selected;
+  var picked = rows.filter(function(t) { return !!selected[_getLiveTradeRowKey(t)]; });
+  if (!picked.length) {
+    cfToast('Select at least one completed trade first.', 'warn');
+    return;
+  }
+
+  function esc(v) {
+    var s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  var lines = [[
+    'Trade ID',
+    'Symbol',
+    'Side',
+    'Entry Time',
+    'Exit Time',
+    'Entry USD',
+    'Entry INR',
+    'Exit USD',
+    'Exit INR',
+    'PnL USD',
+    'PnL INR',
+    'Reason',
+    'Leverage',
+    'Size',
+    'Notional USD',
+    'Notional INR',
+  ].join(',')];
+
+  picked.forEach(function(t) {
+    var entry = parseFloat(t.entry_price) || 0;
+    var exit = parseFloat(t.exit_price) || 0;
+    var pnl = parseFloat(t.pnl) || 0;
+    var notional = parseFloat(t.notional) || 0;
+    lines.push([
+      esc(t.id || ''),
+      esc(t.symbol || ''),
+      esc(t.side || ''),
+      esc(_fmtTradeDateTime(t.entry_time)),
+      esc(_fmtTradeDateTime(t.exit_time)),
+      esc(entry.toFixed(2)),
+      esc(fmtINRPrice(entry)),
+      esc(exit.toFixed(2)),
+      esc(fmtINRPrice(exit)),
+      esc(pnl.toFixed(2)),
+      esc(fmtINR(pnl)),
+      esc(t.exit_reason || ''),
+      esc(t.leverage || ''),
+      esc(t.size || ''),
+      esc(notional.toFixed(2)),
+      esc(fmtINR(notional)),
+    ].join(','));
+  });
+
+  var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = (runId || 'engine') + '_selected_trades.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 250);
+}
 
 function startLiveMonitor() {
   loadLiveMonitor();
@@ -5221,6 +5424,7 @@ function renderLivePanel(d, idx) {
   var name = d.strategy_name || d.run_name || 'Strategy';
   var mode = d.mode || 'paper';
   var runId = d.run_id || '';
+  var safeRunId = _escapeJsString(runId);
   var pnl = parseFloat(d.total_pnl) || 0;
   var dailyPnl = parseFloat(d.daily_pnl) || 0;
 
@@ -5307,7 +5511,7 @@ function renderLivePanel(d, idx) {
   html += '<h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📈 Open Positions</h4>';
   html += '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;overflow:hidden;margin-bottom:12px;">';
   html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
-  html += '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.06);color:var(--muted);"><th style="padding:7px 10px;text-align:left;">Symbol</th><th style="text-align:right;padding:7px 10px;">Side</th><th style="text-align:right;padding:7px 10px;">Entry $</th><th style="text-align:right;padding:7px 10px;">Notional</th></tr></thead>';
+  html += '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.06);color:var(--muted);"><th style="padding:7px 10px;text-align:left;">Symbol</th><th style="text-align:right;padding:7px 10px;">Side</th><th style="text-align:right;padding:7px 10px;">Entry ₹</th><th style="text-align:right;padding:7px 10px;">Notional</th></tr></thead>';
   html += '<tbody>';
   if (!openTrades.length) {
     html += '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--muted);font-size:12px;">No open positions</td></tr>';
@@ -5341,29 +5545,88 @@ function renderLivePanel(d, idx) {
   html += '</div>'; // end 2-column grid
 
   // ── Completed Trades table (full width)
-  var closedTrades = (d.recent_trades || []).slice().reverse();
+  var closedTrades = _getLiveClosedTradeRows(d);
+  var tradeState = _getLiveTradeState(runId);
+  var tradeFilters = tradeState.filters;
+  var tradeSelected = tradeState.selected;
+  var visibleTrades = _filterLiveClosedTrades(closedTrades, tradeFilters);
+  var closedTradeTotal = typeof d.closed_trades === 'number' ? d.closed_trades : closedTrades.length;
+  var closedTradeSummary = closedTradeTotal > closedTrades.length
+    ? (visibleTrades.length + ' shown from latest ' + closedTrades.length + ' of ' + closedTradeTotal + ' trades')
+    : (visibleTrades.length + ' shown of ' + closedTradeTotal + ' trade' + (closedTradeTotal === 1 ? '' : 's'));
+  var existingKeys = {};
+  closedTrades.forEach(function(t) { existingKeys[_getLiveTradeRowKey(t)] = true; });
+  Object.keys(tradeSelected).forEach(function(key) {
+    if (!existingKeys[key]) delete tradeSelected[key];
+  });
+  var selectedCount = closedTrades.filter(function(t) { return !!tradeSelected[_getLiveTradeRowKey(t)]; }).length;
+  var visibleAllSelected = visibleTrades.length > 0 && visibleTrades.every(function(t) {
+    return !!tradeSelected[_getLiveTradeRowKey(t)];
+  });
+  var filterDefs = [
+    { key: 'all', label: 'All' },
+    { key: 'long', label: 'Long' },
+    { key: 'short', label: 'Short' },
+    { key: 'wins', label: 'Wins' },
+    { key: 'losses', label: 'Losses' },
+  ];
   html += '<div style="margin:0 28px 28px;">';
-  html += '<h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📊 Completed Trades</h4>';
-  html += '<div style="overflow-x:auto;background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;">';
-  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
-  html += '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.06);color:var(--muted);">';
-  html += '<th style="padding:8px 10px;text-align:left;">Symbol</th><th>Entry Time</th><th>Exit Time</th><th>Side</th><th style="text-align:right;">Entry $</th><th style="text-align:right;">Exit $</th><th style="text-align:right;">P&L</th><th>Reason</th>';
+  html += '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:0 0 8px;">';
+  html += '<div>';
+  html += '<h4 style="margin:0;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📊 Completed Trades</h4>';
+  html += '<div style="margin-top:4px;font-size:11px;color:var(--muted);">' + closedTradeSummary + '</div>';
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+  html += filterDefs.map(function(def) {
+    var active = tradeFilters.mode === def.key;
+    var style = active
+      ? 'background:rgba(34,197,94,0.16);border-color:rgba(34,197,94,0.35);color:#86efac;'
+      : 'background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.08);color:var(--muted);';
+    return '<button class="btn btn-outline btn-sm" onclick="_setLiveTradeFilter(\'' + safeRunId + '\',\'' + def.key + '\')" style="padding:5px 10px;font-size:11px;' + style + '">' + def.label + '</button>';
+  }).join('');
+  html += '<input type="text" value="' + _escapeHtml(tradeFilters.query || '') + '" onchange="_setLiveTradeQuery(\'' + safeRunId + '\', this.value)" onkeydown="if(event.key===\'Enter\'){_setLiveTradeQuery(\'' + safeRunId + '\', this.value)}" placeholder="Search symbol, date, reason" style="width:220px;padding:7px 10px;font-size:11px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);color:var(--text);">';
+  html += '</div></div>';
+  if (selectedCount > 0) {
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;margin-bottom:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.16);border-radius:10px;">';
+    html += '<div style="font-size:11px;color:#bfdbfe;">' + selectedCount + ' trade' + (selectedCount === 1 ? '' : 's') + ' selected</div>';
+    html += '<div style="display:flex;gap:8px;align-items:center;">';
+    html += '<button class="btn btn-outline btn-sm" onclick="_exportLiveTradeSelection(\'' + safeRunId + '\')" style="padding:5px 12px;font-size:11px;">📥 Export Selected</button>';
+    html += '<button class="btn btn-outline btn-sm" onclick="_clearLiveTradeSelection(\'' + safeRunId + '\')" style="padding:5px 12px;font-size:11px;">Clear</button>';
+    html += '</div></div>';
+  }
+  html += '<div style="overflow:auto;max-height:420px;background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:1080px;">';
+  html += '<thead><tr style="position:sticky;top:0;background:rgba(10,14,24,0.96);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,0.08);color:var(--muted);z-index:1;">';
+  html += '<th style="padding:8px 10px;text-align:center;width:36px;"><input type="checkbox" class="tbl-chk" onchange="_toggleAllLiveTradeChecks(\'' + safeRunId + '\', this.checked)"' + (visibleAllSelected ? ' checked' : '') + '></th>';
+  html += '<th style="padding:8px 10px;text-align:left;">Trade</th><th style="padding:8px 10px;text-align:left;">Entry At</th><th style="padding:8px 10px;text-align:left;">Exit At</th><th style="padding:8px 10px;text-align:left;">Side</th><th style="padding:8px 10px;text-align:right;">Entry ₹</th><th style="padding:8px 10px;text-align:right;">Exit ₹</th><th style="padding:8px 10px;text-align:right;">P&amp;L</th><th style="padding:8px 10px;text-align:left;">Reason</th>';
   html += '</tr></thead><tbody>';
   if (!closedTrades.length) {
-    html += '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted);">No completed trades yet</td></tr>';
+    html += '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted);">No completed trades yet</td></tr>';
+  } else if (!visibleTrades.length) {
+    html += '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted);">No trades match the current filters.</td></tr>';
   } else {
-    closedTrades.forEach(function(t) {
+    visibleTrades.forEach(function(t) {
+      var key = _getLiveTradeRowKey(t);
       var tpnl = parseFloat(t.pnl) || 0;
-      var fmtTime = function(ts) { if (!ts) return '—'; var s = String(ts); var m = s.match(/(\d{2}:\d{2}:\d{2})/); return m ? m[1] + ' IST' : s.slice(0, 19); };
+      var entryPrice = parseFloat(t.entry_price) || 0;
+      var exitPrice = parseFloat(t.exit_price) || 0;
+      var entryParts = _getTradeDateParts(t.entry_time);
+      var exitParts = _getTradeDateParts(t.exit_time);
+      var meta = [];
+      if (t.id !== undefined && t.id !== null && t.id !== '') meta.push('#' + t.id);
+      if (t.leverage) meta.push(t.leverage + 'x');
+      if (t.size) meta.push('size ' + t.size);
+      if (t.notional) meta.push(fmtINR(parseFloat(t.notional) || 0) + ' notional');
       html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
-      html += '<td style="padding:7px 10px;">' + (t.symbol || d.symbol || '—') + '</td>';
-      html += '<td style="padding:7px 10px;">' + fmtTime(t.entry_time) + '</td>';
-      html += '<td style="padding:7px 10px;">' + fmtTime(t.exit_time) + '</td>';
-      html += '<td style="padding:7px 10px;color:' + ((t.side||'').toLowerCase() === 'long' ? 'var(--green)' : 'var(--red)') + ';">' + (t.side || '—') + '</td>';
-      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINRPrice(parseFloat(t.entry_price) || 0) + '</td>';
-      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINRPrice(parseFloat(t.exit_price) || 0) + '</td>';
-      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;color:' + (tpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + tpnl.toFixed(2) + '</td>';
-      html += '<td style="padding:7px 10px;">' + (t.exit_reason || '—') + '</td>';
+      html += '<td style="padding:7px 10px;text-align:center;"><input type="checkbox" class="tbl-chk" onchange="_toggleLiveTradeCheck(\'' + safeRunId + '\',\'' + _escapeJsString(key) + '\', this.checked)"' + (tradeSelected[key] ? ' checked' : '') + '></td>';
+      html += '<td style="padding:7px 10px;"><div style="font-weight:600;">' + (t.symbol || d.symbol || '—') + '</div><div style="margin-top:3px;font-size:10px;color:var(--muted);">' + (meta.length ? meta.join(' • ') : '—') + '</div></td>';
+      html += '<td style="padding:7px 10px;"><div style="font-weight:600;">' + entryParts.date + '</div><div style="margin-top:3px;font-size:11px;color:var(--muted);font-family:\'JetBrains Mono\',monospace;">' + entryParts.time + '</div></td>';
+      html += '<td style="padding:7px 10px;"><div style="font-weight:600;">' + exitParts.date + '</div><div style="margin-top:3px;font-size:11px;color:var(--muted);font-family:\'JetBrains Mono\',monospace;">' + exitParts.time + '</div></td>';
+      html += '<td style="padding:7px 10px;"><span class="tag ' + ((t.side || '').toUpperCase() === 'LONG' ? 'tag-green' : 'tag-red') + '">' + (t.side || '—') + '</span></td>';
+      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;"><div>' + fmtINRPrice(entryPrice) + '</div><div style="margin-top:3px;font-size:10px;color:var(--muted);">' + _fmtUsd(entryPrice) + '</div></td>';
+      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;"><div>' + fmtINRPrice(exitPrice) + '</div><div style="margin-top:3px;font-size:10px;color:var(--muted);">' + _fmtUsd(exitPrice) + '</div></td>';
+      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;color:' + (tpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;"><div>' + fmtINR(tpnl) + '</div><div style="margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;">' + _fmtUsd(tpnl) + '</div></td>';
+      html += '<td style="padding:7px 10px;">' + reasonTag(t.exit_reason || '—') + '</td>';
       html += '</tr>';
     });
   }
@@ -5968,8 +6231,8 @@ document.addEventListener('keydown', function(e) {
               <th class="sortable-th" data-col="entry_time" onclick="sortTrades('entry_time')">Entry Time <span class="sort-icon" id="sort-entry_time">▲</span></th>
               <th class="sortable-th" data-col="exit_time" onclick="sortTrades('exit_time')">Exit Time <span class="sort-icon" id="sort-exit_time">▲</span></th>
               <th class="sortable-th" data-col="side" onclick="sortTrades('side')">Side <span class="sort-icon" id="sort-side">▲</span></th>
-              <th class="sortable-th" data-col="entry_price" onclick="sortTrades('entry_price')">Entry $ <span class="sort-icon" id="sort-entry_price">▲</span></th>
-              <th class="sortable-th" data-col="exit_price" onclick="sortTrades('exit_price')">Exit $ <span class="sort-icon" id="sort-exit_price">▲</span></th>
+              <th class="sortable-th" data-col="entry_price" onclick="sortTrades('entry_price')">Entry ₹ <span class="sort-icon" id="sort-entry_price">▲</span></th>
+              <th class="sortable-th" data-col="exit_price" onclick="sortTrades('exit_price')">Exit ₹ <span class="sort-icon" id="sort-exit_price">▲</span></th>
               <th class="sortable-th" data-col="pnl" onclick="sortTrades('pnl')">P&amp;L <span class="sort-icon" id="sort-pnl">▲</span></th>
               <th class="sortable-th" data-col="exit_reason" onclick="sortTrades('exit_reason')">Reason <span class="sort-icon" id="sort-exit_reason">▲</span></th>
             </tr></thead>
