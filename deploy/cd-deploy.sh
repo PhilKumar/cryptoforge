@@ -56,6 +56,13 @@ pip install -q --disable-pip-version-check -r "$APP_DIR/requirements.txt"
 
 # ── 2. Stop standby if somehow still running ──────────────────
 sudo systemctl stop "${APP}@${STANDBY_PORT}" 2>/dev/null || true
+
+# ── 2b. Kill any stale process holding the standby port ───────
+if sudo fuser "${STANDBY_PORT}/tcp" >/dev/null 2>&1; then
+    log "⚠ Stale process on port $STANDBY_PORT — killing..."
+    sudo fuser -k "${STANDBY_PORT}/tcp" 2>/dev/null || true
+    sleep 1
+fi
 sleep 1
 
 # ── 3. Start standby instance ────────────────────────────────
@@ -66,6 +73,8 @@ sudo systemctl start "${APP}@${STANDBY_PORT}"
 log "Waiting for standby health check..."
 if ! health_check "$STANDBY_PORT"; then
     log "ROLLBACK — standby failed health check! Stopping standby."
+    log "── Last 40 lines of journal for ${APP}@${STANDBY_PORT} ──"
+    sudo journalctl -u "${APP}@${STANDBY_PORT}" --no-pager -n 40 || true
     sudo systemctl stop "${APP}@${STANDBY_PORT}" 2>/dev/null || true
     die "Deploy aborted. Active instance on port $ACTIVE_PORT unchanged."
 fi
