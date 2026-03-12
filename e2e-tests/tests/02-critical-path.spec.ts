@@ -2,7 +2,7 @@
  * 02-critical-path.spec.ts
  * Regression suite for the 6 CryptoForge hotfixes:
  *   1. View modal renders HTML, not raw tag strings
- *   2. Timestamps shown as HH:MM:SS
+ *   2. Shared trade timestamps show full date + time
  *   3. Paper trades appear under the Paper filter
  *   4. Scalp filter button exists and works
  *   5. Paper engine transitions from Scanning → In Trade
@@ -72,9 +72,11 @@ test.describe('Phase 1 — UI & Rendering', () => {
     // Start a paper engine so there is an active panel to inspect
     const runId = await deployPaperStrategy(page);
 
-    // Wait for the panel to appear, then click "View"
-    await page.waitForSelector(`button:has-text("View")`, { timeout: 15_000 });
-    await page.click(`button:has-text("View")`);
+    // Force a monitor refresh, then wait for the engine-panel action specifically.
+    await page.evaluate(() => typeof loadLiveMonitor === 'function' && loadLiveMonitor());
+    const viewBtn = page.locator('#live-panels-container button[onclick*="viewEngineDetails"]').first();
+    await expect(viewBtn).toBeVisible({ timeout: 15_000 });
+    await viewBtn.click();
 
     // Target the engine-details modal specifically (multiple .cf-modal exist in the DOM)
     const modal = page.locator('.cf-modal').filter({ hasText: 'Engine Details' });
@@ -95,22 +97,10 @@ test.describe('Phase 1 — UI & Rendering', () => {
     await page.request.post('/api/paper/stop', { data: { run_id: runId } });
   });
 
-  // ── Bug 2: Timestamps must be HH:MM:SS ──────────────────────
-  test('Trade table timestamps match HH:MM:SS format', async ({ page }) => {
-    await page.goto('/');
-    await page.click('#nav-results');
-
-    // If there are trades in the table, every non-dash time cell matches HH:MM:SS
-    const timeCells = page.locator('td[style*="white-space:nowrap"]');
-    const count = await timeCells.count();
-
-    for (let i = 0; i < Math.min(count, 20); i++) {
-      const text = (await timeCells.nth(i).innerText()).trim();
-      if (text && text !== '—') {
-        // Must match HH:MM:SS (not a full date like 2024-01-01 12:34:56)
-        expect(text).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-      }
-    }
+  // ── Bug 2: Shared formatter must include full date + time ───
+  test('Shared trade formatter includes date and time', async ({ page }) => {
+    const formatted = await page.evaluate(() => (window as Window & { fmtDt: (s: string) => string }).fmtDt('2026-03-10 13:37:55'));
+    expect(formatted).toBe('10 Mar 2026, 13:37:55 IST');
   });
 
 });

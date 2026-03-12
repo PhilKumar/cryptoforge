@@ -6,6 +6,7 @@ __pycache__/
 runs.json
 strategies.json
 node_modules/
+.venv/
 .DS_Store
 *.log
 *.bak
@@ -18,3 +19,5 @@ _validate*.py
 .sessions.json
 live_state_*.json
 Tier A*
+e2e-tests/playwright-report/
+e2e-tests/test-results/
