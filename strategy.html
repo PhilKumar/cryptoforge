@@ -732,6 +732,11 @@
   .sort-icon { font-size: 10px; margin-left: 4px; opacity: 0.5; }
   .sort-icon.active { opacity: 1; color: var(--accent); }
 
+  /* ── Table Checkboxes ── */
+  .tbl-cb { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+  .bulk-bar { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .bulk-bar .bulk-count { font-size:12px; color:var(--muted); }
+
   /* ── Pagination ── */
   .pagination-bar {
     display: flex; justify-content: space-between; align-items: center;
@@ -1855,13 +1860,13 @@
     <table class="trade-table" id="market-table" style="font-size: 14px;">
       <thead>
         <tr>
-          <th style="padding-left:16px;">#</th>
-          <th>Coin</th>
-          <th style="text-align:right;">Price</th>
-          <th style="text-align:right;">24h %</th>
-          <th style="text-align:right;">Volume (24h)</th>
-          <th style="text-align:right;">Market Cap</th>
-          <th style="text-align:right;">ATH</th>
+          <th class="sortable-th" style="padding-left:16px;" onclick="sortMarketTable('rank')"># <span class="sort-icon mkt-sort" id="mkts-rank">▲</span></th>
+          <th class="sortable-th" onclick="sortMarketTable('name')">Coin <span class="sort-icon mkt-sort" id="mkts-name">▲</span></th>
+          <th class="sortable-th" style="text-align:right;" onclick="sortMarketTable('price')">Price <span class="sort-icon mkt-sort" id="mkts-price">▲</span></th>
+          <th class="sortable-th" style="text-align:right;" onclick="sortMarketTable('change_24h')">24h % <span class="sort-icon mkt-sort" id="mkts-change_24h">▲</span></th>
+          <th class="sortable-th" style="text-align:right;" onclick="sortMarketTable('volume_24h')">Volume (24h) <span class="sort-icon mkt-sort" id="mkts-volume_24h">▲</span></th>
+          <th class="sortable-th" style="text-align:right;" onclick="sortMarketTable('market_cap')">Market Cap <span class="sort-icon mkt-sort" id="mkts-market_cap">▲</span></th>
+          <th class="sortable-th" style="text-align:right;" onclick="sortMarketTable('ath')">ATH <span class="sort-icon mkt-sort" id="mkts-ath">▲</span></th>
           <th style="text-align:center;">Trade</th>
         </tr>
       </thead>
@@ -2042,7 +2047,7 @@
      ═══════════════════════════════════════════════════════ -->
 <div id="results-page" class="page-section">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
-    <h2>📊 All Runs</h2>
+    <h2><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px;opacity:0.8;"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>All Runs</h2>
     <div style="display:flex;gap:8px;align-items:center;">
       <div id="runs-filter-bar" style="display: flex; gap: 6px;">
         <button class="btn btn-sm runs-filter-btn active" data-filter="all" onclick="filterRuns('all', this)" style="font-size: 11px; padding: 5px 12px; background: var(--accent); color: #000;">All</button>
@@ -2053,6 +2058,12 @@
       </div>
       <button class="btn btn-outline btn-sm" onclick="toggleCompare()">⚖️ Compare</button>
     </div>
+  </div>
+
+  <!-- Bulk action bar -->
+  <div id="runs-bulk-bar" class="bulk-bar" style="display:none;">
+    <span class="bulk-count" id="runs-bulk-count">0 selected</span>
+    <button class="btn btn-danger btn-sm" onclick="bulkDeleteRuns()">🗑 Delete Selected</button>
   </div>
 
   <!-- Compare Panel (hidden by default) -->
@@ -2075,12 +2086,19 @@
     <div style="overflow-x:auto;">
       <table class="trade-table" id="runs-table">
         <thead><tr>
-          <th>Mode</th><th>Name</th><th>Symbol</th><th class="num">Lev</th>
-          <th class="num">Trades</th><th class="num">Win Rate</th><th class="num">P&L</th>
-          <th>Date</th><th>Actions</th>
+          <th style="width:30px;"><input type="checkbox" class="tbl-cb" onchange="toggleAllRunsCb(this)"></th>
+          <th class="sortable-th" onclick="sortRunsTable('mode')">Mode <span class="sort-icon rt-sort" id="rts-mode">▲</span></th>
+          <th class="sortable-th" onclick="sortRunsTable('run_name')">Name <span class="sort-icon rt-sort" id="rts-run_name">▲</span></th>
+          <th class="sortable-th" onclick="sortRunsTable('symbol')">Symbol <span class="sort-icon rt-sort" id="rts-symbol">▲</span></th>
+          <th class="sortable-th num" onclick="sortRunsTable('leverage')">Lev <span class="sort-icon rt-sort" id="rts-leverage">▲</span></th>
+          <th class="sortable-th num" onclick="sortRunsTable('trade_count')">Trades <span class="sort-icon rt-sort" id="rts-trade_count">▲</span></th>
+          <th class="sortable-th num" onclick="sortRunsTable('win_rate')">Win Rate <span class="sort-icon rt-sort" id="rts-win_rate">▲</span></th>
+          <th class="sortable-th num" onclick="sortRunsTable('total_pnl')">P&amp;L <span class="sort-icon rt-sort" id="rts-total_pnl">▲</span></th>
+          <th class="sortable-th" onclick="sortRunsTable('created_at')">Date <span class="sort-icon rt-sort" id="rts-created_at">▲</span></th>
+          <th>Actions</th>
         </tr></thead>
         <tbody id="results-list">
-          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No runs yet.</td></tr>
+          <tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No runs yet.</td></tr>
         </tbody>
       </table>
     </div>
@@ -2150,13 +2168,19 @@
 
   <!-- Open Positions -->
   <div class="card" style="margin-bottom:20px;">
-    <h3 style="margin-bottom:14px;">📊 Open Positions</h3>
+    <h3 style="margin-bottom:14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>Open Positions</h3>
     <div style="overflow-x:auto;">
       <table class="trade-table" id="pf-positions-table">
         <thead><tr>
-          <th>Symbol</th><th>Side</th><th>Size</th><th>Entry Price</th>
-          <th>Mark Price</th><th>Leverage</th><th>Unrealized P&L</th><th>Realized P&L</th>
-          <th>Liq. Price</th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',0)">Symbol <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',1)">Side <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',2)">Size <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',3)">Entry Price <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',4)">Mark Price <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',5)">Leverage <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',6)">Unrealized P&amp;L <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',7)">Realized P&amp;L <span class="sort-icon pf-pos-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-positions',8)">Liq. Price <span class="sort-icon pf-pos-sort">▲</span></th>
         </tr></thead>
         <tbody id="pf-positions-body">
           <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No open positions</td></tr>
@@ -2167,12 +2191,17 @@
 
   <!-- Filled Orders (Recent) -->
   <div class="card" style="margin-bottom:20px;">
-    <h3 style="margin-bottom:14px;">📋 Recent Filled Orders</h3>
+    <h3 style="margin-bottom:14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>Recent Filled Orders</h3>
     <div style="overflow-x:auto;">
       <table class="trade-table" id="pf-orders-table">
         <thead><tr>
-          <th>Time</th><th>Symbol</th><th>Side</th><th>Size</th>
-          <th>Fill Price</th><th>Order Type</th><th>Status</th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',0)">Time <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',1)">Symbol <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',2)">Side <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',3)">Size <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',4)">Fill Price <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',5)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',6)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
         </tr></thead>
         <tbody id="pf-orders-body">
           <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
@@ -2350,8 +2379,15 @@
         <div style="overflow-x:auto;">
           <table class="trade-table" id="cf-scalp-history-table">
             <thead><tr>
-              <th>Time</th><th>Symbol</th><th>Side</th><th>Entry</th>
-              <th>Exit</th><th>Fees</th><th>P&L</th><th>Net P&L</th><th>Reason</th>
+              <th class="sortable-th" onclick="sortScalpHistory('exit_time')">Time <span class="sort-icon sh-sort" id="shs-exit_time">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('symbol')">Symbol <span class="sort-icon sh-sort" id="shs-symbol">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('side')">Side <span class="sort-icon sh-sort" id="shs-side">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('entry_price')">Entry <span class="sort-icon sh-sort" id="shs-entry_price">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('exit_price')">Exit <span class="sort-icon sh-sort" id="shs-exit_price">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('fees')">Fees <span class="sort-icon sh-sort" id="shs-fees">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('pnl')">P&amp;L <span class="sort-icon sh-sort" id="shs-pnl">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('net_pnl')">Net P&amp;L <span class="sort-icon sh-sort" id="shs-net_pnl">▲</span></th>
+              <th class="sortable-th" onclick="sortScalpHistory('exit_reason')">Reason <span class="sort-icon sh-sort" id="shs-exit_reason">▲</span></th>
             </tr></thead>
             <tbody id="cf-scalp-history-body">
               <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>
@@ -3181,38 +3217,7 @@ async function refreshMarket() {
       // Store coins globally for the builder crypto selector
       window._marketCoins = d.coins;
 
-      tbody.innerHTML = d.coins.map(c => {
-        const chgColor = c.change_24h >= 0 ? 'var(--green)' : 'var(--red)';
-        const chgSign = c.change_24h >= 0 ? '+' : '';
-        const athPct = c.ath_change_pct || 0;
-        const tradeSym = c.trade_symbol || (c.symbol + 'USDT');
-        const safeName = (c.name || '').replace(/'/g, "\\'");
-        const btnClass = c.delta_tradeable ? 'btn-live' : 'btn-bt';
-        const btnLabel = c.delta_tradeable ? '⚡ Trade' : '📊 Backtest';
-        const tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" onclick="selectCryptoFromMarket(\'' + tradeSym + "','" + safeName + '\')">' + btnLabel + '</button>';
-        return `
-          <tr style="cursor:pointer;" onmouseover="this.style.background='rgba(139,92,246,0.04)'" onmouseout="this.style.background=''">
-            <td style="padding-left:16px;color:var(--muted);font-weight:600;">${c.rank}</td>
-            <td>
-              <div style="display:flex;align-items:center;gap:10px;">
-                <img src="${c.image}" alt="${c.symbol}" width="28" height="28" style="border-radius:50%;" onerror="this.style.display='none'">
-                <div>
-                  <div style="font-weight:700;font-size:15px;">${c.symbol}</div>
-                  <div style="font-size:11px;color:var(--muted);">${c.name}</div>
-                </div>
-              </div>
-            </td>
-            <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;">${fmtPrice(c.price)}</td>
-            <td style="text-align:right;color:${chgColor};font-weight:600;">${chgSign}${c.change_24h.toFixed(2)}%</td>
-            <td style="text-align:right;color:var(--muted);">${fmtNum(c.volume_24h)}</td>
-            <td style="text-align:right;">${fmtNum(c.market_cap)}</td>
-            <td style="text-align:right;">
-              <div>${fmtPrice(c.ath)}</div>
-              <div style="font-size:10px;color:${athPct > -20 ? 'var(--green)' : 'var(--red)'}">${athPct.toFixed(1)}%</div>
-            </td>
-            <td style="text-align:center;">${tradeBtn}</td>
-          </tr>`;
-      }).join('');
+      _renderMarketRows(d.coins);
 
       // Also update topbar tickers from the coins data
       const btc = d.coins.find(c => c.symbol === 'BTC');
@@ -3315,7 +3320,7 @@ async function runBacktest() {
   var countdownSec = 15;
   var countdownEl = document.getElementById('results-list');
   function renderCountdown(sec) {
-    countdownEl.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:60px 20px;">'
+    countdownEl.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:60px 20px;">'
       + '<div style="font-size:48px;margin-bottom:16px;">⏳</div>'
       + '<div style="font-size:20px;font-weight:700;margin-bottom:8px;">Running Backtest...</div>'
       + '<div style="font-size:14px;color:var(--muted);margin-bottom:20px;">' + payload.run_name + ' • ' + payload.symbol + ' • ' + payload.candle_interval + '</div>'
@@ -3329,7 +3334,7 @@ async function runBacktest() {
     if (countdownSec > 0) renderCountdown(countdownSec);
     else {
       clearInterval(countdownTimer);
-      countdownEl.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:60px 20px;">'
+      countdownEl.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:60px 20px;">'
         + '<div style="font-size:48px;margin-bottom:16px;">⏳</div>'
         + '<div style="font-size:20px;font-weight:700;margin-bottom:8px;">Still running...</div>'
         + '<div style="font-size:14px;color:var(--muted);">Processing large dataset, please wait...</div>'
@@ -3379,6 +3384,12 @@ async function runBacktest() {
 
 // ── Results (All Runs: Backtest / Paper / Live) ───────────
 let _currentRunFilter = 'all';
+let _runsSortCol = 'created_at';
+let _runsSortAsc = false;
+let _shSortCol = 'exit_time';
+let _shSortAsc = false;
+let _mktSortCol = 'rank';
+let _mktSortAsc = true;
 
 function _getModeBadge(mode) {
   const m = (mode || 'backtest').toLowerCase();
@@ -3397,14 +3408,26 @@ function _normalizeMode(mode) {
 }
 
 function _buildRunCards(runs) {
-  if (!runs.length) return '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No runs found.</td></tr>';
-  return runs.map(r => {
+  if (!runs.length) return '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No runs found.</td></tr>';
+  // Sort
+  var sorted = [...runs];
+  sorted.sort(function(a, b) {
+    var va, vb;
+    if (_runsSortCol === 'win_rate') { va = a.stats?.win_rate || 0; vb = b.stats?.win_rate || 0; }
+    else { va = a[_runsSortCol]; vb = b[_runsSortCol]; }
+    if (va == null) va = ''; if (vb == null) vb = '';
+    if (typeof va === 'number' && typeof vb === 'number') return _runsSortAsc ? va - vb : vb - va;
+    va = String(va); vb = String(vb);
+    return _runsSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+  return sorted.map(r => {
     const pnl = r.total_pnl || 0;
     const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
     const wr = r.stats?.win_rate || 0;
     const wrColor = wr >= 50 ? 'var(--green)' : wr > 0 ? 'var(--red)' : 'var(--muted)';
     const date = (r.created_at || r.started_at || '').slice(0, 16);
     return `<tr style="cursor:pointer;" onclick="viewRun(${r.id})">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="tbl-cb run-cb" value="${r.id}" onchange="updateRunsBulk()"></td>
       <td>${_getModeBadge(r.mode)}</td>
       <td style="font-weight:600;font-family:inherit;color:var(--text);">${r.run_name || 'Run #' + r.id}</td>
       <td>${r.symbol || '—'}</td>
@@ -3420,6 +3443,45 @@ function _buildRunCards(runs) {
       </td>
     </tr>`;
   }).join('');
+}
+
+function sortRunsTable(col) {
+  if (_runsSortCol === col) { _runsSortAsc = !_runsSortAsc; } else { _runsSortCol = col; _runsSortAsc = true; }
+  document.querySelectorAll('.rt-sort').forEach(el => { el.textContent = '▲'; el.classList.remove('active'); });
+  var icon = document.getElementById('rts-' + col);
+  if (icon) { icon.textContent = _runsSortAsc ? '▲' : '▼'; icon.classList.add('active'); }
+  _renderFilteredRuns();
+}
+
+function toggleAllRunsCb(master) {
+  document.querySelectorAll('.run-cb').forEach(cb => { cb.checked = master.checked; });
+  updateRunsBulk();
+}
+
+function updateRunsBulk() {
+  var checked = document.querySelectorAll('.run-cb:checked');
+  var bar = document.getElementById('runs-bulk-bar');
+  var count = document.getElementById('runs-bulk-count');
+  if (checked.length > 0) {
+    bar.style.display = 'flex';
+    count.textContent = checked.length + ' selected';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+async function bulkDeleteRuns() {
+  var ids = Array.from(document.querySelectorAll('.run-cb:checked')).map(cb => parseInt(cb.value));
+  if (!ids.length) return;
+  var ok = await cfConfirm('Delete ' + ids.length + ' selected runs? This cannot be undone.', 'Bulk Delete?', '🗑️');
+  if (!ok) return;
+  try {
+    for (var id of ids) {
+      await fetch('/api/runs/' + id, { method: 'DELETE', credentials: 'same-origin' });
+    }
+    cfToast(ids.length + ' runs deleted', 'success');
+    loadRuns();
+  } catch(e) { cfToast('Delete failed: ' + e.message, 'error'); }
 }
 
 function filterRuns(mode, btn) {
@@ -3453,10 +3515,14 @@ function _renderFilteredRuns() {
     filtered = _allRunsCache.filter(r => _normalizeMode(r.mode) === _currentRunFilter);
   }
   if (!filtered.length) {
-    cont.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No ' + (_currentRunFilter === 'all' ? '' : _currentRunFilter + ' ') + 'runs yet.</td></tr>';
+    cont.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No ' + (_currentRunFilter === 'all' ? '' : _currentRunFilter + ' ') + 'runs yet.</td></tr>';
   } else {
     cont.innerHTML = _buildRunCards(filtered);
   }
+  // Reset master checkbox
+  var master = document.querySelector('#runs-table thead .tbl-cb');
+  if (master) master.checked = false;
+  updateRunsBulk();
 }
 
 function _renderPortfolioPaperRuns(runs) {
@@ -3742,6 +3808,122 @@ async function deleteRun(rid) {
 
 function exportCSV() {
   if (currentRunId) window.open(`/api/runs/${currentRunId}/csv`, '_blank');
+}
+
+// ── Market Table Sort ──────────────────────────────────
+function sortMarketTable(col) {
+  if (!window._marketCoins || !window._marketCoins.length) return;
+  if (_mktSortCol === col) { _mktSortAsc = !_mktSortAsc; } else { _mktSortCol = col; _mktSortAsc = true; }
+  document.querySelectorAll('.mkt-sort').forEach(el => { el.textContent = '▲'; el.classList.remove('active'); });
+  var icon = document.getElementById('mkts-' + col);
+  if (icon) { icon.textContent = _mktSortAsc ? '▲' : '▼'; icon.classList.add('active'); }
+  window._marketCoins.sort(function(a, b) {
+    var va = a[col], vb = b[col];
+    if (va == null) va = ''; if (vb == null) vb = '';
+    if (typeof va === 'number' && typeof vb === 'number') return _mktSortAsc ? va - vb : vb - va;
+    return _mktSortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  });
+  _renderMarketRows(window._marketCoins);
+}
+
+function _renderMarketRows(coins) {
+  var tbody = document.getElementById('market-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = coins.map(function(c) {
+    var chgColor = c.change_24h >= 0 ? 'var(--green)' : 'var(--red)';
+    var chgSign = c.change_24h >= 0 ? '+' : '';
+    var athPct = c.ath_change_pct || 0;
+    var tradeSym = c.trade_symbol || (c.symbol + 'USDT');
+    var safeName = (c.name || '').replace(/'/g, "\\'");
+    var btnClass = c.delta_tradeable ? 'btn-live' : 'btn-bt';
+    var btnLabel = c.delta_tradeable ? '⚡ Trade' : '📊 Backtest';
+    var tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" onclick="selectCryptoFromMarket(\'' + tradeSym + "','" + safeName + '\')">' + btnLabel + '</button>';
+    return '<tr style="cursor:pointer;" onmouseover="this.style.background=\'rgba(139,92,246,0.04)\'" onmouseout="this.style.background=\'\'">' +
+      '<td style="padding-left:16px;color:var(--muted);font-weight:600;">' + c.rank + '</td>' +
+      '<td><div style="display:flex;align-items:center;gap:10px;">' +
+        '<img src="' + c.image + '" alt="' + c.symbol + '" width="28" height="28" style="border-radius:50%;" onerror="this.style.display=\'none\'">' +
+        '<div><div style="font-weight:700;font-size:15px;">' + c.symbol + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);">' + c.name + '</div></div></div></td>' +
+      '<td style="text-align:right;font-family:\'JetBrains Mono\',monospace;font-weight:600;">' + fmtPrice(c.price) + '</td>' +
+      '<td style="text-align:right;color:' + chgColor + ';font-weight:600;">' + chgSign + c.change_24h.toFixed(2) + '%</td>' +
+      '<td style="text-align:right;color:var(--muted);">' + fmtNum(c.volume_24h) + '</td>' +
+      '<td style="text-align:right;">' + fmtNum(c.market_cap) + '</td>' +
+      '<td style="text-align:right;"><div>' + fmtPrice(c.ath) + '</div><div style="font-size:10px;color:' + (athPct > -20 ? 'var(--green)' : 'var(--red)') + '">' + athPct.toFixed(1) + '%</div></td>' +
+      '<td style="text-align:center;">' + tradeBtn + '</td></tr>';
+  }).join('');
+}
+
+// ── Scalp History Sort ──────────────────────────────────
+function sortScalpHistory(col) {
+  if (_shSortCol === col) { _shSortAsc = !_shSortAsc; } else { _shSortCol = col; _shSortAsc = true; }
+  document.querySelectorAll('.sh-sort').forEach(el => { el.textContent = '▲'; el.classList.remove('active'); });
+  var icon = document.getElementById('shs-' + col);
+  if (icon) { icon.textContent = _shSortAsc ? '▲' : '▼'; icon.classList.add('active'); }
+  // Re-render the scalp history with new sort
+  var allTrades = Array.from(_cfTradeCache.values());
+  allTrades.sort(function(a, b) {
+    var va, vb;
+    if (col === 'net_pnl') {
+      var fa = a.fees || (a.size ? Math.round(a.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
+      var fb = b.fees || (b.size ? Math.round(b.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
+      va = a.net_pnl !== undefined ? a.net_pnl : (a.pnl || 0) - fa;
+      vb = b.net_pnl !== undefined ? b.net_pnl : (b.pnl || 0) - fb;
+    } else if (col === 'fees') {
+      va = a.fees || (a.size ? Math.round(a.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
+      vb = b.fees || (b.size ? Math.round(b.size * 0.0005 * 1.18 * 2 * 10000) / 10000 : 0);
+    } else if (col === 'exit_time') {
+      va = a.exit_time || a.entry_time || '';
+      vb = b.exit_time || b.entry_time || '';
+    } else {
+      va = a[col]; vb = b[col];
+    }
+    if (va == null) va = ''; if (vb == null) vb = '';
+    if (typeof va === 'number' && typeof vb === 'number') return _shSortAsc ? va - vb : vb - va;
+    return _shSortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  });
+  var body = document.getElementById('cf-scalp-history-body');
+  if (body) {
+    if (!allTrades.length) {
+      body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
+    } else {
+      body.innerHTML = allTrades.map(_cfTradeRow).join('');
+    }
+  }
+}
+
+// ── Generic Table Sort (for portfolio tables) ──────────
+var _genSortState = {};
+function sortGenericTable(tablePrefix, colIdx) {
+  var key = tablePrefix + '-' + colIdx;
+  if (_genSortState[tablePrefix + '-col'] === colIdx) {
+    _genSortState[tablePrefix + '-asc'] = !_genSortState[tablePrefix + '-asc'];
+  } else {
+    _genSortState[tablePrefix + '-col'] = colIdx;
+    _genSortState[tablePrefix + '-asc'] = true;
+  }
+  var asc = _genSortState[tablePrefix + '-asc'];
+  // Update icons
+  var sortClass = tablePrefix.replace('pf-', 'pf-').replace('positions', 'pos').replace('orders', 'ord') + '-sort';
+  document.querySelectorAll('.' + sortClass).forEach(el => { el.textContent = '▲'; el.classList.remove('active'); });
+  // Find the nth sort icon
+  var icons = document.querySelectorAll('.' + sortClass);
+  if (icons[colIdx]) { icons[colIdx].textContent = asc ? '▲' : '▼'; icons[colIdx].classList.add('active'); }
+  // Sort tbody rows in-place
+  var tableId = tablePrefix === 'pf-positions' ? 'pf-positions-table' : 'pf-orders-table';
+  var tbody = document.querySelector('#' + tableId + ' tbody');
+  if (!tbody) return;
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  if (rows.length <= 1 && rows[0]?.querySelector('td[colspan]')) return; // empty state
+  rows.sort(function(a, b) {
+    var cellA = a.cells[colIdx], cellB = b.cells[colIdx];
+    if (!cellA || !cellB) return 0;
+    var va = cellA.textContent.replace(/[₹,%x]/g, '').replace(/,/g, '').trim();
+    var vb = cellB.textContent.replace(/[₹,%x]/g, '').replace(/,/g, '').trim();
+    var na = parseFloat(va), nb = parseFloat(vb);
+    if (!isNaN(na) && !isNaN(nb)) return asc ? na - nb : nb - na;
+    return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+  rows.forEach(r => tbody.appendChild(r));
 }
 
 // ── Save Strategy ──────────────────────────────────────────
