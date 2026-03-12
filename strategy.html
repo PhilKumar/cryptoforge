@@ -2071,8 +2071,19 @@
     <div id="compare-results"></div>
   </div>
 
-  <div id="results-list">
-    <div style="color: var(--muted); text-align: center; padding: 40px;">No runs yet.</div>
+  <div class="card" style="padding:20px;">
+    <div style="overflow-x:auto;">
+      <table class="trade-table" id="runs-table">
+        <thead><tr>
+          <th>Mode</th><th>Name</th><th>Symbol</th><th class="num">Lev</th>
+          <th class="num">Trades</th><th class="num">Win Rate</th><th class="num">P&L</th>
+          <th>Date</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="results-list">
+          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No runs yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Run detail modal is rendered as a fixed overlay; see #run-detail-modal below -->
@@ -3304,13 +3315,13 @@ async function runBacktest() {
   var countdownSec = 15;
   var countdownEl = document.getElementById('results-list');
   function renderCountdown(sec) {
-    countdownEl.innerHTML = '<div style="text-align:center;padding:60px 20px;">'
+    countdownEl.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:60px 20px;">'
       + '<div style="font-size:48px;margin-bottom:16px;">⏳</div>'
       + '<div style="font-size:20px;font-weight:700;margin-bottom:8px;">Running Backtest...</div>'
       + '<div style="font-size:14px;color:var(--muted);margin-bottom:20px;">' + payload.run_name + ' • ' + payload.symbol + ' • ' + payload.candle_interval + '</div>'
       + '<div style="font-size:42px;font-weight:800;font-family:JetBrains Mono;color:var(--accent);">' + sec + 's</div>'
       + '<div style="font-size:12px;color:var(--muted);margin-top:8px;">Fetching candle data & computing indicators...</div>'
-      + '</div>';
+      + '</td></tr>';
   }
   renderCountdown(countdownSec);
   var countdownTimer = setInterval(function() {
@@ -3318,11 +3329,11 @@ async function runBacktest() {
     if (countdownSec > 0) renderCountdown(countdownSec);
     else {
       clearInterval(countdownTimer);
-      countdownEl.innerHTML = '<div style="text-align:center;padding:60px 20px;">'
+      countdownEl.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:60px 20px;">'
         + '<div style="font-size:48px;margin-bottom:16px;">⏳</div>'
         + '<div style="font-size:20px;font-weight:700;margin-bottom:8px;">Still running...</div>'
         + '<div style="font-size:14px;color:var(--muted);">Processing large dataset, please wait...</div>'
-        + '</div>';
+        + '</td></tr>';
     }
   }, 1000);
 
@@ -3386,25 +3397,29 @@ function _normalizeMode(mode) {
 }
 
 function _buildRunCards(runs) {
-  if (!runs.length) return '<div style="color:var(--muted);text-align:center;padding:40px;">No runs found.</div>';
-  return runs.map(r => `
-    <div class="run-card" onclick="viewRun(${r.id})">
-      <div class="rc-header">
-        <span class="rc-name">${_getModeBadge(r.mode)} ${r.run_name || 'Run #' + r.id}</span>
-        <span style="display:flex;gap:8px;align-items:center;">
-          <span class="tag tag-purple">${r.symbol || ''} ${r.leverage || 1}x</span>
-          <span class="tag ${(r.total_pnl||0) >= 0 ? 'tag-green' : 'tag-red'}">${fmtINR(r.total_pnl||0)}</span>
-          <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
-                  onclick="event.stopPropagation();viewRun(${r.id})" title="View Results">👁</button>
-          <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
-                  onclick="event.stopPropagation();copyEditRun(${r.id})" title="Copy & Edit">📝</button>
-          <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;"
-                  onclick="event.stopPropagation();deleteRun(${r.id})">🗑</button>
-        </span>
-      </div>
-      <div class="rc-meta">${r.trade_count||0} trades • ${r.created_at?.slice(0,16)||''} • WR: ${r.stats?.win_rate||0}%</div>
-    </div>
-  `).join('');
+  if (!runs.length) return '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No runs found.</td></tr>';
+  return runs.map(r => {
+    const pnl = r.total_pnl || 0;
+    const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
+    const wr = r.stats?.win_rate || 0;
+    const wrColor = wr >= 50 ? 'var(--green)' : wr > 0 ? 'var(--red)' : 'var(--muted)';
+    const date = (r.created_at || r.started_at || '').slice(0, 16);
+    return `<tr style="cursor:pointer;" onclick="viewRun(${r.id})">
+      <td>${_getModeBadge(r.mode)}</td>
+      <td style="font-weight:600;font-family:inherit;color:var(--text);">${r.run_name || 'Run #' + r.id}</td>
+      <td>${r.symbol || '—'}</td>
+      <td class="num">${r.leverage || 1}x</td>
+      <td class="num">${r.trade_count || 0}</td>
+      <td class="num" style="color:${wrColor};font-weight:600;">${wr.toFixed(1)}%</td>
+      <td class="num" style="color:${pnlColor};font-weight:700;">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</td>
+      <td style="font-size:11px;color:var(--muted);">${date}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation();viewRun(${r.id})" title="View">👁</button>
+        <button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation();copyEditRun(${r.id})" title="Copy & Edit">📝</button>
+        <button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation();deleteRun(${r.id})" title="Delete">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
 }
 
 function filterRuns(mode, btn) {
@@ -3437,9 +3452,8 @@ function _renderFilteredRuns() {
   if (_currentRunFilter !== 'all') {
     filtered = _allRunsCache.filter(r => _normalizeMode(r.mode) === _currentRunFilter);
   }
-  cont.style.display = 'block';
   if (!filtered.length) {
-    cont.innerHTML = '<div style="color:var(--muted);text-align:center;padding:40px;">No ' + (_currentRunFilter === 'all' ? '' : _currentRunFilter + ' ') + 'runs yet.</div>';
+    cont.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No ' + (_currentRunFilter === 'all' ? '' : _currentRunFilter + ' ') + 'runs yet.</td></tr>';
   } else {
     cont.innerHTML = _buildRunCards(filtered);
   }
