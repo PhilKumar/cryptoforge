@@ -33,6 +33,13 @@ _http_session.mount("https://", _adapter)
 _http_session.mount("http://", _adapter)
 
 
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _request_with_retry(
     method: str,
     url: str,
@@ -81,12 +88,21 @@ class _CircuitBreaker:
         self._state = self.CLOSED
         self._opened_at = 0.0
 
-    def call_allowed(self) -> bool:
-        if self._state == self.CLOSED:
-            return True
+    def check(self):
+        if self._state != self.OPEN:
+            return
         if _time.time() - self._opened_at >= self._timeout:
+            self._failures = 0
+            self._state = self.CLOSED
+            return
+        raise Exception("Delta API circuit breaker is OPEN — broker unavailable")
+
+    def call_allowed(self) -> bool:
+        try:
+            self.check()
             return True
-        return False
+        except Exception:
+            return False
 
     def record_success(self):
         self._failures = 0
@@ -160,8 +176,7 @@ class DeltaClient:
         }
 
     def _get(self, path: str, params: dict = None, auth: bool = False) -> dict:
-        if not _circuit_breaker.call_allowed():
-            raise Exception("Delta API circuit breaker is OPEN — broker unavailable")
+        _circuit_breaker.check()
         url = f"{self.base_url}{path}"
         query_string = ""
         if auth and params:
@@ -184,8 +199,7 @@ class DeltaClient:
             raise
 
     def _post(self, path: str, data: dict = None) -> dict:
-        if not _circuit_breaker.call_allowed():
-            raise Exception("Delta API circuit breaker is OPEN — broker unavailable")
+        _circuit_breaker.check()
         url = f"{self.base_url}{path}"
         body = json.dumps(data) if data else ""
         headers = self._sign("POST", path, body=body)
@@ -360,10 +374,10 @@ class DeltaClient:
         if isinstance(result, dict) and result.get("error"):
             return {**result, "verified": False}
 
-        order_id = result.get("id")
+        order_id = result.get("id") or result.get("order_id")
         if not order_id:
             print(f"[DELTA] Order placed but no ID returned: {result}")
-            return {**result, "verified": False}
+            return {**result, "verified": False, "error": "Order accepted without an order id"}
 
         print(f"[DELTA] Order {order_id} placed — verifying fill...")
 
@@ -376,19 +390,23 @@ class DeltaClient:
                 orders = await asyncio.to_thread(self.get_orders, product_id, "closed")
                 filled = None
                 for o in orders or []:
-                    if o.get("id") == order_id:
+                    if str(o.get("id")) == str(order_id):
                         filled = o
                         break
 
-                if filled and filled.get("state") in ("filled", "closed"):
+                state = str((filled or {}).get("state", "")).lower()
+                if filled and state in ("filled", "closed", "completed"):
                     print(f"[DELTA] Order {order_id} VERIFIED filled (attempt {attempt + 1})")
+                    fill_price = self._extract_fill_price(filled) or self._extract_fill_price(result)
 
                     # Cross-check position
-                    position = await asyncio.to_thread(self.get_position, product_id)
+                    position = await asyncio.to_thread(self.get_position, product_id, True)
+                    pos_size = abs(_as_float(position.get("size", 0)))
                     if position:
-                        pos_size = abs(float(position.get("size", 0)))
-                        expected_size = abs(float(size))
-                        if pos_size > 0:
+                        expected_size = abs(_as_float(size))
+                        if reduce_only and pos_size <= 0:
+                            print(f"[DELTA] Position fully closed after reduce-only fill for order {order_id}")
+                        elif pos_size > 0:
                             print(f"[DELTA] Position confirmed: size={pos_size}")
                         else:
                             print(f"[DELTA] WARNING: Position size is 0 after fill (expected ~{expected_size})")
@@ -396,7 +414,9 @@ class DeltaClient:
                     return {
                         **result,
                         "verified": True,
-                        "fill_status": filled.get("state"),
+                        "fill_status": state,
+                        "fill_price": fill_price or None,
+                        "position_size": pos_size,
                         "verified_at_attempt": attempt + 1,
                     }
 
@@ -406,7 +426,20 @@ class DeltaClient:
                 print(f"[DELTA] Verify error (attempt {attempt + 1}): {e}")
 
         print(f"[DELTA] Order {order_id} UNVERIFIED after {max_verify_attempts} attempts")
-        return {**result, "verified": False, "verified_at_attempt": max_verify_attempts}
+        return {
+            **result,
+            "verified": False,
+            "verified_at_attempt": max_verify_attempts,
+            "error": f"Order {order_id} could not be verified after {max_verify_attempts} attempts",
+        }
+
+    @staticmethod
+    def _extract_fill_price(order: dict) -> float:
+        for key in ("average_fill_price", "avg_fill_price", "fill_price", "average_price", "avg_price", "price"):
+            price = _as_float((order or {}).get(key), 0.0)
+            if price > 0:
+                return price
+        return 0.0
 
     # ── Products (Instruments) ────────────────────────────────────
     def get_products(self, force_refresh: bool = False) -> list:
@@ -652,7 +685,7 @@ class DeltaClient:
             print(f"[DELTA] Positions error: {e}")
             return []
 
-    def get_position(self, product_id: int) -> dict:
+    def get_position(self, product_id: int, strict: bool = False) -> dict:
         """Get position for a specific product."""
         if not self._is_configured():
             return {}
@@ -660,10 +693,12 @@ class DeltaClient:
             resp = self._get("/positions", params={"product_id": product_id}, auth=True)
             results = resp.get("result", [])
             for p in results:
-                if p.get("product_id") == product_id:
+                if int(p.get("product_id", 0) or 0) == int(product_id):
                     return p
             return {}
         except Exception as e:
+            if strict:
+                raise
             print(f"[DELTA] Position error: {e}")
             return {}
 

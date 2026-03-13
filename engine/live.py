@@ -28,6 +28,13 @@ def _now_ist() -> datetime:
     return datetime.now(IST)
 
 
+def _coerce_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # Try to import WebSocket feed (optional enhancement)
 try:
     from engine.ws_feed import DeltaWSFeed
@@ -224,11 +231,126 @@ class LiveEngine:
             self._ws_feed = None
             self._ws_price = None
 
+    def _next_trade_id(self) -> int:
+        max_id = 0
+        for trade in [*self.open_trades, *self.closed_trades]:
+            try:
+                max_id = max(max_id, int(trade.get("id", 0) or 0))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return max_id + 1
+
+    @staticmethod
+    def _extract_order_price(order: dict, fallback: float) -> float:
+        for key in (
+            "average_fill_price",
+            "avg_fill_price",
+            "fill_price",
+            "average_price",
+            "avg_price",
+            "entry_price",
+            "price",
+            "mark_price",
+        ):
+            price = _coerce_float((order or {}).get(key), 0.0)
+            if price > 0:
+                return price
+        return fallback
+
+    async def _place_verified_order(self, **kwargs) -> dict:
+        place_verified = getattr(self.broker, "place_order_verified", None)
+        if not callable(place_verified):
+            return {"error": "Broker does not support verified order placement", "verified": False}
+        return await place_verified(**kwargs)
+
+    def _build_reconciled_trade(self, position: dict, symbol: str, leverage: int, product_id: int) -> dict:
+        signed_size = _coerce_float(position.get("size"), 0.0)
+        size = abs(signed_size)
+        side = "LONG" if signed_size >= 0 else "SHORT"
+        position_leverage = int(_coerce_float(position.get("leverage"), leverage) or leverage)
+        entry_price = self._extract_order_price(position, 0.0)
+        notional = round(size * entry_price, 2) if size > 0 and entry_price > 0 else 0.0
+        margin = _coerce_float(position.get("margin"), 0.0)
+        if margin <= 0 and notional > 0:
+            margin = round(notional / max(position_leverage, 1), 2)
+        if notional <= 0 and margin > 0:
+            notional = round(margin * max(position_leverage, 1), 2)
+        return {
+            "id": self._next_trade_id(),
+            "symbol": symbol,
+            "side": side,
+            "entry_price": entry_price,
+            "entry_time": _now_ist().strftime("%Y-%m-%d %H:%M:%S"),
+            "size": size,
+            "notional": round(notional, 2),
+            "margin": round(margin, 2),
+            "leverage": position_leverage,
+            "product_id": product_id,
+            "order_id": "reconciled",
+            "reconciled": True,
+            "_exit_attempts": 0,
+        }
+
+    async def _reconcile_exchange_position(self, product_id: int, symbol: str, leverage: int):
+        position = await asyncio.to_thread(self.broker.get_position, product_id, True)
+        signed_size = _coerce_float(position.get("size"), 0.0)
+        if abs(signed_size) <= 0:
+            if self.open_trades:
+                cleared = len(self.open_trades)
+                self.open_trades = []
+                self.in_trade = False
+                self.log_event(
+                    "warn",
+                    f"Reconciliation cleared {cleared} restored local trade(s) for {symbol}; "
+                    "no open exchange position exists.",
+                )
+                self._save_state()
+            return
+
+        reconciled = self._build_reconciled_trade(position, symbol, leverage, product_id)
+        existing = self.open_trades[0] if self.open_trades else None
+        mismatches = []
+        if existing:
+            if str(existing.get("side", "")).upper() != reconciled["side"]:
+                mismatches.append("side")
+            existing_size = _coerce_float(existing.get("size"), 0.0)
+            if abs(existing_size - reconciled["size"]) > max(1e-6, reconciled["size"] * 0.001):
+                mismatches.append("size")
+            existing_entry = _coerce_float(existing.get("entry_price"), 0.0)
+            if (
+                existing_entry > 0
+                and reconciled["entry_price"] > 0
+                and abs(existing_entry - reconciled["entry_price"]) > max(0.5, reconciled["entry_price"] * 0.001)
+            ):
+                mismatches.append("entry price")
+
+        self.open_trades = [reconciled]
+        self.in_trade = True
+        if not existing:
+            self.log_event(
+                "warn",
+                f"Recovered exchange position for {symbol}: {reconciled['side']} size={reconciled['size']} "
+                f"@ ${reconciled['entry_price']:,.2f}.",
+            )
+        elif mismatches:
+            self.log_event(
+                "warn",
+                f"Reconciled restored local trade to exchange state for {symbol} ({', '.join(mismatches)} corrected).",
+            )
+        else:
+            self.log_event("info", f"Exchange reconciliation confirmed the restored live position for {symbol}.")
+        self._save_state()
+
     async def start(self, callback: Callable = None):
         self.running = True
-        self.session_date = date_type.today()
-        self.daily_pnl = 0.0
+        today = date_type.today()
+        restored_same_day = self.session_date == today
+        self.session_date = today
+        if not restored_same_day:
+            self.daily_pnl = 0.0
+            self.trades_today = 0
         self.max_daily_loss = float(self.strategy.get("max_daily_loss", 0) or 0)
+        self._last_trade_date = today
 
         symbol = self.strategy.get("symbol", "BTCUSDT")
         leverage = int(self.strategy.get("leverage", 10))
@@ -248,14 +370,20 @@ class LiveEngine:
         # Get product ID for real orders
         product = self.broker.get_product_by_symbol(symbol)
         product_id = product.get("id") if product else None
+        if not product_id:
+            msg = f"Product not found for {symbol} — refusing to start live engine."
+            self.log_event("error", msg)
+            self.running = False
+            if callback:
+                await callback({"type": "error", "message": msg})
+            return
 
         # Set leverage on exchange
-        if product_id:
-            try:
-                self.broker.set_leverage(product_id, leverage)
-                self.log_event("info", f"Leverage set to {leverage}x on {symbol}")
-            except Exception as e:
-                self.log_event("warn", f"Could not set leverage: {e}")
+        try:
+            self.broker.set_leverage(product_id, leverage)
+            self.log_event("info", f"Leverage set to {leverage}x on {symbol}")
+        except Exception as e:
+            self.log_event("warn", f"Could not set leverage: {e}")
 
         self.log_event("start", f"LIVE Trading Engine Started — {symbol} {leverage}x {trade_side}")
         self.log_event("info", f"Timeframe: {candle_interval} | SL: {sl_pct}% | TP: {tp_pct}%")
@@ -263,6 +391,15 @@ class LiveEngine:
         self.log_event("warn", "REAL MONEY — Orders will be placed on Delta Exchange")
         if self.max_daily_loss > 0:
             self.log_event("info", f"Max daily loss: ${self.max_daily_loss:,.0f}")
+        try:
+            await self._reconcile_exchange_position(product_id, symbol, leverage)
+        except Exception as e:
+            msg = f"Startup reconciliation failed for {symbol}: {e}"
+            self.log_event("error", msg)
+            self.running = False
+            if callback:
+                await callback({"type": "error", "message": msg})
+            return
 
         # Start WebSocket feed for real-time price
         await self._start_ws_feed(symbol)
@@ -335,46 +472,68 @@ class LiveEngine:
                             size = max(1, int(notional / price))
                             side = "buy" if trade_side == "LONG" else "sell"
 
-                            order_id = "sim"
-                            if product_id:
-                                try:
-                                    result = self.broker.place_order(
-                                        product_id=product_id,
-                                        size=size,
-                                        side=side,
-                                        order_type="market_order",
-                                        leverage=leverage,
-                                    )
-                                    if isinstance(result, dict) and result.get("error"):
-                                        self.log_event("error", f"Order rejected: {result['error']}")
-                                        continue
-                                    order_id = result.get("id", "placed")
-                                    self.log_event("order", f"Order placed: {side} {size} {symbol} (ID: {order_id})")
-                                except Exception as e:
-                                    self.log_event("error", f"Order failed: {e}")
+                            try:
+                                result = await self._place_verified_order(
+                                    product_id=product_id,
+                                    size=size,
+                                    side=side,
+                                    order_type="market_order",
+                                    leverage=leverage,
+                                )
+                                if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
+                                    err = result.get("error") or "entry order could not be verified"
+                                    self.log_event("error", f"Order rejected: {err}")
                                     continue
+                                order_id = result.get("id", "placed")
+                                entry_price = self._extract_order_price(result, price)
+                                notional = round(size * entry_price, 2) if entry_price > 0 else round(notional, 2)
+                                margin = round(notional / max(leverage, 1), 2) if notional > 0 else round(margin, 2)
+                                self.log_event(
+                                    "order",
+                                    f"Order verified: {side} {size} {symbol} (ID: {order_id}, attempt "
+                                    f"{result.get('verified_at_attempt', 1)})",
+                                )
+                            except Exception as e:
+                                self.log_event("error", f"Order failed: {e}")
+                                continue
 
                             trade = {
-                                "id": len(self.closed_trades) + len(self.open_trades) + 1,
+                                "id": self._next_trade_id(),
                                 "symbol": symbol,
                                 "side": trade_side,
-                                "entry_price": price,
+                                "entry_price": entry_price,
                                 "entry_time": now.strftime("%Y-%m-%d %H:%M:%S"),
                                 "size": size,
                                 "notional": round(notional, 2),
                                 "margin": round(margin, 2),
                                 "leverage": leverage,
+                                "product_id": product_id,
                                 "order_id": order_id,
+                                "verified_at_attempt": result.get("verified_at_attempt"),
                                 "_exit_attempts": 0,  # tracks failed exit order attempts
                             }
                             async with self._trades_lock:
                                 self.open_trades.append(trade)
                                 self.in_trade = True
                             self.trades_today += 1
-                            self.log_event("entry", f"ENTRY {trade_side} {symbol} @ ${price:,.2f} (size={size})")
+                            self.log_event(
+                                "entry",
+                                f"ENTRY {trade_side} {symbol} @ ${entry_price:,.2f} (size={size})",
+                            )
 
                             if callback:
-                                await callback({"type": "entry", "trade": trade, "price": price})
+                                await callback(
+                                    {
+                                        "type": "entry",
+                                        "trade": trade,
+                                        "price": entry_price,
+                                        "open_positions": len(self.open_trades),
+                                        "closed_trades": len(self.closed_trades),
+                                        "open_trades": list(self.open_trades),
+                                        "recent_trades": self.closed_trades[-50:],
+                                        "total_pnl": round(self.total_pnl, 2),
+                                    }
+                                )
 
                             self._save_state()
                 else:
@@ -382,13 +541,18 @@ class LiveEngine:
                         ep = trade["entry_price"]
                         # Use real-time WS price for SL/TP, REST price for signals
                         check_price = exit_price
-                        if trade_side == "LONG":
+                        trade_side_local = str(trade.get("side", trade_side)).upper()
+                        if trade_side_local == "LONG":
                             pnl_pct = (check_price - ep) / ep * 100
                         else:
                             pnl_pct = (ep - check_price) / ep * 100
 
-                        lev_pnl_pct = pnl_pct * leverage
-                        trade_pnl = trade["notional"] * (pnl_pct / 100)
+                        trade_leverage = int(trade.get("leverage", leverage) or leverage)
+                        lev_pnl_pct = pnl_pct * trade_leverage
+                        trade_notional = _coerce_float(trade.get("notional"), 0.0)
+                        if trade_notional <= 0:
+                            trade_notional = round(_coerce_float(trade.get("size"), 0.0) * ep, 2)
+                        trade_pnl = trade_notional * (pnl_pct / 100)
                         exit_reason = None
 
                         if sl_pct > 0 and lev_pnl_pct <= -sl_pct:
@@ -402,62 +566,71 @@ class LiveEngine:
 
                         if exit_reason:
                             # Place exit order on exchange
-                            close_side = "sell" if trade_side == "LONG" else "buy"
+                            close_side = "sell" if trade_side_local == "LONG" else "buy"
                             exit_ok = True
-                            if product_id:
-                                try:
-                                    exit_result = self.broker.place_order(
-                                        product_id=product_id,
-                                        size=trade.get("size", 1),
-                                        side=close_side,
-                                        order_type="market_order",
-                                        reduce_only=True,
-                                    )
-                                    if isinstance(exit_result, dict) and exit_result.get("error"):
-                                        trade["_exit_attempts"] = trade.get("_exit_attempts", 0) + 1
-                                        attempt = trade["_exit_attempts"]
-                                        self.log_event(
-                                            "error",
-                                            f"Exit order rejected (attempt {attempt}/3): {exit_result['error']}",
-                                        )
-                                        if attempt >= 3:
-                                            self.log_event(
-                                                "error",
-                                                f"CRITICAL: Exit failed 3 times for trade "
-                                                f"{trade.get('id')} ({trade_side} {symbol}). "
-                                                f"MANUAL INTERVENTION REQUIRED. Engine stopping.",
-                                            )
-                                            self.running = False
-                                        exit_ok = False
-                                    else:
-                                        self.log_event(
-                                            "order", f"Exit order placed: {close_side} {trade.get('size', 1)} {symbol}"
-                                        )
-                                except Exception as e:
+                            try:
+                                exit_result = await self._place_verified_order(
+                                    product_id=int(trade.get("product_id", product_id) or product_id),
+                                    size=trade.get("size", 1),
+                                    side=close_side,
+                                    order_type="market_order",
+                                    leverage=trade_leverage,
+                                    reduce_only=True,
+                                )
+                                if isinstance(exit_result, dict) and (
+                                    exit_result.get("error") or not exit_result.get("verified")
+                                ):
                                     trade["_exit_attempts"] = trade.get("_exit_attempts", 0) + 1
                                     attempt = trade["_exit_attempts"]
-                                    self.log_event("error", f"Exit order failed (attempt {attempt}/3): {e}")
+                                    err = exit_result.get("error") or "exit order could not be verified"
+                                    self.log_event("error", f"Exit order rejected (attempt {attempt}/3): {err}")
                                     if attempt >= 3:
                                         self.log_event(
                                             "error",
                                             f"CRITICAL: Exit failed 3 times for trade "
-                                            f"{trade.get('id')} ({trade_side} {symbol}). "
+                                            f"{trade.get('id')} ({trade_side_local} {symbol}). "
                                             f"MANUAL INTERVENTION REQUIRED. Engine stopping.",
                                         )
                                         self.running = False
                                     exit_ok = False
+                                else:
+                                    self.log_event(
+                                        "order",
+                                        f"Exit order verified: {close_side} {trade.get('size', 1)} {symbol} "
+                                        f"(attempt {exit_result.get('verified_at_attempt', 1)})",
+                                    )
+                            except Exception as e:
+                                trade["_exit_attempts"] = trade.get("_exit_attempts", 0) + 1
+                                attempt = trade["_exit_attempts"]
+                                self.log_event("error", f"Exit order failed (attempt {attempt}/3): {e}")
+                                if attempt >= 3:
+                                    self.log_event(
+                                        "error",
+                                        f"CRITICAL: Exit failed 3 times for trade "
+                                        f"{trade.get('id')} ({trade_side_local} {symbol}). "
+                                        f"MANUAL INTERVENTION REQUIRED. Engine stopping.",
+                                    )
+                                    self.running = False
+                                exit_ok = False
 
                             if not exit_ok:
                                 continue  # Don't close locally if exchange order failed
 
+                            actual_exit_price = self._extract_order_price(exit_result, check_price)
+                            if trade_side_local == "LONG":
+                                pnl_pct = (actual_exit_price - ep) / ep * 100
+                            else:
+                                pnl_pct = (ep - actual_exit_price) / ep * 100
+                            trade_pnl = trade_notional * (pnl_pct / 100)
                             self.total_pnl += trade_pnl
                             self.daily_pnl += trade_pnl
                             capital += trade_pnl
                             capital = max(capital, 0)
+                            self.capital = capital
 
                             closed = {
                                 **trade,
-                                "exit_price": check_price,
+                                "exit_price": actual_exit_price,
                                 "exit_time": now.strftime("%Y-%m-%d %H:%M:%S"),
                                 "pnl": round(trade_pnl, 2),
                                 "exit_reason": exit_reason,
@@ -471,15 +644,28 @@ class LiveEngine:
                             emoji = "+" if trade_pnl >= 0 else ""
                             self.log_event(
                                 "exit",
-                                f"EXIT {exit_reason} {symbol} @ ${check_price:,.2f} | P&L: {emoji}${trade_pnl:,.2f}",
+                                f"EXIT {exit_reason} {symbol} @ ${actual_exit_price:,.2f} | "
+                                f"P&L: {emoji}${trade_pnl:,.2f}",
                             )
 
                             if callback:
-                                await callback({"type": "exit", "trade": closed, "total_pnl": round(self.total_pnl, 2)})
+                                await callback(
+                                    {
+                                        "type": "exit",
+                                        "trade": closed,
+                                        "total_pnl": round(self.total_pnl, 2),
+                                        "open_positions": len(self.open_trades),
+                                        "closed_trades": len(self.closed_trades),
+                                        "open_trades": list(self.open_trades),
+                                        "recent_trades": self.closed_trades[-50:],
+                                    }
+                                )
 
+                            self.capital = capital
                             self._save_state()
 
                 # Periodic state save
+                self.capital = capital
                 self._save_state()
 
             except asyncio.CancelledError:
@@ -514,11 +700,11 @@ class LiveEngine:
             "open_positions": len(self.open_trades),
             "closed_trades": len(self.closed_trades),
             "closed_trade_rows": closed_rows,
+            "recent_trades": closed_rows,
             "trades_today": self.trades_today,
             "total_pnl": round(self.total_pnl, 2),
             "daily_pnl": round(self.daily_pnl, 2),
             "open_trades": self.open_trades,
-            "recent_trades": closed_rows[-10:],
             "current_candle": self.current_candle,
             "current_indicators": self.current_indicators,
             "event_log": [

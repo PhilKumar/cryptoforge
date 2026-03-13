@@ -481,6 +481,7 @@ async def emergency_stop(request: Request):
     """Emergency kill all running engines."""
     results = {}
     stopped = 0
+    scalp_closed = 0
 
     for run_id, engine in list(paper_engines.items()):
         try:
@@ -504,6 +505,29 @@ async def emergency_stop(request: Request):
         except Exception as e:
             results[f"live:{run_id}"] = f"error: {str(e)}"
 
+    # Stop scalp mode too, closing any open scalp positions before halting the engine.
+    scalp_engine = globals().get("_scalp_engine")
+    scalp_run_saver = globals().get("_save_scalp_trade_to_history")
+    if scalp_engine is not None:
+        for trade_id in list(getattr(scalp_engine, "open_trades", {}).keys()):
+            try:
+                result = await scalp_engine.exit_trade(int(trade_id), reason="kill_switch")
+                if result.get("status") == "ok" and result.get("trade"):
+                    if callable(scalp_run_saver):
+                        scalp_run_saver(result["trade"])
+                    results[f"scalp:trade:{trade_id}"] = "closed"
+                    scalp_closed += 1
+                else:
+                    results[f"scalp:trade:{trade_id}"] = result.get("message", "error")
+            except Exception as e:
+                results[f"scalp:trade:{trade_id}"] = f"error: {str(e)}"
+        try:
+            if getattr(scalp_engine, "_running", False):
+                scalp_engine.stop()
+                results["scalp:engine"] = "stopped"
+        except Exception as e:
+            results["scalp:engine"] = f"error: {str(e)}"
+
     # Cancel all tasks
     for name, tasks_dict in [("live", _live_tasks), ("paper", _paper_tasks)]:
         for run_id, task_ref in list(tasks_dict.items()):
@@ -521,7 +545,8 @@ async def emergency_stop(request: Request):
     return {
         "status": "ok",
         "stopped": stopped,
-        "message": f"Emergency stop executed — {stopped} engine(s) stopped",
+        "scalp_closed": scalp_closed,
+        "message": f"Emergency stop executed — {stopped} engine(s) stopped, {scalp_closed} scalp trade(s) closed",
         "results": results,
         "timestamp": str(datetime.now()),
     }
@@ -1019,6 +1044,13 @@ async def live_start(payload: StrategyPayload):
     if run_id in live_engines and live_engines[run_id].running:
         return {"status": "already_running", "run_id": run_id}
 
+    try:
+        product = delta.get_product_by_symbol(payload.symbol)
+    except Exception as e:
+        return {"status": "error", "message": f"Live start preflight failed for {payload.symbol}: {e}"}
+    if not product:
+        return {"status": "error", "message": f"Product not found for {payload.symbol}. Live engine was not started."}
+
     engine = LiveEngine(delta, run_id=run_id)
     engine.configure(
         strategy=strategy_dict,
@@ -1027,14 +1059,8 @@ async def live_start(payload: StrategyPayload):
         deploy_config=deploy_config,
     )
     engine.running = True
-    engine.event_log = []
-    # Preserve any restored open_trades from _load_state() to avoid orphaning exchange positions
-    if not engine.open_trades:
-        engine.open_trades = []
-    engine.closed_trades = []
-    engine.trades_today = 0
 
-    _alert_state[run_id] = {"in_trade": False, "closed_count": 0}
+    _alert_state[run_id] = {"in_trade": bool(engine.open_trades), "closed_count": len(engine.closed_trades)}
 
     async def broadcast(event: dict):
         for ws in ws_clients.copy():

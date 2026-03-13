@@ -18,6 +18,13 @@ def _now_utc():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _coerce_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class ScalpTrade:
     """Represents a single open crypto scalp position."""
 
@@ -185,6 +192,29 @@ class ScalpEngine:
             self._task.cancel()
             self._task = None
 
+    @staticmethod
+    def _extract_order_price(order: dict, fallback: float) -> float:
+        for key in (
+            "average_fill_price",
+            "avg_fill_price",
+            "fill_price",
+            "average_price",
+            "avg_price",
+            "entry_price",
+            "price",
+            "mark_price",
+        ):
+            price = _coerce_float((order or {}).get(key), 0.0)
+            if price > 0:
+                return price
+        return fallback
+
+    async def _place_verified_order(self, **kwargs) -> dict:
+        place_verified = getattr(self.delta, "place_order_verified", None)
+        if not callable(place_verified):
+            return {"error": "Broker does not support verified order placement", "verified": False}
+        return await place_verified(**kwargs)
+
     async def enter_trade(
         self,
         symbol: str,
@@ -226,17 +256,17 @@ class ScalpEngine:
                 return {"status": "error", "message": f"Product not found for {symbol}"}
             try:
                 order_side = "buy" if side == "LONG" else "sell"
-                result = await asyncio.to_thread(
-                    self.delta.place_order,
+                result = await self._place_verified_order(
                     product_id=product_id,
                     size=size,
                     side=order_side,
                     order_type="market_order",
                     leverage=leverage,
                 )
-                if isinstance(result, dict) and result.get("error"):
-                    return {"status": "error", "message": result["error"]}
+                if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
+                    return {"status": "error", "message": result.get("error") or "entry order could not be verified"}
                 order_id = str(result.get("id", "placed"))
+                entry_price = self._extract_order_price(result, entry_price)
             except Exception as e:
                 return {"status": "error", "message": str(e)}
 
@@ -403,22 +433,23 @@ class ScalpEngine:
         else:
             try:
                 close_side = "sell" if trade.side == "LONG" else "buy"
-                result = await asyncio.to_thread(
-                    self.delta.place_order,
+                result = await self._place_verified_order(
                     product_id=trade.product_id,
                     size=trade.size,
                     side=close_side,
                     order_type="market_order",
+                    leverage=trade.leverage,
                     reduce_only=True,
                 )
-                if isinstance(result, dict) and result.get("error"):
+                if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
                     # Broker rejected the exit — leave trade open so monitor retries.
                     # Increment attempt counter; after 3 failures alert and halt engine.
                     trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
                     self._log(
                         "error",
                         f"Exit order REJECTED for trade {trade.trade_id} "
-                        f"(attempt {trade._exit_attempts}): {result['error']}",
+                        f"(attempt {trade._exit_attempts}): "
+                        f"{result.get('error') or 'exit order could not be verified'}",
                     )
                     if trade._exit_attempts >= 3:
                         self._log(
@@ -430,6 +461,7 @@ class ScalpEngine:
                         self.stop()
                     return  # keep in open_trades — monitor will retry next cycle
                 exit_order_id = str(result.get("id", "closed"))
+                trade.current_price = self._extract_order_price(result, trade.current_price)
             except Exception as e:
                 trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
                 self._log(
