@@ -3688,8 +3688,17 @@ function getIndicatorOptions() {
     html += '</optgroup>';
   }
 
+  // ── Day / Time (always available) ──
+  html += '<optgroup label="── Day / Time ──">';
+  html += '<option value="Time_Of_Day">Time Of Day</option>';
+  html += '<option value="Day_Of_Week">Day Of Week</option>';
+  html += '</optgroup>';
+
   return html;
 }
+
+// Boolean fields — only show is_true / is_false operators, no right side
+var BOOLEAN_FIELDS = ['CPR_is_narrow', 'CPR_is_moderate', 'CPR_is_wide', 'ORB_is_breakout_up', 'ORB_is_breakout_down', 'ORB_is_inside'];
 
 function addCondition(type) {
   const arr = type === 'entry' ? entryConditions : exitConditions;
@@ -3706,8 +3715,21 @@ function removeCondition(type, idx) {
 function updateCondition(type, idx, field, value) {
   const arr = type === 'entry' ? entryConditions : exitConditions;
   arr[idx][field] = value;
-  // Re-render when right-side changes to show/hide number input
-  if (field === 'right') renderConditions(type);
+  // Re-render when left changes (to update operator/RHS) or right changes (number input)
+  if (field === 'left' || field === 'right') renderConditions(type);
+}
+
+// Day picker helpers
+function toggleDayDropdown(el) { var dd = el.nextElementSibling; dd.style.display = dd.style.display === 'none' ? 'block' : 'none'; }
+function updateDayLabel(type, idx, cb) {
+  var picker = cb.closest('.day-picker');
+  var checks = picker.querySelectorAll('input:checked');
+  var label = picker.querySelector('.day-picker-toggle');
+  var days = Array.from(checks).map(function(c) { return c.value; });
+  if (days.length === 0) label.textContent = 'Select days \u25BE';
+  else label.textContent = days.map(function(d) { return d.substring(0,3); }).join(', ') + ' \u25BE';
+  var arr = type === 'entry' ? entryConditions : exitConditions;
+  arr[idx].right_days = days;
 }
 
 function renderConditions(type) {
@@ -3716,7 +3738,6 @@ function renderConditions(type) {
   const opts = getIndicatorOptions();
 
   cont.innerHTML = arr.map((c, i) => {
-    // Connector div between rows (not inside condition-row)
     let connectorHtml = '';
     if (i > 0) {
       connectorHtml = `<div class="condition-connector">
@@ -3726,13 +3747,32 @@ function renderConditions(type) {
         </select>
       </div>`;
     }
-    return `${connectorHtml}
-    <div class="condition-row">
-      ${i === 0 ? '<span class="logic-label" style="min-width:40px;text-align:center;font-size:11px;font-weight:700;color:var(--accent);letter-spacing:1px;">IF</span>' : ''}
-      <select onchange="updateCondition('${type}',${i},'left',this.value)">
-        ${opts.replace(`value="${c.left}"`, `value="${c.left}" selected`)}
-      </select>
-      <select style="min-width:150px;" onchange="updateCondition('${type}',${i},'operator',this.value)">
+
+    var isBool = BOOLEAN_FIELDS.includes(c.left);
+    var isTime = c.left === 'Time_Of_Day';
+    var isDow = c.left === 'Day_Of_Week';
+
+    // Operator dropdown depends on left-side type
+    var opHtml = '';
+    if (isBool) {
+      opHtml = `<select style="min-width:120px;" onchange="updateCondition('${type}',${i},'operator',this.value)">
+        <option value="is_true" ${c.operator==='is_true'?'selected':''}>Is True</option>
+        <option value="is_false" ${c.operator==='is_false'?'selected':''}>Is False</option>
+      </select>`;
+    } else if (isTime) {
+      opHtml = `<select style="min-width:120px;" onchange="updateCondition('${type}',${i},'operator',this.value)">
+        <option value="is_above" ${c.operator==='is_above'?'selected':''}>Is Above</option>
+        <option value="is_below" ${c.operator==='is_below'?'selected':''}>Is Below</option>
+        <option value=">=" ${c.operator==='>='?'selected':''}>Equal or Above</option>
+        <option value="<=" ${c.operator==='<='?'selected':''}>Equal or Below</option>
+      </select>`;
+    } else if (isDow) {
+      opHtml = `<select style="min-width:120px;" onchange="updateCondition('${type}',${i},'operator',this.value)">
+        <option value="contains" ${c.operator==='contains'?'selected':''}>Contains</option>
+        <option value="not_contains" ${c.operator==='not_contains'?'selected':''}>Not Contains</option>
+      </select>`;
+    } else {
+      opHtml = `<select style="min-width:150px;" onchange="updateCondition('${type}',${i},'operator',this.value)">
         <option value="crosses_above" ${c.operator==='crosses_above'?'selected':''}>Crosses Above</option>
         <option value="crosses_below" ${c.operator==='crosses_below'?'selected':''}>Crosses Below</option>
         <option value="is_above" ${c.operator==='is_above'?'selected':''}>Is Above</option>
@@ -3740,14 +3780,43 @@ function renderConditions(type) {
         <option value="==" ${c.operator==='=='?'selected':''}>== (Equals)</option>
         <option value=">=" ${c.operator==='>='?'selected':''}>>=</option>
         <option value="<=" ${c.operator==='<='?'selected':''}><=</option>
-        <option value="is_true" ${c.operator==='is_true'?'selected':''}>Is True</option>
-        <option value="is_false" ${c.operator==='is_false'?'selected':''}>Is False</option>
-      </select>
-      <select onchange="updateCondition('${type}',${i},'right',this.value)">
+      </select>`;
+    }
+
+    // Right-side depends on type
+    var rhsHtml = '';
+    if (isBool) {
+      rhsHtml = ''; // No right side for boolean
+    } else if (isTime) {
+      rhsHtml = `<input type="time" value="${c.right_time||'09:30'}" step="1" style="flex:1;padding:8px;font-family:'JetBrains Mono',monospace;font-size:13px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);"
+        onchange="var a=('${type}'==='entry'?entryConditions:exitConditions);a[${i}].right_time=this.value;">`;
+    } else if (isDow) {
+      var selDays = c.right_days || [];
+      var dayLabel = selDays.length ? selDays.map(function(d){return d.substring(0,3);}).join(', ') + ' \u25BE' : 'Select days \u25BE';
+      rhsHtml = `<div class="day-picker" style="flex:1;position:relative;">
+        <div class="day-picker-toggle" onclick="toggleDayDropdown(this)" style="padding:8px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;color:var(--text);">${dayLabel}</div>
+        <div style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);margin-top:4px;padding:4px 0;">` +
+        ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(function(day) {
+          var chk = selDays.includes(day) ? 'checked' : '';
+          return `<label style="display:block;padding:8px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);" onmouseover="this.style.background='rgba(0,200,150,0.08)'" onmouseout="this.style.background='transparent'"><input type="checkbox" value="${day}" ${chk} style="margin-right:10px;accent-color:var(--accent);" onchange="updateDayLabel('${type}',${i},this)"> ${day}</label>`;
+        }).join('') +
+        `</div></div>`;
+    } else {
+      rhsHtml = `<select onchange="updateCondition('${type}',${i},'right',this.value)">
         ${opts.replace(`value="${c.right}"`, `value="${c.right}" selected`)}
       </select>
       ${c.right === 'number' ? `<input type="number" style="width:80px;" value="${c.right_number_value||0}"
-        onchange="updateCondition('${type}',${i},'right_number_value',this.value)">` : ''}
+        onchange="updateCondition('${type}',${i},'right_number_value',this.value)">` : ''}`;
+    }
+
+    return `${connectorHtml}
+    <div class="condition-row">
+      ${i === 0 ? '<span class="logic-label" style="min-width:40px;text-align:center;font-size:11px;font-weight:700;color:var(--accent);letter-spacing:1px;">IF</span>' : ''}
+      <select onchange="updateCondition('${type}',${i},'left',this.value)">
+        ${opts.replace(`value="${c.left}"`, `value="${c.left}" selected`)}
+      </select>
+      ${opHtml}
+      ${rhsHtml}
       <button class="remove-cond" onclick="removeCondition('${type}',${i})">✕</button>
     </div>`;
   }).join('');
@@ -4019,14 +4088,18 @@ async function runBacktest() {
     fee_pct: parseFloat(document.getElementById('b-fee').value) || 0.05,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     indicators: indicators,
-    entry_conditions: entryConditions.map(c => ({
-      left: c.left, operator: c.operator, right: c.right,
-      connector: c.connector, right_number_value: c.right_number_value,
-    })),
-    exit_conditions: exitConditions.map(c => ({
-      left: c.left, operator: c.operator, right: c.right,
-      connector: c.connector, right_number_value: c.right_number_value,
-    })),
+    entry_conditions: entryConditions.map(c => {
+      var o = { left: c.left, operator: c.operator, right: c.right, connector: c.connector, right_number_value: c.right_number_value };
+      if (c.right_time) o.right_time = c.right_time;
+      if (c.right_days) o.right_days = c.right_days;
+      return o;
+    }),
+    exit_conditions: exitConditions.map(c => {
+      var o = { left: c.left, operator: c.operator, right: c.right, connector: c.connector, right_number_value: c.right_number_value };
+      if (c.right_time) o.right_time = c.right_time;
+      if (c.right_days) o.right_days = c.right_days;
+      return o;
+    }),
     candle_interval: document.getElementById('b-interval').value,
   };
 

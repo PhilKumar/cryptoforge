@@ -61,9 +61,39 @@ def eval_condition(row, cond, prev_row=None):
     left = cond["left"]
     op = cond["operator"]
 
+    # ── Time of Day ──
+    if left == "Time_Of_Day":
+        ts = row.name if hasattr(row, "name") else None
+        if ts is None:
+            return False
+        cur_time = ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts)
+        cmp_time = cond.get("right_time", "09:30")
+        if op == "is_above":
+            return cur_time > cmp_time
+        elif op == "is_below":
+            return cur_time < cmp_time
+        elif op == ">=":
+            return cur_time >= cmp_time
+        elif op == "<=":
+            return cur_time <= cmp_time
+        return False
+
+    # ── Day of Week ──
+    if left == "Day_Of_Week":
+        ts = row.name if hasattr(row, "name") else None
+        if ts is None:
+            return False
+        day_name = ts.strftime("%A") if hasattr(ts, "strftime") else ""
+        days = cond.get("right_days", [])
+        if op == "contains":
+            return day_name in days
+        elif op == "not_contains":
+            return day_name not in days
+        return False
+
     # Standard indicator conditions
     lv = _resolve_value(row, left)
-    r = cond["right"]
+    r = cond.get("right")
     rv = _resolve_value(row, r, cond)
 
     try:
