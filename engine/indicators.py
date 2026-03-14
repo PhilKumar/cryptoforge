@@ -210,9 +210,9 @@ def stochastic_rsi(
     return _clean(pd.DataFrame({"stoch_rsi_k": stoch_k, "stoch_rsi_d": stoch_d}, index=series.index))
 
 
-def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
-    """Central Pivot Range (CPR) with support/resistance levels.
-    Supports Day, Week, and Month timeframes.
+def cpr(df: pd.DataFrame, timeframe: str = "Day", narrow_pct: float = 0.2, moderate_pct: float = 0.5) -> pd.DataFrame:
+    """Central Pivot Range (CPR) with support/resistance levels and width classification.
+    Supports 2H, 4H, Day, Week, and Month timeframes.
     Uses previous period's high/low/close to calculate pivot levels.
     """
     d = df.copy()
@@ -228,54 +228,66 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
     else:
         is_intraday = False
 
-    def _calc_pivots(daily_df):
+    def _calc_pivots(agg_df):
         """Calculate pivot levels from aggregated HLC data."""
-        daily_df["pivot"] = (daily_df["high"] + daily_df["low"] + daily_df["close"]) / 3
-        daily_df["bc"] = (daily_df["high"] + daily_df["low"]) / 2
-        daily_df["tc"] = 2 * daily_df["pivot"] - daily_df["bc"]
-        daily_df["R1"] = 2 * daily_df["pivot"] - daily_df["low"]
-        daily_df["S1"] = 2 * daily_df["pivot"] - daily_df["high"]
-        daily_df["R2"] = daily_df["pivot"] + (daily_df["high"] - daily_df["low"])
-        daily_df["S2"] = daily_df["pivot"] - (daily_df["high"] - daily_df["low"])
-        daily_df["R3"] = daily_df["high"] + 2 * (daily_df["pivot"] - daily_df["low"])
-        daily_df["S3"] = daily_df["low"] - 2 * (daily_df["high"] - daily_df["pivot"])
-        daily_df["R4"] = daily_df["R3"] + (daily_df["high"] - daily_df["low"])
-        daily_df["S4"] = daily_df["S3"] - (daily_df["high"] - daily_df["low"])
-        daily_df["R5"] = daily_df["R4"] + (daily_df["high"] - daily_df["low"])
-        daily_df["S5"] = daily_df["S4"] - (daily_df["high"] - daily_df["low"])
-        return daily_df
+        agg_df["pivot"] = (agg_df["high"] + agg_df["low"] + agg_df["close"]) / 3
+        agg_df["bc"] = (agg_df["high"] + agg_df["low"]) / 2
+        agg_df["tc"] = 2 * agg_df["pivot"] - agg_df["bc"]
+        agg_df["R1"] = 2 * agg_df["pivot"] - agg_df["low"]
+        agg_df["S1"] = 2 * agg_df["pivot"] - agg_df["high"]
+        agg_df["R2"] = agg_df["pivot"] + (agg_df["high"] - agg_df["low"])
+        agg_df["S2"] = agg_df["pivot"] - (agg_df["high"] - agg_df["low"])
+        agg_df["R3"] = agg_df["high"] + 2 * (agg_df["pivot"] - agg_df["low"])
+        agg_df["S3"] = agg_df["low"] - 2 * (agg_df["high"] - agg_df["pivot"])
+        agg_df["R4"] = agg_df["R3"] + (agg_df["high"] - agg_df["low"])
+        agg_df["S4"] = agg_df["S3"] - (agg_df["high"] - agg_df["low"])
+        agg_df["R5"] = agg_df["R4"] + (agg_df["high"] - agg_df["low"])
+        agg_df["S5"] = agg_df["S4"] - (agg_df["high"] - agg_df["low"])
+        # CPR width
+        agg_df["cpr_width_pct"] = (agg_df["tc"] - agg_df["bc"]).abs() / agg_df["close"].replace(0, np.nan) * 100
+        return agg_df
+
+    pivot_cols = ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3", "R4", "S4", "R5", "S5", "cpr_width_pct"]
+
+    def _map_period(agg, period_key):
+        """Map aggregated period data back to intraday rows."""
+        agg = _calc_pivots(agg)
+        agg = agg.shift(1)
+        for col in pivot_cols:
+            mapping = agg[col].to_dict()
+            d[f"CPR_{col}"] = period_key.map(mapping).values
 
     if is_intraday and hasattr(d.index, "date"):
-        if tf == "week":
-            # Weekly CPR: group by ISO week
+        if tf == "2h":
+            # 2-hour CPR: group by 2-hour windows
+            period_key = d.index.floor("2h").astype(str)
+            period_key = pd.Series(period_key, index=d.index)
+            agg = d.groupby(d.index.floor("2h")).agg({"high": "max", "low": "min", "close": "last"})
+            agg.index = agg.index.astype(str)
+            _map_period(agg, period_key)
+        elif tf == "4h":
+            # 4-hour CPR: group by 4-hour windows
+            period_key = d.index.floor("4h").astype(str)
+            period_key = pd.Series(period_key, index=d.index)
+            agg = d.groupby(d.index.floor("4h")).agg({"high": "max", "low": "min", "close": "last"})
+            agg.index = agg.index.astype(str)
+            _map_period(agg, period_key)
+        elif tf == "week":
             period_key = d.index.to_series().dt.isocalendar().apply(lambda x: f"{x.year}-W{x.week:02d}", axis=1)
             period_key.index = d.index
             agg = d.groupby(period_key).agg({"high": "max", "low": "min", "close": "last"})
-            agg = _calc_pivots(agg)
-            agg = agg.shift(1)
-            mapped_key = period_key
-            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3", "R4", "S4", "R5", "S5"]:
-                mapping = agg[col].to_dict()
-                d[f"CPR_{col}"] = mapped_key.map(mapping).values
+            _map_period(agg, period_key)
         elif tf == "month":
-            # Monthly CPR: group by year-month
-            period_key = d.index.to_period("M").astype(str)
+            period_key = pd.Series(d.index.to_period("M").astype(str), index=d.index)
             agg = d.groupby(period_key).agg({"high": "max", "low": "min", "close": "last"})
-            agg = _calc_pivots(agg)
-            agg = agg.shift(1)
-            mapped_key = pd.Series(d.index.to_period("M").astype(str), index=d.index)
-            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3", "R4", "S4", "R5", "S5"]:
-                mapping = agg[col].to_dict()
-                d[f"CPR_{col}"] = mapped_key.map(mapping).values
+            _map_period(agg, period_key)
         else:
-            # Daily CPR (default): group by date, use previous day's HLC
+            # Daily CPR (default)
             daily = d.groupby(d.index.date).agg({"high": "max", "low": "min", "close": "last"})
             daily = _calc_pivots(daily)
-            # Shift by one day — today's CPR uses yesterday's HLC
             daily = daily.shift(1)
-            # Map back to intraday rows
             date_series = pd.Series(d.index.date, index=d.index)
-            for col in ["pivot", "bc", "tc", "R1", "S1", "R2", "S2", "R3", "S3", "R4", "S4", "R5", "S5"]:
+            for col in pivot_cols:
                 mapping = daily[col].to_dict()
                 d[f"CPR_{col}"] = date_series.map(mapping).values
     else:
@@ -296,6 +308,7 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day") -> pd.DataFrame:
         d["CPR_S4"] = d["CPR_S3"] - (prev_h - prev_l)
         d["CPR_R5"] = d["CPR_R4"] + (prev_h - prev_l)
         d["CPR_S5"] = d["CPR_S4"] - (prev_h - prev_l)
+        d["CPR_cpr_width_pct"] = (d["CPR_tc"] - d["CPR_bc"]).abs() / d["close"].replace(0, np.nan) * 100
 
     return d
 
@@ -397,9 +410,11 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
                 df["StochRSI_D"] = srsi["stoch_rsi_d"]
 
             elif name == "CPR":
-                # Support CPR_Day, CPR_Week, CPR_Month or plain CPR
+                # Support CPR_Day_0.2_0.5, CPR_2H, CPR_Week, CPR_Month or plain CPR
                 tf = parts[1] if len(parts) > 1 else "Day"
-                cpr_df = cpr(df, timeframe=tf)
+                narrow_pct = float(parts[2]) if len(parts) > 2 else 0.2
+                moderate_pct = float(parts[3]) if len(parts) > 3 else 0.5
+                cpr_df = cpr(df, timeframe=tf, narrow_pct=narrow_pct, moderate_pct=moderate_pct)
                 for col in [
                     "CPR_pivot",
                     "CPR_bc",
@@ -414,11 +429,25 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
                     "CPR_S4",
                     "CPR_R5",
                     "CPR_S5",
+                    "CPR_cpr_width_pct",
                 ]:
                     if col in cpr_df.columns:
                         df[col] = cpr_df[col]
+                # Capitalized aliases for frontend condition matching
+                df["CPR_Pivot"] = df.get("CPR_pivot", np.nan)
+                df["CPR_TC"] = df.get("CPR_tc", np.nan)
+                df["CPR_BC"] = df.get("CPR_bc", np.nan)
+                # Width classification
+                df["CPR_width_pct"] = df.get("CPR_cpr_width_pct", np.nan)
+                df["CPR_is_narrow"] = df["CPR_width_pct"] <= narrow_pct
+                df["CPR_is_moderate"] = (df["CPR_width_pct"] > narrow_pct) & (df["CPR_width_pct"] <= moderate_pct)
+                df["CPR_is_wide"] = df["CPR_width_pct"] > moderate_pct
 
             elif name in ("Current", "Previous"):
+                pass
+
+            # Signal Candle — trade-context indicator, populated at runtime by engines
+            elif name == "Signal":
                 pass
 
         except (IndexError, ValueError, KeyError) as e:

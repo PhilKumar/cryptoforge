@@ -802,7 +802,7 @@
   .table-value-sub.negative { color: #fca5a5; }
   .table-input-sm {
     width: 88px;
-    padding: 6px 22px 6px 8px;
+    padding: 6px 20px 6px 6px;
     border-radius: 10px;
     border: 1px solid rgba(118,138,176,0.20);
     background: linear-gradient(180deg, rgba(40,50,74,0.92), rgba(16,24,42,0.98));
@@ -810,15 +810,6 @@
     font-size: 11px;
     font-family: 'JetBrains Mono', monospace;
     text-align: right;
-    -moz-appearance: textfield;
-  }
-  .table-input-sm::-webkit-inner-spin-button,
-  .table-input-sm::-webkit-outer-spin-button {
-    opacity: 1;
-    position: absolute;
-    right: 4px;
-    top: 50%;
-    transform: translateY(-50%);
   }
   .table-inline-actions {
     display: inline-flex;
@@ -2500,7 +2491,11 @@
         <div id="indicator-list" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-height: 24px;"></div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <select id="new-indicator-name" onchange="renderIndicatorFields()" style="width:160px;padding:8px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
-            <option value="EMA" selected>EMA</option>
+            <option value="Current_Candle" selected>Current Candle</option>
+            <option value="Previous_Day">Previous Day Candle</option>
+            <option value="Signal_Candle">Signal Candle</option>
+            <option value="ORB">ORB (Opening Range)</option>
+            <option value="EMA">EMA</option>
             <option value="SMA">SMA</option>
             <option value="RSI">RSI</option>
             <option value="Supertrend">SuperTrend</option>
@@ -2696,12 +2691,11 @@
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',3)">Size <span class="sort-icon pf-ord-sort">▲</span></th>
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',4)">Fill Price <span class="sort-icon pf-ord-sort">▲</span></th>
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',5)">Fees <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" onclick="sortGenericTable('pf-orders',6)">P&L <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" onclick="sortGenericTable('pf-orders',7)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" onclick="sortGenericTable('pf-orders',8)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',6)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',7)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
         </tr></thead>
         <tbody id="pf-orders-body">
-          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
+          <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
         </tbody>
       </table>
     </div>
@@ -2783,7 +2777,27 @@
     <button class="btn btn-outline btn-sm" onclick="cfLoadScalpStatus()">↻ Refresh</button>
   </div>
 
-  <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start;">
+  <!-- Active Positions — full width below status -->
+  <div class="card" style="padding:20px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h3 style="margin:0;font-size:15px;font-weight:700;">Active Positions</h3>
+      <span style="font-size:12px;color:var(--muted);" id="cf-scalp-active-count">0 open</span>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="trade-table" id="cf-scalp-active-table">
+        <thead><tr>
+          <th>Symbol</th><th>Side</th><th>Qty (USDT)</th><th>Entry</th>
+          <th>Mark</th><th>Unreal. P&L</th><th>TP $</th><th>SL $</th><th>Action</th>
+        </tr></thead>
+        <tbody id="cf-scalp-active-body">
+          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Entry Form (left) + Event Log (right) -->
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start;margin-bottom:16px;">
 
     <!-- ── Entry Form ── -->
     <div class="card" style="padding:20px;">
@@ -2863,68 +2877,102 @@
       <div id="cf-scalp-entry-status" style="margin-top:12px;font-size:12px;min-height:18px;color:var(--muted);"></div>
     </div>
 
-    <!-- ── Right Panel: Active Trades + History ── -->
-    <div>
-
-      <!-- Active Positions -->
-      <div class="card" style="padding:20px;margin-bottom:16px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-          <h3 style="margin:0;font-size:15px;font-weight:700;">Active Positions</h3>
-          <span style="font-size:12px;color:var(--muted);" id="cf-scalp-active-count">0 open</span>
-        </div>
-        <div style="overflow-x:auto;">
-          <table class="trade-table" id="cf-scalp-active-table">
-            <thead><tr>
-              <th>Symbol</th><th>Side</th><th>Qty (USDT)</th><th>Entry</th>
-              <th>Mark</th><th>Unreal. P&L</th><th>TP $</th><th>SL $</th><th>Action</th>
-            </tr></thead>
-            <tbody id="cf-scalp-active-body">
-              <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
-            </tbody>
-          </table>
-        </div>
+    <!-- ── Event Log (right of entry form) ── -->
+    <div class="card" style="padding:20px;">
+      <h3 style="margin:0 0 14px;font-size:15px;font-weight:700;">Event Log</h3>
+      <div id="cf-scalp-event-log" style="max-height:500px;overflow-y:auto;font-size:12px;font-family:'JetBrains Mono',monospace;">
+        <div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>
       </div>
+    </div>
 
-      <!-- Trade History -->
-      <div class="card" style="padding:20px;">
-        <div class="table-toolbar">
-          <div class="table-title-group">
-            <h3 class="table-title">Trade History</h3>
-            <div class="table-meta">Closed scalp trades with gross P&amp;L, fees, and net result.</div>
-          </div>
-        </div>
-        <div style="overflow-x:auto;">
-          <table class="trade-table" id="cf-scalp-history-table">
-            <thead><tr>
-              <th class="sortable-th" onclick="sortScalpHistory('exit_time')">Closed At <span class="sort-icon sh-sort" id="shs-exit_time">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('symbol')">Symbol <span class="sort-icon sh-sort" id="shs-symbol">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('side')">Side <span class="sort-icon sh-sort" id="shs-side">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('entry_price')">Entry <span class="sort-icon sh-sort" id="shs-entry_price">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('exit_price')">Exit <span class="sort-icon sh-sort" id="shs-exit_price">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('fees')">Fees <span class="sort-icon sh-sort" id="shs-fees">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('pnl')">P&amp;L <span class="sort-icon sh-sort" id="shs-pnl">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('net_pnl')">Net P&amp;L <span class="sort-icon sh-sort" id="shs-net_pnl">▲</span></th>
-              <th class="sortable-th" onclick="sortScalpHistory('exit_reason')">Reason <span class="sort-icon sh-sort" id="shs-exit_reason">▲</span></th>
-            </tr></thead>
-            <tbody id="cf-scalp-history-body">
-              <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>
-            </tbody>
-          </table>
-        </div>
+  </div><!-- /entry+log grid -->
+
+  <!-- Trade History — full width at bottom -->
+  <div class="card" style="padding:20px;">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Trade History</h3>
+        <div class="table-meta">Closed scalp trades with gross P&amp;L, fees, and net result.</div>
       </div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="trade-table" id="cf-scalp-history-table">
+        <thead><tr>
+          <th class="sortable-th" onclick="sortScalpHistory('exit_time')">Closed At <span class="sort-icon sh-sort" id="shs-exit_time">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('symbol')">Symbol <span class="sort-icon sh-sort" id="shs-symbol">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('side')">Side <span class="sort-icon sh-sort" id="shs-side">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('entry_price')">Entry <span class="sort-icon sh-sort" id="shs-entry_price">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('exit_price')">Exit <span class="sort-icon sh-sort" id="shs-exit_price">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('fees')">Fees <span class="sort-icon sh-sort" id="shs-fees">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('pnl')">P&amp;L <span class="sort-icon sh-sort" id="shs-pnl">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('net_pnl')">Net P&amp;L <span class="sort-icon sh-sort" id="shs-net_pnl">▲</span></th>
+          <th class="sortable-th" onclick="sortScalpHistory('exit_reason')">Reason <span class="sort-icon sh-sort" id="shs-exit_reason">▲</span></th>
+        </tr></thead>
+        <tbody id="cf-scalp-history-body">
+          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 
-      <!-- Event Log -->
-      <div class="card" style="padding:20px;">
-        <h3 style="margin:0 0 14px;font-size:15px;font-weight:700;">Event Log</h3>
-        <div id="cf-scalp-event-log" style="max-height:220px;overflow-y:auto;font-size:12px;font-family:'JetBrains Mono',monospace;">
-          <div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>
-        </div>
-      </div>
-
-    </div><!-- /right panel -->
-  </div><!-- /grid -->
 </div><!-- /scalp-page -->
 
+<!-- ═══ CPR CONFIGURATION MODAL ═══ -->
+<div class="modal-overlay" id="cpr-modal" onclick="if(event.target===this)closeCPRModal()">
+  <div class="modal" style="width: 560px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+      <h3 style="margin: 0;">Add CPR Indicator</h3>
+      <button class="leg-remove" onclick="closeCPRModal()" style="font-size: 22px;">&times;</button>
+    </div>
+
+    <div class="modal-grid">
+      <div>
+        <label>Indicator Type</label>
+        <input type="text" value="CPR (Central Pivot Range)" readonly style="background:var(--card2);color:var(--muted);cursor:default;">
+      </div>
+      <div>
+        <label>Time Frame</label>
+        <select id="cpr-timeframe">
+          <option value="2H">2 Hour</option>
+          <option value="4H">4 Hour</option>
+          <option value="Day" selected>Day</option>
+          <option value="Week">Week</option>
+          <option value="Month">Month</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="modal-grid">
+      <div>
+        <label>Category</label>
+        <select id="cpr-category">
+          <option value="Traditional" selected>Traditional</option>
+          <option value="Fibonacci">Fibonacci</option>
+          <option value="Camarilla">Camarilla</option>
+        </select>
+      </div>
+      <div>
+        <label>Narrow Range %</label>
+        <input type="number" id="cpr-narrow-pct" value="0.2" step="0.05" min="0">
+      </div>
+    </div>
+
+    <div class="modal-grid">
+      <div>
+        <label>Moderate Range %</label>
+        <input type="number" id="cpr-moderate-pct" value="0.5" step="0.05" min="0">
+      </div>
+      <div>
+        <label>Wide Range %</label>
+        <input type="number" id="cpr-wide-pct" value="0.5" step="0.05" min="0">
+      </div>
+    </div>
+
+    <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+      <button class="btn" onclick="confirmAddCPR()" style="padding: 10px 40px;">Save</button>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════════════════════════════════════════════
      JAVASCRIPT
@@ -3392,11 +3440,15 @@ function renderIndicatorFields() {
       '<input type="number" id="ind-bb-std" value="2" step="0.1" min="0.1" style="width:70px;' + _indInputStyle + '" title="Std Dev">' + _indTfHtml;
   else if (name === 'ATR' || name === 'ADX' || name === 'StochRSI')
     c.innerHTML = '<input type="number" id="ind-period" value="14" min="1" style="width:70px;' + _indInputStyle + '" title="Period">' + _indTfHtml;
-  else if (name === 'VWAP')
+  else if (name === 'VWAP' || name === 'Current_Candle' || name === 'Signal_Candle')
     c.innerHTML = _indTfHtml;
+  else if (name === 'ORB')
+    c.innerHTML = '<div style="display:flex;align-items:center;gap:6px"><label style="font-size:11px;color:var(--muted);white-space:nowrap;">Minutes:</label>' +
+      '<input type="number" id="ind-orb-minutes" value="15" style="width:70px;' + _indInputStyle + '" title="ORB window in minutes" min="5" max="60" step="5"></div>';
   else if (name === 'CPR')
-    c.innerHTML = '<select id="ind-cpr-tf" style="width:100px;' + _indInputStyle + '">' +
-      '<option value="Day" selected>Day</option><option value="Week">Week</option><option value="Month">Month</option></select>';
+    c.innerHTML = '<span style="font-size:11px;color:var(--muted);">Click + Add to configure</span>';
+  else if (name === 'Previous_Day')
+    c.innerHTML = '';
   else
     c.innerHTML = '';
 }
@@ -3405,6 +3457,13 @@ function addIndicator() {
   var name = document.getElementById('new-indicator-name').value;
   var id = '';
   var tf = (document.getElementById('ind-tf') || {}).value || '5';
+
+  // CPR opens a configuration modal instead of adding directly
+  if (name === 'CPR') {
+    if (indicators.some(function(i) { return i.startsWith('CPR'); })) { cfToast('CPR already added!', 'warning'); return; }
+    document.getElementById('cpr-modal').classList.add('open');
+    return;
+  }
 
   if (name === 'EMA' || name === 'SMA') {
     var p = (document.getElementById('ind-period') || {}).value || '14';
@@ -3430,9 +3489,15 @@ function addIndicator() {
     id = name + '_' + p + '_' + tf + 'm';
   } else if (name === 'VWAP') {
     id = 'VWAP_' + tf + 'm';
-  } else if (name === 'CPR') {
-    var cprTf = (document.getElementById('ind-cpr-tf') || {}).value || 'Day';
-    id = 'CPR_' + cprTf;
+  } else if (name === 'Current_Candle') {
+    id = 'Current_Candle_' + tf + 'm';
+  } else if (name === 'Signal_Candle') {
+    id = 'Signal_Candle_' + tf + 'm';
+  } else if (name === 'Previous_Day') {
+    id = 'Previous_Day';
+  } else if (name === 'ORB') {
+    var mins = (document.getElementById('ind-orb-minutes') || {}).value || '15';
+    id = 'ORB_' + mins + 'min';
   }
 
   if (!id) return;
@@ -3445,6 +3510,37 @@ function addIndicator() {
   }
 }
 
+// ── CPR Modal Functions ──
+function closeCPRModal() { document.getElementById('cpr-modal').classList.remove('open'); }
+
+function confirmAddCPR() {
+  var cprTf = (document.getElementById('cpr-timeframe') || {}).value || 'Day';
+  var narrowPct = parseFloat((document.getElementById('cpr-narrow-pct') || {}).value) || 0.2;
+  var moderatePct = parseFloat((document.getElementById('cpr-moderate-pct') || {}).value) || 0.5;
+
+  // Encode: CPR_Day_0.2_0.5
+  var indId = 'CPR_' + cprTf + '_' + narrowPct + '_' + moderatePct;
+
+  if (!indicators.some(function(i) { return i.startsWith('CPR'); })) {
+    indicators.push(indId);
+    renderIndicators();
+    closeCPRModal();
+    cfToast('Added CPR ' + cprTf + ' (Narrow \u2264' + narrowPct + '%, Moderate \u2264' + moderatePct + '%)', 'success');
+  } else {
+    cfToast('CPR already added!', 'warning');
+    closeCPRModal();
+  }
+}
+
+function _formatCPRBadge(indId) {
+  // CPR_Day_0.2_0.5 → "CPR Day (N:0.2% M:0.5%)"
+  var parts = indId.split('_');
+  var tf = parts[1] || 'Day';
+  var narrow = parts[2] || '0.2';
+  var moderate = parts[3] || '0.5';
+  return 'CPR ' + tf + ' (N:' + narrow + '% M:' + moderate + '%)';
+}
+
 function removeIndicator(idx) {
   indicators.splice(idx, 1);
   renderIndicators();
@@ -3454,8 +3550,10 @@ function renderIndicators() {
   var list = document.getElementById('indicator-list');
   if (!list) return;
   list.innerHTML = indicators.map(function(ind, i) {
-    var display = ind.replace(/_/g, ' ');
-    return '<span class="tag tag-purple" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;" onclick="removeIndicator(' + i + ')">' +
+    var isCPR = ind.startsWith('CPR');
+    var display = isCPR ? _formatCPRBadge(ind) : ind.replace(/_/g, ' ');
+    var bgStyle = isCPR ? 'background:linear-gradient(135deg, var(--accent2), #7c3aed);' : '';
+    return '<span class="tag tag-purple" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;' + bgStyle + '" onclick="removeIndicator(' + i + ')">' +
       display + ' <span style="color:#ffb3b3;font-size:14px;">\u00d7</span></span>';
   }).join('');
   renderConditions('entry');
@@ -3543,15 +3641,50 @@ function getIndicatorOptions() {
   // ── Support/Resistance (CPR) ──
   var cprInds = indicators.filter(function(i) { return i.startsWith('CPR'); });
   if (cprInds.length) {
-    var cprLabel = cprInds[0] || 'CPR';
-    html += '<optgroup label="── Support / Resistance (' + _d(cprLabel) + ') ──">';
-    html += '<option value="CPR_pivot">CPR Pivot</option>';
-    html += '<option value="CPR_bc">CPR BC (Bottom)</option>';
-    html += '<option value="CPR_tc">CPR TC (Top)</option>';
-    html += '<option value="CPR_R1">R1</option><option value="CPR_R2">R2</option>';
-    html += '<option value="CPR_R3">R3</option><option value="CPR_R4">R4</option><option value="CPR_R5">R5</option>';
-    html += '<option value="CPR_S1">S1</option><option value="CPR_S2">S2</option>';
-    html += '<option value="CPR_S3">S3</option><option value="CPR_S4">S4</option><option value="CPR_S5">S5</option>';
+    var cprLabel = _formatCPRBadge(cprInds[0]);
+    html += '<optgroup label="── CPR (' + cprLabel + ') ──">';
+    html += '<option value="CPR_Pivot">CPR \u2014 Pivot</option>';
+    html += '<option value="CPR_TC">CPR \u2014 TC (Top Central)</option>';
+    html += '<option value="CPR_BC">CPR \u2014 BC (Bottom Central)</option>';
+    html += '<option value="CPR_R1">CPR \u2014 R1</option><option value="CPR_R2">CPR \u2014 R2</option>';
+    html += '<option value="CPR_R3">CPR \u2014 R3</option><option value="CPR_R4">CPR \u2014 R4</option><option value="CPR_R5">CPR \u2014 R5</option>';
+    html += '<option value="CPR_S1">CPR \u2014 S1</option><option value="CPR_S2">CPR \u2014 S2</option>';
+    html += '<option value="CPR_S3">CPR \u2014 S3</option><option value="CPR_S4">CPR \u2014 S4</option><option value="CPR_S5">CPR \u2014 S5</option>';
+    html += '<option value="CPR_width_pct">CPR \u2014 Width %</option>';
+    html += '<option value="CPR_is_narrow">CPR \u2014 Is Narrow (true/false)</option>';
+    html += '<option value="CPR_is_moderate">CPR \u2014 Is Moderate (true/false)</option>';
+    html += '<option value="CPR_is_wide">CPR \u2014 Is Wide (true/false)</option>';
+    html += '</optgroup>';
+  }
+
+  // ── Signal Candle ──
+  var sigInds = indicators.filter(function(i) { return i.startsWith('Signal_Candle'); });
+  if (sigInds.length) {
+    html += '<optgroup label="── Signal Candle ──">';
+    html += '<option value="Signal_Candle_Open">Signal Candle \u2014 Open</option>';
+    html += '<option value="Signal_Candle_High">Signal Candle \u2014 High</option>';
+    html += '<option value="Signal_Candle_Low">Signal Candle \u2014 Low</option>';
+    html += '<option value="Signal_Candle_Close">Signal Candle \u2014 Close</option>';
+    html += '</optgroup>';
+  }
+
+  // ── Previous Day ──
+  var prevDayInds = indicators.filter(function(i) { return i === 'Previous_Day'; });
+  if (prevDayInds.length) {
+    html += '<optgroup label="── Previous Day ──">';
+    html += '<option value="yesterday_high">Previous Day \u2014 High</option>';
+    html += '<option value="yesterday_low">Previous Day \u2014 Low</option>';
+    html += '<option value="yesterday_close">Previous Day \u2014 Close</option>';
+    html += '<option value="yesterday_open">Previous Day \u2014 Open</option>';
+    html += '</optgroup>';
+  }
+
+  // ── ORB (Opening Range Breakout) ──
+  var orbInds = indicators.filter(function(i) { return i.startsWith('ORB'); });
+  if (orbInds.length) {
+    html += '<optgroup label="── ORB ──">';
+    html += '<option value="ORB_high">ORB \u2014 High</option>';
+    html += '<option value="ORB_low">ORB \u2014 Low</option>';
     html += '</optgroup>';
   }
 
@@ -5039,12 +5172,12 @@ const STRATEGY_TEMPLATES = {
     symbol: 'BTCUSDT',
     leverage: 5,
     side: 'LONG',
-    indicators: ['CPR_Day', 'EMA_50_60m'],
+    indicators: ['CPR_Day_0.2_0.5', 'EMA_50_60m'],
     entry: [
-      { left: 'current_close', operator: 'crosses_above', right: 'CPR_tc', connector: 'AND', right_number_value: '0' },
+      { left: 'current_close', operator: 'crosses_above', right: 'CPR_TC', connector: 'AND', right_number_value: '0' },
       { left: 'current_close', operator: 'is_above', right: 'EMA_50_60m', connector: 'AND', right_number_value: '0' },
     ],
-    exit: [{ left: 'current_close', operator: 'crosses_below', right: 'CPR_pivot', connector: 'AND', right_number_value: '0' }],
+    exit: [{ left: 'current_close', operator: 'crosses_below', right: 'CPR_Pivot', connector: 'AND', right_number_value: '0' }],
     sl: 3, tp: 10, interval: '1h',
   },
   stochrsi_scalp: {
@@ -5490,7 +5623,7 @@ async function loadPortfolioData() {
     var ordTbody = document.getElementById('pf-orders-body');
     if (ordTbody) {
       if (orders.length === 0) {
-        ordTbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
+        ordTbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
       } else {
         ordTbody.innerHTML = orders.slice(0, 50).map(function(o) {
           var side = (o.side || '').toUpperCase();
@@ -5499,9 +5632,6 @@ async function loadPortfolioData() {
           var timeStr = ts ? fmtDt(ts) : '--';
           var symbol = o.product_symbol || o.symbol || ('ID:' + (o.product_id || ''));
           var fee = parseFloat(o.paid_commission) || 0;
-          var rpnl = parseFloat(o.realized_pnl) || 0;
-          var netPnl = rpnl - fee;
-          var pnlColor = netPnl > 0 ? 'var(--green)' : netPnl < 0 ? 'var(--red)' : 'var(--muted)';
           return '<tr>' +
             '<td style="white-space:nowrap;font-size:12px;">' + timeStr + '</td>' +
             '<td style="font-weight:600;">' + symbol + '</td>' +
@@ -5509,7 +5639,6 @@ async function loadPortfolioData() {
             '<td>' + (o.size || o.quantity || 0) + '</td>' +
             '<td>' + fmtINRPrice(fillPrice) + '</td>' +
             '<td style="color:var(--yellow);">' + fmtINR(fee) + '</td>' +
-            '<td style="color:' + pnlColor + ';font-weight:700;">' + (netPnl >= 0 ? '+' : '') + fmtINR(netPnl) + '</td>' +
             '<td>' + (o.order_type || o.type || '--').replace('_', ' ') + '</td>' +
             '<td><span class="tag tag-purple">' + (o.state || o.status || 'filled') + '</span></td>' +
             '</tr>';
