@@ -52,14 +52,20 @@ test.describe('Shell Audit', () => {
     const entryBefore = await page.locator('#entry-conditions .condition-row').count();
     const exitBefore = await page.locator('#exit-conditions .condition-row').count();
 
-    await page.click('button:has-text("MACD")');
-    await page.click('button:has-text("Bollinger")');
+    // Select MACD from dropdown and add
+    await page.selectOption('#new-indicator-name', 'MACD');
+    await page.locator('#builder-page button:has-text("+ Add")').first().click();
     await expect(page.locator('#indicator-list')).toContainText('MACD');
+
+    // Select Bollinger Bands from dropdown and add
+    await page.selectOption('#new-indicator-name', 'BB');
+    await page.locator('#builder-page button:has-text("+ Add")').first().click();
     await expect(page.locator('#indicator-list')).toContainText('BB');
 
+    // Add entry and exit conditions (indicator +Add is index 0, entry is 1, exit is 2)
     const addBtns = page.locator('#builder-page button:has-text("+ Add")');
-    await addBtns.nth(0).click();
     await addBtns.nth(1).click();
+    await addBtns.nth(2).click();
     await expect(page.locator('#entry-conditions .condition-row')).toHaveCount(entryBefore + 1);
     await expect(page.locator('#exit-conditions .condition-row')).toHaveCount(exitBefore + 1);
 
