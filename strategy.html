@@ -3254,7 +3254,7 @@ function showPage(pageId, btn) {
 
   if (pageId === 'dashboard-page') { refreshBrokerState(true); loadDashboard(); }
   if (pageId === 'market-page') refreshMarket();
-  if (pageId === 'results-page') { loadRuns(); fetchStrategies(); }
+  if (pageId === 'results-page' && !_backtestRunning) { loadRuns(); fetchStrategies(); }
   if (pageId === 'live-page') startLiveMonitor();
   if (pageId === 'portfolio-page') { refreshBrokerState(true); loadPortfolioData(); }
   if (pageId === 'scalp-page') cfInitScalpPage();
@@ -4108,8 +4108,12 @@ async function runBacktest() {
   btn.disabled = true; btn.textContent = '⏳ Running...';
   btn.classList.add('loading');
 
-  // Navigate to results page immediately with a countdown timer
+  // Navigate to results page without triggering loadRuns (which would overwrite countdown)
+  _backtestRunning = true;
   showPage('results-page', document.getElementById('nav-results'));
+  // Hide any existing pagination from previous runs view
+  var existingPager = document.getElementById('runs-table-pagination');
+  if (existingPager) existingPager.style.display = 'none';
   var countdownSec = 15;
   var countdownEl = document.getElementById('results-list');
   function renderCountdown(sec) {
@@ -4171,11 +4175,13 @@ async function runBacktest() {
     await cfAlert('Error: ' + e.message, 'Error', '❌');
     await loadRuns();
   } finally {
+    _backtestRunning = false;
     btn.disabled = false; btn.textContent = '⚡ Run Backtest'; btn.classList.remove('loading');
   }
 }
 
 // ── Results (All Runs: Backtest / Paper / Live) ───────────
+let _backtestRunning = false;
 let _currentRunFilter = 'all';
 let _runsSortCol = 'created_at';
 let _runsSortAsc = false;
