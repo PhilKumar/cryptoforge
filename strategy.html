@@ -3743,7 +3743,29 @@ function updateCondition(type, idx, field, value) {
 }
 
 // Day picker helpers
-function toggleDayDropdown(el) { var dd = el.nextElementSibling; dd.style.display = dd.style.display === 'none' ? 'block' : 'none'; }
+function toggleDayDropdown(el) {
+  var dd = el.nextElementSibling;
+  if (dd.style.display === 'none' || !dd.style.display) {
+    // Position fixed relative to viewport to escape overflow:hidden on .card
+    var rect = el.getBoundingClientRect();
+    dd.style.position = 'fixed';
+    dd.style.top = (rect.bottom + 4) + 'px';
+    dd.style.left = rect.left + 'px';
+    dd.style.width = rect.width + 'px';
+    dd.style.display = 'block';
+    // Close on outside click
+    setTimeout(function() {
+      document.addEventListener('click', function closeDayPicker(e) {
+        if (!dd.contains(e.target) && e.target !== el) {
+          dd.style.display = 'none';
+          document.removeEventListener('click', closeDayPicker);
+        }
+      });
+    }, 0);
+  } else {
+    dd.style.display = 'none';
+  }
+}
 function updateDayLabel(type, idx, cb) {
   var picker = cb.closest('.day-picker');
   var checks = picker.querySelectorAll('input:checked');
@@ -3759,6 +3781,34 @@ function renderConditions(type) {
   const arr = type === 'entry' ? entryConditions : exitConditions;
   const cont = document.getElementById(type + '-conditions');
   const opts = getIndicatorOptions();
+
+  // ── Auto-fix stale operator/right from saved conditions ──
+  arr.forEach(function(c) {
+    if (BOOLEAN_FIELDS.includes(c.left)) {
+      if (c.operator !== 'is_true' && c.operator !== 'is_false') {
+        c.operator = 'is_true';
+        c.right = '';
+      }
+    } else if (c.left === 'Day_Of_Week') {
+      if (c.operator !== 'contains' && c.operator !== 'not_contains') {
+        c.operator = 'contains';
+        c.right = '';
+        c.right_days = c.right_days || [];
+      }
+    } else if (c.left === 'Time_Of_Day') {
+      if (!['is_above','is_below','>=','<='].includes(c.operator)) {
+        c.operator = 'is_above';
+        c.right = '';
+        c.right_time = c.right_time || '09:30';
+      }
+    } else {
+      // Normal indicator — if operator is boolean/dow-only, reset to default
+      if (c.operator === 'is_true' || c.operator === 'is_false' || c.operator === 'contains' || c.operator === 'not_contains') {
+        c.operator = 'crosses_above';
+        c.right = c.right || 'current_close';
+      }
+    }
+  });
 
   cont.innerHTML = arr.map((c, i) => {
     let connectorHtml = '';
@@ -3818,7 +3868,7 @@ function renderConditions(type) {
       var dayLabel = selDays.length ? selDays.map(function(d){return d.substring(0,3);}).join(', ') + ' \u25BE' : 'Select days \u25BE';
       rhsHtml = `<div class="day-picker" style="flex:1;position:relative;">
         <div class="day-picker-toggle" onclick="toggleDayDropdown(this)" style="padding:8px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;color:var(--text);">${dayLabel}</div>
-        <div style="display:none;position:absolute;top:100%;left:0;right:0;z-index:9999;background:linear-gradient(180deg,rgba(25,34,58,0.99),rgba(10,16,30,0.99));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.7);margin-top:4px;padding:4px 0;">` +
+        <div style="display:none;position:fixed;z-index:99999;background:linear-gradient(180deg,rgba(25,34,58,0.99),rgba(10,16,30,0.99));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.7);padding:4px 0;">` +
         ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(function(day) {
           var chk = selDays.includes(day) ? 'checked' : '';
           return `<label style="display:block;padding:8px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);" onmouseover="this.style.background='rgba(0,200,150,0.08)'" onmouseout="this.style.background='transparent'"><input type="checkbox" value="${day}" ${chk} style="margin-right:10px;accent-color:var(--accent);" onchange="updateDayLabel('${type}',${i},this)"> ${day}</label>`;
