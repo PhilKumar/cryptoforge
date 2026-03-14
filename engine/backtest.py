@@ -93,6 +93,17 @@ def eval_condition(row, cond, prev_row=None):
 
     # Standard indicator conditions
     lv = _resolve_value(row, left)
+
+    # ── Boolean operators — handle before RHS resolution ──
+    if op == "is_true":
+        if lv is None:
+            return False
+        return bool(lv)
+    elif op == "is_false":
+        if lv is None:
+            return False
+        return not bool(lv)
+
     r = cond.get("right")
     rv = _resolve_value(row, r, cond)
 
@@ -153,10 +164,6 @@ def eval_condition(row, cond, prev_row=None):
         return lv_f >= rv_f
     elif op == "<=":
         return lv_f <= rv_f
-    elif op == "is_true":
-        return bool(lv)
-    elif op == "is_false":
-        return not bool(lv)
     return False
 
 
