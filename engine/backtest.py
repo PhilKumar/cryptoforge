@@ -353,15 +353,40 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
                 exit_reason = "Signal Exit"
 
             if exit_reason:
-                # For signal exits, use candle open price
+                # Calculate actual exit price based on exit reason
                 if exit_reason == "Signal Exit":
-                    exit_price = float(row["open"])
+                    price = float(row["open"])
+                elif exit_reason == "Stop Loss":
+                    # SL triggers at exactly -sl_pct leveraged loss
                     if side == "LONG":
-                        pnl_pct = (exit_price - entry_price) / entry_price * 100
+                        price = entry_price * (1 - sl_pct / (leverage * 100))
                     else:
-                        pnl_pct = (entry_price - exit_price) / entry_price * 100
-                    trade_pnl = entry_size * (pnl_pct / 100)
-                    price = exit_price
+                        price = entry_price * (1 + sl_pct / (leverage * 100))
+                elif exit_reason == "Take Profit":
+                    # TP triggers at exactly +tp_pct leveraged profit
+                    if side == "LONG":
+                        price = entry_price * (1 + tp_pct / (leverage * 100))
+                    else:
+                        price = entry_price * (1 - tp_pct / (leverage * 100))
+                elif exit_reason == "Trailing SL":
+                    # Trailing triggers when profit drops trail_pct below peak
+                    trail_exit_lev = peak_pnl_pct - trail_pct
+                    if side == "LONG":
+                        price = entry_price * (1 + trail_exit_lev / (leverage * 100))
+                    else:
+                        price = entry_price * (1 - trail_exit_lev / (leverage * 100))
+                elif exit_reason == "Liquidation":
+                    if side == "LONG":
+                        price = entry_price * (1 + config.LIQUIDATION_THRESHOLD / (leverage * 100))
+                    else:
+                        price = entry_price * (1 - config.LIQUIDATION_THRESHOLD / (leverage * 100))
+
+                # Recalculate P&L from actual exit price
+                if side == "LONG":
+                    pnl_pct = (price - entry_price) / entry_price * 100
+                else:
+                    pnl_pct = (entry_price - price) / entry_price * 100
+                trade_pnl = entry_size * (pnl_pct / 100)
                 # Calculate fees (entry + exit)
                 entry_fee = entry_size * (fee_pct / 100)
                 exit_fee = entry_size * (1 + pnl_pct / 100) * (fee_pct / 100)
