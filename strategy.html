@@ -2682,11 +2682,12 @@
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',2)">Side <span class="sort-icon pf-ord-sort">▲</span></th>
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',3)">Size <span class="sort-icon pf-ord-sort">▲</span></th>
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',4)">Fill Price <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" onclick="sortGenericTable('pf-orders',5)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" onclick="sortGenericTable('pf-orders',6)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',5)">Fees <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',6)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',7)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
         </tr></thead>
         <tbody id="pf-orders-body">
-          <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
+          <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
         </tbody>
       </table>
     </div>
@@ -2788,19 +2789,16 @@
         </div>
 
         <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Ticket Size (USDT)</label>
-          <input type="number" id="cf-scalp-qty" value="100" min="1" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Size (USDT)</label>
+          <input type="number" id="cf-scalp-qty" value="100" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
         </div>
 
         <div>
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Leverage</label>
           <select id="cf-scalp-leverage" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
-            <option value="1">1×</option>
-            <option value="2">2×</option>
-            <option value="5">5×</option>
-            <option value="10" selected>10×</option>
-            <option value="20">20×</option>
             <option value="50">50×</option>
+            <option value="100" selected>100×</option>
+            <option value="200">200×</option>
           </select>
         </div>
 
@@ -2810,7 +2808,7 @@
               <option value="usdt">$</option><option value="pct">%</option>
             </select>
           </label>
-          <input type="number" id="cf-scalp-sl" value="5" min="0.1" step="0.1" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+          <input type="number" id="cf-scalp-sl" value="10" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
           <div id="cf-sl-hint" style="margin-top:4px;font-size:10px;color:var(--muted);">Max loss in USDT before auto-exit</div>
         </div>
 
@@ -2820,7 +2818,7 @@
               <option value="usdt">$</option><option value="pct">%</option>
             </select>
           </label>
-          <input type="number" id="cf-scalp-tp" value="10" min="0.1" step="0.1" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+          <input type="number" id="cf-scalp-tp" value="10" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
           <div id="cf-tp-hint" style="margin-top:4px;font-size:10px;color:var(--muted);">Profit target in USDT before auto-exit</div>
         </div>
 
@@ -5444,7 +5442,7 @@ async function loadPortfolioData() {
     var ordTbody = document.getElementById('pf-orders-body');
     if (ordTbody) {
       if (orders.length === 0) {
-        ordTbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
+        ordTbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
       } else {
         ordTbody.innerHTML = orders.slice(0, 50).map(function(o) {
           var side = (o.side || '').toUpperCase();
@@ -5452,12 +5450,14 @@ async function loadPortfolioData() {
           var ts = o.created_at || o.timestamp || '';
           var timeStr = ts ? fmtDt(ts) : '--';
           var symbol = o.product_symbol || o.symbol || ('ID:' + (o.product_id || ''));
+          var fee = parseFloat(o.paid_commission) || 0;
           return '<tr>' +
             '<td style="white-space:nowrap;font-size:12px;">' + timeStr + '</td>' +
             '<td style="font-weight:600;">' + symbol + '</td>' +
             '<td><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + side + '</span></td>' +
             '<td>' + (o.size || o.quantity || 0) + '</td>' +
             '<td>' + fmtINRPrice(fillPrice) + '</td>' +
+            '<td style="color:var(--yellow);">' + fmtINR(fee) + '</td>' +
             '<td>' + (o.order_type || o.type || '--').replace('_', ' ') + '</td>' +
             '<td><span class="tag tag-purple">' + (o.state || o.status || 'filled') + '</span></td>' +
             '</tr>';
@@ -6856,7 +6856,18 @@ async function cfModifyScalpTrade(tradeId) {
   }
 }
 
-function cfUpdateScalpSymbol() { /* placeholder for future mark-price updates */ }
+function cfUpdateScalpSymbol() {
+  var sym = (document.getElementById('cf-scalp-symbol') || {}).value || '';
+  var levSel = document.getElementById('cf-scalp-leverage');
+  if (!levSel) return;
+  var isBtcEth = sym === 'BTCUSDT' || sym === 'ETHUSDT';
+  var opts = isBtcEth
+    ? [{v:'50',l:'50\u00d7'},{v:'100',l:'100\u00d7'},{v:'200',l:'200\u00d7'}]
+    : [{v:'1',l:'1\u00d7'},{v:'2',l:'2\u00d7'},{v:'5',l:'5\u00d7'},{v:'10',l:'10\u00d7'},{v:'20',l:'20\u00d7'},{v:'50',l:'50\u00d7'}];
+  var prev = levSel.value;
+  levSel.innerHTML = opts.map(function(o){ return '<option value="'+o.v+'"'+(o.v===prev?' selected':'')+'>'+o.l+'</option>'; }).join('');
+  if (!opts.some(function(o){ return o.v === prev; })) levSel.value = opts[0].v;
+}
 
 // SL/TP hint text updates when type toggle changes
 function cfUpdateSLTPHints() {
