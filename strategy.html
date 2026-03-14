@@ -3716,8 +3716,30 @@ function removeCondition(type, idx) {
 function updateCondition(type, idx, field, value) {
   const arr = type === 'entry' ? entryConditions : exitConditions;
   arr[idx][field] = value;
-  // Re-render when left changes (to update operator/RHS) or right changes (number input)
-  if (field === 'left' || field === 'right') renderConditions(type);
+  // When left field changes, reset operator/right to match the new field type
+  if (field === 'left') {
+    if (BOOLEAN_FIELDS.includes(value)) {
+      arr[idx].operator = 'is_true';
+      arr[idx].right = '';
+    } else if (value === 'Time_Of_Day') {
+      arr[idx].operator = 'is_above';
+      arr[idx].right = '';
+      arr[idx].right_time = arr[idx].right_time || '09:30';
+    } else if (value === 'Day_Of_Week') {
+      arr[idx].operator = 'contains';
+      arr[idx].right = '';
+      arr[idx].right_days = arr[idx].right_days || [];
+    } else {
+      // Normal field — reset to default operator if coming from boolean/time/dow
+      var oldOp = arr[idx].operator;
+      if (oldOp === 'is_true' || oldOp === 'is_false' || oldOp === 'contains' || oldOp === 'not_contains') {
+        arr[idx].operator = 'crosses_above';
+        arr[idx].right = 'current_close';
+      }
+    }
+    renderConditions(type);
+  }
+  if (field === 'right') renderConditions(type);
 }
 
 // Day picker helpers
@@ -4173,6 +4195,7 @@ async function runBacktest() {
         + '<div style="margin-top:6px;font-size:12px;">Win Rate: ' + (d.stats.win_rate || 0) + '% • Max DD: ' + (d.stats.max_drawdown || 0).toFixed(1) + '% • Sharpe: ' + (parseFloat(d.stats.sharpe_ratio) || 0).toFixed(2) + '</div>'
         + diagHtml,
         '📊', [{label:'View Results', cls:'btn-primary'}]);
+      await loadRuns();
       if (d.run_id) { viewRun(d.run_id); }
     } else {
       await cfAlert('Backtest failed: ' + (d.message || 'Unknown error'), 'Error', '❌');
