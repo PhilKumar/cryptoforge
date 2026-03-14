@@ -2918,14 +2918,14 @@
 </div><!-- /scalp-page -->
 
 <!-- ═══ CPR CONFIGURATION MODAL ═══ -->
-<div class="modal-overlay" id="cpr-modal" onclick="if(event.target===this)closeCPRModal()">
-  <div class="modal" style="width: 560px;">
+<div class="cf-modal-overlay" id="cpr-modal" style="display:none;" onclick="if(event.target===this)closeCPRModal()">
+  <div class="cf-modal" style="width: 520px; max-width: 520px; text-align: left;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
       <h3 style="margin: 0;">Add CPR Indicator</h3>
       <button class="leg-remove" onclick="closeCPRModal()" style="font-size: 22px;">&times;</button>
     </div>
 
-    <div class="modal-grid">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
       <div>
         <label>Indicator Type</label>
         <input type="text" value="CPR (Central Pivot Range)" readonly style="background:var(--card2);color:var(--muted);cursor:default;">
@@ -2942,7 +2942,7 @@
       </div>
     </div>
 
-    <div class="modal-grid">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
       <div>
         <label>Category</label>
         <select id="cpr-category">
@@ -2957,7 +2957,7 @@
       </div>
     </div>
 
-    <div class="modal-grid">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
       <div>
         <label>Moderate Range %</label>
         <input type="number" id="cpr-moderate-pct" value="0.5" step="0.05" min="0">
@@ -3461,7 +3461,7 @@ function addIndicator() {
   // CPR opens a configuration modal instead of adding directly
   if (name === 'CPR') {
     if (indicators.some(function(i) { return i.startsWith('CPR'); })) { cfToast('CPR already added!', 'warning'); return; }
-    document.getElementById('cpr-modal').classList.add('open');
+    document.getElementById('cpr-modal').style.display = 'flex';
     return;
   }
 
@@ -3511,7 +3511,7 @@ function addIndicator() {
 }
 
 // ── CPR Modal Functions ──
-function closeCPRModal() { document.getElementById('cpr-modal').classList.remove('open'); }
+function closeCPRModal() { document.getElementById('cpr-modal').style.display = 'none'; }
 
 function confirmAddCPR() {
   var cprTf = (document.getElementById('cpr-timeframe') || {}).value || 'Day';
