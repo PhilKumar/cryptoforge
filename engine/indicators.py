@@ -335,40 +335,64 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
                 df[ind_string] = st_df["supertrend"]
 
             elif name == "MACD":
-                fast = int(parts[1]) if len(parts) > 1 else 12
-                slow = int(parts[2]) if len(parts) > 2 else 26
-                sig = int(parts[3]) if len(parts) > 3 else 9
+                # Filter out trailing timeframe suffix (e.g. '5m')
+                num_parts = [p for p in parts[1:] if not p.endswith("m")]
+                fast = int(num_parts[0]) if len(num_parts) > 0 else 12
+                slow = int(num_parts[1]) if len(num_parts) > 1 else 26
+                sig = int(num_parts[2]) if len(num_parts) > 2 else 9
                 macd_df = macd(df["close"], fast, slow, sig)
+                # Full-ID prefixed columns (new format: MACD_12_26_9_5m__line)
+                df[f"{ind_string}__line"] = macd_df["macd_line"]
+                df[f"{ind_string}__signal"] = macd_df["macd_signal"]
+                df[f"{ind_string}__histogram"] = macd_df["macd_histogram"]
+                # Backward-compat static columns
                 df["MACD_line"] = macd_df["macd_line"]
                 df["MACD_signal"] = macd_df["macd_signal"]
                 df["MACD_histogram"] = macd_df["macd_histogram"]
 
             elif name == "BB":
-                period = int(parts[1]) if len(parts) > 1 else 20
-                std = float(parts[2]) if len(parts) > 2 else 2.0
+                num_parts = [p for p in parts[1:] if not p.endswith("m")]
+                period = int(num_parts[0]) if len(num_parts) > 0 else 20
+                std = float(num_parts[1]) if len(num_parts) > 1 else 2.0
                 bb_df = bollinger_bands(df["close"], period, std)
+                # Full-ID prefixed columns
+                df[f"{ind_string}__upper"] = bb_df["bb_upper"]
+                df[f"{ind_string}__middle"] = bb_df["bb_middle"]
+                df[f"{ind_string}__lower"] = bb_df["bb_lower"]
+                # Backward-compat static columns
                 df["BB_upper"] = bb_df["bb_upper"]
                 df["BB_middle"] = bb_df["bb_middle"]
                 df["BB_lower"] = bb_df["bb_lower"]
                 df["BB_width"] = bb_df["bb_width"]
 
             elif name == "VWAP":
-                df["VWAP"] = vwap(df)
+                val = vwap(df)
+                df[ind_string] = val
+                df["VWAP"] = val  # backward-compat
 
             elif name == "ATR":
                 period = int(parts[1]) if len(parts) > 1 else 14
                 df[ind_string] = atr(df, period)
 
             elif name == "ADX":
-                period = int(parts[1]) if len(parts) > 1 else 14
+                num_parts = [p for p in parts[1:] if not p.endswith("m")]
+                period = int(num_parts[0]) if len(num_parts) > 0 else 14
                 adx_df = adx(df, period)
                 df[ind_string] = adx_df["adx"]
+                df[f"{ind_string}__plus"] = adx_df["adx_plus"]
+                df[f"{ind_string}__minus"] = adx_df["adx_minus"]
+                # Backward-compat
                 df[f"{ind_string}_plus"] = adx_df["adx_plus"]
                 df[f"{ind_string}_minus"] = adx_df["adx_minus"]
 
             elif name == "StochRSI":
-                period = int(parts[1]) if len(parts) > 1 else 14
+                num_parts = [p for p in parts[1:] if not p.endswith("m")]
+                period = int(num_parts[0]) if len(num_parts) > 0 else 14
                 srsi = stochastic_rsi(df["close"], period)
+                # Full-ID prefixed columns
+                df[f"{ind_string}__K"] = srsi["stoch_rsi_k"]
+                df[f"{ind_string}__D"] = srsi["stoch_rsi_d"]
+                # Backward-compat static columns
                 df["StochRSI_K"] = srsi["stoch_rsi_k"]
                 df["StochRSI_D"] = srsi["stoch_rsi_d"]
 

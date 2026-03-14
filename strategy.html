@@ -801,8 +801,8 @@
   .table-value-sub.positive { color: #86efac; }
   .table-value-sub.negative { color: #fca5a5; }
   .table-input-sm {
-    width: 72px;
-    padding: 6px 8px;
+    width: 88px;
+    padding: 6px 22px 6px 8px;
     border-radius: 10px;
     border: 1px solid rgba(118,138,176,0.20);
     background: linear-gradient(180deg, rgba(40,50,74,0.92), rgba(16,24,42,0.98));
@@ -810,6 +810,15 @@
     font-size: 11px;
     font-family: 'JetBrains Mono', monospace;
     text-align: right;
+    -moz-appearance: textfield;
+  }
+  .table-input-sm::-webkit-inner-spin-button,
+  .table-input-sm::-webkit-outer-spin-button {
+    opacity: 1;
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
   }
   .table-inline-actions {
     display: inline-flex;
@@ -2488,20 +2497,24 @@
     <div>
       <div class="card">
         <h3 style="margin-bottom: 14px;">📐 Indicators</h3>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;">
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('EMA')">EMA</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('SMA')">SMA</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('RSI')">RSI</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('Supertrend')">SuperTrend</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('MACD')">MACD</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('BB')">Bollinger</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('VWAP')">VWAP</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('ATR')">ATR</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('ADX')">ADX</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('StochRSI')">StochRSI</button>
-          <button class="btn btn-outline btn-sm" onclick="addIndicator('CPR')">CPR</button>
+        <div id="indicator-list" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-height: 24px;"></div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <select id="new-indicator-name" onchange="renderIndicatorFields()" style="width:160px;padding:8px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
+            <option value="EMA" selected>EMA</option>
+            <option value="SMA">SMA</option>
+            <option value="RSI">RSI</option>
+            <option value="Supertrend">SuperTrend</option>
+            <option value="MACD">MACD</option>
+            <option value="BB">Bollinger Bands</option>
+            <option value="VWAP">VWAP</option>
+            <option value="ATR">ATR</option>
+            <option value="ADX">ADX</option>
+            <option value="StochRSI">StochRSI</option>
+            <option value="CPR">CPR</option>
+          </select>
+          <div id="dynamic-indicator-fields" style="display:flex;align-items:center;gap:8px;"></div>
+          <button class="btn btn-outline btn-sm" onclick="addIndicator()" style="font-size:12px;padding:8px 14px;">+ Add</button>
         </div>
-        <div id="indicator-list" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
       </div>
 
       <div class="card">
@@ -2683,11 +2696,12 @@
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',3)">Size <span class="sort-icon pf-ord-sort">▲</span></th>
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',4)">Fill Price <span class="sort-icon pf-ord-sort">▲</span></th>
           <th class="sortable-th" onclick="sortGenericTable('pf-orders',5)">Fees <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" onclick="sortGenericTable('pf-orders',6)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" onclick="sortGenericTable('pf-orders',7)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',6)">P&L <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',7)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
+          <th class="sortable-th" onclick="sortGenericTable('pf-orders',8)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
         </tr></thead>
         <tbody id="pf-orders-body">
-          <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
+          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
         </tbody>
       </table>
     </div>
@@ -2796,6 +2810,11 @@
         <div>
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Leverage</label>
           <select id="cf-scalp-leverage" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="5">5×</option>
+            <option value="10">10×</option>
+            <option value="25">25×</option>
             <option value="50">50×</option>
             <option value="100" selected>100×</option>
             <option value="200">200×</option>
@@ -3349,50 +3368,80 @@ function setSide(side) {
 }
 
 // ── Indicators ─────────────────────────────────────────────
-async function addIndicator(name) {
-  let label = name;
-  if (name === 'EMA') {
-    label = await cfPrompt('EMA Indicator', 'Enter EMA period:', '20');
-    if (!label) return; label = 'EMA_' + label;
-  } else if (name === 'SMA') {
-    label = await cfPrompt('SMA Indicator', 'Enter SMA period:', '50');
-    if (!label) return; label = 'SMA_' + label;
-  } else if (name === 'RSI') {
-    label = await cfPrompt('RSI Indicator', 'Enter RSI period:', '14');
-    if (!label) return; label = 'RSI_' + label;
-  } else if (name === 'Supertrend') {
-    var p = await cfPrompt('SuperTrend', 'Enter period:', '10');
-    if (!p) return;
-    var m = await cfPrompt('SuperTrend', 'Enter multiplier:', '3.0');
-    if (!m) return;
-    label = 'Supertrend_' + p + '_' + m;
-  } else if (name === 'MACD') { label = 'MACD_12_26_9'; }
-  else if (name === 'BB') { label = 'BB_20_2.0'; }
-  else if (name === 'ATR') {
-    var atrP = await cfPrompt('ATR Indicator', 'Enter ATR period:', '14');
-    if (!atrP) return; label = 'ATR_' + atrP;
-  } else if (name === 'StochRSI') { label = 'StochRSI_14'; }
-  else if (name === 'ADX') {
-    var adxP = await cfPrompt('ADX Indicator', 'Enter ADX period:', '14');
-    if (!adxP) return; label = 'ADX_' + adxP;
-  }
-  else if (name === 'CPR') {
-    var tf = await cfSelect('CPR Indicator', 'Select timeframe:', [
-      {value:'Day', label:'Day'},
-      {value:'Week', label:'Week'},
-      {value:'Month', label:'Month'}
-    ], 'Day');
-    if (!tf) return;
-    label = 'CPR_' + tf;
-  }
-  // else VWAP is just 'VWAP'
+var _indInputStyle = 'padding:7px 8px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:"Outfit",sans-serif;font-size:12px;';
+var _indTfHtml = '<select id="ind-tf" style="width:100px;' + _indInputStyle + '">' +
+  '<option value="1">1 Min</option><option value="3">3 Min</option><option value="5" selected>5 Min</option>' +
+  '<option value="15">15 Min</option><option value="30">30 Min</option><option value="60">1 Hour</option></select>';
 
-  if (!indicators.includes(label)) {
-    indicators.push(label);
+function renderIndicatorFields() {
+  var name = document.getElementById('new-indicator-name').value;
+  var c = document.getElementById('dynamic-indicator-fields');
+  if (name === 'EMA' || name === 'SMA')
+    c.innerHTML = '<input type="number" id="ind-period" value="14" min="1" style="width:70px;' + _indInputStyle + '" title="Period">' + _indTfHtml;
+  else if (name === 'Supertrend')
+    c.innerHTML = '<input type="number" id="ind-period" value="10" min="1" style="width:70px;' + _indInputStyle + '" title="Period">' +
+      '<input type="number" id="ind-multiplier" value="3" step="0.1" min="0.1" style="width:70px;' + _indInputStyle + '" title="Multiplier">' + _indTfHtml;
+  else if (name === 'RSI')
+    c.innerHTML = '<input type="number" id="ind-period" value="14" min="1" style="width:70px;' + _indInputStyle + '" title="Period">' + _indTfHtml;
+  else if (name === 'MACD')
+    c.innerHTML = '<input type="number" id="ind-macd-fast" value="12" min="1" style="width:55px;' + _indInputStyle + '" title="Fast">' +
+      '<input type="number" id="ind-macd-slow" value="26" min="1" style="width:55px;' + _indInputStyle + '" title="Slow">' +
+      '<input type="number" id="ind-macd-signal" value="9" min="1" style="width:55px;' + _indInputStyle + '" title="Signal">' + _indTfHtml;
+  else if (name === 'BB')
+    c.innerHTML = '<input type="number" id="ind-period" value="20" min="1" style="width:70px;' + _indInputStyle + '" title="Period">' +
+      '<input type="number" id="ind-bb-std" value="2" step="0.1" min="0.1" style="width:70px;' + _indInputStyle + '" title="Std Dev">' + _indTfHtml;
+  else if (name === 'ATR' || name === 'ADX' || name === 'StochRSI')
+    c.innerHTML = '<input type="number" id="ind-period" value="14" min="1" style="width:70px;' + _indInputStyle + '" title="Period">' + _indTfHtml;
+  else if (name === 'VWAP')
+    c.innerHTML = _indTfHtml;
+  else if (name === 'CPR')
+    c.innerHTML = '<select id="ind-cpr-tf" style="width:100px;' + _indInputStyle + '">' +
+      '<option value="Day" selected>Day</option><option value="Week">Week</option><option value="Month">Month</option></select>';
+  else
+    c.innerHTML = '';
+}
+
+function addIndicator() {
+  var name = document.getElementById('new-indicator-name').value;
+  var id = '';
+  var tf = (document.getElementById('ind-tf') || {}).value || '5';
+
+  if (name === 'EMA' || name === 'SMA') {
+    var p = (document.getElementById('ind-period') || {}).value || '14';
+    id = name + '_' + p + '_' + tf + 'm';
+  } else if (name === 'RSI') {
+    var p = (document.getElementById('ind-period') || {}).value || '14';
+    id = 'RSI_' + p + '_' + tf + 'm';
+  } else if (name === 'Supertrend') {
+    var p = (document.getElementById('ind-period') || {}).value || '10';
+    var m = (document.getElementById('ind-multiplier') || {}).value || '3';
+    id = 'Supertrend_' + p + '_' + m + '_' + tf + 'm';
+  } else if (name === 'MACD') {
+    var fast = (document.getElementById('ind-macd-fast') || {}).value || '12';
+    var slow = (document.getElementById('ind-macd-slow') || {}).value || '26';
+    var sig = (document.getElementById('ind-macd-signal') || {}).value || '9';
+    id = 'MACD_' + fast + '_' + slow + '_' + sig + '_' + tf + 'm';
+  } else if (name === 'BB') {
+    var p = (document.getElementById('ind-period') || {}).value || '20';
+    var std = (document.getElementById('ind-bb-std') || {}).value || '2';
+    id = 'BB_' + p + '_' + std + '_' + tf + 'm';
+  } else if (name === 'ATR' || name === 'ADX' || name === 'StochRSI') {
+    var p = (document.getElementById('ind-period') || {}).value || '14';
+    id = name + '_' + p + '_' + tf + 'm';
+  } else if (name === 'VWAP') {
+    id = 'VWAP_' + tf + 'm';
+  } else if (name === 'CPR') {
+    var cprTf = (document.getElementById('ind-cpr-tf') || {}).value || 'Day';
+    id = 'CPR_' + cprTf;
+  }
+
+  if (!id) return;
+  if (!indicators.includes(id)) {
+    indicators.push(id);
     renderIndicators();
-    cfToast(label + ' added', 'success');
+    cfToast(id.replace(/_/g, ' ') + ' added', 'success');
   } else {
-    cfToast(label + ' already added', 'warning');
+    cfToast('Already added!', 'warning');
   }
 }
 
@@ -3402,18 +3451,26 @@ function removeIndicator(idx) {
 }
 
 function renderIndicators() {
-  document.getElementById('indicator-list').innerHTML = indicators.map((ind, i) => `
-    <span class="tag tag-purple" style="cursor:pointer;" onclick="removeIndicator(${i})">${ind} ✕</span>
-  `).join('');
-  // Sync condition dropdowns when indicators change
+  var list = document.getElementById('indicator-list');
+  if (!list) return;
+  list.innerHTML = indicators.map(function(ind, i) {
+    var display = ind.replace(/_/g, ' ');
+    return '<span class="tag tag-purple" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;" onclick="removeIndicator(' + i + ')">' +
+      display + ' <span style="color:#ffb3b3;font-size:14px;">\u00d7</span></span>';
+  }).join('');
   renderConditions('entry');
   renderConditions('exit');
 }
 
+// Initialize indicator fields on page load
+document.addEventListener('DOMContentLoaded', function() { if (document.getElementById('new-indicator-name')) renderIndicatorFields(); });
+
 // ── Conditions ─────────────────────────────────────────────
 function getIndicatorOptions() {
+  var _d = function(id) { return id.replace(/_/g, ' '); };
+
   // ── Current Candle (live price action) ──
-  let html = '<optgroup label="🕯️ Current Candle">';
+  var html = '<optgroup label="Current Candle">';
   html += '<option value="current_open">Current Candle — Open</option>';
   html += '<option value="current_high">Current Candle — High</option>';
   html += '<option value="current_low">Current Candle — Low</option>';
@@ -3421,89 +3478,80 @@ function getIndicatorOptions() {
   html += '<option value="current_volume">Current Candle — Volume</option>';
   html += '</optgroup>';
 
-  // ── Custom Number (always visible near top) ──
+  // ── Custom Number ──
   html += '<optgroup label="── Custom Value ──">';
   html += '<option value="number">Number (e.g. 30, 70)</option>';
   html += '</optgroup>';
 
   // ── Moving Averages ──
-  const mas = indicators.filter(i => i.startsWith('EMA') || i.startsWith('SMA'));
+  var mas = indicators.filter(function(i) { return i.startsWith('EMA') || i.startsWith('SMA'); });
   if (mas.length) {
     html += '<optgroup label="── Moving Averages ──">';
-    mas.forEach(ind => { html += `<option value="${ind}">${ind}</option>`; });
+    mas.forEach(function(ind) { html += '<option value="' + ind + '">' + _d(ind) + '</option>'; });
     html += '</optgroup>';
   }
 
   // ── Oscillators (RSI, MACD, StochRSI) ──
-  const hasRSI = indicators.filter(i => i.startsWith('RSI'));
-  const hasMACD = indicators.some(i => i.startsWith('MACD'));
-  const hasStoch = indicators.some(i => i.startsWith('StochRSI'));
-  if (hasRSI.length || hasMACD || hasStoch) {
+  var rsiInds = indicators.filter(function(i) { return i.startsWith('RSI'); });
+  var macdInds = indicators.filter(function(i) { return i.startsWith('MACD'); });
+  var stochInds = indicators.filter(function(i) { return i.startsWith('StochRSI'); });
+  if (rsiInds.length || macdInds.length || stochInds.length) {
     html += '<optgroup label="── Oscillators ──">';
-    hasRSI.forEach(ind => { html += `<option value="${ind}">${ind}</option>`; });
-    if (hasMACD) {
-      html += '<option value="MACD_line">MACD Line</option>';
-      html += '<option value="MACD_signal">MACD Signal</option>';
-      html += '<option value="MACD_histogram">MACD Histogram</option>';
-    }
-    if (hasStoch) {
-      html += '<option value="StochRSI_K">StochRSI K</option>';
-      html += '<option value="StochRSI_D">StochRSI D</option>';
-    }
+    rsiInds.forEach(function(ind) { html += '<option value="' + ind + '">' + _d(ind) + '</option>'; });
+    macdInds.forEach(function(ind) {
+      html += '<option value="' + ind + '__line">' + _d(ind) + ' Line</option>';
+      html += '<option value="' + ind + '__signal">' + _d(ind) + ' Signal</option>';
+      html += '<option value="' + ind + '__histogram">' + _d(ind) + ' Histogram</option>';
+    });
+    stochInds.forEach(function(ind) {
+      html += '<option value="' + ind + '__K">' + _d(ind) + ' K</option>';
+      html += '<option value="' + ind + '__D">' + _d(ind) + ' D</option>';
+    });
     html += '</optgroup>';
   }
 
   // ── Volatility (BB, ATR) ──
-  const hasBB = indicators.some(i => i.startsWith('BB'));
-  const hasATR = indicators.filter(i => i.startsWith('ATR'));
-  if (hasBB || hasATR.length) {
+  var bbInds = indicators.filter(function(i) { return i.startsWith('BB'); });
+  var atrInds = indicators.filter(function(i) { return i.startsWith('ATR'); });
+  if (bbInds.length || atrInds.length) {
     html += '<optgroup label="── Volatility ──">';
-    if (hasBB) {
-      html += '<option value="BB_upper">BB Upper</option>';
-      html += '<option value="BB_middle">BB Middle</option>';
-      html += '<option value="BB_lower">BB Lower</option>';
-    }
-    hasATR.forEach(ind => { html += `<option value="${ind}">${ind}</option>`; });
+    bbInds.forEach(function(ind) {
+      html += '<option value="' + ind + '__upper">' + _d(ind) + ' Upper</option>';
+      html += '<option value="' + ind + '__middle">' + _d(ind) + ' Middle</option>';
+      html += '<option value="' + ind + '__lower">' + _d(ind) + ' Lower</option>';
+    });
+    atrInds.forEach(function(ind) { html += '<option value="' + ind + '">' + _d(ind) + '</option>'; });
     html += '</optgroup>';
   }
 
   // ── Trend (Supertrend, ADX, VWAP) ──
-  const hasST = indicators.filter(i => i.startsWith('Supertrend'));
-  const hasADX = indicators.filter(i => i.startsWith('ADX'));
-  const hasVWAP = indicators.includes('VWAP');
-  if (hasST.length || hasADX.length || hasVWAP) {
+  var stInds = indicators.filter(function(i) { return i.startsWith('Supertrend'); });
+  var adxInds = indicators.filter(function(i) { return i.startsWith('ADX'); });
+  var vwapInds = indicators.filter(function(i) { return i.startsWith('VWAP'); });
+  if (stInds.length || adxInds.length || vwapInds.length) {
     html += '<optgroup label="── Trend ──">';
-    hasST.forEach(ind => {
-      html += `<option value="${ind}">${ind} (Price Level)</option>`;
+    stInds.forEach(function(ind) { html += '<option value="' + ind + '">' + _d(ind) + ' (Price Level)</option>'; });
+    adxInds.forEach(function(ind) {
+      html += '<option value="' + ind + '">' + _d(ind) + '</option>';
+      html += '<option value="' + ind + '__plus">' + _d(ind) + ' +DI</option>';
+      html += '<option value="' + ind + '__minus">' + _d(ind) + ' -DI</option>';
     });
-    hasADX.forEach(ind => {
-      html += `<option value="${ind}">${ind}</option>`;
-      html += `<option value="${ind}_plus">${ind} +DI</option>`;
-      html += `<option value="${ind}_minus">${ind} -DI</option>`;
-    });
-    if (hasVWAP) html += '<option value="VWAP">VWAP</option>';
+    vwapInds.forEach(function(ind) { html += '<option value="' + ind + '">' + _d(ind) + '</option>'; });
     html += '</optgroup>';
   }
 
   // ── Support/Resistance (CPR) ──
-  const hasCPR = indicators.some(i => i.startsWith('CPR'));
-  if (hasCPR) {
-    const cprInd = indicators.find(i => i.startsWith('CPR'));
-    const cprLabel = cprInd || 'CPR';
-    html += '<optgroup label="── Support / Resistance (' + cprLabel + ') ──">';
+  var cprInds = indicators.filter(function(i) { return i.startsWith('CPR'); });
+  if (cprInds.length) {
+    var cprLabel = cprInds[0] || 'CPR';
+    html += '<optgroup label="── Support / Resistance (' + _d(cprLabel) + ') ──">';
     html += '<option value="CPR_pivot">CPR Pivot</option>';
     html += '<option value="CPR_bc">CPR BC (Bottom)</option>';
     html += '<option value="CPR_tc">CPR TC (Top)</option>';
-    html += '<option value="CPR_R1">R1</option>';
-    html += '<option value="CPR_R2">R2</option>';
-    html += '<option value="CPR_R3">R3</option>';
-    html += '<option value="CPR_R4">R4</option>';
-    html += '<option value="CPR_R5">R5</option>';
-    html += '<option value="CPR_S1">S1</option>';
-    html += '<option value="CPR_S2">S2</option>';
-    html += '<option value="CPR_S3">S3</option>';
-    html += '<option value="CPR_S4">S4</option>';
-    html += '<option value="CPR_S5">S5</option>';
+    html += '<option value="CPR_R1">R1</option><option value="CPR_R2">R2</option>';
+    html += '<option value="CPR_R3">R3</option><option value="CPR_R4">R4</option><option value="CPR_R5">R5</option>';
+    html += '<option value="CPR_S1">S1</option><option value="CPR_S2">S2</option>';
+    html += '<option value="CPR_S3">S3</option><option value="CPR_S4">S4</option><option value="CPR_S5">S5</option>';
     html += '</optgroup>';
   }
 
@@ -3512,7 +3560,7 @@ function getIndicatorOptions() {
 
 function addCondition(type) {
   const arr = type === 'entry' ? entryConditions : exitConditions;
-  arr.push({ left: 'current_close', operator: 'crosses_above', right: 'EMA_20', connector: 'AND', right_number_value: '0' });
+  arr.push({ left: 'current_close', operator: 'crosses_above', right: 'current_close', connector: 'AND', right_number_value: '0' });
   renderConditions(type);
 }
 
@@ -4933,9 +4981,9 @@ const STRATEGY_TEMPLATES = {
     symbol: 'BTCUSDT',
     leverage: 10,
     side: 'LONG',
-    indicators: ['Supertrend_10_3.0', 'ATR_14'],
-    entry: [{ left: 'current_close', operator: 'crosses_above', right: 'Supertrend_10_3.0', connector: 'AND', right_number_value: '0' }],
-    exit: [{ left: 'current_close', operator: 'crosses_below', right: 'Supertrend_10_3.0', connector: 'AND', right_number_value: '0' }],
+    indicators: ['Supertrend_10_3.0_15m', 'ATR_14_15m'],
+    entry: [{ left: 'current_close', operator: 'crosses_above', right: 'Supertrend_10_3.0_15m', connector: 'AND', right_number_value: '0' }],
+    exit: [{ left: 'current_close', operator: 'crosses_below', right: 'Supertrend_10_3.0_15m', connector: 'AND', right_number_value: '0' }],
     sl: 3, tp: 8, interval: '15m',
   },
   eth_ema_cross: {
@@ -4946,9 +4994,9 @@ const STRATEGY_TEMPLATES = {
     symbol: 'ETHUSDT',
     leverage: 20,
     side: 'LONG',
-    indicators: ['EMA_9', 'EMA_21'],
-    entry: [{ left: 'EMA_9', operator: 'crosses_above', right: 'EMA_21', connector: 'AND', right_number_value: '0' }],
-    exit: [{ left: 'EMA_9', operator: 'crosses_below', right: 'EMA_21', connector: 'AND', right_number_value: '0' }],
+    indicators: ['EMA_9_5m', 'EMA_21_5m'],
+    entry: [{ left: 'EMA_9_5m', operator: 'crosses_above', right: 'EMA_21_5m', connector: 'AND', right_number_value: '0' }],
+    exit: [{ left: 'EMA_9_5m', operator: 'crosses_below', right: 'EMA_21_5m', connector: 'AND', right_number_value: '0' }],
     sl: 2, tp: 5, interval: '5m',
   },
   sol_rsi_reversal: {
@@ -4959,12 +5007,12 @@ const STRATEGY_TEMPLATES = {
     symbol: 'SOLUSDT',
     leverage: 15,
     side: 'LONG',
-    indicators: ['RSI_14', 'BB_20_2.0'],
+    indicators: ['RSI_14_15m', 'BB_20_2.0_15m'],
     entry: [
-      { left: 'RSI_14', operator: 'crosses_above', right: 'number', connector: 'AND', right_number_value: '30' },
-      { left: 'current_close', operator: 'is_below', right: 'BB_lower', connector: 'AND', right_number_value: '0' },
+      { left: 'RSI_14_15m', operator: 'crosses_above', right: 'number', connector: 'AND', right_number_value: '30' },
+      { left: 'current_close', operator: 'is_below', right: 'BB_20_2.0_15m__lower', connector: 'AND', right_number_value: '0' },
     ],
-    exit: [{ left: 'RSI_14', operator: 'is_above', right: 'number', connector: 'AND', right_number_value: '70' }],
+    exit: [{ left: 'RSI_14_15m', operator: 'is_above', right: 'number', connector: 'AND', right_number_value: '70' }],
     sl: 4, tp: 12, interval: '15m',
   },
   multi_macd_momentum: {
@@ -4975,12 +5023,12 @@ const STRATEGY_TEMPLATES = {
     symbol: 'BTCUSDT',
     leverage: 10,
     side: 'LONG',
-    indicators: ['MACD_12_26_9', 'VWAP'],
+    indicators: ['MACD_12_26_9_5m', 'VWAP_5m'],
     entry: [
-      { left: 'MACD_histogram', operator: 'crosses_above', right: 'number', connector: 'AND', right_number_value: '0' },
-      { left: 'current_close', operator: 'is_above', right: 'VWAP', connector: 'AND', right_number_value: '0' },
+      { left: 'MACD_12_26_9_5m__histogram', operator: 'crosses_above', right: 'number', connector: 'AND', right_number_value: '0' },
+      { left: 'current_close', operator: 'is_above', right: 'VWAP_5m', connector: 'AND', right_number_value: '0' },
     ],
-    exit: [{ left: 'MACD_histogram', operator: 'crosses_below', right: 'number', connector: 'AND', right_number_value: '0' }],
+    exit: [{ left: 'MACD_12_26_9_5m__histogram', operator: 'crosses_below', right: 'number', connector: 'AND', right_number_value: '0' }],
     sl: 2.5, tp: 7, interval: '5m',
   },
   cpr_breakout: {
@@ -4991,10 +5039,10 @@ const STRATEGY_TEMPLATES = {
     symbol: 'BTCUSDT',
     leverage: 5,
     side: 'LONG',
-    indicators: ['CPR', 'EMA_50'],
+    indicators: ['CPR_Day', 'EMA_50_60m'],
     entry: [
       { left: 'current_close', operator: 'crosses_above', right: 'CPR_tc', connector: 'AND', right_number_value: '0' },
-      { left: 'current_close', operator: 'is_above', right: 'EMA_50', connector: 'AND', right_number_value: '0' },
+      { left: 'current_close', operator: 'is_above', right: 'EMA_50_60m', connector: 'AND', right_number_value: '0' },
     ],
     exit: [{ left: 'current_close', operator: 'crosses_below', right: 'CPR_pivot', connector: 'AND', right_number_value: '0' }],
     sl: 3, tp: 10, interval: '1h',
@@ -5007,12 +5055,12 @@ const STRATEGY_TEMPLATES = {
     symbol: 'ETHUSDT',
     leverage: 25,
     side: 'LONG',
-    indicators: ['StochRSI_14', 'EMA_9'],
+    indicators: ['StochRSI_14_1m', 'EMA_9_1m'],
     entry: [
-      { left: 'StochRSI_K', operator: 'crosses_above', right: 'StochRSI_D', connector: 'AND', right_number_value: '0' },
-      { left: 'current_close', operator: 'is_above', right: 'EMA_9', connector: 'AND', right_number_value: '0' },
+      { left: 'StochRSI_14_1m__K', operator: 'crosses_above', right: 'StochRSI_14_1m__D', connector: 'AND', right_number_value: '0' },
+      { left: 'current_close', operator: 'is_above', right: 'EMA_9_1m', connector: 'AND', right_number_value: '0' },
     ],
-    exit: [{ left: 'StochRSI_K', operator: 'crosses_below', right: 'StochRSI_D', connector: 'AND', right_number_value: '0' }],
+    exit: [{ left: 'StochRSI_14_1m__K', operator: 'crosses_below', right: 'StochRSI_14_1m__D', connector: 'AND', right_number_value: '0' }],
     sl: 1.5, tp: 4, interval: '1m',
   },
 };
@@ -5442,7 +5490,7 @@ async function loadPortfolioData() {
     var ordTbody = document.getElementById('pf-orders-body');
     if (ordTbody) {
       if (orders.length === 0) {
-        ordTbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
+        ordTbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
       } else {
         ordTbody.innerHTML = orders.slice(0, 50).map(function(o) {
           var side = (o.side || '').toUpperCase();
@@ -5451,6 +5499,9 @@ async function loadPortfolioData() {
           var timeStr = ts ? fmtDt(ts) : '--';
           var symbol = o.product_symbol || o.symbol || ('ID:' + (o.product_id || ''));
           var fee = parseFloat(o.paid_commission) || 0;
+          var rpnl = parseFloat(o.realized_pnl) || 0;
+          var netPnl = rpnl - fee;
+          var pnlColor = netPnl > 0 ? 'var(--green)' : netPnl < 0 ? 'var(--red)' : 'var(--muted)';
           return '<tr>' +
             '<td style="white-space:nowrap;font-size:12px;">' + timeStr + '</td>' +
             '<td style="font-weight:600;">' + symbol + '</td>' +
@@ -5458,6 +5509,7 @@ async function loadPortfolioData() {
             '<td>' + (o.size || o.quantity || 0) + '</td>' +
             '<td>' + fmtINRPrice(fillPrice) + '</td>' +
             '<td style="color:var(--yellow);">' + fmtINR(fee) + '</td>' +
+            '<td style="color:' + pnlColor + ';font-weight:700;">' + (netPnl >= 0 ? '+' : '') + fmtINR(netPnl) + '</td>' +
             '<td>' + (o.order_type || o.type || '--').replace('_', ' ') + '</td>' +
             '<td><span class="tag tag-purple">' + (o.state || o.status || 'filled') + '</span></td>' +
             '</tr>';
@@ -6856,18 +6908,7 @@ async function cfModifyScalpTrade(tradeId) {
   }
 }
 
-function cfUpdateScalpSymbol() {
-  var sym = (document.getElementById('cf-scalp-symbol') || {}).value || '';
-  var levSel = document.getElementById('cf-scalp-leverage');
-  if (!levSel) return;
-  var isBtcEth = sym === 'BTCUSDT' || sym === 'ETHUSDT';
-  var opts = isBtcEth
-    ? [{v:'50',l:'50\u00d7'},{v:'100',l:'100\u00d7'},{v:'200',l:'200\u00d7'}]
-    : [{v:'1',l:'1\u00d7'},{v:'2',l:'2\u00d7'},{v:'5',l:'5\u00d7'},{v:'10',l:'10\u00d7'},{v:'20',l:'20\u00d7'},{v:'50',l:'50\u00d7'}];
-  var prev = levSel.value;
-  levSel.innerHTML = opts.map(function(o){ return '<option value="'+o.v+'"'+(o.v===prev?' selected':'')+'>'+o.l+'</option>'; }).join('');
-  if (!opts.some(function(o){ return o.v === prev; })) levSel.value = opts[0].v;
-}
+function cfUpdateScalpSymbol() { /* all symbols share the same leverage options */ }
 
 // SL/TP hint text updates when type toggle changes
 function cfUpdateSLTPHints() {
