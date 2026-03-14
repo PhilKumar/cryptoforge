@@ -229,6 +229,46 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     # Compute indicators
     df = compute_dynamic_indicators(df_raw, indicators)
 
+    # ── Diagnostic: log available columns & sample condition values ──
+    df_cols = sorted([c for c in df.columns if not c.startswith("_")])
+    print(f"[BACKTEST-DIAG] DataFrame rows: {len(df)}, columns ({len(df_cols)}): {df_cols[:40]}")
+    print(f"[BACKTEST-DIAG] Entry conditions: {entry_conditions}")
+    print(f"[BACKTEST-DIAG] Exit conditions: {exit_conditions}")
+    # Check each condition field exists in DataFrame
+    for label, conds in [("ENTRY", entry_conditions), ("EXIT", exit_conditions)]:
+        for ci, c in enumerate(conds):
+            left_key = c.get("left", "")
+            right_key = c.get("right", "")
+            op = c.get("operator", "")
+            mapped_left = _PRICE_MAP.get(left_key, left_key)
+            mapped_right = (
+                _PRICE_MAP.get(right_key, right_key)
+                if right_key not in ("number", "true", "false", "", None)
+                else right_key
+            )
+            left_ok = left_key in ("Time_Of_Day", "Day_Of_Week") or mapped_left in df.columns
+            right_ok = (
+                right_key in ("number", "true", "false", "", None)
+                or op in ("is_true", "is_false")
+                or right_key in ("Time_Of_Day", "Day_Of_Week")
+                or mapped_right in df.columns
+            )
+            if not left_ok:
+                print(
+                    f"[BACKTEST-DIAG] ⚠ {label}[{ci}] LEFT '{left_key}' (mapped: '{mapped_left}') NOT FOUND in DataFrame!"
+                )
+            if not right_ok:
+                print(
+                    f"[BACKTEST-DIAG] ⚠ {label}[{ci}] RIGHT '{right_key}' (mapped: '{mapped_right}') NOT FOUND in DataFrame!"
+                )
+            # Sample values from midpoint of data
+            if len(df) > 10:
+                mid = len(df) // 2
+                sample_row = df.iloc[mid]
+                lv = _resolve_value(sample_row, left_key)
+                rv = _resolve_value(sample_row, right_key, c) if right_key else None
+                print(f"[BACKTEST-DIAG] {label}[{ci}] '{left_key}' {op} '{right_key}' → sample LV={lv}, RV={rv}")
+
     trades = []
     equity_curve = []
     cum_pnl = 0.0
@@ -241,6 +281,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     trades_today = 0
     last_trade_date = None
     peak_pnl_pct = 0.0  # for trailing SL
+    _entry_true_count = 0  # diagnostic counter
 
     for i in range(2, len(df)):
         row = df.iloc[i]
@@ -263,6 +304,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
             if trades_today >= max_tpd:
                 continue
             if eval_condition_group(prev, entry_conditions, prev_prev):
+                _entry_true_count += 1
                 in_trade = True
                 entry_price = float(row["open"])
                 entry_time = ts
@@ -538,7 +580,41 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         step = len(equity_curve) // 500
         eq_out = equity_curve[::step]
 
-    return {
+    print(f"[BACKTEST-DIAG] Entry condition matched on {_entry_true_count} candles, total trades: {total_trades}")
+
+    # Build diagnostic info for 0-trade results
+    diagnostics = None
+    if total_trades == 0:
+        diag_items = []
+        diag_items.append(f"DataFrame: {len(df)} rows")
+        diag_items.append(f"Entry conditions matched: {_entry_true_count} times")
+        for label, conds in [("Entry", entry_conditions), ("Exit", exit_conditions)]:
+            for ci, c in enumerate(conds):
+                left_key = c.get("left", "")
+                right_key = c.get("right", "")
+                op = c.get("operator", "")
+                mapped_left = _PRICE_MAP.get(left_key, left_key)
+                mapped_right = (
+                    _PRICE_MAP.get(right_key, right_key)
+                    if right_key not in ("number", "true", "false", "", None)
+                    else right_key
+                )
+                left_in_df = left_key in ("Time_Of_Day", "Day_Of_Week") or mapped_left in df.columns
+                right_in_df = (
+                    right_key in ("number", "true", "false", "", None)
+                    or op in ("is_true", "is_false")
+                    or right_key in ("Time_Of_Day", "Day_Of_Week")
+                    or mapped_right in df.columns
+                )
+                status = "OK" if (left_in_df and right_in_df) else "MISSING"
+                if not left_in_df:
+                    status = f"LEFT '{left_key}' NOT IN DF"
+                if not right_in_df:
+                    status = f"RIGHT '{right_key}' NOT IN DF"
+                diag_items.append(f"{label}[{ci}]: {left_key} {op} {right_key} → {status}")
+        diagnostics = diag_items
+
+    result = {
         "status": "success",
         "stats": stats,
         "trades": trades,
@@ -547,3 +623,6 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         "yearly": yearly_list,
         "day_of_week": list(dow_map.values()),
     }
+    if diagnostics:
+        result["diagnostics"] = diagnostics
+    return result

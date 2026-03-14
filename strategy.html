@@ -4160,10 +4160,18 @@ async function runBacktest() {
     if (d.status === 'success') {
       var pnl = d.stats.total_pnl || 0;
       var pnlColor = pnl >= 0 ? 'color:var(--green)' : 'color:var(--red)';
+      var diagHtml = '';
+      if ((d.stats.total_trades || 0) === 0 && d.diagnostics && d.diagnostics.length) {
+        diagHtml = '<div style="margin-top:14px;padding:12px;background:rgba(255,100,100,0.08);border:1px solid rgba(255,100,100,0.2);border-radius:8px;text-align:left;">'
+          + '<div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">Diagnostics (0 trades):</div>'
+          + d.diagnostics.map(function(line) { return '<div style="font-size:11px;font-family:JetBrains Mono,monospace;color:var(--muted);padding:2px 0;">' + line.replace(/NOT IN DF/g, '<span style="color:var(--red);font-weight:700;">NOT IN DF</span>').replace(/MISSING/g, '<span style="color:var(--red);font-weight:700;">MISSING</span>') + '</div>'; }).join('')
+          + '</div>';
+      }
       await cfModal('Backtest Complete', '<div style="font-size:15px;margin-bottom:10px;">'
         + '<b>' + (d.stats.total_trades || 0) + '</b> trades executed</div>'
         + '<div style="font-size:22px;font-weight:800;font-family:JetBrains Mono;' + pnlColor + '">' + fmtINR(pnl) + '</div>'
-        + '<div style="margin-top:6px;font-size:12px;">Win Rate: ' + (d.stats.win_rate || 0) + '% • Max DD: ' + (d.stats.max_drawdown || 0).toFixed(1) + '% • Sharpe: ' + (parseFloat(d.stats.sharpe_ratio) || 0).toFixed(2) + '</div>',
+        + '<div style="margin-top:6px;font-size:12px;">Win Rate: ' + (d.stats.win_rate || 0) + '% • Max DD: ' + (d.stats.max_drawdown || 0).toFixed(1) + '% • Sharpe: ' + (parseFloat(d.stats.sharpe_ratio) || 0).toFixed(2) + '</div>'
+        + diagHtml,
         '📊', [{label:'View Results', cls:'btn-primary'}]);
       if (d.run_id) { viewRun(d.run_id); }
     } else {

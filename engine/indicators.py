@@ -313,9 +313,82 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day", narrow_pct: float = 0.2, moder
     return d
 
 
+def _is_intraday(df: pd.DataFrame) -> bool:
+    if len(df) < 2:
+        return False
+    return (df.index[1] - df.index[0]).total_seconds() < 86400
+
+
+def yesterday_candle(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute previous day OHLC. Handles both intraday and daily DataFrames."""
+    intraday = _is_intraday(df)
+    daily = (
+        df.resample("D").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+        if intraday
+        else df.copy()
+    )
+
+    daily["yesterday_high"] = daily["high"].shift(1)
+    daily["yesterday_low"] = daily["low"].shift(1)
+    daily["yesterday_close"] = daily["close"].shift(1)
+    daily["yesterday_open"] = daily["open"].shift(1)
+
+    yest_cols = ["yesterday_high", "yesterday_low", "yesterday_close", "yesterday_open"]
+    result = df.copy()
+    if intraday:
+        result = result.join(daily[yest_cols].reindex(result.index, method="ffill"))
+    else:
+        for col in yest_cols:
+            result[col] = daily[col].reindex(result.index, method="ffill")
+
+    return result
+
+
+def orb(df: pd.DataFrame, window_minutes: int = 15) -> pd.DataFrame:
+    """Opening Range Breakout — computes ORB high/low from the first N minutes of each day.
+    Crypto markets are 24/7, so we use 00:00 UTC as the day start."""
+    intraday = _is_intraday(df)
+    if not intraday:
+        result = df.copy()
+        result["ORB_high"] = np.nan
+        result["ORB_low"] = np.nan
+        result["ORB_Range"] = np.nan
+        return result
+
+    from datetime import time as dtime
+    from datetime import timedelta
+
+    # Crypto: day starts at 00:00 UTC
+    market_open = dtime(0, 0)
+    orb_end = (pd.Timestamp("2000-01-01 00:00") + timedelta(minutes=window_minutes)).time()
+
+    result = df.copy()
+    result["ORB_high"] = np.nan
+    result["ORB_low"] = np.nan
+
+    for date, group in result.groupby(result.index.date):
+        orb_mask = (group.index.time >= market_open) & (group.index.time < orb_end)
+        orb_candles = group[orb_mask]
+        if len(orb_candles) > 0:
+            orb_high = orb_candles["high"].max()
+            orb_low = orb_candles["low"].min()
+            post_orb = (result.index.date == date) & (result.index.time >= orb_end)
+            result.loc[post_orb, "ORB_high"] = orb_high
+            result.loc[post_orb, "ORB_low"] = orb_low
+
+    result["ORB_Range"] = result["ORB_high"] - result["ORB_low"]
+    result["ORB_is_breakout_up"] = result["close"] > result["ORB_high"]
+    result["ORB_is_breakout_down"] = result["close"] < result["ORB_low"]
+    result["ORB_is_inside"] = (~result["ORB_is_breakout_up"]) & (~result["ORB_is_breakout_down"])
+    return result
+
+
 def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.DataFrame:
     """Compute indicators dynamically based on UI selection."""
     df = df.copy()
+
+    # Always compute yesterday candle data (Previous Day)
+    df = yesterday_candle(df)
 
     # Always expose current candle OHLCV
     df["current_open"] = df["open"]
@@ -443,8 +516,22 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
                 df["CPR_is_moderate"] = (df["CPR_width_pct"] > narrow_pct) & (df["CPR_width_pct"] <= moderate_pct)
                 df["CPR_is_wide"] = df["CPR_width_pct"] > moderate_pct
 
-            elif name in ("Current", "Previous"):
-                pass
+            elif name == "Current":
+                pass  # current_* columns always created above
+
+            elif name == "Previous":
+                pass  # yesterday_* columns always created by yesterday_candle() above
+
+            elif name == "ORB":
+                # ORB_15min → window_minutes = 15
+                minutes = int(parts[1].replace("min", "")) if len(parts) > 1 else 15
+                orb_df = orb(df, window_minutes=minutes)
+                df["ORB_high"] = orb_df["ORB_high"]
+                df["ORB_low"] = orb_df["ORB_low"]
+                df["ORB_Range"] = orb_df["ORB_Range"]
+                df["ORB_is_breakout_up"] = orb_df["ORB_is_breakout_up"]
+                df["ORB_is_breakout_down"] = orb_df["ORB_is_breakout_down"]
+                df["ORB_is_inside"] = orb_df["ORB_is_inside"]
 
             # Signal Candle — trade-context indicator, populated at runtime by engines
             elif name == "Signal":
