@@ -372,12 +372,14 @@ class StrategyPayload(BaseModel):
     leverage: int = 10
     trade_side: str = "LONG"
     position_size_pct: float = 100.0
+    position_size_mode: str = "pct"  # "pct" or "fixed_qty"
+    fixed_qty: float = 0.0  # quantity in base asset (e.g. 0.1 BTC)
     stoploss_pct: float = 5.0
     target_profit_pct: float = 10.0
     trailing_sl_pct: float = 0.0
     max_trades_per_day: int = 5
     max_daily_loss: float = 0.0
-    fee_pct: float = 0.05
+    fee_pct: float = 0.0
     compounding: bool = False
     indicators: List[str] = []
     entry_conditions: Optional[List[dict]] = None

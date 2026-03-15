@@ -2423,7 +2423,14 @@
           </div>
           <div class="input-group">
             <label>Position Size</label>
-            <input type="number" id="b-possize" value="100" min="1">
+            <div style="display:flex;gap:4px;align-items:center;">
+              <select id="b-possize-mode" style="width:110px;padding:8px 4px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:12px;" onchange="document.getElementById('b-possize-label').textContent=this.value==='fixed_qty'?'Qty':'%'; document.getElementById('b-possize').value=this.value==='fixed_qty'?'0.1':'100'; document.getElementById('b-possize').step=this.value==='fixed_qty'?'0.01':'1';">
+                <option value="pct">% of Capital</option>
+                <option value="fixed_qty">Fixed Qty</option>
+              </select>
+              <input type="number" id="b-possize" value="100" min="0.001" step="1" style="flex:1;">
+              <span id="b-possize-label" style="font-size:11px;opacity:0.6;min-width:14px;">%</span>
+            </div>
           </div>
         </div>
 
@@ -2445,7 +2452,7 @@
           </div>
           <div class="input-group">
             <label>Fee % (per side)</label>
-            <input type="number" id="b-fee" value="0.05" step="0.01" min="0">
+            <input type="number" id="b-fee" value="0" step="0.01" min="0" title="Set to 0 for CryptoBot comparison. Delta Exchange taker fee is 0.05%.">
           </div>
         </div>
         <div class="form-row-2">
@@ -4149,11 +4156,13 @@ async function runBacktest() {
     initial_capital: parseFloat(document.getElementById('b-capital').value) || 10000,
     leverage: selectedLeverage,
     trade_side: selectedSide,
-    position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
+    position_size_pct: document.getElementById('b-possize-mode').value === 'pct' ? (parseFloat(document.getElementById('b-possize').value) || 100) : 100,
+    position_size_mode: document.getElementById('b-possize-mode').value,
+    fixed_qty: document.getElementById('b-possize-mode').value === 'fixed_qty' ? (parseFloat(document.getElementById('b-possize').value) || 0.1) : 0,
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0.05 : v; })(),
+    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     indicators: indicators,
@@ -4976,12 +4985,14 @@ async function saveStrategy() {
     stoploss_pct: parseFloat(document.getElementById('b-sl').value),
     target_profit_pct: parseFloat(document.getElementById('b-tp').value),
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0.05 : v; })(),
+    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     folder: getSelectedFolder(),
     initial_capital: parseFloat(document.getElementById('b-capital').value) || 10000,
-    position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
+    position_size_pct: document.getElementById('b-possize-mode').value === 'pct' ? (parseFloat(document.getElementById('b-possize').value) || 100) : 100,
+    position_size_mode: document.getElementById('b-possize-mode').value,
+    fixed_qty: document.getElementById('b-possize-mode').value === 'fixed_qty' ? (parseFloat(document.getElementById('b-possize').value) || 0.1) : 0,
     candle_interval: document.getElementById('b-interval').value,
   };
   try {
@@ -5052,12 +5063,22 @@ async function startPaperFromSelector() {
   exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
   if (s.stoploss_pct != null) document.getElementById('b-sl').value = s.stoploss_pct;
   if (s.target_profit_pct != null) document.getElementById('b-tp').value = s.target_profit_pct;
-  if (s.fee_pct != null) document.getElementById('b-fee').value = s.fee_pct;
+  // fee_pct is NOT restored from saved strategy — always defaults to 0 (set manually if needed)
   document.getElementById('b-compounding').checked = !!s.compounding;
   if (s.trailing_sl_pct != null) document.getElementById('b-trail').value = s.trailing_sl_pct;
   if (s.max_trades_per_day != null) document.getElementById('b-maxtrades').value = s.max_trades_per_day;
   if (s.initial_capital != null) document.getElementById('b-capital').value = s.initial_capital;
-  if (s.position_size_pct != null) document.getElementById('b-possize').value = s.position_size_pct;
+  if (s.position_size_mode === 'fixed_qty') {
+    document.getElementById('b-possize-mode').value = 'fixed_qty';
+    document.getElementById('b-possize').value = s.fixed_qty || 0.1;
+    document.getElementById('b-possize').step = '0.01';
+    document.getElementById('b-possize-label').textContent = 'Qty';
+  } else {
+    document.getElementById('b-possize-mode').value = 'pct';
+    if (s.position_size_pct != null) document.getElementById('b-possize').value = s.position_size_pct;
+    document.getElementById('b-possize').step = '1';
+    document.getElementById('b-possize-label').textContent = '%';
+  }
   if (s.candle_interval) document.getElementById('b-interval').value = s.candle_interval;
   cfToast('Loaded strategy: ' + (s.run_name || 'Untitled'), 'info');
   return startPaper();
@@ -5078,10 +5099,12 @@ async function startPaper() {
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0.05 : v; })(),
+    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
-    position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
+    position_size_pct: document.getElementById('b-possize-mode').value === 'pct' ? (parseFloat(document.getElementById('b-possize').value) || 100) : 100,
+    position_size_mode: document.getElementById('b-possize-mode').value,
+    fixed_qty: document.getElementById('b-possize-mode').value === 'fixed_qty' ? (parseFloat(document.getElementById('b-possize').value) || 0.1) : 0,
     candle_interval: document.getElementById('b-interval').value,
     order_type: document.getElementById('deploy-order-type') ? document.getElementById('deploy-order-type').value : 'market',
     margin_mode: document.getElementById('deploy-margin-mode') ? document.getElementById('deploy-margin-mode').value : 'cross',
@@ -5136,10 +5159,12 @@ async function startLive() {
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0.05 : v; })(),
+    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
-    position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
+    position_size_pct: document.getElementById('b-possize-mode').value === 'pct' ? (parseFloat(document.getElementById('b-possize').value) || 100) : 100,
+    position_size_mode: document.getElementById('b-possize-mode').value,
+    fixed_qty: document.getElementById('b-possize-mode').value === 'fixed_qty' ? (parseFloat(document.getElementById('b-possize').value) || 0.1) : 0,
     candle_interval: document.getElementById('b-interval').value,
     order_type: document.getElementById('deploy-order-type') ? document.getElementById('deploy-order-type').value : 'market',
     margin_mode: document.getElementById('deploy-margin-mode') ? document.getElementById('deploy-margin-mode').value : 'cross',
@@ -6013,12 +6038,22 @@ async function loadStrategyToBuilder(sid) {
   exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
   if (s.stoploss_pct != null) document.getElementById('b-sl').value = s.stoploss_pct;
   if (s.target_profit_pct != null) document.getElementById('b-tp').value = s.target_profit_pct;
-  if (s.fee_pct != null) document.getElementById('b-fee').value = s.fee_pct;
+  // fee_pct is NOT restored from saved strategy — always defaults to 0 (set manually if needed)
   document.getElementById('b-compounding').checked = !!s.compounding;
   if (s.trailing_sl_pct != null) document.getElementById('b-trail').value = s.trailing_sl_pct;
   if (s.max_trades_per_day != null) document.getElementById('b-maxtrades').value = s.max_trades_per_day;
   if (s.initial_capital != null) document.getElementById('b-capital').value = s.initial_capital;
-  if (s.position_size_pct != null) document.getElementById('b-possize').value = s.position_size_pct;
+  if (s.position_size_mode === 'fixed_qty') {
+    document.getElementById('b-possize-mode').value = 'fixed_qty';
+    document.getElementById('b-possize').value = s.fixed_qty || 0.1;
+    document.getElementById('b-possize').step = '0.01';
+    document.getElementById('b-possize-label').textContent = 'Qty';
+  } else {
+    document.getElementById('b-possize-mode').value = 'pct';
+    if (s.position_size_pct != null) document.getElementById('b-possize').value = s.position_size_pct;
+    document.getElementById('b-possize').step = '1';
+    document.getElementById('b-possize-label').textContent = '%';
+  }
   if (s.candle_interval) document.getElementById('b-interval').value = s.candle_interval;
   // Set folder
   var folderSel = document.getElementById('b-folder');
@@ -6130,12 +6165,22 @@ function copyEditStrategy(data) {
   exitConditions = (data.exit_conditions || []).map(function(c) { return {...c}; });
   if (data.stoploss_pct != null) document.getElementById('b-sl').value = data.stoploss_pct;
   if (data.target_profit_pct != null) document.getElementById('b-tp').value = data.target_profit_pct;
-  if (data.fee_pct != null) document.getElementById('b-fee').value = data.fee_pct;
+  // fee_pct is NOT restored from saved strategy — always defaults to 0 (set manually if needed)
   document.getElementById('b-compounding').checked = !!data.compounding;
   if (data.trailing_sl_pct != null) document.getElementById('b-trail').value = data.trailing_sl_pct;
   if (data.max_trades_per_day != null) document.getElementById('b-maxtrades').value = data.max_trades_per_day;
   if (data.initial_capital != null) document.getElementById('b-capital').value = data.initial_capital;
-  if (data.position_size_pct != null) document.getElementById('b-possize').value = data.position_size_pct;
+  if (data.position_size_mode === 'fixed_qty') {
+    document.getElementById('b-possize-mode').value = 'fixed_qty';
+    document.getElementById('b-possize').value = data.fixed_qty || 0.1;
+    document.getElementById('b-possize').step = '0.01';
+    document.getElementById('b-possize-label').textContent = 'Qty';
+  } else {
+    document.getElementById('b-possize-mode').value = 'pct';
+    if (data.position_size_pct != null) document.getElementById('b-possize').value = data.position_size_pct;
+    document.getElementById('b-possize').step = '1';
+    document.getElementById('b-possize-label').textContent = '%';
+  }
   if (data.candle_interval) document.getElementById('b-interval').value = data.candle_interval;
   // Navigate to builder
   showPage('builder-page', document.getElementById('nav-builder'));
