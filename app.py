@@ -984,7 +984,7 @@ def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str 
         # Normalize both to tz-naive for comparison
         idx = cached.index.tz_localize(None) if cached.index.tz else cached.index
         cache_start, cache_end = idx.min(), idx.max()
-        if cache_start <= from_ts and cache_end >= to_ts - pd.Timedelta(days=1):
+        if cache_start <= from_ts and cache_end >= to_ts:
             sliced = cached.loc[(idx >= from_ts) & (idx <= to_ts)]
             if len(sliced) > 0:
                 print(
@@ -1073,6 +1073,9 @@ async def api_run_backtest(payload: StrategyPayload):
                 "candle_interval": payload.candle_interval,
                 "initial_capital": payload.initial_capital,
                 "position_size_pct": payload.position_size_pct,
+                "fee_pct": payload.fee_pct,
+                "trailing_sl_pct": payload.trailing_sl_pct,
+                "max_trades_per_day": payload.max_trades_per_day,
                 "stats": results["stats"],
                 "monthly": results.get("monthly", []),
                 "day_of_week": results.get("day_of_week", []),

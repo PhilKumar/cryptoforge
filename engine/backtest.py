@@ -100,10 +100,21 @@ def eval_condition(row, cond, prev_row=None):
     if op == "is_true":
         if lv is None:
             return False
+        # NaN must be treated as False, not True (bool(NaN) == True is a Python gotcha)
+        try:
+            if pd.isna(lv):
+                return False
+        except (TypeError, ValueError):
+            pass
         return bool(lv)
     elif op == "is_false":
         if lv is None:
             return False
+        try:
+            if pd.isna(lv):
+                return False
+        except (TypeError, ValueError):
+            pass
         return not bool(lv)
 
     r = cond.get("right")
@@ -227,6 +238,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     side = sc.get("trade_side", "LONG").upper()  # LONG or SHORT
     position_size_pct = float(sc.get("position_size_pct", 100))  # % of capital
     fee_pct = float(sc.get("fee_pct", 0.05))  # taker fee per side (0.05% default for Delta)
+    max_daily_loss = float(sc.get("max_daily_loss", 0))  # 0 = disabled
 
     # Compute indicators (including warm-up data)
     base_interval = sc.get("candle_interval", None)
@@ -303,6 +315,8 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     entry_size = 0  # notional position size in USD
     trades_today = 0
     last_trade_date = None
+    daily_pnl = 0.0  # for max_daily_loss check
+    daily_loss_hit = False  # stop trading for the rest of the day
     peak_pnl_pct = 0.0  # for trailing SL
     _entry_true_count = 0  # diagnostic counter
 
@@ -315,9 +329,11 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         ist_ts = ts + pd.Timedelta(hours=5, minutes=30) if hasattr(ts, "date") else ts
         current_date = ist_ts.date() if hasattr(ist_ts, "date") else ist_ts
 
-        # Reset daily trade count
+        # Reset daily trade count and daily loss tracker
         if current_date != last_trade_date:
             trades_today = 0
+            daily_pnl = 0.0
+            daily_loss_hit = False
             last_trade_date = current_date
 
         price = float(row["close"])
@@ -327,6 +343,8 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         if not in_trade:
             # Check entry (evaluate PREV candle to avoid look-ahead, enter at current open)
             if trades_today >= max_tpd:
+                continue
+            if daily_loss_hit:
                 continue
             if eval_condition_group(prev, entry_conditions, prev_prev):
                 _entry_true_count += 1
@@ -420,6 +438,10 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
                 total_fees += trade_fees
                 cum_pnl += trade_pnl
                 capital += trade_pnl  # compound capital
+                # Track daily PnL for max_daily_loss
+                daily_pnl += trade_pnl
+                if max_daily_loss > 0 and daily_pnl <= -max_daily_loss:
+                    daily_loss_hit = True
                 tid += 1
                 trades.append(
                     _mk(

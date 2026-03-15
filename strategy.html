@@ -4969,6 +4969,7 @@ async function saveStrategy() {
     target_profit_pct: parseFloat(document.getElementById('b-tp').value),
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
     fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0.05 : v; })(),
+    max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     folder: getSelectedFolder(),
     initial_capital: parseFloat(document.getElementById('b-capital').value) || 10000,
     position_size_pct: parseFloat(document.getElementById('b-possize').value) || 100,
@@ -5040,8 +5041,14 @@ async function startPaperFromSelector() {
   indicators = [...(s.indicators || [])];
   entryConditions = (s.entry_conditions || []).map(function(c) { return {...c}; });
   exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
-  if (s.stoploss_pct) document.getElementById('b-sl').value = s.stoploss_pct;
-  if (s.target_profit_pct) document.getElementById('b-tp').value = s.target_profit_pct;
+  if (s.stoploss_pct != null) document.getElementById('b-sl').value = s.stoploss_pct;
+  if (s.target_profit_pct != null) document.getElementById('b-tp').value = s.target_profit_pct;
+  if (s.fee_pct != null) document.getElementById('b-fee').value = s.fee_pct;
+  if (s.trailing_sl_pct != null) document.getElementById('b-trail').value = s.trailing_sl_pct;
+  if (s.max_trades_per_day != null) document.getElementById('b-maxtrades').value = s.max_trades_per_day;
+  if (s.initial_capital != null) document.getElementById('b-capital').value = s.initial_capital;
+  if (s.position_size_pct != null) document.getElementById('b-possize').value = s.position_size_pct;
+  if (s.candle_interval) document.getElementById('b-interval').value = s.candle_interval;
   cfToast('Loaded strategy: ' + (s.run_name || 'Untitled'), 'info');
   return startPaper();
 }
@@ -5992,8 +5999,14 @@ async function loadStrategyToBuilder(sid) {
   indicators = [...(s.indicators || [])];
   entryConditions = (s.entry_conditions || []).map(function(c) { return {...c}; });
   exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
-  if (s.stoploss_pct) document.getElementById('b-sl').value = s.stoploss_pct;
-  if (s.target_profit_pct) document.getElementById('b-tp').value = s.target_profit_pct;
+  if (s.stoploss_pct != null) document.getElementById('b-sl').value = s.stoploss_pct;
+  if (s.target_profit_pct != null) document.getElementById('b-tp').value = s.target_profit_pct;
+  if (s.fee_pct != null) document.getElementById('b-fee').value = s.fee_pct;
+  if (s.trailing_sl_pct != null) document.getElementById('b-trail').value = s.trailing_sl_pct;
+  if (s.max_trades_per_day != null) document.getElementById('b-maxtrades').value = s.max_trades_per_day;
+  if (s.initial_capital != null) document.getElementById('b-capital').value = s.initial_capital;
+  if (s.position_size_pct != null) document.getElementById('b-possize').value = s.position_size_pct;
+  if (s.candle_interval) document.getElementById('b-interval').value = s.candle_interval;
   // Set folder
   var folderSel = document.getElementById('b-folder');
   if (folderSel) {
@@ -6102,10 +6115,13 @@ function copyEditStrategy(data) {
   indicators = [...(data.indicators || [])];
   entryConditions = (data.entry_conditions || []).map(function(c) { return {...c}; });
   exitConditions = (data.exit_conditions || []).map(function(c) { return {...c}; });
-  if (data.stoploss_pct) document.getElementById('b-sl').value = data.stoploss_pct;
-  if (data.target_profit_pct) document.getElementById('b-tp').value = data.target_profit_pct;
-  if (data.initial_capital) document.getElementById('b-capital').value = data.initial_capital;
-  if (data.position_size_pct) document.getElementById('b-possize').value = data.position_size_pct;
+  if (data.stoploss_pct != null) document.getElementById('b-sl').value = data.stoploss_pct;
+  if (data.target_profit_pct != null) document.getElementById('b-tp').value = data.target_profit_pct;
+  if (data.fee_pct != null) document.getElementById('b-fee').value = data.fee_pct;
+  if (data.trailing_sl_pct != null) document.getElementById('b-trail').value = data.trailing_sl_pct;
+  if (data.max_trades_per_day != null) document.getElementById('b-maxtrades').value = data.max_trades_per_day;
+  if (data.initial_capital != null) document.getElementById('b-capital').value = data.initial_capital;
+  if (data.position_size_pct != null) document.getElementById('b-possize').value = data.position_size_pct;
   if (data.candle_interval) document.getElementById('b-interval').value = data.candle_interval;
   // Navigate to builder
   showPage('builder-page', document.getElementById('nav-builder'));

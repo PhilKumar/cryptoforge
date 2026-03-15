@@ -535,30 +535,48 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                 fast = int(num_parts[0]) if len(num_parts) > 0 else 12
                 slow = int(num_parts[1]) if len(num_parts) > 1 else 26
                 sig = int(num_parts[2]) if len(num_parts) > 2 else 9
-                macd_df = macd(df["close"], fast, slow, sig)
-                # Full-ID prefixed columns (new format: MACD_12_26_9_5m__line)
-                df[f"{ind_string}__line"] = macd_df["macd_line"]
-                df[f"{ind_string}__signal"] = macd_df["macd_signal"]
-                df[f"{ind_string}__histogram"] = macd_df["macd_histogram"]
+                if needs_resample:
+                    resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
+                    macd_df = macd(resampled_close, fast, slow, sig)
+                    df[f"{ind_string}__line"] = _map_to_base(macd_df["macd_line"], df.index)
+                    df[f"{ind_string}__signal"] = _map_to_base(macd_df["macd_signal"], df.index)
+                    df[f"{ind_string}__histogram"] = _map_to_base(macd_df["macd_histogram"], df.index)
+                    print(
+                        f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for MACD({fast},{slow},{sig})"
+                    )
+                else:
+                    macd_df = macd(df["close"], fast, slow, sig)
+                    df[f"{ind_string}__line"] = macd_df["macd_line"]
+                    df[f"{ind_string}__signal"] = macd_df["macd_signal"]
+                    df[f"{ind_string}__histogram"] = macd_df["macd_histogram"]
                 # Backward-compat static columns
-                df["MACD_line"] = macd_df["macd_line"]
-                df["MACD_signal"] = macd_df["macd_signal"]
-                df["MACD_histogram"] = macd_df["macd_histogram"]
+                df["MACD_line"] = df[f"{ind_string}__line"]
+                df["MACD_signal"] = df[f"{ind_string}__signal"]
+                df["MACD_histogram"] = df[f"{ind_string}__histogram"]
 
             elif name == "BB":
                 num_parts = [p for p in parts[1:] if not p.endswith("m")]
                 period = int(num_parts[0]) if len(num_parts) > 0 else 20
                 std = float(num_parts[1]) if len(num_parts) > 1 else 2.0
-                bb_df = bollinger_bands(df["close"], period, std)
-                # Full-ID prefixed columns
-                df[f"{ind_string}__upper"] = bb_df["bb_upper"]
-                df[f"{ind_string}__middle"] = bb_df["bb_middle"]
-                df[f"{ind_string}__lower"] = bb_df["bb_lower"]
+                if needs_resample:
+                    resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
+                    bb_df = bollinger_bands(resampled_close, period, std)
+                    df[f"{ind_string}__upper"] = _map_to_base(bb_df["bb_upper"], df.index)
+                    df[f"{ind_string}__middle"] = _map_to_base(bb_df["bb_middle"], df.index)
+                    df[f"{ind_string}__lower"] = _map_to_base(bb_df["bb_lower"], df.index)
+                    print(
+                        f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for BB({period},{std})"
+                    )
+                else:
+                    bb_df = bollinger_bands(df["close"], period, std)
+                    df[f"{ind_string}__upper"] = bb_df["bb_upper"]
+                    df[f"{ind_string}__middle"] = bb_df["bb_middle"]
+                    df[f"{ind_string}__lower"] = bb_df["bb_lower"]
                 # Backward-compat static columns
-                df["BB_upper"] = bb_df["bb_upper"]
-                df["BB_middle"] = bb_df["bb_middle"]
-                df["BB_lower"] = bb_df["bb_lower"]
-                df["BB_width"] = bb_df["bb_width"]
+                df["BB_upper"] = df[f"{ind_string}__upper"]
+                df["BB_middle"] = df[f"{ind_string}__middle"]
+                df["BB_lower"] = df[f"{ind_string}__lower"]
+                df["BB_width"] = (df["BB_upper"] - df["BB_lower"]) / df["BB_middle"].replace(0, np.nan) * 100
 
             elif name == "VWAP":
                 val = vwap(df)
@@ -566,30 +584,63 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                 df["VWAP"] = val  # backward-compat
 
             elif name == "ATR":
-                period = int(parts[1]) if len(parts) > 1 else 14
-                df[ind_string] = atr(df, period)
+                num_parts = [p for p in parts[1:] if not p.endswith("m")]
+                period = int(num_parts[0]) if len(num_parts) > 0 else 14
+                if needs_resample:
+                    ohlc_resamp = (
+                        df[["open", "high", "low", "close"]]
+                        .resample(f"{target_minutes}min")
+                        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                        .dropna()
+                    )
+                    atr_vals = atr(ohlc_resamp, period)
+                    df[ind_string] = _map_to_base(atr_vals, df.index)
+                    print(f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for ATR({period})")
+                else:
+                    df[ind_string] = atr(df, period)
 
             elif name == "ADX":
                 num_parts = [p for p in parts[1:] if not p.endswith("m")]
                 period = int(num_parts[0]) if len(num_parts) > 0 else 14
-                adx_df = adx(df, period)
-                df[ind_string] = adx_df["adx"]
-                df[f"{ind_string}__plus"] = adx_df["adx_plus"]
-                df[f"{ind_string}__minus"] = adx_df["adx_minus"]
+                if needs_resample:
+                    ohlc_resamp = (
+                        df[["open", "high", "low", "close"]]
+                        .resample(f"{target_minutes}min")
+                        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                        .dropna()
+                    )
+                    adx_df = adx(ohlc_resamp, period)
+                    df[ind_string] = _map_to_base(adx_df["adx"], df.index)
+                    df[f"{ind_string}__plus"] = _map_to_base(adx_df["adx_plus"], df.index)
+                    df[f"{ind_string}__minus"] = _map_to_base(adx_df["adx_minus"], df.index)
+                    print(f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for ADX({period})")
+                else:
+                    adx_df = adx(df, period)
+                    df[ind_string] = adx_df["adx"]
+                    df[f"{ind_string}__plus"] = adx_df["adx_plus"]
+                    df[f"{ind_string}__minus"] = adx_df["adx_minus"]
                 # Backward-compat
-                df[f"{ind_string}_plus"] = adx_df["adx_plus"]
-                df[f"{ind_string}_minus"] = adx_df["adx_minus"]
+                df[f"{ind_string}_plus"] = df[f"{ind_string}__plus"]
+                df[f"{ind_string}_minus"] = df[f"{ind_string}__minus"]
 
             elif name == "StochRSI":
                 num_parts = [p for p in parts[1:] if not p.endswith("m")]
                 period = int(num_parts[0]) if len(num_parts) > 0 else 14
-                srsi = stochastic_rsi(df["close"], period)
-                # Full-ID prefixed columns
-                df[f"{ind_string}__K"] = srsi["stoch_rsi_k"]
-                df[f"{ind_string}__D"] = srsi["stoch_rsi_d"]
+                if needs_resample:
+                    resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
+                    srsi = stochastic_rsi(resampled_close, period)
+                    df[f"{ind_string}__K"] = _map_to_base(srsi["stoch_rsi_k"], df.index)
+                    df[f"{ind_string}__D"] = _map_to_base(srsi["stoch_rsi_d"], df.index)
+                    print(
+                        f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for StochRSI({period})"
+                    )
+                else:
+                    srsi = stochastic_rsi(df["close"], period)
+                    df[f"{ind_string}__K"] = srsi["stoch_rsi_k"]
+                    df[f"{ind_string}__D"] = srsi["stoch_rsi_d"]
                 # Backward-compat static columns
-                df["StochRSI_K"] = srsi["stoch_rsi_k"]
-                df["StochRSI_D"] = srsi["stoch_rsi_d"]
+                df["StochRSI_K"] = df[f"{ind_string}__K"]
+                df["StochRSI_D"] = df[f"{ind_string}__D"]
 
             elif name == "CPR":
                 # Support CPR_Day_0.2_0.5, CPR_2H, CPR_Week, CPR_Month or plain CPR
