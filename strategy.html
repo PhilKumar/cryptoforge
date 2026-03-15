@@ -3743,7 +3743,17 @@ function updateCondition(type, idx, field, value) {
 }
 
 // Day picker helpers
-function toggleDayDropdown(el) { var dd = el.nextElementSibling; dd.style.display = dd.style.display === 'none' ? 'block' : 'none'; }
+function toggleDayDropdown(el) {
+  var dd = el.nextElementSibling;
+  var card = el.closest('.card');
+  if (dd.style.display === 'none') {
+    dd.style.display = 'block';
+    if (card) card.style.zIndex = '10';
+  } else {
+    dd.style.display = 'none';
+    if (card) card.style.zIndex = '';
+  }
+}
 function updateDayLabel(type, idx, cb) {
   var picker = cb.closest('.day-picker');
   var checks = picker.querySelectorAll('input:checked');
