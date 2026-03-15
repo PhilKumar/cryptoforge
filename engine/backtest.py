@@ -324,29 +324,27 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
                 best_pnl_pct = (entry_price - lo) / entry_price * 100
                 pnl_pct = (entry_price - price) / entry_price * 100
 
-            # Leveraged P&L
-            worst_lev = worst_pnl_pct * leverage
-            best_lev = best_pnl_pct * leverage
-            lev_pnl_pct = pnl_pct * leverage
+            # P&L as price percentage (unleveraged)
             trade_pnl = entry_size * (pnl_pct / 100)
 
-            # Track peak for trailing SL (use best case within candle)
-            if best_lev > peak_pnl_pct:
-                peak_pnl_pct = best_lev
+            # Track peak price move for trailing SL
+            if best_pnl_pct > peak_pnl_pct:
+                peak_pnl_pct = best_pnl_pct
 
             exit_reason = None
 
-            # Trailing stop-loss (triggers once profit exceeds trail_pct then pulls back)
-            if trail_pct > 0 and peak_pnl_pct >= trail_pct and worst_lev <= (peak_pnl_pct - trail_pct):
+            # SL/TP are PRICE percentages (unleveraged), matching CryptoBot behavior
+            # Trailing stop-loss (triggers once price move exceeds trail_pct then pulls back)
+            if trail_pct > 0 and peak_pnl_pct >= trail_pct and worst_pnl_pct <= (peak_pnl_pct - trail_pct):
                 exit_reason = "Trailing SL"
-            # Stop-loss (worst-case intra-candle)
-            elif sl_pct > 0 and worst_lev <= -sl_pct:
+            # Stop-loss (worst-case intra-candle price move)
+            elif sl_pct > 0 and worst_pnl_pct <= -sl_pct:
                 exit_reason = "Stop Loss"
-            # Take profit (best-case intra-candle)
-            elif tp_pct > 0 and best_lev >= tp_pct:
+            # Take profit (best-case intra-candle price move)
+            elif tp_pct > 0 and best_pnl_pct >= tp_pct:
                 exit_reason = "Take Profit"
-            # Liquidation check (worst-case intra-candle)
-            elif worst_lev <= config.LIQUIDATION_THRESHOLD:
+            # Liquidation check (leveraged — this IS an account-level concept)
+            elif (worst_pnl_pct * leverage) <= config.LIQUIDATION_THRESHOLD:
                 exit_reason = "Liquidation"
             # Exit conditions met (evaluate prev candle, exit at current open)
             elif eval_condition_group(prev, exit_conditions, prev_prev):
@@ -357,29 +355,31 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
                 if exit_reason == "Signal Exit":
                     price = float(row["open"])
                 elif exit_reason == "Stop Loss":
-                    # SL triggers at exactly -sl_pct leveraged loss
+                    # SL at exact price percentage
                     if side == "LONG":
-                        price = entry_price * (1 - sl_pct / (leverage * 100))
+                        price = entry_price * (1 - sl_pct / 100)
                     else:
-                        price = entry_price * (1 + sl_pct / (leverage * 100))
+                        price = entry_price * (1 + sl_pct / 100)
                 elif exit_reason == "Take Profit":
-                    # TP triggers at exactly +tp_pct leveraged profit
+                    # TP at exact price percentage
                     if side == "LONG":
-                        price = entry_price * (1 + tp_pct / (leverage * 100))
+                        price = entry_price * (1 + tp_pct / 100)
                     else:
-                        price = entry_price * (1 - tp_pct / (leverage * 100))
+                        price = entry_price * (1 - tp_pct / 100)
                 elif exit_reason == "Trailing SL":
-                    # Trailing triggers when profit drops trail_pct below peak
-                    trail_exit_lev = peak_pnl_pct - trail_pct
+                    # Trailing triggers when price pulls back trail_pct from peak
+                    trail_exit_pct = peak_pnl_pct - trail_pct
                     if side == "LONG":
-                        price = entry_price * (1 + trail_exit_lev / (leverage * 100))
+                        price = entry_price * (1 + trail_exit_pct / 100)
                     else:
-                        price = entry_price * (1 - trail_exit_lev / (leverage * 100))
+                        price = entry_price * (1 - trail_exit_pct / 100)
                 elif exit_reason == "Liquidation":
+                    # Liquidation is leveraged (account-level)
+                    liq_price_pct = config.LIQUIDATION_THRESHOLD / leverage
                     if side == "LONG":
-                        price = entry_price * (1 + config.LIQUIDATION_THRESHOLD / (leverage * 100))
+                        price = entry_price * (1 + liq_price_pct / 100)
                     else:
-                        price = entry_price * (1 - config.LIQUIDATION_THRESHOLD / (leverage * 100))
+                        price = entry_price * (1 - liq_price_pct / 100)
 
                 # Recalculate P&L from actual exit price
                 if side == "LONG":
