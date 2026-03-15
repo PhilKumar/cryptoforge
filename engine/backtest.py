@@ -229,16 +229,27 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     fee_pct = float(sc.get("fee_pct", 0.05))  # taker fee per side (0.05% default for Delta)
 
     # Compute indicators (including warm-up data)
-    df = compute_dynamic_indicators(df_raw, indicators)
+    base_interval = sc.get("candle_interval", None)
+    df = compute_dynamic_indicators(df_raw, indicators, base_interval=base_interval)
 
     # Trim warm-up data: only trade from the user's requested from_date
+    # CryptoBot (Delta Exchange India) interprets dates as IST (UTC+5:30).
+    # from_date "2025-01-01" means Jan 1 IST = Dec 31 18:30 UTC.
     from_date_str = sc.get("from_date", "")
     if from_date_str and len(df) > 0:
         try:
-            cutoff = pd.Timestamp(from_date_str)
+            # Convert IST date to UTC cutoff
+            cutoff = pd.Timestamp(from_date_str) - pd.Timedelta(hours=5, minutes=30)
+            # Handle timezone-aware index
+            if hasattr(df.index, "tz") and df.index.tz is not None:
+                cutoff = cutoff.tz_localize(df.index.tz)
+            before_len = len(df)
             df = df[df.index >= cutoff]
-            print(f"[BACKTEST] Trimmed warm-up data. Trading from {cutoff}, rows: {len(df)}")
-        except Exception:
+            print(
+                f"[BACKTEST] Trimmed warm-up data. IST from_date={from_date_str}, UTC cutoff={cutoff}, rows: {before_len}→{len(df)}"
+            )
+        except Exception as e:
+            print(f"[BACKTEST] Warm-up trim failed: {e}")
             pass
 
     # ── Diagnostic: log available columns & sample condition values ──

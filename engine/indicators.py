@@ -24,6 +24,50 @@ def _clean(s):
     return s.replace([np.inf, -np.inf], np.nan)
 
 
+def _parse_tf_minutes(tf_str: str) -> int:
+    """Parse a timeframe string like '3m', '5m', '15m', '1h' into minutes."""
+    if not tf_str:
+        return 0
+    s = tf_str.strip().lower()
+    if s.endswith("m"):
+        return int(s[:-1])
+    if s.endswith("h"):
+        return int(s[:-1]) * 60
+    if s.endswith("d"):
+        return int(s[:-1]) * 1440
+    try:
+        return int(s)
+    except ValueError:
+        return 0
+
+
+def _resample_series(series: pd.Series, base_minutes: int, target_minutes: int) -> pd.Series:
+    """Resample a series from base timeframe to target timeframe.
+
+    Returns resampled .last() values SHIFTED by 1 period to avoid look-ahead,
+    then forward-filled back to the original index.
+    The shift ensures we only use data from the most recently COMPLETED
+    higher-timeframe candle (matching CryptoBot behavior).
+    """
+    if target_minutes <= base_minutes or target_minutes == 0:
+        return series  # no resampling needed
+    resampled = series.resample(f"{target_minutes}min").last().dropna()
+    return resampled
+
+
+def _map_to_base(resampled_indicator: pd.Series, original_index, shift: bool = True) -> pd.Series:
+    """Map a higher-timeframe indicator back to the base timeframe index.
+
+    Args:
+        resampled_indicator: Indicator computed on resampled (higher TF) data
+        original_index: The base-timeframe DatetimeIndex
+        shift: If True, shift by 1 period to use only completed candles (avoid look-ahead)
+    """
+    if shift:
+        resampled_indicator = resampled_indicator.shift(1)
+    return resampled_indicator.reindex(original_index, method="ffill")
+
+
 def ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
@@ -397,9 +441,21 @@ def orb(df: pd.DataFrame, window_minutes: int = 15) -> pd.DataFrame:
     return result
 
 
-def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.DataFrame:
-    """Compute indicators dynamically based on UI selection."""
+def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_interval: str = None) -> pd.DataFrame:
+    """Compute indicators dynamically based on UI selection.
+
+    Args:
+        df: OHLCV DataFrame with DatetimeIndex
+        ui_indicators: List of indicator strings like 'RSI_14_5m', 'EMA_30_3m'
+        base_interval: Base candle interval string (e.g. '3m', '5m'). Auto-detected if None.
+    """
     df = df.copy()
+
+    # Auto-detect base interval from data if not provided
+    if base_interval is None and len(df) > 1:
+        diff_secs = (df.index[1] - df.index[0]).total_seconds()
+        base_interval = f"{int(diff_secs / 60)}m"
+    base_minutes = _parse_tf_minutes(base_interval) if base_interval else 0
 
     # Always compute yesterday candle data (Previous Day)
     df = yesterday_candle(df)
@@ -416,23 +472,62 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list) -> pd.Data
             parts = ind_string.split("_")
             name = parts[0]
 
+            # Detect timeframe suffix (e.g. '5m' in 'RSI_14_5m')
+            tf_suffix = parts[-1] if len(parts) > 1 and parts[-1].endswith("m") else None
+            target_minutes = _parse_tf_minutes(tf_suffix) if tf_suffix else base_minutes
+            needs_resample = target_minutes > base_minutes > 0
+
             if name == "EMA":
                 period = int(parts[1])
-                df[ind_string] = ema(df["close"], period)
+                if needs_resample:
+                    resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
+                    ema_vals = ema(resampled_close, period)
+                    df[ind_string] = _map_to_base(ema_vals, df.index)
+                    print(f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for EMA({period})")
+                else:
+                    df[ind_string] = ema(df["close"], period)
 
             elif name == "SMA":
                 period = int(parts[1])
-                df[ind_string] = sma(df["close"], period)
+                if needs_resample:
+                    resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
+                    sma_vals = sma(resampled_close, period)
+                    df[ind_string] = _map_to_base(sma_vals, df.index)
+                else:
+                    df[ind_string] = sma(df["close"], period)
 
             elif name == "RSI":
                 period = int(parts[1])
-                df[ind_string] = rsi(df["close"], period)
+                if needs_resample:
+                    resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
+                    rsi_vals = rsi(resampled_close, period)
+                    df[ind_string] = _map_to_base(rsi_vals, df.index)
+                    print(f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for RSI({period})")
+                else:
+                    df[ind_string] = rsi(df["close"], period)
 
             elif name == "Supertrend":
-                period = int(parts[1])
-                mult = float(parts[2])
-                st_df = supertrend(df, period=period, multiplier=mult)
-                df[ind_string] = st_df["supertrend"]
+                # Filter numeric parts (skip timeframe suffix)
+                num_parts = [p for p in parts[1:] if not p.endswith("m")]
+                period = int(num_parts[0]) if len(num_parts) > 0 else 10
+                mult = float(num_parts[1]) if len(num_parts) > 1 else 3.0
+                if needs_resample:
+                    # Resample OHLC to target timeframe for Supertrend
+                    ohlc_resamp = (
+                        df[["open", "high", "low", "close"]]
+                        .resample(f"{target_minutes}min")
+                        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                        .dropna()
+                    )
+                    st_df = supertrend(ohlc_resamp, period=period, multiplier=mult)
+                    st_vals = st_df["supertrend"]
+                    df[ind_string] = _map_to_base(st_vals, df.index)
+                    print(
+                        f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for Supertrend({period},{mult})"
+                    )
+                else:
+                    st_df = supertrend(df, period=period, multiplier=mult)
+                    df[ind_string] = st_df["supertrend"]
 
             elif name == "MACD":
                 # Filter out trailing timeframe suffix (e.g. '5m')

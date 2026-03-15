@@ -377,6 +377,7 @@ class StrategyPayload(BaseModel):
     trailing_sl_pct: float = 0.0
     max_trades_per_day: int = 5
     max_daily_loss: float = 0.0
+    fee_pct: float = 0.05
     indicators: List[str] = []
     entry_conditions: Optional[List[dict]] = None
     exit_conditions: Optional[List[dict]] = None
@@ -927,25 +928,87 @@ async def get_single_ticker(symbol: str):
 _DELTA_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "PAXGUSDT"}
 
 
+# ── Local Candle Cache ────────────────────────────────────────────
+_CACHE_DIR = os.path.join(_HERE, "cache", "candles")
+os.makedirs(_CACHE_DIR, exist_ok=True)
+
+
+def _cache_path(symbol: str, interval: str) -> str:
+    """Return path to the pickle cache file for a symbol/interval pair."""
+    return os.path.join(_CACHE_DIR, f"{symbol}_{interval}.pkl")
+
+
+def _load_cache(symbol: str, interval: str) -> pd.DataFrame:
+    """Load cached candle data from disk. Returns empty DataFrame if no cache."""
+    path = _cache_path(symbol, interval)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_pickle(path)  # nosec B301 — only reads self-generated cache files
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        return df
+    except Exception as e:
+        print(f"[CACHE] Failed to read {path}: {e}")
+        return pd.DataFrame()
+
+
+def _save_cache(df: pd.DataFrame, symbol: str, interval: str):
+    """Save candle data to disk (pickle). Merges with existing cache."""
+    if df.empty:
+        return
+    path = _cache_path(symbol, interval)
+    try:
+        existing = _load_cache(symbol, interval)
+        if not existing.empty:
+            merged = pd.concat([existing, df])
+            merged = merged[~merged.index.duplicated(keep="last")]
+            merged.sort_index(inplace=True)
+            df = merged
+        df.to_pickle(path)
+        print(f"[CACHE] Saved {len(df)} candles to {path}")
+    except Exception as e:
+        print(f"[CACHE] Failed to save {path}: {e}")
+
+
 # ── Data Fetch ────────────────────────────────────────────────────
 def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str = "5m") -> pd.DataFrame:
     print(f"[DATA] Symbol={symbol}, Interval={candle_interval}, From={from_date}, To={to_date}")
 
-    # Try Delta Exchange first for supported symbols
+    from_ts = pd.Timestamp(from_date)
+    to_ts = pd.Timestamp(to_date)
+
+    # ── 1. Check local cache first ────────────────────────────
+    cached = _load_cache(symbol, candle_interval)
+    if not cached.empty:
+        # Normalize both to tz-naive for comparison
+        idx = cached.index.tz_localize(None) if cached.index.tz else cached.index
+        cache_start, cache_end = idx.min(), idx.max()
+        if cache_start <= from_ts and cache_end >= to_ts - pd.Timedelta(days=1):
+            sliced = cached.loc[(idx >= from_ts) & (idx <= to_ts)]
+            if len(sliced) > 0:
+                print(
+                    f"[CACHE] HIT: {len(sliced)} candles for {symbol}/{candle_interval} ({cache_start} → {cache_end})"
+                )
+                return sliced
+        print(f"[CACHE] Partial: cache has {cache_start}→{cache_end}, need {from_date}→{to_date}")
+
+    # ── 2. Fetch from API (Binance first — fast, free, no key) ──
+    df = get_candles_binance(symbol, resolution=candle_interval, start=from_date, end=to_date)
+    if not df.empty:
+        print(f"[DATA] Binance: {len(df)} candles: {df.index[0]} → {df.index[-1]}")
+        _save_cache(df, symbol, candle_interval)
+        return df
+
+    # ── 3. Fallback to Delta Exchange ──────────────────────────
     if symbol in _DELTA_SYMBOLS:
         df = delta.get_candles(symbol, resolution=candle_interval, start=from_date, end=to_date)
         if not df.empty:
             print(f"[DATA] Delta: {len(df)} candles: {df.index[0]} → {df.index[-1]}")
+            _save_cache(df, symbol, candle_interval)
             return df
-        print(f"[DATA] Delta returned no data for {symbol}, trying Binance...")
 
-    # Fallback: Binance public API (works for any major crypto)
-    df = get_candles_binance(symbol, resolution=candle_interval, start=from_date, end=to_date)
-    if not df.empty:
-        print(f"[DATA] Binance: {len(df)} candles: {df.index[0]} → {df.index[-1]}")
-        return df
-
-    raise Exception(f"No candle data for {symbol} (tried Delta + Binance)")
+    raise Exception(f"No candle data for {symbol} (tried cache + Binance + Delta)")
 
 
 # ── Backtest ──────────────────────────────────────────────────────
@@ -1840,6 +1903,30 @@ async def export_run_csv(rid: int):
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={name}_trades.csv"},
     )
+
+
+# ── Cache Management ──────────────────────────────────────────────
+@app.get("/api/cache/status")
+async def cache_status():
+    """Show cached candle files and sizes."""
+    files = []
+    if os.path.exists(_CACHE_DIR):
+        for f in os.listdir(_CACHE_DIR):
+            path = os.path.join(_CACHE_DIR, f)
+            size_mb = os.path.getsize(path) / 1024 / 1024
+            files.append({"file": f, "size_mb": round(size_mb, 2)})
+    return {"cache_dir": _CACHE_DIR, "files": files}
+
+
+@app.delete("/api/cache")
+async def clear_cache():
+    """Clear all cached candle data."""
+    cleared = 0
+    if os.path.exists(_CACHE_DIR):
+        for f in os.listdir(_CACHE_DIR):
+            os.remove(os.path.join(_CACHE_DIR, f))
+            cleared += 1
+    return {"cleared": cleared}
 
 
 @app.get("/api/funding/{symbol}")

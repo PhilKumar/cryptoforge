@@ -18,6 +18,7 @@ _validate*.py
 *.tmp
 .sessions.json
 live_state_*.json
+cache/
 Tier A*
 e2e-tests/playwright-report/
 e2e-tests/test-results/
