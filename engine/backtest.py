@@ -229,6 +229,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     sc = strategy_config or {}
 
     capital = float(sc.get("initial_capital", config.DEFAULT_CAPITAL))
+    initial_capital_for_sizing = capital  # fixed sizing base (never changes)
     leverage = int(sc.get("leverage", 10))
     sl_pct = float(sc.get("stoploss_pct", 5))
     tp_pct = float(sc.get("target_profit_pct", 10))
@@ -237,6 +238,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     indicators = sc.get("indicators", []) or []
     side = sc.get("trade_side", "LONG").upper()  # LONG or SHORT
     position_size_pct = float(sc.get("position_size_pct", 100))  # % of capital
+    compounding = str(sc.get("compounding", "false")).lower() == "true"
     fee_pct = float(sc.get("fee_pct", 0.05))  # taker fee per side (0.05% default for Delta)
     max_daily_loss = float(sc.get("max_daily_loss", 0))  # 0 = disabled
 
@@ -352,8 +354,9 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
                 entry_price = float(row["open"])
                 entry_time = ts
                 peak_pnl_pct = 0.0  # reset trailing tracker
-                # Position size = (capital * position_size_pct/100) * leverage
-                margin_used = capital * (position_size_pct / 100)
+                # Position size: fixed (initial capital) or compounding (current capital)
+                sizing_base = capital if compounding else initial_capital_for_sizing
+                margin_used = sizing_base * (position_size_pct / 100)
                 entry_size = margin_used * leverage
                 trades_today += 1
         else:
@@ -551,8 +554,11 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
             total_days = len(daily_vals)
             if total_days > 0 and max_dd > 0:
                 total_return_dec = (daily_vals[-1] - daily_vals[0]) / daily_vals[0]
-                ann_return = ((1 + total_return_dec) ** (365 / max(total_days, 1))) - 1
-                calmar_ratio = (ann_return * 100) / max_dd
+                # Guard against negative base (losses > 100%) which would produce complex numbers
+                base_val = 1 + total_return_dec
+                if base_val > 0:
+                    ann_return = (base_val ** (365 / max(total_days, 1))) - 1
+                    calmar_ratio = (ann_return * 100) / max_dd
 
     # Average trade duration
     avg_duration_str = ""
@@ -644,6 +650,7 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         "trailing_sl_pct": trail_pct,
         "leverage": leverage,
         "side": side,
+        "compounding": compounding,
     }
 
     # Downsample equity curve for large datasets

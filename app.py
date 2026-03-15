@@ -378,6 +378,7 @@ class StrategyPayload(BaseModel):
     max_trades_per_day: int = 5
     max_daily_loss: float = 0.0
     fee_pct: float = 0.05
+    compounding: bool = False
     indicators: List[str] = []
     entry_conditions: Optional[List[dict]] = None
     exit_conditions: Optional[List[dict]] = None
