@@ -6,6 +6,16 @@ Crypto-optimized: Supertrend, EMA, RSI, MACD, Bollinger Bands, VWAP, ATR
 import numpy as np
 import pandas as pd
 
+# Delta Exchange India uses IST (UTC+5:30) for day boundaries.
+# All daily aggregations (CPR, yesterday_candle, VWAP) must use IST days
+# to match CryptoBot reference results.
+_IST_OFFSET = pd.Timedelta(hours=5, minutes=30)
+
+
+def _ist_dates(index):
+    """Convert UTC index to IST dates for daily grouping."""
+    return (index + _IST_OFFSET).date
+
 
 def _clean(s):
     """Replace ±Inf with NaN so they never propagate into condition evaluation."""
@@ -179,17 +189,16 @@ def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> p
 
 
 def vwap(df: pd.DataFrame) -> pd.Series:
-    """Volume Weighted Average Price — resets daily (UTC midnight) for crypto."""
+    """Volume Weighted Average Price — resets daily (IST boundary) for crypto."""
     typical = (df["high"] + df["low"] + df["close"]) / 3
     tp_vol = typical * df["volume"]
 
-    # If index is datetime, reset accumulation daily
+    # Reset accumulation at IST day boundary
     if hasattr(df.index, "date"):
-        dates = pd.Series(df.index.date, index=df.index)
+        dates = pd.Series(_ist_dates(df.index), index=df.index)
         cum_tp_vol = tp_vol.groupby(dates).cumsum()
         cum_vol = df["volume"].groupby(dates).cumsum()
     else:
-        # Fallback: simple cumulative (no date info)
         cum_tp_vol = tp_vol.cumsum()
         cum_vol = df["volume"].cumsum()
 
@@ -282,11 +291,12 @@ def cpr(df: pd.DataFrame, timeframe: str = "Day", narrow_pct: float = 0.2, moder
             agg = d.groupby(period_key).agg({"high": "max", "low": "min", "close": "last"})
             _map_period(agg, period_key)
         else:
-            # Daily CPR (default)
-            daily = d.groupby(d.index.date).agg({"high": "max", "low": "min", "close": "last"})
+            # Daily CPR (default) — use IST day boundary to match Delta Exchange India
+            ist_dates_arr = _ist_dates(d.index)
+            daily = d.groupby(ist_dates_arr).agg({"high": "max", "low": "min", "close": "last"})
             daily = _calc_pivots(daily)
             daily = daily.shift(1)
-            date_series = pd.Series(d.index.date, index=d.index)
+            date_series = pd.Series(ist_dates_arr, index=d.index)
             for col in pivot_cols:
                 mapping = daily[col].to_dict()
                 d[f"CPR_{col}"] = date_series.map(mapping).values
@@ -320,13 +330,14 @@ def _is_intraday(df: pd.DataFrame) -> bool:
 
 
 def yesterday_candle(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute previous day OHLC. Handles both intraday and daily DataFrames."""
+    """Compute previous day OHLC. Uses IST day boundary for crypto data."""
     intraday = _is_intraday(df)
-    daily = (
-        df.resample("D").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
-        if intraday
-        else df.copy()
-    )
+    if intraday:
+        # Group by IST date to match Delta Exchange India day boundary
+        ist_dates_arr = _ist_dates(df.index)
+        daily = df.groupby(ist_dates_arr).agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+    else:
+        daily = df.copy()
 
     daily["yesterday_high"] = daily["high"].shift(1)
     daily["yesterday_low"] = daily["low"].shift(1)
@@ -336,7 +347,10 @@ def yesterday_candle(df: pd.DataFrame) -> pd.DataFrame:
     yest_cols = ["yesterday_high", "yesterday_low", "yesterday_close", "yesterday_open"]
     result = df.copy()
     if intraday:
-        result = result.join(daily[yest_cols].reindex(result.index, method="ffill"))
+        ist_date_series = pd.Series(ist_dates_arr, index=df.index)
+        for col in yest_cols:
+            mapping = daily[col].to_dict()
+            result[col] = ist_date_series.map(mapping).values
     else:
         for col in yest_cols:
             result[col] = daily[col].reindex(result.index, method="ffill")

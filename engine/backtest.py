@@ -78,12 +78,14 @@ def eval_condition(row, cond, prev_row=None):
             return cur_time <= cmp_time
         return False
 
-    # ── Day of Week ──
+    # ── Day of Week (evaluated in IST to match Delta Exchange India) ──
     if left == "Day_Of_Week":
         ts = row.name if hasattr(row, "name") else None
         if ts is None:
             return False
-        day_name = ts.strftime("%A") if hasattr(ts, "strftime") else ""
+        # Convert UTC to IST for day-of-week check
+        ist_ts = ts + pd.Timedelta(hours=5, minutes=30) if hasattr(ts, "strftime") else ts
+        day_name = ist_ts.strftime("%A") if hasattr(ist_ts, "strftime") else ""
         days = cond.get("right_days", [])
         if op == "contains":
             return day_name in days
