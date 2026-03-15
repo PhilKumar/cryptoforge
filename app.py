@@ -959,10 +959,22 @@ async def api_run_backtest(payload: StrategyPayload):
         print(f"[BACKTEST] Indicators: {payload.indicators}")
         print(f"{'=' * 60}")
 
+        # Fetch extra data before from_date for indicator warm-up
+        # EMA(30) needs ~30 candles, CPR needs previous day OHLC, Supertrend needs ~10
+        # 3 days of 3-min candles = 1440 candles — sufficient warm-up
+        from datetime import datetime, timedelta
+
+        warmup_days = 3
+        try:
+            actual_from = datetime.strptime(payload.from_date, "%Y-%m-%d")
+            warmup_from = (actual_from - timedelta(days=warmup_days)).strftime("%Y-%m-%d")
+        except Exception:
+            warmup_from = payload.from_date
+
         df_raw = await asyncio.to_thread(
             _fetch_data,
             symbol=payload.symbol,
-            from_date=payload.from_date,
+            from_date=warmup_from,
             to_date=payload.to_date,
             candle_interval=payload.candle_interval,
         )

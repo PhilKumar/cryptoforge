@@ -228,8 +228,18 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     position_size_pct = float(sc.get("position_size_pct", 100))  # % of capital
     fee_pct = float(sc.get("fee_pct", 0.05))  # taker fee per side (0.05% default for Delta)
 
-    # Compute indicators
+    # Compute indicators (including warm-up data)
     df = compute_dynamic_indicators(df_raw, indicators)
+
+    # Trim warm-up data: only trade from the user's requested from_date
+    from_date_str = sc.get("from_date", "")
+    if from_date_str and len(df) > 0:
+        try:
+            cutoff = pd.Timestamp(from_date_str)
+            df = df[df.index >= cutoff]
+            print(f"[BACKTEST] Trimmed warm-up data. Trading from {cutoff}, rows: {len(df)}")
+        except Exception:
+            pass
 
     # ── Diagnostic: log available columns & sample condition values ──
     df_cols = sorted([c for c in df.columns if not c.startswith("_")])
@@ -290,7 +300,9 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         prev = df.iloc[i - 1]
         prev_prev = df.iloc[i - 2]
         ts = df.index[i]
-        current_date = ts.date() if hasattr(ts, "date") else ts
+        # Use IST date for daily trade count (matches Delta Exchange India day boundary)
+        ist_ts = ts + pd.Timedelta(hours=5, minutes=30) if hasattr(ts, "date") else ts
+        current_date = ist_ts.date() if hasattr(ist_ts, "date") else ist_ts
 
         # Reset daily trade count
         if current_date != last_trade_date:
