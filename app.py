@@ -2211,6 +2211,7 @@ async def scalp_enter(request: Request):
             sl_pct=float(body.get("stop_loss_pct", 0)),
             target_usd=float(body.get("tp_usd", 0)),
             sl_usd=float(body.get("sl_usd", 0)),
+            sl_price=float(body.get("sl_price", 0)),
             mode=mode,
         )
         if result.get("status") == "error":
