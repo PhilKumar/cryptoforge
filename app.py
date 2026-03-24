@@ -7,6 +7,7 @@ Production-ready: multi-engine, WebSocket, portfolio history, full CRUD.
 import asyncio
 import inspect
 import json
+import logging
 import os
 import secrets
 import sys
@@ -14,6 +15,14 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+
+# ── Module-level logger ──────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+_logger = logging.getLogger("cryptoforge")
 
 import pandas as pd
 
@@ -47,18 +56,18 @@ def _shutdown_save_engines():
                 status = engine.get_status()
                 engine.stop()
                 _save_engine_run_to_history(status, "paper")
-                print(f"[SHUTDOWN] Saved paper engine {run_id}")
+                _logger.info("Saved paper engine %s on shutdown", run_id)
             except Exception as e:
-                print(f"[SHUTDOWN] Failed to save paper engine {run_id}: {e}")
+                _logger.error("Failed to save paper engine %s on shutdown: %s", run_id, e)
     for run_id, engine in list(live_engines.items()):
         if engine.running:
             try:
                 status = engine.get_status()
                 engine.stop()
                 _save_engine_run_to_history(status, "live")
-                print(f"[SHUTDOWN] Saved live engine {run_id}")
+                _logger.info("Saved live engine %s on shutdown", run_id)
             except Exception as e:
-                print(f"[SHUTDOWN] Failed to save live engine {run_id}: {e}")
+                _logger.error("Failed to save live engine %s on shutdown: %s", run_id, e)
 
 
 import atexit
@@ -67,8 +76,18 @@ atexit.register(_shutdown_save_engines)
 
 # Initialize
 app = FastAPI(title="CryptoForge", version="2.0.0")
+_ALLOWED_ORIGINS = [
+    "https://crypto.philforge.in",
+    "https://www.crypto.philforge.in",
+    "http://localhost:9000",
+    "http://127.0.0.1:9000",
+]
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 from error_handlers import register_error_handlers
@@ -295,9 +314,9 @@ def check_rate_limit(endpoint: str, max_calls: int = 5, window_sec: int = 10, cl
     if len(_rate_limits[key]) >= max_calls:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Max {max_calls}/{window_sec}s.")
     _rate_limits[key].append(now)
-    if len(_rate_limits) > 50_000:
+    if len(_rate_limits) > 10_000:
         stale = [k for k, v in _rate_limits.items() if not v or now - v[-1] > window_sec]
-        for k in stale[:5_000]:
+        for k in stale:
             del _rate_limits[k]
 
 
@@ -911,10 +930,7 @@ async def get_ticker():
         _ticker_cache["timestamp"] = time.time()
         return result
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        print(f"[TICKER] Error: {e}")
+        _logger.exception("Ticker error: %s", e)
         return {"status": "error", "message": str(e)[:100]}
 
 
@@ -952,7 +968,7 @@ def _load_cache(symbol: str, interval: str) -> pd.DataFrame:
             df.index = pd.to_datetime(df.index)
         return df
     except Exception as e:
-        print(f"[CACHE] Failed to read {path}: {e}")
+        _logger.warning("Cache read failed %s: %s", path, e)
         return pd.DataFrame()
 
 
@@ -969,14 +985,14 @@ def _save_cache(df: pd.DataFrame, symbol: str, interval: str):
             merged.sort_index(inplace=True)
             df = merged
         df.to_pickle(path)
-        print(f"[CACHE] Saved {len(df)} candles to {path}")
+        _logger.info("Cache saved %d candles to %s", len(df), path)
     except Exception as e:
-        print(f"[CACHE] Failed to save {path}: {e}")
+        _logger.warning("Cache save failed %s: %s", path, e)
 
 
 # ── Data Fetch ────────────────────────────────────────────────────
 def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str = "5m") -> pd.DataFrame:
-    print(f"[DATA] Symbol={symbol}, Interval={candle_interval}, From={from_date}, To={to_date}")
+    _logger.info("Data fetch: %s %s %s→%s", symbol, candle_interval, from_date, to_date)
 
     from_ts = pd.Timestamp(from_date)
     to_ts = pd.Timestamp(to_date)
@@ -990,16 +1006,14 @@ def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str 
         if cache_start <= from_ts and cache_end >= to_ts:
             sliced = cached.loc[(idx >= from_ts) & (idx <= to_ts)]
             if len(sliced) > 0:
-                print(
-                    f"[CACHE] HIT: {len(sliced)} candles for {symbol}/{candle_interval} ({cache_start} → {cache_end})"
-                )
+                _logger.info("Cache HIT: %d candles for %s/%s", len(sliced), symbol, candle_interval)
                 return sliced
-        print(f"[CACHE] Partial: cache has {cache_start}→{cache_end}, need {from_date}→{to_date}")
+        _logger.info("Cache partial: has %s→%s, need %s→%s", cache_start, cache_end, from_date, to_date)
 
     # ── 2. Fetch from API (Binance first — fast, free, no key) ──
     df = get_candles_binance(symbol, resolution=candle_interval, start=from_date, end=to_date)
     if not df.empty:
-        print(f"[DATA] Binance: {len(df)} candles: {df.index[0]} → {df.index[-1]}")
+        _logger.info("Binance: %d candles fetched", len(df))
         _save_cache(df, symbol, candle_interval)
         return df
 
@@ -1007,7 +1021,7 @@ def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str 
     if symbol in _DELTA_SYMBOLS:
         df = delta.get_candles(symbol, resolution=candle_interval, start=from_date, end=to_date)
         if not df.empty:
-            print(f"[DATA] Delta: {len(df)} candles: {df.index[0]} → {df.index[-1]}")
+            _logger.info("Delta: %d candles fetched", len(df))
             _save_cache(df, symbol, candle_interval)
             return df
 
@@ -1018,12 +1032,14 @@ def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str 
 @app.post("/api/backtest")
 async def api_run_backtest(payload: StrategyPayload):
     try:
-        print(f"\n{'=' * 60}")
-        print(f"[BACKTEST] Run: {payload.run_name}")
-        print(f"[BACKTEST] Symbol: {payload.symbol}, Leverage: {payload.leverage}x")
-        print(f"[BACKTEST] Side: {payload.trade_side}, Interval: {payload.candle_interval}")
-        print(f"[BACKTEST] Indicators: {payload.indicators}")
-        print(f"{'=' * 60}")
+        _logger.info(
+            "Backtest: %s | %s %sx | %s %s",
+            payload.run_name,
+            payload.symbol,
+            payload.leverage,
+            payload.trade_side,
+            payload.candle_interval,
+        )
 
         # Fetch extra data before from_date for indicator warm-up
         # EMA(30) needs ~30 candles, CPR needs previous day OHLC, Supertrend needs ~10
@@ -1529,7 +1545,7 @@ def _save_engine_run_to_history(status: dict, mode: str):
             if isinstance(closed, int):
                 closed = []
         if not closed:
-            print(f"[{mode.upper()}] No trades to save — skipping runs.json")
+            _logger.info("[%s] No trades to save — skipping", mode.upper())
             return
 
         # Check if trades were already saved individually (avoid duplicates)
@@ -1539,7 +1555,7 @@ def _save_engine_run_to_history(status: dict, mode: str):
             1 for r in runs if r.get("mode") == mode and r.get("run_name") == run_name and r.get("trade_count") == 1
         )
         if existing_count >= len(closed):
-            print(f"[{mode.upper()}] All {len(closed)} trades already saved individually — skipping bulk save")
+            _logger.info("[%s] All %d trades already saved individually — skipping", mode.upper(), len(closed))
             return
 
         max_id = max([r.get("id", 0) for r in runs], default=0)
@@ -1576,9 +1592,9 @@ def _save_engine_run_to_history(status: dict, mode: str):
 
         runs.append(run_entry)
         _save_runs(runs)
-        print(f"[{mode.upper()}] Saved run #{run_entry['id']} to runs.json: {len(closed)} trades, P&L=${total_pnl}")
+        _logger.info("[%s] Saved run #%s: %d trades, P&L=$%s", mode.upper(), run_entry["id"], len(closed), total_pnl)
     except Exception as e:
-        print(f"[{mode.upper()}] Failed to save run to history: {e}")
+        _logger.error("[%s] Failed to save run to history: %s", mode.upper(), e)
 
 
 def _save_trade_to_history(trade: dict, mode: str, run_name: str = "") -> None:
@@ -1615,9 +1631,9 @@ def _save_trade_to_history(trade: dict, mode: str, run_name: str = "") -> None:
         }
         runs.append(run_entry)
         _save_runs(runs)
-        print(f"[{mode.upper()}] Saved trade to runs.json: {symbol} {side} P&L=${pnl}")
+        _logger.info("[%s] Saved trade: %s %s P&L=$%s", mode.upper(), symbol, side, pnl)
     except Exception as e:
-        print(f"[{mode.upper()}] Failed to save trade to history: {e}")
+        _logger.error("[%s] Failed to save trade to history: %s", mode.upper(), e)
 
 
 def _save_scalp_trade_to_history(trade: dict) -> None:
@@ -1652,9 +1668,9 @@ def _save_scalp_trade_to_history(trade: dict) -> None:
         }
         runs.append(run_entry)
         _save_runs(runs)
-        print(f"[SCALP] Saved trade #{trade.get('trade_id')} to runs.json: P&L=${pnl}")
+        _logger.info("[SCALP] Saved trade #%s: P&L=$%s", trade.get("trade_id"), pnl)
     except Exception as e:
-        print(f"[SCALP] Failed to save trade to history: {e}")
+        _logger.error("[SCALP] Failed to save trade to history: %s", e)
 
 
 # ── Combined Engines Status (Multi-Strategy Monitor) ─────────────
@@ -1801,7 +1817,7 @@ async def get_portfolio_history():
 
         return {"status": "success", "daily": daily, "monthly": monthly, "yearly": yearly}
     except Exception as e:
-        print(f"[PORTFOLIO] History error: {e}")
+        _logger.error("Portfolio history error: %s", e)
         return {"status": "error", "message": str(e), "daily": {}, "monthly": {}, "yearly": {}}
 
 
@@ -1815,7 +1831,8 @@ def _load():
         try:
             with open(STRAT_FILE) as f:
                 return json.load(f)
-        except:
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            _logger.warning("Failed to load %s: %s", STRAT_FILE, e)
             return []
     return []
 
@@ -1832,7 +1849,8 @@ def _load_runs():
         try:
             with open(RUNS_FILE) as f:
                 return json.load(f)
-        except:
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            _logger.warning("Failed to load %s: %s", RUNS_FILE, e)
             return []
     return []
 
@@ -2212,7 +2230,7 @@ def _scalp_persist_trade(trade: dict) -> None:
             trades.append(trade)
             _save_scalp_trades(trades)
     except Exception as e:
-        print(f"[SCALP] Failed to persist trade: {e}")
+        _logger.error("[SCALP] Failed to persist trade: %s", e)
 
     # Telegram alert for auto-exits (TP/SL hits from monitor loop)
     reason = trade.get("exit_reason", trade.get("reason", "auto"))
@@ -2349,17 +2367,26 @@ async def websocket_endpoint(ws: WebSocket):
         while True:
             paper_sts = {rid: e.get_status() for rid, e in paper_engines.items()}
             live_sts = {rid: e.get_status() for rid, e in live_engines.items()}
-            await ws.send_json(
-                {
-                    "type": "status",
-                    "paper_engines": paper_sts,
-                    "live_engines": live_sts,
-                    "paper_running": any(s.get("running") for s in paper_sts.values()),
-                    "live_running": any(s.get("running") for s in live_sts.values()),
-                }
-            )
+            try:
+                await asyncio.wait_for(
+                    ws.send_json(
+                        {
+                            "type": "status",
+                            "paper_engines": paper_sts,
+                            "live_engines": live_sts,
+                            "paper_running": any(s.get("running") for s in paper_sts.values()),
+                            "live_running": any(s.get("running") for s in live_sts.values()),
+                        }
+                    ),
+                    timeout=10,
+                )
+            except asyncio.TimeoutError:
+                _logger.warning("WebSocket send timed out, closing connection")
+                break
             await asyncio.sleep(5)
     except (WebSocketDisconnect, Exception):
+        pass
+    finally:
         if ws in ws_clients:
             ws_clients.remove(ws)
 
@@ -2368,8 +2395,5 @@ async def websocket_endpoint(ws: WebSocket):
 if __name__ == "__main__":
     import uvicorn
 
-    print("=" * 60)
-    print("  CryptoForge — Starting Backend")
-    print(f"  Open: http://{config.APP_HOST}:{config.APP_PORT}")
-    print("=" * 60)
+    _logger.info("CryptoForge starting — http://%s:%s", config.APP_HOST, config.APP_PORT)
     uvicorn.run("app:app", host=config.APP_HOST, port=config.APP_PORT, reload=False, log_level="info")

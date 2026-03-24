@@ -1,5 +1,5 @@
 """
-error_handlers.py — AlgoForge Standardised Error Handling
+error_handlers.py — CryptoForge Standardised Error Handling
 ==========================================================
 Register with FastAPI in app.py:
 
@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-_log = logging.getLogger("algoforge.errors")
+_log = logging.getLogger("cryptoforge.errors")
 
 # ── Friendly message map ───────────────────────────────────────────
 # (title, user-facing message)

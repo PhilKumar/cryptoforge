@@ -2082,7 +2082,7 @@
       <span class="ap-icon">⬟</span> MATIC
     </div>
   </div>
-  <span class="inr-rate-badge" id="inr-rate-badge">₹84.5/USD</span>
+  <span class="inr-rate-badge" id="inr-rate-badge" style="display:none;"></span>
 </div>
 
 <!-- Funding Rate Strip -->
@@ -2147,17 +2147,17 @@
   <div class="stats-grid" id="dash-stats">
     <div class="stat-box pnl-hero">
       <div class="stat-label">Today's P&amp;L</div>
-      <div class="stat-value" id="dash-pnl">₹0.00</div>
+      <div class="stat-value" id="dash-pnl">$0.00</div>
       <div style="font-size:10px;color:var(--muted);margin-top:6px;letter-spacing:0.5px;">Combined Real + Paper</div>
     </div>
     <div class="stat-box pnl-hero">
       <div class="stat-label">Paper P&amp;L</div>
-      <div class="stat-value" id="dash-paper-pnl">₹0.00</div>
+      <div class="stat-value" id="dash-paper-pnl">$0.00</div>
       <div style="font-size:10px;color:var(--muted);margin-top:6px;" id="dash-paper">Idle</div>
     </div>
     <div class="stat-box pnl-hero" id="dash-live-card">
       <div class="stat-label">Live P&amp;L</div>
-      <div class="stat-value" id="dash-live-pnl">₹0.00</div>
+      <div class="stat-value" id="dash-live-pnl">$0.00</div>
       <div style="font-size:10px;color:var(--muted);margin-top:6px;" id="dash-live">Idle</div>
     </div>
     <div class="stat-box">
@@ -2651,12 +2651,12 @@
   <div class="stats-grid" style="margin-bottom:20px;">
     <div class="stat-box">
       <div class="stat-label">Available Balance</div>
-      <div class="stat-value" id="pf-balance" style="color:var(--accent);">₹0.00</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;">USDT Wallet (in ₹)</div>
+      <div class="stat-value" id="pf-balance" style="color:var(--accent);">$0.00</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">USDT Wallet Balance</div>
     </div>
     <div class="stat-box">
       <div class="stat-label">Unrealized P&L</div>
-      <div class="stat-value" id="pf-unrealized">₹0.00</div>
+      <div class="stat-value" id="pf-unrealized">$0.00</div>
       <div style="font-size:11px;color:var(--muted);margin-top:6px;">Open Positions</div>
     </div>
     <div class="stat-box">
@@ -2722,7 +2722,7 @@
     <div class="stats-grid" id="pf-paper-stats">
       <div class="stat-box"><div class="stat-label">Status</div><div class="stat-value" id="pf-paper-status" style="font-size:16px;">Idle</div></div>
       <div class="stat-box"><div class="stat-label">Symbol</div><div class="stat-value" id="pf-paper-symbol" style="font-size:16px;">--</div></div>
-      <div class="stat-box"><div class="stat-label">Paper P&L</div><div class="stat-value" id="pf-paper-pnl">₹0.00</div></div>
+      <div class="stat-box"><div class="stat-label">Paper P&L</div><div class="stat-value" id="pf-paper-pnl">$0.00</div></div>
       <div class="stat-box"><div class="stat-label">Trades</div><div class="stat-value" id="pf-paper-trades">0</div></div>
     </div>
   </div>
@@ -2733,7 +2733,7 @@
     <div class="stats-grid" id="pf-live-stats">
       <div class="stat-box"><div class="stat-label">Status</div><div class="stat-value" id="pf-live-status" style="font-size:16px;">Idle</div></div>
       <div class="stat-box"><div class="stat-label">Symbol</div><div class="stat-value" id="pf-live-symbol" style="font-size:16px;">--</div></div>
-      <div class="stat-box"><div class="stat-label">Live P&L</div><div class="stat-value" id="pf-live-pnl">₹0.00</div></div>
+      <div class="stat-box"><div class="stat-label">Live P&L</div><div class="stat-value" id="pf-live-pnl">$0.00</div></div>
       <div class="stat-box"><div class="stat-label">Trades</div><div class="stat-value" id="pf-live-trades">0</div></div>
     </div>
   </div>
@@ -2786,7 +2786,7 @@
     <div style="flex:1;min-width:120px;font-size:12px;color:var(--muted);" id="cf-scalp-open-count">0 open trades</div>
     <div style="display:flex;align-items:center;gap:10px;">
       <span style="font-size:12px;color:var(--muted);">Session P&L:</span>
-      <span style="font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;" id="cf-scalp-session-pnl">₹0.00</span>
+      <span style="font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;" id="cf-scalp-session-pnl">$0.00</span>
     </div>
     <button class="btn btn-danger btn-sm" onclick="emergencyStop()">⛔ Master Kill</button>
     <button class="btn btn-outline btn-sm" onclick="cfLoadScalpStatus()">↻ Refresh</button>
@@ -3984,84 +3984,51 @@ async function loadDashboard() {
   } catch(e) { console.error('Dashboard error:', e); }
 }
 
-// ── INR Currency Conversion ─────────────────────────────────
-// Backend always works in USDT. We convert to INR for display only.
-const INR_FALLBACK_RATE = 84.5; // 1 USD ≈ ₹84.5 (static fallback)
-let _inrRate = INR_FALLBACK_RATE;
-
-(async function _fetchINRRate() {
-  try {
-    // Primary: exchangerate-api (free, no key needed for this endpoint)
-    const r = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-    if (r.ok) {
-      const d = await r.json();
-      if (d.rates && d.rates.INR && d.rates.INR > 50) {
-        _inrRate = d.rates.INR;
-        console.log('[CryptoForge] USD→INR rate loaded:', _inrRate.toFixed(2));
-        // Update the rate badge if visible
-        const badge = document.getElementById('inr-rate-badge');
-        if (badge) badge.textContent = '₹' + _inrRate.toFixed(1) + '/USD';
-      }
-    }
-  } catch (e) {
-    console.warn('[CryptoForge] INR rate fetch failed, using fallback ₹' + INR_FALLBACK_RATE);
-  }
-  // Refresh every 15 minutes
-  setTimeout(_fetchINRRate, 15 * 60 * 1000);
-})();
-
-/** Convert a USD amount to INR (live rate, fallback if not loaded yet) */
-function usdToINR(usd) {
-  return (usd || 0) * _inrRate;
-}
+// ── USD Currency Formatting ─────────────────────────────────
+// All values are in USDT. Display in $ directly — no conversion needed.
 
 /**
- * Format a USD P&L / monetary value as Indian Rupees.
- * e.g. fmtINR(1234.56) → "₹1,04,371.44"
+ * Format a USD P&L / monetary value.
+ * e.g. fmtINR(1234.56) → "$1,234.56"
+ * Function names kept as fmtINR/fmtINRPrice/fmtINRLarge for backward compat.
  */
 function fmtINR(usd, decimals) {
-  if (usd === null || usd === undefined || isNaN(usd)) return '₹0.00';
-  const inr = usdToINR(usd);
+  if (usd === null || usd === undefined || isNaN(usd)) return '$0.00';
   const d = (decimals !== undefined) ? decimals : 2;
-  const absStr = Math.abs(inr).toFixed(d);
-  const [intPart, decPart] = absStr.split('.');
-  // Indian grouping: last 3 digits, then groups of 2
-  const lastThree = intPart.slice(-3);
-  const rest = intPart.slice(0, -3);
-  const formatted = rest.length
-    ? rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + lastThree
-    : lastThree;
-  return (inr < 0 ? '-' : '') + '₹' + formatted + (decPart ? '.' + decPart : '');
+  const val = parseFloat(usd);
+  return (val < 0 ? '-$' : '$') + Math.abs(val).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
 /**
- * Format large USD numbers (market cap, volume) in INR with Indian suffixes.
- * e.g. fmtINRLarge(1e9) → "₹84,500 Cr"
+ * Format large USD numbers (market cap, volume) with standard suffixes.
+ * e.g. fmtINRLarge(1e9) → "$1.00B"
  */
 function fmtINRLarge(usd) {
-  if (!usd || isNaN(usd)) return '₹0';
-  const inr = usdToINR(usd);
-  if (inr >= 1e13) return '₹' + (inr / 1e12).toFixed(2) + ' L Cr';  // lakh crore
-  if (inr >= 1e7)  return '₹' + (inr / 1e7).toFixed(2)  + ' Cr';    // crore
-  if (inr >= 1e5)  return '₹' + (inr / 1e5).toFixed(2)  + ' L';     // lakh
-  if (inr >= 1e3)  return '₹' + (inr / 1e3).toFixed(1)  + ' K';
-  return '₹' + inr.toFixed(0);
+  if (!usd || isNaN(usd)) return '$0';
+  const abs = Math.abs(usd);
+  const sign = usd < 0 ? '-' : '';
+  if (abs >= 1e12) return sign + '$' + (abs / 1e12).toFixed(2) + 'T';
+  if (abs >= 1e9)  return sign + '$' + (abs / 1e9).toFixed(2)  + 'B';
+  if (abs >= 1e6)  return sign + '$' + (abs / 1e6).toFixed(2)  + 'M';
+  if (abs >= 1e3)  return sign + '$' + (abs / 1e3).toFixed(1)  + 'K';
+  return sign + '$' + abs.toFixed(0);
 }
 
 /**
- * Format a USD asset price as INR (handles BTC ~₹84 L, altcoins, micro-caps).
- * e.g. fmtINRPrice(85000) → "₹71,82,500"
+ * Format a USD asset price (handles BTC ~$85K, altcoins, micro-caps).
+ * e.g. fmtINRPrice(85000) → "$85,000"
  */
 function fmtINRPrice(usdPrice) {
-  if (!usdPrice || isNaN(usdPrice)) return '₹0';
-  const inr = usdToINR(usdPrice);
-  if (inr >= 1000) return '₹' + inr.toLocaleString('en-IN', { maximumFractionDigits: 0 });
-  if (inr >= 1)    return '₹' + inr.toFixed(2);
-  if (inr >= 0.01) return '₹' + inr.toFixed(4);
-  return '₹' + inr.toFixed(6);
+  if (!usdPrice || isNaN(usdPrice)) return '$0';
+  const p = parseFloat(usdPrice);
+  if (p >= 1000) return '$' + p.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (p >= 1)    return '$' + p.toFixed(2);
+  if (p >= 0.01) return '$' + p.toFixed(4);
+  return '$' + p.toFixed(6);
 }
 
-// Legacy aliases kept so any remaining call sites don't break
+// Kept for backward compat — same as above
+function usdToINR(usd) { return usd || 0; }
 function fmtNum(n)   { return fmtINRLarge(n); }
 function fmtPrice(p) { return fmtINRPrice(p); }
 
@@ -4348,7 +4315,7 @@ function _renderResultsHead() {
   if (_resultsUsesTradeView()) {
     head.innerHTML = '<tr>'
       + '<th>Run</th><th>Trade</th><th>Entry At</th><th>Exit At</th><th>Side</th>'
-      + '<th class="num">Entry ₹</th><th class="num">Exit ₹</th><th class="num">P&amp;L</th><th>Reason</th><th>Action</th>'
+      + '<th class="num">Entry $</th><th class="num">Exit $</th><th class="num">P&amp;L</th><th>Reason</th><th>Action</th>'
       + '</tr>';
     return;
   }
@@ -4962,8 +4929,8 @@ function sortGenericTable(tablePrefix, colIdx) {
   rows.sort(function(a, b) {
     var cellA = a.cells[colIdx], cellB = b.cells[colIdx];
     if (!cellA || !cellB) return 0;
-    var va = cellA.textContent.replace(/[₹,%x]/g, '').replace(/,/g, '').trim();
-    var vb = cellB.textContent.replace(/[₹,%x]/g, '').replace(/,/g, '').trim();
+    var va = cellA.textContent.replace(/[$₹,%x]/g, '').replace(/,/g, '').trim();
+    var vb = cellB.textContent.replace(/[$₹,%x]/g, '').replace(/,/g, '').trim();
     var na = parseFloat(va), nb = parseFloat(vb);
     if (!isNaN(na) && !isNaN(nb)) return asc ? na - nb : nb - na;
     return asc ? va.localeCompare(vb) : vb.localeCompare(va);
@@ -6364,17 +6331,17 @@ function _exportLiveTradeSelection(runId) {
     'Side',
     'Entry Time',
     'Exit Time',
-    'Entry USD',
-    'Entry INR',
-    'Exit USD',
-    'Exit INR',
-    'PnL USD',
-    'PnL INR',
+    'Entry $',
+    'Entry $ Fmt',
+    'Exit $',
+    'Exit $ Fmt',
+    'PnL $',
+    'PnL $ Fmt',
     'Reason',
     'Leverage',
     'Size',
-    'Notional USD',
-    'Notional INR',
+    'Notional $',
+    'Notional $ Fmt',
   ].join(',')];
 
   picked.forEach(function(t) {
@@ -6591,7 +6558,7 @@ function renderLivePanel(d, idx) {
     allRows.forEach(function(pair) {
       var k = pair[0], v = pair[1];
       var isInd = !['current','open','high','low','close','volume'].includes(k);
-      var valStr = typeof v === 'number' ? (v > 100 ? v.toLocaleString('en-IN', {maximumFractionDigits:2}) : v.toFixed(4)) : (v != null ? v : '—');
+      var valStr = typeof v === 'number' ? (v > 100 ? v.toLocaleString('en-US', {maximumFractionDigits:2}) : v.toFixed(4)) : (v != null ? v : '—');
       html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
       html += '<td style="padding:7px 16px;color:' + (isInd ? 'var(--text)' : 'var(--muted)') + ';font-weight:' + (isInd ? '600' : '400') + ';">' + k + '</td>';
       html += '<td style="padding:7px 16px;text-align:right;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:' + (isInd ? 'var(--accent2)' : 'var(--text)') + ';">' + valStr + '</td>';
@@ -6608,7 +6575,7 @@ function renderLivePanel(d, idx) {
   html += '<h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📈 Open Positions</h4>';
   html += '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;overflow:hidden;margin-bottom:12px;">';
   html += '<table class="trade-table live-monitor-table" id="live-open-table-' + panelKey + '" style="width:100%;font-size:12px;">';
-  html += '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.06);color:var(--muted);"><th style="padding:7px 10px;text-align:left;">Symbol</th><th style="text-align:right;padding:7px 10px;">Side</th><th style="text-align:right;padding:7px 10px;">Entry ₹</th><th style="text-align:right;padding:7px 10px;">Notional</th></tr></thead>';
+  html += '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.06);color:var(--muted);"><th style="padding:7px 10px;text-align:left;">Symbol</th><th style="text-align:right;padding:7px 10px;">Side</th><th style="text-align:right;padding:7px 10px;">Entry $</th><th style="text-align:right;padding:7px 10px;">Notional</th></tr></thead>';
   html += '<tbody>';
   if (!openTrades.length) {
     html += '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--muted);font-size:12px;">No open positions</td></tr>';
@@ -6694,7 +6661,7 @@ function renderLivePanel(d, idx) {
   html += '<table class="trade-table live-monitor-table" id="live-completed-table-' + panelKey + '" style="width:100%;font-size:12px;min-width:1080px;">';
   html += '<thead><tr style="position:sticky;top:0;background:rgba(10,14,24,0.96);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,0.08);color:var(--muted);z-index:1;">';
   html += '<th style="padding:8px 10px;text-align:center;width:36px;"><input type="checkbox" class="tbl-chk" onchange="_toggleAllLiveTradeChecks(\'' + safeRunId + '\', this.checked)"' + (visibleAllSelected ? ' checked' : '') + '></th>';
-  html += '<th style="padding:8px 10px;text-align:left;">Trade</th><th style="padding:8px 10px;text-align:left;">Entry At</th><th style="padding:8px 10px;text-align:left;">Exit At</th><th style="padding:8px 10px;text-align:left;">Side</th><th style="padding:8px 10px;text-align:right;">Entry ₹</th><th style="padding:8px 10px;text-align:right;">Exit ₹</th><th style="padding:8px 10px;text-align:right;">P&amp;L</th><th style="padding:8px 10px;text-align:left;">Reason</th>';
+  html += '<th style="padding:8px 10px;text-align:left;">Trade</th><th style="padding:8px 10px;text-align:left;">Entry At</th><th style="padding:8px 10px;text-align:left;">Exit At</th><th style="padding:8px 10px;text-align:left;">Side</th><th style="padding:8px 10px;text-align:right;">Entry $</th><th style="padding:8px 10px;text-align:right;">Exit $</th><th style="padding:8px 10px;text-align:right;">P&amp;L</th><th style="padding:8px 10px;text-align:left;">Reason</th>';
   html += '</tr></thead><tbody>';
   if (!closedTrades.length) {
     html += '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted);">No completed trades yet</td></tr>';
@@ -6719,9 +6686,9 @@ function renderLivePanel(d, idx) {
       html += '<td style="padding:7px 10px;"><div class="table-datetime"><div class="table-datetime-date">' + entryParts.date + '</div><div class="table-datetime-time">' + entryParts.time + '</div></div></td>';
       html += '<td style="padding:7px 10px;"><div class="table-datetime"><div class="table-datetime-date">' + exitParts.date + '</div><div class="table-datetime-time">' + exitParts.time + '</div></div></td>';
       html += '<td style="padding:7px 10px;"><span class="tag ' + ((t.side || '').toUpperCase() === 'LONG' ? 'tag-green' : 'tag-red') + '">' + (t.side || '—') + '</span></td>';
-      html += '<td style="padding:7px 10px;text-align:right;"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(entryPrice) + '</div><div class="table-value-sub">' + _fmtUsd(entryPrice) + '</div></div></td>';
-      html += '<td style="padding:7px 10px;text-align:right;"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(exitPrice) + '</div><div class="table-value-sub">' + _fmtUsd(exitPrice) + '</div></div></td>';
-      html += '<td style="padding:7px 10px;text-align:right;"><div class="table-value-stack"><div class="table-value-main ' + (tpnl >= 0 ? 'positive' : 'negative') + '">' + fmtINR(tpnl) + '</div><div class="table-value-sub ' + (tpnl >= 0 ? 'positive' : 'negative') + '">' + _fmtUsd(tpnl) + '</div></div></td>';
+      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINRPrice(entryPrice) + '</td>';
+      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINRPrice(exitPrice) + '</td>';
+      html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;font-weight:700;color:' + (tpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtINR(tpnl) + '</td>';
       html += '<td style="padding:7px 10px;">' + reasonTag(t.exit_reason || '—') + '</td>';
       html += '</tr>';
     });
@@ -7336,8 +7303,8 @@ document.addEventListener('keydown', function(e) {
               <th class="sortable-th" data-col="entry_time" onclick="sortTrades('entry_time')">Entry Time <span class="sort-icon" id="sort-entry_time">▲</span></th>
               <th class="sortable-th" data-col="exit_time" onclick="sortTrades('exit_time')">Exit Time <span class="sort-icon" id="sort-exit_time">▲</span></th>
               <th class="sortable-th" data-col="side" onclick="sortTrades('side')">Side <span class="sort-icon" id="sort-side">▲</span></th>
-              <th class="sortable-th" data-col="entry_price" onclick="sortTrades('entry_price')">Entry ₹ <span class="sort-icon" id="sort-entry_price">▲</span></th>
-              <th class="sortable-th" data-col="exit_price" onclick="sortTrades('exit_price')">Exit ₹ <span class="sort-icon" id="sort-exit_price">▲</span></th>
+              <th class="sortable-th" data-col="entry_price" onclick="sortTrades('entry_price')">Entry $ <span class="sort-icon" id="sort-entry_price">▲</span></th>
+              <th class="sortable-th" data-col="exit_price" onclick="sortTrades('exit_price')">Exit $ <span class="sort-icon" id="sort-exit_price">▲</span></th>
               <th class="sortable-th" data-col="pnl" onclick="sortTrades('pnl')">P&amp;L <span class="sort-icon" id="sort-pnl">▲</span></th>
               <th class="sortable-th" data-col="exit_reason" onclick="sortTrades('exit_reason')">Reason <span class="sort-icon" id="sort-exit_reason">▲</span></th>
             </tr></thead>
