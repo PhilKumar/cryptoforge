@@ -214,6 +214,8 @@ class DeltaWSFeed:
                         pass
 
                 # Exponential backoff
+                if not self._running:
+                    break
                 self._reconnect_attempt += 1
                 delay = min(
                     RECONNECT_BASE * (RECONNECT_MULTIPLIER ** (self._reconnect_attempt - 1)),
@@ -466,13 +468,33 @@ class DeltaWSFeed:
 
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
         if self._reader_task:
             self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+        if self._connect_task and not self._connect_task.done():
+            self._connect_task.cancel()
+            try:
+                await self._connect_task
+            except asyncio.CancelledError:
+                pass
 
         if self._ws and not self._ws.closed:
             await self._ws.close()
         if self._session and not self._session.closed:
             await self._session.close()
+
+        self._heartbeat_task = None
+        self._reader_task = None
+        self._connect_task = None
+        self._ws = None
+        self._session = None
 
         print("[WS] Disconnected")
 
