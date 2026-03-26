@@ -28,6 +28,13 @@ def _now_ist() -> datetime:
     return datetime.now(IST)
 
 
+def _coerce_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _interval_duration(interval: str) -> timedelta:
     raw = str(interval or "5m").strip().lower()
     try:
@@ -114,6 +121,7 @@ class PaperTradingEngine:
         self.open_trades = []
         self.closed_trades = []
         self.total_pnl = 0.0
+        self.capital = 0.0
         self.trades_today = 0
         self.daily_pnl = 0.0
         self.max_daily_loss = 0.0
@@ -148,6 +156,7 @@ class PaperTradingEngine:
                 "trades_today": self.trades_today,
                 "daily_pnl": self.daily_pnl,
                 "total_pnl": self.total_pnl,
+                "capital": self.capital,
                 "current_candle": self.current_candle,
                 "current_indicators": {
                     k: (v if not isinstance(v, float) or not math.isnan(v) else None)
@@ -191,6 +200,7 @@ class PaperTradingEngine:
             self.trades_today = state.get("trades_today", 0)
             self.daily_pnl = state.get("daily_pnl", 0.0)
             self.total_pnl = state.get("total_pnl", 0.0)
+            self.capital = state.get("capital", 0.0)
             self.current_candle = state.get("current_candle", {})
             self.current_indicators = state.get("current_indicators", {})
 
@@ -280,7 +290,13 @@ class PaperTradingEngine:
         sl_pct = float(self.strategy.get("stoploss_pct", 5))
         tp_pct = float(self.strategy.get("target_profit_pct", 10))
         trailing_sl_pct = float(self.strategy.get("trailing_sl_pct", 0))
-        capital = float(self.strategy.get("initial_capital", config.DEFAULT_CAPITAL))
+        fee_pct = float(self.strategy.get("fee_pct", 0) or 0)
+        compounding = bool(self.strategy.get("compounding", False))
+        position_size_mode = str(self.strategy.get("position_size_mode", "pct") or "pct")
+        fixed_qty = float(self.strategy.get("fixed_qty", 0) or 0)
+        initial_capital = float(self.strategy.get("initial_capital", config.DEFAULT_CAPITAL))
+        capital = self.capital if self.capital > 0 else initial_capital
+        self.capital = capital
         position_size_pct = float(self.strategy.get("position_size_pct", 100))
         candle_interval = self.strategy.get("candle_interval", "5m")
 
@@ -289,6 +305,15 @@ class PaperTradingEngine:
         if trailing_sl_pct > 0:
             self.log_event("info", f"Trailing SL: {trailing_sl_pct}% from best price")
         self.log_event("info", f"Max trades/day: {max_tpd} | Capital: ${capital:,.0f}")
+        self.log_event(
+            "info",
+            (
+                f"Sizing: fixed qty {fixed_qty:g}"
+                if position_size_mode == "fixed_qty" and fixed_qty > 0
+                else f"Sizing: {position_size_pct}% of capital"
+            )
+            + f" | Fee: {fee_pct}% per side | Compounding: {'ON' if compounding else 'OFF'}",
+        )
         if self.max_daily_loss > 0:
             self.log_event("info", f"Max daily loss: ${self.max_daily_loss:,.0f}")
 
@@ -359,18 +384,26 @@ class PaperTradingEngine:
                         if signal_row is not None and eval_condition_group(
                             signal_row, self.entry_conditions, signal_prev
                         ):
-                            margin = capital * (position_size_pct / 100)
-                            notional = margin * leverage
+                            if position_size_mode == "fixed_qty" and fixed_qty > 0:
+                                notional = max(fixed_qty * price, 1.0)
+                            else:
+                                sizing_base = capital if compounding else initial_capital
+                                margin = sizing_base * (position_size_pct / 100)
+                                notional = max(margin * leverage, 1.0)
+                            size = max(1, int(round(notional)))
+                            notional = float(size)
+                            margin = round(notional / max(leverage, 1), 2)
                             trade = {
                                 "id": len(self.closed_trades) + len(self.open_trades) + 1,
                                 "symbol": symbol,
                                 "side": trade_side,
                                 "entry_price": price,
                                 "entry_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                                "size": size,
                                 "notional": round(notional, 2),
                                 "leverage": leverage,
-                                "margin": round(margin, 2),
-                                "best_price": price,  # for trailing SL
+                                "margin": margin,
+                                "best_pnl_pct": 0.0,
                             }
                             self.open_trades.append(trade)
                             self.in_trade = True
@@ -394,27 +427,23 @@ class PaperTradingEngine:
                             pnl_pct = (ep - check_price) / ep * 100
 
                         lev_pnl_pct = pnl_pct * leverage
-                        trade_pnl = trade["notional"] * (pnl_pct / 100)
+                        trade_notional = _coerce_float(trade.get("notional"), 0.0)
+                        if trade_notional <= 0:
+                            trade_notional = float(max(1, int(round(_coerce_float(trade.get("size"), 1.0)))))
+                        gross_trade_pnl = trade_notional * (pnl_pct / 100)
                         exit_reason = None
 
-                        # Trailing SL: track best price and trail from there
+                        # Trailing SL matches backtest logic: once price move exceeds the trail,
+                        # exit only after price gives back the same amount from the best move.
                         if trailing_sl_pct > 0:
-                            best = trade.get("best_price", ep)
-                            if trade_side == "LONG":
-                                best = max(best, check_price)
-                                trail_trigger = best * (1 - trailing_sl_pct / 100)
-                                if check_price <= trail_trigger and pnl_pct > 0:
-                                    exit_reason = f"Trailing SL ({trailing_sl_pct}%)"
-                            else:
-                                best = min(best, check_price)
-                                trail_trigger = best * (1 + trailing_sl_pct / 100)
-                                if check_price >= trail_trigger and pnl_pct > 0:
-                                    exit_reason = f"Trailing SL ({trailing_sl_pct}%)"
-                            trade["best_price"] = best
+                            peak_pnl_pct = max(_coerce_float(trade.get("best_pnl_pct"), 0.0), pnl_pct)
+                            trade["best_pnl_pct"] = peak_pnl_pct
+                            if peak_pnl_pct >= trailing_sl_pct and pnl_pct <= (peak_pnl_pct - trailing_sl_pct):
+                                exit_reason = f"Trailing SL ({trailing_sl_pct}%)"
 
-                        if not exit_reason and sl_pct > 0 and lev_pnl_pct <= -sl_pct:
+                        if not exit_reason and sl_pct > 0 and pnl_pct <= -sl_pct:
                             exit_reason = "Stop Loss"
-                        elif not exit_reason and tp_pct > 0 and lev_pnl_pct >= tp_pct:
+                        elif not exit_reason and tp_pct > 0 and pnl_pct >= tp_pct:
                             exit_reason = "Take Profit"
                         elif not exit_reason and lev_pnl_pct <= -90:
                             exit_reason = "Liquidation"
@@ -426,15 +455,22 @@ class PaperTradingEngine:
                             exit_reason = "Signal Exit"
 
                         if exit_reason:
+                            entry_fee = trade_notional * (fee_pct / 100)
+                            exit_fee = trade_notional * (1 + pnl_pct / 100) * (fee_pct / 100)
+                            trade_fees = entry_fee + exit_fee
+                            trade_pnl = gross_trade_pnl - trade_fees
                             self.total_pnl += trade_pnl
                             self.daily_pnl += trade_pnl
                             capital += trade_pnl
                             capital = max(capital, 0)
+                            self.capital = capital
 
                             closed = {
                                 **trade,
                                 "exit_price": check_price,
                                 "exit_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                                "gross_pnl": round(gross_trade_pnl, 2),
+                                "fees": round(trade_fees, 2),
                                 "pnl": round(trade_pnl, 2),
                                 "exit_reason": exit_reason,
                             }

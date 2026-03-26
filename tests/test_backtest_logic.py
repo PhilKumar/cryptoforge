@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from importlib import import_module
 
@@ -218,6 +219,96 @@ class IndicatorComputationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["stats"]["total_trades"], 0)
+
+
+class BacktestRoutePersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_backtest_run_persists_roundtrip_fields(self):
+        app_module = _load_app_module()
+
+        idx = pd.date_range("2026-03-20 00:00:00+00:00", periods=8, freq="5min")
+        df = pd.DataFrame(
+            [
+                {"open": 10.0, "high": 12.0, "low": 9.0, "close": 11.0, "volume": 1.0},
+                {"open": 11.0, "high": 13.0, "low": 10.0, "close": 12.0, "volume": 2.0},
+                {"open": 12.0, "high": 14.0, "low": 11.0, "close": 13.0, "volume": 3.0},
+                {"open": 13.0, "high": 15.0, "low": 12.0, "close": 14.0, "volume": 4.0},
+                {"open": 14.0, "high": 16.0, "low": 13.0, "close": 15.0, "volume": 5.0},
+                {"open": 15.0, "high": 17.0, "low": 14.0, "close": 16.0, "volume": 6.0},
+                {"open": 16.0, "high": 18.0, "low": 15.0, "close": 17.0, "volume": 7.0},
+                {"open": 17.0, "high": 19.0, "low": 16.0, "close": 18.0, "volume": 8.0},
+            ],
+            index=idx,
+        )
+
+        original_run_file = app_module.RUNS_FILE
+        original_fetch_data = app_module._fetch_data
+        original_run_backtest = app_module.run_backtest
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                app_module.RUNS_FILE = os.path.join(tmpdir, "runs.json")
+                app_module._fetch_data = lambda **_: df
+
+                def _fake_run_backtest(**kwargs):
+                    return {
+                        "status": "success",
+                        "stats": {"total_trades": 1, "total_pnl": 123.45},
+                        "monthly": [],
+                        "yearly": [],
+                        "day_of_week": [],
+                        "trades": [
+                            {
+                                "entry_time": "2026-03-20 00:10:00",
+                                "exit_time": "2026-03-20 00:15:00",
+                                "entry_price": 12.0,
+                                "exit_price": 13.0,
+                                "pnl": 123.45,
+                            }
+                        ],
+                        "equity": [],
+                    }
+
+                app_module.run_backtest = _fake_run_backtest
+
+                payload = app_module.StrategyPayload(
+                    run_name="Roundtrip",
+                    symbol="BTCUSDT",
+                    from_date="2026-03-20",
+                    to_date="2026-03-20",
+                    initial_capital=25000,
+                    leverage=7,
+                    trade_side="SHORT",
+                    position_size_pct=42,
+                    position_size_mode="fixed_qty",
+                    fixed_qty=0.25,
+                    stoploss_pct=3.5,
+                    target_profit_pct=8.5,
+                    trailing_sl_pct=1.25,
+                    max_trades_per_day=2,
+                    max_daily_loss=9.0,
+                    fee_pct=0.05,
+                    compounding=True,
+                    indicators=["EMA_20_5m"],
+                    entry_conditions=[],
+                    exit_conditions=[],
+                    candle_interval="5m",
+                )
+
+                result = await app_module.api_run_backtest(payload)
+                self.assertEqual(result["status"], "success")
+
+                saved_runs = app_module._load_runs()
+                self.assertEqual(len(saved_runs), 1)
+                saved = saved_runs[0]
+                self.assertEqual(saved["position_size_mode"], "fixed_qty")
+                self.assertEqual(saved["fixed_qty"], 0.25)
+                self.assertEqual(saved["compounding"], True)
+                self.assertEqual(saved["fee_pct"], 0.05)
+                self.assertEqual(saved["max_daily_loss"], 9.0)
+        finally:
+            app_module.RUNS_FILE = original_run_file
+            app_module._fetch_data = original_fetch_data
+            app_module.run_backtest = original_run_backtest
 
 
 if __name__ == "__main__":

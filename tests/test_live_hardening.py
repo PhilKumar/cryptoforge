@@ -10,6 +10,7 @@ import pandas as pd
 from broker.delta import _CircuitBreaker
 from engine.live import LiveEngine
 from engine.live import _select_signal_rows as select_live_signal_rows
+from engine.paper_trading import PaperTradingEngine
 from engine.paper_trading import _select_signal_rows as select_paper_signal_rows
 from engine.scalp import ScalpEngine
 
@@ -217,6 +218,7 @@ class LiveEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(broker.verified_calls[0]["side"], "buy")
         self.assertEqual(engine.open_trades[0]["order_id"], "ord-1")
         self.assertEqual(engine.open_trades[0]["entry_price"], 101.5)
+        self.assertEqual(broker.verified_calls[0]["size"], 1000)
 
     def test_live_signal_rows_ignore_forming_last_candle(self):
         idx = pd.to_datetime(["2026-03-25 12:00:00+00:00", "2026-03-25 12:05:00+00:00"])
@@ -253,6 +255,63 @@ class PaperEngineSignalTests(unittest.TestCase):
         self.assertEqual(float(latest_row["close"]), 101.5)
         self.assertEqual(signal_row.name, idx[0])
         self.assertEqual(signal_prev.name, idx[0])
+
+
+class PaperEngineParityTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    async def test_paper_engine_uses_fixed_qty_and_applies_fees(self):
+        broker = FakeLiveBroker(position={})
+        engine = PaperTradingEngine(broker, run_id="paper-fixed-qty")
+        engine._state_file = os.path.join(self._tmp.name, "paper-fixed-qty.json")
+        engine.configure(
+            strategy={
+                "run_name": "paper-fixed-qty",
+                "symbol": "BTCUSDT",
+                "leverage": 10,
+                "trade_side": "LONG",
+                "indicators": [],
+                "max_trades_per_day": 1,
+                "stoploss_pct": 50,
+                "target_profit_pct": 50,
+                "trailing_sl_pct": 0,
+                "fee_pct": 0.05,
+                "compounding": True,
+                "initial_capital": 100,
+                "position_size_pct": 100,
+                "position_size_mode": "fixed_qty",
+                "fixed_qty": 0.25,
+                "candle_interval": "5m",
+                "poll_interval": 0,
+            },
+            entry_conditions=[{"left": "entry", "operator": "is_above", "right": "x"}],
+            exit_conditions=[{"left": "exit", "operator": "is_above", "right": "x"}],
+        )
+        engine._start_ws_feed = AsyncMock(return_value=None)
+        engine._stop_ws_feed = AsyncMock(return_value=None)
+
+        async def callback(event):
+            if event.get("type") == "entry":
+                engine._ws_price = 105.0
+            elif event.get("type") == "exit":
+                engine.stop()
+
+        with (
+            patch("engine.paper_trading.compute_dynamic_indicators", side_effect=lambda df, indicators: df),
+            patch(
+                "engine.paper_trading.eval_condition_group",
+                side_effect=lambda row, conditions, prev: bool(conditions),
+            ),
+        ):
+            await engine.start(callback=callback)
+
+        self.assertEqual(len(engine.closed_trades), 1)
+        trade = engine.closed_trades[0]
+        self.assertEqual(trade["size"], 25)
+        self.assertGreater(trade["gross_pnl"], trade["pnl"])
+        self.assertGreater(trade["fees"], 0)
 
 
 class HistoryPersistenceTests(unittest.TestCase):

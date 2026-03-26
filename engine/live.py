@@ -315,7 +315,7 @@ class LiveEngine:
         side = "LONG" if signed_size >= 0 else "SHORT"
         position_leverage = int(_coerce_float(position.get("leverage"), leverage) or leverage)
         entry_price = self._extract_order_price(position, 0.0)
-        notional = round(size * entry_price, 2) if size > 0 and entry_price > 0 else 0.0
+        notional = round(size, 2) if size > 0 else 0.0
         margin = _coerce_float(position.get("margin"), 0.0)
         if margin <= 0 and notional > 0:
             margin = round(notional / max(position_leverage, 1), 2)
@@ -406,6 +406,11 @@ class LiveEngine:
         trade_side = self.strategy.get("trade_side", "LONG").upper()
         sl_pct = float(self.strategy.get("stoploss_pct", 5))
         tp_pct = float(self.strategy.get("target_profit_pct", 10))
+        trailing_sl_pct = float(self.strategy.get("trailing_sl_pct", 0))
+        fee_pct = float(self.strategy.get("fee_pct", 0) or 0)
+        compounding = bool(self.strategy.get("compounding", False))
+        position_size_mode = str(self.strategy.get("position_size_mode", "pct") or "pct")
+        fixed_qty = float(self.strategy.get("fixed_qty", 0) or 0)
         initial_capital = float(self.strategy.get("initial_capital", config.DEFAULT_CAPITAL))
         # Restore effective capital from state (persisted across restarts); fall back to initial
         capital = self.capital if self.capital > 0 else initial_capital
@@ -434,7 +439,18 @@ class LiveEngine:
         self.log_event("start", f"LIVE Trading Engine Started — {symbol} {leverage}x {trade_side}")
         self.log_event("info", f"Timeframe: {candle_interval} | SL: {sl_pct}% | TP: {tp_pct}%")
         self.log_event("info", f"Max trades/day: {max_tpd} | Capital: ${capital:,.0f}")
+        self.log_event(
+            "info",
+            (
+                f"Sizing: fixed qty {fixed_qty:g}"
+                if position_size_mode == "fixed_qty" and fixed_qty > 0
+                else f"Sizing: {position_size_pct}% of capital"
+            )
+            + f" | Fee: {fee_pct}% per side | Compounding: {'ON' if compounding else 'OFF'}",
+        )
         self.log_event("warn", "REAL MONEY — Orders will be placed on Delta Exchange")
+        if trailing_sl_pct > 0:
+            self.log_event("info", f"Trailing SL: {trailing_sl_pct}% from peak move")
         if self.max_daily_loss > 0:
             self.log_event("info", f"Max daily loss: ${self.max_daily_loss:,.0f}")
         try:
@@ -514,9 +530,15 @@ class LiveEngine:
                         if signal_row is not None and eval_condition_group(
                             signal_row, self.entry_conditions, signal_prev
                         ):
-                            margin = capital * (position_size_pct / 100)
-                            notional = margin * leverage
-                            size = max(1, int(notional / price))
+                            if position_size_mode == "fixed_qty" and fixed_qty > 0:
+                                target_notional = max(fixed_qty * price, 1.0)
+                            else:
+                                sizing_base = capital if compounding else initial_capital
+                                margin = sizing_base * (position_size_pct / 100)
+                                target_notional = max(margin * leverage, 1.0)
+                            size = max(1, int(round(target_notional)))
+                            notional = float(size)
+                            margin = round(notional / max(leverage, 1), 2)
                             side = "buy" if trade_side == "LONG" else "sell"
 
                             try:
@@ -533,8 +555,8 @@ class LiveEngine:
                                     continue
                                 order_id = result.get("id", "placed")
                                 entry_price = self._extract_order_price(result, price)
-                                notional = round(size * entry_price, 2) if entry_price > 0 else round(notional, 2)
-                                margin = round(notional / max(leverage, 1), 2) if notional > 0 else round(margin, 2)
+                                notional = float(size)
+                                margin = round(notional / max(leverage, 1), 2)
                                 self.log_event(
                                     "order",
                                     f"Order verified: {side} {size} {symbol} (ID: {order_id}, attempt "
@@ -557,6 +579,7 @@ class LiveEngine:
                                 "product_id": product_id,
                                 "order_id": order_id,
                                 "verified_at_attempt": result.get("verified_at_attempt"),
+                                "best_pnl_pct": 0.0,
                                 "_exit_attempts": 0,  # tracks failed exit order attempts
                             }
                             async with self._trades_lock:
@@ -598,18 +621,26 @@ class LiveEngine:
                         lev_pnl_pct = pnl_pct * trade_leverage
                         trade_notional = _coerce_float(trade.get("notional"), 0.0)
                         if trade_notional <= 0:
-                            trade_notional = round(_coerce_float(trade.get("size"), 0.0) * ep, 2)
-                        trade_pnl = trade_notional * (pnl_pct / 100)
+                            trade_notional = float(max(1, int(round(_coerce_float(trade.get("size"), 1.0)))))
+                        gross_trade_pnl = trade_notional * (pnl_pct / 100)
                         exit_reason = None
 
-                        if sl_pct > 0 and lev_pnl_pct <= -sl_pct:
+                        if trailing_sl_pct > 0:
+                            peak_pnl_pct = max(_coerce_float(trade.get("best_pnl_pct"), 0.0), pnl_pct)
+                            trade["best_pnl_pct"] = peak_pnl_pct
+                            if peak_pnl_pct >= trailing_sl_pct and pnl_pct <= (peak_pnl_pct - trailing_sl_pct):
+                                exit_reason = f"Trailing SL ({trailing_sl_pct}%)"
+
+                        if not exit_reason and sl_pct > 0 and pnl_pct <= -sl_pct:
                             exit_reason = "Stop Loss"
-                        elif tp_pct > 0 and lev_pnl_pct >= tp_pct:
+                        elif not exit_reason and tp_pct > 0 and pnl_pct >= tp_pct:
                             exit_reason = "Take Profit"
-                        elif lev_pnl_pct <= config.LIQUIDATION_THRESHOLD:
+                        elif not exit_reason and lev_pnl_pct <= config.LIQUIDATION_THRESHOLD:
                             exit_reason = "Liquidation"
-                        elif signal_row is not None and eval_condition_group(
-                            signal_row, self.exit_conditions, signal_prev
+                        elif (
+                            not exit_reason
+                            and signal_row is not None
+                            and eval_condition_group(signal_row, self.exit_conditions, signal_prev)
                         ):
                             exit_reason = "Signal Exit"
 
@@ -670,7 +701,11 @@ class LiveEngine:
                                 pnl_pct = (actual_exit_price - ep) / ep * 100
                             else:
                                 pnl_pct = (ep - actual_exit_price) / ep * 100
-                            trade_pnl = trade_notional * (pnl_pct / 100)
+                            gross_trade_pnl = trade_notional * (pnl_pct / 100)
+                            entry_fee = trade_notional * (fee_pct / 100)
+                            exit_fee = trade_notional * (1 + pnl_pct / 100) * (fee_pct / 100)
+                            trade_fees = entry_fee + exit_fee
+                            trade_pnl = gross_trade_pnl - trade_fees
                             self.total_pnl += trade_pnl
                             self.daily_pnl += trade_pnl
                             capital += trade_pnl
@@ -681,6 +716,8 @@ class LiveEngine:
                                 **trade,
                                 "exit_price": actual_exit_price,
                                 "exit_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                                "gross_pnl": round(gross_trade_pnl, 2),
+                                "fees": round(trade_fees, 2),
                                 "pnl": round(trade_pnl, 2),
                                 "exit_reason": exit_reason,
                             }

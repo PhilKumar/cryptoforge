@@ -1,6 +1,6 @@
 """
 engine/backtest.py — CryptoForge Backtest Engine
-Perpetual futures backtesting with leverage, funding rates, and liquidation.
+Perpetual futures backtesting with leverage, fee modeling, and liquidation.
 Vectorized condition evaluation for 10-50x speed over row-by-row approach.
 """
 

@@ -1350,6 +1350,10 @@ async def api_run_backtest(payload: StrategyPayload):
 
         if results.get("status") == "success":
             results["strategy_warnings"] = runtime["warnings"]
+            results["model_assumptions"] = [
+                "Funding is not modeled in backtests yet.",
+                "Slippage is not modeled; fills assume next-open or threshold-price execution.",
+            ]
             runs = _load_runs()
             max_id = max([r.get("id", 0) for r in runs], default=0)
             run_entry = {
@@ -1368,9 +1372,15 @@ async def api_run_backtest(payload: StrategyPayload):
                 "candle_interval": payload.candle_interval,
                 "initial_capital": payload.initial_capital,
                 "position_size_pct": payload.position_size_pct,
+                "position_size_mode": payload.position_size_mode,
+                "fixed_qty": payload.fixed_qty,
                 "fee_pct": payload.fee_pct,
+                "compounding": payload.compounding,
                 "trailing_sl_pct": payload.trailing_sl_pct,
                 "max_trades_per_day": payload.max_trades_per_day,
+                "max_daily_loss": payload.max_daily_loss,
+                "strategy_warnings": results.get("strategy_warnings", []),
+                "model_assumptions": results.get("model_assumptions", []),
                 "stats": results["stats"],
                 "monthly": results.get("monthly", []),
                 "yearly": results.get("yearly", []),
@@ -1433,6 +1443,10 @@ async def live_start(payload: StrategyPayload):
         "trailing_sl_pct": payload.trailing_sl_pct,
         "initial_capital": payload.initial_capital,
         "position_size_pct": payload.position_size_pct,
+        "position_size_mode": payload.position_size_mode,
+        "fixed_qty": payload.fixed_qty,
+        "fee_pct": payload.fee_pct,
+        "compounding": payload.compounding,
         "candle_interval": payload.candle_interval,
         "max_daily_loss": payload.max_daily_loss,
         "poll_interval": 30,
@@ -1594,6 +1608,10 @@ async def paper_start(payload: StrategyPayload):
         "trailing_sl_pct": payload.trailing_sl_pct,
         "initial_capital": payload.initial_capital,
         "position_size_pct": payload.position_size_pct,
+        "position_size_mode": payload.position_size_mode,
+        "fixed_qty": payload.fixed_qty,
+        "fee_pct": payload.fee_pct,
+        "compounding": payload.compounding,
         "candle_interval": payload.candle_interval,
         "max_daily_loss": payload.max_daily_loss,
         "poll_interval": 30,
