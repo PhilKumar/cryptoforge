@@ -35,10 +35,27 @@ def _parse_tf_minutes(tf_str: str) -> int:
         return int(s[:-1]) * 60
     if s.endswith("d"):
         return int(s[:-1]) * 1440
+    if s.endswith("w"):
+        return int(s[:-1]) * 10080
     try:
         return int(s)
     except ValueError:
         return 0
+
+
+def _split_indicator_parts(parts: list[str]) -> tuple[list[str], str | None]:
+    """Return numeric/config parts and an optional timeframe suffix token.
+
+    Timeframe suffixes are explicit tokens like 5m, 1h, 1d, 1w.
+    Plain numeric indicator parameters like 14 or 26 must not be mistaken
+    for timeframes.
+    """
+    if len(parts) <= 1:
+        return [], None
+    last = str(parts[-1]).strip().lower()
+    if last.endswith(("m", "h", "d", "w")) and _parse_tf_minutes(last) > 0:
+        return parts[1:-1], parts[-1]
+    return parts[1:], None
 
 
 def _resample_series(series: pd.Series, base_minutes: int, target_minutes: int) -> pd.Series:
@@ -471,14 +488,13 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
         try:
             parts = ind_string.split("_")
             name = parts[0]
+            indicator_parts, tf_suffix = _split_indicator_parts(parts)
 
-            # Detect timeframe suffix (e.g. '5m' in 'RSI_14_5m')
-            tf_suffix = parts[-1] if len(parts) > 1 and parts[-1].endswith("m") else None
             target_minutes = _parse_tf_minutes(tf_suffix) if tf_suffix else base_minutes
             needs_resample = target_minutes > base_minutes > 0
 
             if name == "EMA":
-                period = int(parts[1])
+                period = int(indicator_parts[0])
                 if needs_resample:
                     resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
                     ema_vals = ema(resampled_close, period)
@@ -488,7 +504,7 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                     df[ind_string] = ema(df["close"], period)
 
             elif name == "SMA":
-                period = int(parts[1])
+                period = int(indicator_parts[0])
                 if needs_resample:
                     resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
                     sma_vals = sma(resampled_close, period)
@@ -497,7 +513,7 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                     df[ind_string] = sma(df["close"], period)
 
             elif name == "RSI":
-                period = int(parts[1])
+                period = int(indicator_parts[0])
                 if needs_resample:
                     resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
                     rsi_vals = rsi(resampled_close, period)
@@ -507,10 +523,8 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                     df[ind_string] = rsi(df["close"], period)
 
             elif name == "Supertrend":
-                # Filter numeric parts (skip timeframe suffix)
-                num_parts = [p for p in parts[1:] if not p.endswith("m")]
-                period = int(num_parts[0]) if len(num_parts) > 0 else 10
-                mult = float(num_parts[1]) if len(num_parts) > 1 else 3.0
+                period = int(indicator_parts[0]) if len(indicator_parts) > 0 else 10
+                mult = float(indicator_parts[1]) if len(indicator_parts) > 1 else 3.0
                 if needs_resample:
                     # Resample OHLC to target timeframe for Supertrend
                     ohlc_resamp = (
@@ -530,11 +544,9 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                     df[ind_string] = st_df["supertrend"]
 
             elif name == "MACD":
-                # Filter out trailing timeframe suffix (e.g. '5m')
-                num_parts = [p for p in parts[1:] if not p.endswith("m")]
-                fast = int(num_parts[0]) if len(num_parts) > 0 else 12
-                slow = int(num_parts[1]) if len(num_parts) > 1 else 26
-                sig = int(num_parts[2]) if len(num_parts) > 2 else 9
+                fast = int(indicator_parts[0]) if len(indicator_parts) > 0 else 12
+                slow = int(indicator_parts[1]) if len(indicator_parts) > 1 else 26
+                sig = int(indicator_parts[2]) if len(indicator_parts) > 2 else 9
                 if needs_resample:
                     resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
                     macd_df = macd(resampled_close, fast, slow, sig)
@@ -555,9 +567,8 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                 df["MACD_histogram"] = df[f"{ind_string}__histogram"]
 
             elif name == "BB":
-                num_parts = [p for p in parts[1:] if not p.endswith("m")]
-                period = int(num_parts[0]) if len(num_parts) > 0 else 20
-                std = float(num_parts[1]) if len(num_parts) > 1 else 2.0
+                period = int(indicator_parts[0]) if len(indicator_parts) > 0 else 20
+                std = float(indicator_parts[1]) if len(indicator_parts) > 1 else 2.0
                 if needs_resample:
                     resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
                     bb_df = bollinger_bands(resampled_close, period, std)
@@ -603,8 +614,7 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                     df["VWAP"] = val  # backward-compat on base timeframe
 
             elif name == "ATR":
-                num_parts = [p for p in parts[1:] if not p.endswith("m")]
-                period = int(num_parts[0]) if len(num_parts) > 0 else 14
+                period = int(indicator_parts[0]) if len(indicator_parts) > 0 else 14
                 if needs_resample:
                     ohlc_resamp = (
                         df[["open", "high", "low", "close"]]
@@ -619,8 +629,7 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                     df[ind_string] = atr(df, period)
 
             elif name == "ADX":
-                num_parts = [p for p in parts[1:] if not p.endswith("m")]
-                period = int(num_parts[0]) if len(num_parts) > 0 else 14
+                period = int(indicator_parts[0]) if len(indicator_parts) > 0 else 14
                 if needs_resample:
                     ohlc_resamp = (
                         df[["open", "high", "low", "close"]]
@@ -643,8 +652,7 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                 df[f"{ind_string}_minus"] = df[f"{ind_string}__minus"]
 
             elif name == "StochRSI":
-                num_parts = [p for p in parts[1:] if not p.endswith("m")]
-                period = int(num_parts[0]) if len(num_parts) > 0 else 14
+                period = int(indicator_parts[0]) if len(indicator_parts) > 0 else 14
                 if needs_resample:
                     resampled_close = _resample_series(df["close"], base_minutes, target_minutes)
                     srsi = stochastic_rsi(resampled_close, period)

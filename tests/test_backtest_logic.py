@@ -103,6 +103,50 @@ class StrategyRuntimeTests(unittest.TestCase):
 
 
 class IndicatorComputationTests(unittest.TestCase):
+    def test_resampled_hourly_ema_uses_completed_hour_only(self):
+        idx = pd.date_range("2026-03-25 00:00:00+00:00", periods=24, freq="5min")
+        df = pd.DataFrame(
+            [
+                {
+                    "open": float(i + 1),
+                    "high": float(i + 1.5),
+                    "low": float(i + 0.5),
+                    "close": float(i + 1),
+                    "volume": 1.0,
+                }
+                for i in range(24)
+            ],
+            index=idx,
+        )
+
+        out = compute_dynamic_indicators(df, ["EMA_2_1h"], base_interval="5m")
+        ema_series = out["EMA_2_1h"]
+
+        self.assertTrue(ema_series.iloc[:12].isna().all())
+        self.assertTrue((ema_series.iloc[12:] == 12.0).all())
+
+    def test_macd_hourly_suffix_creates_resampled_columns(self):
+        idx = pd.date_range("2026-03-25 00:00:00+00:00", periods=36, freq="5min")
+        df = pd.DataFrame(
+            [
+                {
+                    "open": float(i + 1),
+                    "high": float(i + 1.5),
+                    "low": float(i + 0.5),
+                    "close": float(i + 1),
+                    "volume": 1.0,
+                }
+                for i in range(36)
+            ],
+            index=idx,
+        )
+
+        out = compute_dynamic_indicators(df, ["MACD_12_26_9_1h"], base_interval="5m")
+
+        self.assertIn("MACD_12_26_9_1h__line", out.columns)
+        self.assertIn("MACD_12_26_9_1h__signal", out.columns)
+        self.assertIn("MACD_12_26_9_1h__histogram", out.columns)
+
     def test_resampled_vwap_uses_completed_higher_timeframe(self):
         idx = pd.date_range("2026-03-25 00:00:00+00:00", periods=6, freq="5min")
         df = pd.DataFrame(
