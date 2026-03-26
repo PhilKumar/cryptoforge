@@ -2809,6 +2809,14 @@
     <button class="btn btn-outline btn-sm" onclick="cfLoadScalpStatus()">↻ Refresh</button>
   </div>
 
+  <div id="cf-scalp-pending-wrap" class="card" style="padding:14px 18px;margin-bottom:16px;display:none;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:#fbbf24;">Pending Guardrails</div>
+      <div id="cf-scalp-pending-count" style="font-size:11px;color:var(--muted);">0 armed</div>
+    </div>
+    <div id="cf-scalp-pending-list" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;"></div>
+  </div>
+
   <!-- Active Positions — full width below status -->
   <div class="card" style="padding:20px;margin-bottom:16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
@@ -7093,6 +7101,38 @@ async function cfLoadScalpStatus() {
     }
     const engDot = document.getElementById('cf-scalp-dot');
     if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+
+    const pendingWrap = document.getElementById('cf-scalp-pending-wrap');
+    const pendingCount = document.getElementById('cf-scalp-pending-count');
+    const pendingList = document.getElementById('cf-scalp-pending-list');
+    if (pendingWrap && pendingList) {
+      if (!pending.length) {
+        pendingWrap.style.display = 'none';
+      } else {
+        pendingWrap.style.display = 'block';
+        if (pendingCount) pendingCount.textContent = pending.length + ' armed';
+        pendingList.innerHTML = pending.map(p => {
+          const sideColor = p.side === 'LONG' ? 'var(--green)' : 'var(--red)';
+          const triggerText = p.side === 'LONG' ? 'Buy when price >=' : 'Sell when price <=';
+          const armedAt = p.created_at ? fmtDt(p.created_at) : '—';
+          const qtyText = '$' + fmtINR(p.qty_usdt || ((p.size || 0) / Math.max(p.leverage || 1, 1)));
+          return `
+            <div style="padding:12px 14px;border:1px solid rgba(251,191,36,0.22);border-radius:12px;background:linear-gradient(180deg,rgba(251,191,36,0.08) 0%, rgba(15,23,42,0.18) 100%);">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+                <div style="font-size:13px;font-weight:700;color:${sideColor};">${_escapeHtml(p.side === 'LONG' ? 'BUY Pending' : 'SELL Pending')}</div>
+                <div style="font-size:11px;color:var(--muted);">${_escapeHtml(String(p.mode || 'paper').toUpperCase())}</div>
+              </div>
+              <div style="font-size:12px;font-weight:600;margin-bottom:6px;">${_escapeHtml(p.symbol || '—')}</div>
+              <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${_escapeHtml(triggerText)} <span style="color:#fbbf24;font-weight:700;">${fmtINRPrice(p.guardrail_price || 0)}</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;color:var(--muted);">
+                <div>Size: <span style="color:var(--text);font-weight:600;">${_escapeHtml(qtyText)}</span></div>
+                <div>Lev: <span style="color:var(--text);font-weight:600;">${_escapeHtml(String(p.leverage || '—'))}x</span></div>
+                <div style="grid-column:span 2;">Armed: <span style="color:var(--text);font-weight:600;">${_escapeHtml(armedAt)}</span></div>
+              </div>
+            </div>`;
+        }).join('');
+      }
+    }
 
     // Session P&L
     const sessionPnlEl = document.getElementById('cf-scalp-session-pnl');
