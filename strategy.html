@@ -2850,7 +2850,7 @@
 
         <div>
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Size (USDT)</label>
-          <input type="number" id="cf-scalp-qty" value="100" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+          <input type="number" id="cf-scalp-qty" value="1000" min="10" step="100" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
         </div>
 
         <div>
@@ -2861,8 +2861,8 @@
             <option value="5">5×</option>
             <option value="10">10×</option>
             <option value="25">25×</option>
-            <option value="50">50×</option>
-            <option value="100" selected>100×</option>
+            <option value="50" selected>50×</option>
+            <option value="100">100×</option>
             <option value="200">200×</option>
           </select>
         </div>
@@ -2873,7 +2873,7 @@
               <option value="usdt">$</option><option value="pct">%</option>
             </select>
           </label>
-          <input type="number" id="cf-scalp-sl" value="10" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+          <input type="number" id="cf-scalp-sl" value="100" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
           <div id="cf-sl-hint" style="margin-top:4px;font-size:10px;color:var(--muted);">Max loss in USDT before auto-exit</div>
         </div>
 
@@ -2883,7 +2883,7 @@
               <option value="usdt">$</option><option value="pct">%</option>
             </select>
           </label>
-          <input type="number" id="cf-scalp-tp" value="10" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
+          <input type="number" id="cf-scalp-tp" value="100" min="10" step="10" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;box-sizing:border-box;">
           <div id="cf-tp-hint" style="margin-top:4px;font-size:10px;color:var(--muted);">Profit target in USDT before auto-exit</div>
         </div>
 
@@ -7029,6 +7029,7 @@ document.addEventListener('DOMContentLoaded', () => {
 var _cfScalpPollTimer = null;
 // Persistent trade cache — never loses trades across polls
 var _cfTradeCache = new Map();
+var _cfScalpEventCache = new Map();
 // Track which open trade IDs we've rendered (for targeted updates)
 var _cfOpenTradeIds = [];
 
@@ -7140,12 +7141,19 @@ async function cfLoadScalpStatus() {
     // Event Log
     const logEl = document.getElementById('cf-scalp-event-log');
     if (logEl) {
-      const events = d.event_log || [];
-      if (!events.length) {
+      const events = [...(d.file_events || []), ...(d.event_log || [])];
+      events.forEach(e => {
+        const key = (e.ts || e.time || '') + '|' + (e.level || e.type || '') + '|' + (e.msg || e.message || '');
+        _cfScalpEventCache.set(key, e);
+      });
+      const allEvents = Array.from(_cfScalpEventCache.values())
+        .sort((a, b) => String(b.ts || b.time || '').localeCompare(String(a.ts || a.time || '')))
+        .slice(0, 200);
+      if (!allEvents.length) {
         logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>';
       } else {
         const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
-        logEl.innerHTML = events.map(e =>
+        logEl.innerHTML = allEvents.map(e =>
           `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">` +
           `<span style="color:var(--muted);margin-right:8px;">${_escapeHtml(e.time || '')}</span>` +
           `<span style="color:${evtColors[e.level || e.type] || 'var(--text-dim)'};">${_escapeHtml(e.msg || e.message || '')}</span>` +
@@ -7239,10 +7247,10 @@ function cfRenderActivePositions(open) {
 
 async function cfSubmitScalp(direction) {
   const symbol = document.getElementById('cf-scalp-symbol').value;
-  const qty = parseFloat(document.getElementById('cf-scalp-qty').value) || 100;
-  const leverage = parseInt(document.getElementById('cf-scalp-leverage').value) || 10;
-  const slVal = parseFloat(document.getElementById('cf-scalp-sl').value) || 5;
-  const tpVal = parseFloat(document.getElementById('cf-scalp-tp').value) || 10;
+  const qty = parseFloat(document.getElementById('cf-scalp-qty').value) || 1000;
+  const leverage = parseInt(document.getElementById('cf-scalp-leverage').value) || 50;
+  const slVal = parseFloat(document.getElementById('cf-scalp-sl').value) || 100;
+  const tpVal = parseFloat(document.getElementById('cf-scalp-tp').value) || 100;
   const guardrailPrice = parseFloat(document.getElementById('cf-scalp-stop-price').value) || 0;
   const slType = document.getElementById('cf-sl-type').value;
   const tpType = document.getElementById('cf-tp-type').value;

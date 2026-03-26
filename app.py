@@ -2644,6 +2644,7 @@ async def export_live_trades_csv(run_id: str = ""):
 # ── Scalp Engine ──────────────────────────────────────────────────
 _scalp_engine: Optional[ScalpEngine] = None
 _SCALP_FILE = os.path.join(_HERE, "scalp_trades.json")
+_SCALP_EVENTS_FILE = os.path.join(_HERE, "scalp_events.json")
 
 
 def _load_scalp_trades():
@@ -2663,6 +2664,34 @@ def _save_scalp_trades(trades):
     os.replace(tmp, _SCALP_FILE)
 
 
+def _load_scalp_events():
+    if os.path.exists(_SCALP_EVENTS_FILE):
+        try:
+            with open(_SCALP_EVENTS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def _save_scalp_events(events):
+    tmp = _SCALP_EVENTS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(events[-300:], f, indent=2, default=str)
+    os.replace(tmp, _SCALP_EVENTS_FILE)
+
+
+def _scalp_persist_event(event: dict) -> None:
+    try:
+        events = _load_scalp_events()
+        key = (event.get("ts"), event.get("level"), event.get("msg"))
+        if not any((e.get("ts"), e.get("level"), e.get("msg")) == key for e in events):
+            events.append(event)
+            _save_scalp_events(events)
+    except Exception as e:
+        _logger.error("[SCALP] Failed to persist event: %s", e)
+
+
 def _scalp_persist_trade(trade: dict) -> None:
     """Persist a single closed scalp trade to disk (auto + manual exits)."""
     try:
@@ -2672,6 +2701,7 @@ def _scalp_persist_trade(trade: dict) -> None:
         if not any((t.get("trade_id"), t.get("entry_time")) == key for t in trades):
             trades.append(trade)
             _save_scalp_trades(trades)
+        _save_scalp_trade_to_history(trade)
     except Exception as e:
         _logger.error("[SCALP] Failed to persist trade: %s", e)
 
@@ -2691,7 +2721,11 @@ def _scalp_persist_trade(trade: dict) -> None:
 def _get_scalp_engine():
     global _scalp_engine
     if _scalp_engine is None:
-        _scalp_engine = ScalpEngine(delta, on_trade_closed=_scalp_persist_trade)
+        _scalp_engine = ScalpEngine(
+            delta,
+            on_trade_closed=_scalp_persist_trade,
+            on_event=_scalp_persist_event,
+        )
     return _scalp_engine
 
 
@@ -2699,7 +2733,8 @@ def _get_scalp_engine():
 async def scalp_status():
     eng = _get_scalp_engine()
     status = eng.get_status()
-    status["file_trades"] = list(reversed(_load_scalp_trades()[-50:]))
+    status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
+    status["file_events"] = list(reversed(_load_scalp_events()[-200:]))
     return status
 
 
@@ -2715,8 +2750,8 @@ async def scalp_enter(request: Request):
     symbol = body.get("symbol", "BTCUSDT")
     raw_side = body.get("side", "BUY").upper()
     side = "LONG" if raw_side == "BUY" else "SHORT"
-    qty_usdt = float(body.get("qty_usdt", 100))
-    leverage = int(body.get("leverage", 10))
+    qty_usdt = float(body.get("qty_usdt", 1000))
+    leverage = int(body.get("leverage", 50))
     mode = body.get("mode", "paper")
 
     # Convert USDT qty to contract size (1 contract = 1 USD on Delta)

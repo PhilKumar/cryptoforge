@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import timedelta
 from importlib import import_module
 from unittest.mock import AsyncMock, patch
 
@@ -57,14 +58,18 @@ class FakeLiveBroker:
 
 
 class FakeScalpDelta:
-    def __init__(self):
+    def __init__(self, ticker_prices=None):
         self.verified_calls = []
+        self.ticker_prices = list(ticker_prices or [100.0])
 
     def get_product_by_symbol(self, symbol):
         return {"id": 77}
 
     def get_ticker(self, symbol):
-        return {"mark_price": 100.0}
+        price = self.ticker_prices[0] if self.ticker_prices else 100.0
+        if len(self.ticker_prices) > 1:
+            price = self.ticker_prices.pop(0)
+        return {"mark_price": price}
 
     def to_delta_symbol(self, symbol):
         if symbol.endswith("USDT"):
@@ -411,6 +416,28 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.open_trades[trade_id].current_price, 103.75)
         self.assertEqual(engine.get_status()["open_trades"][0]["mark_price"], 103.75)
 
+    async def test_scalp_trade_waits_for_fresh_price_before_pnl_exit_checks(self):
+        delta = FakeScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=10000,
+            leverage=50,
+            target_usd=100,
+            sl_usd=100,
+            mode="live",
+        )
+        trade = engine.open_trades[entered["trade_id"]]
+
+        self.assertFalse(trade.can_evaluate_exit(trade.entry_time))
+        trade._post_entry_price_ready = True
+        self.assertFalse(trade.can_evaluate_exit(trade.entry_time + timedelta(seconds=1)))
+        self.assertTrue(trade.can_evaluate_exit(trade.entry_time + timedelta(seconds=3)))
+        self.assertEqual(trade.check_exit(99.0), "sl_usd_hit")
+
 
 class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -474,6 +501,18 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(status["running"])
         self.assertEqual(status["run_id"], "target-live")
         self.assertEqual(status["mode"], "live")
+
+    async def test_scalp_persist_trade_saves_disk_copy_and_results_history(self):
+        trade = HistoryPersistenceTests._sample_trade()
+        with (
+            patch.object(self.app_module, "_load_scalp_trades", return_value=[]),
+            patch.object(self.app_module, "_save_scalp_trades") as save_scalp_trades,
+            patch.object(self.app_module, "_save_scalp_trade_to_history") as save_scalp_history,
+        ):
+            self.app_module._scalp_persist_trade(trade)
+
+        save_scalp_trades.assert_called_once()
+        save_scalp_history.assert_called_once_with(trade)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ Completely isolated from LiveEngine and PaperTradingEngine.
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -70,6 +70,9 @@ class ScalpTrade:
         self.order_id = order_id
         self.entry_time = entry_time or _now_utc()
         self.mode = mode
+        self._exit_guard_until = self.entry_time + timedelta(seconds=2 if mode == "live" else 1)
+        self._prefer_fresh_rest_mark_until = self.entry_time + timedelta(seconds=5 if mode == "live" else 2)
+        self._post_entry_price_ready = False
 
         # Resolve absolute TP/SL from percentage if needed
         self.target_price = target_price
@@ -95,6 +98,14 @@ class ScalpTrade:
         self.exit_order_id: str = ""
         self.pnl: float = 0.0
         self.status: str = "open"
+
+    def should_prefer_fresh_rest_mark(self, now: Optional[datetime] = None) -> bool:
+        now = now or _now_utc()
+        return now < self._prefer_fresh_rest_mark_until
+
+    def can_evaluate_exit(self, now: Optional[datetime] = None) -> bool:
+        now = now or _now_utc()
+        return self._post_entry_price_ready and now >= self._exit_guard_until
 
     # Delta Exchange India: taker 0.05%, 18% GST on fees
     TAKER_FEE_RATE = 0.0005
@@ -180,10 +191,16 @@ class ScalpEngine:
     • Falls back to REST bulk ticker fetch when WS is unavailable.
     """
 
-    def __init__(self, delta_client, on_trade_closed: Optional[Callable[[dict], None]] = None):
+    def __init__(
+        self,
+        delta_client,
+        on_trade_closed: Optional[Callable[[dict], None]] = None,
+        on_event: Optional[Callable[[dict], None]] = None,
+    ):
         self.delta = delta_client
         # Callback invoked with trade dict whenever a trade is closed (for disk persistence).
         self._on_trade_closed = on_trade_closed
+        self._on_event = on_event
         self.open_trades: Dict[int, ScalpTrade] = {}
         self.closed_trades: list = []
         self.event_log: list = []
@@ -464,7 +481,12 @@ class ScalpEngine:
                             trade.entry_price = price
                             self._log("info", f"📌 Trade {tid} entry price set @ ${price:,.4f}")
                         trade.current_price = price
+                        if not trade._post_entry_price_ready:
+                            trade._post_entry_price_ready = True
+                            self._log("info", f"📡 Trade {tid} fresh price synced @ ${price:,.4f}")
 
+                    if not trade.can_evaluate_exit():
+                        continue
                     reason = trade.check_exit(trade.current_price)
                     if reason:
                         await self._close_trade(trade, reason)
@@ -475,15 +497,30 @@ class ScalpEngine:
     async def _fetch_all_prices(self, trades: list) -> dict:
         """Fetch mark prices for all unique symbols.
         Prefer WS prices; use REST bulk ticker only for symbols still missing."""
+        now = _now_utc()
         symbols = list({trade.symbol for _, trade in trades})
+        prefer_fresh_symbols = {trade.symbol for _, trade in trades if trade.should_prefer_fresh_rest_mark(now)}
         result = {}
         missing = []
         for sym in symbols:
+            if sym in prefer_fresh_symbols:
+                missing.append(sym)
+                continue
             price = self._ws_prices.get(self._canonical_symbol(sym), 0.0)
             if price > 0:
                 result[sym] = price
             else:
                 missing.append(sym)
+        if prefer_fresh_symbols:
+            for sym in sorted(prefer_fresh_symbols):
+                try:
+                    ticker = await asyncio.to_thread(self.delta.get_ticker, sym)
+                    p = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+                    if p > 0:
+                        result[sym] = p
+                except Exception:
+                    pass
+            missing = [sym for sym in missing if sym not in result]
         if not missing:
             return result
         try:
@@ -602,10 +639,17 @@ class ScalpEngine:
         )
 
     def _log(self, level: str, msg: str):
+        now = _now_utc()
         entry = {
-            "time": _now_utc().strftime("%H:%M:%S"),
+            "time": now.strftime("%H:%M:%S"),
+            "ts": str(now),
             "level": level,
             "msg": msg,
         }
         self.event_log.append(entry)
+        if self._on_event:
+            try:
+                self._on_event(entry)
+            except Exception:
+                pass
         print(f"[SCALP][{level.upper()}] {msg}")
