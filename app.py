@@ -848,17 +848,30 @@ async def dashboard_summary(request: Request):
         from datetime import date as _date
 
         today_str = str(_date.today())
-        for r in reversed(runs):
-            if r.get("mode") == "paper":
-                created = r.get("created_at", "")
-                if created.startswith(today_str):
-                    paper_pnl_val = r.get("total_pnl", 0)
-                    paper_trades_val = r.get("trade_count", len(r.get("trades", [])))
-                break  # only check most recent paper run
+        today_paper_runs = [
+            r
+            for r in runs
+            if r.get("mode") == "paper" and str(r.get("created_at") or r.get("started_at") or "").startswith(today_str)
+        ]
+        if today_paper_runs:
+            paper_pnl_val = sum(r.get("total_pnl", 0) for r in today_paper_runs)
+            paper_trades_val = sum(r.get("trade_count", len(r.get("trades", []))) for r in today_paper_runs)
 
     if live_statuses:
         live_pnl_val = sum(s.get("total_pnl", 0) for s in live_statuses)
         live_trades_val = sum(s.get("trades_today", 0) for s in live_statuses)
+    else:
+        from datetime import date as _date
+
+        today_str = str(_date.today())
+        today_live_runs = [
+            r
+            for r in runs
+            if r.get("mode") == "live" and str(r.get("created_at") or r.get("started_at") or "").startswith(today_str)
+        ]
+        if today_live_runs:
+            live_pnl_val = sum(r.get("total_pnl", 0) for r in today_live_runs)
+            live_trades_val = sum(r.get("trade_count", len(r.get("trades", []))) for r in today_live_runs)
 
     today_pnl = paper_pnl_val + live_pnl_val
 
@@ -1549,23 +1562,15 @@ async def live_stop(request: Request):
 async def live_status(run_id: str = ""):
     if run_id and run_id in live_engines:
         return live_engines[run_id].get_status()
+    if run_id:
+        stopped = _stopped_engines.get(run_id)
+        if stopped and stopped.get("mode") == "live":
+            return {**stopped, "running": False, "run_id": run_id, "mode": "live"}
+        return _empty_engine_status("live", run_id=run_id)
     for rid, engine in live_engines.items():
         if engine.running:
             return engine.get_status()
-    return {
-        "running": False,
-        "run_id": "",
-        "mode": "live",
-        "open_positions": 0,
-        "closed_trades": 0,
-        "total_pnl": 0,
-        "trades_today": 0,
-        "strategy_name": "",
-        "symbol": "",
-        "open_trades": [],
-        "recent_trades": [],
-        "event_log": [],
-    }
+    return _history_engine_status("live")
 
 
 # ── Paper Trading ─────────────────────────────────────────────────
@@ -1707,18 +1712,11 @@ async def paper_stop(request: Request):
     return {"status": "stopped", "run_id": run_id}
 
 
-@app.get("/api/paper/status")
-async def paper_status(run_id: str = ""):
-    if run_id and run_id in paper_engines:
-        return paper_engines[run_id].get_status()
-    for rid, engine in paper_engines.items():
-        if engine.running:
-            return engine.get_status()
-
-    status = {
+def _empty_engine_status(mode: str, run_id: str = "") -> dict:
+    return {
         "running": False,
-        "run_id": "",
-        "mode": "paper",
+        "run_id": run_id,
+        "mode": mode,
         "open_positions": 0,
         "closed_trades": 0,
         "total_pnl": 0,
@@ -1729,13 +1727,16 @@ async def paper_status(run_id: str = ""):
         "recent_trades": [],
         "event_log": [],
     }
+
+
+def _history_engine_status(mode: str) -> dict:
+    status = _empty_engine_status(mode)
     try:
-        runs = _load_runs()
-        paper_runs = [r for r in runs if r.get("mode") == "paper"]
-        if paper_runs:
-            last = paper_runs[-1]
+        runs = [r for r in _load_runs() if r.get("mode") == mode]
+        if runs:
+            last = runs[-1]
             trades = last.get("trades", [])
-            status["strategy_name"] = last.get("run_name", "Last Paper Run")
+            status["strategy_name"] = last.get("run_name", f"Last {mode.title()} Run")
             status["symbol"] = last.get("symbol", "")
             status["closed_trades"] = len(trades)
             status["trades_today"] = len(trades)
@@ -1745,6 +1746,21 @@ async def paper_status(run_id: str = ""):
     except Exception:
         pass
     return status
+
+
+@app.get("/api/paper/status")
+async def paper_status(run_id: str = ""):
+    if run_id and run_id in paper_engines:
+        return paper_engines[run_id].get_status()
+    if run_id:
+        stopped = _stopped_engines.get(run_id)
+        if stopped and stopped.get("mode") == "paper":
+            return {**stopped, "running": False, "run_id": run_id, "mode": "paper"}
+        return _empty_engine_status("paper", run_id=run_id)
+    for rid, engine in paper_engines.items():
+        if engine.running:
+            return engine.get_status()
+    return _history_engine_status("paper")
 
 
 # ── Orders / Positions ────────────────────────────────────────────

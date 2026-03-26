@@ -412,5 +412,69 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.get_status()["open_trades"][0]["mark_price"], 103.75)
 
 
+class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+
+    async def test_dashboard_summary_aggregates_all_todays_saved_runs(self):
+        fake_runs = [
+            {"id": 1, "mode": "paper", "created_at": "2026-03-24 11:00:00", "total_pnl": 10, "trade_count": 1},
+            {"id": 2, "mode": "paper", "created_at": "2026-03-26 10:00:00", "total_pnl": 25, "trade_count": 2},
+            {"id": 3, "mode": "paper", "started_at": "2026-03-26 14:00:00", "total_pnl": -5, "trade_count": 1},
+            {"id": 4, "mode": "live", "created_at": "2026-03-26 15:00:00", "total_pnl": 12, "trade_count": 3},
+        ]
+        with (
+            patch.object(self.app_module, "_load", return_value=[]),
+            patch.object(self.app_module, "_load_runs", return_value=fake_runs),
+            patch.object(self.app_module, "paper_engines", {}),
+            patch.object(self.app_module, "live_engines", {}),
+        ):
+            summary = await self.app_module.dashboard_summary(None)
+
+        self.assertEqual(summary["paper_pnl"], 20)
+        self.assertEqual(summary["paper_trades"], 3)
+        self.assertEqual(summary["live_pnl"], 12)
+        self.assertEqual(summary["live_trades"], 3)
+        self.assertEqual(summary["today_pnl"], 32)
+
+    async def test_paper_status_with_missing_run_id_uses_stopped_snapshot(self):
+        running_engine = type(
+            "RunningEngine", (), {"running": True, "get_status": lambda self: {"strategy_name": "Other"}}
+        )()
+        with (
+            patch.object(self.app_module, "paper_engines", {"other-run": running_engine}),
+            patch.object(
+                self.app_module,
+                "_stopped_engines",
+                {"target-run": {"strategy_name": "Stopped Paper", "total_pnl": 44, "mode": "paper"}},
+            ),
+        ):
+            status = await self.app_module.paper_status("target-run")
+
+        self.assertEqual(status["strategy_name"], "Stopped Paper")
+        self.assertFalse(status["running"])
+        self.assertEqual(status["run_id"], "target-run")
+        self.assertEqual(status["mode"], "paper")
+
+    async def test_live_status_with_missing_run_id_uses_stopped_snapshot(self):
+        running_engine = type(
+            "RunningEngine", (), {"running": True, "get_status": lambda self: {"strategy_name": "Other"}}
+        )()
+        with (
+            patch.object(self.app_module, "live_engines", {"other-live": running_engine}),
+            patch.object(
+                self.app_module,
+                "_stopped_engines",
+                {"target-live": {"strategy_name": "Stopped Live", "total_pnl": 77, "mode": "live"}},
+            ),
+        ):
+            status = await self.app_module.live_status("target-live")
+
+        self.assertEqual(status["strategy_name"], "Stopped Live")
+        self.assertFalse(status["running"])
+        self.assertEqual(status["run_id"], "target-live")
+        self.assertEqual(status["mode"], "live")
+
+
 if __name__ == "__main__":
     unittest.main()
