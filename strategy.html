@@ -4691,7 +4691,7 @@ async function viewRun(rid) {
           ${row('Execution Mode', t.mode || 'paper')}
           ${row('Profit Lock', t.target_usd ? '$' + t.target_usd : '—')}
           ${row('Risk Cap', t.sl_usd ? '$' + t.sl_usd : '—')}
-          ${t.sl_price ? row('Guardrail Price', fmtINRPrice(t.sl_price)) : ''}
+          ${(t.guardrail_price || t.sl_price) ? row('Guardrail Price', fmtINRPrice(t.guardrail_price || t.sl_price)) : ''}
           <div style="padding:10px 0;border-bottom:1px solid var(--border);grid-column:span 3;">
             <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">P&amp;L</div>
             <div style="font-weight:700;font-size:22px;font-family:'JetBrains Mono',monospace;color:${pnlColor};">${fmtINR(pnl)}</div>
@@ -7078,15 +7078,19 @@ async function cfLoadScalpStatus() {
     if (!r.ok) return;
     const d = await r.json();
     const open = d.open_trades || [];
-    const running = d.running || open.length > 0;
+    const pending = d.pending_entries || [];
+    const running = d.running || open.length > 0 || pending.length > 0;
 
     // Status indicators
     const dot = document.getElementById('cf-scalp-status-dot');
     const label = document.getElementById('cf-scalp-status-label');
     if (dot) dot.style.background = running ? 'var(--green)' : 'var(--muted)';
-    if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : 'Monitoring') : 'Engine Idle';
+    if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : (pending.length ? 'Guardrail Armed' : 'Monitoring')) : 'Engine Idle';
     const openCount = document.getElementById('cf-scalp-open-count');
-    if (openCount) openCount.textContent = open.length + ' open trade' + (open.length !== 1 ? 's' : '');
+    if (openCount) {
+      const openText = open.length + ' open trade' + (open.length !== 1 ? 's' : '');
+      openCount.textContent = pending.length ? (openText + ' • ' + pending.length + ' pending') : openText;
+    }
     const engDot = document.getElementById('cf-scalp-dot');
     if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
 
@@ -7261,7 +7265,7 @@ async function cfSubmitScalp(direction) {
     const payload = { symbol, side: direction, qty_usdt: qty, leverage, mode };
     if (slType === 'pct') { payload.stop_loss_pct = slVal; } else { payload.sl_usd = slVal; }
     if (tpType === 'pct') { payload.take_profit_pct = tpVal; } else { payload.tp_usd = tpVal; }
-    if (guardrailPrice > 0) payload.sl_price = guardrailPrice;
+    if (guardrailPrice > 0) payload.guardrail_price = guardrailPrice;
     const res = await fetch('/api/scalp/enter', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7271,6 +7275,10 @@ async function cfSubmitScalp(direction) {
     if (d.status === 'ok' || d.status === 'entered' || d.trade_id) {
       if (statusEl) { statusEl.textContent = direction + ' entered ✓'; statusEl.style.color = 'var(--green)'; }
       cfToast(`Scalp ${direction} entered on ${symbol}`, 'success');
+      setTimeout(cfLoadScalpStatus, 500);
+    } else if (d.status === 'pending' || d.entry_id) {
+      if (statusEl) { statusEl.textContent = d.message || 'Guardrail armed'; statusEl.style.color = '#fbbf24'; }
+      cfToast(d.message || `Guardrail armed for ${symbol}`, 'info');
       setTimeout(cfLoadScalpStatus, 500);
     } else {
       if (statusEl) { statusEl.textContent = d.message || d.status || 'Error'; statusEl.style.color = 'var(--red)'; }

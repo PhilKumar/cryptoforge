@@ -58,6 +58,7 @@ class ScalpTrade:
         order_id: str = "",
         entry_time: Optional[datetime] = None,
         mode: str = "live",
+        guardrail_price: float = 0.0,
     ):
         self.trade_id = trade_id
         self.symbol = symbol
@@ -70,6 +71,7 @@ class ScalpTrade:
         self.order_id = order_id
         self.entry_time = entry_time or _now_utc()
         self.mode = mode
+        self.guardrail_price = guardrail_price
         self._exit_guard_until = self.entry_time + timedelta(seconds=2 if mode == "live" else 1)
         self._prefer_fresh_rest_mark_until = self.entry_time + timedelta(seconds=5 if mode == "live" else 2)
         self._post_entry_price_ready = False
@@ -167,6 +169,7 @@ class ScalpTrade:
             "target_usd": self.target_usd,
             "sl_usd": self.sl_usd,
             "order_id": self.order_id,
+            "guardrail_price": self.guardrail_price,
             "entry_time": str(self.entry_time),
             "exit_time": str(self.exit_time) if self.exit_time else None,
             "exit_price": self.exit_price,
@@ -180,6 +183,66 @@ class ScalpTrade:
             "mark_price": self.current_price,
             "status": self.status,
             "mode": self.mode,
+        }
+
+
+class PendingScalpEntry:
+    """Represents an armed scalp entry waiting for the guardrail trigger."""
+
+    def __init__(
+        self,
+        entry_id: int,
+        symbol: str,
+        side: str,
+        size: int,
+        leverage: int,
+        guardrail_price: float,
+        target_price: float = 0.0,
+        sl_price: float = 0.0,
+        target_pct: float = 0.0,
+        sl_pct: float = 0.0,
+        target_usd: float = 0.0,
+        sl_usd: float = 0.0,
+        mode: str = "live",
+    ):
+        self.entry_id = entry_id
+        self.symbol = symbol
+        self.side = side
+        self.size = size
+        self.leverage = leverage
+        self.guardrail_price = guardrail_price
+        self.target_price = target_price
+        self.sl_price = sl_price
+        self.target_pct = target_pct
+        self.sl_pct = sl_pct
+        self.target_usd = target_usd
+        self.sl_usd = sl_usd
+        self.mode = mode
+        self.created_at = _now_utc()
+
+    def should_trigger(self, price: float) -> bool:
+        if price <= 0 or self.guardrail_price <= 0:
+            return False
+        if self.side == "LONG":
+            return price >= self.guardrail_price
+        return price <= self.guardrail_price
+
+    def to_dict(self) -> dict:
+        return {
+            "entry_id": self.entry_id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "size": self.size,
+            "leverage": self.leverage,
+            "guardrail_price": self.guardrail_price,
+            "target_price": self.target_price,
+            "sl_price": self.sl_price,
+            "target_usd": self.target_usd,
+            "sl_usd": self.sl_usd,
+            "mode": self.mode,
+            "status": "pending",
+            "created_at": str(self.created_at),
+            "qty_usdt": round(self.size / max(self.leverage, 1), 2),
         }
 
 
@@ -202,6 +265,7 @@ class ScalpEngine:
         self._on_trade_closed = on_trade_closed
         self._on_event = on_event
         self.open_trades: Dict[int, ScalpTrade] = {}
+        self.pending_entries: Dict[int, PendingScalpEntry] = {}
         self.closed_trades: list = []
         self.event_log: list = []
         self._trade_counter: int = int(_now_utc().timestamp() * 1000)
@@ -320,7 +384,98 @@ class ScalpEngine:
         sl_pct: float = 0.0,
         target_usd: float = 0.0,
         sl_usd: float = 0.0,
+        guardrail_price: float = 0.0,
         mode: str = "live",
+    ) -> Dict[str, Any]:
+        """Place immediately, or arm a pending guardrail-triggered entry."""
+
+        market_price = 0.0
+        try:
+            ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
+            market_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+        except Exception:
+            pass
+
+        if guardrail_price > 0:
+            should_enter_now = False
+            if market_price > 0:
+                if side == "LONG":
+                    should_enter_now = market_price >= guardrail_price
+                else:
+                    should_enter_now = market_price <= guardrail_price
+            if not should_enter_now:
+                self._trade_counter += 1
+                pending = PendingScalpEntry(
+                    entry_id=self._trade_counter,
+                    symbol=symbol,
+                    side=side,
+                    size=size,
+                    leverage=leverage,
+                    guardrail_price=guardrail_price,
+                    target_price=target_price,
+                    sl_price=sl_price,
+                    target_pct=target_pct,
+                    sl_pct=sl_pct,
+                    target_usd=target_usd,
+                    sl_usd=sl_usd,
+                    mode=mode,
+                )
+                self.pending_entries[pending.entry_id] = pending
+                trigger_text = ">=" if side == "LONG" else "<="
+                self._log(
+                    "info",
+                    f"🛡 Guardrail armed for {side} {symbol}: waiting for price {trigger_text} ${guardrail_price:,.4f}",
+                )
+                if not self._running:
+                    self.start()
+                else:
+                    try:
+                        asyncio.get_running_loop().create_task(self._ensure_ws_feed({symbol}))
+                    except RuntimeError:
+                        pass
+                return {
+                    "status": "pending",
+                    "entry_id": pending.entry_id,
+                    "message": f"Waiting for guardrail price ${guardrail_price:,.4f}",
+                    "pending_entry": pending.to_dict(),
+                }
+            self._log(
+                "info",
+                f"🛡 Guardrail already satisfied for {side} {symbol} at ${market_price:,.4f} — entering now.",
+            )
+
+        return await self._open_trade(
+            symbol=symbol,
+            side=side,
+            size=size,
+            leverage=leverage,
+            target_price=target_price,
+            sl_price=sl_price,
+            target_pct=target_pct,
+            sl_pct=sl_pct,
+            target_usd=target_usd,
+            sl_usd=sl_usd,
+            mode=mode,
+            guardrail_price=guardrail_price,
+            market_price=market_price,
+        )
+
+    async def _open_trade(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        size: int,
+        leverage: int,
+        target_price: float = 0.0,
+        sl_price: float = 0.0,
+        target_pct: float = 0.0,
+        sl_pct: float = 0.0,
+        target_usd: float = 0.0,
+        sl_usd: float = 0.0,
+        mode: str = "live",
+        guardrail_price: float = 0.0,
+        market_price: float = 0.0,
     ) -> Dict[str, Any]:
         """Place a broker order (or simulate in paper mode) and register the scalp trade."""
 
@@ -334,12 +489,13 @@ class ScalpEngine:
             pass
 
         # Get current mark price
-        entry_price = 0.0
-        try:
-            ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
-            entry_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
-        except Exception:
-            pass
+        entry_price = market_price
+        if entry_price <= 0:
+            try:
+                ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
+                entry_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+            except Exception:
+                pass
 
         order_id = ""
         if mode == "paper":
@@ -380,6 +536,7 @@ class ScalpEngine:
             sl_usd=sl_usd,
             order_id=order_id,
             mode=mode,
+            guardrail_price=guardrail_price,
         )
         self.open_trades[self._trade_counter] = trade
 
@@ -446,6 +603,7 @@ class ScalpEngine:
         return {
             "running": self._running,
             "in_trade": len(self.open_trades) > 0,
+            "pending_entries": [p.to_dict() for p in self.pending_entries.values()],
             "open_trades": [t.to_dict() for t in self.open_trades.values()],
             "closed_trades": list(reversed(self.closed_trades[-50:])),
             "event_log": list(reversed(self.event_log[-100:])),
@@ -465,13 +623,46 @@ class ScalpEngine:
         while self._running:
             try:
                 trades = list(self.open_trades.items())
-                if not trades:
+                pending_entries = list(self.pending_entries.items())
+                if not trades and not pending_entries:
                     if self._ws_feed:
                         await self._stop_ws_feed()
                     await asyncio.sleep(1)
                     continue
 
-                await self._ensure_ws_feed({trade.symbol for _, trade in trades})
+                tracked_symbols = {trade.symbol for _, trade in trades} | {entry.symbol for _, entry in pending_entries}
+                await self._ensure_ws_feed(tracked_symbols)
+
+                for entry_id, pending in pending_entries:
+                    price = await self._get_symbol_price(pending.symbol)
+                    if price <= 0 or not pending.should_trigger(price):
+                        continue
+                    self._log(
+                        "info",
+                        f"🛡 Guardrail triggered for {pending.side} {pending.symbol} @ ${price:,.4f}",
+                    )
+                    self.pending_entries.pop(entry_id, None)
+                    result = await self._open_trade(
+                        symbol=pending.symbol,
+                        side=pending.side,
+                        size=pending.size,
+                        leverage=pending.leverage,
+                        target_price=pending.target_price,
+                        sl_price=pending.sl_price,
+                        target_pct=pending.target_pct,
+                        sl_pct=pending.sl_pct,
+                        target_usd=pending.target_usd,
+                        sl_usd=pending.sl_usd,
+                        mode=pending.mode,
+                        guardrail_price=pending.guardrail_price,
+                        market_price=price,
+                    )
+                    if result.get("status") != "ok":
+                        self._log(
+                            "error",
+                            f"Guardrail entry failed for {pending.symbol}: {result.get('message', 'unknown error')}",
+                        )
+
                 price_map = await self._fetch_all_prices(trades)
 
                 for tid, trade in trades:
@@ -493,6 +684,17 @@ class ScalpEngine:
             except Exception as e:
                 self._log("error", f"Monitor error: {e}")
             await asyncio.sleep(0.5)
+
+    async def _get_symbol_price(self, symbol: str) -> float:
+        canonical = self._canonical_symbol(symbol)
+        ws_price = self._ws_prices.get(canonical, 0.0)
+        if ws_price > 0:
+            return ws_price
+        try:
+            ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
+            return float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+        except Exception:
+            return 0.0
 
     async def _fetch_all_prices(self, trades: list) -> dict:
         """Fetch mark prices for all unique symbols.

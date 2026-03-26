@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import time
@@ -474,6 +475,37 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(trade.can_evaluate_exit(trade.entry_time + timedelta(seconds=1)))
         self.assertTrue(trade.can_evaluate_exit(trade.entry_time + timedelta(seconds=3)))
         self.assertEqual(trade.check_exit(99.0), "sl_usd_hit")
+
+    async def test_scalp_guardrail_arms_pending_entry_until_price_crosses(self):
+        delta = FakeScalpDelta(ticker_prices=[100.0, 100.0, 104.0, 105.5])
+        engine = ScalpEngine(delta)
+        self.addCleanup(engine.stop)
+        engine._ensure_ws_feed = AsyncMock(return_value=None)
+        engine._stop_ws_feed = AsyncMock(return_value=None)
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=10000,
+            leverage=50,
+            target_usd=100,
+            sl_usd=100,
+            guardrail_price=105.0,
+            mode="paper",
+        )
+
+        self.assertEqual(entered["status"], "pending")
+        self.assertEqual(len(engine.pending_entries), 1)
+        self.assertFalse(engine.open_trades)
+
+        engine.start()
+        await asyncio.sleep(1.3)
+
+        self.assertFalse(engine.pending_entries)
+        self.assertEqual(len(engine.open_trades), 1)
+        trade = next(iter(engine.open_trades.values()))
+        self.assertEqual(trade.guardrail_price, 105.0)
+        self.assertGreaterEqual(trade.entry_price, 105.0)
 
 
 class RouteAuditTests(unittest.IsolatedAsyncioTestCase):

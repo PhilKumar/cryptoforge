@@ -2768,6 +2768,7 @@ async def scalp_enter(request: Request):
             target_usd=float(body.get("tp_usd", 0)),
             sl_usd=float(body.get("sl_usd", 0)),
             sl_price=float(body.get("sl_price", 0)),
+            guardrail_price=float(body.get("guardrail_price", body.get("sl_price", 0)) or 0),
             mode=mode,
         )
         if result.get("status") == "error":
@@ -2780,6 +2781,14 @@ async def scalp_enter(request: Request):
             alerter.alert(
                 "Scalp Entry",
                 f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nSize: {size} contracts\nLeverage: {leverage}x\nEntry: ${price:,.2f}",
+                level="info",
+            )
+        elif result.get("status") == "pending":
+            pending = result.get("pending_entry", {})
+            guardrail = pending.get("guardrail_price", 0)
+            alerter.alert(
+                "Scalp Guardrail Armed",
+                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nSize: {size} contracts\nLeverage: {leverage}x\nGuardrail: ${guardrail:,.2f}",
                 level="info",
             )
         return result
