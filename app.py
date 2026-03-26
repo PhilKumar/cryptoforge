@@ -188,6 +188,10 @@ def _save_sessions(sessions: dict):
         with open(tmp, "w") as f:
             f.write(json.dumps(sessions))
         os.replace(tmp, _SESSION_FILE)
+        try:
+            os.chmod(_SESSION_FILE, 0o600)
+        except OSError:
+            pass
     except Exception:
         pass
 
@@ -653,12 +657,16 @@ async def serve_frontend(request: Request):
         login_path = os.path.join(_HERE, "login.html")
         if os.path.exists(login_path):
             with open(login_path, encoding="utf-8") as f:
-                return HTMLResponse(f.read())
+                resp = HTMLResponse(f.read())
+                resp.headers["Cache-Control"] = "no-store"
+                return resp
         return HTMLResponse("<h2>login.html not found</h2>")
     html_path = os.path.join(_HERE, "strategy.html")
     if os.path.exists(html_path):
         with open(html_path, encoding="utf-8") as f:
-            return HTMLResponse(f.read())
+            resp = HTMLResponse(f.read())
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
     return HTMLResponse("<h2>strategy.html not found</h2>")
 
 
@@ -674,7 +682,16 @@ async def auth_login(request: Request):
         token = _create_session()
         resp = JSONResponse({"status": "ok", "message": "Login successful"})
         is_https = request.headers.get("x-forwarded-proto") == "https"
-        resp.set_cookie("cryptoforge_session", token, max_age=86400, httponly=True, samesite="lax", secure=is_https)
+        resp.headers["Cache-Control"] = "no-store"
+        resp.set_cookie(
+            "cryptoforge_session",
+            token,
+            max_age=86400,
+            httponly=True,
+            samesite="lax",
+            secure=is_https,
+            path="/",
+        )
         return resp
     _record_failed_login(ip)
     raise HTTPException(status_code=401, detail="Invalid PIN")
@@ -683,7 +700,9 @@ async def auth_login(request: Request):
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     token = _get_session_token(request)
-    return {"authenticated": _validate_session(token)}
+    resp = JSONResponse({"authenticated": _validate_session(token)})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.post("/api/auth/logout")
@@ -693,7 +712,8 @@ async def auth_logout(request: Request):
     sessions.pop(token, None)
     _save_sessions(sessions)
     resp = JSONResponse({"status": "ok"})
-    resp.delete_cookie("cryptoforge_session")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.delete_cookie("cryptoforge_session", path="/")
     return resp
 
 

@@ -3082,9 +3082,9 @@ function cfModal(title, msg, icon, buttons) {
     msgEl.className = 'cf-modal-msg';
     if (msg instanceof Node) {
       msgEl.appendChild(msg);
-    } else if (typeof msg === 'string' && /<[^>]+>/.test(msg)) {
+    } else if (msg && typeof msg === 'object' && typeof msg.html === 'string') {
       const tpl = document.createElement('template');
-      tpl.innerHTML = msg;
+      tpl.innerHTML = msg.html;
       msgEl.appendChild(tpl.content.cloneNode(true));
     } else {
       msgEl.textContent = msg == null ? '' : String(msg);
@@ -3118,7 +3118,7 @@ function cfModal(title, msg, icon, buttons) {
 async function cfAlert(msg, title, icon, allowHtml) {
   await cfModal(
     title || 'Notice',
-    allowHtml ? msg : _escapeHtml(msg),
+    allowHtml ? { html: String(msg == null ? '' : msg) } : _escapeHtml(msg),
     icon || 'ℹ️',
     [{label:'OK', cls:'btn-primary'}]
   );
@@ -3126,7 +3126,7 @@ async function cfAlert(msg, title, icon, allowHtml) {
 async function cfConfirm(msg, title, icon, allowHtml) {
   var r = await cfModal(
     title || 'Confirm',
-    allowHtml ? msg : _escapeHtml(msg),
+    allowHtml ? { html: String(msg == null ? '' : msg) } : _escapeHtml(msg),
     icon || '⚠️',
     [{label:'Cancel', cls:'btn-outline'}, {label:'Continue', cls:'btn-danger'}]
   );
@@ -3135,7 +3135,7 @@ async function cfConfirm(msg, title, icon, allowHtml) {
 async function cfSuccess(msg, title, allowHtml) {
   await cfModal(
     title || 'Success',
-    allowHtml ? msg : _escapeHtml(msg),
+    allowHtml ? { html: String(msg == null ? '' : msg) } : _escapeHtml(msg),
     '✅',
     [{label:'OK', cls:'btn-success'}]
   );
@@ -4259,12 +4259,12 @@ async function runBacktest() {
             }).join('')
           + '</div>';
       }
-      await cfModal('Backtest Complete', '<div style="font-size:15px;margin-bottom:10px;">'
+      await cfModal('Backtest Complete', { html: '<div style="font-size:15px;margin-bottom:10px;">'
         + '<b>' + (d.stats.total_trades || 0) + '</b> trades executed</div>'
         + '<div style="font-size:22px;font-weight:800;font-family:JetBrains Mono;' + pnlColor + '">' + fmtINR(pnl) + '</div>'
         + '<div style="margin-top:6px;font-size:12px;">Win Rate: ' + (d.stats.win_rate || 0) + '% • Max DD: ' + (d.stats.max_drawdown || 0).toFixed(1) + '% • Sharpe: ' + (parseFloat(d.stats.sharpe_ratio) || 0).toFixed(2) + '</div>'
         + assumptionsHtml
-        + diagHtml,
+        + diagHtml },
         '📊', [{label:'View Results', cls:'btn-primary'}]);
       await loadRuns();
       if (d.run_id) { viewRun(d.run_id); }
