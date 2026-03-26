@@ -2508,7 +2508,6 @@
           <select id="new-indicator-name" onchange="renderIndicatorFields()" style="width:160px;padding:8px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
             <option value="Current_Candle" selected>Current Candle</option>
             <option value="Previous_Day">Previous Day Candle</option>
-            <option value="Signal_Candle">Signal Candle</option>
             <option value="ORB">ORB (Opening Range)</option>
             <option value="EMA">EMA</option>
             <option value="SMA">SMA</option>
@@ -3469,7 +3468,7 @@ function renderIndicatorFields() {
       '<input type="number" id="ind-bb-std" value="2" step="0.1" min="0.1" style="width:70px;' + _indInputStyle + '" title="Std Dev">' + _indTfHtml;
   else if (name === 'ATR' || name === 'ADX' || name === 'StochRSI')
     c.innerHTML = '<input type="number" id="ind-period" value="14" min="1" style="width:70px;' + _indInputStyle + '" title="Period">' + _indTfHtml;
-  else if (name === 'VWAP' || name === 'Current_Candle' || name === 'Signal_Candle')
+  else if (name === 'VWAP' || name === 'Current_Candle')
     c.innerHTML = _indTfHtml;
   else if (name === 'ORB')
     c.innerHTML = '<div style="display:flex;align-items:center;gap:6px"><label style="font-size:11px;color:var(--muted);white-space:nowrap;">Minutes:</label>' +
@@ -3520,8 +3519,6 @@ function addIndicator() {
     id = 'VWAP_' + tf + 'm';
   } else if (name === 'Current_Candle') {
     id = 'Current_Candle_' + tf + 'm';
-  } else if (name === 'Signal_Candle') {
-    id = 'Signal_Candle_' + tf + 'm';
   } else if (name === 'Previous_Day') {
     id = 'Previous_Day';
   } else if (name === 'ORB') {
@@ -3683,17 +3680,6 @@ function getIndicatorOptions() {
     html += '<option value="CPR_is_narrow">CPR \u2014 Is Narrow (true/false)</option>';
     html += '<option value="CPR_is_moderate">CPR \u2014 Is Moderate (true/false)</option>';
     html += '<option value="CPR_is_wide">CPR \u2014 Is Wide (true/false)</option>';
-    html += '</optgroup>';
-  }
-
-  // ── Signal Candle ──
-  var sigInds = indicators.filter(function(i) { return i.startsWith('Signal_Candle'); });
-  if (sigInds.length) {
-    html += '<optgroup label="── Signal Candle ──">';
-    html += '<option value="Signal_Candle_Open">Signal Candle \u2014 Open</option>';
-    html += '<option value="Signal_Candle_High">Signal Candle \u2014 High</option>';
-    html += '<option value="Signal_Candle_Low">Signal Candle \u2014 Low</option>';
-    html += '<option value="Signal_Candle_Close">Signal Candle \u2014 Close</option>';
     html += '</optgroup>';
   }
 
@@ -4182,7 +4168,7 @@ async function runBacktest() {
     countdownEl.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:60px 20px;">'
       + '<div style="font-size:48px;margin-bottom:16px;">⏳</div>'
       + '<div style="font-size:20px;font-weight:700;margin-bottom:8px;">Running Backtest...</div>'
-      + '<div style="font-size:14px;color:var(--muted);margin-bottom:20px;">' + payload.run_name + ' • ' + payload.symbol + ' • ' + payload.candle_interval + '</div>'
+      + '<div style="font-size:14px;color:var(--muted);margin-bottom:20px;">' + _escapeHtml(payload.run_name) + ' • ' + _escapeHtml(payload.symbol) + ' • ' + _escapeHtml(payload.candle_interval) + '</div>'
       + '<div style="font-size:42px;font-weight:800;font-family:JetBrains Mono;color:var(--accent);">' + sec + 's</div>'
       + '<div style="font-size:12px;color:var(--muted);margin-top:8px;">Fetching candle data & computing indicators...</div>'
       + '</td></tr>';
@@ -4220,13 +4206,21 @@ async function runBacktest() {
     const d = await r.json();
 
     if (d.status === 'success') {
+      if (d.strategy_warnings && d.strategy_warnings.length) {
+        d.strategy_warnings.forEach(function(w) { cfToast(w, 'warning'); });
+      }
       var pnl = d.stats.total_pnl || 0;
       var pnlColor = pnl >= 0 ? 'color:var(--green)' : 'color:var(--red)';
       var diagHtml = '';
       if ((d.stats.total_trades || 0) === 0 && d.diagnostics && d.diagnostics.length) {
         diagHtml = '<div style="margin-top:14px;padding:12px;background:rgba(255,100,100,0.08);border:1px solid rgba(255,100,100,0.2);border-radius:8px;text-align:left;">'
           + '<div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">Diagnostics (0 trades):</div>'
-          + d.diagnostics.map(function(line) { return '<div style="font-size:11px;font-family:JetBrains Mono,monospace;color:var(--muted);padding:2px 0;">' + line.replace(/NOT IN DF/g, '<span style="color:var(--red);font-weight:700;">NOT IN DF</span>').replace(/MISSING/g, '<span style="color:var(--red);font-weight:700;">MISSING</span>') + '</div>'; }).join('')
+          + d.diagnostics.map(function(line) {
+              var safeLine = _escapeHtml(line)
+                .replace(/NOT IN DF/g, '<span style="color:var(--red);font-weight:700;">NOT IN DF</span>')
+                .replace(/MISSING/g, '<span style="color:var(--red);font-weight:700;">MISSING</span>');
+              return '<div style="font-size:11px;font-family:JetBrains Mono,monospace;color:var(--muted);padding:2px 0;">' + safeLine + '</div>';
+            }).join('')
           + '</div>';
       }
       await cfModal('Backtest Complete', '<div style="font-size:15px;margin-bottom:10px;">'
@@ -5132,6 +5126,9 @@ async function startPaper() {
     });
     const d = await r.json();
     if (d.status === 'ok' || d.status === 'started') {
+      if (d.warnings && d.warnings.length) {
+        d.warnings.forEach(function(w) { cfToast(w, 'warning'); });
+      }
       cfToast('Paper trading started: ' + payload.symbol + ' ' + payload.leverage + 'x', 'success');
       // Navigate to live page and start monitoring
       setTimeout(function() {
@@ -5192,6 +5189,9 @@ async function startLive() {
     });
     const d = await r.json();
     if (d.status === 'ok' || d.status === 'started') {
+      if (d.warnings && d.warnings.length) {
+        d.warnings.forEach(function(w) { cfToast(w, 'warning'); });
+      }
       cfToast('LIVE trading started: ' + selectedCrypto + ' ' + selectedLeverage + 'x', 'success');
       showPage('live-page', document.getElementById('nav-live'));
     } else if (d.status === 'already_running') {
@@ -5672,6 +5672,7 @@ async function validateStrategy() {
       indicators: indicators,
       entry_conditions: entryConditions,
       exit_conditions: exitConditions,
+      candle_interval: document.getElementById('b-interval').value,
       stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
       target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
       trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
@@ -5682,7 +5683,13 @@ async function validateStrategy() {
       body: JSON.stringify(payload),
     });
     var d = await r.json();
-    if (d.warnings && d.warnings.length > 0) {
+    if (d.errors && d.errors.length > 0) {
+      msgDiv.innerHTML = d.errors.map(function(err) {
+        return '<div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.24);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--red);">❌ ' + _escapeHtml(err) + '</div>';
+      }).join('') + ((d.warnings && d.warnings.length > 0) ? d.warnings.map(function(w) {
+        return '<div style="background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.22);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);">⚠️ ' + _escapeHtml(w) + '</div>';
+      }).join('') : '');
+    } else if (d.warnings && d.warnings.length > 0) {
       msgDiv.innerHTML = d.warnings.map(function(w) {
         return '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);">⚠️ ' + _escapeHtml(w) + '</div>';
       }).join('');

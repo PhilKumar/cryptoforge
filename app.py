@@ -41,7 +41,7 @@ from pydantic import BaseModel
 import alerter
 import config  # must be first — calls load_dotenv()
 from broker.delta import DeltaClient, get_candles_binance
-from engine.backtest import DEFAULT_ENTRY_CONDITIONS, DEFAULT_EXIT_CONDITIONS, run_backtest
+from engine.backtest import run_backtest
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import ScalpEngine
@@ -414,6 +414,223 @@ class OrderRequest(BaseModel):
     order_type: str = "market_order"
     limit_price: Optional[float] = None
     leverage: int = 10
+
+
+_ALWAYS_AVAILABLE_FIELDS = {
+    "current_open",
+    "current_high",
+    "current_low",
+    "current_close",
+    "current_volume",
+    "yesterday_high",
+    "yesterday_low",
+    "yesterday_close",
+    "yesterday_open",
+    "Time_Of_Day",
+    "Day_Of_Week",
+    "number",
+    "true",
+    "false",
+}
+_CPR_FIELDS = {
+    "CPR_Pivot",
+    "CPR_TC",
+    "CPR_BC",
+    "CPR_R1",
+    "CPR_R2",
+    "CPR_R3",
+    "CPR_R4",
+    "CPR_R5",
+    "CPR_S1",
+    "CPR_S2",
+    "CPR_S3",
+    "CPR_S4",
+    "CPR_S5",
+    "CPR_width_pct",
+    "CPR_is_narrow",
+    "CPR_is_moderate",
+    "CPR_is_wide",
+}
+_ORB_FIELDS = {
+    "ORB_high",
+    "ORB_low",
+    "ORB_Range",
+    "ORB_is_breakout_up",
+    "ORB_is_breakout_down",
+    "ORB_is_inside",
+}
+_SUPPORTED_INDICATOR_PREFIXES = (
+    "EMA_",
+    "SMA_",
+    "RSI_",
+    "Supertrend_",
+    "MACD_",
+    "BB_",
+    "VWAP_",
+    "ATR_",
+    "ADX_",
+    "StochRSI_",
+)
+
+
+def _normalize_condition(cond: dict) -> dict:
+    normalized = dict(cond or {})
+    if "left" not in normalized and "lhs" in normalized:
+        normalized["left"] = normalized.get("lhs")
+    if "right" not in normalized and "rhs" in normalized:
+        normalized["right"] = normalized.get("rhs")
+    if "connector" not in normalized and "logic" in normalized:
+        normalized["connector"] = normalized.get("logic")
+    return normalized
+
+
+def _parse_interval_minutes(interval: str) -> int:
+    raw = str(interval or "5m").strip().lower()
+    try:
+        qty = int(raw[:-1])
+        unit = raw[-1]
+    except (TypeError, ValueError):
+        return 5
+    if unit == "m":
+        return qty
+    if unit == "h":
+        return qty * 60
+    if unit == "d":
+        return qty * 1440
+    if unit == "w":
+        return qty * 10080
+    return 5
+
+
+def _base_indicator_for_field(field: str) -> Optional[str]:
+    if not isinstance(field, str) or not field:
+        return None
+    if field in _ALWAYS_AVAILABLE_FIELDS or field in _CPR_FIELDS or field in _ORB_FIELDS:
+        return None
+    if field.startswith("Signal_Candle"):
+        return None
+    base = field.split("__", 1)[0]
+    if base.startswith(_SUPPORTED_INDICATOR_PREFIXES):
+        return base
+    return None
+
+
+def _normalize_strategy_runtime(
+    *,
+    indicators: Optional[List[str]],
+    entry_conditions: Optional[List[dict]],
+    exit_conditions: Optional[List[dict]],
+    candle_interval: str,
+) -> dict:
+    effective_indicators = list(dict.fromkeys(indicators or []))
+    effective_entry = [_normalize_condition(c) for c in (entry_conditions or [])]
+    effective_exit = [_normalize_condition(c) for c in (exit_conditions or [])]
+    added_indicators = []
+    unsupported_fields = []
+    unresolved_fields = []
+    warnings = []
+    errors = []
+
+    if not effective_entry:
+        errors.append("No entry conditions defined")
+    if not effective_exit:
+        warnings.append("No exit conditions — trades will only close at SL/TP or manual stop")
+
+    cpr_present = any(str(ind).startswith("CPR_") for ind in effective_indicators)
+    orb_present = any(str(ind).startswith("ORB_") for ind in effective_indicators)
+
+    for cond in effective_entry + effective_exit:
+        op = cond.get("operator", "")
+        for key in ("left", "right"):
+            field = cond.get(key, "")
+            if not field or field in _ALWAYS_AVAILABLE_FIELDS:
+                continue
+            if key == "right" and op in ("is_true", "is_false"):
+                continue
+            if field.startswith("Signal_Candle"):
+                if field not in unsupported_fields:
+                    unsupported_fields.append(field)
+                continue
+            if field in _CPR_FIELDS:
+                if not cpr_present and field not in unresolved_fields:
+                    unresolved_fields.append(field)
+                continue
+            if field in _ORB_FIELDS:
+                if not orb_present and field not in unresolved_fields:
+                    unresolved_fields.append(field)
+                continue
+            base_indicator = _base_indicator_for_field(field)
+            if base_indicator:
+                if base_indicator not in effective_indicators:
+                    effective_indicators.append(base_indicator)
+                    added_indicators.append(base_indicator)
+                continue
+            if field not in unresolved_fields:
+                unresolved_fields.append(field)
+
+    return {
+        "indicators": effective_indicators,
+        "entry_conditions": effective_entry,
+        "exit_conditions": effective_exit,
+        "added_indicators": added_indicators,
+        "unsupported_fields": unsupported_fields,
+        "unresolved_fields": unresolved_fields,
+        "warnings": warnings,
+        "errors": errors,
+    }
+
+
+def _estimate_warmup_days(candle_interval: str, indicators: List[str]) -> int:
+    base_minutes = max(_parse_interval_minutes(candle_interval), 1)
+    warmup_days = 3
+
+    def _target_minutes(parts: List[str]) -> int:
+        if parts and parts[-1].endswith(("m", "h", "d", "w")):
+            return max(_parse_interval_minutes(parts[-1]), base_minutes)
+        return base_minutes
+
+    for ind in indicators or []:
+        parts = str(ind or "").split("_")
+        name = parts[0] if parts else ""
+        target_minutes = _target_minutes(parts)
+        days_for_indicator = 0
+
+        try:
+            if name in {"EMA", "SMA", "RSI", "ATR", "ADX", "StochRSI"}:
+                period = int(parts[1]) if len(parts) > 1 else 14
+                candles = period * 2
+                days_for_indicator = int((candles * target_minutes) / 1440) + 2
+            elif name == "MACD":
+                slow = int(parts[2]) if len(parts) > 2 else 26
+                signal = int(parts[3]) if len(parts) > 3 else 9
+                candles = (slow + signal) * 2
+                days_for_indicator = int((candles * target_minutes) / 1440) + 2
+            elif name == "BB":
+                period = int(parts[1]) if len(parts) > 1 else 20
+                candles = period * 2
+                days_for_indicator = int((candles * target_minutes) / 1440) + 2
+            elif name == "Supertrend":
+                period = int(parts[1]) if len(parts) > 1 else 10
+                candles = period * 3
+                days_for_indicator = int((candles * target_minutes) / 1440) + 2
+            elif name in {"VWAP", "Previous"}:
+                days_for_indicator = 2
+            elif name == "ORB":
+                days_for_indicator = 2
+            elif name == "CPR":
+                timeframe = parts[1].lower() if len(parts) > 1 else "day"
+                if timeframe == "month":
+                    days_for_indicator = 70
+                elif timeframe == "week":
+                    days_for_indicator = 16
+                else:
+                    days_for_indicator = 3
+        except (TypeError, ValueError):
+            days_for_indicator = 3
+
+        warmup_days = max(warmup_days, days_for_indicator)
+
+    return warmup_days
 
 
 # ── Favicon ───────────────────────────────────────────────────────
@@ -1070,12 +1287,35 @@ async def api_run_backtest(payload: StrategyPayload):
             payload.candle_interval,
         )
 
-        # Fetch extra data before from_date for indicator warm-up
-        # EMA(30) needs ~30 candles, CPR needs previous day OHLC, Supertrend needs ~10
-        # 3 days of 3-min candles = 1440 candles — sufficient warm-up
+        runtime = _normalize_strategy_runtime(
+            indicators=payload.indicators,
+            entry_conditions=payload.entry_conditions,
+            exit_conditions=payload.exit_conditions,
+            candle_interval=payload.candle_interval,
+        )
+        if runtime["errors"]:
+            return {
+                "status": "error",
+                "message": runtime["errors"][0],
+                "warnings": runtime["warnings"],
+            }
+        if runtime["unsupported_fields"]:
+            return {
+                "status": "error",
+                "message": "Unsupported condition fields: " + ", ".join(runtime["unsupported_fields"]),
+                "warnings": runtime["warnings"],
+            }
+        if runtime["unresolved_fields"]:
+            return {
+                "status": "error",
+                "message": "Missing indicator coverage for fields: " + ", ".join(runtime["unresolved_fields"]),
+                "warnings": runtime["warnings"],
+            }
+
+        # Fetch extra data before from_date for indicator warm-up.
         from datetime import datetime, timedelta
 
-        warmup_days = 3
+        warmup_days = _estimate_warmup_days(payload.candle_interval, runtime["indicators"])
         try:
             actual_from = datetime.strptime(payload.from_date, "%Y-%m-%d")
             warmup_from = (actual_from - timedelta(days=warmup_days)).strftime("%Y-%m-%d")
@@ -1094,15 +1334,17 @@ async def api_run_backtest(payload: StrategyPayload):
             return {"status": "error", "message": "No data returned."}
 
         strategy_config = payload.model_dump()
+        strategy_config["indicators"] = runtime["indicators"]
         results = await asyncio.to_thread(
             run_backtest,
             df_raw=df_raw,
-            entry_conditions=payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS,
-            exit_conditions=payload.exit_conditions or DEFAULT_EXIT_CONDITIONS,
+            entry_conditions=runtime["entry_conditions"],
+            exit_conditions=runtime["exit_conditions"],
             strategy_config=strategy_config,
         )
 
         if results.get("status") == "success":
+            results["strategy_warnings"] = runtime["warnings"]
             runs = _load_runs()
             max_id = max([r.get("id", 0) for r in runs], default=0)
             run_entry = {
@@ -1115,9 +1357,9 @@ async def api_run_backtest(payload: StrategyPayload):
                 "trade_side": payload.trade_side,
                 "stoploss_pct": payload.stoploss_pct,
                 "target_profit_pct": payload.target_profit_pct,
-                "indicators": payload.indicators,
-                "entry_conditions": payload.entry_conditions,
-                "exit_conditions": payload.exit_conditions,
+                "indicators": runtime["indicators"],
+                "entry_conditions": runtime["entry_conditions"],
+                "exit_conditions": runtime["exit_conditions"],
                 "candle_interval": payload.candle_interval,
                 "initial_capital": payload.initial_capital,
                 "position_size_pct": payload.position_size_pct,
@@ -1126,6 +1368,7 @@ async def api_run_backtest(payload: StrategyPayload):
                 "max_trades_per_day": payload.max_trades_per_day,
                 "stats": results["stats"],
                 "monthly": results.get("monthly", []),
+                "yearly": results.get("yearly", []),
                 "day_of_week": results.get("day_of_week", []),
                 "trade_count": results["stats"]["total_trades"],
                 "total_pnl": results["stats"]["total_pnl"],
@@ -1148,12 +1391,37 @@ async def api_run_backtest(payload: StrategyPayload):
 # ── Live Engine ───────────────────────────────────────────────────
 @app.post("/api/live/start")
 async def live_start(payload: StrategyPayload):
+    runtime = _normalize_strategy_runtime(
+        indicators=payload.indicators,
+        entry_conditions=payload.entry_conditions,
+        exit_conditions=payload.exit_conditions,
+        candle_interval=payload.candle_interval,
+    )
+    if runtime["errors"]:
+        return {
+            "status": "error",
+            "message": runtime["errors"][0],
+            "warnings": runtime["warnings"],
+        }
+    if runtime["unsupported_fields"]:
+        return {
+            "status": "error",
+            "message": "Unsupported condition fields: " + ", ".join(runtime["unsupported_fields"]),
+            "warnings": runtime["warnings"],
+        }
+    if runtime["unresolved_fields"]:
+        return {
+            "status": "error",
+            "message": "Missing indicator coverage for fields: " + ", ".join(runtime["unresolved_fields"]),
+            "warnings": runtime["warnings"],
+        }
+
     strategy_dict = {
         "run_name": payload.run_name or "Live Strategy",
         "symbol": payload.symbol,
         "leverage": payload.leverage,
         "trade_side": payload.trade_side,
-        "indicators": payload.indicators or [],
+        "indicators": runtime["indicators"],
         "max_trades_per_day": payload.max_trades_per_day,
         "stoploss_pct": payload.stoploss_pct,
         "target_profit_pct": payload.target_profit_pct,
@@ -1180,8 +1448,8 @@ async def live_start(payload: StrategyPayload):
     engine = LiveEngine(delta, run_id=run_id)
     engine.configure(
         strategy=strategy_dict,
-        entry_conditions=payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS,
-        exit_conditions=payload.exit_conditions or DEFAULT_EXIT_CONDITIONS,
+        entry_conditions=runtime["entry_conditions"],
+        exit_conditions=runtime["exit_conditions"],
         deploy_config=deploy_config,
     )
     engine.running = True
@@ -1204,7 +1472,12 @@ async def live_start(payload: StrategyPayload):
     _live_tasks[run_id] = asyncio.create_task(engine.start(callback=broadcast))
 
     alerter.alert("Engine Started", f"Strategy: {run_id}\nMode: Live (REAL)", level="info")
-    return {"status": "started", "run_id": run_id, "message": "Live trading started with REAL orders"}
+    return {
+        "status": "started",
+        "run_id": run_id,
+        "message": "Live trading started with REAL orders",
+        "warnings": runtime["warnings"],
+    }
 
 
 @app.post("/api/live/stop")
@@ -1279,12 +1552,37 @@ async def live_status(run_id: str = ""):
 # ── Paper Trading ─────────────────────────────────────────────────
 @app.post("/api/paper/start")
 async def paper_start(payload: StrategyPayload):
+    runtime = _normalize_strategy_runtime(
+        indicators=payload.indicators,
+        entry_conditions=payload.entry_conditions,
+        exit_conditions=payload.exit_conditions,
+        candle_interval=payload.candle_interval,
+    )
+    if runtime["errors"]:
+        return {
+            "status": "error",
+            "message": runtime["errors"][0],
+            "warnings": runtime["warnings"],
+        }
+    if runtime["unsupported_fields"]:
+        return {
+            "status": "error",
+            "message": "Unsupported condition fields: " + ", ".join(runtime["unsupported_fields"]),
+            "warnings": runtime["warnings"],
+        }
+    if runtime["unresolved_fields"]:
+        return {
+            "status": "error",
+            "message": "Missing indicator coverage for fields: " + ", ".join(runtime["unresolved_fields"]),
+            "warnings": runtime["warnings"],
+        }
+
     strategy_dict = {
         "run_name": payload.run_name or "Paper Strategy",
         "symbol": payload.symbol,
         "leverage": payload.leverage,
         "trade_side": payload.trade_side,
-        "indicators": payload.indicators or [],
+        "indicators": runtime["indicators"],
         "max_trades_per_day": payload.max_trades_per_day,
         "stoploss_pct": payload.stoploss_pct,
         "target_profit_pct": payload.target_profit_pct,
@@ -1300,28 +1598,11 @@ async def paper_start(payload: StrategyPayload):
     if run_id in paper_engines and paper_engines[run_id].running:
         return {"status": "already_running", "run_id": run_id}
 
-    # When the caller sends no conditions, fall back to EMA-crossover defaults.
-    # Ensure the required EMA indicator is in the indicators list so compute_dynamic_indicators
-    # actually produces the column — without this the column is missing and the condition
-    # always evaluates False, leaving the engine stuck in "Scanning" forever.
-    effective_entry = payload.entry_conditions or DEFAULT_ENTRY_CONDITIONS
-    effective_exit = payload.exit_conditions or DEFAULT_EXIT_CONDITIONS
-    if not payload.entry_conditions:
-        interval = payload.candle_interval or "1m"
-        ema_col = f"EMA_20_{interval}"
-        # Patch both the condition references and the indicators list to match
-        effective_entry = [{"left": "current_close", "operator": "is_above", "right": ema_col, "connector": "AND"}]
-        effective_exit = [{"left": "current_close", "operator": "is_below", "right": ema_col, "connector": "AND"}]
-        inds = list(strategy_dict.get("indicators") or [])
-        if ema_col not in inds:
-            inds.append(ema_col)
-        strategy_dict["indicators"] = inds
-
     engine = PaperTradingEngine(delta, run_id=run_id)
     engine.configure(
         strategy=strategy_dict,
-        entry_conditions=effective_entry,
-        exit_conditions=effective_exit,
+        entry_conditions=runtime["entry_conditions"],
+        exit_conditions=runtime["exit_conditions"],
     )
     engine.running = True
     engine.event_log = []
@@ -1349,7 +1630,12 @@ async def paper_start(payload: StrategyPayload):
     _paper_tasks[run_id] = asyncio.create_task(engine.start(callback=broadcast))
 
     alerter.alert("Engine Started", f"Strategy: {run_id}\nMode: Paper", level="info")
-    return {"status": "started", "run_id": run_id, "message": "Paper trading started with live data"}
+    return {
+        "status": "started",
+        "run_id": run_id,
+        "message": "Paper trading started with live data",
+        "warnings": runtime["warnings"],
+    }
 
 
 @app.post("/api/paper/stop")
@@ -2118,12 +2404,23 @@ async def validate_strategy(request: Request):
     if not symbol:
         errors.append("No trading symbol selected")
 
-    entry = body.get("entry_conditions", [])
-    exit_conds = body.get("exit_conditions", [])
-    if not entry:
-        errors.append("No entry conditions defined")
-    if not exit_conds:
-        warnings.append("No exit conditions — trades will only close at SL/TP")
+    runtime = _normalize_strategy_runtime(
+        indicators=body.get("indicators", []),
+        entry_conditions=body.get("entry_conditions", []),
+        exit_conditions=body.get("exit_conditions", []),
+        candle_interval=body.get("candle_interval", "5m"),
+    )
+
+    entry = runtime["entry_conditions"]
+    exit_conds = runtime["exit_conditions"]
+    errors.extend(runtime["errors"])
+    warnings.extend(runtime["warnings"])
+    if runtime["added_indicators"]:
+        warnings.append("Auto-added indicator dependencies: " + ", ".join(runtime["added_indicators"]))
+    if runtime["unsupported_fields"]:
+        errors.append("Unsupported condition fields: " + ", ".join(runtime["unsupported_fields"]))
+    if runtime["unresolved_fields"]:
+        errors.append("Missing indicator coverage for fields: " + ", ".join(runtime["unresolved_fields"]))
 
     leverage = body.get("leverage", 10)
     if leverage > 50:
@@ -2147,6 +2444,7 @@ async def validate_strategy(request: Request):
         warnings.append(f"Position size {position_size}% exceeds capital")
 
     # Check for contradictory conditions
+    seen_contradictions = set()
     for c in entry:
         lhs = c.get("left", "")
         op = c.get("operator", "")
@@ -2156,7 +2454,10 @@ async def validate_strategy(request: Request):
                 continue
             if c2.get("left") == lhs and c2.get("right") == rhs:
                 if op in ("is_above", "crosses_above") and c2.get("operator") in ("is_below", "crosses_below"):
-                    errors.append(f"Contradictory: {lhs} both above and below {rhs}")
+                    key = (lhs, rhs)
+                    if key not in seen_contradictions:
+                        errors.append(f"Contradictory: {lhs} both above and below {rhs}")
+                        seen_contradictions.add(key)
 
     return {
         "valid": len(errors) == 0,

@@ -327,11 +327,6 @@ def _vec_conditions(df, conditions):
 
 # Default conditions reference the 1m EMA column (interval suffix added by compute_dynamic_indicators).
 # app.py injects "EMA_20_1m" into the indicators list whenever these defaults are used,
-# so the column is guaranteed to exist in the dataframe.
-DEFAULT_ENTRY_CONDITIONS = [{"left": "current_close", "operator": "is_above", "right": "EMA_20_1m", "connector": "AND"}]
-DEFAULT_EXIT_CONDITIONS = [{"left": "current_close", "operator": "is_below", "right": "EMA_20_1m", "connector": "AND"}]
-
-
 # ── Trade Helpers ──────────────────────────────────────────────────
 def _mk(id_, et, xt, ep, xp, pnl, reason, cum, side="LONG", leverage=1, size=1):
     return {
@@ -352,9 +347,9 @@ def _mk(id_, et, xt, ep, xp, pnl, reason, cum, side="LONG", leverage=1, size=1):
 # ── Backtest Runner ────────────────────────────────────────────────
 def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_config=None):
     if entry_conditions is None:
-        entry_conditions = DEFAULT_ENTRY_CONDITIONS
+        entry_conditions = []
     if exit_conditions is None:
-        exit_conditions = DEFAULT_EXIT_CONDITIONS
+        exit_conditions = []
     sc = strategy_config or {}
 
     capital = float(sc.get("initial_capital", config.DEFAULT_CAPITAL))
@@ -410,6 +405,9 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         except Exception as e:
             print(f"[BACKTEST] Warm-up trim failed: {e}")
             pass
+
+    if df.empty:
+        return {"status": "error", "message": "No data available after applying warm-up and date filters."}
 
     # ── Diagnostic: log available columns & sample condition values ──
     df_cols = sorted([c for c in df.columns if not c.startswith("_")])

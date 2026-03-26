@@ -579,9 +579,28 @@ def compute_dynamic_indicators(df: pd.DataFrame, ui_indicators: list, base_inter
                 df["BB_width"] = (df["BB_upper"] - df["BB_lower"]) / df["BB_middle"].replace(0, np.nan) * 100
 
             elif name == "VWAP":
-                val = vwap(df)
-                df[ind_string] = val
-                df["VWAP"] = val  # backward-compat
+                if needs_resample:
+                    ohlcv_resamp = (
+                        df[["open", "high", "low", "close", "volume"]]
+                        .resample(f"{target_minutes}min")
+                        .agg(
+                            {
+                                "open": "first",
+                                "high": "max",
+                                "low": "min",
+                                "close": "last",
+                                "volume": "sum",
+                            }
+                        )
+                        .dropna()
+                    )
+                    vwap_vals = vwap(ohlcv_resamp)
+                    df[ind_string] = _map_to_base(vwap_vals, df.index)
+                    print(f"[INDICATORS] {ind_string}: resampled {base_minutes}m→{target_minutes}m for VWAP")
+                else:
+                    val = vwap(df)
+                    df[ind_string] = val
+                    df["VWAP"] = val  # backward-compat on base timeframe
 
             elif name == "ATR":
                 num_parts = [p for p in parts[1:] if not p.endswith("m")]
