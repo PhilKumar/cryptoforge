@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 
-from broker.delta import _CircuitBreaker
+from broker.delta import DeltaClient, _CircuitBreaker, _normalize_result_list
 from engine.live import LiveEngine
 from engine.live import _select_signal_rows as select_live_signal_rows
 from engine.paper_trading import PaperTradingEngine
@@ -124,6 +124,43 @@ class CircuitBreakerTests(unittest.TestCase):
         breaker.check()
         self.assertEqual(breaker.state, breaker.CLOSED)
         self.assertTrue(breaker.call_allowed())
+
+    def test_normalize_result_list_wraps_single_dict(self):
+        self.assertEqual(_normalize_result_list(None), [])
+        self.assertEqual(_normalize_result_list([{"a": 1}]), [{"a": 1}])
+        self.assertEqual(_normalize_result_list({"a": 1}), [{"a": 1}])
+
+
+class DeltaPositionNormalizationTests(unittest.TestCase):
+    def test_get_position_handles_single_dict_result(self):
+        client = DeltaClient()
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(
+                client,
+                "_get",
+                return_value={"result": {"product_id": 11, "size": "2", "entry_price": "100.5"}},
+            ),
+        ):
+            position = client.get_position(11, strict=True)
+
+        self.assertEqual(position.get("product_id"), 11)
+        self.assertEqual(position.get("size"), "2")
+
+    def test_get_positions_handles_single_dict_result(self):
+        client = DeltaClient()
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(
+                client,
+                "_get",
+                return_value={"result": {"product_id": 11, "size": "2"}},
+            ),
+        ):
+            positions = client.get_positions()
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0].get("product_id"), 11)
 
 
 class LiveEngineHardeningTests(unittest.IsolatedAsyncioTestCase):

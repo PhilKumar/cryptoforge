@@ -40,6 +40,17 @@ def _as_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _normalize_result_list(payload) -> list:
+    """Delta sometimes returns a single dict instead of a result list."""
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return [payload]
+    return []
+
+
 def _request_with_retry(
     method: str,
     url: str,
@@ -680,7 +691,7 @@ class DeltaClient:
             return []
         try:
             resp = self._get("/positions/margined", auth=True)
-            return resp.get("result", [])
+            return _normalize_result_list(resp.get("result", []))
         except Exception as e:
             print(f"[DELTA] Positions error: {e}")
             return []
@@ -691,7 +702,7 @@ class DeltaClient:
             return {}
         try:
             resp = self._get("/positions", params={"product_id": product_id}, auth=True)
-            results = resp.get("result", [])
+            results = _normalize_result_list(resp.get("result", []))
             for p in results:
                 if int(p.get("product_id", 0) or 0) == int(product_id):
                     return p
