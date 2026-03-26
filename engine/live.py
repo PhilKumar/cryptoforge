@@ -35,6 +35,52 @@ def _coerce_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _interval_duration(interval: str) -> timedelta:
+    raw = str(interval or "5m").strip().lower()
+    try:
+        qty = int(raw[:-1])
+        unit = raw[-1]
+    except (TypeError, ValueError):
+        return timedelta(minutes=5)
+    if unit == "m":
+        return timedelta(minutes=qty)
+    if unit == "h":
+        return timedelta(hours=qty)
+    if unit == "d":
+        return timedelta(days=qty)
+    if unit == "w":
+        return timedelta(weeks=qty)
+    return timedelta(minutes=5)
+
+
+def _select_signal_rows(df, interval: str, now: datetime):
+    """Use only fully closed candles for signal entry/exit evaluation."""
+    if len(df.index) == 0:
+        return None, None, None, True
+
+    latest_row = df.iloc[-1]
+
+    latest_idx = df.index[-1]
+    latest_dt = latest_idx.to_pydatetime() if hasattr(latest_idx, "to_pydatetime") else None
+    if latest_dt is None:
+        return latest_row, latest_row, df.iloc[-2] if len(df) > 1 else latest_row, True
+    if latest_dt.tzinfo is None:
+        latest_dt = latest_dt.replace(tzinfo=timezone.utc)
+    candle_closed = now.astimezone(latest_dt.tzinfo) >= (latest_dt + _interval_duration(interval))
+
+    if candle_closed:
+        signal_row = latest_row
+        signal_prev = df.iloc[-2] if len(df) > 1 else latest_row
+        return latest_row, signal_row, signal_prev, True
+
+    if len(df) < 2:
+        return latest_row, None, None, False
+
+    signal_row = df.iloc[-2]
+    signal_prev = df.iloc[-3] if len(df) > 2 else signal_row
+    return latest_row, signal_row, signal_prev, False
+
+
 # Try to import WebSocket feed (optional enhancement)
 try:
     from engine.ws_feed import DeltaWSFeed
@@ -436,8 +482,7 @@ class LiveEngine:
                     continue
 
                 df = compute_dynamic_indicators(df, indicators)
-                row = df.iloc[-1]
-                prev = df.iloc[-2] if len(df) > 1 else row
+                row, signal_row, signal_prev, _candle_closed = _select_signal_rows(df, candle_interval, now)
                 price = float(row["close"])
 
                 # Use WebSocket ticker price if available (more real-time than REST candle close)
@@ -466,7 +511,9 @@ class LiveEngine:
 
                 if not in_trade:
                     if self.trades_today < max_tpd:
-                        if eval_condition_group(row, self.entry_conditions, prev):
+                        if signal_row is not None and eval_condition_group(
+                            signal_row, self.entry_conditions, signal_prev
+                        ):
                             margin = capital * (position_size_pct / 100)
                             notional = margin * leverage
                             size = max(1, int(notional / price))
@@ -561,7 +608,9 @@ class LiveEngine:
                             exit_reason = "Take Profit"
                         elif lev_pnl_pct <= config.LIQUIDATION_THRESHOLD:
                             exit_reason = "Liquidation"
-                        elif eval_condition_group(row, self.exit_conditions, prev):
+                        elif signal_row is not None and eval_condition_group(
+                            signal_row, self.exit_conditions, signal_prev
+                        ):
                             exit_reason = "Signal Exit"
 
                         if exit_reason:

@@ -2,12 +2,15 @@ import os
 import tempfile
 import time
 import unittest
+from importlib import import_module
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 
 from broker.delta import _CircuitBreaker
 from engine.live import LiveEngine
+from engine.live import _select_signal_rows as select_live_signal_rows
+from engine.paper_trading import _select_signal_rows as select_paper_signal_rows
 from engine.scalp import ScalpEngine
 
 _DEFAULT_PRODUCT = object()
@@ -184,6 +187,91 @@ class LiveEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(broker.verified_calls[0]["side"], "buy")
         self.assertEqual(engine.open_trades[0]["order_id"], "ord-1")
         self.assertEqual(engine.open_trades[0]["entry_price"], 101.5)
+
+    def test_live_signal_rows_ignore_forming_last_candle(self):
+        idx = pd.to_datetime(["2026-03-25 12:00:00+00:00", "2026-03-25 12:05:00+00:00"])
+        df = pd.DataFrame(
+            [
+                {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1.0},
+                {"open": 101.0, "high": 102.0, "low": 100.5, "close": 101.5, "volume": 1.0},
+            ],
+            index=idx,
+        )
+        latest_row, signal_row, signal_prev, candle_closed = select_live_signal_rows(
+            df, "5m", pd.Timestamp("2026-03-25 12:07:00+00:00").to_pydatetime()
+        )
+        self.assertFalse(candle_closed)
+        self.assertEqual(float(latest_row["close"]), 101.5)
+        self.assertEqual(signal_row.name, idx[0])
+        self.assertEqual(signal_prev.name, idx[0])
+
+
+class PaperEngineSignalTests(unittest.TestCase):
+    def test_paper_signal_rows_ignore_forming_last_candle(self):
+        idx = pd.to_datetime(["2026-03-25 12:00:00+00:00", "2026-03-25 12:05:00+00:00"])
+        df = pd.DataFrame(
+            [
+                {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1.0},
+                {"open": 101.0, "high": 102.0, "low": 100.5, "close": 101.5, "volume": 1.0},
+            ],
+            index=idx,
+        )
+        latest_row, signal_row, signal_prev, candle_closed = select_paper_signal_rows(
+            df, "5m", pd.Timestamp("2026-03-25 12:07:00+00:00").to_pydatetime()
+        )
+        self.assertFalse(candle_closed)
+        self.assertEqual(float(latest_row["close"]), 101.5)
+        self.assertEqual(signal_row.name, idx[0])
+        self.assertEqual(signal_prev.name, idx[0])
+
+
+class HistoryPersistenceTests(unittest.TestCase):
+    @staticmethod
+    def _sample_trade():
+        return {
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "entry_time": "2026-03-25T09:15:00",
+            "exit_time": "2026-03-25T09:20:00",
+            "entry_price": 100.0,
+            "exit_price": 101.25,
+            "pnl": 12.5,
+            "exit_reason": "Signal Exit",
+        }
+
+    def test_save_engine_run_to_history_skips_duplicate_single_trade_history(self):
+        os.environ.setdefault("CRYPTOFORGE_PIN", "123456")
+        app_module = import_module("app")
+        trade = self._sample_trade()
+        existing_runs = [{"id": 1, "mode": "paper", "run_name": "Paper Alpha", "trade_count": 1, "trades": [trade]}]
+        status = {
+            "strategy_name": "Paper Alpha",
+            "symbol": "BTCUSDT",
+            "leverage": 5,
+            "closed_trades": [trade],
+        }
+
+        with (
+            patch.object(app_module, "_load_runs", return_value=existing_runs),
+            patch.object(app_module, "_save_runs") as save_runs,
+        ):
+            app_module._save_engine_run_to_history(status, "paper")
+
+        save_runs.assert_not_called()
+
+    def test_save_trade_to_history_skips_existing_trade_signature(self):
+        os.environ.setdefault("CRYPTOFORGE_PIN", "123456")
+        app_module = import_module("app")
+        trade = self._sample_trade()
+        existing_runs = [{"id": 1, "mode": "paper", "run_name": "Paper Alpha", "trade_count": 1, "trades": [trade]}]
+
+        with (
+            patch.object(app_module, "_load_runs", return_value=existing_runs),
+            patch.object(app_module, "_save_runs") as save_runs,
+        ):
+            app_module._save_trade_to_history(trade, "paper", "Paper Alpha")
+
+        save_runs.assert_not_called()
 
 
 class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):

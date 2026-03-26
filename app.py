@@ -486,6 +486,32 @@ def _csv_safe(value):
     return value
 
 
+def _trade_signature(trade: dict) -> tuple:
+    """Stable signature for deduplicating persisted trades across runs/history saves."""
+
+    def _rounded(value, digits: int = 8):
+        try:
+            return round(float(value), digits)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return (
+        str(trade.get("symbol", "")),
+        str(trade.get("side", trade.get("trade_side", ""))).upper(),
+        str(trade.get("entry_time", "")),
+        str(trade.get("exit_time", "")),
+        _rounded(trade.get("entry_price")),
+        _rounded(trade.get("exit_price")),
+        _rounded(trade.get("pnl"), 2),
+        str(trade.get("exit_reason", trade.get("reason", ""))),
+    )
+
+
+def _run_trade_signatures(run: dict) -> set[tuple]:
+    trades = run.get("trades", []) or []
+    return {_trade_signature(trade) for trade in trades if isinstance(trade, dict)}
+
+
 # ── Health ────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
@@ -581,6 +607,7 @@ async def dashboard_summary(request: Request):
     """Get dashboard summary data."""
     strats = _load()
     runs = _load_runs()
+    backtest_runs = [r for r in runs if str(r.get("mode", "backtest")).lower() == "backtest"]
 
     paper_running = any(e.running for e in paper_engines.values())
     live_running = any(e.running for e in live_engines.values())
@@ -623,9 +650,11 @@ async def dashboard_summary(request: Request):
 
     return {
         "strategy_count": len(strats),
-        "backtest_count": len(runs),
+        "backtest_count": len(backtest_runs),
         "paper_running": paper_running,
         "live_running": live_running,
+        "paper_count": len(paper_statuses),
+        "live_count": len(live_statuses),
         "paper_strategy": ", ".join(s.get("strategy_name", "") for s in paper_statuses) if paper_statuses else "",
         "live_strategy": ", ".join(s.get("strategy_name", "") for s in live_statuses) if live_statuses else "",
         "today_pnl": round(today_pnl, 2),
@@ -1548,22 +1577,54 @@ def _save_engine_run_to_history(status: dict, mode: str):
             _logger.info("[%s] No trades to save — skipping", mode.upper())
             return
 
-        # Check if trades were already saved individually (avoid duplicates)
         run_name = status.get("strategy_name", status.get("run_name", ""))
         runs = _load_runs()
-        existing_count = sum(
-            1 for r in runs if r.get("mode") == mode and r.get("run_name") == run_name and r.get("trade_count") == 1
-        )
-        if existing_count >= len(closed):
+        closed_signatures = {_trade_signature(trade) for trade in closed if isinstance(trade, dict)}
+        if not closed_signatures:
+            _logger.info("[%s] No valid trade signatures to save — skipping", mode.upper())
+            return
+
+        single_trade_signatures = set()
+        for run in runs:
+            if run.get("mode") != mode or int(run.get("trade_count", 0) or 0) != 1:
+                continue
+            single_trade_signatures.update(_run_trade_signatures(run))
+        if closed_signatures.issubset(single_trade_signatures):
             _logger.info("[%s] All %d trades already saved individually — skipping", mode.upper(), len(closed))
             return
 
+        for run in runs:
+            if run.get("mode") != mode:
+                continue
+            run_signatures = _run_trade_signatures(run)
+            if (
+                run.get("run_name") == run_name
+                and int(run.get("trade_count", 0) or 0) == len(closed_signatures)
+                and run_signatures
+                and run_signatures == closed_signatures
+            ):
+                _logger.info("[%s] Matching aggregate run already saved for %s — skipping", mode.upper(), run_name)
+                return
+
         max_id = max([r.get("id", 0) for r in runs], default=0)
 
-        total_pnl = round(sum(t.get("pnl", 0) for t in closed), 2)
-        winners = [t for t in closed if t.get("pnl", 0) > 0]
-        losers = [t for t in closed if t.get("pnl", 0) <= 0]
-        win_rate = round(len(winners) / len(closed) * 100, 2) if closed else 0
+        ordered_closed = []
+        seen_closed = set()
+        for trade in closed:
+            sig = _trade_signature(trade)
+            if sig in seen_closed:
+                continue
+            seen_closed.add(sig)
+            ordered_closed.append(trade)
+
+        if not ordered_closed:
+            _logger.info("[%s] No unique trades left to save — skipping", mode.upper())
+            return
+
+        total_pnl = round(sum(t.get("pnl", 0) for t in ordered_closed), 2)
+        winners = [t for t in ordered_closed if t.get("pnl", 0) > 0]
+        losers = [t for t in ordered_closed if t.get("pnl", 0) <= 0]
+        win_rate = round(len(winners) / len(ordered_closed) * 100, 2) if ordered_closed else 0
 
         run_entry = {
             "id": max_id + 1,
@@ -1575,10 +1636,10 @@ def _save_engine_run_to_history(status: dict, mode: str):
             "status": "completed",
             "started_at": str(datetime.now()),
             "stopped_at": str(datetime.now()),
-            "trade_count": len(closed),
+            "trade_count": len(ordered_closed),
             "total_pnl": total_pnl,
             "stats": {
-                "total_trades": len(closed),
+                "total_trades": len(ordered_closed),
                 "winning_trades": len(winners),
                 "losing_trades": len(losers),
                 "win_rate": win_rate,
@@ -1586,7 +1647,7 @@ def _save_engine_run_to_history(status: dict, mode: str):
                 "avg_profit": round(sum(t["pnl"] for t in winners) / len(winners), 2) if winners else 0,
                 "avg_loss": round(sum(t["pnl"] for t in losers) / len(losers), 2) if losers else 0,
             },
-            "trades": closed,
+            "trades": ordered_closed,
             "created_at": str(datetime.now()),
         }
 
@@ -1602,6 +1663,11 @@ def _save_trade_to_history(trade: dict, mode: str, run_name: str = "") -> None:
     try:
         pnl = round(trade.get("pnl", 0), 2)
         runs = _load_runs()
+        signature = _trade_signature(trade)
+        for run in runs:
+            if run.get("mode") == mode and signature in _run_trade_signatures(run):
+                _logger.info("[%s] Trade already present in history — skipping duplicate save", mode.upper())
+                return
         max_id = max((r.get("id", 0) for r in runs), default=0)
         symbol = trade.get("symbol", "")
         side = trade.get("side", trade.get("trade_side", ""))
@@ -1641,6 +1707,11 @@ def _save_scalp_trade_to_history(trade: dict) -> None:
     try:
         pnl = round(trade.get("pnl", 0), 2)
         runs = _load_runs()
+        signature = _trade_signature(trade)
+        for run in runs:
+            if run.get("mode") == "scalp" and signature in _run_trade_signatures(run):
+                _logger.info("[SCALP] Trade already present in history — skipping duplicate save")
+                return
         max_id = max((r.get("id", 0) for r in runs), default=0)
         symbol = trade.get("symbol", "")
         side = trade.get("side", "")
@@ -1725,6 +1796,7 @@ async def get_portfolio_history():
     try:
         daily = {}
         runs = _load_runs()
+        seen_trade_signatures = set()
         for r in runs:
             mode = r.get("mode", "backtest")
             if mode not in ("paper", "live"):
@@ -1735,6 +1807,10 @@ async def get_portfolio_history():
             if trades:
                 by_date = {}
                 for t in trades:
+                    sig = _trade_signature(t)
+                    if sig in seen_trade_signatures:
+                        continue
+                    seen_trade_signatures.add(sig)
                     t_date = str(t.get("exit_time", t.get("entry_time", "")))[:10]
                     if not t_date or len(t_date) < 10:
                         t_date = run_date or ""
@@ -1786,6 +1862,11 @@ async def get_portfolio_history():
                     daily[run_date]["paper_pnl"] += r.get("total_pnl", 0)
                     daily[run_date]["paper_trades"] += r.get("trade_count", 0)
 
+        for data in daily.values():
+            data["pnl"] = round(data["real_pnl"] + data["paper_pnl"], 2)
+            data["trades"] = int(data["real_trades"] + data["paper_trades"])
+            data["wins"] = int(data["real_wins"] + data["paper_wins"])
+
         monthly = {}
         yearly = {}
         for date_str, d in daily.items():
@@ -1811,9 +1892,11 @@ async def get_portfolio_history():
         for m in monthly.values():
             for k in ["real_pnl", "real_net_pnl", "paper_pnl", "total_pnl"]:
                 m[k] = round(m[k], 2)
+            m["pnl"] = m["total_pnl"]
         for y_val in yearly.values():
             for k in ["real_pnl", "real_net_pnl", "paper_pnl", "total_pnl"]:
                 y_val[k] = round(y_val[k], 2)
+            y_val["pnl"] = y_val["total_pnl"]
 
         return {"status": "success", "daily": daily, "monthly": monthly, "yearly": yearly}
     except Exception as e:

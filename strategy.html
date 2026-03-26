@@ -3092,16 +3092,30 @@ function cfModal(title, msg, icon, buttons) {
     document.body.appendChild(overlay);
   });
 }
-async function cfAlert(msg, title, icon) {
-  await cfModal(title || 'Notice', msg, icon || 'ℹ️', [{label:'OK', cls:'btn-primary'}]);
+async function cfAlert(msg, title, icon, allowHtml) {
+  await cfModal(
+    title || 'Notice',
+    allowHtml ? msg : _escapeHtml(msg),
+    icon || 'ℹ️',
+    [{label:'OK', cls:'btn-primary'}]
+  );
 }
-async function cfConfirm(msg, title, icon) {
-  var r = await cfModal(title || 'Confirm', msg, icon || '⚠️',
-    [{label:'Cancel', cls:'btn-outline'}, {label:'Continue', cls:'btn-danger'}]);
+async function cfConfirm(msg, title, icon, allowHtml) {
+  var r = await cfModal(
+    title || 'Confirm',
+    allowHtml ? msg : _escapeHtml(msg),
+    icon || '⚠️',
+    [{label:'Cancel', cls:'btn-outline'}, {label:'Continue', cls:'btn-danger'}]
+  );
   return r === 1;
 }
-async function cfSuccess(msg, title) {
-  await cfModal(title || 'Success', msg, '✅', [{label:'OK', cls:'btn-success'}]);
+async function cfSuccess(msg, title, allowHtml) {
+  await cfModal(
+    title || 'Success',
+    allowHtml ? msg : _escapeHtml(msg),
+    '✅',
+    [{label:'OK', cls:'btn-success'}]
+  );
 }
 
 // ── Prompt Modal (replaces native prompt()) ────────────────
@@ -3948,8 +3962,10 @@ async function loadDashboard() {
           if (engines.length > 0) {
             engList.innerHTML = engines.map(function(e) {
               var ep = parseFloat(e.total_pnl) || 0;
+              var strategyName = _escapeHtml(e.strategy_name || e.run_name || '');
+              var mode = _escapeHtml(e.mode || '');
               return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border);">'
-                + '<div><b>' + (e.strategy_name || e.run_name || '') + '</b> <span class="tag ' + (e.mode === 'paper' ? 'tag-green' : 'tag-red') + '">' + (e.mode || '') + '</span></div>'
+                + '<div><b>' + strategyName + '</b> <span class="tag ' + (e.mode === 'paper' ? 'tag-green' : 'tag-red') + '">' + mode + '</span></div>'
                 + '<div style="font-family:JetBrains Mono;font-weight:700;color:' + (ep >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtINR(ep) + '</div>'
                 + '</div>';
             }).join('');
@@ -3970,10 +3986,12 @@ async function loadDashboard() {
       cont.innerHTML = runs.slice(-5).reverse().map(r => {
         const pnl = r.total_pnl || 0;
         const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
+        const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
+        const symbol = _escapeHtml(r.symbol || '—');
         return `<tr style="cursor:pointer;" onclick="viewRun(${r.id})" onmouseover="this.style.background='rgba(139,92,246,0.04)'" onmouseout="this.style.background=''">
           <td>${_getModeBadge(r.mode)}</td>
-          <td style="font-weight:600;">${r.run_name || 'Run #' + r.id}</td>
-          <td>${r.symbol || '—'}</td>
+          <td style="font-weight:600;">${runName}</td>
+          <td>${symbol}</td>
           <td class="num">${r.leverage || 1}x</td>
           <td class="num">${r.trade_count || 0}</td>
           <td class="num" style="color:${pnlColor};font-weight:700;font-family:'JetBrains Mono',monospace;">${fmtINR(pnl)}</td>
@@ -4335,9 +4353,10 @@ function _renderResultsHead() {
 
 function _flattenRunTrades(runs) {
   var rows = [];
+  var seen = {};
   runs.forEach(function(run) {
     (run.trades || []).forEach(function(trade, idx) {
-      rows.push({
+      var row = {
         run_id: run.id,
         run_name: run.run_name || ('Run #' + run.id),
         mode: _normalizeMode(run.mode),
@@ -4351,7 +4370,22 @@ function _flattenRunTrades(runs) {
         side: trade.side || run.trade_side || '—',
         pnl: parseFloat(trade.pnl) || 0,
         exit_reason: trade.exit_reason || '—',
-      });
+      };
+      var signature = [
+        row.mode,
+        row.symbol,
+        row.side,
+        row.entry_time || '',
+        row.exit_time || '',
+        row.entry_price,
+        row.exit_price,
+        row.pnl,
+        row.exit_reason || '',
+      ].join('|');
+      if (!seen[signature]) {
+        seen[signature] = true;
+        rows.push(row);
+      }
     });
   });
   rows.sort(function(a, b) {
@@ -4369,12 +4403,15 @@ function _buildRunTradeRows(runs) {
     var entryParts = _getTradeDateParts(t.entry_time);
     var exitParts = _getTradeDateParts(t.exit_time);
     var pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
+    var runName = _escapeHtml(t.run_name || 'Run');
+    var mode = _escapeHtml(t.mode || '');
+    var symbol = _escapeHtml(t.symbol || '—');
     return '<tr>'
-      + '<td><div class="table-row-label">' + (t.run_name || 'Run') + '</div><div class="table-note">' + t.mode + ' • ' + (t.symbol || '—') + '</div></td>'
-      + '<td><div class="table-row-label">' + (t.symbol || '—') + '</div><div class="table-note">#' + (t.trade_id || '—') + ' • ' + (t.leverage || 1) + 'x</div></td>'
+      + '<td><div class="table-row-label">' + runName + '</div><div class="table-note">' + mode + ' • ' + symbol + '</div></td>'
+      + '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">#' + _escapeHtml(t.trade_id || '—') + ' • ' + (t.leverage || 1) + 'x</div></td>'
       + '<td><div class="table-datetime"><div class="table-datetime-date">' + entryParts.date + '</div><div class="table-datetime-time">' + entryParts.time + '</div></div></td>'
       + '<td><div class="table-datetime"><div class="table-datetime-date">' + exitParts.date + '</div><div class="table-datetime-time">' + exitParts.time + '</div></div></td>'
-      + '<td><span class="tag ' + ((t.side || '').toUpperCase() === 'LONG' ? 'tag-green' : 'tag-red') + '">' + (t.side || '—') + '</span></td>'
+      + '<td><span class="tag ' + ((t.side || '').toUpperCase() === 'LONG' ? 'tag-green' : 'tag-red') + '">' + _escapeHtml(t.side || '—') + '</span></td>'
       + '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(t.entry_price || 0) + '</div></div></td>'
       + '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(t.exit_price || 0) + '</div></div></td>'
       + '<td class="num"><div class="table-value-stack"><div class="table-value-main ' + pnlClass + '">' + fmtINR(t.pnl || 0) + '</div><div class="table-value-sub ' + pnlClass + '">' + (t.pnl >= 0 ? 'profit' : 'loss') + '</div></div></td>'
@@ -4436,11 +4473,13 @@ function _buildRunCards(runs) {
     const wrColor = wr >= 50 ? 'var(--green)' : wr > 0 ? 'var(--red)' : 'var(--muted)';
     const date = (r.created_at || r.started_at || '').slice(0, 16);
     const isBacktest = _normalizeMode(r.mode) === 'backtest';
+    const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
+    const symbol = _escapeHtml(r.symbol || '—');
     return `<tr${isBacktest ? ' style="cursor:pointer;" onclick="viewRun(' + r.id + ')"' : ''}>
       <td onclick="event.stopPropagation()"><input type="checkbox" class="tbl-cb run-cb" value="${r.id}" onchange="updateRunsBulk()"></td>
       <td>${_getModeBadge(r.mode)}</td>
-      <td style="font-weight:600;font-family:inherit;color:var(--text);">${r.run_name || 'Run #' + r.id}</td>
-      <td>${r.symbol || '—'}</td>
+      <td style="font-weight:600;font-family:inherit;color:var(--text);">${runName}</td>
+      <td>${symbol}</td>
       <td class="num">${r.leverage || 1}x</td>
       <td class="num">${r.trade_count || 0}</td>
       <td class="num" style="color:${wrColor};font-weight:600;">${wr.toFixed(1)}%</td>
@@ -4550,9 +4589,11 @@ function _renderPortfolioPaperRuns(runs) {
     const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
     const wr = r.stats?.win_rate || 0;
     const wrColor = wr >= 50 ? 'var(--green)' : wr > 0 ? 'var(--red)' : 'var(--muted)';
+    const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
+    const symbol = _escapeHtml(r.symbol || '—');
     return `<tr style="cursor:pointer;" onclick="viewRun(${r.id})" onmouseover="this.style.background='rgba(139,92,246,0.04)'" onmouseout="this.style.background=''">
-      <td style="font-weight:600;">${r.run_name || 'Run #' + r.id}</td>
-      <td>${r.symbol || '—'}</td>
+      <td style="font-weight:600;">${runName}</td>
+      <td>${symbol}</td>
       <td class="num">${r.leverage || 1}x</td>
       <td class="num">${r.trade_count || 0}</td>
       <td class="num" style="color:${wrColor};">${wr}%</td>
@@ -4602,8 +4643,8 @@ async function viewRun(rid) {
       const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
       const row = (label, val) =>
         `<div style="padding:10px 0;border-bottom:1px solid var(--border);">
-          <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">${label}</div>
-          <div style="font-weight:600;font-size:14px;">${val}</div>
+          <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">${_escapeHtml(label)}</div>
+          <div style="font-weight:600;font-size:14px;">${_escapeHtml(val)}</div>
         </div>`;
       document.getElementById('rd-stats').innerHTML =
         `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 24px;font-size:13px;margin-bottom:16px;">
@@ -4731,7 +4772,7 @@ function reasonTag(reason) {
   if (r.includes('stop') || r.includes('liquidat')) cls = 'tag-red';
   else if (r.includes('profit') || r.includes('target')) cls = 'tag-green';
   else if (r.includes('signal')) cls = 'tag-yellow';
-  return '<span class="tag ' + cls + '">' + reason + '</span>';
+  return '<span class="tag ' + cls + '">' + _escapeHtml(reason) + '</span>';
 }
 
 function sortTrades(col) {
@@ -4773,11 +4814,14 @@ function renderTradesPage(page) {
     var exitParts = _getTradeDateParts(t.exit_time);
     var pnl = t.pnl != null ? t.pnl : 0;
     var pnlClass = pnl >= 0 ? 'positive' : 'negative';
+    var symbol = _escapeHtml(t.symbol || _currentRunSymbol || '');
+    var tradeId = _escapeHtml(t.id || '—');
+    var side = _escapeHtml(t.side || '');
     return '<tr>'
-      + '<td><div class="table-row-label">' + (t.symbol || _currentRunSymbol || '') + '</div><div class="table-note">trade #' + (t.id || '—') + '</div></td>'
+      + '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">trade #' + tradeId + '</div></td>'
       + '<td><div class="table-datetime"><div class="table-datetime-date">' + entryParts.date + '</div><div class="table-datetime-time">' + entryParts.time + '</div></div></td>'
       + '<td><div class="table-datetime"><div class="table-datetime-date">' + exitParts.date + '</div><div class="table-datetime-time">' + exitParts.time + '</div></div></td>'
-      + '<td><span class="tag ' + (t.side === 'LONG' ? 'tag-green' : 'tag-red') + '">' + (t.side || '') + '</span></td>'
+      + '<td><span class="tag ' + (t.side === 'LONG' ? 'tag-green' : 'tag-red') + '">' + side + '</span></td>'
       + '<td><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(t.entry_price || 0) + '</div></div></td>'
       + '<td><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(t.exit_price || 0) + '</div></div></td>'
       + '<td><div class="table-value-stack"><div class="table-value-main ' + pnlClass + '">' + fmtINR(pnl) + '</div><div class="table-value-sub ' + pnlClass + '">' + (pnl >= 0 ? 'profit' : 'loss') + '</div></div></td>'
@@ -4845,15 +4889,17 @@ function _renderMarketRows(coins) {
     var athPct = c.ath_change_pct || 0;
     var tradeSym = c.trade_symbol || (c.symbol + 'USDT');
     var safeName = (c.name || '').replace(/'/g, "\\'");
+    var safeSymbol = _escapeHtml(c.symbol);
+    var safeCoinName = _escapeHtml(c.name);
     var btnClass = c.delta_tradeable ? 'btn-live' : 'btn-bt';
     var btnLabel = c.delta_tradeable ? '⚡ Trade' : '📊 Backtest';
     var tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" onclick="selectCryptoFromMarket(\'' + tradeSym + "','" + safeName + '\')">' + btnLabel + '</button>';
     return '<tr style="cursor:pointer;" onmouseover="this.style.background=\'rgba(139,92,246,0.04)\'" onmouseout="this.style.background=\'\'">' +
       '<td style="padding-left:16px;color:var(--muted);font-weight:600;">' + c.rank + '</td>' +
       '<td><div style="display:flex;align-items:center;gap:10px;">' +
-        '<img src="' + c.image + '" alt="' + c.symbol + '" width="28" height="28" style="border-radius:50%;" onerror="this.style.display=\'none\'">' +
-        '<div><div style="font-weight:700;font-size:15px;">' + c.symbol + '</div>' +
-        '<div style="font-size:11px;color:var(--muted);">' + c.name + '</div></div></div></td>' +
+        '<img src="' + c.image + '" alt="' + safeSymbol + '" width="28" height="28" style="border-radius:50%;" onerror="this.style.display=\'none\'">' +
+        '<div><div style="font-weight:700;font-size:15px;">' + safeSymbol + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);">' + safeCoinName + '</div></div></div></td>' +
       '<td style="text-align:right;font-family:\'JetBrains Mono\',monospace;font-weight:600;">' + fmtPrice(c.price) + '</td>' +
       '<td style="text-align:right;color:' + chgColor + ';font-weight:600;">' + chgSign + c.change_24h.toFixed(2) + '%</td>' +
       '<td style="text-align:right;color:var(--muted);">' + fmtNum(c.volume_24h) + '</td>' +
@@ -5112,7 +5158,7 @@ async function stopPaper() {
 }
 
 async function startLive() {
-  const ok = await cfConfirm('This will place <b>REAL orders</b> on Delta Exchange with <b>real funds</b>.<br><br>Symbol: <b>' + selectedCrypto + '</b><br>Leverage: <b>' + selectedLeverage + 'x</b><br><br>Are you sure?', 'Go Live', '⚠️');
+  const ok = await cfConfirm('This will place <b>REAL orders</b> on Delta Exchange with <b>real funds</b>.<br><br>Symbol: <b>' + _escapeHtml(selectedCrypto) + '</b><br>Leverage: <b>' + selectedLeverage + 'x</b><br><br>Are you sure?', 'Go Live', '⚠️', true);
   if (!ok) return;
   const payload = {
     run_name: document.getElementById('b-name').value || 'Live',
@@ -5159,7 +5205,7 @@ async function startLive() {
 }
 
 async function stopLive() {
-  const ok = await cfConfirm('Stop the <b>LIVE</b> trading engine? Open positions will remain.', 'Stop Live', '⏹️');
+  const ok = await cfConfirm('Stop the <b>LIVE</b> trading engine? Open positions will remain.', 'Stop Live', '⏹️', true);
   if (!ok) return;
   await fetch('/api/live/stop', { method: 'POST', credentials: 'same-origin' });
   cfToast('Live engine stopped', 'info');
@@ -5414,7 +5460,7 @@ async function populateCompareDropdowns() {
     var compareRuns = _allRunsCache.filter(function(run) { return _normalizeMode(run.mode) === 'backtest'; });
     var opts = '<option value="">Select run...</option>';
     compareRuns.forEach(function(run) {
-      opts += '<option value="' + run.id + '">' + (run.run_name || 'Run #' + run.id) +
+      opts += '<option value="' + run.id + '">' + _escapeHtml(run.run_name || 'Run #' + run.id) +
         ' — $' + (run.total_pnl || 0).toFixed(2) + '</option>';
     });
     document.getElementById('compare-a').innerHTML = opts;
@@ -5450,12 +5496,12 @@ async function runComparison() {
     ];
 
     var html = '<div class="compare-grid"><div class="compare-col">' +
-      '<h4>' + (ra.run_name || 'Run A') + '</h4>';
+      '<h4>' + _escapeHtml(ra.run_name || 'Run A') + '</h4>';
     metrics.forEach(function(m) {
       var cls = m[3] !== undefined ? (m[3] >= 0 ? ' positive' : ' negative') : '';
       html += '<div class="compare-row"><span class="cr-label">' + m[0] + '</span><span class="cr-val' + cls + '">' + m[1] + '</span></div>';
     });
-    html += '</div><div class="compare-col"><h4>' + (rb.run_name || 'Run B') + '</h4>';
+    html += '</div><div class="compare-col"><h4>' + _escapeHtml(rb.run_name || 'Run B') + '</h4>';
     metrics.forEach(function(m) {
       var cls = m[4] !== undefined ? (m[4] >= 0 ? ' positive' : ' negative') : '';
       html += '<div class="compare-row"><span class="cr-label">' + m[0] + '</span><span class="cr-val' + cls + '">' + m[2] + '</span></div>';
@@ -5638,7 +5684,7 @@ async function validateStrategy() {
     var d = await r.json();
     if (d.warnings && d.warnings.length > 0) {
       msgDiv.innerHTML = d.warnings.map(function(w) {
-        return '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);">⚠️ ' + w + '</div>';
+        return '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);">⚠️ ' + _escapeHtml(w) + '</div>';
       }).join('');
     } else {
       msgDiv.innerHTML = '<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--green);">✅ Strategy validation passed</div>';
@@ -5762,10 +5808,11 @@ async function loadPortfolioData() {
         posTbody.innerHTML = positions.map(function(p) {
           var upnl = parseFloat(p.unrealized_pnl) || 0;
           var rpnl = parseFloat(p.realized_pnl) || 0;
-          var sideColor = p.side === 'LONG' ? 'var(--green)' : 'var(--red)';
+          var side = _escapeHtml(p.side || '--');
+          var symbol = _escapeHtml(p.symbol || '--');
           return '<tr>' +
-            '<td style="font-weight:700;">' + (p.symbol || '--') + '</td>' +
-            '<td><span class="tag ' + (p.side === 'LONG' ? 'tag-green' : 'tag-red') + '">' + (p.side || '--') + '</span></td>' +
+            '<td style="font-weight:700;">' + symbol + '</td>' +
+            '<td><span class="tag ' + (p.side === 'LONG' ? 'tag-green' : 'tag-red') + '">' + side + '</span></td>' +
             '<td>' + (p.size || 0) + '</td>' +
             '<td>' + fmtINRPrice(parseFloat(p.entry_price) || 0) + '</td>' +
             '<td>' + fmtINRPrice(parseFloat(p.mark_price) || 0) + '</td>' +
@@ -5787,20 +5834,23 @@ async function loadPortfolioData() {
       } else {
         ordTbody.innerHTML = orders.slice(0, 50).map(function(o) {
           var side = (o.side || '').toUpperCase();
+          var safeSide = _escapeHtml(side || '--');
           var fillPrice = parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
           var ts = o.created_at || o.timestamp || '';
           var timeStr = ts ? fmtDt(ts) : '--';
-          var symbol = o.product_symbol || o.symbol || ('ID:' + (o.product_id || ''));
+          var symbol = _escapeHtml(o.product_symbol || o.symbol || ('ID:' + (o.product_id || '')));
           var fee = parseFloat(o.paid_commission) || 0;
+          var orderType = _escapeHtml((o.order_type || o.type || '--').replace('_', ' '));
+          var orderState = _escapeHtml(o.state || o.status || 'filled');
           return '<tr>' +
             '<td style="white-space:nowrap;font-size:12px;">' + timeStr + '</td>' +
             '<td style="font-weight:600;">' + symbol + '</td>' +
-            '<td><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + side + '</span></td>' +
+            '<td><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + safeSide + '</span></td>' +
             '<td>' + (o.size || o.quantity || 0) + '</td>' +
             '<td>' + fmtINRPrice(fillPrice) + '</td>' +
             '<td style="color:var(--yellow);">' + fmtINR(fee) + '</td>' +
-            '<td>' + (o.order_type || o.type || '--').replace('_', ' ') + '</td>' +
-            '<td><span class="tag tag-purple">' + (o.state || o.status || 'filled') + '</span></td>' +
+            '<td>' + orderType + '</td>' +
+            '<td><span class="tag tag-purple">' + orderState + '</span></td>' +
             '</tr>';
         }).join('');
       }
@@ -5910,15 +5960,18 @@ function renderStrategiesList() {
     var strats = folders[folder];
     html += '<div class="strat-folder-group">';
     html += '<div class="strat-folder-header" onclick="toggleFolder(this)">';
-    html += '<span class="folder-icon">📁</span> ' + folder;
+    html += '<span class="folder-icon">📁</span> ' + _escapeHtml(folder);
     html += '<span class="folder-count">' + strats.length + ' strategies</span>';
     html += '</div>';
     html += '<div class="strat-folder-body">';
     strats.forEach(function(s) {
+      var strategyName = _escapeHtml(s.run_name || 'Untitled');
+      var symbol = _escapeHtml(s.symbol || '');
+      var side = _escapeHtml(s.trade_side || '');
       html += '<div class="strat-row">';
       html += '<div style="flex:1;">';
-      html += '<div class="sr-name">' + (s.run_name || 'Untitled') + '</div>';
-      html += '<div class="sr-meta">' + (s.symbol || '') + ' • ' + (s.leverage || 1) + 'x • ' + (s.trade_side || '') + '</div>';
+      html += '<div class="sr-name">' + strategyName + '</div>';
+      html += '<div class="sr-meta">' + symbol + ' • ' + (s.leverage || 1) + 'x • ' + side + '</div>';
       html += '</div>';
       html += '<div class="strat-actions">';
       html += '<button onclick="viewStrategy(\'' + s.id + '\')">👁 View</button>';
@@ -5954,12 +6007,12 @@ async function viewStrategy(sid) {
     ['Folder', s.folder || 'Default'],
   ];
   document.getElementById('vs-config').innerHTML = cfg.map(function(c) {
-    return '<div class="ti-item"><div class="ti-label">' + c[0] + '</div><div class="ti-value">' + c[1] + '</div></div>';
+    return '<div class="ti-item"><div class="ti-label">' + _escapeHtml(c[0]) + '</div><div class="ti-value">' + _escapeHtml(c[1]) + '</div></div>';
   }).join('');
   // Indicators
   var inds = s.indicators || [];
   document.getElementById('vs-indicators').innerHTML = inds.length > 0
-    ? inds.map(function(ind) { return '<span class="tag tag-purple">' + ind + '</span>'; }).join('')
+    ? inds.map(function(ind) { return '<span class="tag tag-purple">' + _escapeHtml(ind) + '</span>'; }).join('')
     : '<span style="color:var(--muted);font-size:13px;">No indicators</span>';
   // Conditions
   var formatConds = function(conds) {
@@ -5967,7 +6020,7 @@ async function viewStrategy(sid) {
     return conds.map(function(c, i) {
       var prefix = i > 0 ? '<span style="color:var(--accent);font-weight:700;">' + (c.connector || 'AND') + '</span> ' : '';
       var rightVal = c.right === 'number' ? (c.right_number_value || 0) : c.right;
-      return '<div class="vs-cond-row">' + prefix + c.left + ' <b>' + (c.operator || '').replace(/_/g, ' ') + '</b> ' + rightVal + '</div>';
+      return '<div class="vs-cond-row">' + prefix + _escapeHtml(c.left) + ' <b>' + _escapeHtml((c.operator || '').replace(/_/g, ' ')) + '</b> ' + _escapeHtml(rightVal) + '</div>';
     }).join('');
   };
   document.getElementById('vs-entry-conds').innerHTML = formatConds(s.entry_conditions);
@@ -6445,7 +6498,7 @@ function renderLiveTabs() {
   // Individual strategy tabs
   _liveEngines.forEach(function(eng, idx) {
     var active = idx === _liveSelectedTab;
-    var name = eng.strategy_name || eng.run_name || 'Strategy';
+    var name = _escapeHtml(eng.strategy_name || eng.run_name || 'Strategy');
     var modeIcon = eng.mode === 'paper' ? '📄' : '🔴';
     var pnl = parseFloat(eng.total_pnl) || 0;
     var running = eng.running;
@@ -6484,7 +6537,7 @@ function renderLivePanel(d, idx) {
 
   var running = d.running;
   var inTrade = d.in_trade;
-  var name = d.strategy_name || d.run_name || 'Strategy';
+  var name = _escapeHtml(d.strategy_name || d.run_name || 'Strategy');
   var mode = d.mode || 'paper';
   var runId = d.run_id || '';
   var safeRunId = _escapeJsString(runId);
@@ -6517,15 +6570,15 @@ function renderLivePanel(d, idx) {
   html += '<div style="display:flex;align-items:center;gap:12px;">';
   html += '<span style="font-size:22px;">' + modeIcon + '</span>';
   html += '<div><div style="font-size:18px;font-weight:700;">' + name + '</div>';
-  html += '<div style="font-size:11px;color:var(--muted);margin-top:2px;">' + modeLabel + ' • ' + (d.symbol || '') + ' • ' + (d.leverage || 1) + 'x</div></div>';
+  html += '<div style="font-size:11px;color:var(--muted);margin-top:2px;">' + modeLabel + ' • ' + _escapeHtml(d.symbol || '') + ' • ' + (d.leverage || 1) + 'x</div></div>';
   html += badgeHtml;
   html += '</div>';
   html += '<div style="display:flex;gap:8px;">';
   if (running) {
-    html += '<button class="btn btn-danger btn-sm" onclick="stopEngine(\'' + runId + '\',\'' + mode + '\')" style="padding:6px 14px;">⏹ Stop</button>';
+    html += '<button class="btn btn-danger btn-sm" onclick="stopEngine(\'' + safeRunId + '\',\'' + mode + '\')" style="padding:6px 14px;">⏹ Stop</button>';
   }
-  html += '<button class="btn btn-primary btn-sm" onclick="viewEngineDetails(\'' + runId + '\',\'' + mode + '\')" style="padding:6px 14px;">👁️ View</button>';
-  html += '<button class="btn btn-warning btn-sm" onclick="downloadEngineCSV(\'' + runId + '\',\'' + mode + '\')" style="padding:6px 14px;">📥 CSV</button>';
+  html += '<button class="btn btn-primary btn-sm" onclick="viewEngineDetails(\'' + safeRunId + '\',\'' + mode + '\')" style="padding:6px 14px;">👁️ View</button>';
+  html += '<button class="btn btn-warning btn-sm" onclick="downloadEngineCSV(\'' + safeRunId + '\',\'' + mode + '\')" style="padding:6px 14px;">📥 CSV</button>';
   html += '</div></div>';
 
   // ── 4 Stat Cards
@@ -6560,8 +6613,8 @@ function renderLivePanel(d, idx) {
       var isInd = !['current','open','high','low','close','volume'].includes(k);
       var valStr = typeof v === 'number' ? (v > 100 ? v.toLocaleString('en-US', {maximumFractionDigits:2}) : v.toFixed(4)) : (v != null ? v : '—');
       html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
-      html += '<td style="padding:7px 16px;color:' + (isInd ? 'var(--text)' : 'var(--muted)') + ';font-weight:' + (isInd ? '600' : '400') + ';">' + k + '</td>';
-      html += '<td style="padding:7px 16px;text-align:right;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:' + (isInd ? 'var(--accent2)' : 'var(--text)') + ';">' + valStr + '</td>';
+      html += '<td style="padding:7px 16px;color:' + (isInd ? 'var(--text)' : 'var(--muted)') + ';font-weight:' + (isInd ? '600' : '400') + ';">' + _escapeHtml(k) + '</td>';
+      html += '<td style="padding:7px 16px;text-align:right;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:' + (isInd ? 'var(--accent2)' : 'var(--text)') + ';">' + _escapeHtml(valStr) + '</td>';
       html += '</tr>';
     });
   }
@@ -6581,9 +6634,11 @@ function renderLivePanel(d, idx) {
     html += '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--muted);font-size:12px;">No open positions</td></tr>';
   } else {
     openTrades.forEach(function(p) {
+      var symbol = _escapeHtml(p.symbol || d.symbol || '—');
+      var side = _escapeHtml(p.side || '—');
       html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
-      html += '<td style="padding:7px 10px;">' + (p.symbol || d.symbol || '—') + '</td>';
-      html += '<td style="padding:7px 10px;text-align:right;color:' + ((p.side||'').toLowerCase() === 'long' ? 'var(--green)' : 'var(--red)') + ';">' + (p.side || '—') + '</td>';
+      html += '<td style="padding:7px 10px;">' + symbol + '</td>';
+      html += '<td style="padding:7px 10px;text-align:right;color:' + ((p.side||'').toLowerCase() === 'long' ? 'var(--green)' : 'var(--red)') + ';">' + side + '</td>';
       html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINRPrice(parseFloat(p.entry_price) || 0) + '</td>';
       html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINR(parseFloat(p.notional) || 0, 0) + '</td>';
       html += '</tr>';
@@ -6600,7 +6655,7 @@ function renderLivePanel(d, idx) {
     html += '<div style="color:var(--muted);padding:12px;">No events yet.</div>';
   } else {
     events.forEach(function(e) {
-      html += '<div class="log-entry"><span class="log-time">[' + (e.time || '') + ']</span> <span style="color:' + (evtColors[e.type] || 'var(--text)') + ';">[' + (e.type || 'info').toUpperCase() + ']</span> ' + (e.message || '') + '</div>';
+      html += '<div class="log-entry"><span class="log-time">[' + _escapeHtml(e.time || '') + ']</span> <span style="color:' + (evtColors[e.type] || 'var(--text)') + ';">[' + _escapeHtml((e.type || 'info').toUpperCase()) + ']</span> ' + _escapeHtml(e.message || '') + '</div>';
     });
   }
   html += '</div>';
@@ -6682,10 +6737,10 @@ function renderLivePanel(d, idx) {
       if (t.notional) meta.push(fmtINR(parseFloat(t.notional) || 0) + ' notional');
       html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
       html += '<td style="padding:7px 10px;text-align:center;"><input type="checkbox" class="tbl-chk" onchange="_toggleLiveTradeCheck(\'' + safeRunId + '\',\'' + _escapeJsString(key) + '\', this.checked)"' + (tradeSelected[key] ? ' checked' : '') + '></td>';
-      html += '<td style="padding:7px 10px;"><div class="table-row-label">' + (t.symbol || d.symbol || '—') + '</div><div class="table-note">' + (meta.length ? meta.join(' • ') : '—') + '</div></td>';
+      html += '<td style="padding:7px 10px;"><div class="table-row-label">' + _escapeHtml(t.symbol || d.symbol || '—') + '</div><div class="table-note">' + _escapeHtml(meta.length ? meta.join(' • ') : '—') + '</div></td>';
       html += '<td style="padding:7px 10px;"><div class="table-datetime"><div class="table-datetime-date">' + entryParts.date + '</div><div class="table-datetime-time">' + entryParts.time + '</div></div></td>';
       html += '<td style="padding:7px 10px;"><div class="table-datetime"><div class="table-datetime-date">' + exitParts.date + '</div><div class="table-datetime-time">' + exitParts.time + '</div></div></td>';
-      html += '<td style="padding:7px 10px;"><span class="tag ' + ((t.side || '').toUpperCase() === 'LONG' ? 'tag-green' : 'tag-red') + '">' + (t.side || '—') + '</span></td>';
+      html += '<td style="padding:7px 10px;"><span class="tag ' + ((t.side || '').toUpperCase() === 'LONG' ? 'tag-green' : 'tag-red') + '">' + _escapeHtml(t.side || '—') + '</span></td>';
       html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINRPrice(entryPrice) + '</td>';
       html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;">' + fmtINRPrice(exitPrice) + '</td>';
       html += '<td style="padding:7px 10px;text-align:right;font-family:\'JetBrains Mono\',monospace;font-weight:700;color:' + (tpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtINR(tpnl) + '</td>';
@@ -6750,9 +6805,9 @@ function viewEngineDetails(runId, mode) {
   var bestTrade = trades.length ? Math.max.apply(null, trades.map(function(t){return t.pnl||0;})) : 0;
   var worstTrade = trades.length ? Math.min.apply(null, trades.map(function(t){return t.pnl||0;})) : 0;
 
-  var name = d.strategy_name || d.run_name || 'Engine';
+  var name = _escapeHtml(d.strategy_name || d.run_name || 'Engine');
   var html = '<div style="max-width:600px;margin:0 auto;">';
-  html += '<h3 style="margin:0 0 16px;font-size:18px;">' + name + ' — ' + (d.symbol || '') + '</h3>';
+  html += '<h3 style="margin:0 0 16px;font-size:18px;">' + name + ' — ' + _escapeHtml(d.symbol || '') + '</h3>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">';
   html += '<div class="ti-item"><div class="ti-label">Total P&L</div><div class="ti-value" style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + pnl.toFixed(2) + '</div></div>';
   html += '<div class="ti-item"><div class="ti-label">Win Rate</div><div class="ti-value">' + winRate + '%</div></div>';
@@ -6766,12 +6821,12 @@ function viewEngineDetails(runId, mode) {
 
   // Config details
   html += '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;padding:12px;font-size:12px;">';
-  html += '<div style="margin-bottom:4px;"><b>Mode:</b> ' + (mode || 'paper') + '  |  <b>Leverage:</b> ' + (d.leverage || 1) + 'x  |  <b>Side:</b> ' + (d.side || d.trade_side || '') + '</div>';
-  html += '<div><b>Run ID:</b> <span style="font-family:monospace;font-size:10px;color:var(--muted);">' + runId + '</span></div>';
+  html += '<div style="margin-bottom:4px;"><b>Mode:</b> ' + _escapeHtml(mode || 'paper') + '  |  <b>Leverage:</b> ' + (d.leverage || 1) + 'x  |  <b>Side:</b> ' + _escapeHtml(d.side || d.trade_side || '') + '</div>';
+  html += '<div><b>Run ID:</b> <span style="font-family:monospace;font-size:10px;color:var(--muted);">' + _escapeHtml(runId) + '</span></div>';
   html += '</div>';
   html += '</div>';
 
-  cfAlert(html, 'Engine Details — ' + name, '📊');
+  cfAlert(html, 'Engine Details — ' + name, '📊', true);
 }
 
 // ── Portfolio Monthly/Yearly P&L ───────────────────────────
@@ -6829,16 +6884,18 @@ function renderMonthlyDailyGrid() {
   for (var d = 1; d <= daysInMonth; d++) {
     var key = yr + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0');
     var data = daily[key] || { pnl: 0, trades: 0 };
-    totalPnl += data.pnl || 0;
-    totalTrades += data.trades || 0;
-    dayData.push({day: d, key: key, pnl: data.pnl || 0, trades: data.trades || 0});
-    var pnlVal = data.pnl || 0;
+    var pnlForDay = data.total_pnl != null ? data.total_pnl : (data.pnl != null ? data.pnl : ((data.real_pnl || 0) + (data.paper_pnl || 0)));
+    var tradesForDay = data.trades != null ? data.trades : ((data.real_trades || 0) + (data.paper_trades || 0));
+    totalPnl += pnlForDay || 0;
+    totalTrades += tradesForDay || 0;
+    dayData.push({day: d, key: key, pnl: pnlForDay || 0, trades: tradesForDay || 0});
+    var pnlVal = pnlForDay || 0;
     var color = pnlVal > 0 ? 'var(--green)' : pnlVal < 0 ? 'var(--red)' : 'var(--muted)';
     var bg = pnlVal > 0 ? 'rgba(34,197,94,0.06)' : pnlVal < 0 ? 'rgba(239,68,68,0.06)' : '';
     html += '<div class="day-cell" style="background:' + bg + ';">';
     html += '<div class="dc-day">' + d + '</div>';
     html += '<div class="dc-pnl" style="color:' + color + '">$' + pnlVal.toFixed(2) + '</div>';
-    if (data.trades) html += '<div class="dc-trades">' + data.trades + ' trades</div>';
+    if (tradesForDay) html += '<div class="dc-trades">' + tradesForDay + ' trades</div>';
     html += '</div>';
   }
   gridEl.innerHTML = html;
@@ -6885,10 +6942,11 @@ function renderYearlyMonthlyTable() {
       if (data === null) {
         html += '<div class="ytd-cell" style="color:var(--muted);">—</div>';
       } else {
-        var pnl = data.pnl || 0;
+        var pnl = data.total_pnl != null ? data.total_pnl : (data.pnl || 0);
+        var tradeCount = data.trades != null ? data.trades : ((data.real_trades || 0) + (data.paper_trades || 0));
         var color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
         var bg = pnl >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
-        html += '<div class="ytd-cell" style="background:' + bg + ';color:' + color + ';" title="$' + pnl.toFixed(2) + ' (' + (data.trades || 0) + ' trades)">$' + (Math.abs(pnl) >= 1000 ? (pnl/1000).toFixed(1) + 'K' : pnl.toFixed(0)) + '</div>';
+        html += '<div class="ytd-cell" style="background:' + bg + ';color:' + color + ';" title="$' + pnl.toFixed(2) + ' (' + tradeCount + ' trades)">$' + (Math.abs(pnl) >= 1000 ? (pnl/1000).toFixed(1) + 'K' : pnl.toFixed(0)) + '</div>';
       }
     });
   });
@@ -6957,8 +7015,8 @@ function _cfTradeRow(t) {
   const netClass = netPnl > 0 ? 'positive' : netPnl < 0 ? 'negative' : '';
   return `<tr>
     <td><div class="table-datetime"><div class="table-datetime-date">${timeParts.date}</div><div class="table-datetime-time">${timeParts.time}</div></div></td>
-    <td><div class="table-row-label">${t.symbol || '—'}</div><div class="table-note">trade #${t.trade_id || t.id || '—'}</div></td>
-    <td><span class="tag ${sideTag}">${side || '—'}</span></td>
+    <td><div class="table-row-label">${_escapeHtml(t.symbol || '—')}</div><div class="table-note">trade #${_escapeHtml(t.trade_id || t.id || '—')}</div></td>
+    <td><span class="tag ${sideTag}">${_escapeHtml(side || '—')}</span></td>
     <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div></div></td>
     <td><div class="table-value-stack"><div class="table-value-main">$${(t.exit_price || 0).toFixed(4)}</div></div></td>
     <td><div class="table-value-stack"><div class="table-value-main">${fmtINR(fees)}</div><div class="table-value-sub">fees</div></div></td>
@@ -7044,8 +7102,8 @@ async function cfLoadScalpStatus() {
         const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
         logEl.innerHTML = events.map(e =>
           `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">` +
-          `<span style="color:var(--muted);margin-right:8px;">${e.time || ''}</span>` +
-          `<span style="color:${evtColors[e.level || e.type] || 'var(--text-dim)'};">${e.msg || e.message || ''}</span>` +
+          `<span style="color:var(--muted);margin-right:8px;">${_escapeHtml(e.time || '')}</span>` +
+          `<span style="color:${evtColors[e.level || e.type] || 'var(--text-dim)'};">${_escapeHtml(e.msg || e.message || '')}</span>` +
           `</div>`
         ).join('');
       }
