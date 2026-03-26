@@ -65,6 +65,16 @@ class FakeScalpDelta:
     def get_ticker(self, symbol):
         return {"mark_price": 100.0}
 
+    def to_delta_symbol(self, symbol):
+        if symbol.endswith("USDT"):
+            return symbol[:-1]
+        return symbol
+
+    def from_delta_symbol(self, symbol):
+        if symbol.endswith("USD") and not symbol.endswith("USDT"):
+            return symbol + "T"
+        return symbol
+
     async def place_order_verified(self, **kwargs):
         self.verified_calls.append(kwargs)
         fill_price = 100.5 if not kwargs.get("reduce_only") else 101.25
@@ -74,6 +84,26 @@ class FakeScalpDelta:
             "verified_at_attempt": 1,
             "fill_price": fill_price,
         }
+
+
+class FakeWSFeed:
+    def __init__(self):
+        self.on_ticker = None
+        self.connected = False
+        self.subscribed = []
+
+    async def connect(self):
+        self.connected = True
+
+    async def subscribe_ticker(self, symbol):
+        self.subscribed.append(symbol)
+
+    async def disconnect(self):
+        self.connected = False
+
+    def emit(self, symbol, price):
+        if self.on_ticker:
+            self.on_ticker(symbol, {"mark_price": price})
 
 
 class CircuitBreakerTests(unittest.TestCase):
@@ -278,7 +308,7 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_scalp_live_entry_and_exit_use_verified_orders(self):
         delta = FakeScalpDelta()
         engine = ScalpEngine(delta)
-        engine._running = True
+        engine.start = lambda: None
 
         entered = await engine.enter_trade(
             symbol="BTCUSDT",
@@ -301,6 +331,26 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(delta.verified_calls), 2)
         self.assertFalse(engine.open_trades)
         self.assertEqual(engine.closed_trades[-1]["exit_order_id"], "scalp-2")
+
+    async def test_scalp_ws_ticker_updates_trade_price(self):
+        delta = FakeScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=100,
+            leverage=10,
+            target_usd=10,
+            sl_usd=5,
+            mode="paper",
+        )
+        trade_id = entered["trade_id"]
+
+        engine._handle_ticker("BTCUSD", {"mark_price": 103.75})
+
+        self.assertEqual(engine.open_trades[trade_id].current_price, 103.75)
+        self.assertEqual(engine.get_status()["open_trades"][0]["mark_price"], 103.75)
 
 
 if __name__ == "__main__":

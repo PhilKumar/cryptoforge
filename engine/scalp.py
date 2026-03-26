@@ -10,8 +10,19 @@ Completely isolated from LiveEngine and PaperTradingEngine.
 """
 
 import asyncio
+import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+try:
+    from engine.ws_feed import DeltaWSFeed
+
+    _HAS_WS = True
+except ImportError:
+    _HAS_WS = False
 
 
 def _now_utc():
@@ -164,8 +175,9 @@ class ScalpTrade:
 class ScalpEngine:
     """
     Manages all active crypto scalp trades.
-    • Runs a background monitoring loop (2s interval).
-    • Uses bulk ticker fetch for all symbols in one REST call.
+    • Runs a background monitoring loop.
+    • Uses WebSocket ticker updates first for real-time pricing.
+    • Falls back to REST bulk ticker fetch when WS is unavailable.
     """
 
     def __init__(self, delta_client, on_trade_closed: Optional[Callable[[dict], None]] = None):
@@ -178,6 +190,9 @@ class ScalpEngine:
         self._trade_counter: int = int(_now_utc().timestamp() * 1000)
         self._running: bool = False
         self._task: Optional[asyncio.Task] = None
+        self._ws_feed = None
+        self._ws_prices: Dict[str, float] = {}
+        self._ws_subscribed_symbols: set[str] = set()
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -191,6 +206,13 @@ class ScalpEngine:
         if self._task:
             self._task.cancel()
             self._task = None
+        if self._ws_feed:
+            try:
+                asyncio.get_running_loop().create_task(self._stop_ws_feed())
+            except RuntimeError:
+                self._ws_feed = None
+                self._ws_prices.clear()
+                self._ws_subscribed_symbols.clear()
 
     @staticmethod
     def _extract_order_price(order: dict, fallback: float) -> float:
@@ -214,6 +236,60 @@ class ScalpEngine:
         if not callable(place_verified):
             return {"error": "Broker does not support verified order placement", "verified": False}
         return await place_verified(**kwargs)
+
+    def _canonical_symbol(self, symbol: str) -> str:
+        if not symbol:
+            return ""
+        from_delta = getattr(self.delta, "from_delta_symbol", None)
+        if callable(from_delta):
+            try:
+                return str(from_delta(symbol)).upper()
+            except Exception:
+                pass
+        return str(symbol).upper()
+
+    def _handle_ticker(self, sym: str, ticker: dict):
+        try:
+            mark = ticker.get("mark_price") or ticker.get("close") or ticker.get("last_price")
+            price = _coerce_float(mark, 0.0)
+            if price <= 0:
+                return
+            canonical = self._canonical_symbol(sym)
+            self._ws_prices[canonical] = price
+            for trade in self.open_trades.values():
+                if self._canonical_symbol(trade.symbol) == canonical:
+                    trade.current_price = price
+        except Exception:
+            pass
+
+    async def _ensure_ws_feed(self, symbols: set[str]):
+        if not _HAS_WS or not symbols:
+            return
+        if self._ws_feed is None:
+            self._ws_feed = DeltaWSFeed()
+            self._ws_feed.on_ticker = self._handle_ticker
+            await self._ws_feed.connect()
+            self._log("info", "WebSocket ticker connected for scalp pricing")
+
+        pending = {self._canonical_symbol(sym) for sym in symbols} - self._ws_subscribed_symbols
+        if not pending:
+            return
+        for sym in sorted(pending):
+            try:
+                await self._ws_feed.subscribe_ticker(sym)
+                self._ws_subscribed_symbols.add(sym)
+            except Exception as e:
+                self._log("warn", f"WebSocket subscribe failed for {sym}: {e}")
+
+    async def _stop_ws_feed(self):
+        if self._ws_feed:
+            try:
+                await self._ws_feed.disconnect()
+            except Exception:
+                pass
+        self._ws_feed = None
+        self._ws_prices.clear()
+        self._ws_subscribed_symbols.clear()
 
     async def enter_trade(
         self,
@@ -301,6 +377,11 @@ class ScalpEngine:
 
         if not self._running:
             self.start()
+        else:
+            try:
+                asyncio.get_running_loop().create_task(self._ensure_ws_feed({symbol}))
+            except RuntimeError:
+                pass
 
         return {"status": "ok", "trade_id": self._trade_counter, "trade": trade.to_dict()}
 
@@ -363,14 +444,17 @@ class ScalpEngine:
     # ── Internal monitoring ───────────────────────────────────────
 
     async def _monitor_loop(self):
-        """Poll prices every ~1s and trigger auto-exits."""
+        """Monitor open trades and trigger exits with WS-first pricing."""
         while self._running:
             try:
                 trades = list(self.open_trades.items())
                 if not trades:
+                    if self._ws_feed:
+                        await self._stop_ws_feed()
                     await asyncio.sleep(1)
                     continue
 
+                await self._ensure_ws_feed({trade.symbol for _, trade in trades})
                 price_map = await self._fetch_all_prices(trades)
 
                 for tid, trade in trades:
@@ -386,13 +470,22 @@ class ScalpEngine:
                         await self._close_trade(trade, reason)
             except Exception as e:
                 self._log("error", f"Monitor error: {e}")
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
     async def _fetch_all_prices(self, trades: list) -> dict:
-        """Fetch mark prices for all unique symbols via bulk ticker call.
-        Returns {symbol: mark_price}."""
+        """Fetch mark prices for all unique symbols.
+        Prefer WS prices; use REST bulk ticker only for symbols still missing."""
         symbols = list({trade.symbol for _, trade in trades})
         result = {}
+        missing = []
+        for sym in symbols:
+            price = self._ws_prices.get(self._canonical_symbol(sym), 0.0)
+            if price > 0:
+                result[sym] = price
+            else:
+                missing.append(sym)
+        if not missing:
+            return result
         try:
             tickers = await asyncio.to_thread(self.delta.get_tickers_bulk)
             ticker_map: Dict[str, float] = {}
@@ -405,7 +498,7 @@ class ScalpEngine:
                     canonical = self.delta.from_delta_symbol(sym)
                     ticker_map[canonical] = price
 
-            for sym in symbols:
+            for sym in missing:
                 if sym in ticker_map:
                     result[sym] = ticker_map[sym]
                 else:
@@ -415,7 +508,7 @@ class ScalpEngine:
         except Exception as e:
             self._log("error", f"Bulk ticker fetch failed: {e}")
             # Fallback: individual fetch per symbol
-            for sym in symbols:
+            for sym in missing:
                 try:
                     ticker = await asyncio.to_thread(self.delta.get_ticker, sym)
                     p = float(ticker.get("mark_price") or ticker.get("last_price") or 0)

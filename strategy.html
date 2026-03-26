@@ -3062,9 +3062,15 @@ function cfModal(title, msg, icon, buttons) {
 
     const msgEl = document.createElement('div');
     msgEl.className = 'cf-modal-msg';
-    // Use innerHTML so callers can pass rich HTML (e.g. viewEngineDetails).
-    // Plain-text callers (cfAlert, cfConfirm) already escape their strings via template literals.
-    msgEl.innerHTML = msg;
+    if (msg instanceof Node) {
+      msgEl.appendChild(msg);
+    } else if (typeof msg === 'string' && /<[^>]+>/.test(msg)) {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = msg;
+      msgEl.appendChild(tpl.content.cloneNode(true));
+    } else {
+      msgEl.textContent = msg == null ? '' : String(msg);
+    }
 
     const actionsEl = document.createElement('div');
     actionsEl.className = 'cf-modal-actions';
@@ -6813,27 +6819,27 @@ function viewEngineDetails(runId, mode) {
   var worstTrade = trades.length ? Math.min.apply(null, trades.map(function(t){return t.pnl||0;})) : 0;
 
   var name = _escapeHtml(d.strategy_name || d.run_name || 'Engine');
-  var html = '<div style="max-width:600px;margin:0 auto;">';
-  html += '<h3 style="margin:0 0 16px;font-size:18px;">' + name + ' — ' + _escapeHtml(d.symbol || '') + '</h3>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">';
-  html += '<div class="ti-item"><div class="ti-label">Total P&L</div><div class="ti-value" style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + pnl.toFixed(2) + '</div></div>';
-  html += '<div class="ti-item"><div class="ti-label">Win Rate</div><div class="ti-value">' + winRate + '%</div></div>';
-  html += '<div class="ti-item"><div class="ti-label">Total Trades</div><div class="ti-value">' + trades.length + '</div></div>';
-  html += '<div class="ti-item"><div class="ti-label">Winners / Losers</div><div class="ti-value" style="color:var(--green);">' + winners.length + '<span style="color:var(--muted);"> / </span><span style="color:var(--red);">' + losers.length + '</span></div></div>';
-  html += '<div class="ti-item"><div class="ti-label">Avg Win</div><div class="ti-value" style="color:var(--green);">$' + avgWin + '</div></div>';
-  html += '<div class="ti-item"><div class="ti-label">Avg Loss</div><div class="ti-value" style="color:var(--red);">$' + avgLoss + '</div></div>';
-  html += '<div class="ti-item"><div class="ti-label">Best Trade</div><div class="ti-value" style="color:var(--green);">$' + bestTrade.toFixed(2) + '</div></div>';
-  html += '<div class="ti-item"><div class="ti-label">Worst Trade</div><div class="ti-value" style="color:var(--red);">$' + worstTrade.toFixed(2) + '</div></div>';
-  html += '</div>';
+  var wrapper = document.createElement('div');
+  wrapper.style.maxWidth = '600px';
+  wrapper.style.margin = '0 auto';
+  wrapper.innerHTML =
+    '<h3 style="margin:0 0 16px;font-size:18px;">' + name + ' — ' + _escapeHtml(d.symbol || '') + '</h3>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">'
+    + '<div class="ti-item"><div class="ti-label">Total P&L</div><div class="ti-value" style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">$' + pnl.toFixed(2) + '</div></div>'
+    + '<div class="ti-item"><div class="ti-label">Win Rate</div><div class="ti-value">' + winRate + '%</div></div>'
+    + '<div class="ti-item"><div class="ti-label">Total Trades</div><div class="ti-value">' + trades.length + '</div></div>'
+    + '<div class="ti-item"><div class="ti-label">Winners / Losers</div><div class="ti-value" style="color:var(--green);">' + winners.length + '<span style="color:var(--muted);"> / </span><span style="color:var(--red);">' + losers.length + '</span></div></div>'
+    + '<div class="ti-item"><div class="ti-label">Avg Win</div><div class="ti-value" style="color:var(--green);">$' + avgWin + '</div></div>'
+    + '<div class="ti-item"><div class="ti-label">Avg Loss</div><div class="ti-value" style="color:var(--red);">$' + avgLoss + '</div></div>'
+    + '<div class="ti-item"><div class="ti-label">Best Trade</div><div class="ti-value" style="color:var(--green);">$' + bestTrade.toFixed(2) + '</div></div>'
+    + '<div class="ti-item"><div class="ti-label">Worst Trade</div><div class="ti-value" style="color:var(--red);">$' + worstTrade.toFixed(2) + '</div></div>'
+    + '</div>'
+    + '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;padding:12px;font-size:12px;">'
+    + '<div style="margin-bottom:4px;"><b>Mode:</b> ' + _escapeHtml(mode || 'paper') + '  |  <b>Leverage:</b> ' + (d.leverage || 1) + 'x  |  <b>Side:</b> ' + _escapeHtml(d.side || d.trade_side || '') + '</div>'
+    + '<div><b>Run ID:</b> <span style="font-family:monospace;font-size:10px;color:var(--muted);">' + _escapeHtml(runId) + '</span></div>'
+    + '</div>';
 
-  // Config details
-  html += '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;padding:12px;font-size:12px;">';
-  html += '<div style="margin-bottom:4px;"><b>Mode:</b> ' + _escapeHtml(mode || 'paper') + '  |  <b>Leverage:</b> ' + (d.leverage || 1) + 'x  |  <b>Side:</b> ' + _escapeHtml(d.side || d.trade_side || '') + '</div>';
-  html += '<div><b>Run ID:</b> <span style="font-family:monospace;font-size:10px;color:var(--muted);">' + _escapeHtml(runId) + '</span></div>';
-  html += '</div>';
-  html += '</div>';
-
-  cfAlert(html, 'Engine Details — ' + name, '📊', true);
+  cfModal('Engine Details — ' + name, wrapper, '📊', [{label:'OK', cls:'btn-primary'}]);
 }
 
 // ── Portfolio Monthly/Yearly P&L ───────────────────────────

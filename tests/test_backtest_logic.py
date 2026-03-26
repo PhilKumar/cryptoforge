@@ -16,7 +16,7 @@ def _load_app_module():
 
 
 class StrategyRuntimeTests(unittest.TestCase):
-    def test_normalize_runtime_requires_explicit_entry_conditions(self):
+    def test_normalize_runtime_injects_default_entry_for_interval(self):
         app_module = _load_app_module()
 
         runtime = app_module._normalize_strategy_runtime(
@@ -26,9 +26,10 @@ class StrategyRuntimeTests(unittest.TestCase):
             candle_interval="15m",
         )
 
-        self.assertEqual(runtime["entry_conditions"], [])
+        self.assertEqual(runtime["entry_conditions"][0]["right"], "EMA_20_15m")
         self.assertEqual(runtime["exit_conditions"], [])
-        self.assertIn("No entry conditions defined", runtime["errors"])
+        self.assertIn("EMA_20_15m", runtime["indicators"])
+        self.assertFalse(runtime["errors"])
         self.assertTrue(any("No exit conditions" in w for w in runtime["warnings"]))
 
     def test_normalize_runtime_autoloads_missing_indicator_dependency(self):

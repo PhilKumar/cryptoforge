@@ -532,7 +532,12 @@ def _normalize_strategy_runtime(
     errors = []
 
     if not effective_entry:
-        errors.append("No entry conditions defined")
+        ema_col = f"EMA_20_{candle_interval or '5m'}"
+        effective_entry = [{"left": "current_close", "operator": "is_above", "right": ema_col, "connector": "AND"}]
+        if ema_col not in effective_indicators:
+            effective_indicators.append(ema_col)
+            added_indicators.append(ema_col)
+        warnings.append(f"No entry conditions — default Close > {ema_col} will be used")
     if not effective_exit:
         warnings.append("No exit conditions — trades will only close at SL/TP or manual stop")
 
