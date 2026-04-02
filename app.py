@@ -472,14 +472,19 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), browsing-topics=()"
     csp = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "script-src 'self'; "
+        "script-src-elem 'self'; "
+        "script-src-attr 'none'; "
+        "style-src 'self' https://fonts.googleapis.com; "
+        "style-src-elem 'self' https://fonts.googleapis.com; "
+        "style-src-attr 'unsafe-inline'; "
         "font-src 'self' https://fonts.gstatic.com data:; "
         "img-src 'self' data: blob: https:; "
         "connect-src 'self' ws: wss: https:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
-        "form-action 'self'"
+        "form-action 'self'; "
+        "object-src 'none'"
     )
     response.headers["Content-Security-Policy"] = csp
     if _is_https_request(request):
