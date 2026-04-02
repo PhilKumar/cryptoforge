@@ -63,11 +63,15 @@ class FakeScalpDelta:
     def __init__(self, ticker_prices=None):
         self.verified_calls = []
         self.ticker_prices = list(ticker_prices or [100.0])
+        self.product_calls = 0
+        self.ticker_calls = 0
 
     def get_product_by_symbol(self, symbol):
+        self.product_calls += 1
         return {"id": 77}
 
     def get_ticker(self, symbol):
+        self.ticker_calls += 1
         price = self.ticker_prices[0] if self.ticker_prices else 100.0
         if len(self.ticker_prices) > 1:
             price = self.ticker_prices.pop(0)
@@ -408,6 +412,35 @@ class HistoryPersistenceTests(unittest.TestCase):
 
 
 class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scalp_paper_entry_skips_broker_lookups_without_cached_price(self):
+        class OfflineScalpDelta(FakeScalpDelta):
+            def get_product_by_symbol(self, symbol):
+                self.product_calls += 1
+                raise AssertionError("paper mode should not look up broker products")
+
+            def get_ticker(self, symbol):
+                self.ticker_calls += 1
+                raise AssertionError("paper mode should not block on broker tickers")
+
+        delta = OfflineScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=100,
+            leverage=10,
+            target_usd=10,
+            sl_usd=5,
+            mode="paper",
+        )
+
+        self.assertEqual(entered["status"], "ok")
+        self.assertEqual(delta.product_calls, 0)
+        self.assertEqual(delta.ticker_calls, 0)
+        self.assertEqual(entered["trade"]["order_id"], "PAPER")
+
     async def test_scalp_live_entry_and_exit_use_verified_orders(self):
         delta = FakeScalpDelta()
         engine = ScalpEngine(delta)
@@ -454,6 +487,40 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(engine.open_trades[trade_id].current_price, 103.75)
         self.assertEqual(engine.get_status()["open_trades"][0]["mark_price"], 103.75)
+
+    async def test_scalp_paper_entry_backfills_pct_targets_when_first_tick_arrives(self):
+        class OfflineScalpDelta(FakeScalpDelta):
+            def get_product_by_symbol(self, symbol):
+                raise AssertionError("paper mode should not look up broker products")
+
+            def get_ticker(self, symbol):
+                raise AssertionError("paper mode should not block on broker tickers")
+
+        delta = OfflineScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=100,
+            leverage=10,
+            target_pct=10,
+            sl_pct=5,
+            mode="paper",
+        )
+        trade_id = entered["trade_id"]
+        trade = engine.open_trades[trade_id]
+
+        self.assertEqual(trade.entry_price, 0.0)
+        self.assertEqual(trade.target_price, 0.0)
+        self.assertEqual(trade.sl_price, 0.0)
+
+        engine._handle_ticker("BTCUSD", {"mark_price": 100.0})
+
+        self.assertEqual(trade.entry_price, 100.0)
+        self.assertEqual(trade.current_price, 100.0)
+        self.assertEqual(trade.target_price, 101.0)
+        self.assertEqual(trade.sl_price, 99.5)
 
     async def test_scalp_trade_waits_for_fresh_price_before_pnl_exit_checks(self):
         delta = FakeScalpDelta()

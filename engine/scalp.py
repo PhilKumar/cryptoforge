@@ -81,19 +81,11 @@ class ScalpTrade:
         self.exit_latency_ms: float = 0.0
 
         # Resolve absolute TP/SL from percentage if needed
+        self.target_pct = target_pct
+        self.sl_pct = sl_pct
         self.target_price = target_price
         self.sl_price = sl_price
-
-        if not self.target_price and target_pct > 0 and entry_price > 0:
-            # Convert leveraged % to raw price move
-            price_move_pct = target_pct / leverage
-            mult = 1 if side == "LONG" else -1
-            self.target_price = round(entry_price * (1 + mult * price_move_pct / 100), 6)
-
-        if not self.sl_price and sl_pct > 0 and entry_price > 0:
-            price_move_pct = sl_pct / leverage
-            mult = -1 if side == "LONG" else 1
-            self.sl_price = round(entry_price * (1 + mult * price_move_pct / 100), 6)
+        self._apply_percentage_targets()
 
         self.target_usd = target_usd
         self.sl_usd = sl_usd
@@ -104,6 +96,26 @@ class ScalpTrade:
         self.exit_order_id: str = ""
         self.pnl: float = 0.0
         self.status: str = "open"
+
+    def _apply_percentage_targets(self) -> None:
+        if self.entry_price <= 0:
+            return
+        if not self.target_price and self.target_pct > 0:
+            price_move_pct = self.target_pct / max(self.leverage, 1)
+            mult = 1 if self.side == "LONG" else -1
+            self.target_price = round(self.entry_price * (1 + mult * price_move_pct / 100), 6)
+        if not self.sl_price and self.sl_pct > 0:
+            price_move_pct = self.sl_pct / max(self.leverage, 1)
+            mult = -1 if self.side == "LONG" else 1
+            self.sl_price = round(self.entry_price * (1 + mult * price_move_pct / 100), 6)
+
+    def prime_entry_price(self, price: float) -> bool:
+        price = _coerce_float(price, 0.0)
+        if price <= 0 or self.entry_price > 0:
+            return False
+        self.entry_price = price
+        self._apply_percentage_targets()
+        return True
 
     def should_prefer_fresh_rest_mark(self, now: Optional[datetime] = None) -> bool:
         now = now or _now_utc()
@@ -287,6 +299,7 @@ class ScalpEngine:
         self._task: Optional[asyncio.Task] = None
         self._ws_feed = None
         self._ws_prices: Dict[str, float] = {}
+        self._last_prices: Dict[str, float] = {}
         self._ws_subscribed_symbols: set[str] = set()
         self._last_price_ts: Dict[str, datetime] = {}
         self._last_price_source: Dict[str, str] = {}
@@ -372,13 +385,22 @@ class ScalpEngine:
         canonical = self._canonical_symbol(symbol)
         if source == "ws":
             self._ws_prices[canonical] = price
+        self._last_prices[canonical] = price
         self._last_price_ts[canonical] = now
         self._last_price_source[canonical] = source
         for trade in self.open_trades.values():
             if self._canonical_symbol(trade.symbol) == canonical:
+                trade.prime_entry_price(price)
                 trade.current_price = price
                 trade.last_price_source = source
                 trade.last_price_update = now
+
+    def _cached_price(self, symbol: str) -> float:
+        canonical = self._canonical_symbol(symbol)
+        price = _coerce_float(self._ws_prices.get(canonical), 0.0)
+        if price > 0:
+            return price
+        return _coerce_float(self._last_prices.get(canonical), 0.0)
 
     async def _emit_update(self):
         if not self._on_update:
@@ -468,15 +490,16 @@ class ScalpEngine:
     ) -> Dict[str, Any]:
         """Place immediately, or arm a pending guardrail-triggered entry."""
 
-        market_price = 0.0
-        try:
-            ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
-            market_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
-            if market_price > 0:
-                self._rest_price_fetches += 1
-                self._record_price(symbol, market_price, source="rest_quote")
-        except Exception:
-            pass
+        market_price = self._cached_price(symbol)
+        if market_price <= 0 and (mode != "paper" or guardrail_price > 0):
+            try:
+                ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
+                market_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+                if market_price > 0:
+                    self._rest_price_fetches += 1
+                    self._record_price(symbol, market_price, source="rest_quote")
+            except Exception:
+                pass
 
         if guardrail_price > 0:
             should_enter_now = False
@@ -562,18 +585,17 @@ class ScalpEngine:
     ) -> Dict[str, Any]:
         """Place a broker order (or simulate in paper mode) and register the scalp trade."""
 
-        # Look up product
         product_id = 0
-        try:
-            product = await asyncio.to_thread(self.delta.get_product_by_symbol, symbol)
-            if product:
-                product_id = int(product.get("id", 0))
-        except Exception:
-            pass
+        if mode != "paper":
+            try:
+                product = await asyncio.to_thread(self.delta.get_product_by_symbol, symbol)
+                if product:
+                    product_id = int(product.get("id", 0))
+            except Exception:
+                pass
 
-        # Get current mark price
-        entry_price = market_price
-        if entry_price <= 0:
+        entry_price = market_price or self._cached_price(symbol)
+        if entry_price <= 0 and mode != "paper":
             try:
                 ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
                 entry_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
@@ -800,8 +822,7 @@ class ScalpEngine:
                 for tid, trade in trades:
                     price = price_map.get(trade.symbol, 0.0)
                     if price > 0:
-                        if trade.entry_price == 0:
-                            trade.entry_price = price
+                        if trade.prime_entry_price(price):
                             self._log("info", f"📌 Trade {tid} entry price set @ ${price:,.4f}")
                         trade.current_price = price
                         if not trade._post_entry_price_ready:
