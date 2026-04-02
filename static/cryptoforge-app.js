@@ -4489,6 +4489,7 @@ document.addEventListener('DOMContentLoaded', () => {
   connectWS();
   requestNotificationPermission();
   fetchStrategies();
+  cfApplyScalpDefaults();
   cfUpdateSLTPHints();
   cfUpdateScalpSymbol();
   cfToggleScalpLiveSafety();
@@ -4582,6 +4583,38 @@ const _cfOperatorReads = [
     body: 'The operator who waits through dead tape is usually safer than the one who fills the session with random clicks. Good scalping is mostly selective boredom with a fast trigger.'
   }
 ];
+
+const _CF_SCALP_DEFAULTS = Object.freeze({
+  symbol: 'BTCUSDT',
+  qty: '10000',
+  leverage: '10',
+  sl: '1000',
+  tp: '1000',
+  slType: 'usdt',
+  tpType: 'usdt',
+  mode: 'paper',
+  guardrail: ''
+});
+
+function cfApplyScalpDefaults() {
+  var defaults = _CF_SCALP_DEFAULTS;
+  var setValue = function(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.value = value;
+  };
+  setValue('cf-scalp-symbol', defaults.symbol);
+  setValue('cf-scalp-qty', defaults.qty);
+  setValue('cf-scalp-sl', defaults.sl);
+  setValue('cf-scalp-tp', defaults.tp);
+  setValue('cf-sl-type', defaults.slType);
+  setValue('cf-tp-type', defaults.tpType);
+  setValue('cf-scalp-mode', defaults.mode);
+  setValue('cf-scalp-stop-price', defaults.guardrail);
+  var levEl = document.getElementById('cf-scalp-leverage');
+  if (levEl) levEl.value = defaults.leverage;
+  var liveAck = document.getElementById('cf-scalp-live-ack');
+  if (liveAck) liveAck.checked = false;
+}
 
 function cfScalpSelectedSymbol() {
   var el = document.getElementById('cf-scalp-symbol');
@@ -5223,14 +5256,21 @@ async function cfUpdateScalpSymbol() {
   const symbolEl = document.getElementById('cf-scalp-symbol');
   const levEl = document.getElementById('cf-scalp-leverage');
   if (!symbolEl || !levEl) return;
+  const preferred = String(levEl.value || _CF_SCALP_DEFAULTS.leverage || '10');
   try {
     const r = await fetch('/api/leverage/' + symbolEl.value, { credentials: 'same-origin' });
     const d = await r.json();
     if (d.status === 'ok' && Array.isArray(d.options) && d.options.length) {
-      const current = String(d.default || d.options[0]);
+      const options = d.options.map(function(lev) { return String(lev); });
+      const brokerDefault = String(d.default || d.options[0]);
+      const selected = options.includes(preferred)
+        ? preferred
+        : (options.includes(String(_CF_SCALP_DEFAULTS.leverage)) ? String(_CF_SCALP_DEFAULTS.leverage) : brokerDefault);
       levEl.innerHTML = d.options.map(function(lev) {
-        return '<option value="' + lev + '"' + (String(lev) === current ? ' selected' : '') + '>' + lev + '×</option>';
+        const value = String(lev);
+        return '<option value="' + value + '"' + (value === selected ? ' selected' : '') + '>' + value + '×</option>';
       }).join('');
+      levEl.value = selected;
     }
   } catch(e) {}
   cfRefreshScalpEntryLaneFromState();
