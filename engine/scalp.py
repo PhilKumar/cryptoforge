@@ -394,6 +394,8 @@ class ScalpEngine:
                 trade.current_price = price
                 trade.last_price_source = source
                 trade.last_price_update = now
+                if not trade._post_entry_price_ready:
+                    trade._post_entry_price_ready = True
 
     def _cached_price(self, symbol: str) -> float:
         canonical = self._canonical_symbol(symbol)

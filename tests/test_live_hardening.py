@@ -412,6 +412,32 @@ class HistoryPersistenceTests(unittest.TestCase):
         save_runs.assert_not_called()
 
 
+class WebSocketFeedContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_returns_once_socket_is_ready(self):
+        from engine.ws_feed import DeltaWSFeed
+
+        feed = DeltaWSFeed()
+        blocker = asyncio.Event()
+
+        async def fake_do_connect():
+            feed._connected = True
+            feed._ws = SimpleNamespace(closed=False)
+            feed._connected_event.set()
+            await blocker.wait()
+
+        feed._do_connect = fake_do_connect
+
+        await asyncio.wait_for(feed.connect(), 0.2)
+
+        self.assertTrue(feed.connected)
+        self.assertIsNotNone(feed._connect_task)
+        self.assertFalse(feed._connect_task.done())
+
+        feed._running = False
+        blocker.set()
+        await asyncio.wait_for(feed._connect_task, 0.2)
+
+
 class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_scalp_paper_entry_skips_broker_lookups_without_cached_price(self):
         class OfflineScalpDelta(FakeScalpDelta):
@@ -486,7 +512,10 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
 
         engine._handle_ticker("BTCUSD", {"mark_price": 103.75})
 
-        self.assertEqual(engine.open_trades[trade_id].current_price, 103.75)
+        trade = engine.open_trades[trade_id]
+        self.assertEqual(trade.entry_price, 103.75)
+        self.assertEqual(trade.current_price, 103.75)
+        self.assertTrue(trade._post_entry_price_ready)
         self.assertEqual(engine.get_status()["open_trades"][0]["mark_price"], 103.75)
 
     async def test_scalp_paper_entry_backfills_pct_targets_when_first_tick_arrives(self):

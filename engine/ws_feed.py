@@ -76,6 +76,7 @@ class DeltaWSFeed:
         self._running = False
         self._reconnect_attempt = 0
         self._last_message_time = 0
+        self._connected_event = asyncio.Event()
 
         # Channel management
         self._subscribed_channels: Set[str] = set()
@@ -141,9 +142,15 @@ class DeltaWSFeed:
         Connect to Delta Exchange WebSocket.
         Starts heartbeat and message reader tasks.
         Auto-reconnects on disconnect.
+        Returns once the socket is ready for subscriptions.
         """
         self._running = True
-        await self._do_connect()
+        if self.connected:
+            return
+        if self._connect_task is None or self._connect_task.done():
+            self._connected_event.clear()
+            self._connect_task = asyncio.create_task(self._do_connect())
+        await asyncio.wait_for(self._connected_event.wait(), timeout=15)
 
     async def _do_connect(self):
         """Internal connection logic with retry."""
@@ -163,6 +170,7 @@ class DeltaWSFeed:
                 self._connected = True
                 self._reconnect_attempt = 0
                 self._last_message_time = _time.time()
+                self._connected_event.set()
                 print("[WS] Connected to Delta Exchange WebSocket")
 
                 # Authenticate if API keys are configured
@@ -195,13 +203,14 @@ class DeltaWSFeed:
                 self._reader_task = asyncio.create_task(self._reader_loop())
                 self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-                # Wait for reader to finish (means disconnect)
-                await self._reader_task
+                # Reader/heartbeat continue in the background. When the
+                # socket drops, _reader_loop triggers reconnect handling.
                 return
 
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                 self._connected = False
                 self._authenticated = False
+                self._connected_event.clear()
                 self.last_error = str(e)
                 print(f"[WS] Connection failed: {e}")
 
@@ -341,6 +350,7 @@ class DeltaWSFeed:
         finally:
             self._connected = False
             self._authenticated = False
+            self._connected_event.clear()
             if self._heartbeat_task:
                 self._heartbeat_task.cancel()
 
@@ -465,6 +475,7 @@ class DeltaWSFeed:
         """Gracefully disconnect from WebSocket."""
         self._running = False
         self._connected = False
+        self._connected_event.clear()
 
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
