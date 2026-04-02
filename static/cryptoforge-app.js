@@ -4617,8 +4617,7 @@ function cfScalpGateTone(allowed, state) {
 
 function cfScalpGateLabel(allowed, state) {
   var tone = cfScalpGateTone(allowed, state);
-  if (tone === 'open') return 'Open';
-  if (tone === 'caution') return 'Caution';
+  if (tone === 'open' || tone === 'caution') return 'Open';
   if (tone === 'waiting') return 'Waiting';
   return 'Blocked';
 }
@@ -4825,27 +4824,24 @@ function cfRefreshScalpEntryLaneFromState() {
   if (guardrailArmed) effectiveAllowed = true;
   if (requiresAck) effectiveAllowed = false;
 
-  let title = 'Waiting for first tick';
-  if (state === 'fresh') title = mode === 'live' ? 'Live velocity entry ready' : 'Velocity entry ready';
-  else if (state === 'degraded') title = mode === 'live' ? 'Live blocked, paper allowed' : 'Paper entry with caution';
-  else if (state === 'stale') title = 'Feed stale';
+  let title = 'Velocity Entry';
 
   let note = '';
   if (guardrailArmed) {
-    note = 'Guardrail armed. Entry will wait for the trigger price.';
+    note = 'Guardrail armed. Entry waits for the trigger price.';
   } else if (requiresAck) {
-    note = 'Tick live acknowledgement to enable real orders.';
+    note = 'Confirm live mode to enable real orders.';
   } else if (state === 'waiting') {
     note = 'Waiting for the first reliable market tick.';
   } else if (state === 'degraded') {
-    note = 'Paper entry is allowed. Live entry stays blocked until a fresh tick arrives.';
+    note = mode === 'live' ? 'Live entry stays blocked until a fresh tick arrives.' : '';
   } else if (state === 'stale') {
     note = 'Wait for a fresher market tick before buying or selling.';
   }
 
   if (lane) {
     lane.dataset.state = state;
-    lane.classList.toggle('is-compact', !note);
+    lane.classList.toggle('has-note', !!note);
   }
   if (titleEl) titleEl.textContent = title;
   if (stateEl) {
@@ -4863,8 +4859,8 @@ function cfRefreshScalpEntryLaneFromState() {
     liveGateEl.dataset.gate = cfScalpGateTone(liveAllowed, state);
   }
   if (noteEl) {
-    noteEl.textContent = note;
-    noteEl.style.display = note ? 'block' : 'none';
+    noteEl.textContent = note || ' ';
+    noteEl.classList.toggle('is-empty', !note);
   }
 
   const disableReason = guardrailArmed ? '' : (note || entry.reason || feed.entry_block_reason || 'Entry unavailable');
@@ -4903,7 +4899,7 @@ function cfApplyScalpStatus(d) {
   if (feedDetail) {
     feedDetail.textContent = cfScalpFeedDetail(feed);
     const state = String(feed.state || '').toLowerCase();
-    feedDetail.style.color = feed.last_error || state === 'stale' ? 'var(--red)' : state === 'degraded' ? '#fbbf24' : 'var(--muted)';
+    feedDetail.style.color = feed.last_error || state === 'stale' ? 'var(--red)' : 'var(--muted)';
   }
   const execMeta = document.getElementById('cf-scalp-exec-meta');
   if (execMeta) {
