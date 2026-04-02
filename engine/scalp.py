@@ -259,11 +259,13 @@ class ScalpEngine:
         delta_client,
         on_trade_closed: Optional[Callable[[dict], None]] = None,
         on_event: Optional[Callable[[dict], None]] = None,
+        on_update: Optional[Callable[[dict], None]] = None,
     ):
         self.delta = delta_client
         # Callback invoked with trade dict whenever a trade is closed (for disk persistence).
         self._on_trade_closed = on_trade_closed
         self._on_event = on_event
+        self._on_update = on_update
         self.open_trades: Dict[int, ScalpTrade] = {}
         self.pending_entries: Dict[int, PendingScalpEntry] = {}
         self.closed_trades: list = []
@@ -274,6 +276,9 @@ class ScalpEngine:
         self._ws_feed = None
         self._ws_prices: Dict[str, float] = {}
         self._ws_subscribed_symbols: set[str] = set()
+        self._update_task: Optional[asyncio.Task] = None
+        self._last_update_push: float = 0.0
+        self._update_interval_sec: float = 0.25
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -281,12 +286,16 @@ class ScalpEngine:
         if not self._running:
             self._running = True
             self._task = asyncio.create_task(self._monitor_loop())
+            self._schedule_update(force=True)
 
     def stop(self):
         self._running = False
         if self._task:
             self._task.cancel()
             self._task = None
+        if self._update_task:
+            self._update_task.cancel()
+            self._update_task = None
         if self._ws_feed:
             try:
                 asyncio.get_running_loop().create_task(self._stop_ws_feed())
@@ -340,8 +349,51 @@ class ScalpEngine:
             for trade in self.open_trades.values():
                 if self._canonical_symbol(trade.symbol) == canonical:
                     trade.current_price = price
+            self._schedule_update()
         except Exception:
             pass
+
+    async def _emit_update(self):
+        if not self._on_update:
+            return
+        self._last_update_push = asyncio.get_running_loop().time()
+        payload = self.get_status()
+        payload["closed_trades"] = list(reversed(self.closed_trades[-20:]))
+        payload["event_log"] = list(reversed(self.event_log[-40:]))
+        try:
+            result = self._on_update(payload)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            pass
+
+    async def _delayed_update(self, delay: float):
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            await self._emit_update()
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._update_task = None
+
+    def _schedule_update(self, force: bool = False):
+        if not self._on_update:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if force:
+            if self._update_task and not self._update_task.done():
+                self._update_task.cancel()
+            self._update_task = loop.create_task(self._delayed_update(0))
+            return
+        if self._update_task and not self._update_task.done():
+            return
+        elapsed = loop.time() - self._last_update_push
+        delay = max(0.0, self._update_interval_sec - elapsed)
+        self._update_task = loop.create_task(self._delayed_update(delay))
 
     async def _ensure_ws_feed(self, symbols: set[str]):
         if not _HAS_WS or not symbols:
@@ -426,6 +478,7 @@ class ScalpEngine:
                     "info",
                     f"🛡 Guardrail armed for {side} {symbol}: waiting for price {trigger_text} ${guardrail_price:,.4f}",
                 )
+                self._schedule_update(force=True)
                 if not self._running:
                     self.start()
                 else:
@@ -556,6 +609,7 @@ class ScalpEngine:
                 asyncio.get_running_loop().create_task(self._ensure_ws_feed({symbol}))
             except RuntimeError:
                 pass
+        self._schedule_update(force=True)
 
         return {"status": "ok", "trade_id": self._trade_counter, "trade": trade.to_dict()}
 
@@ -576,6 +630,7 @@ class ScalpEngine:
             if attr in kwargs and kwargs[attr] is not None:
                 setattr(trade, attr, kwargs[attr])
         self._log("info", f"🎯 Trade {trade_id} targets updated: {kwargs}")
+        self._schedule_update(force=True)
         return {"status": "ok", "trade": trade.to_dict()}
 
     def get_status(self) -> dict:
@@ -839,6 +894,7 @@ class ScalpEngine:
             f"entry=${trade.entry_price:,.4f} exit=${exit_price:,.4f} "
             f"PnL={pnl_sign}${pnl:.2f}",
         )
+        self._schedule_update(force=True)
 
     def _log(self, level: str, msg: str):
         now = _now_utc()

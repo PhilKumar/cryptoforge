@@ -3343,10 +3343,17 @@
 
         <div style="grid-column:span 2;">
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Execution Mode</label>
-          <select id="cf-scalp-mode" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
+          <select id="cf-scalp-mode" onchange="cfToggleScalpLiveSafety()" style="width:100%;padding:9px 10px;background:var(--input-bg,rgba(255,255,255,0.05));border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;">
             <option value="paper" selected>📄 Paper</option>
             <option value="live">🔴 Live</option>
           </select>
+        </div>
+
+        <div id="cf-scalp-live-safety" style="grid-column:span 2;display:none;padding:10px 12px;border-radius:10px;border:1px solid rgba(248,113,113,0.24);background:rgba(248,113,113,0.08);">
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:11px;color:#fecaca;line-height:1.5;text-transform:none;letter-spacing:0;">
+            <input type="checkbox" id="cf-scalp-live-ack" style="width:14px;height:14px;margin-top:2px;accent-color:#f87171;">
+            <span>I understand live scalp mode will place real Delta orders immediately once submitted.</span>
+          </label>
         </div>
 
         <div style="grid-column:span 2;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
@@ -5981,6 +5988,10 @@ function connectWS() {
         if (dot) dot.classList.toggle('active', data.paper_running || data.live_running);
         return;
       }
+      if (data.source === 'scalp' && data.type === 'scalp_status') {
+        cfApplyScalpStatus(data.status || {});
+        return;
+      }
       // Trade events — trigger immediate refresh
       if (data.source === 'live' || data.source === 'paper') {
         var srcLabel = data.source === 'paper' ? '📄 Paper' : '🔴 Live';
@@ -7674,6 +7685,8 @@ document.addEventListener('DOMContentLoaded', () => {
   requestNotificationPermission();
   fetchStrategies();
   cfUpdateSLTPHints();
+  cfUpdateScalpSymbol();
+  cfToggleScalpLiveSafety();
   setInterval(refreshTopbarTicker, 30000);
   setInterval(pollLiveStatus, 10000);
   setInterval(function() { if (document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData(); }, 60000);
@@ -7706,7 +7719,7 @@ var _cfOpenTradeIds = [];
 function cfInitScalpPage() {
   cfLoadScalpStatus();
   if (!_cfScalpPollTimer) {
-    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 1000);
+    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 4000);
   }
 }
 
@@ -7747,127 +7760,124 @@ async function cfLoadScalpStatus() {
     const r = await fetch('/api/scalp/status');
     if (!r.ok) return;
     const d = await r.json();
-    const open = d.open_trades || [];
-    const pending = d.pending_entries || [];
-    const running = d.running || open.length > 0 || pending.length > 0;
-
-    // Status indicators
-    const dot = document.getElementById('cf-scalp-status-dot');
-    const label = document.getElementById('cf-scalp-status-label');
-    if (dot) dot.style.background = running ? 'var(--green)' : 'var(--muted)';
-    if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : (pending.length ? 'Guardrail Armed' : 'Monitoring')) : 'Engine Idle';
-    const openCount = document.getElementById('cf-scalp-open-count');
-    if (openCount) {
-      const openText = open.length + ' open trade' + (open.length !== 1 ? 's' : '');
-      openCount.textContent = pending.length ? (openText + ' • ' + pending.length + ' pending') : openText;
-    }
-    const engDot = document.getElementById('cf-scalp-dot');
-    if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
-
-    const pendingWrap = document.getElementById('cf-scalp-pending-wrap');
-    const pendingCount = document.getElementById('cf-scalp-pending-count');
-    const pendingList = document.getElementById('cf-scalp-pending-list');
-    if (pendingWrap && pendingList) {
-      if (!pending.length) {
-        pendingWrap.style.display = 'none';
-      } else {
-        pendingWrap.style.display = 'block';
-        if (pendingCount) pendingCount.textContent = pending.length + ' armed';
-        pendingList.innerHTML = pending.map(p => {
-          const sideColor = p.side === 'LONG' ? 'var(--green)' : 'var(--red)';
-          const triggerText = p.side === 'LONG' ? 'Buy when price >=' : 'Sell when price <=';
-          const armedAt = p.created_at ? fmtDt(p.created_at) : '—';
-          const qtyText = '$' + fmtINR(p.qty_usdt || ((p.size || 0) / Math.max(p.leverage || 1, 1)));
-          return `
-            <div style="padding:12px 14px;border:1px solid rgba(251,191,36,0.22);border-radius:12px;background:linear-gradient(180deg,rgba(251,191,36,0.08) 0%, rgba(15,23,42,0.18) 100%);">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
-                <div style="font-size:13px;font-weight:700;color:${sideColor};">${_escapeHtml(p.side === 'LONG' ? 'BUY Pending' : 'SELL Pending')}</div>
-                <div style="font-size:11px;color:var(--muted);">${_escapeHtml(String(p.mode || 'paper').toUpperCase())}</div>
-              </div>
-              <div style="font-size:12px;font-weight:600;margin-bottom:6px;">${_escapeHtml(p.symbol || '—')}</div>
-              <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${_escapeHtml(triggerText)} <span style="color:#fbbf24;font-weight:700;">${fmtINRPrice(p.guardrail_price || 0)}</span></div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;color:var(--muted);">
-                <div>Size: <span style="color:var(--text);font-weight:600;">${_escapeHtml(qtyText)}</span></div>
-                <div>Lev: <span style="color:var(--text);font-weight:600;">${_escapeHtml(String(p.leverage || '—'))}x</span></div>
-                <div style="grid-column:span 2;">Armed: <span style="color:var(--text);font-weight:600;">${_escapeHtml(armedAt)}</span></div>
-              </div>
-            </div>`;
-        }).join('');
-      }
-    }
-
-    // Session P&L
-    const sessionPnlEl = document.getElementById('cf-scalp-session-pnl');
-    if (sessionPnlEl) {
-      let pnl;
-      if (d.session_pnl !== undefined) {
-        pnl = d.session_pnl;
-      } else {
-        const todayUtc = new Date().toISOString().slice(0, 10);
-        const todayRealized = (d.closed_trades || [])
-          .filter(t => t.exit_time && String(t.exit_time).startsWith(todayUtc))
-          .reduce((s, t) => s + (t.pnl || 0), 0);
-        const openUnrealized = open.reduce((s, t) => s + (t.unrealized_pnl || 0), 0);
-        pnl = todayRealized + openUnrealized;
-      }
-      const sign = pnl >= 0 ? '+' : '';
-      sessionPnlEl.textContent = sign + fmtINR(pnl);
-      sessionPnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
-    }
-
-    // Active Positions — targeted DOM updates (no full innerHTML replace)
-    cfRenderActivePositions(open);
-
-    // Trade History — merge into persistent cache, never lose trades
-    const memTrades = d.closed_trades || [];
-    const fileTrades = d.file_trades || [];
-    [...memTrades, ...fileTrades].forEach(t => {
-      // Composite key — trade_id resets to 1 on engine restart, so include entry_time
-      const id = (t.trade_id || '') + '|' + (t.entry_time || '');
-      _cfTradeCache.set(id, t);
-    });
-
-    const body = document.getElementById('cf-scalp-history-body');
-    if (body) {
-      const allTrades = Array.from(_cfTradeCache.values());
-      // Sort by exit_time descending (most recent first)
-      allTrades.sort((a, b) => {
-        const ta = a.exit_time || a.entry_time || '';
-        const tb = b.exit_time || b.entry_time || '';
-        return String(tb).localeCompare(String(ta));
-      });
-      if (!allTrades.length) {
-        body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
-      } else {
-        body.innerHTML = allTrades.map(_cfTradeRow).join('');
-      }
-    }
-    _renderTablePager('cf-scalp-history-table', 'cf-scalp-history-table', 'cf-scalp-history-pagination');
-
-    // Event Log
-    const logEl = document.getElementById('cf-scalp-event-log');
-    if (logEl) {
-      const events = [...(d.file_events || []), ...(d.event_log || [])];
-      events.forEach(e => {
-        const key = (e.ts || e.time || '') + '|' + (e.level || e.type || '') + '|' + (e.msg || e.message || '');
-        _cfScalpEventCache.set(key, e);
-      });
-      const allEvents = Array.from(_cfScalpEventCache.values())
-        .sort((a, b) => String(b.ts || b.time || '').localeCompare(String(a.ts || a.time || '')))
-        .slice(0, 200);
-      if (!allEvents.length) {
-        logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>';
-      } else {
-        const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
-        logEl.innerHTML = allEvents.map(e =>
-          `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">` +
-          `<span style="color:var(--muted);margin-right:8px;">${_escapeHtml(e.time || '')}</span>` +
-          `<span style="color:${evtColors[e.level || e.type] || 'var(--text-dim)'};">${_escapeHtml(e.msg || e.message || '')}</span>` +
-          `</div>`
-        ).join('');
-      }
-    }
+    cfApplyScalpStatus(d);
   } catch(e) { /* engine may not be running */ }
+}
+
+function cfApplyScalpStatus(d) {
+  const open = d.open_trades || [];
+  const pending = d.pending_entries || [];
+  const running = d.running || open.length > 0 || pending.length > 0;
+
+  const dot = document.getElementById('cf-scalp-status-dot');
+  const label = document.getElementById('cf-scalp-status-label');
+  if (dot) dot.style.background = running ? 'var(--green)' : 'var(--muted)';
+  if (label) label.textContent = running ? (d.in_trade ? 'In Trade' : (pending.length ? 'Guardrail Armed' : 'Monitoring')) : 'Engine Idle';
+  const openCount = document.getElementById('cf-scalp-open-count');
+  if (openCount) {
+    const openText = open.length + ' open trade' + (open.length !== 1 ? 's' : '');
+    openCount.textContent = pending.length ? (openText + ' • ' + pending.length + ' pending') : openText;
+  }
+  const engDot = document.getElementById('cf-scalp-dot');
+  if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+
+  const pendingWrap = document.getElementById('cf-scalp-pending-wrap');
+  const pendingCount = document.getElementById('cf-scalp-pending-count');
+  const pendingList = document.getElementById('cf-scalp-pending-list');
+  if (pendingWrap && pendingList) {
+    if (!pending.length) {
+      pendingWrap.style.display = 'none';
+    } else {
+      pendingWrap.style.display = 'block';
+      if (pendingCount) pendingCount.textContent = pending.length + ' armed';
+      pendingList.innerHTML = pending.map(p => {
+        const sideColor = p.side === 'LONG' ? 'var(--green)' : 'var(--red)';
+        const triggerText = p.side === 'LONG' ? 'Buy when price >=' : 'Sell when price <=';
+        const armedAt = p.created_at ? fmtDt(p.created_at) : '—';
+        const qtyText = fmtINR(p.qty_usdt || ((p.size || 0) / Math.max(p.leverage || 1, 1)));
+        return `
+          <div style="padding:12px 14px;border:1px solid rgba(251,191,36,0.22);border-radius:12px;background:linear-gradient(180deg,rgba(251,191,36,0.08) 0%, rgba(15,23,42,0.18) 100%);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+              <div style="font-size:13px;font-weight:700;color:${sideColor};">${_escapeHtml(p.side === 'LONG' ? 'BUY Pending' : 'SELL Pending')}</div>
+              <div style="font-size:11px;color:var(--muted);">${_escapeHtml(String(p.mode || 'paper').toUpperCase())}</div>
+            </div>
+            <div style="font-size:12px;font-weight:600;margin-bottom:6px;">${_escapeHtml(p.symbol || '—')}</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${_escapeHtml(triggerText)} <span style="color:#fbbf24;font-weight:700;">${fmtINRPrice(p.guardrail_price || 0)}</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;color:var(--muted);">
+              <div>Size: <span style="color:var(--text);font-weight:600;">${_escapeHtml(qtyText)}</span></div>
+              <div>Lev: <span style="color:var(--text);font-weight:600;">${_escapeHtml(String(p.leverage || '—'))}x</span></div>
+              <div style="grid-column:span 2;">Armed: <span style="color:var(--text);font-weight:600;">${_escapeHtml(armedAt)}</span></div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+  }
+
+  const sessionPnlEl = document.getElementById('cf-scalp-session-pnl');
+  if (sessionPnlEl) {
+    let pnl;
+    if (d.session_pnl !== undefined) {
+      pnl = d.session_pnl;
+    } else {
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      const todayRealized = (d.closed_trades || [])
+        .filter(t => t.exit_time && String(t.exit_time).startsWith(todayUtc))
+        .reduce((s, t) => s + (t.pnl || 0), 0);
+      const openUnrealized = open.reduce((s, t) => s + (t.unrealized_pnl || 0), 0);
+      pnl = todayRealized + openUnrealized;
+    }
+    const sign = pnl >= 0 ? '+' : '';
+    sessionPnlEl.textContent = sign + fmtINR(pnl);
+    sessionPnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
+  }
+
+  cfRenderActivePositions(open);
+
+  const memTrades = d.closed_trades || [];
+  const fileTrades = d.file_trades || [];
+  [...memTrades, ...fileTrades].forEach(t => {
+    const id = (t.trade_id || '') + '|' + (t.entry_time || '');
+    _cfTradeCache.set(id, t);
+  });
+
+  const body = document.getElementById('cf-scalp-history-body');
+  if (body) {
+    const allTrades = Array.from(_cfTradeCache.values());
+    allTrades.sort((a, b) => {
+      const ta = a.exit_time || a.entry_time || '';
+      const tb = b.exit_time || b.entry_time || '';
+      return String(tb).localeCompare(String(ta));
+    });
+    if (!allTrades.length) {
+      body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
+    } else {
+      body.innerHTML = allTrades.map(_cfTradeRow).join('');
+    }
+  }
+  _renderTablePager('cf-scalp-history-table', 'cf-scalp-history-table', 'cf-scalp-history-pagination');
+
+  const logEl = document.getElementById('cf-scalp-event-log');
+  if (logEl) {
+    const events = [...(d.file_events || []), ...(d.event_log || [])];
+    events.forEach(e => {
+      const key = (e.ts || e.time || '') + '|' + (e.level || e.type || '') + '|' + (e.msg || e.message || '');
+      _cfScalpEventCache.set(key, e);
+    });
+    const allEvents = Array.from(_cfScalpEventCache.values())
+      .sort((a, b) => String(b.ts || b.time || '').localeCompare(String(a.ts || a.time || '')))
+      .slice(0, 200);
+    if (!allEvents.length) {
+      logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>';
+    } else {
+      const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
+      logEl.innerHTML = allEvents.map(e =>
+        `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">` +
+        `<span style="color:var(--muted);margin-right:8px;">${_escapeHtml(e.time || '')}</span>` +
+        `<span style="color:${evtColors[e.level || e.type] || 'var(--text-dim)'};">${_escapeHtml(e.msg || e.message || '')}</span>` +
+        `</div>`
+      ).join('');
+    }
+  }
 }
 
 function cfRenderActivePositions(open) {
@@ -7961,7 +7971,13 @@ async function cfSubmitScalp(direction) {
   const slType = document.getElementById('cf-sl-type').value;
   const tpType = document.getElementById('cf-tp-type').value;
   const mode = document.getElementById('cf-scalp-mode').value;
+  const liveAck = document.getElementById('cf-scalp-live-ack');
   const statusEl = document.getElementById('cf-scalp-entry-status');
+  if (mode === 'live' && liveAck && !liveAck.checked) {
+    if (statusEl) { statusEl.textContent = 'Confirm live acknowledgement first'; statusEl.style.color = 'var(--red)'; }
+    cfToast('Acknowledge live scalp mode before placing real orders', 'warning');
+    return;
+  }
   if (statusEl) statusEl.textContent = 'Submitting…';
   try {
     const payload = { symbol, side: direction, qty_usdt: qty, leverage, mode };
@@ -8049,7 +8065,30 @@ async function cfModifyScalpTrade(tradeId) {
   }
 }
 
-function cfUpdateScalpSymbol() { /* all symbols share the same leverage options */ }
+async function cfUpdateScalpSymbol() {
+  const symbolEl = document.getElementById('cf-scalp-symbol');
+  const levEl = document.getElementById('cf-scalp-leverage');
+  if (!symbolEl || !levEl) return;
+  try {
+    const r = await fetch('/api/leverage/' + symbolEl.value, { credentials: 'same-origin' });
+    const d = await r.json();
+    if (d.status === 'ok' && Array.isArray(d.options) && d.options.length) {
+      const current = String(d.default || d.options[0]);
+      levEl.innerHTML = d.options.map(function(lev) {
+        return '<option value="' + lev + '"' + (String(lev) === current ? ' selected' : '') + '>' + lev + '×</option>';
+      }).join('');
+    }
+  } catch(e) {}
+}
+
+function cfToggleScalpLiveSafety() {
+  const modeEl = document.getElementById('cf-scalp-mode');
+  const wrap = document.getElementById('cf-scalp-live-safety');
+  const ack = document.getElementById('cf-scalp-live-ack');
+  const isLive = !!modeEl && modeEl.value === 'live';
+  if (wrap) wrap.style.display = isLive ? 'block' : 'none';
+  if (!isLive && ack) ack.checked = false;
+}
 
 // SL/TP hint text updates when type toggle changes
 function cfUpdateSLTPHints() {

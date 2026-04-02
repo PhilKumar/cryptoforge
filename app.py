@@ -954,7 +954,13 @@ async def dashboard_summary(request: Request):
 
 # ── Broker Connection ────────────────────────────────────────────
 @app.post("/api/broker/check")
-async def check_broker():
+async def check_broker(request: Request = None):
+    check_rate_limit(
+        "broker_check",
+        max_calls=6,
+        window_sec=30,
+        client_ip=request.client.host if request and request.client else "global",
+    )
     try:
         if not delta._is_configured():
             return {
@@ -998,7 +1004,13 @@ async def check_broker():
 
 
 @app.post("/api/broker/connect")
-async def connect_broker():
+async def connect_broker(request: Request = None):
+    check_rate_limit(
+        "broker_connect",
+        max_calls=4,
+        window_sec=30,
+        client_ip=request.client.host if request and request.client else "global",
+    )
     try:
         if not delta._is_configured():
             return {
@@ -1344,7 +1356,13 @@ def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str 
 
 # ── Backtest ──────────────────────────────────────────────────────
 @app.post("/api/backtest")
-async def api_run_backtest(payload: StrategyPayload):
+async def api_run_backtest(payload: StrategyPayload, request: Request = None):
+    check_rate_limit(
+        "backtest",
+        max_calls=3,
+        window_sec=30,
+        client_ip=request.client.host if request and request.client else "global",
+    )
     try:
         _logger.info(
             "Backtest: %s | %s %sx | %s %s",
@@ -2748,6 +2766,16 @@ def _scalp_persist_trade(trade: dict) -> None:
         )
 
 
+async def _broadcast_scalp_update(status: dict) -> None:
+    payload = {"source": "scalp", "type": "scalp_status", "status": status}
+    for ws in ws_clients.copy():
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            if ws in ws_clients:
+                ws_clients.remove(ws)
+
+
 def _get_scalp_engine():
     global _scalp_engine
     if _scalp_engine is None:
@@ -2755,6 +2783,7 @@ def _get_scalp_engine():
             delta,
             on_trade_closed=_scalp_persist_trade,
             on_event=_scalp_persist_event,
+            on_update=_broadcast_scalp_update,
         )
     return _scalp_engine
 
@@ -2775,6 +2804,9 @@ async def scalp_trades():
 
 @app.post("/api/scalp/enter")
 async def scalp_enter(request: Request):
+    check_rate_limit(
+        "scalp_enter", max_calls=6, window_sec=10, client_ip=request.client.host if request.client else "global"
+    )
     body = await request.json()
     eng = _get_scalp_engine()
     symbol = body.get("symbol", "BTCUSDT")
@@ -2829,15 +2861,16 @@ async def scalp_enter(request: Request):
 
 @app.post("/api/scalp/exit")
 async def scalp_exit(request: Request):
+    check_rate_limit(
+        "scalp_exit", max_calls=8, window_sec=10, client_ip=request.client.host if request.client else "global"
+    )
     body = await request.json()
     trade_id = int(body.get("trade_id", 0))
     eng = _get_scalp_engine()
     try:
         result = await eng.exit_trade(trade_id, reason="manual")
         # Persistence is handled by the engine's on_trade_closed callback.
-        # _save_scalp_trade_to_history for the Results page:
         if result.get("status") == "ok" and result.get("trade"):
-            _save_scalp_trade_to_history(result["trade"])
             t = result["trade"]
             pnl = round(t.get("pnl", 0), 2)
             alerter.alert(
@@ -2856,6 +2889,9 @@ async def scalp_exit(request: Request):
 @app.put("/api/scalp/trades/{trade_id}/targets")
 async def update_scalp_targets(trade_id: int, request: Request):
     """Modify TP/SL for an active scalp trade."""
+    check_rate_limit(
+        "scalp_targets", max_calls=10, window_sec=15, client_ip=request.client.host if request.client else "global"
+    )
     body = await request.json()
     eng = _get_scalp_engine()
     kwargs = {}
