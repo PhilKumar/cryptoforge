@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#8b5cf6">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <script>
   (function () {
     function earlyFmtDt(raw) {
@@ -28,6 +28,9 @@
 </script>
 <style>
   :root {
+    --font-body: 'Manrope', sans-serif;
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
     --bg:         #07090f;
     --fg:         #dde3ee;
     --surface:    rgba(14, 18, 32, 0.90);
@@ -75,7 +78,7 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-body);
     background: var(--bg);
     background-image:
       radial-gradient(ellipse 900px 700px at 15% 25%, rgba(157,113,248,0.045) 0%, transparent 68%),
@@ -165,7 +168,7 @@
     box-shadow: 0 0 0 0.5px rgba(255,255,255,0.10), 0 8px 32px rgba(0,0,0,0.44), inset 0 1px 0 rgba(255,255,255,0.12);
   }
   .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.9px; margin-bottom: 6px; font-weight: 600; }
-  .stat-value { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; letter-spacing: -0.5px; line-height: 1.1; }
+  .stat-value { font-size: 22px; font-weight: 700; font-family: var(--font-mono); letter-spacing: -0.5px; line-height: 1.1; }
 
   /* ── Hero P&L card variant ── */
   .stat-box.pnl-hero {
@@ -188,7 +191,7 @@
     50%       { box-shadow: 0 0 1px rgba(255,255,255,0.08), 0 4px 24px rgba(0,0,0,0.35), 0 0 0 4px rgba(239,68,68,0.08); }
   }
 
-  h1, h2, h3 { font-family: 'Syne', sans-serif; }
+  h1, h2, h3 { font-family: var(--font-display); }
   h2 { font-size: 26px; letter-spacing: -0.5px; }
   h3 { font-size: 17px; letter-spacing: -0.3px; }
 
@@ -202,7 +205,7 @@
     color: var(--text);
     padding: 11px 12px;
     border-radius: 12px;
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-body);
     font-size: 15px;
     transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     box-shadow:
@@ -229,7 +232,7 @@
     border-radius: 999px;
     border: 1px solid var(--btn-border, rgba(117,138,178,0.24));
     font-weight: 700;
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-body);
     font-size: 13px;
     cursor: pointer;
     transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
@@ -408,7 +411,7 @@
     filter: blur(0.2px);
   }
   .topbar-brand-text {
-    font-family: 'Syne', sans-serif;
+    font-family: var(--font-display);
     font-size: 16px;
     font-weight: 800;
     background: linear-gradient(130deg, #c4b5fd 0%, #f9a8d4 100%);
@@ -447,9 +450,9 @@
   .ticker-cell:last-child { border-right: none; }
   .ticker-cell:hover { background: rgba(255,255,255,0.03); }
   .ticker-cell .tc-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; margin-bottom: 2px; }
-  .ticker-cell .tc-price { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 13px; letter-spacing: -0.2px; line-height: 1; }
-  .ticker-cell .tc-usd { font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 500; color: var(--muted); margin-top: 2px; letter-spacing: -0.2px; opacity: 0.7; }
-  .ticker-cell .tc-change { font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500; margin-top: 2px; }
+  .ticker-cell .tc-price { font-family: var(--font-mono); font-weight: 600; font-size: 13px; letter-spacing: -0.2px; line-height: 1; }
+  .ticker-cell .tc-usd { font-family: var(--font-mono); font-size: 9.5px; font-weight: 500; color: var(--muted); margin-top: 2px; letter-spacing: -0.2px; opacity: 0.7; }
+  .ticker-cell .tc-change { font-family: var(--font-mono); font-size: 10px; font-weight: 500; margin-top: 2px; }
 
   .topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .topbar-clock {
@@ -457,7 +460,7 @@
     border: 1px solid var(--border);
     border-radius: 7px;
     padding: 5px 11px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     color: var(--text-dim);
     white-space: nowrap;
@@ -1198,7 +1201,7 @@
   .market-card .mc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .market-card .mc-symbol { font-weight: 700; font-size: 16px; }
   .market-card .mc-icon { font-size: 20px; }
-  .market-card .mc-price { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .market-card .mc-price { font-family: var(--font-mono); font-size: 18px; font-weight: 700; margin-bottom: 4px; }
   .market-card .mc-change { font-size: 13px; font-weight: 600; }
   .market-card .mc-volume { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
@@ -1242,7 +1245,7 @@
     text-align: center;
   }
   .cf-modal-icon { font-size: 42px; margin-bottom: 12px; }
-  .cf-modal-title { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+  .cf-modal-title { font-family: var(--font-display); font-size: 20px; font-weight: 800; margin-bottom: 8px; }
   .cf-modal-msg { color: var(--muted); font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
   .cf-modal-actions { display: flex; gap: 10px; justify-content: center; }
   .cf-modal-actions .btn { min-width: 100px; justify-content: center; }
@@ -1278,11 +1281,11 @@
     border-radius: 10px; padding: 12px;
   }
   .ti-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px; }
-  .ti-value { font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 600; }
+  .ti-value { font-family: var(--font-mono); font-size: 15px; font-weight: 600; }
   .trade-log-panel {
     background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.04);
     border-radius: 12px; padding: 14px; max-height: 260px; overflow-y: auto;
-    font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.8;
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.8;
   }
   .log-entry { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.02); }
   .log-time { color: var(--muted); margin-right: 8px; }
@@ -2096,7 +2099,7 @@
   .text-warn           { color: var(--yellow) !important; }
   .text-muted          { color: var(--muted) !important; }
   .text-accent         { color: var(--accent) !important; }
-  .mono                { font-family: 'JetBrains Mono', monospace; }
+  .mono                { font-family: var(--font-mono); }
 
   /* ── Scrollbar theming ── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -2116,7 +2119,7 @@
     transform: translateY(-1px);
   }
   .market-card .mc-price,
-  .market-card .mc-change { font-family: 'JetBrains Mono', monospace; }
+  .market-card .mc-change { font-family: var(--font-mono); }
 
   /* ═══ MOBILE RESPONSIVE — Comprehensive ═══ */
 
@@ -2270,6 +2273,39 @@
     .mission-grid,
     .builder-insight-grid { grid-template-columns: 1fr !important; }
   }
+
+  /* ── Typography Override Map ── */
+  body, button, input, select, textarea { font-family: var(--font-body); }
+  h1, h2, h3, h4, h5, h6,
+  .topbar-brand-text,
+  .topbar-brand-sub,
+  .nav-tab,
+  .cf-modal-title,
+  .mission-title,
+  .table-title,
+  .tc-name { font-family: var(--font-display) !important; }
+  .mono,
+  .stat-value,
+  .mission-mini-value,
+  .overview-value,
+  .ti-value,
+  .ticker-cell .tc-price,
+  .ticker-cell .tc-usd,
+  .ticker-cell .tc-change,
+  .market-card .mc-price,
+  .market-card .mc-change,
+  .live-combined-pnl,
+  .signal-item .si-value,
+  .day-cell .dc-pnl,
+  .ytd-cell,
+  [style*="JetBrains Mono"],
+  [style*="font-family:JetBrains Mono"],
+  [style*="font-family:'JetBrains Mono'"],
+  [style*="font-family:var(--font-mono)"] { font-family: var(--font-mono) !important; }
+  [style*="font-family:'Outfit'"],
+  [style*="font-family:Outfit"] { font-family: var(--font-body) !important; }
+  [style*="font-family:'Syne'"],
+  [style*="font-family:Syne"] { font-family: var(--font-display) !important; }
 </style>
 <script src="/static/error-handler.js" defer></script>
 </head>

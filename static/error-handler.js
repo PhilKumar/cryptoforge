@@ -1,5 +1,5 @@
 /**
- * error-handler.js — AlgoForge / CryptoForge Frontend Error System
+ * error-handler.js — PhilForge / CryptoForge Frontend Error System
  * =================================================================
  * Drop-in: add one line to strategy.html <head>:
  *   <script src="/static/error-handler.js" defer></script>
@@ -45,7 +45,7 @@ function _showCrashScreen(message, source) {
   // Only inject once
   if (document.getElementById('_af-crash-screen')) return;
 
-  console.error('[AlgoForge] Fatal JS error →', message, source);
+  console.error('[PhilForge] Fatal JS error →', message, source);
 
   const screen = document.createElement('div');
   screen.id = '_af-crash-screen';
@@ -53,7 +53,7 @@ function _showCrashScreen(message, source) {
     position: fixed; inset: 0; z-index: 99999;
     display: flex; align-items: center; justify-content: center;
     background: #060b12;
-    font-family: 'Outfit', system-ui, sans-serif;
+    font-family: 'Manrope', system-ui, sans-serif;
   `;
 
   screen.innerHTML = `
@@ -86,7 +86,7 @@ function _showCrashScreen(message, source) {
 
       <!-- heading -->
       <h2 style="
-        font-family: 'Syne', 'Outfit', system-ui, sans-serif;
+        font-family: 'Space Grotesk', 'Manrope', system-ui, sans-serif;
         font-size: 22px; font-weight: 800; letter-spacing: -0.3px;
         color: #dde3ee; margin-bottom: 12px;
       ">Something went wrong</h2>
@@ -104,7 +104,7 @@ function _showCrashScreen(message, source) {
       <!-- technical context (collapsed) -->
       <details style="margin-bottom: 28px; text-align: left;">
         <summary style="
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'IBM Plex Mono', monospace;
           font-size: 11px; color: rgba(221,227,238,0.35);
           cursor: pointer; letter-spacing: 0.05em;
           list-style: none; display: flex; align-items: center; gap: 6px;
@@ -116,7 +116,7 @@ function _showCrashScreen(message, source) {
           margin-top: 10px;
           background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06);
           border-radius: 8px; padding: 12px 14px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'IBM Plex Mono', monospace;
           font-size: 11px; color: rgba(248,113,113,0.75);
           word-break: break-word; line-height: 1.6;
         ">${_escHtml(String(message || 'Unknown error'))}</div>
@@ -126,7 +126,7 @@ function _showCrashScreen(message, source) {
       <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
         <button onclick="location.reload()" style="
           padding: 11px 28px; border-radius: 999px; cursor: pointer;
-          font-family: 'Outfit', system-ui; font-weight: 700; font-size: 14px;
+          font-family: 'Manrope', system-ui; font-weight: 700; font-size: 14px;
           background: linear-gradient(180deg, rgba(0,191,165,0.25) 0%, rgba(0,150,130,0.45) 100%);
           color: #34d399; border: 1px solid rgba(0,191,165,0.45);
           box-shadow: 0 4px 16px rgba(0,191,165,0.2), inset 0 1px 0 rgba(255,255,255,0.1);
@@ -137,7 +137,7 @@ function _showCrashScreen(message, source) {
         </button>
         <button onclick="document.getElementById('_af-crash-screen').remove()" style="
           padding: 11px 28px; border-radius: 999px; cursor: pointer;
-          font-family: 'Outfit', system-ui; font-weight: 700; font-size: 14px;
+          font-family: 'Manrope', system-ui; font-weight: 700; font-size: 14px;
           background: transparent; color: rgba(221,227,238,0.45);
           border: 1px solid rgba(255,255,255,0.10); transition: color 0.15s;
         " onmouseover="this.style.color='rgba(221,227,238,0.85)'"
@@ -225,7 +225,7 @@ window.addEventListener('unhandledrejection', function (event) {
         0 0 0 0.5px rgba(255,255,255,0.05),
         0 8px 32px rgba(0,0,0,0.55),
         inset 0 1px 0 rgba(255,255,255,0.08);
-      font-family: 'Outfit', system-ui, sans-serif;
+      font-family: 'Manrope', system-ui, sans-serif;
       font-size: 13.5px;
       line-height: 1.45;
       color: #dde3ee;
@@ -629,7 +629,7 @@ function widgetError(container, message = 'Failed to load data.', retryFn = null
 
       <!-- message -->
       <p style="
-        font-family: 'Outfit', system-ui, sans-serif;
+        font-family: 'Manrope', system-ui, sans-serif;
         font-size: ${compact ? '12px' : '13.5px'};
         color: rgba(248,113,113,0.80);
         line-height: 1.5;
@@ -641,7 +641,7 @@ function widgetError(container, message = 'Failed to load data.', retryFn = null
         <button id="${retryId}" style="
           padding: ${compact ? '5px 14px' : '7px 18px'};
           border-radius: 999px; cursor: pointer;
-          font-family: 'Outfit', system-ui; font-weight: 700;
+          font-family: 'Manrope', system-ui; font-weight: 700;
           font-size: ${compact ? '11px' : '12px'};
           background: rgba(248,113,113,0.12);
           color: #fca5a5;
@@ -738,4 +738,4 @@ function _escHtml(str) {
 
 window._escHtml = _escHtml;
 
-console.info('[AlgoForge] error-handler.js loaded — global error handling active.');
+console.info('[PhilForge] error-handler.js loaded — global error handling active.');

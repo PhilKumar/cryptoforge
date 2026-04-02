@@ -4,10 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>CryptoForge — Unlock</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
+    --font-body: 'Manrope', sans-serif;
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
     --bg:      #07090f;
     --card:    rgba(18, 22, 40, 0.88);
     --border:  rgba(255, 255, 255, 0.07);
@@ -18,7 +21,7 @@
     --danger:  #f87171;
   }
   body {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-body);
     background: #050710;
     background-image:
       radial-gradient(ellipse 800px 600px at 20% 30%, rgba(139,92,246,0.06) 0%, transparent 70%),
@@ -70,7 +73,7 @@
     position: relative; z-index: 1;
   }
   .unlock-title {
-    font-family: 'Syne', sans-serif;
+    font-family: var(--font-display);
     font-size: 22px; font-weight: 700;
     letter-spacing: -0.5px; margin-bottom: 2px;
     background: linear-gradient(135deg, #c4b5fd, #f9a8d4);
@@ -126,7 +129,7 @@
     border-top: 1px solid rgba(255,255,255,0.10);
     border-radius: 11px;
     color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 20px;
     font-weight: 600;
     padding: 14px 0;
