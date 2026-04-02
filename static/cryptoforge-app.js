@@ -754,8 +754,17 @@ function cfFormatLatency(ms) {
   const val = Number(ms);
   if (!Number.isFinite(val) || val < 0) return '—';
   if (val < 1000) return Math.round(val) + 'ms';
-  if (val < 10000) return (val / 1000).toFixed(1) + 's';
-  return Math.round(val / 1000) + 's';
+  const totalSeconds = Math.floor(val / 1000);
+  if (totalSeconds < 60) return totalSeconds + 's';
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (totalMinutes < 60) return totalMinutes + 'm ' + seconds + 's';
+  const totalHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (totalHours < 24) return totalHours + 'h ' + minutes + 'm';
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return days + 'd ' + hours + 'h';
 }
 
 function cfPriceSourceLabel(source) {
@@ -4483,6 +4492,16 @@ document.addEventListener('DOMContentLoaded', () => {
   cfUpdateSLTPHints();
   cfUpdateScalpSymbol();
   cfToggleScalpLiveSafety();
+  cfInitOperatorLounge();
+  cfRefreshScalpEntryLaneFromState();
+
+  var scalpGuardrail = document.getElementById('cf-scalp-stop-price');
+  if (scalpGuardrail) scalpGuardrail.addEventListener('input', cfRefreshScalpEntryLaneFromState);
+  var scalpAck = document.getElementById('cf-scalp-live-ack');
+  if (scalpAck) scalpAck.addEventListener('change', cfRefreshScalpEntryLaneFromState);
+  var scalpMode = document.getElementById('cf-scalp-mode');
+  if (scalpMode) scalpMode.addEventListener('change', cfRefreshScalpEntryLaneFromState);
+
   setInterval(refreshTopbarTicker, 30000);
   setInterval(pollLiveStatus, 10000);
   setInterval(function() { if (document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData(); }, 60000);
@@ -4506,16 +4525,176 @@ document.addEventListener('DOMContentLoaded', () => {
 // ══════════════════════════════════════════════════════
 
 var _cfScalpPollTimer = null;
+var _cfLatestScalpStatus = {};
 // Persistent trade cache — never loses trades across polls
 var _cfTradeCache = new Map();
 var _cfScalpEventCache = new Map();
 // Track which open trade IDs we've rendered (for targeted updates)
 var _cfOpenTradeIds = [];
+var _cfOperatorFactIndex = 0;
+var _cfOperatorPuzzleIndex = 0;
+var _cfOperatorReadIndex = 0;
+const _cfOperatorFacts = [
+  'A feed that is 2-3 seconds late can still look alive while being completely wrong for scalping. Freshness matters more than visual movement.',
+  'Most bad scalp entries happen after the trader loses track of market state, not because the button was hard to find.',
+  'When funding cools while price holds trend, continuation quality is usually better than when both spike together.',
+  'A guardrail price is not just a safety trigger. It is a way to keep patience encoded in the execution path.',
+  'If your mark price source keeps flipping between WS and REST, your first task is feed stability, not strategy tweaking.',
+  'The best backtest metric for a scalper is often execution drag, because it tells you how much edge disappears in the real path.'
+];
+const _cfOperatorPuzzles = [
+  {
+    title: 'Puzzle 01 — Trend Or Trap?',
+    prompt: 'BTC prints higher highs on 5m, open interest is flat, funding is cooling, and basis is stable. Are you more likely looking at healthy continuation or late leveraged chasing?',
+    answer: 'More likely healthy continuation. Flat leverage and cooling funding suggest the move is not being driven by crowded late longs.'
+  },
+  {
+    title: 'Puzzle 02 — Wait Or Fire?',
+    prompt: 'Your setup is valid but the last mark update is 11 seconds old and source is REST quote. Do you hit entry because price looks close enough or wait for a fresh tick?',
+    answer: 'Wait. For a scalp, stale price is a structural risk, not a cosmetic one. Execution on an old mark destroys decision quality.'
+  },
+  {
+    title: 'Puzzle 03 — Good PnL, Bad Process?',
+    prompt: 'You took profit quickly, but the trade only worked because the spread snapped in your favor after a delayed entry fill. Was that a good execution?',
+    answer: 'No. Positive outcome does not prove good process. If fill quality is random, the strategy edge is overstated.'
+  },
+  {
+    title: 'Puzzle 04 — When To Use Guardrails?',
+    prompt: 'Price is ranging under a breakout shelf. You want in only if momentum proves itself. Do you market in early or arm a guardrail above the shelf?',
+    answer: 'Arm the guardrail. It preserves the thesis while reducing impulse entries before confirmation.'
+  }
+];
+const _cfOperatorReads = [
+  {
+    title: 'Read — The 20 Second Check',
+    body: 'Before any scalp, check four things in order: feed freshness, symbol context, current spread behaviour, and where your invalidation actually lives. This takes less than 20 seconds and filters out most low-quality clicks.'
+  },
+  {
+    title: 'Read — Why Delayed Feeds Feel Dangerous',
+    body: 'A delayed feed does not just make the UI look slow. It changes the trade itself. Your entry becomes a guess on an old state, and then your stop and target are anchored to the wrong moment.'
+  },
+  {
+    title: 'Read — Backtests For Scalpers Need Friction',
+    body: 'A scalp backtest without spread, slippage, and funding assumptions is not conservative enough. The raw signal can be fine while the realised path is untradeable after costs.'
+  },
+  {
+    title: 'Read — Quiet Sessions Beat Forced Sessions',
+    body: 'The operator who waits through dead tape is usually safer than the one who fills the session with random clicks. Good scalping is mostly selective boredom with a fast trigger.'
+  }
+];
+
+function cfScalpSelectedSymbol() {
+  var el = document.getElementById('cf-scalp-symbol');
+  return (el && el.value ? String(el.value) : '').toUpperCase();
+}
+
+function cfScalpSelectedMode() {
+  var el = document.getElementById('cf-scalp-mode');
+  return el && el.value === 'live' ? 'live' : 'paper';
+}
+
+function cfScalpGuardrailActive() {
+  var el = document.getElementById('cf-scalp-stop-price');
+  return !!el && Number(el.value) > 0;
+}
+
+function cfScalpStateLabel(state) {
+  var raw = String(state || '').toLowerCase();
+  if (raw === 'fresh') return 'Fresh';
+  if (raw === 'degraded') return 'Degraded';
+  if (raw === 'stale') return 'Stale';
+  if (raw === 'waiting') return 'Waiting';
+  return raw ? (raw.charAt(0).toUpperCase() + raw.slice(1)) : 'Waiting';
+}
+
+function cfScalpGateTone(allowed, state) {
+  var raw = String(state || '').toLowerCase();
+  if (allowed && raw === 'degraded') return 'caution';
+  if (allowed) return 'open';
+  if (raw === 'waiting') return 'waiting';
+  return 'blocked';
+}
+
+function cfScalpGateLabel(allowed, state) {
+  var tone = cfScalpGateTone(allowed, state);
+  if (tone === 'open') return 'Open';
+  if (tone === 'caution') return 'Caution';
+  if (tone === 'waiting') return 'Waiting';
+  return 'Blocked';
+}
+
+function cfTrimUiText(text, maxLen) {
+  var raw = String(text || '').trim();
+  if (!raw) return '';
+  return raw.length > maxLen ? raw.slice(0, maxLen - 1) + '…' : raw;
+}
+
+function cfSetScalpEntryButtonState(btn, enabled, reason) {
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.classList.toggle('is-disabled', !enabled);
+  btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+  if (!enabled && reason) btn.title = reason;
+  else btn.removeAttribute('title');
+}
+
+function cfRenderOperatorFact() {
+  var target = document.getElementById('cf-operator-fact');
+  if (target) target.textContent = _cfOperatorFacts[_cfOperatorFactIndex % _cfOperatorFacts.length];
+}
+
+function cfRenderOperatorPuzzle() {
+  var item = _cfOperatorPuzzles[_cfOperatorPuzzleIndex % _cfOperatorPuzzles.length];
+  var title = document.getElementById('cf-operator-puzzle-title');
+  var prompt = document.getElementById('cf-operator-puzzle');
+  var answer = document.getElementById('cf-operator-answer');
+  if (title) title.textContent = item.title;
+  if (prompt) prompt.textContent = item.prompt;
+  if (answer) {
+    answer.textContent = item.answer;
+    answer.classList.remove('revealed');
+  }
+}
+
+function cfRenderOperatorRead() {
+  var item = _cfOperatorReads[_cfOperatorReadIndex % _cfOperatorReads.length];
+  var title = document.getElementById('cf-operator-read-title');
+  var body = document.getElementById('cf-operator-read');
+  if (title) title.textContent = item.title;
+  if (body) body.textContent = item.body;
+}
+
+function cfInitOperatorLounge() {
+  cfRenderOperatorFact();
+  cfRenderOperatorPuzzle();
+  cfRenderOperatorRead();
+}
+
+function cfOperatorNextFact() {
+  _cfOperatorFactIndex = (_cfOperatorFactIndex + 1) % _cfOperatorFacts.length;
+  cfRenderOperatorFact();
+}
+
+function cfOperatorRevealAnswer() {
+  var answer = document.getElementById('cf-operator-answer');
+  if (answer) answer.classList.add('revealed');
+}
+
+function cfOperatorNextPuzzle() {
+  _cfOperatorPuzzleIndex = (_cfOperatorPuzzleIndex + 1) % _cfOperatorPuzzles.length;
+  cfRenderOperatorPuzzle();
+}
+
+function cfOperatorNextRead() {
+  _cfOperatorReadIndex = (_cfOperatorReadIndex + 1) % _cfOperatorReads.length;
+  cfRenderOperatorRead();
+}
 
 function cfInitScalpPage() {
   cfLoadScalpStatus();
+  cfRefreshScalpEntryLaneFromState();
   if (!_cfScalpPollTimer) {
-    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 4000);
+    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 2000);
   }
 }
 
@@ -4553,7 +4732,9 @@ function _cfTradeRow(t) {
 
 async function cfLoadScalpStatus() {
   try {
-    const r = await fetch('/api/scalp/status');
+    const symbol = cfScalpSelectedSymbol();
+    const url = symbol ? ('/api/scalp/status?symbol=' + encodeURIComponent(symbol)) : '/api/scalp/status';
+    const r = await cfApiFetch(url);
     if (!r.ok) return;
     const d = await r.json();
     cfApplyScalpStatus(d);
@@ -4562,12 +4743,13 @@ async function cfLoadScalpStatus() {
 
 function cfScalpFeedSummary(feed) {
   const meta = feed || {};
+  const symbol = meta.symbol || cfScalpSelectedSymbol() || '';
+  const stateLabel = cfScalpStateLabel(meta.state);
   const source = cfPriceSourceLabel(meta.source);
-  const symbol = meta.symbol || '';
   const age = meta.age_ms !== undefined && meta.age_ms !== null ? cfFormatLatency(meta.age_ms) : '—';
   if (!symbol && !meta.ws_connected) return 'Awaiting ticks';
-  if (!symbol) return meta.ws_connected ? 'WS connected' : 'Waiting for price';
-  return source + ' • ' + symbol + ' • ' + age;
+  if (!symbol) return meta.ws_connected ? (stateLabel + ' • WS ready') : 'Waiting for price';
+  return stateLabel + ' • ' + source + ' • ' + symbol + ' • ' + age;
 }
 
 function cfScalpFeedDetail(feed) {
@@ -4579,6 +4761,8 @@ function cfScalpFeedDetail(feed) {
   bits.push(String(Number(meta.rest_fallbacks) || 0) + ' REST');
   const active = Array.isArray(meta.subscribed_channels) && meta.subscribed_channels.length ? meta.subscribed_channels[0] : '';
   if (active) bits.push(active);
+  const reason = cfTrimUiText(meta.entry_block_reason, 96);
+  if (reason) bits.push(reason);
   const error = String(meta.last_error || '').trim();
   if (error) bits.push(error.length > 72 ? error.slice(0, 69) + '...' : error);
   return bits.join(' • ');
@@ -4586,21 +4770,26 @@ function cfScalpFeedDetail(feed) {
 
 function cfScalpExecSummary(execMetrics) {
   const meta = execMetrics || {};
-  if (!meta.phase) return 'No live fills yet';
-  const phase = String(meta.phase || '').toUpperCase();
+  if (!meta.phase) return 'No broker actions yet';
+  const phase = String(meta.phase || '').replace(/_/g, ' ').toUpperCase();
   const symbol = meta.symbol || '—';
-  const latency = cfFormatLatency(meta.latency_ms);
-  const suffix = meta.verified ? latency : 'unverified';
-  return phase + ' • ' + symbol + ' • ' + suffix;
+  const lifecycle = String(meta.order_lifecycle || meta.fill_status || '').replace(/_/g, ' ').trim();
+  const latency = Number(meta.latency_ms) > 0 ? cfFormatLatency(meta.latency_ms) : (meta.verified === false ? 'unverified' : 'pending');
+  return [phase, symbol, lifecycle ? lifecycle.toUpperCase() : latency].filter(Boolean).join(' • ');
 }
 
 function cfScalpExecDetail(execMetrics) {
   const meta = execMetrics || {};
   if (!meta.phase) return 'Awaiting next broker action';
   const bits = [];
+  if (meta.order_id) bits.push('order ' + meta.order_id);
+  if (meta.fill_status) bits.push(String(meta.fill_status).replace(/_/g, ' '));
+  if (meta.order_lifecycle && meta.order_lifecycle !== meta.fill_status) bits.push(String(meta.order_lifecycle).replace(/_/g, ' '));
   if (Number(meta.ack_ms) > 0) bits.push('ack ' + cfFormatLatency(meta.ack_ms));
   if (Number(meta.latency_ms) > 0) bits.push('verify ' + cfFormatLatency(meta.latency_ms));
   if (Number(meta.verified_at_attempt) > 0) bits.push('attempt ' + String(meta.verified_at_attempt));
+  if (Number(meta.position_size) > 0) bits.push('size ' + String(meta.position_size));
+  if (meta.error) bits.push(cfTrimUiText(meta.error, 84));
   if (!bits.length) return meta.verified === false ? 'verification failed' : 'awaiting broker metrics';
   return bits.join(' • ');
 }
@@ -4611,7 +4800,68 @@ function cfScalpMarkMeta(trade) {
   return source === 'Idle' ? 'mark' : source + ' • ' + age;
 }
 
+function cfRefreshScalpEntryLaneFromState() {
+  const lane = document.querySelector('.cf-scalp-entry-lane');
+  const titleEl = document.getElementById('cf-scalp-entry-title');
+  const stateEl = document.getElementById('cf-scalp-entry-state');
+  const symbolEl = document.getElementById('cf-scalp-entry-symbol');
+  const ageEl = document.getElementById('cf-scalp-entry-age');
+  const paperGateEl = document.getElementById('cf-scalp-paper-gate');
+  const liveGateEl = document.getElementById('cf-scalp-live-gate');
+  const noteEl = document.getElementById('cf-scalp-entry-note');
+  const buyBtn = document.getElementById('cf-scalp-buy-btn');
+  const sellBtn = document.getElementById('cf-scalp-sell-btn');
+  const liveAck = document.getElementById('cf-scalp-live-ack');
+  const mode = cfScalpSelectedMode();
+  const guardrailArmed = cfScalpGuardrailActive();
+  const status = _cfLatestScalpStatus || {};
+  const entry = status.entry_controls || {};
+  const feed = status.feed_metrics || {};
+  const symbol = (entry.symbol || cfScalpSelectedSymbol() || feed.symbol || '—').toUpperCase();
+  const state = String(entry.state || feed.state || 'waiting').toLowerCase();
+  const ageMs = entry.age_ms !== undefined && entry.age_ms !== null ? entry.age_ms : feed.age_ms;
+  const paperAllowed = !!entry.paper_allowed;
+  const liveAllowed = !!entry.live_allowed;
+  const requiresAck = mode === 'live' && liveAck && !liveAck.checked;
+  let effectiveAllowed = mode === 'live' ? liveAllowed : paperAllowed;
+  if (guardrailArmed) effectiveAllowed = true;
+  if (requiresAck) effectiveAllowed = false;
+
+  let title = 'Waiting for a fresh market tick';
+  if (state === 'fresh') title = mode === 'live' ? 'Live entry lane open' : 'Paper entry lane open';
+  else if (state === 'degraded') title = mode === 'live' ? 'Paper only until a fresher tick arrives' : 'Paper entry allowed with caution';
+  else if (state === 'stale') title = 'Feed stale — wait before entering';
+
+  let note = entry.reason || feed.entry_block_reason || 'Select a symbol and wait for the first reliable price update.';
+  if (guardrailArmed) {
+    note = 'Guardrail price is set. Pending entries can arm now and will wait for price confirmation before opening.';
+  } else if (requiresAck) {
+    note = 'Live mode still requires the acknowledgement checkbox before real orders can be submitted.';
+  }
+
+  if (lane) lane.dataset.state = state;
+  if (titleEl) titleEl.textContent = title;
+  if (stateEl) stateEl.textContent = cfScalpStateLabel(state).toUpperCase();
+  if (stateEl) stateEl.dataset.state = state;
+  if (symbolEl) symbolEl.textContent = symbol;
+  if (ageEl) ageEl.textContent = ageMs !== undefined && ageMs !== null ? cfFormatLatency(ageMs) : '—';
+  if (paperGateEl) {
+    paperGateEl.textContent = cfScalpGateLabel(paperAllowed, state);
+    paperGateEl.dataset.gate = cfScalpGateTone(paperAllowed, state);
+  }
+  if (liveGateEl) {
+    liveGateEl.textContent = cfScalpGateLabel(liveAllowed, state);
+    liveGateEl.dataset.gate = cfScalpGateTone(liveAllowed, state);
+  }
+  if (noteEl) noteEl.textContent = note;
+
+  const disableReason = guardrailArmed ? '' : note;
+  cfSetScalpEntryButtonState(buyBtn, effectiveAllowed, disableReason);
+  cfSetScalpEntryButtonState(sellBtn, effectiveAllowed, disableReason);
+}
+
 function cfApplyScalpStatus(d) {
+  _cfLatestScalpStatus = d || {};
   const open = d.open_trades || [];
   const pending = d.pending_entries || [];
   const running = d.running || open.length > 0 || pending.length > 0;
@@ -4631,30 +4881,33 @@ function cfApplyScalpStatus(d) {
   const feedMeta = document.getElementById('cf-scalp-feed-meta');
   if (feedMeta) {
     feedMeta.textContent = cfScalpFeedSummary(feed);
-    const ageMs = Number(feed.age_ms);
-    const source = String(feed.source || '').toLowerCase();
-    if (/^ws$/.test(source) && Number.isFinite(ageMs) && ageMs <= 1200) feedMeta.style.color = 'var(--green)';
-    else if (source.startsWith('rest')) feedMeta.style.color = '#fbbf24';
-    else if (Number.isFinite(ageMs) && ageMs > 3000) feedMeta.style.color = 'var(--red)';
+    const state = String(feed.state || '').toLowerCase();
+    if (state === 'fresh') feedMeta.style.color = 'var(--green)';
+    else if (state === 'degraded') feedMeta.style.color = '#fbbf24';
+    else if (state === 'stale') feedMeta.style.color = 'var(--red)';
     else feedMeta.style.color = 'var(--text)';
   }
   const feedDetail = document.getElementById('cf-scalp-feed-detail');
   if (feedDetail) {
     feedDetail.textContent = cfScalpFeedDetail(feed);
-    feedDetail.style.color = feed.last_error ? 'var(--red)' : 'var(--muted)';
+    const state = String(feed.state || '').toLowerCase();
+    feedDetail.style.color = feed.last_error || state === 'stale' ? 'var(--red)' : state === 'degraded' ? '#fbbf24' : 'var(--muted)';
   }
   const execMeta = document.getElementById('cf-scalp-exec-meta');
   if (execMeta) {
     const exec = d.execution_metrics || {};
+    const phase = String(exec.phase || '').toLowerCase();
     execMeta.textContent = cfScalpExecSummary(exec);
-    execMeta.style.color = exec.verified === false ? 'var(--red)' : 'var(--text)';
+    execMeta.style.color = exec.verified === false || phase.includes('error') || phase.includes('reject') ? 'var(--red)' : phase === 'entry' || phase === 'exit' ? 'var(--green)' : 'var(--text)';
   }
   const execDetail = document.getElementById('cf-scalp-exec-detail');
   if (execDetail) {
     const exec = d.execution_metrics || {};
     execDetail.textContent = cfScalpExecDetail(exec);
-    execDetail.style.color = exec.verified === false ? 'var(--red)' : 'var(--muted)';
+    execDetail.style.color = exec.verified === false || exec.error ? 'var(--red)' : 'var(--muted)';
   }
+
+  cfRefreshScalpEntryLaneFromState();
 
   const pendingWrap = document.getElementById('cf-scalp-pending-wrap');
   const pendingCount = document.getElementById('cf-scalp-pending-count');
@@ -4851,6 +5104,7 @@ async function cfSubmitScalp(direction) {
   if (mode === 'live' && liveAck && !liveAck.checked) {
     if (statusEl) { statusEl.textContent = 'Confirm live acknowledgement first'; statusEl.style.color = 'var(--red)'; }
     cfToast('Acknowledge live scalp mode before placing real orders', 'warning');
+    cfRefreshScalpEntryLaneFromState();
     return;
   }
   if (statusEl) statusEl.textContent = 'Submitting…';
@@ -4865,14 +5119,29 @@ async function cfSubmitScalp(direction) {
       body: JSON.stringify(payload)
     });
     const d = await res.json();
+    if (d.entry_controls) {
+      const merged = Object.assign({}, _cfLatestScalpStatus || {});
+      merged.entry_controls = d.entry_controls;
+      merged.feed_metrics = Object.assign({}, merged.feed_metrics || {}, {
+        symbol: d.entry_controls.symbol || (merged.feed_metrics || {}).symbol || symbol,
+        source: d.entry_controls.source || (merged.feed_metrics || {}).source || '',
+        age_ms: d.entry_controls.age_ms,
+        state: d.entry_controls.state || (merged.feed_metrics || {}).state || 'waiting',
+        entry_block_reason: d.entry_controls.reason || (merged.feed_metrics || {}).entry_block_reason || ''
+      });
+      _cfLatestScalpStatus = merged;
+      cfRefreshScalpEntryLaneFromState();
+    }
     if (d.status === 'ok' || d.status === 'entered' || d.trade_id) {
       if (statusEl) { statusEl.textContent = direction + ' entered ✓'; statusEl.style.color = 'var(--green)'; }
       cfToast(`Scalp ${direction} entered on ${symbol}`, 'success');
-      setTimeout(cfLoadScalpStatus, 500);
+      await cfLoadScalpStatus();
+      setTimeout(cfLoadScalpStatus, 250);
     } else if (d.status === 'pending' || d.entry_id) {
       if (statusEl) { statusEl.textContent = d.message || 'Guardrail armed'; statusEl.style.color = '#fbbf24'; }
       cfToast(d.message || `Guardrail armed for ${symbol}`, 'info');
-      setTimeout(cfLoadScalpStatus, 500);
+      await cfLoadScalpStatus();
+      setTimeout(cfLoadScalpStatus, 250);
     } else {
       if (statusEl) { statusEl.textContent = d.message || d.status || 'Error'; statusEl.style.color = 'var(--red)'; }
       cfToast(d.message || 'Entry failed', 'danger');
@@ -4893,7 +5162,8 @@ async function cfExitScalpTrade(tradeId) {
     const d = await res.json();
     if (d.status === 'ok' || d.status === 'exited') {
       cfToast('Position closed', 'success');
-      setTimeout(cfLoadScalpStatus, 300);
+      await cfLoadScalpStatus();
+      setTimeout(cfLoadScalpStatus, 200);
     } else {
       cfToast(d.message || 'Exit failed', 'danger');
     }
@@ -4929,7 +5199,8 @@ async function cfModifyScalpTrade(tradeId) {
     const d = await res.json();
     if (d.status === 'ok') {
       cfToast(`Trade #${tradeId} updated — TP: $${newTP || '—'}  SL: $${newSL || '—'}`, 'success');
-      setTimeout(cfLoadScalpStatus, 300);
+      await cfLoadScalpStatus();
+      setTimeout(cfLoadScalpStatus, 200);
     } else {
       cfToast(d.message || d.detail || 'Update failed', 'danger');
     }
@@ -4954,6 +5225,10 @@ async function cfUpdateScalpSymbol() {
       }).join('');
     }
   } catch(e) {}
+  cfRefreshScalpEntryLaneFromState();
+  if (document.getElementById('scalp-page') && document.getElementById('scalp-page').classList.contains('active-page')) {
+    cfLoadScalpStatus();
+  }
 }
 
 function cfToggleScalpLiveSafety() {
@@ -4963,6 +5238,7 @@ function cfToggleScalpLiveSafety() {
   const isLive = !!modeEl && modeEl.value === 'live';
   if (wrap) wrap.style.display = isLive ? 'block' : 'none';
   if (!isLive && ack) ack.checked = false;
+  cfRefreshScalpEntryLaneFromState();
 }
 
 // SL/TP hint text updates when type toggle changes

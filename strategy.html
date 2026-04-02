@@ -256,6 +256,35 @@
     </div>
   </div>
 
+  <div class="operator-lounge-grid">
+    <section class="operator-lounge-card">
+      <div class="operator-lounge-eyebrow">Did You Know</div>
+      <h3 class="operator-lounge-title">Operator Context</h3>
+      <p class="operator-lounge-copy" id="cf-operator-fact">Funding rates, liquidation bands, and spread expansion shape scalp quality more than most entry signals.</p>
+      <div class="operator-lounge-actions">
+        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextFact()">Next Fact</button>
+      </div>
+    </section>
+    <section class="operator-lounge-card">
+      <div class="operator-lounge-eyebrow">Signal Puzzle</div>
+      <h3 class="operator-lounge-title" id="cf-operator-puzzle-title">Microstructure Drill</h3>
+      <p class="operator-lounge-copy" id="cf-operator-puzzle">If the tape looks strong but the mark price keeps lagging spot, which risk check do you trust first?</p>
+      <div class="operator-lounge-answer" id="cf-operator-answer">Check mark-price freshness and funding/liquidation context before chasing the move.</div>
+      <div class="operator-lounge-actions">
+        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorRevealAnswer()">Reveal Answer</button>
+        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextPuzzle()">Next Puzzle</button>
+      </div>
+    </section>
+    <section class="operator-lounge-card">
+      <div class="operator-lounge-eyebrow">Slow Read</div>
+      <h3 class="operator-lounge-title" id="cf-operator-read-title">Execution Note</h3>
+      <p class="operator-lounge-copy" id="cf-operator-read">A clean setup is not enough. Before going live, verify who owns the move: organic taker flow, liquidation cascade, or funding distortion. The same candle can mean three very different trade-quality profiles.</p>
+      <div class="operator-lounge-actions">
+        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextRead()">Next Read</button>
+      </div>
+    </section>
+  </div>
+
   <!-- Strategy Templates -->
   <div class="card">
     <h3 style="margin-bottom: 14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Quick Start Templates</h3>
@@ -975,6 +1004,35 @@
     <button class="btn btn-outline btn-sm" data-cf-click="cfLoadScalpStatus()">↻ Refresh</button>
   </div>
 
+  <div class="card cf-scalp-entry-lane">
+    <div class="cf-scalp-entry-top">
+      <div>
+        <div class="cf-scalp-kicker">Entry Lane</div>
+        <div class="cf-scalp-entry-title" id="cf-scalp-entry-title">Waiting for a fresh market tick</div>
+      </div>
+      <div class="cf-scalp-entry-badge" id="cf-scalp-entry-state">WAITING</div>
+    </div>
+    <div class="cf-scalp-entry-grid">
+      <div class="cf-scalp-entry-metric">
+        <span>Selected Symbol</span>
+        <strong id="cf-scalp-entry-symbol">BTCUSDT</strong>
+      </div>
+      <div class="cf-scalp-entry-metric">
+        <span>Last Tick</span>
+        <strong id="cf-scalp-entry-age">—</strong>
+      </div>
+      <div class="cf-scalp-entry-metric">
+        <span>Paper Gate</span>
+        <strong id="cf-scalp-paper-gate">Blocked</strong>
+      </div>
+      <div class="cf-scalp-entry-metric">
+        <span>Live Gate</span>
+        <strong id="cf-scalp-live-gate">Blocked</strong>
+      </div>
+    </div>
+    <div class="cf-scalp-entry-note" id="cf-scalp-entry-note">Select a symbol and wait for the first reliable price update.</div>
+  </div>
+
   <div id="cf-scalp-pending-wrap" class="card" style="padding:14px 18px;margin-bottom:16px;display:none;">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
       <div style="font-size:13px;font-weight:700;color:#fbbf24;">Pending Guardrails</div>
@@ -1083,8 +1141,8 @@
         </div>
 
         <div style="grid-column:span 2;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
-          <button class="btn" data-cf-click="cfSubmitScalp('BUY')" style="--btn-bg:linear-gradient(180deg,rgba(52,211,153,0.2)0%,rgba(16,185,129,0.35)100%);--btn-border:rgba(52,211,153,0.4);--btn-color:#34d399;font-weight:700;padding:11px;">▲ BUY</button>
-          <button class="btn" data-cf-click="cfSubmitScalp('SELL')" style="--btn-bg:linear-gradient(180deg,rgba(248,113,113,0.2)0%,rgba(239,68,68,0.35)100%);--btn-border:rgba(248,113,113,0.4);--btn-color:#f87171;font-weight:700;padding:11px;">▼ SELL</button>
+          <button class="btn" id="cf-scalp-buy-btn" data-cf-click="cfSubmitScalp('BUY')" style="--btn-bg:linear-gradient(180deg,rgba(52,211,153,0.2)0%,rgba(16,185,129,0.35)100%);--btn-border:rgba(52,211,153,0.4);--btn-color:#34d399;font-weight:700;padding:11px;">▲ BUY</button>
+          <button class="btn" id="cf-scalp-sell-btn" data-cf-click="cfSubmitScalp('SELL')" style="--btn-bg:linear-gradient(180deg,rgba(248,113,113,0.2)0%,rgba(239,68,68,0.35)100%);--btn-border:rgba(248,113,113,0.4);--btn-color:#f87171;font-weight:700;padding:11px;">▼ SELL</button>
         </div>
       </div>
       <div id="cf-scalp-entry-status" style="margin-top:12px;font-size:12px;min-height:18px;color:var(--muted);"></div>

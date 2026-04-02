@@ -218,6 +218,20 @@ def _bootstrap_session_store() -> None:
 
 _bootstrap_session_store()
 
+
+def _resolve_state_file(filename: str) -> tuple[str, str]:
+    legacy_path = os.path.join(_HERE, filename)
+    state_path = os.path.join(_STATE_DIR, filename)
+    if state_path != legacy_path and not os.path.exists(state_path) and os.path.exists(legacy_path):
+        try:
+            os.makedirs(os.path.dirname(state_path), exist_ok=True)
+            shutil.copy2(legacy_path, state_path)
+        except Exception as exc:
+            _logger.warning("Failed to migrate %s to %s: %s", legacy_path, state_path, exc)
+            return legacy_path, legacy_path
+    return legacy_path, state_path
+
+
 CSRF_COOKIE_NAME = "cryptoforge_csrf"
 _SESSION_ABSOLUTE_SEC = int(os.getenv("CRYPTOFORGE_SESSION_ABSOLUTE_SEC", "86400"))
 _SESSION_IDLE_SEC = int(os.getenv("CRYPTOFORGE_SESSION_IDLE_SEC", "14400"))
@@ -2580,8 +2594,8 @@ async def get_portfolio_history():
 
 
 # ── Strategy CRUD ─────────────────────────────────────────────────
-STRAT_FILE = "strategies.json"
-RUNS_FILE = "runs.json"
+_LEGACY_STRAT_FILE, STRAT_FILE = _resolve_state_file("strategies.json")
+_LEGACY_RUNS_FILE, RUNS_FILE = _resolve_state_file("runs.json")
 
 
 def _load():
@@ -2596,6 +2610,7 @@ def _load():
 
 
 def _save(d):
+    os.makedirs(os.path.dirname(STRAT_FILE) or ".", exist_ok=True)
     tmp = STRAT_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(d, f, indent=2)
@@ -2614,6 +2629,7 @@ def _load_runs():
 
 
 def _save_runs(d):
+    os.makedirs(os.path.dirname(RUNS_FILE) or ".", exist_ok=True)
     tmp = RUNS_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(d, f, indent=2)
@@ -2973,8 +2989,8 @@ async def export_live_trades_csv(run_id: str = ""):
 
 # ── Scalp Engine ──────────────────────────────────────────────────
 _scalp_engine: Optional[ScalpEngine] = None
-_SCALP_FILE = os.path.join(_HERE, "scalp_trades.json")
-_SCALP_EVENTS_FILE = os.path.join(_HERE, "scalp_events.json")
+_LEGACY_SCALP_FILE, _SCALP_FILE = _resolve_state_file("scalp_trades.json")
+_LEGACY_SCALP_EVENTS_FILE, _SCALP_EVENTS_FILE = _resolve_state_file("scalp_events.json")
 
 
 def _load_scalp_trades():
@@ -2988,6 +3004,7 @@ def _load_scalp_trades():
 
 
 def _save_scalp_trades(trades):
+    os.makedirs(os.path.dirname(_SCALP_FILE) or ".", exist_ok=True)
     tmp = _SCALP_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(trades, f, indent=2, default=str)
@@ -3005,6 +3022,7 @@ def _load_scalp_events():
 
 
 def _save_scalp_events(events):
+    os.makedirs(os.path.dirname(_SCALP_EVENTS_FILE) or ".", exist_ok=True)
     tmp = _SCALP_EVENTS_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(events[-300:], f, indent=2, default=str)
@@ -3071,9 +3089,11 @@ def _get_scalp_engine():
 
 
 @app.get("/api/scalp/status")
-async def scalp_status():
+async def scalp_status(symbol: str = ""):
     eng = _get_scalp_engine()
-    status = eng.get_status()
+    if symbol:
+        eng.watch_symbol(symbol)
+    status = eng.get_status(symbol)
     status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
     status["file_events"] = list(reversed(_load_scalp_events()[-200:]))
     return status
@@ -3092,11 +3112,25 @@ async def scalp_enter(request: Request):
     body = await request.json()
     eng = _get_scalp_engine()
     symbol = body.get("symbol", "BTCUSDT")
+    eng.watch_symbol(symbol)
     raw_side = body.get("side", "BUY").upper()
     side = "LONG" if raw_side == "BUY" else "SHORT"
     qty_usdt = float(body.get("qty_usdt", 1000))
     leverage = int(body.get("leverage", 50))
     mode = body.get("mode", "paper")
+    guardrail_price = float(body.get("guardrail_price", body.get("sl_price", 0)) or 0)
+
+    entry_controls = eng.get_status(symbol).get("entry_controls", {})
+    if guardrail_price <= 0:
+        allowed = entry_controls.get("paper_allowed") if mode == "paper" else entry_controls.get("live_allowed")
+        if not allowed:
+            message = entry_controls.get("reason") or "Awaiting a fresh market price before entry."
+            alerter.alert(
+                "Scalp Entry Blocked",
+                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nReason: {message}",
+                level="warn",
+            )
+            return {"status": "error", "message": message, "entry_controls": entry_controls}
 
     # Convert USDT qty to contract size (1 contract = 1 USD on Delta)
     size = int(qty_usdt * leverage)
@@ -3112,7 +3146,7 @@ async def scalp_enter(request: Request):
             target_usd=float(body.get("tp_usd", 0)),
             sl_usd=float(body.get("sl_usd", 0)),
             sl_price=float(body.get("sl_price", 0)),
-            guardrail_price=float(body.get("guardrail_price", body.get("sl_price", 0)) or 0),
+            guardrail_price=guardrail_price,
             mode=mode,
         )
         if result.get("status") == "error":

@@ -301,8 +301,10 @@ class ScalpEngine:
         self._ws_prices: Dict[str, float] = {}
         self._last_prices: Dict[str, float] = {}
         self._ws_subscribed_symbols: set[str] = set()
+        self._watch_symbols: set[str] = set()
         self._last_price_ts: Dict[str, datetime] = {}
         self._last_price_source: Dict[str, str] = {}
+        self._last_watch_refresh: Dict[str, datetime] = {}
         self._rest_price_fetches: int = 0
         self._last_execution: Dict[str, Any] = {}
         self._update_task: Optional[asyncio.Task] = None
@@ -332,6 +334,110 @@ class ScalpEngine:
                 self._ws_feed = None
                 self._ws_prices.clear()
                 self._ws_subscribed_symbols.clear()
+
+    def watch_symbol(self, symbol: str) -> None:
+        canonical = self._canonical_symbol(symbol)
+        self._watch_symbols = {canonical} if canonical else set()
+        if not canonical:
+            return
+        if not self._running:
+            self.start()
+            return
+        try:
+            asyncio.get_running_loop().create_task(self._ensure_ws_feed({canonical}))
+        except RuntimeError:
+            return
+
+    @staticmethod
+    def _entry_freshness_thresholds(source: str) -> tuple[int, int]:
+        raw = str(source or "").lower()
+        if raw == "ws":
+            return (2500, 8000)
+        if raw in {"rest_quote", "rest_bulk"}:
+            return (4500, 9000)
+        if raw in {"broker_fill", "entry_snapshot"}:
+            return (3000, 6000)
+        return (4000, 8000)
+
+    def _symbol_feed_guard(self, symbol: str) -> dict:
+        canonical = self._canonical_symbol(symbol)
+        source = str(self._last_price_source.get(canonical, "") or "")
+        updated_at = self._last_price_ts.get(canonical)
+        price = _coerce_float(self._last_prices.get(canonical) or self._ws_prices.get(canonical), 0.0)
+        age_ms = None
+        if updated_at:
+            age_ms = max(0, int((_now_utc() - updated_at).total_seconds() * 1000))
+
+        if price <= 0 or updated_at is None:
+            return {
+                "symbol": canonical or symbol or "",
+                "price": 0.0,
+                "source": source,
+                "updated_at": None,
+                "age_ms": None,
+                "state": "waiting",
+                "paper_allowed": False,
+                "live_allowed": False,
+                "reason": f"Awaiting first market tick for {canonical or symbol or 'selected symbol'}",
+            }
+
+        live_limit_ms, paper_limit_ms = self._entry_freshness_thresholds(source)
+        if age_ms <= live_limit_ms:
+            state = "fresh"
+            paper_allowed = True
+            live_allowed = True
+            reason = f"Fresh {source or 'market'} quote ready for {canonical}"
+        elif age_ms <= paper_limit_ms:
+            state = "degraded"
+            paper_allowed = True
+            live_allowed = False
+            reason = f"Feed is degraded for {canonical}. Paper entry is allowed, live entry is blocked until a fresh tick arrives."
+        else:
+            state = "stale"
+            paper_allowed = False
+            live_allowed = False
+            reason = f"Feed is stale for {canonical}. Refresh or wait for a fresh market tick before entering."
+
+        return {
+            "symbol": canonical or symbol or "",
+            "price": price,
+            "source": source,
+            "updated_at": str(updated_at) if updated_at else None,
+            "age_ms": age_ms,
+            "state": state,
+            "paper_allowed": paper_allowed,
+            "live_allowed": live_allowed,
+            "reason": reason,
+        }
+
+    def _remember_execution(
+        self,
+        *,
+        phase: str,
+        symbol: str,
+        side: str,
+        mode: str,
+        verified: bool,
+        result: Optional[dict] = None,
+        error: str = "",
+    ) -> None:
+        result = result or {}
+        self._last_execution = {
+            "phase": phase,
+            "symbol": symbol,
+            "side": side,
+            "mode": mode,
+            "verified": bool(verified),
+            "latency_ms": round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1),
+            "ack_ms": round(_coerce_float(result.get("order_ack_ms"), 0.0), 1),
+            "verified_at_attempt": int(result.get("verified_at_attempt", 0) or 0),
+            "fill_status": str(result.get("fill_status", "") or ""),
+            "order_lifecycle": str(result.get("order_lifecycle", "") or ""),
+            "position_size": _coerce_float(result.get("position_size"), 0.0),
+            "order_id": str(result.get("id") or result.get("order_id") or ""),
+            "error": str(error or result.get("error") or ""),
+            "updated_at": str(_now_utc()),
+        }
 
     @staticmethod
     def _extract_order_price(order: dict, fallback: float) -> float:
@@ -403,6 +509,21 @@ class ScalpEngine:
         if price > 0:
             return price
         return _coerce_float(self._last_prices.get(canonical), 0.0)
+
+    async def _refresh_watch_prices(self, symbols: set[str]) -> None:
+        now = _now_utc()
+        for canonical in sorted({self._canonical_symbol(sym) for sym in symbols if sym}):
+            last_seen = self._last_price_ts.get(canonical)
+            age_ms = None
+            if last_seen:
+                age_ms = max(0, int((now - last_seen).total_seconds() * 1000))
+            last_refresh = self._last_watch_refresh.get(canonical)
+            if last_refresh and (now - last_refresh).total_seconds() < 1.5:
+                continue
+            if age_ms is not None and age_ms <= 2500:
+                continue
+            self._last_watch_refresh[canonical] = now
+            await self._get_symbol_price(canonical)
 
     async def _emit_update(self):
         if not self._on_update:
@@ -613,6 +734,14 @@ class ScalpEngine:
             order_id = "PAPER"
         else:
             if not product_id:
+                self._remember_execution(
+                    phase="entry_error",
+                    symbol=symbol,
+                    side=side,
+                    mode=mode,
+                    verified=False,
+                    error=f"Product not found for {symbol}",
+                )
                 return {"status": "error", "message": f"Product not found for {symbol}"}
             try:
                 order_side = "buy" if side == "LONG" else "sell"
@@ -624,10 +753,26 @@ class ScalpEngine:
                     leverage=leverage,
                 )
                 if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
+                    self._remember_execution(
+                        phase="entry_reject",
+                        symbol=symbol,
+                        side=side,
+                        mode=mode,
+                        verified=False,
+                        result=result,
+                    )
                     return {"status": "error", "message": result.get("error") or "entry order could not be verified"}
                 order_id = str(result.get("id", "placed"))
                 entry_price = self._extract_order_price(result, entry_price)
             except Exception as e:
+                self._remember_execution(
+                    phase="entry_error",
+                    symbol=symbol,
+                    side=side,
+                    mode=mode,
+                    verified=False,
+                    error=str(e),
+                )
                 return {"status": "error", "message": str(e)}
 
         self._trade_counter += 1
@@ -652,17 +797,14 @@ class ScalpEngine:
         self.open_trades[self._trade_counter] = trade
         trade.entry_latency_ms = round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1)
         self._record_price(symbol, entry_price, source="broker_fill" if mode != "paper" else "entry_snapshot")
-        self._last_execution = {
-            "phase": "entry",
-            "symbol": symbol,
-            "side": side,
-            "mode": mode,
-            "verified": bool(result.get("verified", mode == "paper")),
-            "latency_ms": round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1),
-            "ack_ms": round(_coerce_float(result.get("order_ack_ms"), 0.0), 1),
-            "verified_at_attempt": int(result.get("verified_at_attempt", 0) or 0),
-            "updated_at": str(_now_utc()),
-        }
+        self._remember_execution(
+            phase="entry",
+            symbol=symbol,
+            side=side,
+            mode=mode,
+            verified=bool(result.get("verified", mode == "paper")),
+            result=result,
+        )
 
         mode_label = "[PAPER] " if mode == "paper" else ""
         exec_tail = ""
@@ -711,7 +853,7 @@ class ScalpEngine:
         self._schedule_update(force=True)
         return {"status": "ok", "trade": trade.to_dict()}
 
-    def get_status(self) -> dict:
+    def get_status(self, symbol_hint: str = "") -> dict:
         today_utc = _now_utc().date()
 
         def _exit_date(t: dict):
@@ -732,9 +874,11 @@ class ScalpEngine:
             sum(t._compute_pnl(t.current_price) for t in self.open_trades.values()),
             2,
         )
-        tracked_symbols = {self._canonical_symbol(t.symbol) for t in self.open_trades.values()} | {
-            self._canonical_symbol(p.symbol) for p in self.pending_entries.values()
-        }
+        tracked_symbols = (
+            {self._canonical_symbol(t.symbol) for t in self.open_trades.values()}
+            | {self._canonical_symbol(p.symbol) for p in self.pending_entries.values()}
+            | set(self._watch_symbols)
+        )
         latest_symbol = ""
         latest_ts = None
         for canonical in tracked_symbols or set(self._last_price_ts.keys()):
@@ -745,14 +889,19 @@ class ScalpEngine:
         price_age_ms = None
         if latest_ts:
             price_age_ms = max(0, int((_now_utc() - latest_ts).total_seconds() * 1000))
+        watched_symbol = next(iter(sorted(self._watch_symbols)), "") if self._watch_symbols else ""
+        preferred_symbol = self._canonical_symbol(symbol_hint) or watched_symbol or latest_symbol
+        entry_guard = self._symbol_feed_guard(preferred_symbol)
         ws_status = self._ws_feed.get_status() if self._ws_feed else {}
         feed_metrics = {
             "ws_connected": bool(self._ws_feed and getattr(self._ws_feed, "connected", False)),
             "authenticated": bool(ws_status.get("authenticated", False)),
-            "symbol": latest_symbol or None,
-            "source": self._last_price_source.get(latest_symbol, "") if latest_symbol else "",
-            "updated_at": str(latest_ts) if latest_ts else None,
-            "age_ms": price_age_ms,
+            "symbol": entry_guard.get("symbol") or latest_symbol or None,
+            "source": entry_guard.get("source", ""),
+            "updated_at": entry_guard.get("updated_at") or (str(latest_ts) if latest_ts else None),
+            "age_ms": entry_guard.get("age_ms", price_age_ms),
+            "state": entry_guard.get("state", "waiting"),
+            "entry_block_reason": entry_guard.get("reason", ""),
             "rest_fallbacks": self._rest_price_fetches,
             "messages_received": int(ws_status.get("messages_received", 0) or 0),
             "reconnect_count": int(ws_status.get("reconnect_count", 0) or 0),
@@ -776,6 +925,7 @@ class ScalpEngine:
             "session_fees": session_fees,
             "session_pnl": round(session_realized + session_unrealized, 2),
             "feed_metrics": feed_metrics,
+            "entry_controls": entry_guard,
             "execution_metrics": dict(self._last_execution),
         }
 
@@ -787,14 +937,19 @@ class ScalpEngine:
             try:
                 trades = list(self.open_trades.items())
                 pending_entries = list(self.pending_entries.items())
-                if not trades and not pending_entries:
+                watched = {sym for sym in self._watch_symbols if sym}
+                if not trades and not pending_entries and not watched:
                     if self._ws_feed:
                         await self._stop_ws_feed()
                     await asyncio.sleep(1)
                     continue
 
-                tracked_symbols = {trade.symbol for _, trade in trades} | {entry.symbol for _, entry in pending_entries}
+                tracked_symbols = (
+                    {trade.symbol for _, trade in trades} | {entry.symbol for _, entry in pending_entries} | watched
+                )
                 await self._ensure_ws_feed(tracked_symbols)
+                if watched:
+                    await self._refresh_watch_prices(watched)
 
                 for entry_id, pending in pending_entries:
                     price = await self._get_symbol_price(pending.symbol)
@@ -845,7 +1000,7 @@ class ScalpEngine:
                         await self._close_trade(trade, reason)
             except Exception as e:
                 self._log("error", f"Monitor error: {e}")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25)
 
     async def _get_symbol_price(self, symbol: str) -> float:
         canonical = self._canonical_symbol(symbol)
@@ -951,6 +1106,14 @@ class ScalpEngine:
                     # Broker rejected the exit — leave trade open so monitor retries.
                     # Increment attempt counter; after 3 failures alert and halt engine.
                     trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
+                    self._remember_execution(
+                        phase="exit_reject",
+                        symbol=trade.symbol,
+                        side=trade.side,
+                        mode=trade.mode,
+                        verified=False,
+                        result=result,
+                    )
                     self._log(
                         "error",
                         f"Exit order REJECTED for trade {trade.trade_id} "
@@ -970,6 +1133,14 @@ class ScalpEngine:
                 trade.current_price = self._extract_order_price(result, trade.current_price)
             except Exception as e:
                 trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
+                self._remember_execution(
+                    phase="exit_error",
+                    symbol=trade.symbol,
+                    side=trade.side,
+                    mode=trade.mode,
+                    verified=False,
+                    error=str(e),
+                )
                 self._log(
                     "error",
                     f"Exit order FAILED for trade {trade.trade_id} (attempt {trade._exit_attempts}): {e}",
@@ -998,17 +1169,14 @@ class ScalpEngine:
         closed_dict = trade.to_dict()
         self.closed_trades.append(closed_dict)
         del self.open_trades[trade.trade_id]
-        self._last_execution = {
-            "phase": "exit",
-            "symbol": trade.symbol,
-            "side": trade.side,
-            "mode": trade.mode,
-            "verified": bool(result.get("verified", trade.mode == "paper")),
-            "latency_ms": round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1),
-            "ack_ms": round(_coerce_float(result.get("order_ack_ms"), 0.0), 1),
-            "verified_at_attempt": int(result.get("verified_at_attempt", 0) or 0),
-            "updated_at": str(_now_utc()),
-        }
+        self._remember_execution(
+            phase="exit",
+            symbol=trade.symbol,
+            side=trade.side,
+            mode=trade.mode,
+            verified=bool(result.get("verified", trade.mode == "paper")),
+            result=result,
+        )
 
         # Persist to disk via callback (handles both auto and manual exits uniformly)
         if self._on_trade_closed:

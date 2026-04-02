@@ -389,6 +389,8 @@ class DeltaClient:
             return {
                 **result,
                 "verified": False,
+                "fill_status": str(result.get("fill_status", "rejected") or "rejected"),
+                "order_lifecycle": "rejected",
                 "order_ack_ms": order_ack_ms,
                 "broker_latency_ms": order_ack_ms,
             }
@@ -399,6 +401,8 @@ class DeltaClient:
             return {
                 **result,
                 "verified": False,
+                "fill_status": "unknown",
+                "order_lifecycle": "submitted",
                 "error": "Order accepted without an order id",
                 "order_ack_ms": order_ack_ms,
                 "broker_latency_ms": order_ack_ms,
@@ -407,6 +411,7 @@ class DeltaClient:
         print(f"[DELTA] Order {order_id} placed — verifying fill...")
 
         # Verification loop
+        last_state = "submitted"
         for attempt in range(max_verify_attempts):
             await asyncio.sleep(2)  # Wait for fill
 
@@ -420,6 +425,8 @@ class DeltaClient:
                         break
 
                 state = str((filled or {}).get("state", "")).lower()
+                if state:
+                    last_state = state
                 if filled and state in ("filled", "closed", "completed"):
                     print(f"[DELTA] Order {order_id} VERIFIED filled (attempt {attempt + 1})")
                     fill_price = self._extract_fill_price(filled) or self._extract_fill_price(result)
@@ -440,6 +447,7 @@ class DeltaClient:
                         **result,
                         "verified": True,
                         "fill_status": state,
+                        "order_lifecycle": "filled",
                         "fill_price": fill_price or None,
                         "position_size": pos_size,
                         "verified_at_attempt": attempt + 1,
@@ -453,9 +461,20 @@ class DeltaClient:
                 print(f"[DELTA] Verify error (attempt {attempt + 1}): {e}")
 
         print(f"[DELTA] Order {order_id} UNVERIFIED after {max_verify_attempts} attempts")
+        lifecycle = "pending"
+        if last_state in {"cancelled", "canceled"}:
+            lifecycle = "cancelled"
+        elif last_state in {"partial", "partially_filled", "partially-filled"}:
+            lifecycle = "partial"
+        elif last_state in {"rejected", "failed"}:
+            lifecycle = "rejected"
+        elif last_state in {"filled", "closed", "completed"}:
+            lifecycle = "filled"
         return {
             **result,
             "verified": False,
+            "fill_status": last_state,
+            "order_lifecycle": lifecycle,
             "verified_at_attempt": max_verify_attempts,
             "error": f"Order {order_id} could not be verified after {max_verify_attempts} attempts",
             "order_ack_ms": order_ack_ms,

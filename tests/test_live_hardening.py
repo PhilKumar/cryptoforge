@@ -663,6 +663,42 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["feed_metrics"]["last_error"], "stale ticker")
         self.assertEqual(status["feed_metrics"]["subscribed_channels"], ["v2/ticker:BTCUSD"])
 
+    async def test_scalp_status_tracks_watch_symbol_entry_controls(self):
+        delta = FakeScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine.watch_symbol("BTCUSDT")
+
+        waiting = engine.get_status()
+        self.assertEqual(waiting["entry_controls"]["symbol"], "BTCUSDT")
+        self.assertEqual(waiting["entry_controls"]["state"], "waiting")
+        self.assertFalse(waiting["entry_controls"]["paper_allowed"])
+        self.assertFalse(waiting["entry_controls"]["live_allowed"])
+
+        engine._record_price("BTCUSD", 101.25, source="ws")
+        fresh = engine.get_status()
+        self.assertEqual(fresh["entry_controls"]["symbol"], "BTCUSDT")
+        self.assertEqual(fresh["entry_controls"]["state"], "fresh")
+        self.assertTrue(fresh["entry_controls"]["paper_allowed"])
+        self.assertTrue(fresh["entry_controls"]["live_allowed"])
+
+    async def test_scalp_status_blocks_stale_watch_symbol_entries(self):
+        delta = FakeScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine.watch_symbol("BTCUSDT")
+        engine._last_prices["BTCUSDT"] = 100.0
+        engine._last_price_source["BTCUSDT"] = "rest_quote"
+        engine._last_price_ts["BTCUSDT"] = datetime.utcnow() - timedelta(seconds=12)
+
+        stale = engine.get_status()
+
+        self.assertEqual(stale["entry_controls"]["symbol"], "BTCUSDT")
+        self.assertEqual(stale["entry_controls"]["state"], "stale")
+        self.assertFalse(stale["entry_controls"]["paper_allowed"])
+        self.assertFalse(stale["entry_controls"]["live_allowed"])
+        self.assertIn("stale", stale["entry_controls"]["reason"].lower())
+
     async def test_scalp_guardrail_arms_pending_entry_until_price_crosses(self):
         delta = FakeScalpDelta(ticker_prices=[100.0, 100.0, 104.0, 105.5])
         engine = ScalpEngine(delta)
@@ -812,6 +848,10 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
             status = await client.get("/api/auth/status")
             self.assertEqual(status.status_code, 200)
             self.assertTrue(status.json()["authenticated"])
+
+            prime = await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+            self.assertEqual(prime.status_code, 200)
+            self.app_module._scalp_engine._record_price("BTCUSD", 101.25, source="ws")
 
             csrf = client.cookies.get("cryptoforge_csrf") or ""
             enter = await client.post(
