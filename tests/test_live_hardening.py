@@ -437,6 +437,69 @@ class WebSocketFeedContractTests(unittest.IsolatedAsyncioTestCase):
         blocker.set()
         await asyncio.wait_for(feed._connect_task, 0.2)
 
+    async def test_authenticate_uses_key_auth_payload(self):
+        from engine.ws_feed import DeltaWSFeed
+
+        feed = DeltaWSFeed()
+        feed._api_key = "test-key"
+        feed._api_secret = "test-secret"
+        sent = []
+        feed._ws = SimpleNamespace(closed=False, send_json=AsyncMock(side_effect=lambda payload: sent.append(payload)))
+
+        await feed._authenticate()
+
+        self.assertEqual(sent[0]["type"], "key-auth")
+        self.assertEqual(sent[0]["payload"]["api-key"], "test-key")
+        self.assertTrue(sent[0]["payload"]["signature"])
+
+    async def test_subscribe_ticker_uses_symbols_payload(self):
+        from engine.ws_feed import DeltaWSFeed
+
+        feed = DeltaWSFeed()
+        sent = []
+        feed._ws = SimpleNamespace(closed=False, send_json=AsyncMock(side_effect=lambda payload: sent.append(payload)))
+
+        await feed.subscribe_ticker("BTCUSDT")
+
+        self.assertEqual(
+            sent[0],
+            {
+                "type": "subscribe",
+                "payload": {"channels": [{"name": "v2/ticker", "symbols": ["BTCUSD"]}]},
+            },
+        )
+        self.assertIn("v2/ticker:BTCUSD", feed.get_status()["subscribed_channels"])
+
+    async def test_dispatch_ticker_message_without_channel_routes_handler(self):
+        from engine.ws_feed import DeltaWSFeed
+
+        feed = DeltaWSFeed()
+        seen = []
+        feed.on_ticker = lambda symbol, ticker: seen.append((symbol, ticker))
+
+        await feed._dispatch({"type": "v2/ticker", "symbol": "BTCUSD", "mark_price": "104.25"})
+
+        self.assertEqual(seen, [("BTCUSD", {"type": "v2/ticker", "symbol": "BTCUSD", "mark_price": "104.25"})])
+
+    async def test_key_auth_success_flushes_pending_private_subscriptions(self):
+        from engine.ws_feed import DeltaWSFeed
+
+        feed = DeltaWSFeed()
+        sent = []
+        feed._ws = SimpleNamespace(closed=False, send_json=AsyncMock(side_effect=lambda payload: sent.append(payload)))
+        feed._pending_auth_channels.add(feed._subscription_key("positions", ["all"]))
+
+        await feed._dispatch({"type": "key-auth", "success": True, "status": "authenticated"})
+
+        self.assertTrue(feed.authenticated)
+        self.assertEqual(
+            sent[0],
+            {
+                "type": "subscribe",
+                "payload": {"channels": [{"name": "positions", "symbols": ["all"]}]},
+            },
+        )
+
 
 class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_scalp_paper_entry_skips_broker_lookups_without_cached_price(self):
@@ -573,6 +636,32 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(trade.can_evaluate_exit(trade.entry_time + timedelta(seconds=1)))
         self.assertTrue(trade.can_evaluate_exit(trade.entry_time + timedelta(seconds=3)))
         self.assertEqual(trade.check_exit(99.0), "sl_usd_hit")
+
+    async def test_scalp_status_exposes_ws_feed_diagnostics(self):
+        delta = FakeScalpDelta()
+        engine = ScalpEngine(delta)
+        now = datetime.now()
+        engine._ws_feed = SimpleNamespace(
+            connected=True,
+            get_status=lambda: {
+                "authenticated": False,
+                "messages_received": 42,
+                "reconnect_count": 3,
+                "last_error": "stale ticker",
+                "subscribed_channels": ["v2/ticker:BTCUSD"],
+                "pending_auth_channels": [],
+            },
+        )
+        engine._last_price_ts["BTCUSDT"] = now
+        engine._last_price_source["BTCUSDT"] = "rest_quote"
+
+        status = engine.get_status()
+
+        self.assertTrue(status["feed_metrics"]["ws_connected"])
+        self.assertEqual(status["feed_metrics"]["messages_received"], 42)
+        self.assertEqual(status["feed_metrics"]["reconnect_count"], 3)
+        self.assertEqual(status["feed_metrics"]["last_error"], "stale ticker")
+        self.assertEqual(status["feed_metrics"]["subscribed_channels"], ["v2/ticker:BTCUSD"])
 
     async def test_scalp_guardrail_arms_pending_entry_until_price_crosses(self):
         delta = FakeScalpDelta(ticker_prices=[100.0, 100.0, 104.0, 105.5])

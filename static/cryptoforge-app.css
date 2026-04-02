@@ -1595,6 +1595,14 @@
   }
   [data-theme="light"] #cf-sl-hint,
   [data-theme="light"] #cf-tp-hint { color: #64748b; }
+  .cf-scalp-meta-detail {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace;
+    line-height: 1.35;
+  }
+  [data-theme="light"] .cf-scalp-meta-detail { color: #64748b; }
   [data-theme="light"] #cf-scalp-session-pnl { font-weight: 700; }
   [data-theme="light"] #cf-scalp-status-label { color: #0f172a; }
   [data-theme="light"] #cf-scalp-open-count { color: #475569; }

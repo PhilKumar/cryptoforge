@@ -745,13 +745,20 @@ class ScalpEngine:
         price_age_ms = None
         if latest_ts:
             price_age_ms = max(0, int((_now_utc() - latest_ts).total_seconds() * 1000))
+        ws_status = self._ws_feed.get_status() if self._ws_feed else {}
         feed_metrics = {
             "ws_connected": bool(self._ws_feed and getattr(self._ws_feed, "connected", False)),
+            "authenticated": bool(ws_status.get("authenticated", False)),
             "symbol": latest_symbol or None,
             "source": self._last_price_source.get(latest_symbol, "") if latest_symbol else "",
             "updated_at": str(latest_ts) if latest_ts else None,
             "age_ms": price_age_ms,
             "rest_fallbacks": self._rest_price_fetches,
+            "messages_received": int(ws_status.get("messages_received", 0) or 0),
+            "reconnect_count": int(ws_status.get("reconnect_count", 0) or 0),
+            "last_error": str(ws_status.get("last_error", "") or ""),
+            "subscribed_channels": list(ws_status.get("subscribed_channels") or []),
+            "pending_auth_channels": list(ws_status.get("pending_auth_channels") or []),
         }
 
         return {

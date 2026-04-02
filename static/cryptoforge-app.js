@@ -4570,6 +4570,20 @@ function cfScalpFeedSummary(feed) {
   return source + ' • ' + symbol + ' • ' + age;
 }
 
+function cfScalpFeedDetail(feed) {
+  const meta = feed || {};
+  const bits = [];
+  bits.push(meta.ws_connected ? (meta.authenticated ? 'WS auth' : 'WS live') : 'WS idle');
+  bits.push(String(Number(meta.messages_received) || 0) + ' msgs');
+  bits.push(String(Number(meta.reconnect_count) || 0) + ' reconnects');
+  bits.push(String(Number(meta.rest_fallbacks) || 0) + ' REST');
+  const active = Array.isArray(meta.subscribed_channels) && meta.subscribed_channels.length ? meta.subscribed_channels[0] : '';
+  if (active) bits.push(active);
+  const error = String(meta.last_error || '').trim();
+  if (error) bits.push(error.length > 72 ? error.slice(0, 69) + '...' : error);
+  return bits.join(' • ');
+}
+
 function cfScalpExecSummary(execMetrics) {
   const meta = execMetrics || {};
   if (!meta.phase) return 'No live fills yet';
@@ -4578,6 +4592,17 @@ function cfScalpExecSummary(execMetrics) {
   const latency = cfFormatLatency(meta.latency_ms);
   const suffix = meta.verified ? latency : 'unverified';
   return phase + ' • ' + symbol + ' • ' + suffix;
+}
+
+function cfScalpExecDetail(execMetrics) {
+  const meta = execMetrics || {};
+  if (!meta.phase) return 'Awaiting next broker action';
+  const bits = [];
+  if (Number(meta.ack_ms) > 0) bits.push('ack ' + cfFormatLatency(meta.ack_ms));
+  if (Number(meta.latency_ms) > 0) bits.push('verify ' + cfFormatLatency(meta.latency_ms));
+  if (Number(meta.verified_at_attempt) > 0) bits.push('attempt ' + String(meta.verified_at_attempt));
+  if (!bits.length) return meta.verified === false ? 'verification failed' : 'awaiting broker metrics';
+  return bits.join(' • ');
 }
 
 function cfScalpMarkMeta(trade) {
@@ -4602,20 +4627,33 @@ function cfApplyScalpStatus(d) {
   }
   const engDot = document.getElementById('cf-scalp-dot');
   if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+  const feed = d.feed_metrics || {};
   const feedMeta = document.getElementById('cf-scalp-feed-meta');
   if (feedMeta) {
-    const feed = d.feed_metrics || {};
     feedMeta.textContent = cfScalpFeedSummary(feed);
     const ageMs = Number(feed.age_ms);
-    if (Number.isFinite(ageMs) && ageMs <= 1200) feedMeta.style.color = 'var(--green)';
-    else if (Number.isFinite(ageMs) && ageMs <= 3000) feedMeta.style.color = '#fbbf24';
+    const source = String(feed.source || '').toLowerCase();
+    if (/^ws$/.test(source) && Number.isFinite(ageMs) && ageMs <= 1200) feedMeta.style.color = 'var(--green)';
+    else if (source.startsWith('rest')) feedMeta.style.color = '#fbbf24';
+    else if (Number.isFinite(ageMs) && ageMs > 3000) feedMeta.style.color = 'var(--red)';
     else feedMeta.style.color = 'var(--text)';
+  }
+  const feedDetail = document.getElementById('cf-scalp-feed-detail');
+  if (feedDetail) {
+    feedDetail.textContent = cfScalpFeedDetail(feed);
+    feedDetail.style.color = feed.last_error ? 'var(--red)' : 'var(--muted)';
   }
   const execMeta = document.getElementById('cf-scalp-exec-meta');
   if (execMeta) {
     const exec = d.execution_metrics || {};
     execMeta.textContent = cfScalpExecSummary(exec);
     execMeta.style.color = exec.verified === false ? 'var(--red)' : 'var(--text)';
+  }
+  const execDetail = document.getElementById('cf-scalp-exec-detail');
+  if (execDetail) {
+    const exec = d.execution_metrics || {};
+    execDetail.textContent = cfScalpExecDetail(exec);
+    execDetail.style.color = exec.verified === false ? 'var(--red)' : 'var(--muted)';
   }
 
   const pendingWrap = document.getElementById('cf-scalp-pending-wrap');

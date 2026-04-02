@@ -9,10 +9,10 @@ Delta Exchange WebSocket docs:
 - Testnet:    wss://testnet-socket.delta.exchange
 
 Channels:
-- candlestick_{resolution}_{symbol}   — OHLCV candle updates
-- v2/ticker/{symbol}                   — Real-time ticker
-- orders                               — Order updates (auth required)
-- positions                            — Position updates (auth required)
+- candlestick_{resolution} + symbols[]  — OHLCV candle updates
+- v2/ticker + symbols[]                — Real-time ticker
+- orders + symbols["all"]             — Order updates (auth required)
+- positions + symbols["all"]          — Position updates (auth required)
 
 Usage:
     feed = DeltaWSFeed()
@@ -29,7 +29,7 @@ import json
 import os
 import sys
 import time as _time
-from typing import Callable, Optional, Set
+from typing import Callable, List, Optional, Sequence, Set, Tuple
 
 import aiohttp
 
@@ -109,6 +109,29 @@ class DeltaWSFeed:
             return symbol[:-1]  # strip trailing 'T'
         return symbol
 
+    def _to_subscription_symbol(self, symbol: str) -> str:
+        raw = str(symbol or "").upper()
+        if raw.startswith("MARK:"):
+            return "MARK:" + self._to_delta_symbol(raw.split(":", 1)[1])
+        return self._to_delta_symbol(raw)
+
+    @staticmethod
+    def _subscription_key(name: str, symbols: Optional[Sequence[str]] = None) -> str:
+        payload = {"name": str(name or ""), "symbols": list(symbols or [])}
+        return json.dumps(payload, sort_keys=True)
+
+    @staticmethod
+    def _parse_subscription_key(key: str) -> Tuple[str, Optional[List[str]]]:
+        payload = json.loads(key)
+        symbols = payload.get("symbols") or None
+        return payload.get("name", ""), symbols
+
+    @staticmethod
+    def _format_subscription(name: str, symbols: Optional[Sequence[str]] = None) -> str:
+        if not symbols:
+            return str(name or "")
+        return f"{name}:{','.join(symbols)}"
+
     # ── Properties ──────────────────────────────────────────────
     @property
     def connected(self) -> bool:
@@ -182,8 +205,12 @@ class DeltaWSFeed:
                     print(f"[WS] Resubscribing to {len(self._subscribed_channels)} channels...")
                     channels_copy = list(self._subscribed_channels)
                     self._subscribed_channels.clear()
-                    for channel in channels_copy:
-                        await self._send_subscribe(channel)
+                    for spec in channels_copy:
+                        channel, symbols = self._parse_subscription_key(spec)
+                        if channel in {"orders", "positions", "v2/user_trades"} and not self._authenticated:
+                            self._pending_auth_channels.add(spec)
+                            continue
+                        await self._send_subscribe(channel, symbols)
 
                 # Fire on_connect callback
                 if self.on_connect:
@@ -246,7 +273,7 @@ class DeltaWSFeed:
         try:
             auth = self._generate_auth_signature()
             payload = {
-                "type": "auth",
+                "type": "key-auth",
                 "payload": auth,
             }
             await self._ws.send_json(payload)
@@ -258,65 +285,77 @@ class DeltaWSFeed:
     # ── Subscribe / Unsubscribe ─────────────────────────────────
     async def subscribe_candles(self, symbol: str, resolution: str):
         """Subscribe to candlestick updates."""
-        # Delta India uses USD suffix (BTCUSD), map from USDT
-        symbol = self._to_delta_symbol(symbol)
-        channel = f"candlestick_{resolution}_{symbol}"
-        await self._send_subscribe(channel)
+        symbol = self._to_subscription_symbol(symbol)
+        channel = f"candlestick_{resolution}"
+        await self._send_subscribe(channel, [symbol])
 
     async def subscribe_ticker(self, symbol: str):
         """Subscribe to real-time ticker."""
-        # Delta India uses USD suffix (BTCUSD), map from USDT
-        symbol = self._to_delta_symbol(symbol)
-        channel = f"v2/ticker/{symbol}"
-        await self._send_subscribe(channel)
+        symbol = self._to_subscription_symbol(symbol)
+        await self._send_subscribe("v2/ticker", [symbol])
 
     async def subscribe_orders(self):
         """Subscribe to order updates (requires auth)."""
         channel = "orders"
+        symbols = ["all"]
+        key = self._subscription_key(channel, symbols)
         if not self._authenticated:
-            self._pending_auth_channels.add(channel)
-            print(f"[WS] Queued '{channel}' — waiting for auth")
+            self._pending_auth_channels.add(key)
+            print(f"[WS] Queued '{self._format_subscription(channel, symbols)}' — waiting for auth")
             return
-        await self._send_subscribe(channel)
+        await self._send_subscribe(channel, symbols)
 
     async def subscribe_positions(self):
         """Subscribe to position updates (requires auth)."""
         channel = "positions"
+        symbols = ["all"]
+        key = self._subscription_key(channel, symbols)
         if not self._authenticated:
-            self._pending_auth_channels.add(channel)
+            self._pending_auth_channels.add(key)
+            print(f"[WS] Queued '{self._format_subscription(channel, symbols)}' — waiting for auth")
             return
-        await self._send_subscribe(channel)
+        await self._send_subscribe(channel, symbols)
 
-    async def unsubscribe(self, channel: str):
+    async def unsubscribe(self, channel: str, symbols: Optional[Sequence[str]] = None):
         """Unsubscribe from a channel."""
         if not self._ws or self._ws.closed:
             return
-        self._subscribed_channels.discard(channel)
+        key = self._subscription_key(channel, symbols)
+        self._subscribed_channels.discard(key)
+        payload_channel = {"name": channel}
+        if symbols:
+            payload_channel["symbols"] = list(symbols)
         try:
             await self._ws.send_json(
                 {
                     "type": "unsubscribe",
-                    "payload": {"channels": [{"name": channel}]},
+                    "payload": {"channels": [payload_channel]},
                 }
             )
         except Exception as e:
             print(f"[WS] Unsubscribe error: {e}")
 
-    async def _send_subscribe(self, channel: str):
+    async def _send_subscribe(self, channel: str, symbols: Optional[Sequence[str]] = None, *, remember: bool = True):
         """Send subscribe message for a channel."""
+        key = self._subscription_key(channel, symbols)
         if not self._ws or self._ws.closed:
-            self._subscribed_channels.add(channel)  # Will resubscribe on connect
+            if remember:
+                self._subscribed_channels.add(key)
             return
+        payload_channel = {"name": channel}
+        if symbols:
+            payload_channel["symbols"] = list(symbols)
         try:
             payload = {
                 "type": "subscribe",
-                "payload": {"channels": [{"name": channel}]},
+                "payload": {"channels": [payload_channel]},
             }
             await self._ws.send_json(payload)
-            self._subscribed_channels.add(channel)
-            print(f"[WS] Subscribed: {channel}")
+            if remember:
+                self._subscribed_channels.add(key)
+            print(f"[WS] Subscribed: {self._format_subscription(channel, symbols)}")
         except Exception as e:
-            print(f"[WS] Subscribe error for {channel}: {e}")
+            print(f"[WS] Subscribe error for {self._format_subscription(channel, symbols)}: {e}")
 
     # ── Message Reader ──────────────────────────────────────────
     async def _reader_loop(self):
@@ -374,76 +413,87 @@ class DeltaWSFeed:
         """Route incoming messages to appropriate handlers."""
         msg_type = data.get("type", "")
 
-        # Auth response
-        if msg_type == "auth":
-            if data.get("payload", {}).get("result") == "success":
+        if msg_type in {"auth", "key-auth"}:
+            success = data.get("success")
+            if success is None:
+                success = data.get("payload", {}).get("result") == "success"
+            if success:
                 self._authenticated = True
                 print("[WS] Authenticated successfully")
-                # Subscribe to pending auth channels
-                for ch in list(self._pending_auth_channels):
-                    await self._send_subscribe(ch)
+                for spec in list(self._pending_auth_channels):
+                    channel, symbols = self._parse_subscription_key(spec)
+                    await self._send_subscribe(channel, symbols)
                 self._pending_auth_channels.clear()
             else:
                 print(f"[WS] Auth failed: {data}")
             return
 
-        # Subscription confirmation
         if msg_type == "subscriptions":
             channels = data.get("payload", {}).get("channels", [])
-            print(f"[WS] Active subscriptions: {[c.get('name') for c in channels]}")
+            labels = [self._format_subscription(c.get("name", ""), c.get("symbols") or []) for c in channels]
+            print(f"[WS] Active subscriptions: {labels}")
             return
 
-        # Channel data
-        channel = data.get("channel", "")
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            payload = data.get("data")
+        if not isinstance(payload, dict):
+            payload = data
+        channel = data.get("channel") or msg_type
 
-        # Candlestick updates
-        if channel.startswith("candlestick_"):
-            if self.on_candle:
-                parts = channel.split("_", 2)  # candlestick_1m_BTCUSDT
+        candle_channel = channel if str(channel).startswith("candlestick_") else ""
+        if candle_channel:
+            resolution = ""
+            symbol = str(data.get("symbol") or payload.get("symbol") or "")
+            if candle_channel.count("_") >= 2 and not symbol:
+                parts = candle_channel.split("_", 2)
                 if len(parts) >= 3:
                     resolution = parts[1]
                     symbol = parts[2]
-                    candle = data.get("payload", data.get("data", {}))
-                    try:
-                        result = self.on_candle(symbol, resolution, candle)
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception as e:
-                        print(f"[WS] on_candle error: {e}")
-
-        # Ticker updates
-        elif channel.startswith("v2/ticker/"):
-            if self.on_ticker:
-                symbol = channel.split("/")[-1]
-                ticker = data.get("payload", data.get("data", {}))
+            elif "_" in candle_channel:
+                resolution = candle_channel.split("_", 1)[1]
+            if self.on_candle and resolution and symbol:
                 try:
-                    result = self.on_ticker(symbol, ticker)
+                    result = self.on_candle(symbol, resolution, payload)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as e:
+                    print(f"[WS] on_candle error: {e}")
+            return
+
+        ticker_channel = str(channel)
+        if ticker_channel == "v2/ticker" or ticker_channel.startswith("v2/ticker/"):
+            symbol = str(data.get("symbol") or payload.get("symbol") or "")
+            if not symbol and ticker_channel.startswith("v2/ticker/"):
+                symbol = ticker_channel.split("/", 2)[-1]
+            if self.on_ticker and symbol:
+                try:
+                    result = self.on_ticker(symbol, payload)
                     if asyncio.iscoroutine(result):
                         await result
                 except Exception as e:
                     print(f"[WS] on_ticker error: {e}")
+            return
 
-        # Order updates
-        elif channel == "orders":
+        if channel == "orders":
             if self.on_order:
-                order = data.get("payload", data.get("data", {}))
                 try:
-                    result = self.on_order(order)
+                    result = self.on_order(payload)
                     if asyncio.iscoroutine(result):
                         await result
                 except Exception as e:
                     print(f"[WS] on_order error: {e}")
+            return
 
-        # Position updates
-        elif channel == "positions":
+        if channel == "positions":
             if self.on_position:
-                position = data.get("payload", data.get("data", {}))
                 try:
-                    result = self.on_position(position)
+                    result = self.on_position(payload)
                     if asyncio.iscoroutine(result):
                         await result
                 except Exception as e:
                     print(f"[WS] on_position error: {e}")
+            return
 
     # ── Heartbeat ───────────────────────────────────────────────
     async def _heartbeat_loop(self):
@@ -515,7 +565,14 @@ class DeltaWSFeed:
             "connected": self.connected,
             "authenticated": self._authenticated,
             "ws_url": self._ws_url,
-            "subscribed_channels": list(self._subscribed_channels),
+            "subscribed_channels": [
+                self._format_subscription(*self._parse_subscription_key(spec))
+                for spec in sorted(self._subscribed_channels)
+            ],
+            "pending_auth_channels": [
+                self._format_subscription(*self._parse_subscription_key(spec))
+                for spec in sorted(self._pending_auth_channels)
+            ],
             "messages_received": self.messages_received,
             "reconnect_count": self.reconnect_count,
             "last_error": self.last_error,
