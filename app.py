@@ -11,7 +11,9 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -169,7 +171,53 @@ if not AUTH_PIN:
         "Set it in your .env file: CRYPTOFORGE_PIN=<your-6-digit-pin>"
     )
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
-_SESSION_FILE = os.path.join(_HERE, ".sessions.json")
+
+
+def _state_dir_candidates() -> List[str]:
+    explicit = (os.getenv("CRYPTOFORGE_STATE_DIR") or "").strip()
+    if explicit:
+        yield os.path.abspath(os.path.expanduser(explicit))
+    if sys.platform == "darwin":
+        yield os.path.join(os.path.expanduser("~"), "Library", "Application Support", "CryptoForge")
+    yield os.path.join(os.path.expanduser("~"), ".cryptoforge")
+    yield os.path.join(tempfile.gettempdir(), "cryptoforge")
+    yield _HERE
+
+
+def _state_dir_is_writable(path: str) -> bool:
+    try:
+        os.makedirs(path, exist_ok=True)
+        return os.access(path, os.W_OK)
+    except Exception:
+        return False
+
+
+def _resolve_state_dir() -> str:
+    for path in _state_dir_candidates():
+        if _state_dir_is_writable(path):
+            return path
+    return _HERE
+
+
+_STATE_DIR = _resolve_state_dir()
+_LEGACY_SESSION_FILE = os.path.join(_HERE, ".sessions.json")
+_SESSION_FILE = os.path.join(_STATE_DIR, "sessions.json")
+
+
+def _bootstrap_session_store() -> None:
+    if _SESSION_FILE == _LEGACY_SESSION_FILE:
+        return
+    if os.path.exists(_SESSION_FILE) or not os.path.exists(_LEGACY_SESSION_FILE):
+        return
+    try:
+        os.makedirs(os.path.dirname(_SESSION_FILE), exist_ok=True)
+        shutil.copy2(_LEGACY_SESSION_FILE, _SESSION_FILE)
+    except Exception as exc:
+        _logger.warning("Failed to migrate legacy session store to %s: %s", _SESSION_FILE, exc)
+
+
+_bootstrap_session_store()
+
 CSRF_COOKIE_NAME = "cryptoforge_csrf"
 _SESSION_ABSOLUTE_SEC = int(os.getenv("CRYPTOFORGE_SESSION_ABSOLUTE_SEC", "86400"))
 _SESSION_IDLE_SEC = int(os.getenv("CRYPTOFORGE_SESSION_IDLE_SEC", "14400"))
@@ -283,13 +331,14 @@ def _load_sessions() -> dict:
             if changed:
                 _save_sessions(sessions)
             return sessions
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Failed to load session store %s: %s", _SESSION_FILE, exc)
     return {}
 
 
 def _save_sessions(sessions: dict):
     try:
+        os.makedirs(os.path.dirname(_SESSION_FILE), exist_ok=True)
         tmp = _SESSION_FILE + ".tmp"
         with open(tmp, "w") as f:
             f.write(json.dumps(sessions))
@@ -298,8 +347,8 @@ def _save_sessions(sessions: dict):
             os.chmod(_SESSION_FILE, 0o600)
         except OSError:
             pass
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Failed to save session store %s: %s", _SESSION_FILE, exc)
 
 
 def _create_session(request=None) -> str:

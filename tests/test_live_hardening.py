@@ -8,6 +8,7 @@ from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pandas as pd
 
 from broker.delta import DeltaClient, _CircuitBreaker, _normalize_result_list
@@ -626,11 +627,15 @@ class SessionSecurityTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self._orig_session_file = self.app_module._SESSION_FILE
+        self._orig_state_dir = getattr(self.app_module, "_STATE_DIR", None)
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
+        self.app_module._STATE_DIR = self._tmp.name
         self.addCleanup(self._restore_session_file)
 
     def _restore_session_file(self):
         self.app_module._SESSION_FILE = self._orig_session_file
+        if self._orig_state_dir is not None:
+            self.app_module._STATE_DIR = self._orig_state_dir
 
     @staticmethod
     def _request(user_agent="CryptoForgeTest/1.0", ip="127.0.0.1"):
@@ -658,6 +663,55 @@ class SessionSecurityTests(unittest.TestCase):
         self.app_module._save_sessions(sessions)
 
         self.assertFalse(self.app_module._validate_session(token, request=self._request()))
+
+
+class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addAsyncCleanup(self._tmp.cleanup)
+        self._orig_session_file = self.app_module._SESSION_FILE
+        self._orig_state_dir = getattr(self.app_module, "_STATE_DIR", None)
+        self.app_module._STATE_DIR = self._tmp.name
+        self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
+        self.addAsyncCleanup(self._restore_session_file)
+
+    async def _restore_session_file(self):
+        engine = getattr(self.app_module, "_scalp_engine", None)
+        if engine is not None:
+            engine.stop()
+            self.app_module._scalp_engine = None
+        self.app_module._SESSION_FILE = self._orig_session_file
+        if self._orig_state_dir is not None:
+            self.app_module._STATE_DIR = self._orig_state_dir
+
+    async def test_login_session_allows_authenticated_scalp_write(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            login = await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            self.assertEqual(login.status_code, 200)
+
+            status = await client.get("/api/auth/status")
+            self.assertEqual(status.status_code, 200)
+            self.assertTrue(status.json()["authenticated"])
+
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            enter = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_usdt": 1000,
+                    "leverage": 50,
+                    "sl_usd": 100,
+                    "tp_usd": 100,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(enter.status_code, 200)
+        self.assertEqual(enter.json()["status"], "ok")
 
 
 class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):
