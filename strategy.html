@@ -545,6 +545,209 @@
 
   /* ── Stats Grid ── */
   .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .mission-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr);
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+  .mission-card {
+    position: relative;
+    overflow: hidden;
+    padding: 22px 24px;
+    border-radius: 20px;
+    border: 1px solid rgba(96,165,250,0.18);
+    background:
+      radial-gradient(circle at top right, rgba(59,130,246,0.22), transparent 34%),
+      radial-gradient(circle at bottom left, rgba(34,197,94,0.12), transparent 32%),
+      linear-gradient(145deg, rgba(16,24,44,0.98), rgba(9,14,28,0.99));
+    box-shadow: 0 22px 42px rgba(2,6,23,0.30), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  .mission-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, rgba(255,255,255,0.10), transparent 32%, transparent 68%, rgba(255,255,255,0.05));
+    pointer-events: none;
+  }
+  .mission-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #bfdbfe;
+  }
+  .mission-title {
+    margin: 0 0 10px;
+    font-size: 34px;
+    line-height: 1.02;
+    letter-spacing: -0.05em;
+  }
+  .mission-copy {
+    max-width: 720px;
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .mission-pills, .mission-actions, .safety-checklist, .intel-list, .overview-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .mission-pills { margin-top: 18px; }
+  .mission-actions { margin-top: 18px; }
+  .mission-pill, .safety-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(117,138,176,0.22);
+    background: linear-gradient(180deg, rgba(40,50,74,0.94), rgba(17,24,42,0.98));
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+  .mission-pill strong, .safety-chip strong { color: var(--text); font-weight: 800; }
+  .mission-sidecard {
+    display: grid;
+    gap: 12px;
+  }
+  .mission-mini {
+    padding: 16px 18px;
+    border-radius: 18px;
+    border: 1px solid rgba(117,138,176,0.16);
+    background: linear-gradient(165deg, rgba(18,26,46,0.98), rgba(10,16,30,0.98));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 14px 26px rgba(2,6,23,0.22);
+  }
+  .mission-mini-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .mission-mini-value {
+    font-size: 22px;
+    font-weight: 800;
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1.1;
+  }
+  .mission-mini-copy {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+  .builder-insight-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .execution-brief {
+    display: grid;
+    gap: 14px;
+    padding: 22px;
+    border-radius: 20px;
+    border: 1px solid rgba(167,139,250,0.18);
+    background:
+      radial-gradient(circle at top left, rgba(167,139,250,0.18), transparent 34%),
+      linear-gradient(160deg, rgba(22,20,44,0.98), rgba(10,14,28,0.99));
+  }
+  .execution-brief h3, .results-overview h3 { margin: 0; }
+  .execution-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .brief-metric {
+    padding: 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(117,138,176,0.14);
+    background: rgba(255,255,255,0.03);
+  }
+  .brief-metric-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+    font-weight: 700;
+  }
+  .brief-metric-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .intel-list {
+    margin-top: 2px;
+    gap: 8px;
+  }
+  .intel-pill {
+    padding: 9px 12px;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(117,138,176,0.16);
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .intel-pill strong { color: var(--text); }
+  .safety-panel {
+    padding: 18px;
+    border-radius: 18px;
+    border: 1px solid rgba(52,211,153,0.18);
+    background:
+      radial-gradient(circle at top right, rgba(34,197,94,0.12), transparent 30%),
+      linear-gradient(180deg, rgba(12,22,28,0.98), rgba(9,16,24,0.99));
+  }
+  .safety-panel h4, .deploy-summary h4 { margin: 0 0 10px; font-size: 15px; }
+  .safety-copy {
+    margin: 0 0 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-dim);
+  }
+  .results-overview {
+    margin-bottom: 18px;
+    padding: 22px;
+    border-radius: 20px;
+    border: 1px solid rgba(34,211,238,0.18);
+    background:
+      radial-gradient(circle at top right, rgba(34,211,238,0.16), transparent 34%),
+      linear-gradient(165deg, rgba(14,22,42,0.98), rgba(9,14,28,0.99));
+  }
+  .overview-card {
+    min-width: 0;
+    flex: 1 1 180px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(117,138,176,0.14);
+    background: rgba(255,255,255,0.03);
+  }
+  .overview-label {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+    font-weight: 700;
+  }
+  .overview-value {
+    font-size: 18px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 800;
+    color: var(--text);
+  }
 
   /* ── Builder Grid ── */
   .builder-grid {
@@ -1582,6 +1785,68 @@
     border-radius: 10px; padding: 12px 16px; margin: 16px 0;
     font-size: 13px; color: var(--green); display: flex; align-items: center; gap: 8px;
   }
+  .deploy-summary {
+    margin: 16px 0 0;
+    padding: 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(117,138,176,0.16);
+    background: linear-gradient(180deg, rgba(20,28,48,0.96), rgba(10,15,28,0.98));
+  }
+  .deploy-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .deploy-summary-item {
+    padding: 12px;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(117,138,176,0.12);
+  }
+  .deploy-summary-item span {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .deploy-summary-item strong {
+    font-size: 14px;
+    color: var(--text);
+    word-break: break-word;
+  }
+  .deploy-checklist {
+    display: grid;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .deploy-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(117,138,176,0.14);
+    background: rgba(255,255,255,0.03);
+  }
+  .deploy-check input {
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    accent-color: #38bdf8;
+  }
+  .deploy-check label {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-dim);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .deploy-check label strong { color: var(--text); }
   @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
@@ -1916,6 +2181,10 @@
 
     /* -- Dashboard stats grid: 2-col -- */
     .stats-grid { grid-template-columns: 1fr 1fr !important; }
+    .mission-grid,
+    .builder-insight-grid,
+    .deploy-summary-grid,
+    .execution-summary { grid-template-columns: 1fr !important; }
 
     /* -- Builder grid: single column -- */
     .builder-grid { grid-template-columns: 1fr !important; }
@@ -1998,6 +2267,8 @@
   @media (min-width: 768px) and (max-width: 1024px) {
     .builder-grid { grid-template-columns: 260px 1fr !important; }
     .stats-grid { grid-template-columns: repeat(3, 1fr) !important; }
+    .mission-grid,
+    .builder-insight-grid { grid-template-columns: 1fr !important; }
   }
 </style>
 <script src="/static/error-handler.js" defer></script>
@@ -2162,6 +2433,36 @@
     <button class="btn btn-outline btn-sm broker-toggle-btn" onclick="toggleBrokerConnection()" data-broker-toggle="dashboard">🔗 Connect Broker</button>
   </div>
 
+  <div class="mission-grid">
+    <div class="mission-card">
+      <div class="mission-eyebrow">Operator Command</div>
+      <h3 class="mission-title" id="dash-mission-title">Crypto desk is standing by.</h3>
+      <p class="mission-copy" id="dash-mission-copy">Backtests, paper engines, live monitoring, and broker connectivity are consolidated into a single operating surface. Start with a controlled paper run, validate regime fit, then graduate only verified setups to live.</p>
+      <div class="mission-pills" id="dash-mission-pills">
+        <div class="mission-pill"><strong>Readiness</strong> No active engines</div>
+        <div class="mission-pill"><strong>Broker</strong> Delta status pending</div>
+        <div class="mission-pill"><strong>Pipeline</strong> Backtest coverage pending</div>
+      </div>
+      <div class="mission-actions">
+        <button class="btn btn-primary btn-sm" onclick="showPage('builder-page', document.getElementById('nav-builder'))">🧠 Build Strategy</button>
+        <button class="btn btn-outline btn-sm" onclick="showPage('results-page', document.getElementById('nav-results'))">📊 Review Runs</button>
+        <button class="btn btn-outline btn-sm" onclick="showPage('live-page', document.getElementById('nav-live'))">📡 Monitor Live</button>
+      </div>
+    </div>
+    <div class="mission-sidecard">
+      <div class="mission-mini">
+        <div class="mission-mini-label">Deployment Lane</div>
+        <div class="mission-mini-value" id="dash-deploy-lane">Paper First</div>
+        <div class="mission-mini-copy" id="dash-deploy-copy">Use paper mode to verify execution flow, fills, and risk behavior before enabling live capital.</div>
+      </div>
+      <div class="mission-mini">
+        <div class="mission-mini-label">Control Surface</div>
+        <div class="mission-mini-value" id="dash-control-value">0 Engines</div>
+        <div class="mission-mini-copy" id="dash-control-copy">No active paper or live engines are currently driving orders.</div>
+      </div>
+    </div>
+  </div>
+
   <div class="stats-grid" id="dash-stats">
     <div class="stat-box pnl-hero">
       <div class="stat-label">Today's P&amp;L</div>
@@ -2286,6 +2587,41 @@
     <div id="deploy-paper-info" class="deploy-info">
       ✅ <b>Paper mode</b> — Simulated trading, no real orders will be placed.
     </div>
+    <div class="deploy-summary">
+      <h4>Deployment Summary</h4>
+      <div class="deploy-summary-grid" id="deploy-summary-grid">
+        <div class="deploy-summary-item">
+          <span>Strategy</span>
+          <strong id="deploy-summary-name">Untitled</strong>
+        </div>
+        <div class="deploy-summary-item">
+          <span>Market</span>
+          <strong id="deploy-summary-symbol">BTCUSDT • LONG</strong>
+        </div>
+        <div class="deploy-summary-item">
+          <span>Risk Package</span>
+          <strong id="deploy-summary-risk">10x • SL 5% • TP 10%</strong>
+        </div>
+        <div class="deploy-summary-item">
+          <span>Signal Stack</span>
+          <strong id="deploy-summary-logic">0 indicators • 0 / 0 conditions</strong>
+        </div>
+      </div>
+      <div class="deploy-checklist" id="deploy-checklist">
+        <div class="deploy-check">
+          <input type="checkbox" id="deploy-check-runtime" onchange="updateDeployModalState()">
+          <label for="deploy-check-runtime"><strong>Runtime verified.</strong> I have reviewed symbol, leverage, margin mode, and order behavior for this strategy.</label>
+        </div>
+        <div class="deploy-check">
+          <input type="checkbox" id="deploy-check-risk" onchange="updateDeployModalState()">
+          <label for="deploy-check-risk"><strong>Risk package confirmed.</strong> Stop loss, target, trailing logic, and sizing match the intended trading mandate.</label>
+        </div>
+        <div class="deploy-check" id="deploy-check-live-row" style="display:none;">
+          <input type="checkbox" id="deploy-check-live" onchange="updateDeployModalState()">
+          <label for="deploy-check-live"><strong>Live acknowledgement.</strong> I understand CryptoForge will submit real Delta Exchange orders when live mode is armed.</label>
+        </div>
+      </div>
+    </div>
     <div style="display:flex;gap:10px;margin-top:20px;">
       <button class="btn btn-primary" style="flex:1;" id="deploy-confirm-btn" onclick="confirmDeploy()">🚀 Deploy Paper</button>
       <button class="btn btn-outline" style="flex:0.5;" onclick="closeDeployModal()">Cancel</button>
@@ -2389,6 +2725,46 @@
       <button class="btn btn-outline btn-sm" onclick="saveStrategy()">💾 Save</button>
       <button class="btn btn-primary btn-sm" id="backtest-run-btn" onclick="runBacktest()">⚡ Run Backtest</button>
       <button class="btn btn-success btn-sm" onclick="openDeployModal()">🚀 Deploy</button>
+    </div>
+  </div>
+
+  <div class="builder-insight-grid">
+    <div class="execution-brief">
+      <div>
+        <div class="mission-eyebrow" style="margin-bottom:10px;">Execution Brief</div>
+        <h3 id="builder-brief-title">Builder is ready for a new crypto mandate.</h3>
+        <p class="mission-copy" id="builder-brief-copy" style="margin-top:10px;">Define symbol, leverage, sizing, and condition stack. The brief below translates raw settings into an operator-friendly view before you backtest or deploy.</p>
+      </div>
+      <div class="execution-summary" id="builder-brief-metrics">
+        <div class="brief-metric">
+          <div class="brief-metric-label">Trade Lane</div>
+          <div class="brief-metric-value">LONG • BTCUSDT</div>
+        </div>
+        <div class="brief-metric">
+          <div class="brief-metric-label">Risk Package</div>
+          <div class="brief-metric-value">10x • SL 5% • TP 10%</div>
+        </div>
+        <div class="brief-metric">
+          <div class="brief-metric-label">Signal Stack</div>
+          <div class="brief-metric-value">0 indicators • 0 entry • 0 exit</div>
+        </div>
+        <div class="brief-metric">
+          <div class="brief-metric-label">Backtest Window</div>
+          <div class="brief-metric-value">Select dates</div>
+        </div>
+      </div>
+      <div class="intel-list" id="builder-intel-list">
+        <div class="intel-pill"><strong>Coverage</strong> Add indicators and paired entry/exit logic to generate a deployable system.</div>
+      </div>
+    </div>
+    <div class="safety-panel">
+      <h4>Safety Rail</h4>
+      <p class="safety-copy">Keep deployment disciplined: validate the runtime, verify symbol/leverage, and review live acknowledgements only after paper behavior is stable.</p>
+      <div class="safety-checklist" id="builder-safety-list">
+        <div class="safety-chip"><strong>1</strong> Define at least one entry and one exit</div>
+        <div class="safety-chip"><strong>2</strong> Confirm risk inputs and sizing mode</div>
+        <div class="safety-chip"><strong>3</strong> Backtest before broker deployment</div>
+      </div>
     </div>
   </div>
 
@@ -2582,6 +2958,34 @@
     </div>
   </div>
 
+  <div class="results-overview">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+      <div>
+        <div class="mission-eyebrow" style="margin-bottom:8px;">Runbook Overview</div>
+        <h3 id="results-overview-title">Result archive is waiting for fresh validation.</h3>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="loadRuns()">↻ Refresh Runs</button>
+    </div>
+    <div class="overview-grid" id="results-overview-grid">
+      <div class="overview-card">
+        <div class="overview-label">Archive</div>
+        <div class="overview-value">0 runs</div>
+      </div>
+      <div class="overview-card">
+        <div class="overview-label">Best P&amp;L</div>
+        <div class="overview-value">$0.00</div>
+      </div>
+      <div class="overview-card">
+        <div class="overview-label">Active Filter</div>
+        <div class="overview-value">All</div>
+      </div>
+      <div class="overview-card">
+        <div class="overview-label">Latest Mode</div>
+        <div class="overview-value">None</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Bulk action bar -->
   <div id="runs-bulk-bar" class="bulk-bar" style="display:none;">
     <span class="bulk-count" id="runs-bulk-count">0 selected</span>
@@ -2635,7 +3039,7 @@
      ═══════════════════════════════════════════════════════ -->
 <div id="live-page" class="page-section" style="padding:0;">
 
-  <!-- Tab bar for multi-engine switching (like AlgoForge) -->
+  <!-- Tab bar for multi-engine switching (like PhilForge) -->
   <div id="live-tabs-bar" style="display:flex;align-items:center;gap:0;padding:0 28px;background:var(--card);border-bottom:1px solid var(--border);overflow-x:auto;">
     <!-- Tabs generated dynamically by JS -->
   </div>
@@ -3047,6 +3451,197 @@ const TOP_25 = [
 // ── Core Assets — BTC / ETH / SOL (primary three) ─────────
 const CORE_ASSETS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 
+function getBuilderPayload() {
+  return {
+    run_name: (document.getElementById('b-name') || {}).value || 'Untitled',
+    symbol: selectedCrypto,
+    leverage: selectedLeverage,
+    trade_side: selectedSide,
+    initial_capital: parseFloat((document.getElementById('b-capital') || {}).value) || 10000,
+    position_size_mode: (document.getElementById('b-possize-mode') || {}).value || 'pct',
+    position_size_value: parseFloat((document.getElementById('b-possize') || {}).value) || 0,
+    stoploss_pct: parseFloat((document.getElementById('b-sl') || {}).value) || 5,
+    target_profit_pct: parseFloat((document.getElementById('b-tp') || {}).value) || 10,
+    trailing_sl_pct: parseFloat((document.getElementById('b-trail') || {}).value) || 0,
+    fee_pct: parseFloat((document.getElementById('b-fee') || {}).value) || 0,
+    max_trades_per_day: parseInt((document.getElementById('b-maxtrades') || {}).value) || 5,
+    candle_interval: (document.getElementById('b-interval') || {}).value || '5m',
+    from_date: (document.getElementById('b-from') || {}).value || '',
+    to_date: (document.getElementById('b-to') || {}).value || '',
+    indicators: indicators.slice(),
+    entry_conditions: entryConditions.slice(),
+    exit_conditions: exitConditions.slice(),
+  };
+}
+
+function computeStrategyIntel(payload) {
+  payload = payload || getBuilderPayload();
+  var indicatorCount = (payload.indicators || []).length;
+  var entryCount = (payload.entry_conditions || []).length;
+  var exitCount = (payload.exit_conditions || []).length;
+  var riskMode = payload.position_size_mode === 'fixed_qty' ? 'Fixed Qty' : '% Capital';
+  var from = payload.from_date || 'start';
+  var to = payload.to_date || 'now';
+  var liveReady = indicatorCount > 0 && entryCount > 0 && exitCount > 0;
+  var riskText = payload.leverage + 'x • SL ' + payload.stoploss_pct + '% • TP ' + payload.target_profit_pct + '%';
+  if (payload.trailing_sl_pct > 0) riskText += ' • Trail ' + payload.trailing_sl_pct + '%';
+  var coverage = [];
+  if (!indicatorCount) coverage.push('add indicators');
+  if (!entryCount) coverage.push('add entry logic');
+  if (!exitCount) coverage.push('add exit logic');
+  return {
+    title: payload.run_name || 'Untitled',
+    lane: payload.trade_side + ' • ' + payload.symbol,
+    riskText: riskText,
+    signalText: indicatorCount + ' indicators • ' + entryCount + ' entry • ' + exitCount + ' exit',
+    backtestWindow: from + ' → ' + to + ' • ' + payload.candle_interval,
+    deploymentLane: liveReady ? 'Validated Candidate' : 'Paper First',
+    deploymentCopy: liveReady
+      ? 'Runtime shape is complete. Use backtests and paper fills to verify behavior before any live capital.'
+      : 'Builder is still incomplete. Finish the signal stack and validate in paper mode first.',
+    controlCopy: 'Capital ' + fmtINR(payload.initial_capital) + ' • ' + riskMode + ' • Max ' + payload.max_trades_per_day + ' trades/day',
+    intel: [
+      'Coverage: ' + (coverage.length ? coverage.join(', ') : 'signal stack configured'),
+      'Costs: fee ' + payload.fee_pct + '% per side',
+      'Sizing: ' + riskMode + ' @ ' + payload.position_size_value,
+    ],
+    liveReady: liveReady,
+  };
+}
+
+function renderBuilderDeck() {
+  var intel = computeStrategyIntel();
+  var titleEl = document.getElementById('builder-brief-title');
+  var copyEl = document.getElementById('builder-brief-copy');
+  var metricsEl = document.getElementById('builder-brief-metrics');
+  var intelEl = document.getElementById('builder-intel-list');
+  var safetyEl = document.getElementById('builder-safety-list');
+  if (titleEl) titleEl.textContent = intel.title + ' is staged for ' + intel.lane + '.';
+  if (copyEl) copyEl.textContent = intel.deploymentCopy;
+  if (metricsEl) {
+    metricsEl.innerHTML =
+      '<div class="brief-metric"><div class="brief-metric-label">Trade Lane</div><div class="brief-metric-value">' + _escapeHtml(intel.lane) + '</div></div>' +
+      '<div class="brief-metric"><div class="brief-metric-label">Risk Package</div><div class="brief-metric-value">' + _escapeHtml(intel.riskText) + '</div></div>' +
+      '<div class="brief-metric"><div class="brief-metric-label">Signal Stack</div><div class="brief-metric-value">' + _escapeHtml(intel.signalText) + '</div></div>' +
+      '<div class="brief-metric"><div class="brief-metric-label">Backtest Window</div><div class="brief-metric-value">' + _escapeHtml(intel.backtestWindow) + '</div></div>';
+  }
+  if (intelEl) {
+    intelEl.innerHTML = intel.intel.map(function(line) {
+      var parts = line.split(': ');
+      return '<div class="intel-pill"><strong>' + _escapeHtml(parts[0] || 'Intel') + '</strong>' + (parts[1] ? ' ' + _escapeHtml(parts[1]) : '') + '</div>';
+    }).join('');
+  }
+  if (safetyEl) {
+    safetyEl.innerHTML =
+      '<div class="safety-chip"><strong>1</strong> ' + _escapeHtml(intel.liveReady ? 'Runtime shape is complete' : 'Finish indicator and condition coverage') + '</div>' +
+      '<div class="safety-chip"><strong>2</strong> ' + _escapeHtml('Review ' + intel.riskText) + '</div>' +
+      '<div class="safety-chip"><strong>3</strong> ' + _escapeHtml(intel.liveReady ? 'Backtest and paper-validate before live' : 'Backtest only after the brief is complete') + '</div>';
+  }
+}
+
+function renderDashboardMission(summary, runs) {
+  summary = summary || {};
+  runs = runs || [];
+  var totalEngines = (summary.paper_count || 0) + (summary.live_count || 0);
+  var hasLive = !!summary.live_running;
+  var hasPaper = !!summary.paper_running;
+  var latestRun = runs[0] || null;
+  var title = 'Crypto desk is standing by.';
+  var copy = 'Backtests, paper engines, live monitoring, and broker connectivity are consolidated into a single operating surface. Start with a controlled paper run, validate regime fit, then graduate only verified setups to live.';
+  if (hasLive) {
+    title = 'Live capital is armed across ' + totalEngines + ' engine' + (totalEngines === 1 ? '' : 's') + '.';
+    copy = 'Execution requires tighter discipline now. Monitor broker health, keep risk controls visible, and use the Live workspace for intervention rather than editing strategy state in-flight.';
+  } else if (hasPaper) {
+    title = 'Paper validation is active across ' + (summary.paper_count || totalEngines) + ' engine' + ((summary.paper_count || totalEngines) === 1 ? '' : 's') + '.';
+    copy = 'Use the paper lane to verify fills, signal cadence, and risk packaging before promoting any strategy to live deployment.';
+  } else if (latestRun) {
+    title = 'Latest validation: ' + (latestRun.run_name || ('Run #' + latestRun.id));
+    copy = 'Runbook history is available for replay. Review the latest archive, compare outcomes, and tighten the next deployment package before arming the broker.';
+  }
+  var pills = [
+    '<div class="mission-pill"><strong>Readiness</strong> ' + _escapeHtml(hasLive ? 'Live armed' : hasPaper ? 'Paper active' : 'No engines running') + '</div>',
+    '<div class="mission-pill"><strong>Broker</strong> ' + _escapeHtml(_brokerConnected ? 'Connected' : 'Connection pending') + '</div>',
+    '<div class="mission-pill"><strong>Pipeline</strong> ' + _escapeHtml((summary.backtest_count || 0) + ' archived run' + ((summary.backtest_count || 0) === 1 ? '' : 's')) + '</div>',
+  ];
+  var titleEl = document.getElementById('dash-mission-title');
+  var copyEl = document.getElementById('dash-mission-copy');
+  var pillsEl = document.getElementById('dash-mission-pills');
+  var laneEl = document.getElementById('dash-deploy-lane');
+  var laneCopyEl = document.getElementById('dash-deploy-copy');
+  var controlValueEl = document.getElementById('dash-control-value');
+  var controlCopyEl = document.getElementById('dash-control-copy');
+  if (titleEl) titleEl.textContent = title;
+  if (copyEl) copyEl.textContent = copy;
+  if (pillsEl) pillsEl.innerHTML = pills.join('');
+  if (laneEl) laneEl.textContent = hasLive ? 'Live Guarded' : hasPaper ? 'Paper Verification' : 'Paper First';
+  if (laneCopyEl) laneCopyEl.textContent = hasLive
+    ? 'Real Delta orders are enabled. Operate from monitoring and risk control surfaces.'
+    : hasPaper
+      ? 'Paper execution is available for behavior validation before live cutover.'
+      : 'Start with paper mode to verify execution flow, fills, and risk behavior before enabling live capital.';
+  if (controlValueEl) controlValueEl.textContent = totalEngines + ' Engine' + (totalEngines === 1 ? '' : 's');
+  if (controlCopyEl) controlCopyEl.textContent = totalEngines
+    ? ((summary.paper_count || 0) + ' paper • ' + (summary.live_count || 0) + ' live monitored from one command rail.')
+    : 'No active paper or live engines are currently driving orders.';
+}
+
+function renderResultsOverview(runs) {
+  runs = runs || [];
+  var titleEl = document.getElementById('results-overview-title');
+  var gridEl = document.getElementById('results-overview-grid');
+  if (!titleEl || !gridEl) return;
+  if (!runs.length) {
+    titleEl.textContent = 'Result archive is waiting for fresh validation.';
+    gridEl.innerHTML =
+      '<div class="overview-card"><div class="overview-label">Archive</div><div class="overview-value">0 runs</div></div>' +
+      '<div class="overview-card"><div class="overview-label">Best P&L</div><div class="overview-value">$0.00</div></div>' +
+      '<div class="overview-card"><div class="overview-label">Active Filter</div><div class="overview-value">' + _escapeHtml(_currentRunFilter) + '</div></div>' +
+      '<div class="overview-card"><div class="overview-label">Latest Mode</div><div class="overview-value">None</div></div>';
+    return;
+  }
+  var best = runs.reduce(function(acc, run) {
+    var pnl = parseFloat(run.total_pnl) || 0;
+    return pnl > acc.pnl ? { pnl: pnl, run: run } : acc;
+  }, { pnl: -Infinity, run: null });
+  var latest = runs[0];
+  var positive = runs.filter(function(run) { return (parseFloat(run.total_pnl) || 0) >= 0; }).length;
+  titleEl.textContent = 'Archive contains ' + runs.length + ' runs across backtest, paper, live, and scalp workflows.';
+  gridEl.innerHTML =
+    '<div class="overview-card"><div class="overview-label">Archive</div><div class="overview-value">' + runs.length + ' runs</div></div>' +
+    '<div class="overview-card"><div class="overview-label">Best P&L</div><div class="overview-value" style="color:' + (best.pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtINR(best.pnl) + '</div></div>' +
+    '<div class="overview-card"><div class="overview-label">Active Filter</div><div class="overview-value">' + _escapeHtml(_currentRunFilter.toUpperCase()) + '</div></div>' +
+    '<div class="overview-card"><div class="overview-label">Latest Mode</div><div class="overview-value">' + _escapeHtml((_normalizeMode(latest.mode) || 'none').toUpperCase()) + '</div></div>' +
+    '<div class="overview-card"><div class="overview-label">Positive Runs</div><div class="overview-value">' + positive + ' / ' + runs.length + '</div></div>' +
+    '<div class="overview-card"><div class="overview-label">Latest Run</div><div class="overview-value">' + _escapeHtml(latest.run_name || ('Run #' + latest.id)) + '</div></div>';
+}
+
+function resetDeployChecks() {
+  ['deploy-check-runtime', 'deploy-check-risk', 'deploy-check-live'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.checked = false;
+  });
+}
+
+function updateDeployModalState() {
+  var intel = computeStrategyIntel();
+  var liveRow = document.getElementById('deploy-check-live-row');
+  var isLive = _deployType === 'live';
+  if (liveRow) liveRow.style.display = isLive ? 'flex' : 'none';
+  var nameEl = document.getElementById('deploy-summary-name');
+  var symbolEl = document.getElementById('deploy-summary-symbol');
+  var riskEl = document.getElementById('deploy-summary-risk');
+  var logicEl = document.getElementById('deploy-summary-logic');
+  if (nameEl) nameEl.textContent = intel.title;
+  if (symbolEl) symbolEl.textContent = intel.lane + ' • ' + intel.backtestWindow;
+  if (riskEl) riskEl.textContent = intel.riskText;
+  if (logicEl) logicEl.textContent = intel.signalText;
+  var canConfirm = !!(document.getElementById('deploy-check-runtime') || {}).checked
+    && !!(document.getElementById('deploy-check-risk') || {}).checked
+    && (!isLive || !!(document.getElementById('deploy-check-live') || {}).checked);
+  var btn = document.getElementById('deploy-confirm-btn');
+  if (btn) btn.disabled = !canConfirm;
+}
+
 /**
  * Quick Asset Switcher: sets the active asset globally.
  * Updates the builder crypto selector AND navigates to the builder tab.
@@ -3435,6 +4030,7 @@ function selectCrypto(symbol, el) {
   document.querySelectorAll('.crypto-item').forEach(i => i.classList.remove('selected'));
   el.classList.add('selected');
   fetchLeverage(symbol);
+  renderBuilderDeck();
 }
 
 // ── Leverage Selector ──────────────────────────────────────
@@ -3449,6 +4045,7 @@ function setLeverage(lev, el) {
   selectedLeverage = lev;
   document.querySelectorAll('.lev-btn').forEach(b => b.classList.remove('active'));
   if (el) el.classList.add('active');
+  renderBuilderDeck();
 }
 
 async function fetchLeverage(symbol) {
@@ -3459,6 +4056,7 @@ async function fetchLeverage(symbol) {
       leverageOptions = d.options;
       selectedLeverage = d.default;
       renderLeverage(d.options, d.default);
+      renderBuilderDeck();
       return;
     }
   } catch(e) { /* fallback below */ }
@@ -3466,6 +4064,7 @@ async function fetchLeverage(symbol) {
   leverageOptions = [1, 2, 5, 10, 20, 50, 100];
   selectedLeverage = 10;
   renderLeverage(leverageOptions, selectedLeverage);
+  renderBuilderDeck();
 }
 
 // ── Side Toggle ────────────────────────────────────────────
@@ -3473,6 +4072,7 @@ function setSide(side) {
   selectedSide = side;
   document.getElementById('side-long').className = 'side-btn' + (side === 'LONG' ? ' long-active' : '');
   document.getElementById('side-short').className = 'side-btn' + (side === 'SHORT' ? ' short-active' : '');
+  renderBuilderDeck();
 }
 
 // ── Indicators ─────────────────────────────────────────────
@@ -3616,6 +4216,7 @@ function renderIndicators() {
   }).join('');
   renderConditions('entry');
   renderConditions('exit');
+  renderBuilderDeck();
 }
 
 // Initialize indicator fields on page load
@@ -3786,6 +4387,7 @@ function updateCondition(type, idx, field, value) {
     renderConditions(type);
   }
   if (field === 'right') renderConditions(type);
+  renderBuilderDeck();
 }
 
 // Day picker helpers
@@ -3927,6 +4529,7 @@ function renderConditions(type) {
       <button class="remove-cond" onclick="removeCondition('${type}',${i})">✕</button>
     </div>`;
   }).join('');
+  renderBuilderDeck();
 }
 
 // ── Dashboard ──────────────────────────────────────────────
@@ -4017,6 +4620,7 @@ async function loadDashboard() {
         </tr>`;
       }).join('');
     }
+    renderDashboardMission(d, runs.slice().reverse());
   } catch(e) { console.error('Dashboard error:', e); }
 }
 
@@ -4147,6 +4751,7 @@ function selectCryptoFromMarket(symbol, name) {
   showPage('builder-page', document.getElementById('nav-builder'));
   initCryptoSelector();
   fetchLeverage(symbol);
+  renderBuilderDeck();
 }
 
 // ── Run Backtest ───────────────────────────────────────────
@@ -4655,6 +5260,7 @@ async function loadRuns() {
 
     // Update portfolio paper runs
     _renderPortfolioPaperRuns(_allRunsCache);
+    renderResultsOverview(_allRunsCache);
   } catch(e) { console.error(e); }
 }
 
@@ -5487,6 +6093,7 @@ function loadTemplate(key) {
   renderIndicators();
   renderConditions('entry');
   renderConditions('exit');
+  renderBuilderDeck();
   cfToast('Template loaded: ' + t.name, 'success');
 }
 
@@ -5680,6 +6287,8 @@ function openDeployModal() {
   document.getElementById('deploy-confirm-btn').textContent = '🚀 Deploy Paper';
   document.getElementById('deploy-confirm-btn').className = 'btn btn-primary';
   document.getElementById('deploy-overlay').style.display = 'flex';
+  resetDeployChecks();
+  updateDeployModalState();
   // Server-side validation
   validateStrategy();
 }
@@ -5705,6 +6314,7 @@ function setDeployType(type) {
     document.getElementById('deploy-confirm-btn').textContent = '🔴 Deploy LIVE';
     document.getElementById('deploy-confirm-btn').className = 'btn btn-danger';
   }
+  updateDeployModalState();
 }
 
 async function validateStrategy() {
@@ -5742,12 +6352,19 @@ async function validateStrategy() {
     } else {
       msgDiv.innerHTML = '<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--green);">✅ Strategy validation passed</div>';
     }
+    updateDeployModalState();
   } catch(e) {
     msgDiv.innerHTML = '<div style="color:var(--muted);font-size:12px;">Validation unavailable</div>';
+    updateDeployModalState();
   }
 }
 
 async function confirmDeploy() {
+  updateDeployModalState();
+  if ((document.getElementById('deploy-confirm-btn') || {}).disabled) {
+    cfToast('Review the deployment checklist before proceeding', 'warning');
+    return;
+  }
   closeDeployModal();
   if (_deployType === 'paper') {
     await startPaper();
@@ -6263,10 +6880,11 @@ function copyEditStrategy(data) {
   renderIndicators();
   renderConditions('entry');
   renderConditions('exit');
+  renderBuilderDeck();
   cfToast('Run loaded for editing', 'success');
 }
 
-// ── Multi-Engine Live Monitor (AlgoForge-style single panel) ───
+// ── Multi-Engine Live Monitor (PhilForge-style single panel) ───
 let _liveMonitorInterval = null;
 let _liveEngines = [];
 let _liveSelectedTab = 0; // index of selected tab
@@ -7011,6 +7629,7 @@ function renderYearlyMonthlyTable() {
 document.addEventListener('DOMContentLoaded', () => {
   initCryptoSelector();
   renderLeverage(leverageOptions, selectedLeverage);
+  renderBuilderDeck();
   renderTemplates();
   refreshBrokerState(true);
   loadDashboard();
@@ -7028,6 +7647,13 @@ document.addEventListener('DOMContentLoaded', () => {
     var tabBtn = document.getElementById('nav-' + savedTab);
     if (tabBtn) showPage(savedTab + '-page', tabBtn);
   }
+  ['b-name', 'b-capital', 'b-possize-mode', 'b-possize', 'b-sl', 'b-tp', 'b-trail', 'b-fee', 'b-maxtrades', 'b-from', 'b-to', 'b-interval'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', renderBuilderDeck);
+      el.addEventListener('change', renderBuilderDeck);
+    }
+  });
 });
 
 // ══════════════════════════════════════════════════════

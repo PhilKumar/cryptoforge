@@ -227,6 +227,11 @@ def _get_session_token(request: Request) -> str:
     return token
 
 
+def _is_https_request(request: Request) -> bool:
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
+    return proto == "https"
+
+
 # ── Auth Middleware (Dependency-based) ────────────────────────────
 async def require_auth(request: Request):
     path = request.url.path
@@ -262,6 +267,31 @@ async def auth_middleware(request: Request, call_next):
         if not _validate_session(token):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), browsing-topics=()"
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob: https:; "
+        "connect-src 'self' ws: wss: https:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    response.headers["Content-Security-Policy"] = csp
+    if _is_https_request(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 # ── Redis (lazy singleton) ────────────────────────────────────────
@@ -681,7 +711,7 @@ async def auth_login(request: Request):
         _clear_login_attempts(ip)
         token = _create_session()
         resp = JSONResponse({"status": "ok", "message": "Login successful"})
-        is_https = request.headers.get("x-forwarded-proto") == "https"
+        is_https = _is_https_request(request)
         resp.headers["Cache-Control"] = "no-store"
         resp.set_cookie(
             "cryptoforge_session",
