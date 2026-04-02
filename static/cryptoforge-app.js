@@ -1447,22 +1447,25 @@ async function loadDashboard() {
     if (runs.length === 0) {
       cont.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No runs yet. Go to Builder to create one.</td></tr>';
     } else {
-      cont.innerHTML = runs.slice(-5).reverse().map(r => {
+      cont.innerHTML = runs.slice().reverse().map(r => {
         const pnl = r.total_pnl || 0;
         const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
         const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
         const symbol = _escapeHtml(r.symbol || '—');
+        const dt = _getTradeDateParts(r.created_at || r.started_at || '');
+        const tradeCount = r.trade_count || 0;
         return `<tr style="cursor:pointer;" data-cf-click="viewRun(${r.id})" data-cf-mouseover="this.style.background='rgba(139,92,246,0.04)'" data-cf-mouseout="this.style.background=''">
           <td>${_getModeBadge(r.mode)}</td>
-          <td style="font-weight:600;">${runName}</td>
-          <td>${symbol}</td>
-          <td class="num">${r.leverage || 1}x</td>
-          <td class="num">${r.trade_count || 0}</td>
-          <td class="num" style="color:${pnlColor};font-weight:700;font-family:'JetBrains Mono',monospace;">${fmtINR(pnl)}</td>
-          <td>${r.created_at?.slice(0,10) || ''}</td>
+          <td><div class="table-row-label">${runName}</div><div class="table-note">${symbol} • ${tradeCount} trades</div></td>
+          <td><div class="table-row-label">${symbol}</div><div class="table-note">${_escapeHtml(String(r.side || 'Both'))}</div></td>
+          <td class="num"><div class="table-value-stack"><div class="table-value-main">${r.leverage || 1}x</div><div class="table-value-sub">leverage</div></div></td>
+          <td class="num"><div class="table-value-stack"><div class="table-value-main">${tradeCount}</div><div class="table-value-sub">closed trades</div></div></td>
+          <td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:${pnlColor};">${fmtINR(pnl)}</div><div class="table-value-sub">net result</div></div></td>
+          <td><div class="table-datetime"><strong>${dt.date}</strong><span>${dt.time || '—'}</span></div></td>
         </tr>`;
       }).join('');
     }
+    _renderTablePager('dash-runs-table', 'dash-runs-table', 'dash-runs-pagination');
     renderDashboardMission(d, runs.slice().reverse());
   } catch(e) { console.error('Dashboard error:', e); }
 }
@@ -1792,22 +1795,22 @@ function _renderTablePager(tableId, stateKey, pagerId) {
   rows.forEach(function(row, idx) {
     row.style.display = idx >= start && idx < start + TABLE_PAGE_SIZE ? '' : 'none';
   });
-  if (total <= TABLE_PAGE_SIZE) {
-    host.style.display = 'none';
-    host.innerHTML = '';
-    return;
-  }
-  var info = 'Showing ' + (start + 1) + '-' + Math.min(start + TABLE_PAGE_SIZE, total) + ' of ' + total;
+  var shown = total <= TABLE_PAGE_SIZE ? Math.min(TABLE_PAGE_SIZE, total) : Math.min(start + TABLE_PAGE_SIZE, total) - start;
+  var info = total <= TABLE_PAGE_SIZE
+    ? (shown + ' shown of ' + total)
+    : ('Showing ' + (start + 1) + '-' + Math.min(start + TABLE_PAGE_SIZE, total) + ' of ' + total);
   var btns = '';
-  btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',1,\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page <= 1 ? 'disabled' : '') + '>«</button>';
-  btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',' + (page - 1) + ',\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page <= 1 ? 'disabled' : '') + '>‹</button>';
-  for (var p = Math.max(1, page - 2); p <= Math.min(totalPages, page + 2); p++) {
-    btns += '<button class="page-btn ' + (p === page ? 'active' : '') + '" data-cf-click="_setTablePage(\'' + tableId + '\',' + p + ',\'' + pagerKey + '\',\'' + hostId + '\')">' + p + '</button>';
+  if (totalPages > 1) {
+    btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',1,\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page <= 1 ? 'disabled' : '') + '>«</button>';
+    btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',' + (page - 1) + ',\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page <= 1 ? 'disabled' : '') + '>‹</button>';
+    for (var p = Math.max(1, page - 2); p <= Math.min(totalPages, page + 2); p++) {
+      btns += '<button class="page-btn ' + (p === page ? 'active' : '') + '" data-cf-click="_setTablePage(\'' + tableId + '\',' + p + ',\'' + pagerKey + '\',\'' + hostId + '\')">' + p + '</button>';
+    }
+    btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',' + (page + 1) + ',\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page >= totalPages ? 'disabled' : '') + '>›</button>';
+    btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',' + totalPages + ',\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page >= totalPages ? 'disabled' : '') + '>»</button>';
   }
-  btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',' + (page + 1) + ',\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page >= totalPages ? 'disabled' : '') + '>›</button>';
-  btns += '<button class="page-btn" data-cf-click="_setTablePage(\'' + tableId + '\',' + totalPages + ',\'' + pagerKey + '\',\'' + hostId + '\')" ' + (page >= totalPages ? 'disabled' : '') + '>»</button>';
   host.style.display = 'flex';
-  host.innerHTML = '<div class="pagination-info">' + info + '</div><div class="pagination-controls">' + btns + '</div>';
+  host.innerHTML = '<div class="pagination-info">' + info + '</div><div class="pagination-actions">' + btns + '</div>';
 }
 
 function _resultsUsesTradeView() {
@@ -1958,20 +1961,20 @@ function _buildRunCards(runs) {
     const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
     const wr = r.stats?.win_rate || 0;
     const wrColor = wr >= 50 ? 'var(--green)' : wr > 0 ? 'var(--red)' : 'var(--muted)';
-    const date = (r.created_at || r.started_at || '').slice(0, 16);
+    const dt = _getTradeDateParts(r.created_at || r.started_at || '');
     const isBacktest = _normalizeMode(r.mode) === 'backtest';
     const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
     const symbol = _escapeHtml(r.symbol || '—');
     return `<tr${isBacktest ? ' style="cursor:pointer;" data-cf-click="viewRun(' + r.id + ')"' : ''}>
       <td data-cf-click="event.stopPropagation()"><input type="checkbox" class="tbl-cb run-cb" value="${r.id}" data-cf-change="updateRunsBulk()"></td>
       <td>${_getModeBadge(r.mode)}</td>
-      <td style="font-weight:600;font-family:inherit;color:var(--text);">${runName}</td>
-      <td>${symbol}</td>
-      <td class="num">${r.leverage || 1}x</td>
-      <td class="num">${r.trade_count || 0}</td>
-      <td class="num" style="color:${wrColor};font-weight:600;">${wr.toFixed(1)}%</td>
-      <td class="num" style="color:${pnlColor};font-weight:700;">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</td>
-      <td style="font-size:11px;color:var(--muted);">${date}</td>
+      <td><div class="table-row-label">${runName}</div><div class="table-note">${symbol} • ${r.trade_count || 0} trades</div></td>
+      <td><div class="table-row-label">${symbol}</div><div class="table-note">${_escapeHtml(String(r.timeframe || 'active'))}</div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main">${r.leverage || 1}x</div><div class="table-value-sub">leverage</div></div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main">${r.trade_count || 0}</div><div class="table-value-sub">closed</div></div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:${wrColor};">${wr.toFixed(1)}%</div><div class="table-value-sub">win rate</div></div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:${pnlColor};">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div><div class="table-value-sub">net result</div></div></td>
+      <td><div class="table-datetime"><strong>${dt.date}</strong><span>${dt.time || '—'}</span></div></td>
       <td style="white-space:nowrap;">
         <div class="action-icon-group">
           ${isBacktest ? '<button class="action-icon-btn view" data-cf-click="event.stopPropagation();viewRun(' + r.id + ')" title="View">👁</button><button class="action-icon-btn edit" data-cf-click="event.stopPropagation();copyEditRun(' + r.id + ')" title="Copy & Edit">📝</button>' : ''}
@@ -2078,14 +2081,15 @@ function _renderPortfolioPaperRuns(runs) {
     const wrColor = wr >= 50 ? 'var(--green)' : wr > 0 ? 'var(--red)' : 'var(--muted)';
     const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
     const symbol = _escapeHtml(r.symbol || '—');
+    const dt = _getTradeDateParts(r.created_at || r.started_at || '');
     return `<tr style="cursor:pointer;" data-cf-click="viewRun(${r.id})" data-cf-mouseover="this.style.background='rgba(139,92,246,0.04)'" data-cf-mouseout="this.style.background=''">
-      <td style="font-weight:600;">${runName}</td>
-      <td>${symbol}</td>
-      <td class="num">${r.leverage || 1}x</td>
-      <td class="num">${r.trade_count || 0}</td>
-      <td class="num" style="color:${wrColor};">${wr}%</td>
-      <td class="num" style="color:${pnlColor};font-weight:700;font-family:'JetBrains Mono',monospace;">${fmtINR(pnl)}</td>
-      <td>${r.created_at?.slice(0,16) || ''}</td>
+      <td><div class="table-row-label">${runName}</div><div class="table-note">${symbol} • paper run</div></td>
+      <td><div class="table-row-label">${symbol}</div><div class="table-note">${_escapeHtml(String(r.side || 'Both'))}</div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main">${r.leverage || 1}x</div><div class="table-value-sub">leverage</div></div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main">${r.trade_count || 0}</div><div class="table-value-sub">closed</div></div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:${wrColor};">${wr}%</div><div class="table-value-sub">win rate</div></div></td>
+      <td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:${pnlColor};">${fmtINR(pnl)}</div><div class="table-value-sub">net result</div></div></td>
+      <td><div class="table-datetime"><strong>${dt.date}</strong><span>${dt.time || '—'}</span></div></td>
     </tr>`;
   }).join('');
   _renderTablePager('portfolio-paper-runs-table', 'portfolio-paper-runs-table', 'portfolio-paper-runs-pagination');
@@ -2379,23 +2383,23 @@ function _renderMarketRows(coins) {
     var chgSign = c.change_24h >= 0 ? '+' : '';
     var athPct = c.ath_change_pct || 0;
     var tradeSym = c.trade_symbol || (c.symbol + 'USDT');
-    var safeName = (c.name || '').replace(/'/g, "\\'");
+    var safeName = (c.name || '').replace(/'/g, "\'");
     var safeSymbol = _escapeHtml(c.symbol);
     var safeCoinName = _escapeHtml(c.name);
     var btnClass = c.delta_tradeable ? 'btn-live' : 'btn-bt';
     var btnLabel = c.delta_tradeable ? '⚡ Trade' : '📊 Backtest';
-    var tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" data-cf-click="selectCryptoFromMarket(\'' + tradeSym + "','" + safeName + '\')">' + btnLabel + '</button>';
+    var tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" data-cf-click="selectCryptoFromMarket(\'' + tradeSym + '\',\'' + safeName + '\')">' + btnLabel + '</button>';
     return '<tr style="cursor:pointer;" data-cf-mouseover="this.style.background=\'rgba(139,92,246,0.04)\'" data-cf-mouseout="this.style.background=\'\'">' +
-      '<td style="padding-left:16px;color:var(--muted);font-weight:600;">' + c.rank + '</td>' +
+      '<td style="padding-left:16px;"><div class="table-value-stack"><div class="table-value-main">#' + c.rank + '</div><div class="table-value-sub">rank</div></div></td>' +
       '<td><div style="display:flex;align-items:center;gap:10px;">' +
         '<img src="' + c.image + '" alt="' + safeSymbol + '" width="28" height="28" style="border-radius:50%;" data-cf-error="this.style.display=\'none\'">' +
-        '<div><div style="font-weight:700;font-size:15px;">' + safeSymbol + '</div>' +
-        '<div style="font-size:11px;color:var(--muted);">' + safeCoinName + '</div></div></div></td>' +
-      '<td style="text-align:right;font-family:\'JetBrains Mono\',monospace;font-weight:600;">' + fmtPrice(c.price) + '</td>' +
-      '<td style="text-align:right;color:' + chgColor + ';font-weight:600;">' + chgSign + c.change_24h.toFixed(2) + '%</td>' +
-      '<td style="text-align:right;color:var(--muted);">' + fmtNum(c.volume_24h) + '</td>' +
-      '<td style="text-align:right;">' + fmtNum(c.market_cap) + '</td>' +
-      '<td style="text-align:right;"><div>' + fmtPrice(c.ath) + '</div><div style="font-size:10px;color:' + (athPct > -20 ? 'var(--green)' : 'var(--red)') + '">' + athPct.toFixed(1) + '%</div></td>' +
+        '<div><div class="table-row-label">' + safeSymbol + '</div>' +
+        '<div class="table-note">' + safeCoinName + '</div></div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtPrice(c.price) + '</div><div class="table-value-sub">last price</div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:' + chgColor + ';">' + chgSign + c.change_24h.toFixed(2) + '%</div><div class="table-value-sub">24h move</div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtNum(c.volume_24h) + '</div><div class="table-value-sub">24h volume</div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtNum(c.market_cap) + '</div><div class="table-value-sub">market cap</div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtPrice(c.ath) + '</div><div class="table-value-sub" style="color:' + (athPct > -20 ? 'var(--green)' : 'var(--red)') + '">' + athPct.toFixed(1) + '% vs ATH</div></div></td>' +
       '<td style="text-align:center;">' + tradeBtn + '</td></tr>';
   }).join('');
   _renderTablePager('market-table', 'market-table', 'market-table-pagination');
@@ -3332,15 +3336,15 @@ async function loadPortfolioData() {
           var side = _escapeHtml(p.side || '--');
           var symbol = _escapeHtml(p.symbol || '--');
           return '<tr>' +
-            '<td style="font-weight:700;">' + symbol + '</td>' +
+            '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">size ' + (p.size || 0) + '</div></td>' +
             '<td><span class="tag ' + (p.side === 'LONG' ? 'tag-green' : 'tag-red') + '">' + side + '</span></td>' +
-            '<td>' + (p.size || 0) + '</td>' +
-            '<td>' + fmtINRPrice(parseFloat(p.entry_price) || 0) + '</td>' +
-            '<td>' + fmtINRPrice(parseFloat(p.mark_price) || 0) + '</td>' +
-            '<td>' + (p.leverage || '--') + 'x</td>' +
-            '<td style="color:' + (upnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">' + fmtINR(upnl) + '</td>' +
-            '<td style="color:' + (rpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtINR(rpnl) + '</td>' +
-            '<td style="color:var(--yellow);">' + fmtINRPrice(parseFloat(p.liquidation_price) || 0) + '</td>' +
+            '<td><div class="table-value-stack"><div class="table-value-main">' + (p.size || 0) + '</div><div class="table-value-sub">contracts</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(parseFloat(p.entry_price) || 0) + '</div><div class="table-value-sub">entry</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(parseFloat(p.mark_price) || 0) + '</div><div class="table-value-sub">mark</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + (p.leverage || '--') + 'x</div><div class="table-value-sub">gear</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:' + (upnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtINR(upnl) + '</div><div class="table-value-sub">unrealized</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:' + (rpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtINR(rpnl) + '</div><div class="table-value-sub">realized</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINRPrice(parseFloat(p.liquidation_price) || 0) + '</div><div class="table-value-sub">liq.</div></div></td>' +
             '</tr>';
         }).join('');
       }
@@ -3358,19 +3362,19 @@ async function loadPortfolioData() {
           var safeSide = _escapeHtml(side || '--');
           var fillPrice = parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
           var ts = o.created_at || o.timestamp || '';
-          var timeStr = ts ? fmtDt(ts) : '--';
+          var dt = _getTradeDateParts(ts);
           var symbol = _escapeHtml(o.product_symbol || o.symbol || ('ID:' + (o.product_id || '')));
           var fee = parseFloat(o.paid_commission) || 0;
           var orderType = _escapeHtml((o.order_type || o.type || '--').replace('_', ' '));
           var orderState = _escapeHtml(o.state || o.status || 'filled');
           return '<tr>' +
-            '<td style="white-space:nowrap;font-size:12px;">' + timeStr + '</td>' +
-            '<td style="font-weight:600;">' + symbol + '</td>' +
+            '<td><div class="table-datetime"><strong>' + dt.date + '</strong><span>' + (dt.time || '—') + '</span></div></td>' +
+            '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">' + orderType + '</div></td>' +
             '<td><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + safeSide + '</span></td>' +
-            '<td>' + (o.size || o.quantity || 0) + '</td>' +
-            '<td>' + fmtINRPrice(fillPrice) + '</td>' +
-            '<td style="color:var(--yellow);">' + fmtINR(fee) + '</td>' +
-            '<td>' + orderType + '</td>' +
+            '<td><div class="table-value-stack"><div class="table-value-main">' + (o.size || o.quantity || 0) + '</div><div class="table-value-sub">filled</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(fillPrice) + '</div><div class="table-value-sub">avg fill</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINR(fee) + '</div><div class="table-value-sub">fees</div></div></td>' +
+            '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">Delta</div></td>' +
             '<td><span class="tag tag-purple">' + orderState + '</span></td>' +
             '</tr>';
         }).join('');

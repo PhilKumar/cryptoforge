@@ -2535,3 +2535,32 @@
   [style*="font-family:Outfit"] { font-family: var(--font-body) !important; }
   [style*="font-family:'Syne'"],
   [style*="font-family:Syne"] { font-family: var(--font-display) !important; }
+
+
+.pagination-actions,
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.table-value-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table-value-main {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.table-value-sub {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
