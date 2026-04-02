@@ -1,6 +1,6 @@
-# AlgoForge + CryptoForge Dual-App AWS Deployment Guide
+# PhilForge + CryptoForge Dual-App AWS Deployment Guide
 
-Run both **AlgoForge** (Indian equities) and **CryptoForge** (crypto perpetual futures) on the same AWS EC2 instance.
+Run both **PhilForge** (Indian equities) and **CryptoForge** (crypto perpetual futures) on the same AWS EC2 instance.
 
 ---
 
@@ -8,7 +8,7 @@ Run both **AlgoForge** (Indian equities) and **CryptoForge** (crypto perpetual f
 
 ```
 AWS EC2 Instance (Ubuntu 22.04, t3.micro)
-├── AlgoForge FastAPI app (port 8000)
+├── PhilForge FastAPI app (port 8000)
 ├── CryptoForge FastAPI app (port 9000)
 └── Nginx reverse proxy (port 80)
     ├── algoforge.YOUR_IP → :8000
@@ -29,7 +29,7 @@ AWS EC2 Instance (Ubuntu 22.04, t3.micro)
   - Elastic IP: Attached to instance
 
 - **API Credentials:**
-  - Dhan API key + secret (for AlgoForge)
+  - Dhan API key + secret (for PhilForge)
   - Delta Exchange API key + secret (for CryptoForge)
 
 ---
@@ -47,7 +47,7 @@ ssh -i your-key.pem ubuntu@YOUR_ELASTIC_IP
 ```bash
 cd /home/ubuntu
 
-# AlgoForge (if not already deployed)
+# PhilForge (if not already deployed)
 git clone https://github.com/YOUR_GITHUB/New_Algo.git algoforge
 cd algoforge
 python3.11 -m venv venv
@@ -55,7 +55,7 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Create .env for AlgoForge
+# Create .env for PhilForge
 cat > /home/ubuntu/algoforge/.env <<'EOF'
 DHAN_API_KEY=your_dhan_key_here
 DHAN_API_SECRET=your_dhan_secret_here
@@ -92,7 +92,7 @@ sudo apt-get install -y python3.11 python3.11-venv python3-pip nginx git
 ### 4. Install Systemd Services
 
 ```bash
-# AlgoForge systemd service
+# PhilForge systemd service
 sudo cp /home/ubuntu/algoforge/deploy/algoforge.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable algoforge
@@ -139,7 +139,7 @@ sudo systemctl restart nginx
 
 ### Local Network (if using direct IP)
 
-- **AlgoForge:** `http://YOUR_ELASTIC_IP:8000`
+- **PhilForge:** `http://YOUR_ELASTIC_IP:8000`
 - **CryptoForge:** `http://YOUR_ELASTIC_IP:9000`
 
 ### Via Nginx Subdomains (Recommended)
@@ -175,7 +175,7 @@ sudo journalctl -u algoforge -f    # Ctrl+C to exit
 sudo journalctl -u cryptoforge -f
 
 # Check ports
-lsof -i :8000  # AlgoForge
+lsof -i :8000  # PhilForge
 lsof -i :9000  # CryptoForge
 lsof -i :80    # Nginx
 ```
@@ -183,7 +183,7 @@ lsof -i :80    # Nginx
 ### 2. Test API Endpoints
 
 ```bash
-# AlgoForge
+# PhilForge
 curl http://YOUR_ELASTIC_IP:8000/api/health
 
 # CryptoForge
@@ -196,12 +196,12 @@ curl -H "Host: cryptoforge.YOUR_ELASTIC_IP" http://YOUR_ELASTIC_IP/api/health
 
 ### 3. Login and Configure
 
-- **AlgoForge:** http://YOUR_ELASTIC_IP:8000 → PIN: 202603
+- **PhilForge:** http://YOUR_ELASTIC_IP:8000 → PIN: 202603
 - **CryptoForge:** http://YOUR_ELASTIC_IP:9000 → PIN: 202603
 
 Edit API credentials:
 ```bash
-# AlgoForge
+# PhilForge
 nano /home/ubuntu/algoforge/.env
 
 # CryptoForge
@@ -301,7 +301,7 @@ curl http://127.0.0.1:9000/api/health
 | Component | CPU | RAM | Disk |
 |-----------|-----|-----|------|
 | Ubuntu base | Idle | 80MB | 2GB |
-| AlgoForge | <5% idle | 100MB | 500MB |
+| PhilForge | <5% idle | 100MB | 500MB |
 | CryptoForge | <5% idle | 100MB | 500MB |
 | Nginx | <1% | 10MB | <1MB |
 | **Total** | <5% idle | ~290MB | ~3.5GB |
