@@ -4760,11 +4760,9 @@ function cfScalpFeedDetail(feed) {
   bits.push(String(Number(meta.reconnect_count) || 0) + ' reconnects');
   bits.push(String(Number(meta.rest_fallbacks) || 0) + ' REST');
   const active = Array.isArray(meta.subscribed_channels) && meta.subscribed_channels.length ? meta.subscribed_channels[0] : '';
-  if (active) bits.push(active);
-  const reason = cfTrimUiText(meta.entry_block_reason, 96);
-  if (reason) bits.push(reason);
+  if (active) bits.push(cfTrimUiText(active, 28));
   const error = String(meta.last_error || '').trim();
-  if (error) bits.push(error.length > 72 ? error.slice(0, 69) + '...' : error);
+  if (error) bits.push(error.length > 56 ? error.slice(0, 53) + '...' : error);
   return bits.join(' • ');
 }
 
@@ -4827,22 +4825,33 @@ function cfRefreshScalpEntryLaneFromState() {
   if (guardrailArmed) effectiveAllowed = true;
   if (requiresAck) effectiveAllowed = false;
 
-  let title = 'Waiting for a fresh market tick';
-  if (state === 'fresh') title = mode === 'live' ? 'Live entry lane open' : 'Paper entry lane open';
-  else if (state === 'degraded') title = mode === 'live' ? 'Paper only until a fresher tick arrives' : 'Paper entry allowed with caution';
-  else if (state === 'stale') title = 'Feed stale — wait before entering';
+  let title = 'Waiting for first tick';
+  if (state === 'fresh') title = mode === 'live' ? 'Live velocity entry ready' : 'Velocity entry ready';
+  else if (state === 'degraded') title = mode === 'live' ? 'Live blocked, paper allowed' : 'Paper entry with caution';
+  else if (state === 'stale') title = 'Feed stale';
 
-  let note = entry.reason || feed.entry_block_reason || 'Select a symbol and wait for the first reliable price update.';
+  let note = '';
   if (guardrailArmed) {
-    note = 'Guardrail price is set. Pending entries can arm now and will wait for price confirmation before opening.';
+    note = 'Guardrail armed. Entry will wait for the trigger price.';
   } else if (requiresAck) {
-    note = 'Live mode still requires the acknowledgement checkbox before real orders can be submitted.';
+    note = 'Tick live acknowledgement to enable real orders.';
+  } else if (state === 'waiting') {
+    note = 'Waiting for the first reliable market tick.';
+  } else if (state === 'degraded') {
+    note = 'Paper entry is allowed. Live entry stays blocked until a fresh tick arrives.';
+  } else if (state === 'stale') {
+    note = 'Wait for a fresher market tick before buying or selling.';
   }
 
-  if (lane) lane.dataset.state = state;
+  if (lane) {
+    lane.dataset.state = state;
+    lane.classList.toggle('is-compact', !note);
+  }
   if (titleEl) titleEl.textContent = title;
-  if (stateEl) stateEl.textContent = cfScalpStateLabel(state).toUpperCase();
-  if (stateEl) stateEl.dataset.state = state;
+  if (stateEl) {
+    stateEl.textContent = cfScalpStateLabel(state).toUpperCase();
+    stateEl.dataset.state = state;
+  }
   if (symbolEl) symbolEl.textContent = symbol;
   if (ageEl) ageEl.textContent = ageMs !== undefined && ageMs !== null ? cfFormatLatency(ageMs) : '—';
   if (paperGateEl) {
@@ -4853,9 +4862,12 @@ function cfRefreshScalpEntryLaneFromState() {
     liveGateEl.textContent = cfScalpGateLabel(liveAllowed, state);
     liveGateEl.dataset.gate = cfScalpGateTone(liveAllowed, state);
   }
-  if (noteEl) noteEl.textContent = note;
+  if (noteEl) {
+    noteEl.textContent = note;
+    noteEl.style.display = note ? 'block' : 'none';
+  }
 
-  const disableReason = guardrailArmed ? '' : note;
+  const disableReason = guardrailArmed ? '' : (note || entry.reason || feed.entry_block_reason || 'Entry unavailable');
   cfSetScalpEntryButtonState(buyBtn, effectiveAllowed, disableReason);
   cfSetScalpEntryButtonState(sellBtn, effectiveAllowed, disableReason);
 }
@@ -5091,10 +5103,10 @@ function cfRenderActivePositions(open) {
 
 async function cfSubmitScalp(direction) {
   const symbol = document.getElementById('cf-scalp-symbol').value;
-  const qty = parseFloat(document.getElementById('cf-scalp-qty').value) || 1000;
-  const leverage = parseInt(document.getElementById('cf-scalp-leverage').value) || 50;
-  const slVal = parseFloat(document.getElementById('cf-scalp-sl').value) || 100;
-  const tpVal = parseFloat(document.getElementById('cf-scalp-tp').value) || 100;
+  const qty = parseFloat(document.getElementById('cf-scalp-qty').value) || 10000;
+  const leverage = parseInt(document.getElementById('cf-scalp-leverage').value) || 10;
+  const slVal = parseFloat(document.getElementById('cf-scalp-sl').value) || 1000;
+  const tpVal = parseFloat(document.getElementById('cf-scalp-tp').value) || 1000;
   const guardrailPrice = parseFloat(document.getElementById('cf-scalp-stop-price').value) || 0;
   const slType = document.getElementById('cf-sl-type').value;
   const tpType = document.getElementById('cf-tp-type').value;
