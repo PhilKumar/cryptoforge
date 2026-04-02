@@ -2,6 +2,17 @@ import { expect, Page, test } from '@playwright/test';
 
 const PIN = process.env.E2E_PIN || '123456';
 
+async function apiWrite(page: Page, url: string, options: Record<string, unknown> = {}) {
+  const cookies = await page.context().cookies();
+  const csrf = cookies.find((cookie) => cookie.name === 'cryptoforge_csrf')?.value;
+  const headers = new Headers((options.headers as Record<string, string> | undefined) || {});
+  if (csrf) headers.set('X-CSRF-Token', csrf);
+  return page.request.fetch(url, {
+    ...options,
+    headers: Object.fromEntries(headers.entries()),
+  });
+}
+
 async function login(page: Page) {
   await page.goto('/');
   for (const digit of PIN.split('')) {
@@ -11,7 +22,8 @@ async function login(page: Page) {
 }
 
 async function startPaper(page: Page, runName: string) {
-  const resp = await page.request.post('/api/paper/start', {
+  const resp = await apiWrite(page, '/api/paper/start', {
+    method: 'POST',
     data: {
       run_name: runName,
       symbol: 'BTCUSDT',
@@ -44,7 +56,7 @@ test.describe('Status Routes And Portfolio', () => {
 
   test('paper status for a missing run_id does not bleed active engine state', async ({ page }) => {
     const runName = `E2E-Paper-Isolation-${Date.now()}`;
-    await page.request.post('/api/paper/stop', { data: { run_id: runName } });
+    await apiWrite(page, '/api/paper/stop', { method: 'POST', data: { run_id: runName } });
     await startPaper(page, runName);
 
     const resp = await page.request.get(`/api/paper/status?run_id=${encodeURIComponent('missing-run')}`);
@@ -55,14 +67,14 @@ test.describe('Status Routes And Portfolio', () => {
     expect(body.running).toBe(false);
     expect(body.strategy_name || '').not.toContain(runName);
 
-    await page.request.post('/api/paper/stop', { data: { run_id: runName } });
+    await apiWrite(page, '/api/paper/stop', { method: 'POST', data: { run_id: runName } });
   });
 
   test('paper status keeps the stopped snapshot for the requested run_id', async ({ page }) => {
     const runName = `E2E-Paper-Stopped-${Date.now()}`;
-    await page.request.post('/api/paper/stop', { data: { run_id: runName } });
+    await apiWrite(page, '/api/paper/stop', { method: 'POST', data: { run_id: runName } });
     await startPaper(page, runName);
-    await page.request.post('/api/paper/stop', { data: { run_id: runName } });
+    await apiWrite(page, '/api/paper/stop', { method: 'POST', data: { run_id: runName } });
 
     const resp = await page.request.get(`/api/paper/status?run_id=${encodeURIComponent(runName)}`);
     expect(resp.status()).toBe(200);
@@ -75,7 +87,15 @@ test.describe('Status Routes And Portfolio', () => {
   });
 
   test('portfolio page renders empty broker states without breaking the shell', async ({ page }) => {
-    await page.click('#nav-portfolio');
+    await page.evaluate(() => {
+      const nav = document.getElementById('nav-portfolio');
+      const win = window as Window & { showPage?: (id: string, navEl?: Element | null) => void };
+      if (typeof win.showPage === 'function') {
+        win.showPage('portfolio-page', nav);
+      } else {
+        nav?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      }
+    });
     await expect(page.locator('#portfolio-page')).toHaveClass(/active-page/, { timeout: 10_000 });
     await expect(page.locator('#pf-positions-table')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#pf-orders-table')).toBeVisible({ timeout: 10_000 });

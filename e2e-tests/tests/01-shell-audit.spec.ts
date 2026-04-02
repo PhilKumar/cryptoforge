@@ -2,6 +2,17 @@ import { test, expect, Page } from '@playwright/test';
 
 const PIN = process.env.E2E_PIN || '123456';
 
+async function apiWrite(page: Page, url: string, options: Record<string, unknown> = {}) {
+  const cookies = await page.context().cookies();
+  const csrf = cookies.find((cookie) => cookie.name === 'cryptoforge_csrf')?.value;
+  const headers = new Headers((options.headers as Record<string, string> | undefined) || {});
+  if (csrf) headers.set('X-CSRF-Token', csrf);
+  return page.request.fetch(url, {
+    ...options,
+    headers: Object.fromEntries(headers.entries()),
+  });
+}
+
 async function login(page: Page) {
   await page.goto('/');
   for (const digit of PIN.split('')) {
@@ -92,7 +103,7 @@ test.describe('Shell Audit', () => {
     await expect(page.locator('.deploy-modal')).toBeHidden();
 
     if (saved) {
-      await page.request.delete(`/api/strategies/${saved.id}`);
+      await apiWrite(page, `/api/strategies/${saved.id}`, { method: 'DELETE' });
     }
   });
 
@@ -103,7 +114,8 @@ test.describe('Shell Audit', () => {
     const toDate = new Date(now.getTime() - 2 * 86400000).toISOString().slice(0, 10);
     const fromDate = new Date(now.getTime() - 5 * 86400000).toISOString().slice(0, 10);
 
-    const btResp = await page.request.post('/api/backtest', {
+    const btResp = await apiWrite(page, '/api/backtest', {
+      method: 'POST',
       data: {
         run_name: runName,
         symbol: 'BTCUSDT',
@@ -154,7 +166,7 @@ test.describe('Shell Audit', () => {
     expect(scalpStatus).toHaveProperty('closed_trades');
 
     if (btBody.run_id) {
-      await page.request.delete(`/api/runs/${btBody.run_id}`);
+      await apiWrite(page, `/api/runs/${btBody.run_id}`, { method: 'DELETE' });
     }
   });
 });
