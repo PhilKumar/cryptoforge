@@ -5,6 +5,7 @@ Production-ready: multi-engine, WebSocket, portfolio history, full CRUD.
 """
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -15,6 +16,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 # ── Module-level logger ──────────────────────────────────────────
 logging.basicConfig(
@@ -87,7 +89,7 @@ app.add_middleware(
     allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Requested-With"],
 )
 
 from error_handlers import register_error_handlers
@@ -168,6 +170,98 @@ if not AUTH_PIN:
     )
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 _SESSION_FILE = os.path.join(_HERE, ".sessions.json")
+CSRF_COOKIE_NAME = "cryptoforge_csrf"
+_SESSION_ABSOLUTE_SEC = int(os.getenv("CRYPTOFORGE_SESSION_ABSOLUTE_SEC", "86400"))
+_SESSION_IDLE_SEC = int(os.getenv("CRYPTOFORGE_SESSION_IDLE_SEC", "14400"))
+_SESSION_TOUCH_SEC = int(os.getenv("CRYPTOFORGE_SESSION_TOUCH_SEC", "300"))
+
+
+def _session_now() -> datetime:
+    return datetime.now()
+
+
+def _normalize_datetime(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return None
+        raw = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            for fmt, sample in (("%Y-%m-%d %H:%M:%S", raw[:19]), ("%Y-%m-%d", raw[:10])):
+                try:
+                    dt = datetime.strptime(sample, fmt)
+                    break
+                except ValueError:
+                    dt = None
+            if dt is None:
+                return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def _client_ip(request) -> str:
+    if request is None:
+        return "unknown"
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    client = getattr(request, "client", None)
+    return client.host if client else "unknown"
+
+
+def _session_user_agent_hash(request) -> str:
+    if request is None:
+        return ""
+    user_agent = (request.headers.get("user-agent") or "").strip()
+    if not user_agent:
+        return ""
+    return hashlib.sha256(user_agent.encode("utf-8")).hexdigest()
+
+
+def _normalize_session_record(value, now: Optional[datetime] = None) -> Optional[dict]:
+    now = _normalize_datetime(now or _session_now()) or _session_now()
+    if isinstance(value, str):
+        expires_at = _normalize_datetime(value)
+        if not expires_at:
+            return None
+        baseline = min(now, expires_at)
+        return {
+            "created_at": baseline.isoformat(),
+            "last_seen_at": baseline.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "ua_hash": "",
+        }
+    if not isinstance(value, dict):
+        return None
+    expires_at = _normalize_datetime(value.get("expires_at") or value.get("expires") or value.get("exp"))
+    if not expires_at:
+        return None
+    created_at = _normalize_datetime(value.get("created_at")) or min(now, expires_at)
+    last_seen_at = _normalize_datetime(value.get("last_seen_at")) or created_at
+    return {
+        "created_at": created_at.isoformat(),
+        "last_seen_at": last_seen_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "ua_hash": str(value.get("ua_hash") or ""),
+    }
+
+
+def _session_expired(record: dict, now: Optional[datetime] = None) -> bool:
+    now = _normalize_datetime(now or _session_now()) or _session_now()
+    expires_at = _normalize_datetime(record.get("expires_at"))
+    if not expires_at or now > expires_at:
+        return True
+    last_seen_at = _normalize_datetime(record.get("last_seen_at"))
+    if last_seen_at and (now - last_seen_at).total_seconds() > _SESSION_IDLE_SEC:
+        return True
+    return False
 
 
 def _load_sessions() -> dict:
@@ -175,8 +269,20 @@ def _load_sessions() -> dict:
         if os.path.exists(_SESSION_FILE):
             with open(_SESSION_FILE, "r") as f:
                 data = json.loads(f.read())
-            now = datetime.now().isoformat()
-            return {k: v for k, v in data.items() if v > now}
+            now = _session_now()
+            sessions = {}
+            changed = False
+            for token, raw in data.items():
+                record = _normalize_session_record(raw, now=now)
+                if not record or _session_expired(record, now=now):
+                    changed = True
+                    continue
+                sessions[token] = record
+                if record != raw:
+                    changed = True
+            if changed:
+                _save_sessions(sessions)
+            return sessions
     except Exception:
         pass
     return {}
@@ -196,25 +302,58 @@ def _save_sessions(sessions: dict):
         pass
 
 
-def _create_session() -> str:
+def _create_session(request=None) -> str:
     sessions = _load_sessions()
     token = secrets.token_hex(32)
-    sessions[token] = (datetime.now() + timedelta(hours=24)).isoformat()
+    now = _session_now()
+    sessions[token] = {
+        "created_at": now.isoformat(),
+        "last_seen_at": now.isoformat(),
+        "expires_at": (now + timedelta(seconds=_SESSION_ABSOLUTE_SEC)).isoformat(),
+        "ua_hash": _session_user_agent_hash(request),
+    }
     _save_sessions(sessions)
     return token
 
 
-def _validate_session(token: str) -> bool:
+def _destroy_session(token: str) -> None:
+    if not token:
+        return
+    sessions = _load_sessions()
+    if token in sessions:
+        sessions.pop(token, None)
+        _save_sessions(sessions)
+
+
+def _validate_session(token: str, request=None, touch: bool = True) -> bool:
     if not token:
         return False
     sessions = _load_sessions()
-    exp_str = sessions.get(token)
-    if not exp_str:
+    record = sessions.get(token)
+    if not record:
         return False
-    if datetime.now() > datetime.fromisoformat(exp_str):
+    now = _session_now()
+    if _session_expired(record, now=now):
         sessions.pop(token, None)
         _save_sessions(sessions)
         return False
+    expected_ua = str(record.get("ua_hash") or "")
+    actual_ua = _session_user_agent_hash(request)
+    if expected_ua and actual_ua and not secrets.compare_digest(expected_ua, actual_ua):
+        _logger.warning("Rejecting session due to user-agent mismatch")
+        sessions.pop(token, None)
+        _save_sessions(sessions)
+        return False
+    if request is not None and touch:
+        last_seen = _normalize_datetime(record.get("last_seen_at"))
+        should_touch = not last_seen or (now - last_seen).total_seconds() >= _SESSION_TOUCH_SEC
+        if not expected_ua and actual_ua:
+            record["ua_hash"] = actual_ua
+            should_touch = True
+        if should_touch:
+            record["last_seen_at"] = now.isoformat()
+            sessions[token] = record
+            _save_sessions(sessions)
     return True
 
 
@@ -227,9 +366,48 @@ def _get_session_token(request: Request) -> str:
     return token
 
 
+def _create_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _get_csrf_token(request: Request) -> str:
+    return request.cookies.get(CSRF_COOKIE_NAME, "")
+
+
+def _set_csrf_cookie(response: Response, token: str, request: Request) -> None:
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        token,
+        max_age=_SESSION_ABSOLUTE_SEC,
+        httponly=False,
+        samesite="strict",
+        secure=_is_https_request(request),
+        path="/",
+    )
+
+
+def _ensure_csrf_cookie(response: Response, request: Request) -> str:
+    token = _get_csrf_token(request) or _create_csrf_token()
+    _set_csrf_cookie(response, token, request)
+    return token
+
+
 def _is_https_request(request: Request) -> bool:
     proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
     return proto == "https"
+
+
+def _is_same_origin_request(request: Request) -> bool:
+    expected_origin = str(request.base_url).rstrip("/")
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if origin:
+        return origin == expected_origin
+    referer = request.headers.get("referer") or ""
+    if referer:
+        parsed = urlparse(referer)
+        referer_origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        return referer_origin == expected_origin
+    return True
 
 
 # ── Auth Middleware (Dependency-based) ────────────────────────────
@@ -240,7 +418,7 @@ async def require_auth(request: Request):
     if path.startswith("/static"):
         return
     token = _get_session_token(request)
-    if not _validate_session(token):
+    if not _validate_session(token, request=request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -264,8 +442,23 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     if path.startswith("/api/"):
         token = _get_session_token(request)
-        if not _validate_session(token):
+        if not _validate_session(token, request=request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def csrf_middleware(request: Request, call_next):
+    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path.startswith("/api/"):
+        if request.url.path != "/api/auth/login":
+            token = _get_session_token(request)
+            if _validate_session(token, request=request):
+                cookie_token = _get_csrf_token(request)
+                header_token = request.headers.get("X-CSRF-Token", "")
+                if not cookie_token or not header_token or not secrets.compare_digest(cookie_token, header_token):
+                    return JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
+                if not _is_same_origin_request(request):
+                    return JSONResponse({"detail": "Origin validation failed"}, status_code=403)
     return await call_next(request)
 
 
@@ -433,12 +626,36 @@ class StrategyPayload(BaseModel):
     max_trades_per_day: int = 5
     max_daily_loss: float = 0.0
     fee_pct: float = 0.0
+    slippage_bps: float = 0.0
+    spread_bps: float = 0.0
+    funding_bps_per_8h: float = 0.0
     compounding: bool = False
     indicators: List[str] = []
     entry_conditions: Optional[List[dict]] = None
     exit_conditions: Optional[List[dict]] = None
     candle_interval: str = "5m"
     deploy_config: Optional[dict] = None
+
+
+def _build_backtest_assumptions(payload: StrategyPayload) -> List[str]:
+    assumptions = [
+        f"Fees are modeled at {payload.fee_pct:g}% per side.",
+    ]
+    if payload.spread_bps > 0 or payload.slippage_bps > 0:
+        assumptions.append(
+            "Execution impact applies "
+            f"{payload.spread_bps:g} bps spread and {payload.slippage_bps:g} bps slippage per side."
+        )
+    else:
+        assumptions.append("Execution impact is disabled; fills use raw trigger and next-open prices.")
+    if payload.funding_bps_per_8h != 0:
+        assumptions.append(
+            f"Funding is prorated at {payload.funding_bps_per_8h:g} bps per 8h using average position notional."
+        )
+    else:
+        assumptions.append("Funding is disabled for this run.")
+    assumptions.append("Stops and targets still assume first-touch execution within each candle.")
+    return assumptions
 
 
 class OrderRequest(BaseModel):
@@ -683,7 +900,7 @@ async def favicon():
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend(request: Request):
     token = _get_session_token(request)
-    if not _validate_session(token):
+    if not _validate_session(token, request=request):
         login_path = os.path.join(_HERE, "login.html")
         if os.path.exists(login_path):
             with open(login_path, encoding="utf-8") as f:
@@ -696,6 +913,7 @@ async def serve_frontend(request: Request):
         with open(html_path, encoding="utf-8") as f:
             resp = HTMLResponse(f.read())
             resp.headers["Cache-Control"] = "no-store"
+            _ensure_csrf_cookie(resp, request)
             return resp
     return HTMLResponse("<h2>strategy.html not found</h2>")
 
@@ -703,25 +921,26 @@ async def serve_frontend(request: Request):
 # ── Auth Endpoints ────────────────────────────────────────────────
 @app.post("/api/auth/login")
 async def auth_login(request: Request):
-    ip = request.client.host if request.client else "unknown"
+    ip = _client_ip(request)
     _check_login_rate(ip)
     body = await request.json()
-    password = body.get("password", "")
-    if password == AUTH_PIN:
+    password = str(body.get("password", ""))
+    if secrets.compare_digest(password, str(AUTH_PIN)):
         _clear_login_attempts(ip)
-        token = _create_session()
+        token = _create_session(request=request)
         resp = JSONResponse({"status": "ok", "message": "Login successful"})
         is_https = _is_https_request(request)
         resp.headers["Cache-Control"] = "no-store"
         resp.set_cookie(
             "cryptoforge_session",
             token,
-            max_age=86400,
+            max_age=_SESSION_ABSOLUTE_SEC,
             httponly=True,
             samesite="lax",
             secure=is_https,
             path="/",
         )
+        _set_csrf_cookie(resp, _create_csrf_token(), request)
         return resp
     _record_failed_login(ip)
     raise HTTPException(status_code=401, detail="Invalid PIN")
@@ -730,20 +949,22 @@ async def auth_login(request: Request):
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     token = _get_session_token(request)
-    resp = JSONResponse({"authenticated": _validate_session(token)})
+    authenticated = _validate_session(token, request=request)
+    resp = JSONResponse({"authenticated": authenticated})
     resp.headers["Cache-Control"] = "no-store"
+    if authenticated:
+        _ensure_csrf_cookie(resp, request)
     return resp
 
 
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request):
     token = _get_session_token(request)
-    sessions = _load_sessions()
-    sessions.pop(token, None)
-    _save_sessions(sessions)
+    _destroy_session(token)
     resp = JSONResponse({"status": "ok"})
     resp.headers["Cache-Control"] = "no-store"
     resp.delete_cookie("cryptoforge_session", path="/")
+    resp.delete_cookie(CSRF_COOKIE_NAME, path="/")
     return resp
 
 
@@ -756,6 +977,20 @@ def _csv_safe(value):
     if isinstance(value, str) and value.startswith(_CSV_INJECT_CHARS):
         return "'" + value
     return value
+
+
+def _today_local_date():
+    return _session_now().date()
+
+
+def _run_record_date(run: dict):
+    dt = _normalize_datetime(run.get("created_at") or run.get("started_at"))
+    return dt.date() if dt else None
+
+
+def _saved_runs_for_date(runs: List[dict], mode: str, target_date):
+    target_mode = str(mode or "").lower()
+    return [r for r in runs if str(r.get("mode", "")).lower() == target_mode and _run_record_date(r) == target_date]
 
 
 def _trade_signature(trade: dict) -> tuple:
@@ -890,19 +1125,13 @@ async def dashboard_summary(request: Request):
     paper_trades_val = 0
     live_pnl_val = 0
     live_trades_val = 0
+    today_date = _today_local_date()
 
     if paper_statuses:
         paper_pnl_val = sum(s.get("total_pnl", 0) for s in paper_statuses)
         paper_trades_val = sum(s.get("trades_today", 0) for s in paper_statuses)
     else:
-        from datetime import date as _date
-
-        today_str = str(_date.today())
-        today_paper_runs = [
-            r
-            for r in runs
-            if r.get("mode") == "paper" and str(r.get("created_at") or r.get("started_at") or "").startswith(today_str)
-        ]
+        today_paper_runs = _saved_runs_for_date(runs, "paper", today_date)
         if today_paper_runs:
             paper_pnl_val = sum(r.get("total_pnl", 0) for r in today_paper_runs)
             paper_trades_val = sum(r.get("trade_count", len(r.get("trades", []))) for r in today_paper_runs)
@@ -911,14 +1140,7 @@ async def dashboard_summary(request: Request):
         live_pnl_val = sum(s.get("total_pnl", 0) for s in live_statuses)
         live_trades_val = sum(s.get("trades_today", 0) for s in live_statuses)
     else:
-        from datetime import date as _date
-
-        today_str = str(_date.today())
-        today_live_runs = [
-            r
-            for r in runs
-            if r.get("mode") == "live" and str(r.get("created_at") or r.get("started_at") or "").startswith(today_str)
-        ]
+        today_live_runs = _saved_runs_for_date(runs, "live", today_date)
         if today_live_runs:
             live_pnl_val = sum(r.get("total_pnl", 0) for r in today_live_runs)
             live_trades_val = sum(r.get("trade_count", len(r.get("trades", []))) for r in today_live_runs)
@@ -1431,10 +1653,7 @@ async def api_run_backtest(payload: StrategyPayload, request: Request = None):
 
         if results.get("status") == "success":
             results["strategy_warnings"] = runtime["warnings"]
-            results["model_assumptions"] = [
-                "Funding is not modeled in backtests yet.",
-                "Slippage is not modeled; fills assume next-open or threshold-price execution.",
-            ]
+            results["model_assumptions"] = _build_backtest_assumptions(payload)
             runs = _load_runs()
             max_id = max([r.get("id", 0) for r in runs], default=0)
             run_entry = {
@@ -1456,6 +1675,9 @@ async def api_run_backtest(payload: StrategyPayload, request: Request = None):
                 "position_size_mode": payload.position_size_mode,
                 "fixed_qty": payload.fixed_qty,
                 "fee_pct": payload.fee_pct,
+                "slippage_bps": payload.slippage_bps,
+                "spread_bps": payload.spread_bps,
+                "funding_bps_per_8h": payload.funding_bps_per_8h,
                 "compounding": payload.compounding,
                 "trailing_sl_pct": payload.trailing_sl_pct,
                 "max_trades_per_day": payload.max_trades_per_day,
@@ -1527,6 +1749,9 @@ async def live_start(payload: StrategyPayload):
         "position_size_mode": payload.position_size_mode,
         "fixed_qty": payload.fixed_qty,
         "fee_pct": payload.fee_pct,
+        "slippage_bps": payload.slippage_bps,
+        "spread_bps": payload.spread_bps,
+        "funding_bps_per_8h": payload.funding_bps_per_8h,
         "compounding": payload.compounding,
         "candle_interval": payload.candle_interval,
         "max_daily_loss": payload.max_daily_loss,
@@ -1684,6 +1909,9 @@ async def paper_start(payload: StrategyPayload):
         "position_size_mode": payload.position_size_mode,
         "fixed_qty": payload.fixed_qty,
         "fee_pct": payload.fee_pct,
+        "slippage_bps": payload.slippage_bps,
+        "spread_bps": payload.spread_bps,
+        "funding_bps_per_8h": payload.funding_bps_per_8h,
         "compounding": payload.compounding,
         "candle_interval": payload.candle_interval,
         "max_daily_loss": payload.max_daily_loss,
@@ -2911,7 +3139,7 @@ async def update_scalp_targets(trade_id: int, request: Request):
 async def websocket_endpoint(ws: WebSocket):
     # Authenticate WebSocket via session cookie
     token = ws.cookies.get("cryptoforge_session", "")
-    if not _validate_session(token):
+    if not _validate_session(token, request=ws):
         await ws.close(code=4001, reason="Unauthorized")
         return
     await ws.accept()

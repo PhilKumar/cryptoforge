@@ -371,6 +371,8 @@ class DeltaClient:
         4. Retry verification up to max_verify_attempts times
         Returns enriched order dict with 'verified' flag.
         """
+        started_at = _time.perf_counter()
+
         # Place the order
         result = self.place_order(
             product_id=product_id,
@@ -381,14 +383,26 @@ class DeltaClient:
             leverage=leverage,
             reduce_only=reduce_only,
         )
+        order_ack_ms = round((_time.perf_counter() - started_at) * 1000, 1)
 
         if isinstance(result, dict) and result.get("error"):
-            return {**result, "verified": False}
+            return {
+                **result,
+                "verified": False,
+                "order_ack_ms": order_ack_ms,
+                "broker_latency_ms": order_ack_ms,
+            }
 
         order_id = result.get("id") or result.get("order_id")
         if not order_id:
             print(f"[DELTA] Order placed but no ID returned: {result}")
-            return {**result, "verified": False, "error": "Order accepted without an order id"}
+            return {
+                **result,
+                "verified": False,
+                "error": "Order accepted without an order id",
+                "order_ack_ms": order_ack_ms,
+                "broker_latency_ms": order_ack_ms,
+            }
 
         print(f"[DELTA] Order {order_id} placed — verifying fill...")
 
@@ -429,6 +443,8 @@ class DeltaClient:
                         "fill_price": fill_price or None,
                         "position_size": pos_size,
                         "verified_at_attempt": attempt + 1,
+                        "order_ack_ms": order_ack_ms,
+                        "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
                     }
 
                 print(f"[DELTA] Order {order_id} not yet filled (attempt {attempt + 1})")
@@ -442,6 +458,8 @@ class DeltaClient:
             "verified": False,
             "verified_at_attempt": max_verify_attempts,
             "error": f"Order {order_id} could not be verified after {max_verify_attempts} attempts",
+            "order_ack_ms": order_ack_ms,
+            "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
         }
 
     @staticmethod

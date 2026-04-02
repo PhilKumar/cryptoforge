@@ -2886,11 +2886,24 @@
           </div>
         </div>
         <div class="form-row-2">
+          <div class="input-group">
+            <label>Spread (bps)</label>
+            <input type="number" id="b-spread" value="0" step="0.1" min="0" title="Quoted spread assumption. Half the spread is applied on entry and half on exit.">
+          </div>
+          <div class="input-group">
+            <label>Slippage (bps / side)</label>
+            <input type="number" id="b-slippage" value="0" step="0.1" min="0" title="Additional adverse slippage applied per side after spread.">
+          </div>
+        </div>
+        <div class="form-row-2">
+          <div class="input-group">
+            <label>Funding (bps / 8h)</label>
+            <input type="number" id="b-funding" value="0" step="0.1" title="Prorated funding on average notional. Use negative values to model funding rebates.">
+          </div>
           <div class="input-group" style="display:flex;align-items:center;gap:8px;">
             <label for="b-compounding" style="margin:0;cursor:pointer;">Compounding</label>
             <input type="checkbox" id="b-compounding" title="OFF = fixed position sizing (same size every trade). ON = position grows/shrinks with P&L.">
           </div>
-          <div class="input-group"></div>
         </div>
 
         <div class="form-row-2">
@@ -3241,6 +3254,14 @@
       <span style="font-size:13px;font-weight:600;" id="cf-scalp-status-label">Engine Idle</span>
     </div>
     <div style="flex:1;min-width:120px;font-size:12px;color:var(--muted);" id="cf-scalp-open-count">0 open trades</div>
+    <div style="min-width:160px;">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Feed Freshness</div>
+      <div id="cf-scalp-feed-meta" style="font-size:12px;font-weight:600;color:var(--text);font-family:'IBM Plex Mono',monospace;">Awaiting ticks</div>
+    </div>
+    <div style="min-width:160px;">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Execution</div>
+      <div id="cf-scalp-exec-meta" style="font-size:12px;font-weight:600;color:var(--text);font-family:'IBM Plex Mono',monospace;">No live fills yet</div>
+    </div>
     <div style="display:flex;align-items:center;gap:10px;">
       <span style="font-size:12px;color:var(--muted);">Session P&L:</span>
       <span style="font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;" id="cf-scalp-session-pnl">$0.00</span>
@@ -3494,19 +3515,50 @@ const TOP_25 = [
 // ── Core Assets — BTC / ETH / SOL (primary three) ─────────
 const CORE_ASSETS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 
+function cfInputNumber(id, fallback) {
+  const el = document.getElementById(id);
+  const value = parseFloat(el ? el.value : '');
+  return isNaN(value) ? fallback : value;
+}
+
+function cfBuilderCostModel() {
+  return {
+    fee_pct: cfInputNumber('b-fee', 0),
+    spread_bps: cfInputNumber('b-spread', 0),
+    slippage_bps: cfInputNumber('b-slippage', 0),
+    funding_bps_per_8h: cfInputNumber('b-funding', 0),
+  };
+}
+
+function cfApplyBuilderCostModel(data) {
+  data = data || {};
+  document.getElementById('b-fee').value = data.fee_pct != null ? data.fee_pct : 0;
+  document.getElementById('b-spread').value = data.spread_bps != null ? data.spread_bps : 0;
+  document.getElementById('b-slippage').value = data.slippage_bps != null ? data.slippage_bps : 0;
+  document.getElementById('b-funding').value = data.funding_bps_per_8h != null ? data.funding_bps_per_8h : 0;
+}
+
+function cfCostModelSummary(data) {
+  data = data || {};
+  return 'Fee ' + (data.fee_pct || 0) + '% • Spread ' + (data.spread_bps || 0) + ' bps • Slip ' + (data.slippage_bps || 0) + ' bps • Funding ' + (data.funding_bps_per_8h || 0) + ' bps/8h';
+}
+
 function getBuilderPayload() {
+  var positionSizeMode = (document.getElementById('b-possize-mode') || {}).value || 'pct';
+  var positionSizeValue = cfInputNumber('b-possize', 0);
   return {
     run_name: (document.getElementById('b-name') || {}).value || 'Untitled',
     symbol: selectedCrypto,
     leverage: selectedLeverage,
     trade_side: selectedSide,
     initial_capital: parseFloat((document.getElementById('b-capital') || {}).value) || 10000,
-    position_size_mode: (document.getElementById('b-possize-mode') || {}).value || 'pct',
-    position_size_value: parseFloat((document.getElementById('b-possize') || {}).value) || 0,
+    position_size_mode: positionSizeMode,
+    position_size_value: positionSizeValue,
+    position_size_pct: positionSizeMode === 'pct' ? positionSizeValue : 100,
+    fixed_qty: positionSizeMode === 'fixed_qty' ? positionSizeValue : 0,
     stoploss_pct: parseFloat((document.getElementById('b-sl') || {}).value) || 5,
     target_profit_pct: parseFloat((document.getElementById('b-tp') || {}).value) || 10,
     trailing_sl_pct: parseFloat((document.getElementById('b-trail') || {}).value) || 0,
-    fee_pct: parseFloat((document.getElementById('b-fee') || {}).value) || 0,
     max_trades_per_day: parseInt((document.getElementById('b-maxtrades') || {}).value) || 5,
     candle_interval: (document.getElementById('b-interval') || {}).value || '5m',
     from_date: (document.getElementById('b-from') || {}).value || '',
@@ -3514,6 +3566,7 @@ function getBuilderPayload() {
     indicators: indicators.slice(),
     entry_conditions: entryConditions.slice(),
     exit_conditions: exitConditions.slice(),
+    ...cfBuilderCostModel(),
   };
 }
 
@@ -3545,7 +3598,7 @@ function computeStrategyIntel(payload) {
     controlCopy: 'Capital ' + fmtINR(payload.initial_capital) + ' • ' + riskMode + ' • Max ' + payload.max_trades_per_day + ' trades/day',
     intel: [
       'Coverage: ' + (coverage.length ? coverage.join(', ') : 'signal stack configured'),
-      'Costs: fee ' + payload.fee_pct + '% per side',
+      'Costs: ' + cfCostModelSummary(payload),
       'Sizing: ' + riskMode + ' @ ' + payload.position_size_value,
     ],
     liveReady: liveReady,
@@ -3979,9 +4032,52 @@ function updateClock() {
 setInterval(updateClock, 1000);
 updateClock();
 
+function cfGetCookie(name) {
+  const prefix = name + '=';
+  const parts = document.cookie ? document.cookie.split(';') : [];
+  for (let i = 0; i < parts.length; i++) {
+    const item = parts[i].trim();
+    if (item.startsWith(prefix)) return decodeURIComponent(item.slice(prefix.length));
+  }
+  return '';
+}
+
+function cfApiFetch(url, options) {
+  const opts = Object.assign({ credentials: 'same-origin' }, options || {});
+  const method = String(opts.method || 'GET').toUpperCase();
+  const headers = new Headers(opts.headers || {});
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && url !== '/api/auth/login') {
+    const csrf = cfGetCookie('cryptoforge_csrf');
+    if (csrf) headers.set('X-CSRF-Token', csrf);
+    headers.set('X-Requested-With', 'XMLHttpRequest');
+  }
+  opts.headers = headers;
+  return fetch(url, opts);
+}
+
+function cfFormatLatency(ms) {
+  const val = Number(ms);
+  if (!Number.isFinite(val) || val < 0) return '—';
+  if (val < 1000) return Math.round(val) + 'ms';
+  if (val < 10000) return (val / 1000).toFixed(1) + 's';
+  return Math.round(val / 1000) + 's';
+}
+
+function cfPriceSourceLabel(source) {
+  const raw = String(source || '').toLowerCase();
+  if (!raw) return 'Idle';
+  if (raw === 'ws') return 'WS';
+  if (raw === 'rest_bulk') return 'REST bulk';
+  if (raw === 'rest_quote') return 'REST quote';
+  if (raw === 'broker_fill') return 'Broker fill';
+  if (raw === 'entry_snapshot') return 'Entry snap';
+  if (raw === 'entry') return 'Entry';
+  return raw.replace(/_/g, ' ');
+}
+
 // ── Logout ─────────────────────────────────────────────────
 async function doLogout() {
-  await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+  await cfApiFetch('/api/auth/logout', { method: 'POST' });
   window.location.reload();
 }
 
@@ -3990,7 +4086,7 @@ async function emergencyStop() {
   const ok = await cfConfirm('This will immediately kill all running paper, live, and scalp flows. Are you sure?', 'Emergency Stop', '🚨');
   if (!ok) return;
   try {
-    const r = await fetch('/api/emergency-stop', { method: 'POST', credentials: 'same-origin' });
+    const r = await cfApiFetch('/api/emergency-stop', { method: 'POST' });
     const d = await r.json();
     cfToast(d.message || 'All engines stopped', 'success');
     setTimeout(function() { location.reload(); }, 1000);
@@ -4010,7 +4106,7 @@ function _applyBrokerState(connected, message) {
 
 async function refreshBrokerState(silent) {
   try {
-    const r = await fetch('/api/broker/check', { method: 'POST', credentials: 'same-origin' });
+    const r = await cfApiFetch('/api/broker/check', { method: 'POST' });
     const d = await r.json();
     _applyBrokerState(d.status === 'connected', d.status === 'connected' ? 'Connected' : (d.message || 'Disconnected'));
   } catch(e) {
@@ -4021,7 +4117,7 @@ async function refreshBrokerState(silent) {
 
 async function connectBroker() {
   try {
-    const r = await fetch('/api/broker/connect', { method: 'POST', credentials: 'same-origin' });
+    const r = await cfApiFetch('/api/broker/connect', { method: 'POST' });
     const d = await r.json();
     if (d.status === 'connected') {
       _applyBrokerState(true, 'Connected');
@@ -4813,7 +4909,7 @@ async function runBacktest() {
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
+    ...cfBuilderCostModel(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     indicators: indicators,
@@ -4868,8 +4964,8 @@ async function runBacktest() {
   }, 1000);
 
   try {
-    const r = await fetch('/api/backtest', {
-      method: 'POST', credentials: 'same-origin',
+    const r = await cfApiFetch('/api/backtest', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -5220,7 +5316,7 @@ async function bulkDeleteRuns() {
   if (!ok) return;
   try {
     for (var id of ids) {
-      await fetch('/api/runs/' + id, { method: 'DELETE', credentials: 'same-origin' });
+      await cfApiFetch('/api/runs/' + id, { method: 'DELETE' });
     }
     cfToast(ids.length + ' runs deleted', 'success');
     loadRuns();
@@ -5371,6 +5467,8 @@ async function viewRun(rid) {
         ['Avg Win', fmtINR(s.avg_win || 0)],
         ['Avg Loss', fmtINR(s.avg_loss || 0)],
         ['Fees Paid', fmtINR(s.total_fees || 0)],
+        ['Execution Drag', fmtINR(s.total_execution_cost || 0)],
+        ['Funding', fmtINR(s.total_funding || 0)],
         ['Final Capital', fmtINR(s.final_capital || s.initial_capital || 0)],
       ].map(([label, val, isGreen]) => `
         <div class="stat-box">
@@ -5543,7 +5641,7 @@ async function deleteRun(rid) {
   var ok = await cfConfirm('This will permanently delete this run. This cannot be undone.', 'Delete Run?', '🗑️');
   if (!ok) return;
   try {
-    await fetch(`/api/runs/${rid}`, { method: 'DELETE', credentials: 'same-origin' });
+    await cfApiFetch(`/api/runs/${rid}`, { method: 'DELETE' });
     cfToast('Run deleted', 'success');
     loadRuns();
   } catch(e) { cfToast('Delete failed: ' + e.message, 'error'); }
@@ -5687,7 +5785,7 @@ async function saveStrategy() {
     stoploss_pct: parseFloat(document.getElementById('b-sl').value),
     target_profit_pct: parseFloat(document.getElementById('b-tp').value),
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
+    ...cfBuilderCostModel(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     folder: getSelectedFolder(),
@@ -5698,8 +5796,8 @@ async function saveStrategy() {
     candle_interval: document.getElementById('b-interval').value,
   };
   try {
-    await fetch('/api/strategies', {
-      method: 'POST', credentials: 'same-origin',
+    await cfApiFetch('/api/strategies', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -5765,7 +5863,7 @@ async function startPaperFromSelector() {
   exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
   if (s.stoploss_pct != null) document.getElementById('b-sl').value = s.stoploss_pct;
   if (s.target_profit_pct != null) document.getElementById('b-tp').value = s.target_profit_pct;
-  if (s.fee_pct != null) document.getElementById('b-fee').value = s.fee_pct;
+  cfApplyBuilderCostModel(s);
   document.getElementById('b-compounding').checked = !!s.compounding;
   if (s.trailing_sl_pct != null) document.getElementById('b-trail').value = s.trailing_sl_pct;
   if (s.max_trades_per_day != null) document.getElementById('b-maxtrades').value = s.max_trades_per_day;
@@ -5801,7 +5899,7 @@ async function startPaper() {
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
+    ...cfBuilderCostModel(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     position_size_pct: document.getElementById('b-possize-mode').value === 'pct' ? (parseFloat(document.getElementById('b-possize').value) || 100) : 100,
@@ -5814,8 +5912,8 @@ async function startPaper() {
     tp_reference: document.getElementById('deploy-tp-ref') ? document.getElementById('deploy-tp-ref').value : 'signal',
   };
   try {
-    const r = await fetch('/api/paper/start', {
-      method: 'POST', credentials: 'same-origin',
+    const r = await cfApiFetch('/api/paper/start', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -5844,7 +5942,7 @@ async function startPaper() {
 async function stopPaper() {
   const ok = await cfConfirm('Stop the paper trading engine?', 'Stop Paper', '⏹️');
   if (!ok) return;
-  await fetch('/api/paper/stop', { method: 'POST', credentials: 'same-origin' });
+  await cfApiFetch('/api/paper/stop', { method: 'POST' });
   cfToast('Paper engine stopped', 'info');
   loadLiveMonitor();
 }
@@ -5864,7 +5962,7 @@ async function startLive() {
     stoploss_pct: parseFloat(document.getElementById('b-sl').value) || 5,
     target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
     trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
-    fee_pct: (() => { const v = parseFloat(document.getElementById('b-fee').value); return isNaN(v) ? 0 : v; })(),
+    ...cfBuilderCostModel(),
     compounding: document.getElementById('b-compounding').checked,
     max_trades_per_day: parseInt(document.getElementById('b-maxtrades').value) || 5,
     position_size_pct: document.getElementById('b-possize-mode').value === 'pct' ? (parseFloat(document.getElementById('b-possize').value) || 100) : 100,
@@ -5877,8 +5975,8 @@ async function startLive() {
     tp_reference: document.getElementById('deploy-tp-ref') ? document.getElementById('deploy-tp-ref').value : 'signal',
   };
   try {
-    const r = await fetch('/api/live/start', {
-      method: 'POST', credentials: 'same-origin',
+    const r = await cfApiFetch('/api/live/start', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -5902,7 +6000,7 @@ async function startLive() {
 async function stopLive() {
   const ok = await cfConfirm('Stop the <b>LIVE</b> trading engine? Open positions will remain.', 'Stop Live', '⏹️', true);
   if (!ok) return;
-  await fetch('/api/live/stop', { method: 'POST', credentials: 'same-origin' });
+  await cfApiFetch('/api/live/stop', { method: 'POST' });
   cfToast('Live engine stopped', 'info');
   loadLiveMonitor();
 }
@@ -6193,6 +6291,8 @@ async function runComparison() {
       ['Avg Win', '$' + (sa.avg_win || 0).toFixed(2), '$' + (sb.avg_win || 0).toFixed(2)],
       ['Avg Loss', '$' + (sa.avg_loss || 0).toFixed(2), '$' + (sb.avg_loss || 0).toFixed(2)],
       ['Fees', '$' + (sa.total_fees || 0).toFixed(2), '$' + (sb.total_fees || 0).toFixed(2)],
+      ['Execution Drag', '$' + (sa.total_execution_cost || 0).toFixed(2), '$' + (sb.total_execution_cost || 0).toFixed(2)],
+      ['Funding', '$' + (sa.total_funding || 0).toFixed(2), '$' + (sb.total_funding || 0).toFixed(2)],
     ];
 
     var html = '<div class="compare-grid"><div class="compare-col">' +
@@ -6380,8 +6480,8 @@ async function validateStrategy() {
       target_profit_pct: parseFloat(document.getElementById('b-tp').value) || 10,
       trailing_sl_pct: parseFloat(document.getElementById('b-trail').value) || 0,
     };
-    var r = await fetch('/api/validate-strategy', {
-      method: 'POST', credentials: 'same-origin',
+    var r = await cfApiFetch('/api/validate-strategy', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -6721,6 +6821,7 @@ async function viewStrategy(sid) {
     ['Leverage', (s.leverage || 1) + 'x'],
     ['Stop Loss', (s.stoploss_pct || 0) + '%'],
     ['Take Profit', (s.target_profit_pct || 0) + '%'],
+    ['Cost Model', cfCostModelSummary(s)],
     ['Folder', s.folder || 'Default'],
   ];
   document.getElementById('vs-config').innerHTML = cfg.map(function(c) {
@@ -6775,7 +6876,7 @@ async function loadStrategyToBuilder(sid) {
   exitConditions = (s.exit_conditions || []).map(function(c) { return {...c}; });
   if (s.stoploss_pct != null) document.getElementById('b-sl').value = s.stoploss_pct;
   if (s.target_profit_pct != null) document.getElementById('b-tp').value = s.target_profit_pct;
-  if (s.fee_pct != null) document.getElementById('b-fee').value = s.fee_pct;
+  cfApplyBuilderCostModel(s);
   document.getElementById('b-compounding').checked = !!s.compounding;
   if (s.trailing_sl_pct != null) document.getElementById('b-trail').value = s.trailing_sl_pct;
   if (s.max_trades_per_day != null) document.getElementById('b-maxtrades').value = s.max_trades_per_day;
@@ -6821,8 +6922,8 @@ async function copyStrategy(sid) {
   delete payload.id;
   delete payload.created_at;
   try {
-    await fetch('/api/strategies', {
-      method: 'POST', credentials: 'same-origin',
+    await cfApiFetch('/api/strategies', {
+      method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload),
     });
@@ -6846,7 +6947,7 @@ async function deleteStrategy(sid) {
   var ok = await cfConfirm('Delete this saved strategy permanently?', 'Delete Strategy', '🗑️');
   if (!ok) return;
   try {
-    await fetch('/api/strategies/' + sid, { method: 'DELETE', credentials: 'same-origin' });
+    await cfApiFetch('/api/strategies/' + sid, { method: 'DELETE' });
     cfToast('Strategy deleted', 'success');
     fetchStrategies();
   } catch(e) { cfToast('Delete failed: ' + e.message, 'error'); }
@@ -6873,8 +6974,8 @@ async function confirmMoveTo() {
   var folder = sel === '_custom' ? (document.getElementById('move-folder-custom').value || 'Default') : sel;
   closeMoveFolder();
   try {
-    await fetch('/api/strategies/' + _moveStrategyId, {
-      method: 'PUT', credentials: 'same-origin',
+    await cfApiFetch('/api/strategies/' + _moveStrategyId, {
+      method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({folder: folder}),
     });
@@ -6902,7 +7003,7 @@ function copyEditStrategy(data) {
   exitConditions = (data.exit_conditions || []).map(function(c) { return {...c}; });
   if (data.stoploss_pct != null) document.getElementById('b-sl').value = data.stoploss_pct;
   if (data.target_profit_pct != null) document.getElementById('b-tp').value = data.target_profit_pct;
-  if (data.fee_pct != null) document.getElementById('b-fee').value = data.fee_pct;
+  cfApplyBuilderCostModel(data);
   document.getElementById('b-compounding').checked = !!data.compounding;
   if (data.trailing_sl_pct != null) document.getElementById('b-trail').value = data.trailing_sl_pct;
   if (data.max_trades_per_day != null) document.getElementById('b-maxtrades').value = data.max_trades_per_day;
@@ -7479,8 +7580,8 @@ async function stopEngine(runId, mode) {
   if (!ok) return;
   var endpoint = mode === 'live' ? '/api/live/stop' : '/api/paper/stop';
   try {
-    await fetch(endpoint, {
-      method: 'POST', credentials: 'same-origin',
+    await cfApiFetch(endpoint, {
+      method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({run_id: runId}),
     });
@@ -7696,7 +7797,7 @@ document.addEventListener('DOMContentLoaded', () => {
     var tabBtn = document.getElementById('nav-' + savedTab);
     if (tabBtn) showPage(savedTab + '-page', tabBtn);
   }
-  ['b-name', 'b-capital', 'b-possize-mode', 'b-possize', 'b-sl', 'b-tp', 'b-trail', 'b-fee', 'b-maxtrades', 'b-from', 'b-to', 'b-interval'].forEach(function(id) {
+  ['b-name', 'b-capital', 'b-possize-mode', 'b-possize', 'b-sl', 'b-tp', 'b-trail', 'b-fee', 'b-spread', 'b-slippage', 'b-funding', 'b-maxtrades', 'b-from', 'b-to', 'b-interval'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) {
       el.addEventListener('input', renderBuilderDeck);
@@ -7764,6 +7865,32 @@ async function cfLoadScalpStatus() {
   } catch(e) { /* engine may not be running */ }
 }
 
+function cfScalpFeedSummary(feed) {
+  const meta = feed || {};
+  const source = cfPriceSourceLabel(meta.source);
+  const symbol = meta.symbol || '';
+  const age = meta.age_ms !== undefined && meta.age_ms !== null ? cfFormatLatency(meta.age_ms) : '—';
+  if (!symbol && !meta.ws_connected) return 'Awaiting ticks';
+  if (!symbol) return meta.ws_connected ? 'WS connected' : 'Waiting for price';
+  return source + ' • ' + symbol + ' • ' + age;
+}
+
+function cfScalpExecSummary(execMetrics) {
+  const meta = execMetrics || {};
+  if (!meta.phase) return 'No live fills yet';
+  const phase = String(meta.phase || '').toUpperCase();
+  const symbol = meta.symbol || '—';
+  const latency = cfFormatLatency(meta.latency_ms);
+  const suffix = meta.verified ? latency : 'unverified';
+  return phase + ' • ' + symbol + ' • ' + suffix;
+}
+
+function cfScalpMarkMeta(trade) {
+  const source = cfPriceSourceLabel(trade && trade.price_source);
+  const age = cfFormatLatency(trade && trade.price_age_ms);
+  return source === 'Idle' ? 'mark' : source + ' • ' + age;
+}
+
 function cfApplyScalpStatus(d) {
   const open = d.open_trades || [];
   const pending = d.pending_entries || [];
@@ -7780,6 +7907,21 @@ function cfApplyScalpStatus(d) {
   }
   const engDot = document.getElementById('cf-scalp-dot');
   if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+  const feedMeta = document.getElementById('cf-scalp-feed-meta');
+  if (feedMeta) {
+    const feed = d.feed_metrics || {};
+    feedMeta.textContent = cfScalpFeedSummary(feed);
+    const ageMs = Number(feed.age_ms);
+    if (Number.isFinite(ageMs) && ageMs <= 1200) feedMeta.style.color = 'var(--green)';
+    else if (Number.isFinite(ageMs) && ageMs <= 3000) feedMeta.style.color = '#fbbf24';
+    else feedMeta.style.color = 'var(--text)';
+  }
+  const execMeta = document.getElementById('cf-scalp-exec-meta');
+  if (execMeta) {
+    const exec = d.execution_metrics || {};
+    execMeta.textContent = cfScalpExecSummary(exec);
+    execMeta.style.color = exec.verified === false ? 'var(--red)' : 'var(--text)';
+  }
 
   const pendingWrap = document.getElementById('cf-scalp-pending-wrap');
   const pendingCount = document.getElementById('cf-scalp-pending-count');
@@ -7919,7 +8061,7 @@ function cfRenderActivePositions(open) {
         <td>${sideTag}</td>
         <td><div class="table-value-stack"><div class="table-value-main">$${(t.qty_usdt || t.quantity || 0).toFixed(2)}</div><div class="table-value-sub">size</div></div></td>
         <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div><div class="table-value-sub">entry</div></div></td>
-        <td data-field="mark"><div class="table-value-stack"><div class="table-value-main">$${(t.mark_price || t.current_price || 0).toFixed(4)}</div><div class="table-value-sub">mark</div></div></td>
+        <td data-field="mark"><div class="table-value-stack"><div class="table-value-main">$${(t.mark_price || t.current_price || 0).toFixed(4)}</div><div class="table-value-sub">${cfScalpMarkMeta(t)}</div></div></td>
         <td data-field="pnl"><div class="table-value-stack"><div class="table-value-main ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div><div class="table-value-sub ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">unrealized</div></div></td>
         <td><input type="number" class="table-input-sm" id="cf-tp-${tid}" value="${tpVal}" step="1" min="0" title="Target USD" style="color:var(--green);"></td>
         <td><input type="number" class="table-input-sm" id="cf-sl-${tid}" value="${slVal}" step="1" min="0" title="Stop loss USD" style="color:var(--red);"></td>
@@ -7943,7 +8085,7 @@ function cfRenderActivePositions(open) {
       const markCell = row.querySelector('[data-field="mark"]');
       const pnlCell = row.querySelector('[data-field="pnl"]');
       if (markCell) {
-        markCell.innerHTML = '<div class="table-value-stack"><div class="table-value-main">$' + (t.mark_price || t.current_price || 0).toFixed(4) + '</div><div class="table-value-sub">mark</div></div>';
+        markCell.innerHTML = '<div class="table-value-stack"><div class="table-value-main">$' + (t.mark_price || t.current_price || 0).toFixed(4) + '</div><div class="table-value-sub">' + cfScalpMarkMeta(t) + '</div></div>';
       }
       if (pnlCell) {
         const pnlClass = isProfit ? 'positive' : isLoss ? 'negative' : '';
@@ -7984,7 +8126,7 @@ async function cfSubmitScalp(direction) {
     if (slType === 'pct') { payload.stop_loss_pct = slVal; } else { payload.sl_usd = slVal; }
     if (tpType === 'pct') { payload.take_profit_pct = tpVal; } else { payload.tp_usd = tpVal; }
     if (guardrailPrice > 0) payload.guardrail_price = guardrailPrice;
-    const res = await fetch('/api/scalp/enter', {
+    const res = await cfApiFetch('/api/scalp/enter', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -8010,7 +8152,7 @@ async function cfSubmitScalp(direction) {
 
 async function cfExitScalpTrade(tradeId) {
   try {
-    const res = await fetch('/api/scalp/exit', {
+    const res = await cfApiFetch('/api/scalp/exit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ trade_id: tradeId })
@@ -8046,7 +8188,7 @@ async function cfModifyScalpTrade(tradeId) {
     if (newTP > 0) payload.target_usd = newTP;
     if (newSL > 0) payload.sl_usd = newSL;
 
-    const res = await fetch('/api/scalp/trades/' + tradeId + '/targets', {
+    const res = await cfApiFetch('/api/scalp/trades/' + tradeId + '/targets', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

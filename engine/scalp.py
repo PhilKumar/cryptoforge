@@ -75,6 +75,10 @@ class ScalpTrade:
         self._exit_guard_until = self.entry_time + timedelta(seconds=2 if mode == "live" else 1)
         self._prefer_fresh_rest_mark_until = self.entry_time + timedelta(seconds=5 if mode == "live" else 2)
         self._post_entry_price_ready = False
+        self.last_price_source = "entry"
+        self.last_price_update = self.entry_time
+        self.entry_latency_ms: float = 0.0
+        self.exit_latency_ms: float = 0.0
 
         # Resolve absolute TP/SL from percentage if needed
         self.target_price = target_price
@@ -155,6 +159,9 @@ class ScalpTrade:
     def to_dict(self) -> dict:
         gross_pnl = round(self._compute_pnl(self.current_price), 2)
         fees = self._compute_fees(self.exit_price)
+        price_age_ms = None
+        if self.last_price_update:
+            price_age_ms = max(0, int((_now_utc() - self.last_price_update).total_seconds() * 1000))
         return {
             "trade_id": self.trade_id,
             "symbol": self.symbol,
@@ -181,6 +188,11 @@ class ScalpTrade:
             "unrealized_pnl": gross_pnl,
             "qty_usdt": round(self.size / max(self.leverage, 1), 2),
             "mark_price": self.current_price,
+            "price_source": self.last_price_source,
+            "price_updated_at": str(self.last_price_update) if self.last_price_update else None,
+            "price_age_ms": price_age_ms,
+            "entry_latency_ms": self.entry_latency_ms,
+            "exit_latency_ms": self.exit_latency_ms,
             "status": self.status,
             "mode": self.mode,
         }
@@ -276,6 +288,10 @@ class ScalpEngine:
         self._ws_feed = None
         self._ws_prices: Dict[str, float] = {}
         self._ws_subscribed_symbols: set[str] = set()
+        self._last_price_ts: Dict[str, datetime] = {}
+        self._last_price_source: Dict[str, str] = {}
+        self._rest_price_fetches: int = 0
+        self._last_execution: Dict[str, Any] = {}
         self._update_task: Optional[asyncio.Task] = None
         self._last_update_push: float = 0.0
         self._update_interval_sec: float = 0.25
@@ -344,14 +360,25 @@ class ScalpEngine:
             price = _coerce_float(mark, 0.0)
             if price <= 0:
                 return
-            canonical = self._canonical_symbol(sym)
-            self._ws_prices[canonical] = price
-            for trade in self.open_trades.values():
-                if self._canonical_symbol(trade.symbol) == canonical:
-                    trade.current_price = price
+            self._record_price(sym, price, source="ws")
             self._schedule_update()
         except Exception:
             pass
+
+    def _record_price(self, symbol: str, price: float, source: str) -> None:
+        if price <= 0:
+            return
+        now = _now_utc()
+        canonical = self._canonical_symbol(symbol)
+        if source == "ws":
+            self._ws_prices[canonical] = price
+        self._last_price_ts[canonical] = now
+        self._last_price_source[canonical] = source
+        for trade in self.open_trades.values():
+            if self._canonical_symbol(trade.symbol) == canonical:
+                trade.current_price = price
+                trade.last_price_source = source
+                trade.last_price_update = now
 
     async def _emit_update(self):
         if not self._on_update:
@@ -445,6 +472,9 @@ class ScalpEngine:
         try:
             ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
             market_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+            if market_price > 0:
+                self._rest_price_fetches += 1
+                self._record_price(symbol, market_price, source="rest_quote")
         except Exception:
             pass
 
@@ -547,10 +577,14 @@ class ScalpEngine:
             try:
                 ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
                 entry_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+                if entry_price > 0:
+                    self._rest_price_fetches += 1
+                    self._record_price(symbol, entry_price, source="rest_quote")
             except Exception:
                 pass
 
         order_id = ""
+        result: Dict[str, Any] = {}
         if mode == "paper":
             order_id = "PAPER"
         else:
@@ -592,14 +626,34 @@ class ScalpEngine:
             guardrail_price=guardrail_price,
         )
         self.open_trades[self._trade_counter] = trade
+        trade.entry_latency_ms = round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1)
+        self._record_price(symbol, entry_price, source="broker_fill" if mode != "paper" else "entry_snapshot")
+        self._last_execution = {
+            "phase": "entry",
+            "symbol": symbol,
+            "side": side,
+            "mode": mode,
+            "verified": bool(result.get("verified", mode == "paper")),
+            "latency_ms": round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1),
+            "ack_ms": round(_coerce_float(result.get("order_ack_ms"), 0.0), 1),
+            "verified_at_attempt": int(result.get("verified_at_attempt", 0) or 0),
+            "updated_at": str(_now_utc()),
+        }
 
         mode_label = "[PAPER] " if mode == "paper" else ""
+        exec_tail = ""
+        if result.get("broker_latency_ms"):
+            exec_tail = (
+                f" verify={_coerce_float(result.get('broker_latency_ms'), 0.0):,.1f}ms"
+                f" ack={_coerce_float(result.get('order_ack_ms'), 0.0):,.1f}ms"
+            )
         self._log(
             "entry",
             f"{mode_label}✅ SCALP ENTER: {side} {symbol} @ ${entry_price:,.4f} "
             f"size={size} lev={leverage}x orderId={order_id} "
             f"tp=${trade.target_price or 'none'} sl=${trade.sl_price or 'none'} "
-            f"tp_usd=${trade.target_usd or 'none'} sl_usd=${trade.sl_usd or 'none'}",
+            f"tp_usd=${trade.target_usd or 'none'} sl_usd=${trade.sl_usd or 'none'}"
+            f"{exec_tail}",
         )
 
         if not self._running:
@@ -654,6 +708,27 @@ class ScalpEngine:
             sum(t._compute_pnl(t.current_price) for t in self.open_trades.values()),
             2,
         )
+        tracked_symbols = {self._canonical_symbol(t.symbol) for t in self.open_trades.values()} | {
+            self._canonical_symbol(p.symbol) for p in self.pending_entries.values()
+        }
+        latest_symbol = ""
+        latest_ts = None
+        for canonical in tracked_symbols or set(self._last_price_ts.keys()):
+            ts = self._last_price_ts.get(canonical)
+            if ts and (latest_ts is None or ts > latest_ts):
+                latest_ts = ts
+                latest_symbol = canonical
+        price_age_ms = None
+        if latest_ts:
+            price_age_ms = max(0, int((_now_utc() - latest_ts).total_seconds() * 1000))
+        feed_metrics = {
+            "ws_connected": bool(self._ws_feed and getattr(self._ws_feed, "connected", False)),
+            "symbol": latest_symbol or None,
+            "source": self._last_price_source.get(latest_symbol, "") if latest_symbol else "",
+            "updated_at": str(latest_ts) if latest_ts else None,
+            "age_ms": price_age_ms,
+            "rest_fallbacks": self._rest_price_fetches,
+        }
 
         return {
             "running": self._running,
@@ -669,6 +744,8 @@ class ScalpEngine:
             "session_unrealized_pnl": session_unrealized,
             "session_fees": session_fees,
             "session_pnl": round(session_realized + session_unrealized, 2),
+            "feed_metrics": feed_metrics,
+            "execution_metrics": dict(self._last_execution),
         }
 
     # ── Internal monitoring ───────────────────────────────────────
@@ -747,7 +824,11 @@ class ScalpEngine:
             return ws_price
         try:
             ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
-            return float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+            price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+            if price > 0:
+                self._rest_price_fetches += 1
+                self._record_price(symbol, price, source="rest_quote")
+            return price
         except Exception:
             return 0.0
 
@@ -774,6 +855,8 @@ class ScalpEngine:
                     ticker = await asyncio.to_thread(self.delta.get_ticker, sym)
                     p = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
                     if p > 0:
+                        self._rest_price_fetches += 1
+                        self._record_price(sym, p, source="rest_quote")
                         result[sym] = p
                 except Exception:
                     pass
@@ -781,6 +864,7 @@ class ScalpEngine:
         if not missing:
             return result
         try:
+            self._rest_price_fetches += len(missing)
             tickers = await asyncio.to_thread(self.delta.get_tickers_bulk)
             ticker_map: Dict[str, float] = {}
             for t in tickers:
@@ -794,10 +878,12 @@ class ScalpEngine:
 
             for sym in missing:
                 if sym in ticker_map:
+                    self._record_price(sym, ticker_map[sym], source="rest_bulk")
                     result[sym] = ticker_map[sym]
                 else:
                     ds = self.delta.to_delta_symbol(sym)
                     if ds in ticker_map:
+                        self._record_price(sym, ticker_map[ds], source="rest_bulk")
                         result[sym] = ticker_map[ds]
         except Exception as e:
             self._log("error", f"Bulk ticker fetch failed: {e}")
@@ -807,6 +893,8 @@ class ScalpEngine:
                     ticker = await asyncio.to_thread(self.delta.get_ticker, sym)
                     p = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
                     if p > 0:
+                        self._rest_price_fetches += 1
+                        self._record_price(sym, p, source="rest_quote")
                         result[sym] = p
                 except Exception:
                     pass
@@ -815,6 +903,7 @@ class ScalpEngine:
     async def _close_trade(self, trade: ScalpTrade, reason: str):
         """Place exit order (or simulate) and move trade to closed_trades."""
         exit_order_id = ""
+        result: Dict[str, Any] = {}
         if trade.mode == "paper":
             exit_order_id = "PAPER"
         else:
@@ -874,10 +963,22 @@ class ScalpEngine:
         trade.exit_order_id = exit_order_id
         trade.pnl = round(pnl, 2)
         trade.status = "closed"
+        trade.exit_latency_ms = round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1)
 
         closed_dict = trade.to_dict()
         self.closed_trades.append(closed_dict)
         del self.open_trades[trade.trade_id]
+        self._last_execution = {
+            "phase": "exit",
+            "symbol": trade.symbol,
+            "side": trade.side,
+            "mode": trade.mode,
+            "verified": bool(result.get("verified", trade.mode == "paper")),
+            "latency_ms": round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1),
+            "ack_ms": round(_coerce_float(result.get("order_ack_ms"), 0.0), 1),
+            "verified_at_attempt": int(result.get("verified_at_attempt", 0) or 0),
+            "updated_at": str(_now_utc()),
+        }
 
         # Persist to disk via callback (handles both auto and manual exits uniformly)
         if self._on_trade_closed:
@@ -887,12 +988,18 @@ class ScalpEngine:
                 self._log("error", f"Trade persistence callback failed: {_e}")
 
         pnl_sign = "+" if pnl >= 0 else ""
+        exec_tail = ""
+        if result.get("broker_latency_ms"):
+            exec_tail = (
+                f" verify={_coerce_float(result.get('broker_latency_ms'), 0.0):,.1f}ms"
+                f" ack={_coerce_float(result.get('order_ack_ms'), 0.0):,.1f}ms"
+            )
         self._log(
             "exit" if pnl >= 0 else "stop",
             f"{'✅' if pnl >= 0 else '🛑'} SCALP EXIT [{reason}]: "
             f"{trade.side} {trade.symbol} "
             f"entry=${trade.entry_price:,.4f} exit=${exit_price:,.4f} "
-            f"PnL={pnl_sign}${pnl:.2f}",
+            f"PnL={pnl_sign}${pnl:.2f}{exec_tail}",
         )
         self._schedule_update(force=True)
 

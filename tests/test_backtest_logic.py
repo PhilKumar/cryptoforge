@@ -220,6 +220,47 @@ class IndicatorComputationTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["stats"]["total_trades"], 0)
 
+    def test_backtest_cost_model_applies_execution_and_funding_drag(self):
+        idx = pd.date_range("2026-03-20 00:00:00+00:00", periods=5, freq="5min")
+        df = pd.DataFrame(
+            [
+                {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0},
+                {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0},
+                {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0},
+                {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0},
+                {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0},
+            ],
+            index=idx,
+        )
+
+        always_true = [{"left": "current_close", "operator": "is_above", "right": "number", "right_number_value": 0}]
+        result = run_backtest(
+            df,
+            entry_conditions=always_true,
+            exit_conditions=always_true,
+            strategy_config={
+                "from_date": "2026-03-20",
+                "indicators": [],
+                "candle_interval": "5m",
+                "initial_capital": 1000,
+                "leverage": 1,
+                "position_size_mode": "fixed_qty",
+                "fixed_qty": 1,
+                "max_trades_per_day": 1,
+                "spread_bps": 10,
+                "slippage_bps": 5,
+                "funding_bps_per_8h": 800,
+            },
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["stats"]["total_trades"], 1)
+        self.assertAlmostEqual(result["stats"]["total_execution_cost"], 0.2, places=2)
+        self.assertGreater(result["stats"]["total_funding"], 0)
+        self.assertLess(result["stats"]["total_pnl"], -0.2)
+        self.assertEqual(result["trades"][0]["execution_cost"], 0.2)
+        self.assertGreater(result["trades"][0]["funding"], 0)
+
 
 class BacktestRoutePersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_backtest_run_persists_roundtrip_fields(self):
@@ -287,6 +328,9 @@ class BacktestRoutePersistenceTests(unittest.IsolatedAsyncioTestCase):
                     max_trades_per_day=2,
                     max_daily_loss=9.0,
                     fee_pct=0.05,
+                    slippage_bps=3.0,
+                    spread_bps=8.0,
+                    funding_bps_per_8h=1.5,
                     compounding=True,
                     indicators=["EMA_20_5m"],
                     entry_conditions=[],
@@ -304,6 +348,9 @@ class BacktestRoutePersistenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(saved["fixed_qty"], 0.25)
                 self.assertEqual(saved["compounding"], True)
                 self.assertEqual(saved["fee_pct"], 0.05)
+                self.assertEqual(saved["slippage_bps"], 3.0)
+                self.assertEqual(saved["spread_bps"], 8.0)
+                self.assertEqual(saved["funding_bps_per_8h"], 1.5)
                 self.assertEqual(saved["max_daily_loss"], 9.0)
         finally:
             app_module.RUNS_FILE = original_run_file

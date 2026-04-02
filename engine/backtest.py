@@ -344,6 +344,28 @@ def _mk(id_, et, xt, ep, xp, pnl, reason, cum, side="LONG", leverage=1, size=1):
     }
 
 
+def _apply_execution_price(price, side, *, is_entry, spread_bps=0.0, slippage_bps=0.0):
+    """Apply adverse spread/slippage to a reference price."""
+    adverse_bps = max(float(spread_bps), 0.0) / 2.0 + max(float(slippage_bps), 0.0)
+    if adverse_bps <= 0 or price <= 0:
+        return float(price)
+    impact = adverse_bps / 10000.0
+    if side == "LONG":
+        factor = 1 + impact if is_entry else 1 - impact
+    else:
+        factor = 1 - impact if is_entry else 1 + impact
+    return float(price) * factor
+
+
+def _holding_hours(start_ts, end_ts):
+    if start_ts is None or end_ts is None:
+        return 0.0
+    try:
+        return max((end_ts - start_ts).total_seconds() / 3600.0, 0.0)
+    except Exception:
+        return 0.0
+
+
 # ── Backtest Runner ────────────────────────────────────────────────
 def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_config=None):
     if entry_conditions is None:
@@ -364,6 +386,9 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     position_size_pct = float(sc.get("position_size_pct", 100))  # % of capital
     compounding = str(sc.get("compounding", "false")).lower() == "true"
     fee_pct = float(sc.get("fee_pct", 0))  # taker fee per side (0 default; set 0.05 for Delta Exchange realistic fees)
+    slippage_bps = float(sc.get("slippage_bps", 0))
+    spread_bps = float(sc.get("spread_bps", 0))
+    funding_bps_per_8h = float(sc.get("funding_bps_per_8h", 0))
     max_daily_loss = float(sc.get("max_daily_loss", 0))  # 0 = disabled
     # Position sizing mode: "pct" (default) or "fixed_qty" (e.g. 0.1 BTC)
     position_size_mode = sc.get("position_size_mode", "pct")
@@ -375,7 +400,10 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         else f"{position_size_pct}% of capital"
     )
     print(
-        f"[BACKTEST] ═══ FEE: {fee_pct}% per side | SL: {sl_pct}% | TP: {tp_pct}% | Side: {side} | Leverage: {leverage}x | Sizing: {sizing_label} | Compounding: {compounding} ═══"
+        "[BACKTEST] ═══ "
+        f"FEE: {fee_pct}% per side | SPREAD: {spread_bps} bps | SLIPPAGE: {slippage_bps} bps | "
+        f"FUNDING: {funding_bps_per_8h} bps/8h | SL: {sl_pct}% | TP: {tp_pct}% | "
+        f"Side: {side} | Leverage: {leverage}x | Sizing: {sizing_label} | Compounding: {compounding} ═══"
     )
 
     t0 = _time.time()
@@ -481,12 +509,16 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     equity_values = np.full(len(df), float(capital))
     cum_pnl = 0.0
     total_fees = 0.0
+    total_execution_cost = 0.0
+    total_funding = 0.0
     tid = 0
     in_trade = False
     entry_price = 0.0
+    entry_mid_price = 0.0
     entry_time = None
     entry_idx = 0
     entry_size = 0.0  # notional position size in USD
+    position_qty = 0.0
     trades_today = 0
     last_trade_date = None
     daily_pnl = 0.0  # for max_daily_loss check
@@ -520,18 +552,27 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
 
             _entry_true_count += 1
             in_trade = True
-            entry_price = opens[i]
+            entry_mid_price = opens[i]
+            entry_price = _apply_execution_price(
+                entry_mid_price,
+                side,
+                is_entry=True,
+                spread_bps=spread_bps,
+                slippage_bps=slippage_bps,
+            )
             entry_time = ts
             entry_idx = i
             peak_pnl_pct = 0.0  # reset trailing tracker
 
             # Position sizing
             if position_size_mode == "fixed_qty" and fixed_qty > 0:
-                entry_size = fixed_qty * entry_price  # notional = qty × price
+                position_qty = fixed_qty
+                entry_size = position_qty * entry_price  # notional = qty × price
             else:
                 sizing_base = capital if compounding else initial_capital_for_sizing
                 margin_used = sizing_base * (position_size_pct / 100)
                 entry_size = margin_used * leverage
+                position_qty = entry_size / entry_price if entry_price > 0 else 0.0
 
             trades_today += 1
             equity_values[i] = capital
@@ -576,42 +617,57 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
             if exit_reason:
                 # Calculate actual exit price based on exit reason
                 if exit_reason == "Signal Exit":
-                    price = opens[i]
+                    exit_ref_price = opens[i]
                 elif exit_reason == "Stop Loss":
                     if side == "LONG":
-                        price = entry_price * (1 - sl_pct / 100)
+                        exit_ref_price = entry_price * (1 - sl_pct / 100)
                     else:
-                        price = entry_price * (1 + sl_pct / 100)
+                        exit_ref_price = entry_price * (1 + sl_pct / 100)
                 elif exit_reason == "Take Profit":
                     if side == "LONG":
-                        price = entry_price * (1 + tp_pct / 100)
+                        exit_ref_price = entry_price * (1 + tp_pct / 100)
                     else:
-                        price = entry_price * (1 - tp_pct / 100)
+                        exit_ref_price = entry_price * (1 - tp_pct / 100)
                 elif exit_reason == "Trailing SL":
                     trail_exit_pct = peak_pnl_pct - trail_pct
                     if side == "LONG":
-                        price = entry_price * (1 + trail_exit_pct / 100)
+                        exit_ref_price = entry_price * (1 + trail_exit_pct / 100)
                     else:
-                        price = entry_price * (1 - trail_exit_pct / 100)
+                        exit_ref_price = entry_price * (1 - trail_exit_pct / 100)
                 elif exit_reason == "Liquidation":
                     liq_price_pct = config.LIQUIDATION_THRESHOLD / leverage
                     if side == "LONG":
-                        price = entry_price * (1 + liq_price_pct / 100)
+                        exit_ref_price = entry_price * (1 + liq_price_pct / 100)
                     else:
-                        price = entry_price * (1 - liq_price_pct / 100)
+                        exit_ref_price = entry_price * (1 - liq_price_pct / 100)
 
-                # Recalculate P&L from actual exit price
+                exit_price = _apply_execution_price(
+                    exit_ref_price,
+                    side,
+                    is_entry=False,
+                    spread_bps=spread_bps,
+                    slippage_bps=slippage_bps,
+                )
                 if side == "LONG":
-                    pnl_pct = (price - entry_price) / entry_price * 100
+                    gross_trade_pnl = position_qty * (exit_price - entry_price)
+                    gross_reference_pnl = position_qty * (exit_ref_price - entry_mid_price)
                 else:
-                    pnl_pct = (entry_price - price) / entry_price * 100
-                trade_pnl = entry_size * (pnl_pct / 100)
-                # Calculate fees (entry + exit)
+                    gross_trade_pnl = position_qty * (entry_price - exit_price)
+                    gross_reference_pnl = position_qty * (entry_mid_price - exit_ref_price)
+                execution_cost = max(gross_reference_pnl - gross_trade_pnl, 0.0)
                 entry_fee = entry_size * (fee_pct / 100)
-                exit_fee = entry_size * (1 + pnl_pct / 100) * (fee_pct / 100)
+                exit_notional = position_qty * exit_price
+                exit_fee = exit_notional * (fee_pct / 100)
                 trade_fees = entry_fee + exit_fee
-                trade_pnl -= trade_fees
+                hold_hours = _holding_hours(entry_time, ts)
+                avg_notional = (
+                    (entry_size + exit_notional) / 2 if (entry_size > 0 and exit_notional > 0) else entry_size
+                )
+                funding_cost = avg_notional * (funding_bps_per_8h / 10000.0) * (hold_hours / 8.0)
+                trade_pnl = gross_trade_pnl - trade_fees - funding_cost
                 total_fees += trade_fees
+                total_execution_cost += execution_cost
+                total_funding += funding_cost
                 cum_pnl += trade_pnl
                 capital += trade_pnl  # compound capital
                 # Track daily PnL for max_daily_loss
@@ -619,58 +675,88 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
                 if max_daily_loss > 0 and daily_pnl <= -max_daily_loss:
                     daily_loss_hit = True
                 tid += 1
-                trades.append(
-                    _mk(
-                        tid,
-                        entry_time,
-                        ts,
-                        entry_price,
-                        price,
-                        trade_pnl,
-                        exit_reason,
-                        cum_pnl,
-                        side=side,
-                        leverage=leverage,
-                        size=round(entry_size, 2),
-                    )
+                trade = _mk(
+                    tid,
+                    entry_time,
+                    ts,
+                    entry_price,
+                    exit_price,
+                    trade_pnl,
+                    exit_reason,
+                    cum_pnl,
+                    side=side,
+                    leverage=leverage,
+                    size=round(entry_size, 2),
                 )
+                trade.update(
+                    {
+                        "gross_pnl": round(gross_trade_pnl, 2),
+                        "fees": round(trade_fees, 2),
+                        "funding": round(funding_cost, 2),
+                        "execution_cost": round(execution_cost, 2),
+                        "holding_hours": round(hold_hours, 2),
+                    }
+                )
+                trades.append(trade)
                 in_trade = False
 
             equity_values[i] = capital
 
     # Close open trade at last candle
     if in_trade and len(df) > 0:
-        price = closes[-1]
+        exit_ref_price = closes[-1]
         ts = timestamps[-1]
+        exit_price = _apply_execution_price(
+            exit_ref_price,
+            side,
+            is_entry=False,
+            spread_bps=spread_bps,
+            slippage_bps=slippage_bps,
+        )
         if side == "LONG":
-            pnl_pct = (price - entry_price) / entry_price * 100
+            gross_trade_pnl = position_qty * (exit_price - entry_price)
+            gross_reference_pnl = position_qty * (exit_ref_price - entry_mid_price)
         else:
-            pnl_pct = (entry_price - price) / entry_price * 100
-        trade_pnl = entry_size * (pnl_pct / 100)
-        # Fees for end-of-data close
+            gross_trade_pnl = position_qty * (entry_price - exit_price)
+            gross_reference_pnl = position_qty * (entry_mid_price - exit_ref_price)
+        execution_cost = max(gross_reference_pnl - gross_trade_pnl, 0.0)
         entry_fee = entry_size * (fee_pct / 100)
-        exit_fee = entry_size * (1 + pnl_pct / 100) * (fee_pct / 100)
+        exit_notional = position_qty * exit_price
+        exit_fee = exit_notional * (fee_pct / 100)
         trade_fees = entry_fee + exit_fee
-        trade_pnl -= trade_fees
+        hold_hours = _holding_hours(entry_time, ts)
+        avg_notional = (entry_size + exit_notional) / 2 if (entry_size > 0 and exit_notional > 0) else entry_size
+        funding_cost = avg_notional * (funding_bps_per_8h / 10000.0) * (hold_hours / 8.0)
+        trade_pnl = gross_trade_pnl - trade_fees - funding_cost
         total_fees += trade_fees
+        total_execution_cost += execution_cost
+        total_funding += funding_cost
         cum_pnl += trade_pnl
         capital += trade_pnl
         tid += 1
-        trades.append(
-            _mk(
-                tid,
-                entry_time,
-                ts,
-                entry_price,
-                price,
-                trade_pnl,
-                "End of Data",
-                cum_pnl,
-                side=side,
-                leverage=leverage,
-                size=round(entry_size, 2),
-            )
+        trade = _mk(
+            tid,
+            entry_time,
+            ts,
+            entry_price,
+            exit_price,
+            trade_pnl,
+            "End of Data",
+            cum_pnl,
+            side=side,
+            leverage=leverage,
+            size=round(entry_size, 2),
         )
+        trade.update(
+            {
+                "gross_pnl": round(gross_trade_pnl, 2),
+                "fees": round(trade_fees, 2),
+                "funding": round(funding_cost, 2),
+                "execution_cost": round(execution_cost, 2),
+                "holding_hours": round(hold_hours, 2),
+            }
+        )
+        trades.append(trade)
 
     t_loop = _time.time()
 
@@ -835,7 +921,12 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
         "initial_capital": initial_capital,
         "final_capital": round(capital, 2),
         "total_fees": round(total_fees, 2),
+        "total_execution_cost": round(total_execution_cost, 2),
+        "total_funding": round(total_funding, 2),
         "fee_pct": fee_pct,
+        "slippage_bps": slippage_bps,
+        "spread_bps": spread_bps,
+        "funding_bps_per_8h": funding_bps_per_8h,
         "trailing_sl_pct": trail_pct,
         "leverage": leverage,
         "side": side,
@@ -849,6 +940,11 @@ def run_backtest(df_raw, entry_conditions=None, exit_conditions=None, strategy_c
     if total_fees > 0:
         print(
             f"[BACKTEST] ⚠ TOTAL FEES CHARGED: ${total_fees:,.2f} (fee_pct={fee_pct}% per side). Set fee to 0 for CryptoBot comparison."
+        )
+    if total_execution_cost > 0 or total_funding != 0:
+        print(
+            "[BACKTEST] ⚠ COST DRAG: "
+            f"execution=${total_execution_cost:,.2f}, funding=${total_funding:,.2f}, fees=${total_fees:,.2f}"
         )
 
     # Build diagnostic info for 0-trade results

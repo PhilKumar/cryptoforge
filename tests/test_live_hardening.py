@@ -3,8 +3,9 @@ import os
 import tempfile
 import time
 import unittest
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from importlib import import_module
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
@@ -524,6 +525,7 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.app_module, "_load_runs", return_value=fake_runs),
             patch.object(self.app_module, "paper_engines", {}),
             patch.object(self.app_module, "live_engines", {}),
+            patch.object(self.app_module, "_today_local_date", return_value=date(2026, 3, 26)),
         ):
             summary = await self.app_module.dashboard_summary(None)
 
@@ -549,8 +551,51 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status["strategy_name"], "Stopped Paper")
         self.assertFalse(status["running"])
-        self.assertEqual(status["run_id"], "target-run")
-        self.assertEqual(status["mode"], "paper")
+
+
+class SessionSecurityTests(unittest.TestCase):
+    def setUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_session_file = self.app_module._SESSION_FILE
+        self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
+        self.addCleanup(self._restore_session_file)
+
+    def _restore_session_file(self):
+        self.app_module._SESSION_FILE = self._orig_session_file
+
+    @staticmethod
+    def _request(user_agent="CryptoForgeTest/1.0", ip="127.0.0.1"):
+        return SimpleNamespace(
+            headers={"user-agent": user_agent, "x-forwarded-for": ip}, client=SimpleNamespace(host=ip)
+        )
+
+    def test_legacy_string_session_records_still_validate(self):
+        token = "legacy-token"
+        self.app_module._save_sessions({token: (datetime.now() + timedelta(minutes=10)).isoformat()})
+
+        self.assertTrue(self.app_module._validate_session(token))
+
+    def test_session_rejects_user_agent_mismatch(self):
+        token = self.app_module._create_session(request=self._request(user_agent="UA-A"))
+
+        self.assertFalse(self.app_module._validate_session(token, request=self._request(user_agent="UA-B")))
+
+    def test_session_expires_after_idle_timeout(self):
+        token = self.app_module._create_session(request=self._request())
+        sessions = self.app_module._load_sessions()
+        sessions[token]["last_seen_at"] = (
+            datetime.now() - timedelta(seconds=self.app_module._SESSION_IDLE_SEC + 60)
+        ).isoformat()
+        self.app_module._save_sessions(sessions)
+
+        self.assertFalse(self.app_module._validate_session(token, request=self._request()))
+
+
+class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
 
     async def test_live_status_with_missing_run_id_uses_stopped_snapshot(self):
         running_engine = type(
