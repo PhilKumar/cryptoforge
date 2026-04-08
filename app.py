@@ -1390,7 +1390,7 @@ _CG_TO_DELTA = {
     "sol": "SOLUSDT",
     "xrp": "XRPUSDT",
     "doge": "DOGEUSDT",
-    "paxg": "PAXGUSDT",
+    "paxg": "PAXGUSD",
 }
 
 
@@ -1560,7 +1560,7 @@ async def get_single_ticker(symbol: str):
 
 
 # ── Delta Exchange symbols (have perp futures) ───────────────────
-_DELTA_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "PAXGUSDT"}
+_DELTA_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "PAXGUSD"}
 
 
 # ── Local Candle Cache ────────────────────────────────────────────
@@ -3113,7 +3113,7 @@ async def scalp_enter(request: Request):
     eng = _get_scalp_engine()
     symbol = str(body.get("symbol", "BTCUSDT") or "BTCUSDT").upper()
     if symbol in {"GOLD", "GOLDUSDT"}:
-        symbol = "PAXGUSDT"
+        symbol = "PAXGUSD"
     eng.watch_symbol(symbol)
     raw_side = body.get("side", "BUY").upper()
     side = "LONG" if raw_side == "BUY" else "SHORT"

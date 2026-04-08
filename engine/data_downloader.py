@@ -47,7 +47,7 @@ RESOLUTION_SECONDS = {
 }
 
 # Symbols available on Delta Exchange (rest go to Binance fallback)
-DELTA_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "PAXGUSDT"}
+DELTA_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "PAXGUSD"}
 
 
 class AsyncDataDownloader:

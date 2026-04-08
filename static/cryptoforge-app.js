@@ -204,7 +204,7 @@ const TOP_25 = [
   {symbol:"SOLUSDT",name:"Solana",ticker:"SOL",icon:"◎"},
   {symbol:"XRPUSDT",name:"Ripple",ticker:"XRP",icon:"✕"},
   {symbol:"DOGEUSDT",name:"Dogecoin",ticker:"DOGE",icon:"Ð"},
-  {symbol:"PAXGUSDT",name:"PAX Gold",ticker:"PAXG",icon:"🥇"},
+  {symbol:"PAXGUSD",name:"PAX Gold",ticker:"PAXG",icon:"🥇"},
 ];
 
 // ── Core Assets — BTC / ETH / SOL (primary three) ─────────
@@ -4610,7 +4610,7 @@ const _CF_SCALP_DEFAULTS = Object.freeze({
 
 function cfPrettyScalpSymbol(symbol) {
   var raw = String(symbol || '').toUpperCase();
-  if (raw === 'PAXGUSDT' || raw === 'GOLD' || raw === 'GOLDUSDT') return 'GOLD';
+  if (raw === 'PAXGUSD' || raw === 'GOLD' || raw === 'GOLDUSDT') return 'GOLD';
   return raw || '—';
 }
 
