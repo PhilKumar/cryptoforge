@@ -241,19 +241,27 @@
     <div id="dash-engines-list"></div>
   </div>
 
-  <div class="card">
-    <h3 style="margin-bottom: 12px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>Recent Runs</h3>
-    <div style="overflow-x:auto;">
-      <table class="trade-table" id="dash-runs-table" style="font-size:13px;">
-        <thead><tr>
-          <th>Mode</th><th>Name</th><th>Symbol</th><th class="num">Lev</th>
-          <th class="num">Trades</th><th class="num">P&amp;L</th><th>Date</th>
-        </tr></thead>
-        <tbody id="dash-runs-list">
-          <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No runs yet. Go to Builder to create one.</td></tr>
-        </tbody>
-      </table>
+  <div class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Recent Runs</h3>
+        <div class="table-meta">Latest backtest, paper, live, and scalp runs in the same ledger treatment used by Live completed trades.</div>
+      </div>
     </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="dash-runs-table" style="font-size:13px;">
+          <thead><tr>
+            <th>Mode</th><th>Name</th><th>Symbol</th><th class="num">Lev</th>
+            <th class="num">Trades</th><th class="num">P&amp;L</th><th>Date</th>
+          </tr></thead>
+          <tbody id="dash-runs-list">
+            <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No runs yet. Go to Builder to create one.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pagination-bar" id="dash-runs-pagination" style="display:none;"></div>
   </div>
 
   <div class="operator-lounge-grid">
@@ -461,24 +469,35 @@
     <button class="btn btn-outline btn-sm" data-cf-click="refreshMarket()">🔄 Refresh</button>
   </div>
   <!-- Top 25 Table -->
-  <div class="card" style="padding: 0; overflow: hidden; overflow-x: auto;">
-    <table class="trade-table" id="market-table" style="font-size: 14px;">
-      <thead>
-        <tr>
-          <th class="sortable-th" style="padding-left:16px;" data-cf-click="sortMarketTable('rank')"># <span class="sort-icon mkt-sort" id="mkts-rank">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortMarketTable('name')">Coin <span class="sort-icon mkt-sort" id="mkts-name">▲</span></th>
-          <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('price')">Price <span class="sort-icon mkt-sort" id="mkts-price">▲</span></th>
-          <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('change_24h')">24h % <span class="sort-icon mkt-sort" id="mkts-change_24h">▲</span></th>
-          <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('volume_24h')">Volume (24h) <span class="sort-icon mkt-sort" id="mkts-volume_24h">▲</span></th>
-          <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('market_cap')">Market Cap <span class="sort-icon mkt-sort" id="mkts-market_cap">▲</span></th>
-          <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('ath')">ATH <span class="sort-icon mkt-sort" id="mkts-ath">▲</span></th>
-          <th style="text-align:center;">Trade</th>
-        </tr>
-      </thead>
-      <tbody id="market-tbody">
-        <tr><td colspan="8" style="text-align:center; padding:40px; color:var(--muted);">Loading market data...</td></tr>
-      </tbody>
-    </table>
+  <div class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Market Board</h3>
+        <div class="table-meta">Top 25 crypto contracts ranked for fast scanning and direct handoff into Builder and Scalp.</div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="market-table" style="font-size: 14px;">
+          <thead>
+            <tr>
+              <th class="sortable-th" style="padding-left:16px;" data-cf-click="sortMarketTable('rank')"># <span class="sort-icon mkt-sort" id="mkts-rank">▲</span></th>
+              <th class="sortable-th" data-cf-click="sortMarketTable('name')">Coin <span class="sort-icon mkt-sort" id="mkts-name">▲</span></th>
+              <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('price')">Price <span class="sort-icon mkt-sort" id="mkts-price">▲</span></th>
+              <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('change_24h')">24h % <span class="sort-icon mkt-sort" id="mkts-change_24h">▲</span></th>
+              <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('volume_24h')">Volume (24h) <span class="sort-icon mkt-sort" id="mkts-volume_24h">▲</span></th>
+              <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('market_cap')">Market Cap <span class="sort-icon mkt-sort" id="mkts-market_cap">▲</span></th>
+              <th class="sortable-th" style="text-align:right;" data-cf-click="sortMarketTable('ath')">ATH <span class="sort-icon mkt-sort" id="mkts-ath">▲</span></th>
+              <th style="text-align:center;">Trade</th>
+            </tr>
+          </thead>
+          <tbody id="market-tbody">
+            <tr><td colspan="8" style="text-align:center; padding:40px; color:var(--muted);">Loading market data...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pagination-bar" id="market-table-pagination" style="display:none;"></div>
   </div>
 </div>
 
@@ -789,26 +808,35 @@
     <div id="compare-results"></div>
   </div>
 
-  <div class="card" style="padding:20px;">
-    <div style="overflow-x:auto;">
-      <table class="trade-table" id="runs-table">
-        <thead id="results-head"><tr>
-          <th style="width:30px;"><input type="checkbox" class="tbl-cb" data-cf-change="toggleAllRunsCb(this)"></th>
-          <th class="sortable-th" data-cf-click="sortRunsTable('mode')">Mode <span class="sort-icon rt-sort" id="rts-mode">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortRunsTable('run_name')">Name <span class="sort-icon rt-sort" id="rts-run_name">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortRunsTable('symbol')">Symbol <span class="sort-icon rt-sort" id="rts-symbol">▲</span></th>
-          <th class="sortable-th num" data-cf-click="sortRunsTable('leverage')">Lev <span class="sort-icon rt-sort" id="rts-leverage">▲</span></th>
-          <th class="sortable-th num" data-cf-click="sortRunsTable('trade_count')">Trades <span class="sort-icon rt-sort" id="rts-trade_count">▲</span></th>
-          <th class="sortable-th num" data-cf-click="sortRunsTable('win_rate')">Win Rate <span class="sort-icon rt-sort" id="rts-win_rate">▲</span></th>
-          <th class="sortable-th num" data-cf-click="sortRunsTable('total_pnl')">P&amp;L <span class="sort-icon rt-sort" id="rts-total_pnl">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortRunsTable('created_at')">Date <span class="sort-icon rt-sort" id="rts-created_at">▲</span></th>
-          <th>Actions</th>
-        </tr></thead>
-        <tbody id="results-list">
-          <tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No runs yet.</td></tr>
-        </tbody>
-      </table>
+  <div class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Run Archive</h3>
+        <div class="table-meta">Backtest, paper, live, and scalp runs presented in the same ledger treatment as the Live completed-trades table.</div>
+      </div>
     </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="runs-table">
+          <thead id="results-head"><tr>
+            <th style="width:30px;"><input type="checkbox" class="tbl-cb" data-cf-change="toggleAllRunsCb(this)"></th>
+            <th class="sortable-th" data-cf-click="sortRunsTable('mode')">Mode <span class="sort-icon rt-sort" id="rts-mode">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortRunsTable('run_name')">Name <span class="sort-icon rt-sort" id="rts-run_name">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortRunsTable('symbol')">Symbol <span class="sort-icon rt-sort" id="rts-symbol">▲</span></th>
+            <th class="sortable-th num" data-cf-click="sortRunsTable('leverage')">Lev <span class="sort-icon rt-sort" id="rts-leverage">▲</span></th>
+            <th class="sortable-th num" data-cf-click="sortRunsTable('trade_count')">Trades <span class="sort-icon rt-sort" id="rts-trade_count">▲</span></th>
+            <th class="sortable-th num" data-cf-click="sortRunsTable('win_rate')">Win Rate <span class="sort-icon rt-sort" id="rts-win_rate">▲</span></th>
+            <th class="sortable-th num" data-cf-click="sortRunsTable('total_pnl')">P&amp;L <span class="sort-icon rt-sort" id="rts-total_pnl">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortRunsTable('created_at')">Date <span class="sort-icon rt-sort" id="rts-created_at">▲</span></th>
+            <th>Actions</th>
+          </tr></thead>
+          <tbody id="results-list">
+            <tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No runs yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pagination-bar" id="runs-table-pagination" style="display:none;"></div>
   </div>
 
   <!-- Run detail modal is rendered as a fixed overlay; see #run-detail-modal below -->
@@ -874,48 +902,64 @@
   </div>
 
   <!-- Open Positions -->
-  <div class="card" style="margin-bottom:20px;">
-    <h3 style="margin-bottom:14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>Open Positions</h3>
-    <div style="overflow-x:auto;">
-      <table class="trade-table" id="pf-positions-table">
-        <thead><tr>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',0)">Symbol <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',1)">Side <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',2)">Size <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',3)">Entry Price <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',4)">Mark Price <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',5)">Leverage <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',6)">Unrealized P&amp;L <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',7)">Realized P&amp;L <span class="sort-icon pf-pos-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',8)">Liq. Price <span class="sort-icon pf-pos-sort">▲</span></th>
-        </tr></thead>
-        <tbody id="pf-positions-body">
-          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No open positions</td></tr>
-        </tbody>
-      </table>
+  <div class="card table-panel" style="margin-bottom:20px;">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Open Positions</h3>
+        <div class="table-meta">Broker positions displayed in the same ledger shell used by the Live completed-trades table.</div>
+      </div>
     </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="pf-positions-table">
+          <thead><tr>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',0)">Symbol <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',1)">Side <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',2)">Size <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',3)">Entry Price <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',4)">Mark Price <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',5)">Leverage <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',6)">Unrealized P&amp;L <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',7)">Realized P&amp;L <span class="sort-icon pf-pos-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-positions',8)">Liq. Price <span class="sort-icon pf-pos-sort">▲</span></th>
+          </tr></thead>
+          <tbody id="pf-positions-body">
+            <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No open positions</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pagination-bar" id="pf-positions-pagination" style="display:none;"></div>
   </div>
 
   <!-- Filled Orders (Recent) -->
-  <div class="card" style="margin-bottom:20px;">
-    <h3 style="margin-bottom:14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>Recent Filled Orders</h3>
-    <div style="overflow-x:auto;">
-      <table class="trade-table" id="pf-orders-table">
-        <thead><tr>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',0)">Time <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',1)">Symbol <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',2)">Side <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',3)">Size <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',4)">Fill Price <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',5)">Fees <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',6)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',7)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
-        </tr></thead>
-        <tbody id="pf-orders-body">
-          <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
-        </tbody>
-      </table>
+  <div class="card table-panel" style="margin-bottom:20px;">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Recent Filled Orders</h3>
+        <div class="table-meta">Recent broker fills presented with the same structured table shell as the Live completed-trades ledger.</div>
+      </div>
     </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="pf-orders-table">
+          <thead><tr>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',0)">Time <span class="sort-icon pf-ord-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',1)">Symbol <span class="sort-icon pf-ord-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',2)">Side <span class="sort-icon pf-ord-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',3)">Size <span class="sort-icon pf-ord-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',4)">Fill Price <span class="sort-icon pf-ord-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',5)">Fees <span class="sort-icon pf-ord-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',6)">Order Type <span class="sort-icon pf-ord-sort">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortGenericTable('pf-orders',7)">Status <span class="sort-icon pf-ord-sort">▲</span></th>
+          </tr></thead>
+          <tbody id="pf-orders-body">
+            <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pagination-bar" id="pf-orders-pagination" style="display:none;"></div>
   </div>
 
   <!-- Paper Trading Performance -->
@@ -958,17 +1002,25 @@
   </div>
 
   <!-- Paper Trading Runs -->
-  <div class="card" style="margin-top:20px;">
-    <h3 style="margin-bottom:14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>Paper Trading Runs</h3>
-    <div style="overflow-x:auto;">
-      <table class="trade-table" id="portfolio-paper-runs-table" style="font-size:13px;">
-        <thead><tr>
-          <th>Name</th><th>Symbol</th><th class="num">Lev</th><th class="num">Trades</th>
-          <th class="num">Win Rate</th><th class="num">P&amp;L</th><th>Date</th>
-        </tr></thead>
-        <tbody id="portfolio-paper-runs"></tbody>
-      </table>
+  <div class="card table-panel" style="margin-top:20px;">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Paper Trading Runs</h3>
+        <div class="table-meta">Paper-run archive using the same structured ledger shell as the Live completed-trades table.</div>
+      </div>
     </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="portfolio-paper-runs-table" style="font-size:13px;">
+          <thead><tr>
+            <th>Name</th><th>Symbol</th><th class="num">Lev</th><th class="num">Trades</th>
+            <th class="num">Win Rate</th><th class="num">P&amp;L</th><th>Date</th>
+          </tr></thead>
+          <tbody id="portfolio-paper-runs"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pagination-bar" id="portfolio-paper-runs-pagination" style="display:none;"></div>
     <div id="portfolio-paper-runs-empty" style="text-align:center; padding:20px; color:var(--muted);">No paper trading runs yet. Start paper trading from the Live page.</div>
   </div>
 </div>
@@ -1042,22 +1094,30 @@
   </div>
 
   <!-- Active Positions — full width below status -->
-  <div class="card" style="padding:20px;margin-bottom:16px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-      <h3 style="margin:0;font-size:15px;font-weight:700;">Active Positions</h3>
-      <span style="font-size:12px;color:var(--muted);" id="cf-scalp-active-count">0 open</span>
+  <div class="card table-panel" style="margin-bottom:16px;">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Active Positions</h3>
+        <div class="table-meta">Open scalp positions rendered in the same structured ledger shell as the Live completed-trades table.</div>
+      </div>
+      <div class="table-actions">
+        <span class="table-meta" id="cf-scalp-active-count">0 open</span>
+      </div>
     </div>
-    <div style="overflow-x:auto;">
-      <table class="trade-table" id="cf-scalp-active-table">
-        <thead><tr>
-          <th>Symbol</th><th>Side</th><th>Qty (USDT)</th><th>Entry</th>
-          <th>Mark</th><th>Unreal. P&L</th><th>TP $</th><th>SL $</th><th>Action</th>
-        </tr></thead>
-        <tbody id="cf-scalp-active-body">
-          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
-        </tbody>
-      </table>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="cf-scalp-active-table">
+          <thead><tr>
+            <th>Symbol</th><th>Side</th><th>Qty (USDT)</th><th>Entry</th>
+            <th>Mark</th><th>Unreal. P&amp;L</th><th>TP $</th><th>SL $</th><th>Action</th>
+          </tr></thead>
+          <tbody id="cf-scalp-active-body">
+            <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
+    <div class="pagination-bar" id="cf-scalp-active-pagination" style="display:none;"></div>
   </div>
 
   <!-- Entry Form (left) + Event Log (right) -->
@@ -1159,31 +1219,34 @@
   </div><!-- /entry+log grid -->
 
   <!-- Trade History — full width at bottom -->
-  <div class="card" style="padding:20px;">
+  <div class="card table-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
         <h3 class="table-title">Trade History</h3>
         <div class="table-meta">Closed scalp trades with gross P&amp;L, fees, and net result.</div>
       </div>
     </div>
-    <div style="overflow-x:auto;">
-      <table class="trade-table" id="cf-scalp-history-table">
-        <thead><tr>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('exit_time')">Closed At <span class="sort-icon sh-sort" id="shs-exit_time">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('symbol')">Symbol <span class="sort-icon sh-sort" id="shs-symbol">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('side')">Side <span class="sort-icon sh-sort" id="shs-side">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('entry_price')">Entry <span class="sort-icon sh-sort" id="shs-entry_price">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('exit_price')">Exit <span class="sort-icon sh-sort" id="shs-exit_price">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('fees')">Fees <span class="sort-icon sh-sort" id="shs-fees">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('pnl')">P&amp;L <span class="sort-icon sh-sort" id="shs-pnl">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('net_pnl')">Net P&amp;L <span class="sort-icon sh-sort" id="shs-net_pnl">▲</span></th>
-          <th class="sortable-th" data-cf-click="sortScalpHistory('exit_reason')">Reason <span class="sort-icon sh-sort" id="shs-exit_reason">▲</span></th>
-        </tr></thead>
-        <tbody id="cf-scalp-history-body">
-          <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>
-        </tbody>
-      </table>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table" id="cf-scalp-history-table">
+          <thead><tr>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('exit_time')">Closed At <span class="sort-icon sh-sort" id="shs-exit_time">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('symbol')">Symbol <span class="sort-icon sh-sort" id="shs-symbol">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('side')">Side <span class="sort-icon sh-sort" id="shs-side">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('entry_price')">Entry <span class="sort-icon sh-sort" id="shs-entry_price">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('exit_price')">Exit <span class="sort-icon sh-sort" id="shs-exit_price">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('fees')">Fees <span class="sort-icon sh-sort" id="shs-fees">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('pnl')">P&amp;L <span class="sort-icon sh-sort" id="shs-pnl">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('net_pnl')">Net P&amp;L <span class="sort-icon sh-sort" id="shs-net_pnl">▲</span></th>
+            <th class="sortable-th" data-cf-click="sortScalpHistory('exit_reason')">Reason <span class="sort-icon sh-sort" id="shs-exit_reason">▲</span></th>
+          </tr></thead>
+          <tbody id="cf-scalp-history-body">
+            <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
+    <div class="pagination-bar" id="cf-scalp-history-pagination" style="display:none;"></div>
   </div>
 
 </div><!-- /scalp-page -->
