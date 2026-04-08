@@ -3111,17 +3111,29 @@ async def scalp_enter(request: Request):
     )
     body = await request.json()
     eng = _get_scalp_engine()
-    symbol = body.get("symbol", "BTCUSDT")
+    symbol = str(body.get("symbol", "BTCUSDT") or "BTCUSDT").upper()
+    if symbol in {"GOLD", "GOLDUSDT"}:
+        symbol = "PAXGUSDT"
     eng.watch_symbol(symbol)
     raw_side = body.get("side", "BUY").upper()
     side = "LONG" if raw_side == "BUY" else "SHORT"
-    qty_usdt = float(body.get("qty_usdt", 1000))
     leverage = int(body.get("leverage", 50))
     mode = body.get("mode", "paper")
-    guardrail_price = float(body.get("guardrail_price", body.get("sl_price", 0)) or 0)
+
+    qty_mode = "base" if str(body.get("qty_mode", "usdt") or "usdt").lower() in {"base", "qty", "coin"} else "usdt"
+    default_qty = 0.0015 if qty_mode == "base" else 1000
+    qty_value = float(body.get("qty_value", body.get("qty_base", body.get("qty_usdt", default_qty))) or 0)
+    entry_stop_price = float(body.get("entry_stop_price", body.get("guardrail_price", 0)) or 0)
+    entry_limit_price = float(body.get("entry_limit_price", 0) or 0)
+    target_price = float(body.get("target_price", body.get("tp_price", 0)) or 0)
+    sl_price = float(body.get("sl_price", 0) or 0)
+    legacy_size = int(body.get("size", 0) or 0)
+    if legacy_size <= 0 and qty_mode != "base" and qty_value > 0:
+        legacy_size = int(qty_value * leverage)
 
     entry_controls = eng.get_status(symbol).get("entry_controls", {})
-    if guardrail_price <= 0:
+    pending_requested = entry_stop_price > 0 or entry_limit_price > 0
+    if not pending_requested:
         allowed = entry_controls.get("paper_allowed") if mode == "paper" else entry_controls.get("live_allowed")
         if not allowed:
             message = entry_controls.get("reason") or "Awaiting a fresh market price before entry."
@@ -3132,21 +3144,23 @@ async def scalp_enter(request: Request):
             )
             return {"status": "error", "message": message, "entry_controls": entry_controls}
 
-    # Convert USDT qty to contract size (1 contract = 1 USD on Delta)
-    size = int(qty_usdt * leverage)
-
     try:
         result = await eng.enter_trade(
             symbol=symbol,
             side=side,
-            size=size,
+            size=legacy_size,
             leverage=leverage,
+            qty_mode=qty_mode,
+            qty_value=qty_value,
+            target_price=target_price,
+            sl_price=sl_price,
             target_pct=float(body.get("take_profit_pct", 0)),
             sl_pct=float(body.get("stop_loss_pct", 0)),
             target_usd=float(body.get("tp_usd", 0)),
             sl_usd=float(body.get("sl_usd", 0)),
-            sl_price=float(body.get("sl_price", 0)),
-            guardrail_price=guardrail_price,
+            guardrail_price=entry_stop_price,
+            entry_limit_price=entry_limit_price,
+            entry_stop_price=entry_stop_price,
             mode=mode,
         )
         if result.get("status") == "error":
@@ -3155,18 +3169,29 @@ async def scalp_enter(request: Request):
                 f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {result.get('message', 'unknown')}",
             )
         elif result.get("status") == "ok":
-            price = result.get("trade", {}).get("entry_price", 0)
+            trade = result.get("trade", {})
+            qty_text = (
+                f"{trade.get('base_qty', 0):,.6f} qty"
+                if trade.get("qty_mode") == "base"
+                else f"${trade.get('qty_usdt', 0):,.2f} margin"
+            )
+            price = trade.get("entry_price", 0)
             alerter.alert(
                 "Scalp Entry",
-                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nSize: {size} contracts\nLeverage: {leverage}x\nEntry: ${price:,.2f}",
+                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nExposure: {qty_text}\nLeverage: {leverage}x\nEntry: ${price:,.2f}",
                 level="info",
             )
         elif result.get("status") == "pending":
             pending = result.get("pending_entry", {})
-            guardrail = pending.get("guardrail_price", 0)
+            trigger = pending.get("trigger_summary") or "Pending price trigger"
+            qty_text = (
+                f"{pending.get('base_qty', 0):,.6f} qty"
+                if pending.get("qty_mode") == "base"
+                else f"${pending.get('qty_usdt', 0):,.2f} margin"
+            )
             alerter.alert(
-                "Scalp Guardrail Armed",
-                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nSize: {size} contracts\nLeverage: {leverage}x\nGuardrail: ${guardrail:,.2f}",
+                "Scalp Entry Armed",
+                f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nExposure: {qty_text}\nLeverage: {leverage}x\nTrigger: {trigger}",
                 level="info",
             )
         return result
@@ -3219,6 +3244,27 @@ async def update_scalp_targets(trade_id: int, request: Request):
     result = await eng.update_trade_targets(trade_id, **kwargs)
     if result.get("status") == "error":
         raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
+@app.post("/api/scalp/trades/{trade_id}/add")
+async def add_scalp_quantity(trade_id: int, request: Request):
+    check_rate_limit(
+        "scalp_add", max_calls=8, window_sec=15, client_ip=request.client.host if request.client else "global"
+    )
+    body = await request.json()
+    qty_mode = "base" if str(body.get("qty_mode", "base") or "base").lower() in {"base", "qty", "coin"} else "usdt"
+    qty_value = float(body.get("qty_value", body.get("qty_base", body.get("qty_usdt", 0))) or 0)
+    eng = _get_scalp_engine()
+    result = await eng.add_to_trade(trade_id, qty_mode=qty_mode, qty_value=qty_value)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result["message"])
+    trade = result.get("trade", {})
+    alerter.alert(
+        "Scalp Add Quantity",
+        f"Trade ID: {trade_id}\nSymbol: {trade.get('symbol', '—')}\nMode: {trade.get('mode', 'paper')}\nAdded: {qty_value} ({qty_mode})\nNew exposure: ${trade.get('qty_usdt', 0):,.2f} margin",
+        level="info",
+    )
     return result
 
 

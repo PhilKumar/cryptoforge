@@ -730,6 +730,59 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trade.guardrail_price, 105.0)
         self.assertGreaterEqual(trade.entry_price, 105.0)
 
+    async def test_scalp_limit_entry_arms_pending_base_quantity(self):
+        delta = FakeScalpDelta(ticker_prices=[100.0])
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            leverage=10,
+            qty_mode="base",
+            qty_value=0.0015,
+            entry_limit_price=99.0,
+            target_price=102.0,
+            sl_price=98.0,
+            mode="paper",
+        )
+
+        self.assertEqual(entered["status"], "pending")
+        pending = entered["pending_entry"]
+        self.assertEqual(pending["qty_mode"], "base")
+        self.assertAlmostEqual(pending["base_qty"], 0.0015)
+        self.assertEqual(pending["entry_limit_price"], 99.0)
+        self.assertEqual(pending["entry_stop_price"], 0.0)
+
+    async def test_scalp_add_to_trade_scales_position_from_base_quantity(self):
+        delta = FakeScalpDelta(ticker_prices=[100.0, 100.0])
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine._record_price("BTCUSD", 100.0, source="ws")
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            leverage=10,
+            qty_mode="base",
+            qty_value=0.0015,
+            target_usd=10,
+            sl_usd=5,
+            mode="paper",
+        )
+        trade_id = entered["trade_id"]
+        trade = engine.open_trades[trade_id]
+        initial_size = trade.size
+        self.assertGreater(initial_size, 0)
+
+        scaled = await engine.add_to_trade(trade_id, qty_mode="base", qty_value=0.0005)
+
+        self.assertEqual(scaled["status"], "ok")
+        updated = engine.open_trades[trade_id]
+        self.assertGreater(updated.size, initial_size)
+        self.assertGreater(updated.base_qty, 0.0015)
+        self.assertEqual(updated.entry_price, 100.0)
+
 
 class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

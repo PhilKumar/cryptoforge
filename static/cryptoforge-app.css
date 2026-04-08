@@ -2583,3 +2583,262 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+
+/* ── CryptoForge Production Table / Scalp Overrides ───────────────── */
+.table-panel {
+  padding: 20px 26px 22px;
+  border-radius: 24px;
+}
+.table-toolbar {
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+.table-title {
+  font-size: 16px;
+  letter-spacing: 0.01em;
+}
+.table-meta {
+  font-size: 11.5px;
+}
+.table-surface {
+  border-radius: 20px;
+  border: 1px solid rgba(101, 122, 171, 0.22);
+  background: linear-gradient(180deg, rgba(15,20,36,0.98), rgba(8,12,24,1));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 22px 42px rgba(2,6,23,0.22);
+}
+.trade-table {
+  border-radius: 20px;
+  border-color: rgba(101, 122, 171, 0.24);
+}
+.trade-table th {
+  padding: 13px 14px;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  background: linear-gradient(180deg, rgba(92,104,138,0.58) 0%, rgba(44,54,81,0.98) 36%, rgba(17,24,44,1) 100%);
+}
+.trade-table td {
+  padding: 14px 14px;
+}
+.trade-table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.trade-table tbody tr:hover td {
+  background: linear-gradient(180deg, rgba(34,50,88,0.72), rgba(16,23,42,0.99));
+}
+.pagination-bar {
+  font-size: 12px;
+  color: var(--muted);
+}
+.table-input-sm {
+  width: 96px;
+  min-height: 34px;
+}
+.table-edit-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+.table-inline-actions-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.cf-scalp-status-bar {
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(380px, 2fr);
+  gap: 18px;
+  align-items: center;
+}
+.cf-scalp-status-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.cf-scalp-status-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: center;
+}
+.cf-scalp-status-meta-block {
+  min-width: 0;
+}
+.cf-status-kicker {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cf-status-main {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: 'IBM Plex Mono', monospace;
+}
+.cf-scalp-status-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cf-scalp-pending-wrap {
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+.cf-scalp-pending-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.cf-scalp-pending-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.cf-scalp-pending-card {
+  padding: 12px 14px;
+  border: 1px solid rgba(251,191,36,0.22);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(251,191,36,0.08) 0%, rgba(15,23,42,0.18) 100%);
+}
+.cf-scalp-pending-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.cf-scalp-pending-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.cf-scalp-pending-meta span {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cf-scalp-workbench {
+  display: grid;
+  grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+.cf-scalp-form-card {
+  padding: 20px;
+}
+.cf-scalp-form-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.cf-scalp-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.cf-scalp-field {
+  min-width: 0;
+}
+.cf-scalp-field-full {
+  grid-column: span 2;
+}
+.cf-scalp-field label,
+.cf-scalp-label-inline {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cf-scalp-label-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cf-scalp-input {
+  width: 100%;
+  padding: 9px 10px;
+  background: var(--input-bg, rgba(255,255,255,0.05));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: 'Outfit', sans-serif;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.cf-scalp-input-grow {
+  flex: 1;
+}
+.cf-scalp-help {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.cf-scalp-type-select {
+  display: inline-block;
+  width: auto;
+  min-width: 46px;
+  padding: 2px 6px 2px 8px;
+  font-size: 12px;
+  min-height: 0;
+  border-radius: 7px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--accent);
+  font-weight: 600;
+}
+.cf-scalp-qty-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.cf-scalp-live-safety {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(248,113,113,0.24);
+  background: rgba(248,113,113,0.08);
+}
+.cf-scalp-actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 1180px) {
+  .cf-scalp-status-bar,
+  .cf-scalp-workbench {
+    grid-template-columns: 1fr;
+  }
+  .cf-scalp-status-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .cf-scalp-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .cf-scalp-field-full {
+    grid-column: auto;
+  }
+  .cf-scalp-actions-grid {
+    grid-template-columns: 1fr;
+  }
+}

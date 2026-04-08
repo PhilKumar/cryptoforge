@@ -48,6 +48,10 @@ class ScalpTrade:
         size: int,  # contract units
         entry_price: float,
         leverage: int = 10,
+        qty_mode: str = "usdt",
+        qty_value: float = 0.0,
+        base_qty: float = 0.0,
+        margin_usd: float = 0.0,
         # Exit rules (at least one should be set)
         target_price: float = 0.0,  # absolute price to take profit
         sl_price: float = 0.0,  # absolute SL price
@@ -55,6 +59,8 @@ class ScalpTrade:
         sl_pct: float = 0.0,  # leveraged % loss SL
         target_usd: float = 0.0,  # fixed $ profit target
         sl_usd: float = 0.0,  # fixed $ loss SL
+        entry_limit_price: float = 0.0,
+        entry_stop_price: float = 0.0,
         order_id: str = "",
         entry_time: Optional[datetime] = None,
         mode: str = "live",
@@ -68,10 +74,16 @@ class ScalpTrade:
         self.entry_price = entry_price
         self.current_price = entry_price
         self.leverage = leverage
+        self.qty_mode = str(qty_mode or "usdt").lower()
+        self.qty_value = _coerce_float(qty_value, 0.0)
+        self.base_qty = _coerce_float(base_qty, 0.0)
+        self.margin_usd = _coerce_float(margin_usd, 0.0)
         self.order_id = order_id
         self.entry_time = entry_time or _now_utc()
         self.mode = mode
-        self.guardrail_price = guardrail_price
+        self.entry_limit_price = _coerce_float(entry_limit_price, 0.0)
+        self.entry_stop_price = _coerce_float(entry_stop_price or guardrail_price, 0.0)
+        self.guardrail_price = self.entry_stop_price
         self._exit_guard_until = self.entry_time + timedelta(seconds=2 if mode == "live" else 1)
         self._prefer_fresh_rest_mark_until = self.entry_time + timedelta(seconds=5 if mode == "live" else 2)
         self._post_entry_price_ready = False
@@ -96,6 +108,7 @@ class ScalpTrade:
         self.exit_order_id: str = ""
         self.pnl: float = 0.0
         self.status: str = "open"
+        self._refresh_derived_quantities()
 
     def _apply_percentage_targets(self) -> None:
         if self.entry_price <= 0:
@@ -109,11 +122,22 @@ class ScalpTrade:
             mult = -1 if self.side == "LONG" else 1
             self.sl_price = round(self.entry_price * (1 + mult * price_move_pct / 100), 6)
 
+    def _refresh_derived_quantities(self) -> None:
+        self.margin_usd = round(self.size / max(self.leverage, 1), 4)
+        if self.entry_price > 0:
+            self.base_qty = round(self.size / self.entry_price, 8)
+        if self.qty_mode == "base":
+            if self.qty_value <= 0:
+                self.qty_value = self.base_qty
+        elif self.qty_value <= 0:
+            self.qty_value = self.margin_usd
+
     def prime_entry_price(self, price: float) -> bool:
         price = _coerce_float(price, 0.0)
         if price <= 0 or self.entry_price > 0:
             return False
         self.entry_price = price
+        self._refresh_derived_quantities()
         self._apply_percentage_targets()
         return True
 
@@ -181,12 +205,18 @@ class ScalpTrade:
             "product_id": self.product_id,
             "size": self.size,
             "leverage": self.leverage,
+            "qty_mode": self.qty_mode,
+            "qty_value": self.qty_value,
+            "base_qty": self.base_qty,
+            "margin_usd": self.margin_usd,
             "entry_price": self.entry_price,
             "current_price": self.current_price,
             "target_price": self.target_price,
             "sl_price": self.sl_price,
             "target_usd": self.target_usd,
             "sl_usd": self.sl_usd,
+            "entry_limit_price": self.entry_limit_price,
+            "entry_stop_price": self.entry_stop_price,
             "order_id": self.order_id,
             "guardrail_price": self.guardrail_price,
             "entry_time": str(self.entry_time),
@@ -198,7 +228,7 @@ class ScalpTrade:
             "fees": fees,
             "net_pnl": round(gross_pnl - fees, 2),
             "unrealized_pnl": gross_pnl,
-            "qty_usdt": round(self.size / max(self.leverage, 1), 2),
+            "qty_usdt": round(self.margin_usd, 4),
             "mark_price": self.current_price,
             "price_source": self.last_price_source,
             "price_updated_at": str(self.last_price_update) if self.last_price_update else None,
@@ -211,7 +241,7 @@ class ScalpTrade:
 
 
 class PendingScalpEntry:
-    """Represents an armed scalp entry waiting for the guardrail trigger."""
+    """Represents an armed scalp entry waiting for a price trigger."""
 
     def __init__(
         self,
@@ -220,7 +250,13 @@ class PendingScalpEntry:
         side: str,
         size: int,
         leverage: int,
-        guardrail_price: float,
+        qty_mode: str = "usdt",
+        qty_value: float = 0.0,
+        base_qty: float = 0.0,
+        margin_usd: float = 0.0,
+        entry_limit_price: float = 0.0,
+        entry_stop_price: float = 0.0,
+        guardrail_price: float = 0.0,
         target_price: float = 0.0,
         sl_price: float = 0.0,
         target_pct: float = 0.0,
@@ -234,7 +270,13 @@ class PendingScalpEntry:
         self.side = side
         self.size = size
         self.leverage = leverage
-        self.guardrail_price = guardrail_price
+        self.qty_mode = str(qty_mode or "usdt").lower()
+        self.qty_value = _coerce_float(qty_value, 0.0)
+        self.base_qty = _coerce_float(base_qty, 0.0)
+        self.margin_usd = _coerce_float(margin_usd, 0.0)
+        self.entry_limit_price = _coerce_float(entry_limit_price, 0.0)
+        self.entry_stop_price = _coerce_float(entry_stop_price or guardrail_price, 0.0)
+        self.guardrail_price = self.entry_stop_price
         self.target_price = target_price
         self.sl_price = sl_price
         self.target_pct = target_pct
@@ -245,11 +287,23 @@ class PendingScalpEntry:
         self.created_at = _now_utc()
 
     def should_trigger(self, price: float) -> bool:
-        if price <= 0 or self.guardrail_price <= 0:
+        if price <= 0:
             return False
-        if self.side == "LONG":
-            return price >= self.guardrail_price
-        return price <= self.guardrail_price
+        stop_hit = False
+        limit_hit = False
+        if self.entry_stop_price > 0:
+            stop_hit = price >= self.entry_stop_price if self.side == "LONG" else price <= self.entry_stop_price
+        if self.entry_limit_price > 0:
+            limit_hit = price <= self.entry_limit_price if self.side == "LONG" else price >= self.entry_limit_price
+        return stop_hit or limit_hit
+
+    def trigger_summary(self) -> str:
+        bits = []
+        if self.entry_stop_price > 0:
+            bits.append(("Stop ≥ " if self.side == "LONG" else "Stop ≤ ") + f"${self.entry_stop_price:,.4f}")
+        if self.entry_limit_price > 0:
+            bits.append(("Limit ≤ " if self.side == "LONG" else "Limit ≥ ") + f"${self.entry_limit_price:,.4f}")
+        return " • ".join(bits) or "Market"
 
     def to_dict(self) -> dict:
         return {
@@ -258,6 +312,12 @@ class PendingScalpEntry:
             "side": self.side,
             "size": self.size,
             "leverage": self.leverage,
+            "qty_mode": self.qty_mode,
+            "qty_value": self.qty_value,
+            "base_qty": self.base_qty,
+            "margin_usd": self.margin_usd or round(self.size / max(self.leverage, 1), 4),
+            "entry_limit_price": self.entry_limit_price,
+            "entry_stop_price": self.entry_stop_price,
             "guardrail_price": self.guardrail_price,
             "target_price": self.target_price,
             "sl_price": self.sl_price,
@@ -266,7 +326,8 @@ class PendingScalpEntry:
             "mode": self.mode,
             "status": "pending",
             "created_at": str(self.created_at),
-            "qty_usdt": round(self.size / max(self.leverage, 1), 2),
+            "qty_usdt": self.margin_usd or round(self.size / max(self.leverage, 1), 4),
+            "trigger_summary": self.trigger_summary(),
         }
 
 
@@ -510,6 +571,18 @@ class ScalpEngine:
             return price
         return _coerce_float(self._last_prices.get(canonical), 0.0)
 
+    def _resolve_contract_size(self, *, qty_mode: str, qty_value: float, price: float, leverage: int) -> int:
+        mode = str(qty_mode or "usdt").lower()
+        value = _coerce_float(qty_value, 0.0)
+        lev = max(int(leverage or 1), 1)
+        if value <= 0:
+            return 0
+        if mode == "base":
+            if price <= 0:
+                return 0
+            return max(1, int(round(value * price)))
+        return max(1, int(round(value * lev)))
+
     async def _refresh_watch_prices(self, symbols: set[str]) -> None:
         now = _now_utc()
         for canonical in sorted({self._canonical_symbol(sym) for sym in symbols if sym}):
@@ -600,7 +673,7 @@ class ScalpEngine:
         self,
         symbol: str,
         side: str,  # LONG or SHORT
-        size: int,  # contracts
+        size: int = 0,  # contract units
         leverage: int = 10,
         target_price: float = 0.0,
         sl_price: float = 0.0,
@@ -610,11 +683,22 @@ class ScalpEngine:
         sl_usd: float = 0.0,
         guardrail_price: float = 0.0,
         mode: str = "live",
+        qty_mode: str = "usdt",
+        qty_value: float = 0.0,
+        entry_limit_price: float = 0.0,
+        entry_stop_price: float = 0.0,
     ) -> Dict[str, Any]:
-        """Place immediately, or arm a pending guardrail-triggered entry."""
+        """Place immediately, or arm a pending stop/limit-triggered scalp entry."""
 
+        qty_mode = "base" if str(qty_mode or "").lower() in {"base", "qty", "coin"} else "usdt"
+        entry_stop_price = _coerce_float(entry_stop_price or guardrail_price, 0.0)
+        entry_limit_price = _coerce_float(entry_limit_price, 0.0)
+        qty_value = _coerce_float(qty_value, 0.0)
         market_price = self._cached_price(symbol)
-        if market_price <= 0 and (mode != "paper" or guardrail_price > 0):
+        needs_price = (
+            qty_mode == "base" or mode != "paper" or entry_stop_price > 0 or entry_limit_price > 0 or size <= 0
+        )
+        if market_price <= 0 and needs_price:
             try:
                 ticker = await asyncio.to_thread(self.delta.get_ticker, symbol)
                 market_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
@@ -624,22 +708,59 @@ class ScalpEngine:
             except Exception:
                 pass
 
-        if guardrail_price > 0:
+        if qty_value <= 0 and size > 0 and qty_mode != "base":
+            qty_value = round(size / max(leverage, 1), 4)
+
+        has_price_trigger = entry_stop_price > 0 or entry_limit_price > 0
+        if has_price_trigger:
             should_enter_now = False
             if market_price > 0:
                 if side == "LONG":
-                    should_enter_now = market_price >= guardrail_price
+                    if entry_stop_price > 0 and market_price >= entry_stop_price:
+                        should_enter_now = True
+                    if entry_limit_price > 0 and market_price <= entry_limit_price:
+                        should_enter_now = True
                 else:
-                    should_enter_now = market_price <= guardrail_price
+                    if entry_stop_price > 0 and market_price <= entry_stop_price:
+                        should_enter_now = True
+                    if entry_limit_price > 0 and market_price >= entry_limit_price:
+                        should_enter_now = True
             if not should_enter_now:
                 self._trade_counter += 1
+                size_estimate = size
+                if size_estimate <= 0 and market_price > 0:
+                    size_estimate = self._resolve_contract_size(
+                        qty_mode=qty_mode,
+                        qty_value=qty_value,
+                        price=market_price,
+                        leverage=leverage,
+                    )
+                margin_usd = (
+                    qty_value
+                    if qty_mode != "base"
+                    else round(size_estimate / max(leverage, 1), 4)
+                    if size_estimate > 0
+                    else 0.0
+                )
+                base_qty = (
+                    qty_value
+                    if qty_mode == "base"
+                    else round(size_estimate / market_price, 8)
+                    if size_estimate > 0 and market_price > 0
+                    else 0.0
+                )
                 pending = PendingScalpEntry(
                     entry_id=self._trade_counter,
                     symbol=symbol,
                     side=side,
-                    size=size,
+                    size=size_estimate,
                     leverage=leverage,
-                    guardrail_price=guardrail_price,
+                    qty_mode=qty_mode,
+                    qty_value=qty_value,
+                    base_qty=base_qty,
+                    margin_usd=margin_usd,
+                    entry_limit_price=entry_limit_price,
+                    entry_stop_price=entry_stop_price,
                     target_price=target_price,
                     sl_price=sl_price,
                     target_pct=target_pct,
@@ -649,11 +770,7 @@ class ScalpEngine:
                     mode=mode,
                 )
                 self.pending_entries[pending.entry_id] = pending
-                trigger_text = ">=" if side == "LONG" else "<="
-                self._log(
-                    "info",
-                    f"🛡 Guardrail armed for {side} {symbol}: waiting for price {trigger_text} ${guardrail_price:,.4f}",
-                )
+                self._log("info", f"⏳ Entry armed for {side} {symbol}: {pending.trigger_summary()}")
                 self._schedule_update(force=True)
                 if not self._running:
                     self.start()
@@ -665,19 +782,30 @@ class ScalpEngine:
                 return {
                     "status": "pending",
                     "entry_id": pending.entry_id,
-                    "message": f"Waiting for guardrail price ${guardrail_price:,.4f}",
+                    "message": pending.trigger_summary(),
                     "pending_entry": pending.to_dict(),
                 }
             self._log(
-                "info",
-                f"🛡 Guardrail already satisfied for {side} {symbol} at ${market_price:,.4f} — entering now.",
+                "info", f"⏩ Entry trigger already satisfied for {side} {symbol} @ ${market_price:,.4f} — entering now."
             )
+
+        if size <= 0:
+            size = self._resolve_contract_size(
+                qty_mode=qty_mode, qty_value=qty_value, price=market_price, leverage=leverage
+            )
+        if size <= 0:
+            return {
+                "status": "error",
+                "message": f"Unable to resolve order size for {symbol}. Wait for a live price and try again.",
+            }
 
         return await self._open_trade(
             symbol=symbol,
             side=side,
             size=size,
             leverage=leverage,
+            qty_mode=qty_mode,
+            qty_value=qty_value,
             target_price=target_price,
             sl_price=sl_price,
             target_pct=target_pct,
@@ -685,7 +813,9 @@ class ScalpEngine:
             target_usd=target_usd,
             sl_usd=sl_usd,
             mode=mode,
-            guardrail_price=guardrail_price,
+            guardrail_price=entry_stop_price,
+            entry_limit_price=entry_limit_price,
+            entry_stop_price=entry_stop_price,
             market_price=market_price,
         )
 
@@ -696,6 +826,8 @@ class ScalpEngine:
         side: str,
         size: int,
         leverage: int,
+        qty_mode: str = "usdt",
+        qty_value: float = 0.0,
         target_price: float = 0.0,
         sl_price: float = 0.0,
         target_pct: float = 0.0,
@@ -704,6 +836,8 @@ class ScalpEngine:
         sl_usd: float = 0.0,
         mode: str = "live",
         guardrail_price: float = 0.0,
+        entry_limit_price: float = 0.0,
+        entry_stop_price: float = 0.0,
         market_price: float = 0.0,
     ) -> Dict[str, Any]:
         """Place a broker order (or simulate in paper mode) and register the scalp trade."""
@@ -727,6 +861,13 @@ class ScalpEngine:
                     self._record_price(symbol, entry_price, source="rest_quote")
             except Exception:
                 pass
+
+        if size <= 0:
+            size = self._resolve_contract_size(
+                qty_mode=qty_mode, qty_value=qty_value, price=entry_price, leverage=leverage
+            )
+        if size <= 0:
+            return {"status": "error", "message": f"Unable to resolve order size for {symbol}"}
 
         order_id = ""
         result: Dict[str, Any] = {}
@@ -784,12 +925,18 @@ class ScalpEngine:
             size=size,
             entry_price=entry_price,
             leverage=leverage,
+            qty_mode=qty_mode,
+            qty_value=qty_value,
+            base_qty=qty_value if qty_mode == "base" else 0.0,
+            margin_usd=qty_value if qty_mode != "base" and qty_value > 0 else round(size / max(leverage, 1), 4),
             target_price=target_price,
             sl_price=sl_price,
             target_pct=target_pct,
             sl_pct=sl_pct,
             target_usd=target_usd,
             sl_usd=sl_usd,
+            entry_limit_price=entry_limit_price,
+            entry_stop_price=entry_stop_price,
             order_id=order_id,
             mode=mode,
             guardrail_price=guardrail_price,
@@ -813,13 +960,19 @@ class ScalpEngine:
                 f" verify={_coerce_float(result.get('broker_latency_ms'), 0.0):,.1f}ms"
                 f" ack={_coerce_float(result.get('order_ack_ms'), 0.0):,.1f}ms"
             )
+        trigger_bits = []
+        if entry_stop_price > 0:
+            trigger_bits.append(f"stop=${entry_stop_price:,.4f}")
+        if entry_limit_price > 0:
+            trigger_bits.append(f"limit=${entry_limit_price:,.4f}")
+        trigger_text = (" " + " ".join(trigger_bits)) if trigger_bits else ""
         self._log(
             "entry",
             f"{mode_label}✅ SCALP ENTER: {side} {symbol} @ ${entry_price:,.4f} "
             f"size={size} lev={leverage}x orderId={order_id} "
             f"tp=${trade.target_price or 'none'} sl=${trade.sl_price or 'none'} "
             f"tp_usd=${trade.target_usd or 'none'} sl_usd=${trade.sl_usd or 'none'}"
-            f"{exec_tail}",
+            f"{trigger_text}{exec_tail}",
         )
 
         if not self._running:
@@ -852,6 +1005,105 @@ class ScalpEngine:
         self._log("info", f"🎯 Trade {trade_id} targets updated: {kwargs}")
         self._schedule_update(force=True)
         return {"status": "ok", "trade": trade.to_dict()}
+
+    async def add_to_trade(self, trade_id: int, qty_mode: str = "base", qty_value: float = 0.0) -> Dict[str, Any]:
+        trade = self.open_trades.get(trade_id)
+        if not trade:
+            return {"status": "error", "message": f"Trade {trade_id} not found"}
+        qty_mode = "base" if str(qty_mode or "").lower() in {"base", "qty", "coin"} else "usdt"
+        qty_value = _coerce_float(qty_value, 0.0)
+        if qty_value <= 0:
+            return {"status": "error", "message": "Add quantity must be greater than zero"}
+
+        fill_price = self._cached_price(trade.symbol) or trade.current_price or trade.entry_price
+        if fill_price <= 0:
+            try:
+                ticker = await asyncio.to_thread(self.delta.get_ticker, trade.symbol)
+                fill_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+                if fill_price > 0:
+                    self._rest_price_fetches += 1
+                    self._record_price(trade.symbol, fill_price, source="rest_quote")
+            except Exception:
+                pass
+        if fill_price <= 0:
+            return {"status": "error", "message": f"No live price available for {trade.symbol}"}
+
+        add_size = self._resolve_contract_size(
+            qty_mode=qty_mode,
+            qty_value=qty_value,
+            price=fill_price,
+            leverage=trade.leverage,
+        )
+        if add_size <= 0:
+            return {"status": "error", "message": "Unable to resolve add quantity"}
+
+        result: Dict[str, Any] = {}
+        if trade.mode != "paper":
+            try:
+                order_side = "buy" if trade.side == "LONG" else "sell"
+                result = await self._place_verified_order(
+                    product_id=trade.product_id,
+                    size=add_size,
+                    side=order_side,
+                    order_type="market_order",
+                    leverage=trade.leverage,
+                )
+                if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
+                    self._remember_execution(
+                        phase="scale_in_reject",
+                        symbol=trade.symbol,
+                        side=trade.side,
+                        mode=trade.mode,
+                        verified=False,
+                        result=result,
+                    )
+                    return {"status": "error", "message": result.get("error") or "add order could not be verified"}
+                fill_price = self._extract_order_price(result, fill_price)
+            except Exception as e:
+                self._remember_execution(
+                    phase="scale_in_error",
+                    symbol=trade.symbol,
+                    side=trade.side,
+                    mode=trade.mode,
+                    verified=False,
+                    error=str(e),
+                )
+                return {"status": "error", "message": str(e)}
+
+        old_size = max(int(trade.size or 0), 0)
+        total_size = old_size + add_size
+        weighted_price = (
+            fill_price if old_size <= 0 else ((trade.entry_price * old_size) + (fill_price * add_size)) / total_size
+        )
+        trade.size = total_size
+        trade.entry_price = round(weighted_price, 6)
+        trade.current_price = fill_price
+        trade.last_price_source = "broker_fill" if trade.mode != "paper" else "entry_snapshot"
+        trade.last_price_update = _now_utc()
+        trade._refresh_derived_quantities()
+        if trade.target_pct > 0:
+            trade.target_price = 0.0
+        if trade.sl_pct > 0:
+            trade.sl_price = 0.0
+        trade._apply_percentage_targets()
+
+        self._record_price(
+            trade.symbol, fill_price, source="broker_fill" if trade.mode != "paper" else "entry_snapshot"
+        )
+        self._remember_execution(
+            phase="scale_in",
+            symbol=trade.symbol,
+            side=trade.side,
+            mode=trade.mode,
+            verified=bool(result.get("verified", trade.mode == "paper")),
+            result=result,
+        )
+        self._log(
+            "info",
+            f"➕ SCALP ADD: {trade.side} {trade.symbol} add_size={add_size} fill=${fill_price:,.4f} total_size={trade.size}",
+        )
+        self._schedule_update(force=True)
+        return {"status": "ok", "trade": trade.to_dict(), "added_size": add_size, "fill_price": fill_price}
 
     def get_status(self, symbol_hint: str = "") -> dict:
         today_utc = _now_utc().date()
@@ -957,14 +1209,22 @@ class ScalpEngine:
                         continue
                     self._log(
                         "info",
-                        f"🛡 Guardrail triggered for {pending.side} {pending.symbol} @ ${price:,.4f}",
+                        f"🎯 Entry trigger fired for {pending.side} {pending.symbol} @ ${price:,.4f} ({pending.trigger_summary()})",
                     )
                     self.pending_entries.pop(entry_id, None)
+                    trigger_size = pending.size or self._resolve_contract_size(
+                        qty_mode=pending.qty_mode,
+                        qty_value=pending.qty_value,
+                        price=price,
+                        leverage=pending.leverage,
+                    )
                     result = await self._open_trade(
                         symbol=pending.symbol,
                         side=pending.side,
-                        size=pending.size,
+                        size=trigger_size,
                         leverage=pending.leverage,
+                        qty_mode=pending.qty_mode,
+                        qty_value=pending.qty_value,
                         target_price=pending.target_price,
                         sl_price=pending.sl_price,
                         target_pct=pending.target_pct,
@@ -972,13 +1232,15 @@ class ScalpEngine:
                         target_usd=pending.target_usd,
                         sl_usd=pending.sl_usd,
                         mode=pending.mode,
-                        guardrail_price=pending.guardrail_price,
+                        guardrail_price=pending.entry_stop_price,
+                        entry_limit_price=pending.entry_limit_price,
+                        entry_stop_price=pending.entry_stop_price,
                         market_price=price,
                     )
                     if result.get("status") != "ok":
                         self._log(
                             "error",
-                            f"Guardrail entry failed for {pending.symbol}: {result.get('message', 'unknown error')}",
+                            f"Pending entry failed for {pending.symbol}: {result.get('message', 'unknown error')}",
                         )
 
                 price_map = await self._fetch_all_prices(trades)
