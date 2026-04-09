@@ -4563,8 +4563,8 @@ var _cfLatestScalpStatus = {};
 // Persistent trade cache — never loses trades across polls
 var _cfTradeCache = new Map();
 var _cfScalpEventCache = new Map();
-// Track which open trade IDs we've rendered (for targeted updates)
-var _cfOpenTradeIds = [];
+// Track the rendered open-trade structure so scale-ins and target edits repaint immediately
+var _cfOpenTradeSnapshot = "";
 var _cfOperatorFactIndex = 0;
 var _cfOperatorPuzzleIndex = 0;
 var _cfOperatorReadIndex = 0;
@@ -5141,6 +5141,24 @@ function cfApplyScalpStatus(d) {
   }
 }
 
+function _cfOpenTradeSignature(open) {
+  return (open || []).map(function(t) {
+    return [
+      t.trade_id || t.id || '',
+      t.size || 0,
+      t.qty_mode || '',
+      t.qty_usdt || 0,
+      t.base_qty || 0,
+      t.entry_price || 0,
+      t.target_price || 0,
+      t.sl_price || 0,
+      t.target_usd || 0,
+      t.sl_usd || 0,
+      t.mode || ''
+    ].join(':');
+  }).join('|');
+}
+
 function cfRenderActivePositions(open) {
   const body = document.getElementById('cf-scalp-active-body');
   const countEl = document.getElementById('cf-scalp-active-count');
@@ -5148,17 +5166,17 @@ function cfRenderActivePositions(open) {
   if (countEl) countEl.textContent = open.length + ' open';
 
   if (!open.length) {
-    _cfOpenTradeIds = [];
+    _cfOpenTradeSnapshot = '';
     body.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>';
     _renderTablePager('cf-scalp-active-table', 'cf-scalp-active-table', 'cf-scalp-active-pagination');
     return;
   }
 
-  const newIds = open.map(function(t) { return t.trade_id || t.id; }).join(',');
-  const needFullRender = newIds !== _cfOpenTradeIds.join(',');
+  const openSignature = _cfOpenTradeSignature(open);
+  const needFullRender = openSignature !== _cfOpenTradeSnapshot;
 
   if (needFullRender) {
-    _cfOpenTradeIds = open.map(function(t) { return t.trade_id || t.id; });
+    _cfOpenTradeSnapshot = openSignature;
     body.innerHTML = open.map(function(t) {
       const tid = t.trade_id || t.id;
       const pnl = t.unrealized_pnl || 0;
