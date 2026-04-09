@@ -2643,11 +2643,37 @@
   gap: 8px;
   min-width: 152px;
 }
+.table-edit-stack-labeled {
+  gap: 6px;
+}
+.table-field-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1;
+}
 .table-inline-actions-stack {
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
   min-width: 152px;
+}
+.table-add-stack {
+  align-items: stretch;
+}
+.table-add-input {
+  text-align: left;
+}
+.table-add-btn {
+  min-height: 40px;
+}
+.table-action-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  min-width: 120px;
 }
 
 .cf-scalp-active-trade-table {
@@ -2690,7 +2716,7 @@
 }
 .cf-scalp-active-trade-table .table-inline-actions .btn,
 .cf-scalp-active-trade-table .table-inline-actions-stack .btn {
-  min-width: 92px;
+  min-width: 108px;
 }
 .cf-scalp-active-trade-table .table-value-main {
   white-space: nowrap;
