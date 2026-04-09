@@ -1481,6 +1481,67 @@ def _safe_float(v, default=0.0):
         return default
 
 
+def _json_object(body):
+    if isinstance(body, dict):
+        return body
+    raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+
+async def _read_json_body(request: Request) -> Dict:
+    try:
+        return _json_object(await request.json())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+
+def _body_value(body: Dict, *keys, default=None):
+    for key in keys:
+        if key in body:
+            return body.get(key)
+    return default
+
+
+def _parse_float_field(body: Dict, *keys, default=0.0, min_value=None):
+    key = keys[0] if keys else "value"
+    raw = _body_value(body, *keys, default=default)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {key}") from exc
+    if min_value is not None and value < min_value:
+        raise HTTPException(status_code=400, detail=f"{key} must be >= {min_value}")
+    return value
+
+
+def _parse_int_field(body: Dict, *keys, default=0, min_value=None):
+    key = keys[0] if keys else "value"
+    raw = _body_value(body, *keys, default=default)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {key}") from exc
+    if min_value is not None and value < min_value:
+        raise HTTPException(status_code=400, detail=f"{key} must be >= {min_value}")
+    return value
+
+
+def _normalize_scalp_symbol(symbol: str, *, allow_blank: bool = False) -> str:
+    raw = str(symbol or "").strip().upper()
+    if not raw:
+        return "" if allow_blank else "BTCUSDT"
+    if raw in {"GOLD", "GOLDUSDT"}:
+        raw = "PAXGUSD"
+    if raw not in _DELTA_SYMBOLS:
+        raise HTTPException(status_code=400, detail=f"Unsupported scalp symbol: {raw}")
+    return raw
+
+
 @app.get("/api/ticker")
 async def get_ticker():
     """Fetch live prices for top cryptos."""
@@ -3092,6 +3153,7 @@ def _get_scalp_engine():
 async def scalp_status(symbol: str = ""):
     eng = _get_scalp_engine()
     if symbol:
+        symbol = _normalize_scalp_symbol(symbol, allow_blank=True)
         eng.watch_symbol(symbol)
     status = eng.get_status(symbol)
     status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
@@ -3109,25 +3171,33 @@ async def scalp_enter(request: Request):
     check_rate_limit(
         "scalp_enter", max_calls=6, window_sec=10, client_ip=request.client.host if request.client else "global"
     )
-    body = await request.json()
+    body = await _read_json_body(request)
     eng = _get_scalp_engine()
-    symbol = str(body.get("symbol", "BTCUSDT") or "BTCUSDT").upper()
-    if symbol in {"GOLD", "GOLDUSDT"}:
-        symbol = "PAXGUSD"
+    symbol = _normalize_scalp_symbol(_body_value(body, "symbol", default="BTCUSDT"))
     eng.watch_symbol(symbol)
-    raw_side = body.get("side", "BUY").upper()
-    side = "LONG" if raw_side == "BUY" else "SHORT"
-    leverage = int(body.get("leverage", 50))
-    mode = body.get("mode", "paper")
+    raw_side = str(_body_value(body, "side", default="BUY") or "BUY").upper()
+    if raw_side not in {"BUY", "SELL", "LONG", "SHORT"}:
+        raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+    side = "LONG" if raw_side in {"BUY", "LONG"} else "SHORT"
+    leverage = _parse_int_field(body, "leverage", default=50, min_value=1)
+    mode = str(_body_value(body, "mode", default="paper") or "paper").lower()
+    if mode not in {"paper", "live"}:
+        raise HTTPException(status_code=400, detail="mode must be paper or live")
 
     qty_mode = "base" if str(body.get("qty_mode", "usdt") or "usdt").lower() in {"base", "qty", "coin"} else "usdt"
-    default_qty = 0.0015 if qty_mode == "base" else 1000
-    qty_value = float(body.get("qty_value", body.get("qty_base", body.get("qty_usdt", default_qty))) or 0)
-    entry_stop_price = float(body.get("entry_stop_price", body.get("guardrail_price", 0)) or 0)
-    entry_limit_price = float(body.get("entry_limit_price", 0) or 0)
-    target_price = float(body.get("target_price", body.get("tp_price", 0)) or 0)
-    sl_price = float(body.get("sl_price", 0) or 0)
-    legacy_size = int(body.get("size", 0) or 0)
+    default_qty = 0.0015 if qty_mode == "base" else 1000.0
+    qty_value = _parse_float_field(body, "qty_value", "qty_base", "qty_usdt", default=default_qty, min_value=0.0)
+    entry_stop_price = _parse_float_field(body, "entry_stop_price", "guardrail_price", default=0.0, min_value=0.0)
+    entry_limit_price = _parse_float_field(body, "entry_limit_price", default=0.0, min_value=0.0)
+    target_price = _parse_float_field(body, "target_price", "tp_price", default=0.0, min_value=0.0)
+    sl_price = _parse_float_field(body, "sl_price", default=0.0, min_value=0.0)
+    legacy_size = _parse_int_field(body, "size", default=0, min_value=0)
+    target_pct = _parse_float_field(body, "take_profit_pct", default=0.0, min_value=0.0)
+    sl_pct = _parse_float_field(body, "stop_loss_pct", default=0.0, min_value=0.0)
+    target_usd = _parse_float_field(body, "tp_usd", default=0.0, min_value=0.0)
+    sl_usd = _parse_float_field(body, "sl_usd", default=0.0, min_value=0.0)
+    if qty_value <= 0:
+        raise HTTPException(status_code=400, detail="qty_value must be greater than zero")
     if legacy_size <= 0 and qty_mode != "base" and qty_value > 0:
         legacy_size = int(qty_value * leverage)
 
@@ -3154,10 +3224,10 @@ async def scalp_enter(request: Request):
             qty_value=qty_value,
             target_price=target_price,
             sl_price=sl_price,
-            target_pct=float(body.get("take_profit_pct", 0)),
-            sl_pct=float(body.get("stop_loss_pct", 0)),
-            target_usd=float(body.get("tp_usd", 0)),
-            sl_usd=float(body.get("sl_usd", 0)),
+            target_pct=target_pct,
+            sl_pct=sl_pct,
+            target_usd=target_usd,
+            sl_usd=sl_usd,
             guardrail_price=entry_stop_price,
             entry_limit_price=entry_limit_price,
             entry_stop_price=entry_stop_price,
@@ -3205,8 +3275,8 @@ async def scalp_exit(request: Request):
     check_rate_limit(
         "scalp_exit", max_calls=8, window_sec=10, client_ip=request.client.host if request.client else "global"
     )
-    body = await request.json()
-    trade_id = int(body.get("trade_id", 0))
+    body = await _read_json_body(request)
+    trade_id = _parse_int_field(body, "trade_id", default=0, min_value=1)
     eng = _get_scalp_engine()
     try:
         result = await eng.exit_trade(trade_id, reason="manual")
@@ -3233,12 +3303,12 @@ async def update_scalp_targets(trade_id: int, request: Request):
     check_rate_limit(
         "scalp_targets", max_calls=10, window_sec=15, client_ip=request.client.host if request.client else "global"
     )
-    body = await request.json()
+    body = await _read_json_body(request)
     eng = _get_scalp_engine()
     kwargs = {}
     for key in ("target_price", "sl_price", "target_usd", "sl_usd"):
         if key in body and body[key] is not None:
-            kwargs[key] = float(body[key])
+            kwargs[key] = _parse_float_field(body, key, default=0.0, min_value=0.0)
     if not kwargs:
         raise HTTPException(status_code=400, detail="No target fields provided")
     result = await eng.update_trade_targets(trade_id, **kwargs)
@@ -3252,9 +3322,11 @@ async def add_scalp_quantity(trade_id: int, request: Request):
     check_rate_limit(
         "scalp_add", max_calls=8, window_sec=15, client_ip=request.client.host if request.client else "global"
     )
-    body = await request.json()
+    body = await _read_json_body(request)
     qty_mode = "base" if str(body.get("qty_mode", "base") or "base").lower() in {"base", "qty", "coin"} else "usdt"
-    qty_value = float(body.get("qty_value", body.get("qty_base", body.get("qty_usdt", 0))) or 0)
+    qty_value = _parse_float_field(body, "qty_value", "qty_base", "qty_usdt", default=0.0, min_value=0.0)
+    if qty_value <= 0:
+        raise HTTPException(status_code=400, detail="qty_value must be greater than zero")
     eng = _get_scalp_engine()
     result = await eng.add_to_trade(trade_id, qty_mode=qty_mode, qty_value=qty_value)
     if result.get("status") == "error":

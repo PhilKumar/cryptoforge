@@ -157,10 +157,14 @@ class DeltaClient:
 
     @staticmethod
     def from_delta_symbol(symbol: str) -> str:
-        """Convert Delta India XXXUSD back to Binance-style XXXUSDT format."""
-        if symbol and symbol.upper().endswith("USD") and not symbol.upper().endswith("USDT"):
-            return symbol + "T"
-        return symbol
+        """Convert Delta India XXXUSD back to app symbols, preserving special contracts."""
+        raw = str(symbol or "")
+        upper = raw.upper()
+        if upper == "PAXGUSD":
+            return "PAXGUSD"
+        if upper.endswith("USD") and not upper.endswith("USDT"):
+            return upper + "T"
+        return upper
 
     def _is_configured(self) -> bool:
         return (

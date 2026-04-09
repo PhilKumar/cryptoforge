@@ -169,6 +169,10 @@ class DeltaPositionNormalizationTests(unittest.TestCase):
         self.assertEqual(len(positions), 1)
         self.assertEqual(positions[0].get("product_id"), 11)
 
+    def test_from_delta_symbol_preserves_paxg_contract(self):
+        self.assertEqual(DeltaClient.from_delta_symbol("PAXGUSD"), "PAXGUSD")
+        self.assertEqual(DeltaClient.from_delta_symbol("BTCUSD"), "BTCUSDT")
+
 
 class LiveEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -923,6 +927,72 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(enter.status_code, 200)
         self.assertEqual(enter.json()["status"], "ok")
+
+    async def test_scalp_enter_rejects_invalid_numeric_payloads(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            bad = await client.post(
+                "/api/scalp/enter",
+                json={"symbol": "BTCUSDT", "side": "BUY", "qty_value": "oops", "leverage": 10, "mode": "paper"},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["error"]["detail"], "Invalid qty_value")
+
+    async def test_scalp_target_update_rejects_invalid_values(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+            self.app_module._scalp_engine._record_price("BTCUSD", 101.25, source="ws")
+            entered = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_value": 1000,
+                    "qty_mode": "usdt",
+                    "leverage": 10,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+            trade_id = entered.json()["trade_id"]
+            bad = await client.put(
+                f"/api/scalp/trades/{trade_id}/targets",
+                json={"target_price": "bad-price"},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["error"]["detail"], "Invalid target_price")
+
+    async def test_scalp_add_rejects_invalid_quantity(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            bad = await client.post(
+                "/api/scalp/trades/1/add",
+                json={"qty_mode": "base", "qty_value": "bad-qty"},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["error"]["detail"], "Invalid qty_value")
+
+    async def test_scalp_status_rejects_unsupported_symbol(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            bad = await client.get("/api/scalp/status", params={"symbol": "INVALID"})
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["error"]["detail"], "Unsupported scalp symbol: INVALID")
 
 
 class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):
