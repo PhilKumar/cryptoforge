@@ -4565,6 +4565,8 @@ var _cfTradeCache = new Map();
 var _cfScalpEventCache = new Map();
 // Track the rendered open-trade structure so scale-ins and target edits repaint immediately
 var _cfOpenTradeSnapshot = "";
+var _cfOpenTradeDisplayCache = [];
+var _cfOpenTradeDisplayCacheUntil = 0;
 var _cfOperatorFactIndex = 0;
 var _cfOperatorPuzzleIndex = 0;
 var _cfOperatorReadIndex = 0;
@@ -4982,8 +4984,24 @@ function cfApplyScalpStatus(d) {
   try {
     const status = d || {};
     _cfLatestScalpStatus = status;
-    const open = Array.isArray(status.open_trades) ? status.open_trades : [];
+    const payloadOpen = Array.isArray(status.open_trades) ? status.open_trades : [];
     const pending = Array.isArray(status.pending_entries) ? status.pending_entries : [];
+    const exec = status.execution_metrics || {};
+    const execPhase = String(exec.phase || '').toLowerCase();
+    const hasFreshOpenPayload = payloadOpen.length > 0;
+    if (hasFreshOpenPayload) {
+      _cfOpenTradeDisplayCache = payloadOpen.slice();
+      _cfOpenTradeDisplayCacheUntil = Date.now() + 8000;
+    }
+    const open = hasFreshOpenPayload
+      ? payloadOpen
+      : (_cfOpenTradeDisplayCache.length && Date.now() < _cfOpenTradeDisplayCacheUntil && !execPhase.includes('exit')
+          ? _cfOpenTradeDisplayCache.slice()
+          : []);
+    if (!open.length && !pending.length && (!execPhase || execPhase.includes('exit'))) {
+      _cfOpenTradeDisplayCache = [];
+      _cfOpenTradeDisplayCacheUntil = 0;
+    }
     const running = !!status.running || open.length > 0 || pending.length > 0;
 
     const dot = cfEl('cf-scalp-status-dot');
@@ -5017,8 +5035,7 @@ function cfApplyScalpStatus(d) {
 
     const execMeta = cfEl('cf-scalp-exec-meta');
     if (execMeta) {
-      const exec = status.execution_metrics || {};
-      const phase = String(exec.phase || '').toLowerCase();
+      const phase = execPhase;
       execMeta.textContent = cfScalpExecSummary(exec);
       execMeta.style.color = exec.verified === false || phase.includes('error') || phase.includes('reject')
         ? 'var(--red)'
@@ -5028,7 +5045,6 @@ function cfApplyScalpStatus(d) {
     }
     const execDetail = cfEl('cf-scalp-exec-detail');
     if (execDetail) {
-      const exec = status.execution_metrics || {};
       execDetail.textContent = cfScalpExecDetail(exec);
       execDetail.style.color = exec.verified === false || exec.error ? 'var(--red)' : 'var(--muted)';
     }

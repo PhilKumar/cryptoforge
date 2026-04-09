@@ -48,7 +48,7 @@ from broker.delta import DeltaClient, get_candles_binance
 from engine.backtest import run_backtest
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
-from engine.scalp import ScalpEngine
+from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade
 
 
 # ── Shutdown hook: auto-save running engines to runs.json ─────
@@ -3052,6 +3052,7 @@ async def export_live_trades_csv(run_id: str = ""):
 _scalp_engine: Optional[ScalpEngine] = None
 _LEGACY_SCALP_FILE, _SCALP_FILE = _resolve_state_file("scalp_trades.json")
 _LEGACY_SCALP_EVENTS_FILE, _SCALP_EVENTS_FILE = _resolve_state_file("scalp_events.json")
+_LEGACY_SCALP_RUNTIME_FILE, _SCALP_RUNTIME_FILE = _resolve_state_file("scalp_runtime.json")
 
 
 def _load_scalp_trades():
@@ -3088,6 +3089,82 @@ def _save_scalp_events(events):
     with open(tmp, "w") as f:
         json.dump(events[-300:], f, indent=2, default=str)
     os.replace(tmp, _SCALP_EVENTS_FILE)
+
+
+def _load_scalp_runtime() -> dict:
+    if os.path.exists(_SCALP_RUNTIME_FILE):
+        try:
+            with open(_SCALP_RUNTIME_FILE, "r") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_scalp_runtime(runtime_state: dict) -> None:
+    os.makedirs(os.path.dirname(_SCALP_RUNTIME_FILE) or ".", exist_ok=True)
+    tmp = _SCALP_RUNTIME_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(runtime_state, f, indent=2, default=str)
+    os.replace(tmp, _SCALP_RUNTIME_FILE)
+
+
+def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
+    runtime_state = _load_scalp_runtime()
+    open_rows = runtime_state.get("open_trades") or []
+    pending_rows = runtime_state.get("pending_entries") or []
+    if not open_rows and not pending_rows:
+        return False
+
+    restored_open = {}
+    for row in open_rows:
+        try:
+            trade = ScalpTrade.from_dict(row)
+            restored_open[int(trade.trade_id)] = trade
+        except Exception as exc:
+            _logger.warning("[SCALP] Failed to restore open trade %s: %s", row.get("trade_id"), exc)
+    restored_pending = {}
+    for row in pending_rows:
+        try:
+            pending = PendingScalpEntry.from_dict(row)
+            restored_pending[int(pending.entry_id)] = pending
+        except Exception as exc:
+            _logger.warning("[SCALP] Failed to restore pending entry %s: %s", row.get("entry_id"), exc)
+
+    engine.open_trades = restored_open
+    engine.pending_entries = restored_pending
+    engine._last_execution = dict(runtime_state.get("execution_metrics") or {})
+    event_log = runtime_state.get("event_log") or []
+    if event_log:
+        engine.event_log = list(event_log)[-100:]
+    for trade in engine.open_trades.values():
+        if trade.current_price > 0:
+            engine._record_price(trade.symbol, trade.current_price, source=trade.last_price_source or "restored")
+    tracked = {engine._canonical_symbol(t.symbol) for t in engine.open_trades.values()} | {
+        engine._canonical_symbol(p.symbol) for p in engine.pending_entries.values()
+    }
+    engine._watch_symbols = {sym for sym in tracked if sym}
+    if (engine.open_trades or engine.pending_entries) and not getattr(engine, "_running", False):
+        engine.start()
+    return bool(engine.open_trades or engine.pending_entries)
+
+
+def _snapshot_scalp_runtime(status: dict) -> dict:
+    return {
+        "saved_at": str(datetime.now()),
+        "open_trades": list(status.get("open_trades") or []),
+        "pending_entries": list(status.get("pending_entries") or []),
+        "event_log": list(status.get("event_log") or [])[-80:],
+        "execution_metrics": dict(status.get("execution_metrics") or {}),
+    }
+
+
+def _persist_scalp_runtime_snapshot(engine: ScalpEngine, symbol_hint: str = "") -> None:
+    try:
+        _save_scalp_runtime(_snapshot_scalp_runtime(engine.get_status(symbol_hint)))
+    except Exception as exc:
+        _logger.error("[SCALP] Failed to persist runtime snapshot: %s", exc)
 
 
 def _scalp_persist_event(event: dict) -> None:
@@ -3128,6 +3205,10 @@ def _scalp_persist_trade(trade: dict) -> None:
 
 
 async def _broadcast_scalp_update(status: dict) -> None:
+    try:
+        _save_scalp_runtime(_snapshot_scalp_runtime(status))
+    except Exception as exc:
+        _logger.error("[SCALP] Failed to persist runtime state: %s", exc)
     payload = {"source": "scalp", "type": "scalp_status", "status": status}
     for ws in ws_clients.copy():
         try:
@@ -3146,6 +3227,7 @@ def _get_scalp_engine():
             on_event=_scalp_persist_event,
             on_update=_broadcast_scalp_update,
         )
+        _restore_scalp_runtime(_scalp_engine)
     return _scalp_engine
 
 
@@ -3155,6 +3237,8 @@ async def scalp_status(symbol: str = ""):
     if symbol:
         symbol = _normalize_scalp_symbol(symbol, allow_blank=True)
         eng.watch_symbol(symbol)
+    if not eng.open_trades and not eng.pending_entries:
+        _restore_scalp_runtime(eng)
     status = eng.get_status(symbol)
     status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
     status["file_events"] = list(reversed(_load_scalp_events()[-200:]))
@@ -3264,6 +3348,7 @@ async def scalp_enter(request: Request):
                 f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nExposure: {qty_text}\nLeverage: {leverage}x\nTrigger: {trigger}",
                 level="info",
             )
+        _persist_scalp_runtime_snapshot(eng, symbol)
         return result
     except Exception as e:
         alerter.alert("Scalp Entry Error", f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {e}")
@@ -3280,6 +3365,7 @@ async def scalp_exit(request: Request):
     eng = _get_scalp_engine()
     try:
         result = await eng.exit_trade(trade_id, reason="manual")
+        _persist_scalp_runtime_snapshot(eng)
         # Persistence is handled by the engine's on_trade_closed callback.
         if result.get("status") == "ok" and result.get("trade"):
             t = result["trade"]
@@ -3314,6 +3400,7 @@ async def update_scalp_targets(trade_id: int, request: Request):
     result = await eng.update_trade_targets(trade_id, **kwargs)
     if result.get("status") == "error":
         raise HTTPException(status_code=404, detail=result["message"])
+    _persist_scalp_runtime_snapshot(eng)
     return result
 
 
@@ -3331,6 +3418,7 @@ async def add_scalp_quantity(trade_id: int, request: Request):
     result = await eng.add_to_trade(trade_id, qty_mode=qty_mode, qty_value=qty_value)
     if result.get("status") == "error":
         raise HTTPException(status_code=404, detail=result["message"])
+    _persist_scalp_runtime_snapshot(eng)
     trade = result.get("trade", {})
     alerter.alert(
         "Scalp Add Quantity",

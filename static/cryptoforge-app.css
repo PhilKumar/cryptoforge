@@ -2631,20 +2631,73 @@
   color: var(--muted);
 }
 .table-input-sm {
-  width: 96px;
-  min-height: 34px;
+  width: 152px;
+  min-width: 152px;
+  min-height: 40px;
+  padding: 8px 12px;
+  font-size: 12px;
 }
 .table-edit-stack {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 6px;
+  gap: 8px;
+  min-width: 152px;
 }
 .table-inline-actions-stack {
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
+  min-width: 152px;
 }
 
+.cf-scalp-active-trade-table {
+  min-width: 1440px;
+}
+.cf-scalp-workbench-wide {
+  grid-template-columns: minmax(560px, 660px) minmax(0, 1fr);
+}
+.cf-scalp-form-grid-tight {
+  gap: 14px;
+}
+.cf-scalp-form-card .cf-scalp-input {
+  min-height: 52px;
+  font-size: 15px;
+}
+.cf-scalp-form-card .cf-scalp-help,
+.cf-scalp-form-card #cf-scalp-qty-hint,
+.cf-scalp-form-card #cf-sl-hint,
+.cf-scalp-form-card #cf-tp-hint {
+  font-size: 11px;
+  line-height: 1.45;
+}
+.cf-scalp-qty-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 172px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.cf-scalp-qty-mode-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+.cf-scalp-qty-input {
+  min-width: 0;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.cf-scalp-active-trade-table .table-inline-actions .btn,
+.cf-scalp-active-trade-table .table-inline-actions-stack .btn {
+  min-width: 92px;
+}
+.cf-scalp-active-trade-table .table-value-main {
+  white-space: nowrap;
+}
+.cf-scalp-form-card {
+  padding: 22px 24px;
+}
 .cf-scalp-status-bar {
   padding: 14px 20px;
   margin-bottom: 16px;
@@ -2732,7 +2785,7 @@
 
 .cf-scalp-workbench {
   display: grid;
-  grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(420px, 500px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
   margin-bottom: 16px;
@@ -2821,9 +2874,16 @@
   margin-top: 4px;
 }
 
+@media (max-width: 1380px) {
+  .cf-scalp-workbench-wide {
+    grid-template-columns: minmax(480px, 560px) minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 1180px) {
   .cf-scalp-status-bar,
-  .cf-scalp-workbench {
+  .cf-scalp-workbench,
+  .cf-scalp-workbench-wide {
     grid-template-columns: 1fr;
   }
   .cf-scalp-status-meta {

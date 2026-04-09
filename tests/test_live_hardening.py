@@ -995,6 +995,82 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad.json()["error"]["detail"], "Unsupported scalp symbol: INVALID")
 
 
+class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addAsyncCleanup(self._tmp.cleanup)
+        self._orig_runtime_file = self.app_module._SCALP_RUNTIME_FILE
+        self._orig_state_dir = getattr(self.app_module, "_STATE_DIR", None)
+        self.app_module._STATE_DIR = self._tmp.name
+        self.app_module._SCALP_RUNTIME_FILE = os.path.join(self._tmp.name, "scalp_runtime.json")
+        self.addAsyncCleanup(self._restore_runtime_file)
+
+    async def _restore_runtime_file(self):
+        engine = getattr(self.app_module, "_scalp_engine", None)
+        if engine is not None:
+            engine.stop()
+            self.app_module._scalp_engine = None
+        self.app_module._SCALP_RUNTIME_FILE = self._orig_runtime_file
+        if self._orig_state_dir is not None:
+            self.app_module._STATE_DIR = self._orig_state_dir
+
+    async def test_runtime_snapshot_restores_open_scalp_trade(self):
+        delta = FakeScalpDelta(ticker_prices=[101.25, 101.25])
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine._record_price("BTCUSD", 101.25, source="ws")
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            leverage=10,
+            qty_mode="base",
+            qty_value=0.0015,
+            target_usd=10,
+            sl_usd=5,
+            mode="paper",
+        )
+        self.assertEqual(entered["status"], "ok")
+
+        status = engine.get_status("BTCUSDT")
+        self.app_module._save_scalp_runtime(self.app_module._snapshot_scalp_runtime(status))
+
+        restored_engine = ScalpEngine(FakeScalpDelta([101.25]))
+        restored = self.app_module._restore_scalp_runtime(restored_engine)
+
+        self.assertTrue(restored)
+        self.assertEqual(len(restored_engine.open_trades), 1)
+        restored_trade = next(iter(restored_engine.open_trades.values()))
+        self.assertEqual(restored_trade.symbol, "BTCUSDT")
+        self.assertGreater(restored_trade.current_price, 0)
+
+    async def test_route_entry_persists_runtime_snapshot(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+            self.app_module._scalp_engine._record_price("BTCUSD", 101.25, source="ws")
+            entered = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_mode": "base",
+                    "qty_value": 0.0015,
+                    "leverage": 10,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(entered.status_code, 200)
+        runtime = self.app_module._load_scalp_runtime()
+        self.assertEqual(len(runtime.get("open_trades") or []), 1)
+        self.assertEqual((runtime.get("open_trades") or [])[0].get("symbol"), "BTCUSDT")
+
+
 class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.app_module = import_module("app")

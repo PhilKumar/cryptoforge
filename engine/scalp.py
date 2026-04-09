@@ -36,6 +36,17 @@ def _coerce_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _parse_dt(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", ""))
+    except (TypeError, ValueError):
+        return None
+
+
 class ScalpTrade:
     """Represents a single open crypto scalp position."""
 
@@ -213,6 +224,8 @@ class ScalpTrade:
             "current_price": self.current_price,
             "target_price": self.target_price,
             "sl_price": self.sl_price,
+            "target_pct": self.target_pct,
+            "sl_pct": self.sl_pct,
             "target_usd": self.target_usd,
             "sl_usd": self.sl_usd,
             "entry_limit_price": self.entry_limit_price,
@@ -238,6 +251,52 @@ class ScalpTrade:
             "status": self.status,
             "mode": self.mode,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        trade = cls(
+            trade_id=int(data.get("trade_id", 0) or 0),
+            symbol=str(data.get("symbol", "") or ""),
+            side=str(data.get("side", "") or ""),
+            product_id=int(data.get("product_id", 0) or 0),
+            size=int(data.get("size", 0) or 0),
+            entry_price=_coerce_float(data.get("entry_price"), 0.0),
+            leverage=int(data.get("leverage", 1) or 1),
+            qty_mode=str(data.get("qty_mode", "usdt") or "usdt"),
+            qty_value=_coerce_float(data.get("qty_value"), 0.0),
+            base_qty=_coerce_float(data.get("base_qty"), 0.0),
+            margin_usd=_coerce_float(data.get("margin_usd", data.get("qty_usdt")), 0.0),
+            target_price=_coerce_float(data.get("target_price"), 0.0),
+            sl_price=_coerce_float(data.get("sl_price"), 0.0),
+            target_pct=_coerce_float(data.get("target_pct"), 0.0),
+            sl_pct=_coerce_float(data.get("sl_pct"), 0.0),
+            target_usd=_coerce_float(data.get("target_usd"), 0.0),
+            sl_usd=_coerce_float(data.get("sl_usd"), 0.0),
+            entry_limit_price=_coerce_float(data.get("entry_limit_price"), 0.0),
+            entry_stop_price=_coerce_float(data.get("entry_stop_price", data.get("guardrail_price")), 0.0),
+            order_id=str(data.get("order_id", "") or ""),
+            entry_time=_parse_dt(data.get("entry_time")),
+            mode=str(data.get("mode", "paper") or "paper"),
+            guardrail_price=_coerce_float(data.get("guardrail_price"), 0.0),
+        )
+        trade.current_price = _coerce_float(data.get("current_price", data.get("mark_price")), trade.entry_price)
+        trade.last_price_source = str(data.get("price_source", "restored") or "restored")
+        trade.last_price_update = _parse_dt(data.get("price_updated_at")) or trade.entry_time
+        trade.entry_latency_ms = _coerce_float(data.get("entry_latency_ms"), 0.0)
+        trade.exit_latency_ms = _coerce_float(data.get("exit_latency_ms"), 0.0)
+        trade.exit_price = _coerce_float(data.get("exit_price"), 0.0)
+        trade.exit_time = _parse_dt(data.get("exit_time"))
+        trade.exit_reason = str(data.get("exit_reason", "") or "")
+        trade.exit_order_id = str(data.get("exit_order_id", "") or "")
+        trade.pnl = _coerce_float(data.get("pnl"), 0.0)
+        trade.status = str(data.get("status", "open") or "open")
+        trade._post_entry_price_ready = trade.current_price > 0
+        now = _now_utc()
+        if trade._exit_guard_until > now:
+            trade._exit_guard_until = now
+        trade._prefer_fresh_rest_mark_until = now
+        trade._refresh_derived_quantities()
+        return trade
 
 
 class PendingScalpEntry:
@@ -321,6 +380,8 @@ class PendingScalpEntry:
             "guardrail_price": self.guardrail_price,
             "target_price": self.target_price,
             "sl_price": self.sl_price,
+            "target_pct": self.target_pct,
+            "sl_pct": self.sl_pct,
             "target_usd": self.target_usd,
             "sl_usd": self.sl_usd,
             "mode": self.mode,
@@ -329,6 +390,32 @@ class PendingScalpEntry:
             "qty_usdt": self.margin_usd or round(self.size / max(self.leverage, 1), 4),
             "trigger_summary": self.trigger_summary(),
         }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        pending = cls(
+            entry_id=int(data.get("entry_id", 0) or 0),
+            symbol=str(data.get("symbol", "") or ""),
+            side=str(data.get("side", "") or ""),
+            size=int(data.get("size", 0) or 0),
+            leverage=int(data.get("leverage", 1) or 1),
+            qty_mode=str(data.get("qty_mode", "usdt") or "usdt"),
+            qty_value=_coerce_float(data.get("qty_value"), 0.0),
+            base_qty=_coerce_float(data.get("base_qty"), 0.0),
+            margin_usd=_coerce_float(data.get("margin_usd", data.get("qty_usdt")), 0.0),
+            entry_limit_price=_coerce_float(data.get("entry_limit_price"), 0.0),
+            entry_stop_price=_coerce_float(data.get("entry_stop_price", data.get("guardrail_price")), 0.0),
+            guardrail_price=_coerce_float(data.get("guardrail_price"), 0.0),
+            target_price=_coerce_float(data.get("target_price"), 0.0),
+            sl_price=_coerce_float(data.get("sl_price"), 0.0),
+            target_pct=_coerce_float(data.get("target_pct"), 0.0),
+            sl_pct=_coerce_float(data.get("sl_pct"), 0.0),
+            target_usd=_coerce_float(data.get("target_usd"), 0.0),
+            sl_usd=_coerce_float(data.get("sl_usd"), 0.0),
+            mode=str(data.get("mode", "paper") or "paper"),
+        )
+        pending.created_at = _parse_dt(data.get("created_at")) or pending.created_at
+        return pending
 
 
 class ScalpEngine:
