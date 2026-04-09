@@ -5206,7 +5206,7 @@ function cfRenderActivePositions(open) {
         <td data-field="pnl"><div class="table-value-stack"><div class="table-value-main ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div><div class="table-value-sub ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">unrealized</div></div></td>
         <td><div class="table-edit-stack"><input type="number" class="table-input-sm" id="cf-tp-usd-${tid}" value="${t.target_usd || 0}" step="1" min="0" placeholder="$"><input type="number" class="table-input-sm" id="cf-tp-price-${tid}" value="${t.target_price || 0}" step="0.1" min="0" placeholder="price"></div></td>
         <td><div class="table-edit-stack"><input type="number" class="table-input-sm" id="cf-sl-usd-${tid}" value="${t.sl_usd || 0}" step="1" min="0" placeholder="$"><input type="number" class="table-input-sm" id="cf-sl-price-${tid}" value="${t.sl_price || 0}" step="0.1" min="0" placeholder="price"></div></td>
-        <td><div class="table-inline-actions table-inline-actions-stack"><input type="number" class="table-input-sm" id="cf-add-qty-${tid}" value="" step="0.0001" min="0" placeholder="0.0015"><button class="btn btn-outline btn-sm" data-cf-click="cfAddScalpQuantity('${tid}')">Add</button></div></td>
+        <td><div class="table-inline-actions table-inline-actions-stack"><input type="number" class="table-input-sm" id="cf-add-qty-${tid}" value="0.0015" step="0.0001" min="0.0001" data-default-qty="0.0015" placeholder="0.0015"><button class="btn btn-outline btn-sm" data-cf-click="cfAddScalpQuantity('${tid}')">Add</button></div></td>
         <td><div class="table-inline-actions"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Set</button><button class="btn btn-danger btn-sm" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
       </tr>`;
     }).join('');
@@ -5399,8 +5399,9 @@ async function cfAddScalpQuantity(tradeId) {
     cfToast('Trade controls are out of date. Reload the page.', 'warning');
     return;
   }
-  const qtyValue = parseFloat(qtyInput.value) || 0;
-  if (qtyValue <= 0) {
+  const qtyRaw = String(qtyInput.value || qtyInput.getAttribute('data-default-qty') || qtyInput.placeholder || '').trim();
+  const qtyValue = parseFloat(qtyRaw);
+  if (!Number.isFinite(qtyValue) || qtyValue <= 0) {
     cfToast('Add quantity must be greater than zero', 'danger');
     return;
   }
@@ -5412,7 +5413,7 @@ async function cfAddScalpQuantity(tradeId) {
     });
     const d = await res.json();
     if (d.status === 'ok') {
-      qtyInput.value = '';
+      qtyInput.value = qtyInput.getAttribute('data-default-qty') || '';
       cfToast(`Added ${qtyValue} qty to trade #${tradeId}`, 'success');
       await cfLoadScalpStatus();
       setTimeout(cfLoadScalpStatus, 200);
