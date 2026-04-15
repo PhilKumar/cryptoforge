@@ -750,6 +750,18 @@ function cfApiFetch(url, options) {
   return fetch(url, opts);
 }
 
+function cfApiErrorDetail(payload, fallback) {
+  if (!payload || typeof payload !== 'object') return fallback;
+  if (payload.message) return payload.message;
+  if (payload.detail) return payload.detail;
+  if (payload.error && typeof payload.error === 'object') {
+    if (payload.error.detail) return payload.error.detail;
+    if (payload.error.message) return payload.error.message;
+    if (payload.error.title) return payload.error.title;
+  }
+  return fallback;
+}
+
 function cfEl(id) {
   return document.getElementById(id);
 }
@@ -2461,7 +2473,7 @@ function sortScalpHistory(col) {
   var body = document.getElementById('cf-scalp-history-body');
   if (body) {
     if (!allTrades.length) {
-      body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">No trades yet</td></tr>';
     } else {
       body.innerHTML = allTrades.map(_cfTradeRow).join('');
     }
@@ -4803,8 +4815,7 @@ function cfOperatorNextRead() {
 }
 
 function cfInitScalpPage() {
-  cfLoadScalpStatus();
-  cfLoadScalpActivity(true);
+  cfRefreshScalpWorkspace();
   cfRefreshScalpEntryLaneFromState();
   if (!_cfScalpPollTimer) {
     _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 2000);
@@ -4859,10 +4870,34 @@ async function cfLoadScalpStatus() {
     const symbol = cfScalpSelectedSymbol();
     const url = symbol ? ('/api/scalp/status?symbol=' + encodeURIComponent(symbol)) : '/api/scalp/status';
     const r = await cfApiFetch(url);
-    if (!r.ok) return;
+    if (!r.ok) return null;
     const d = await r.json();
     cfApplyScalpStatus(d);
-  } catch(e) { }
+    return d;
+  } catch(e) {
+    return null;
+  }
+}
+
+async function cfRefreshScalpWorkspace() {
+  await cfLoadScalpStatus();
+  await cfLoadScalpActivity(true);
+}
+
+function cfMergeScalpStatusPatch(payload) {
+  if (!payload || typeof payload !== 'object') return _cfLatestScalpStatus || {};
+  const merged = Object.assign({}, _cfLatestScalpStatus || {});
+  if (payload.execution_metrics) {
+    merged.execution_metrics = Object.assign({}, merged.execution_metrics || {}, payload.execution_metrics);
+  }
+  if (payload.feed_metrics) {
+    merged.feed_metrics = Object.assign({}, merged.feed_metrics || {}, payload.feed_metrics);
+  }
+  if (payload.entry_controls) {
+    merged.entry_controls = Object.assign({}, merged.entry_controls || {}, payload.entry_controls);
+  }
+  _cfLatestScalpStatus = merged;
+  return merged;
 }
 
 async function cfLoadScalpActivity(force) {
@@ -4912,7 +4947,7 @@ function cfApplyScalpActivity(status) {
       return String(tb).localeCompare(String(ta));
     });
     if (!allTrades.length) {
-      body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">No trades yet</td></tr>';
     } else {
       body.innerHTML = allTrades.map(_cfTradeRow).join('');
     }
@@ -4932,13 +4967,14 @@ function cfApplyScalpActivity(status) {
       .sort(function(a, b) { return String(b.ts || b.time || '').localeCompare(String(a.ts || a.time || '')); })
       .slice(0, 200);
     if (!allEvents.length) {
-      logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>';
+      logEl.innerHTML = '<div class="cf-scalp-event-empty">No events yet</div>';
     } else {
-      const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
       logEl.innerHTML = allEvents.map(function(e) {
-        return '<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">'
-          + '<span style="color:var(--muted);margin-right:8px;">' + _escapeHtml(e.time || '') + '</span>'
-          + '<span style="color:' + (evtColors[e.level || e.type] || 'var(--text-dim)') + ';">' + _escapeHtml(e.msg || e.message || '') + '</span>'
+        const level = String(e.level || e.type || 'info').toLowerCase();
+        const timeLabel = e.time || String(e.ts || '').split('T').pop().slice(0, 8) || '—';
+        return '<div class="cf-scalp-event-row">'
+          + '<span class="cf-scalp-event-time">' + _escapeHtml(timeLabel) + '</span>'
+          + '<span class="cf-scalp-event-msg" data-level="' + _escapeHtml(level) + '">' + _escapeHtml(e.msg || e.message || '') + '</span>'
           + '</div>';
       }).join('');
     }
@@ -4959,14 +4995,21 @@ function cfScalpFeedSummary(feed) {
 function cfScalpFeedDetail(feed) {
   const meta = feed || {};
   const bits = [];
+  const connectionState = String(meta.connection_state || '').trim();
   bits.push(meta.ws_connected ? (meta.authenticated ? 'WS auth' : 'WS live') : 'WS idle');
+  if (connectionState && connectionState !== 'connected') bits.push(connectionState);
   bits.push(String(Number(meta.messages_received) || 0) + ' msgs');
   bits.push(String(Number(meta.reconnect_count) || 0) + ' reconnects');
   bits.push(String(Number(meta.rest_fallbacks) || 0) + ' REST');
+  if (Number.isFinite(Number(meta.last_message_age_ms)) && Number(meta.last_message_age_ms) >= 0) {
+    bits.push('last msg ' + cfFormatLatency(meta.last_message_age_ms));
+  }
   const active = Array.isArray(meta.subscribed_channels) && meta.subscribed_channels.length ? meta.subscribed_channels[0] : '';
   if (active) bits.push(cfTrimUiText(active, 28));
+  const disconnect = String(meta.last_disconnect_reason || '').trim();
+  if (disconnect) bits.push('drop ' + cfTrimUiText(disconnect, 40));
   const error = String(meta.last_error || '').trim();
-  if (error) bits.push(error.length > 56 ? error.slice(0, 53) + '...' : error);
+  if (error) bits.push(cfTrimUiText(error, 56));
   return bits.join(' • ');
 }
 
@@ -4984,13 +5027,17 @@ function cfScalpExecDetail(execMetrics) {
   const meta = execMetrics || {};
   if (!meta.phase) return 'Awaiting next broker action';
   const bits = [];
+  if (meta.trade_id) bits.push('trade #' + meta.trade_id);
   if (meta.order_id) bits.push('order ' + meta.order_id);
   if (meta.fill_status) bits.push(String(meta.fill_status).replace(/_/g, ' '));
   if (meta.order_lifecycle && meta.order_lifecycle !== meta.fill_status) bits.push(String(meta.order_lifecycle).replace(/_/g, ' '));
   if (Number(meta.ack_ms) > 0) bits.push('ack ' + cfFormatLatency(meta.ack_ms));
   if (Number(meta.latency_ms) > 0) bits.push('verify ' + cfFormatLatency(meta.latency_ms));
   if (Number(meta.verified_at_attempt) > 0) bits.push('attempt ' + String(meta.verified_at_attempt));
-  if (Number(meta.position_size) > 0) bits.push('size ' + String(meta.position_size));
+  if (Number(meta.requested_size) > 0) bits.push('contracts ' + String(meta.requested_size));
+  if (Number(meta.requested_qty_value) > 0) bits.push('qty ' + String(meta.requested_qty_value));
+  else if (Number(meta.position_size) > 0) bits.push('size ' + String(meta.position_size));
+  if (meta.note) bits.push(cfTrimUiText(meta.note, 72));
   if (meta.error) bits.push(cfTrimUiText(meta.error, 84));
   if (!bits.length) return meta.verified === false ? 'verification failed' : 'awaiting broker metrics';
   return bits.join(' • ');
@@ -5082,7 +5129,7 @@ function cfApplyScalpStatus(d) {
     const hasFreshOpenPayload = payloadOpen.length > 0;
     if (hasFreshOpenPayload) {
       _cfOpenTradeDisplayCache = payloadOpen.slice();
-      _cfOpenTradeDisplayCacheUntil = Date.now() + 8000;
+      _cfOpenTradeDisplayCacheUntil = Date.now() + 30000;
     }
     const open = hasFreshOpenPayload
       ? payloadOpen
@@ -5097,7 +5144,7 @@ function cfApplyScalpStatus(d) {
 
     const dot = cfEl('cf-scalp-status-dot');
     const label = cfEl('cf-scalp-status-label');
-    if (dot) dot.style.background = running ? 'var(--green)' : 'var(--muted)';
+    if (dot) dot.dataset.running = running ? 'true' : 'false';
     if (label) label.textContent = running ? (status.in_trade ? 'In Trade' : (pending.length ? 'Pending Entry' : 'Monitoring')) : 'Engine Idle';
     const openCount = cfEl('cf-scalp-open-count');
     if (openCount) {
@@ -5110,34 +5157,31 @@ function cfApplyScalpStatus(d) {
     const feed = status.feed_metrics || {};
     const feedMeta = cfEl('cf-scalp-feed-meta');
     if (feedMeta) {
+      const feedState = String(feed.state || '').toLowerCase() || 'waiting';
       feedMeta.textContent = cfScalpFeedSummary(feed);
-      const state = String(feed.state || '').toLowerCase();
-      if (state === 'fresh') feedMeta.style.color = 'var(--green)';
-      else if (state === 'degraded') feedMeta.style.color = '#fbbf24';
-      else if (state === 'stale') feedMeta.style.color = 'var(--red)';
-      else feedMeta.style.color = 'var(--text)';
+      feedMeta.dataset.state = feedState;
     }
     const feedDetail = cfEl('cf-scalp-feed-detail');
     if (feedDetail) {
+      const feedState = feed.last_error ? 'error' : (String(feed.state || '').toLowerCase() || 'waiting');
       feedDetail.textContent = cfScalpFeedDetail(feed);
-      const state = String(feed.state || '').toLowerCase();
-      feedDetail.style.color = feed.last_error || state === 'stale' ? 'var(--red)' : 'var(--muted)';
+      feedDetail.dataset.state = feedState;
     }
 
     const execMeta = cfEl('cf-scalp-exec-meta');
     if (execMeta) {
       const phase = execPhase;
+      let execState = 'neutral';
+      if (exec.verified === false || phase.includes('error') || phase.includes('reject')) execState = 'error';
+      else if (phase === 'entry' || phase === 'exit' || phase === 'scale_in') execState = 'success';
+      else if (phase === 'targets' || phase === 'armed') execState = 'active';
       execMeta.textContent = cfScalpExecSummary(exec);
-      execMeta.style.color = exec.verified === false || phase.includes('error') || phase.includes('reject')
-        ? 'var(--red)'
-        : phase === 'entry' || phase === 'exit' || phase === 'scale_in'
-          ? 'var(--green)'
-          : 'var(--text)';
+      execMeta.dataset.state = execState;
     }
     const execDetail = cfEl('cf-scalp-exec-detail');
     if (execDetail) {
       execDetail.textContent = cfScalpExecDetail(exec);
-      execDetail.style.color = exec.verified === false || exec.error ? 'var(--red)' : 'var(--muted)';
+      execDetail.dataset.state = exec.verified === false || exec.error ? 'error' : (execPhase ? 'active' : 'neutral');
     }
 
     cfRefreshScalpEntryLaneFromState();
@@ -5146,13 +5190,13 @@ function cfApplyScalpStatus(d) {
     const pendingCount = cfEl('cf-scalp-pending-count');
     const pendingList = cfEl('cf-scalp-pending-list');
     if (pendingWrap && pendingList) {
+      pendingWrap.hidden = !pending.length;
       if (!pending.length) {
-        pendingWrap.style.display = 'none';
+        pendingList.innerHTML = '';
       } else {
-        pendingWrap.style.display = 'block';
         if (pendingCount) pendingCount.textContent = pending.length + ' armed';
         pendingList.innerHTML = pending.map(function(p) {
-          const sideColor = p.side === 'LONG' ? 'var(--green)' : 'var(--red)';
+          const side = String(p.side || '').toLowerCase();
           const armedAt = p.created_at ? fmtDt(p.created_at) : '—';
           const qtyMain = p.qty_mode === 'base' && p.base_qty
             ? Number(p.base_qty).toFixed(6) + ' qty'
@@ -5160,15 +5204,15 @@ function cfApplyScalpStatus(d) {
           return `
             <div class="cf-scalp-pending-card">
               <div class="cf-scalp-pending-card-head">
-                <div style="font-size:13px;font-weight:700;color:${sideColor};">${_escapeHtml(p.side === 'LONG' ? 'BUY Pending' : 'SELL Pending')}</div>
-                <div style="font-size:11px;color:var(--muted);">${_escapeHtml(String(p.mode || 'paper').toUpperCase())}</div>
+                <div class="cf-scalp-pending-side" data-side="${_escapeHtml(side)}">${_escapeHtml(p.side === 'LONG' ? 'BUY Pending' : 'SELL Pending')}</div>
+                <div class="cf-scalp-pending-mode">${_escapeHtml(String(p.mode || 'paper').toUpperCase())}</div>
               </div>
-              <div style="font-size:12px;font-weight:600;margin-bottom:6px;">${_escapeHtml(cfPrettyScalpSymbol(p.symbol || '—'))}</div>
-              <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${_escapeHtml(p.trigger_summary || 'Pending trigger')}</div>
+              <div class="cf-scalp-pending-symbol">${_escapeHtml(cfPrettyScalpSymbol(p.symbol || '—'))}</div>
+              <div class="cf-scalp-pending-trigger">${_escapeHtml(p.trigger_summary || 'Pending trigger')}</div>
               <div class="cf-scalp-pending-meta">
                 <div>Qty: <span>${_escapeHtml(qtyMain)}</span></div>
                 <div>Lev: <span>${_escapeHtml(String(p.leverage || '—'))}x</span></div>
-                <div style="grid-column:span 2;">Armed: <span>${_escapeHtml(armedAt)}</span></div>
+                <div class="cf-scalp-pending-meta-wide">Armed: <span>${_escapeHtml(armedAt)}</span></div>
               </div>
             </div>`;
         }).join('');
@@ -5191,7 +5235,7 @@ function cfApplyScalpStatus(d) {
       }
       const sign = pnl >= 0 ? '+' : '';
       sessionPnlEl.textContent = sign + fmtINR(pnl);
-      sessionPnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
+      sessionPnlEl.dataset.state = pnl > 0 ? 'success' : pnl < 0 ? 'error' : 'neutral';
     }
 
     cfRenderActivePositions(open);
@@ -5227,7 +5271,7 @@ function cfRenderActivePositions(open) {
 
   if (!open.length) {
     _cfOpenTradeSnapshot = '';
-    body.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>';
+    body.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">No active positions</td></tr>';
     _renderTablePager('cf-scalp-active-table', 'cf-scalp-active-table', 'cf-scalp-active-pagination');
     return;
   }
@@ -5246,18 +5290,14 @@ function cfRenderActivePositions(open) {
       const sideTag = t.side === 'BUY' || t.side === 'LONG'
         ? `<span class="tag tag-green">${t.side}</span>`
         : `<span class="tag tag-red">${t.side || '—'}</span>`;
-      const rowBg = isProfit
-        ? 'background:rgba(52,211,153,0.05);border-left:3px solid rgba(52,211,153,0.5);'
-        : isLoss
-          ? 'background:rgba(248,113,113,0.05);border-left:3px solid rgba(248,113,113,0.5);'
-          : 'border-left:3px solid transparent;';
+      const pnlState = isProfit ? 'profit' : (isLoss ? 'loss' : 'flat');
       const qtyMain = t.qty_mode === 'base' && t.base_qty
         ? Number(t.base_qty).toFixed(6)
         : '$' + Number(t.qty_usdt || t.quantity || 0).toFixed(2);
       const qtySub = t.qty_mode === 'base'
         ? ('$' + Number(t.qty_usdt || 0).toFixed(2) + ' margin')
         : ((t.base_qty ? Number(t.base_qty).toFixed(6) + ' qty' : 'margin'));
-      return `<tr data-tid="${tid}" style="${rowBg}">
+      return `<tr data-tid="${tid}" data-pnl-state="${pnlState}">
         <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">trade #${tid || '—'} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div></td>
         <td>${sideTag}</td>
         <td><div class="table-value-stack"><div class="table-value-main">${qtyMain}</div><div class="table-value-sub">${qtySub}</div></div></td>
@@ -5266,8 +5306,8 @@ function cfRenderActivePositions(open) {
         <td data-field="pnl"><div class="table-value-stack"><div class="table-value-main ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div><div class="table-value-sub ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">unrealized</div></div></td>
         <td><div class="table-edit-stack table-edit-stack-labeled"><div class="table-field-label">TP $</div><input type="number" class="table-input-sm" id="cf-tp-usd-${tid}" value="${t.target_usd || 0}" step="1" min="0" placeholder="TP $"><div class="table-field-label">TP Px</div><input type="number" class="table-input-sm" id="cf-tp-price-${tid}" value="${t.target_price || 0}" step="0.1" min="0" placeholder="TP price"></div></td>
         <td><div class="table-edit-stack table-edit-stack-labeled"><div class="table-field-label">SL $</div><input type="number" class="table-input-sm" id="cf-sl-usd-${tid}" value="${t.sl_usd || 0}" step="1" min="0" placeholder="SL $"><div class="table-field-label">SL Px</div><input type="number" class="table-input-sm" id="cf-sl-price-${tid}" value="${t.sl_price || 0}" step="0.1" min="0" placeholder="SL price"></div></td>
-        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack"><div class="table-field-label">Add Qty</div><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="0.0015" step="0.0001" min="0.0001" data-default-qty="0.0015" placeholder="0.0015"><button class="btn btn-outline btn-sm table-add-btn" data-cf-click="cfAddScalpQuantity('${tid}')">Add Qty</button></div></td>
-        <td><div class="table-inline-actions table-action-stack"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Update TP/SL</button><button class="btn btn-danger btn-sm" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
+        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack"><div class="table-field-label">Add Qty</div><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="0.0015" step="any" min="0.000001" data-default-qty="0.0015" placeholder="0.0015"><button class="btn btn-outline btn-sm table-add-btn" data-cf-click="cfAddScalpQuantity('${tid}')">Add</button></div></td>
+        <td><div class="table-inline-actions table-action-stack"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Set</button><button class="btn btn-danger btn-sm" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
       </tr>`;
     }).join('');
   } else {
@@ -5287,12 +5327,7 @@ function cfRenderActivePositions(open) {
         const pnlClass = isProfit ? 'positive' : isLoss ? 'negative' : '';
         pnlCell.innerHTML = '<div class="table-value-stack"><div class="table-value-main ' + pnlClass + '">' + (pnl >= 0 ? '+' : '') + fmtINR(pnl) + '</div><div class="table-value-sub ' + pnlClass + '">unrealized</div></div>';
       }
-      const rowBg = isProfit
-        ? 'background:rgba(52,211,153,0.05);border-left:3px solid rgba(52,211,153,0.5);'
-        : isLoss
-          ? 'background:rgba(248,113,113,0.05);border-left:3px solid rgba(248,113,113,0.5);'
-          : 'border-left:3px solid transparent;';
-      row.style.cssText = rowBg;
+      row.dataset.pnlState = isProfit ? 'profit' : (isLoss ? 'loss' : 'flat');
     });
   }
   _renderTablePager('cf-scalp-active-table', 'cf-scalp-active-table', 'cf-scalp-active-pagination');
@@ -5350,34 +5385,21 @@ async function cfSubmitScalp(direction) {
       body: JSON.stringify(payload)
     });
     const d = await res.json();
-    if (d.entry_controls) {
-      const merged = Object.assign({}, _cfLatestScalpStatus || {});
-      merged.entry_controls = d.entry_controls;
-      merged.feed_metrics = Object.assign({}, merged.feed_metrics || {}, {
-        symbol: d.entry_controls.symbol || (merged.feed_metrics || {}).symbol || symbol,
-        source: d.entry_controls.source || (merged.feed_metrics || {}).source || '',
-        age_ms: d.entry_controls.age_ms,
-        state: d.entry_controls.state || (merged.feed_metrics || {}).state || 'waiting',
-        entry_block_reason: d.entry_controls.reason || (merged.feed_metrics || {}).entry_block_reason || ''
-      });
-      _cfLatestScalpStatus = merged;
-      cfRefreshScalpEntryLaneFromState();
-    }
+    cfMergeScalpStatusPatch(d);
+    cfRefreshScalpEntryLaneFromState();
     if (d.status === 'ok' || d.status === 'entered' || d.trade_id) {
       if (statusEl) { statusEl.textContent = direction + ' entered ✓'; statusEl.style.color = 'var(--green)'; }
       cfToast(`Scalp ${direction} entered on ${cfPrettyScalpSymbol(symbol)}`, 'success');
-      await cfLoadScalpStatus();
-      await cfLoadScalpActivity(true);
+      await cfRefreshScalpWorkspace();
       setTimeout(cfLoadScalpStatus, 250);
     } else if (d.status === 'pending' || d.entry_id) {
       if (statusEl) { statusEl.textContent = d.message || 'Pending entry armed'; statusEl.style.color = '#fbbf24'; }
       cfToast(d.message || `Pending entry armed for ${cfPrettyScalpSymbol(symbol)}`, 'info');
-      await cfLoadScalpStatus();
-      await cfLoadScalpActivity(true);
+      await cfRefreshScalpWorkspace();
       setTimeout(cfLoadScalpStatus, 250);
     } else {
-      if (statusEl) { statusEl.textContent = d.message || d.status || 'Error'; statusEl.style.color = 'var(--red)'; }
-      cfToast(d.message || d.detail || 'Entry failed', 'danger');
+      if (statusEl) { statusEl.textContent = cfApiErrorDetail(d, d.status || 'Error'); statusEl.style.color = 'var(--red)'; }
+      cfToast(cfApiErrorDetail(d, 'Entry failed'), 'danger');
     }
   } catch (e) {
     if (e && e.code === 'cf_ui_mismatch') {
@@ -5398,15 +5420,15 @@ async function cfExitScalpTrade(tradeId) {
       body: JSON.stringify({ trade_id: tradeId })
     });
     const d = await res.json();
+    cfMergeScalpStatusPatch(d);
     if (d.status === 'ok' || d.status === 'exited') {
       cfToast('Position closed', 'success');
-      await cfLoadScalpStatus();
-      await cfLoadScalpActivity(true);
+      await cfRefreshScalpWorkspace();
       setTimeout(cfLoadScalpStatus, 200);
     } else {
-      cfToast(d.message || 'Exit failed', 'danger');
+      cfToast(cfApiErrorDetail(d, 'Exit failed'), 'danger');
     }
-  } catch(e) { cfToast('Network error exiting trade', 'danger'); }
+  } catch(e) { cfToast((e && e.message) ? e.message : 'Network error exiting trade', 'danger'); }
 }
 
 async function cfModifyScalpTrade(tradeId) {
@@ -5442,13 +5464,13 @@ async function cfModifyScalpTrade(tradeId) {
       body: JSON.stringify(payload),
     });
     const d = await res.json();
+    cfMergeScalpStatusPatch(d);
     if (d.status === 'ok') {
       cfToast(`Trade #${tradeId} updated`, 'success');
-      await cfLoadScalpStatus();
-      await cfLoadScalpActivity(true);
+      await cfRefreshScalpWorkspace();
       setTimeout(cfLoadScalpStatus, 200);
     } else {
-      cfToast(d.message || d.detail || 'Update failed', 'danger');
+      cfToast(cfApiErrorDetail(d, 'Update failed'), 'danger');
     }
   } catch (e) {
     cfToast('Error: ' + e.message, 'danger');
@@ -5463,8 +5485,9 @@ async function cfAddScalpQuantity(tradeId) {
     cfToast('Trade controls are out of date. Reload the page.', 'warning');
     return;
   }
-  const qtyRaw = String(qtyInput.value || qtyInput.getAttribute('data-default-qty') || qtyInput.placeholder || '').trim();
-  const qtyValue = parseFloat(qtyRaw);
+  const rawValue = String(qtyInput.value || '').trim();
+  const fallbackValue = String(qtyInput.getAttribute('data-default-qty') || qtyInput.placeholder || '').trim();
+  const qtyValue = parseFloat(rawValue || fallbackValue);
   if (!Number.isFinite(qtyValue) || qtyValue <= 0) {
     cfToast('Add quantity must be greater than zero', 'danger');
     return;
@@ -5476,14 +5499,14 @@ async function cfAddScalpQuantity(tradeId) {
       body: JSON.stringify({ qty_mode: 'base', qty_value: qtyValue }),
     });
     const d = await res.json();
+    cfMergeScalpStatusPatch(d);
     if (d.status === 'ok') {
-      qtyInput.value = qtyInput.getAttribute('data-default-qty') || '';
+      qtyInput.value = qtyInput.getAttribute('data-default-qty') || fallbackValue || '';
       cfToast(`Added ${qtyValue} qty to trade #${tradeId}`, 'success');
-      await cfLoadScalpStatus();
-      await cfLoadScalpActivity(true);
+      await cfRefreshScalpWorkspace();
       setTimeout(cfLoadScalpStatus, 200);
     } else {
-      cfToast(d.message || d.detail || 'Add failed', 'danger');
+      cfToast(cfApiErrorDetail(d, 'Add failed'), 'danger');
     }
   } catch (e) {
     cfToast('Error: ' + e.message, 'danger');
@@ -5522,7 +5545,7 @@ function cfToggleScalpLiveSafety() {
   const wrap = document.getElementById('cf-scalp-live-safety');
   const ack = document.getElementById('cf-scalp-live-ack');
   const isLive = !!modeEl && modeEl.value === 'live';
-  if (wrap) wrap.style.display = isLive ? 'block' : 'none';
+  if (wrap) wrap.hidden = !isLive;
   if (!isLive && ack) ack.checked = false;
   cfRefreshScalpEntryLaneFromState();
 }

@@ -74,8 +74,13 @@ class DeltaWSFeed:
         self._connected = False
         self._authenticated = False
         self._running = False
+        self._disconnect_requested = False
         self._reconnect_attempt = 0
         self._last_message_time = 0
+        self._last_connected_at = 0.0
+        self._last_reconnect_started_at = 0.0
+        self._last_disconnect_reason = ""
+        self._connection_state = "idle"
         self._connected_event = asyncio.Event()
 
         # Channel management
@@ -132,6 +137,29 @@ class DeltaWSFeed:
             return str(name or "")
         return f"{name}:{','.join(symbols)}"
 
+    async def _close_socket_transport(self):
+        ws = self._ws
+        self._ws = None
+        if ws is not None and not ws.closed:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+    async def _close_client_session(self):
+        session = self._session
+        self._session = None
+        if session is not None and not session.closed:
+            try:
+                await session.close()
+            except Exception:
+                pass
+
+    async def _reset_transport(self, *, close_session: bool = False):
+        await self._close_socket_transport()
+        if close_session:
+            await self._close_client_session()
+
     # ── Properties ──────────────────────────────────────────────
     @property
     def connected(self) -> bool:
@@ -168,10 +196,13 @@ class DeltaWSFeed:
         Returns once the socket is ready for subscriptions.
         """
         self._running = True
+        self._disconnect_requested = False
         if self.connected:
+            self._connection_state = "connected"
             return
         if self._connect_task is None or self._connect_task.done():
             self._connected_event.clear()
+            self._connection_state = "connecting"
             self._connect_task = asyncio.create_task(self._do_connect())
         await asyncio.wait_for(self._connected_event.wait(), timeout=15)
 
@@ -179,9 +210,13 @@ class DeltaWSFeed:
         """Internal connection logic with retry."""
         while self._running and self._reconnect_attempt < MAX_RECONNECT_ATTEMPTS:
             try:
+                self._connection_state = "connecting" if self._reconnect_attempt == 0 else "reconnecting"
+                if self._connection_state == "reconnecting":
+                    self._last_reconnect_started_at = _time.time()
                 if self._session is None or self._session.closed:
                     timeout = aiohttp.ClientTimeout(total=30, connect=15)
                     self._session = aiohttp.ClientSession(timeout=timeout)
+                await self._close_socket_transport()
 
                 print(f"[WS] Connecting to {self._ws_url}...")
                 self._ws = await self._session.ws_connect(
@@ -191,16 +226,19 @@ class DeltaWSFeed:
                 )
 
                 self._connected = True
+                self._authenticated = False
                 self._reconnect_attempt = 0
                 self._last_message_time = _time.time()
+                self._last_connected_at = self._last_message_time
                 self._connected_event.set()
+                self._connection_state = "connected"
+                self._last_disconnect_reason = ""
+                self.last_error = ""
                 print("[WS] Connected to Delta Exchange WebSocket")
 
-                # Authenticate if API keys are configured
                 if self._api_key and self._api_key != "YOUR_API_KEY_HERE":
                     await self._authenticate()
 
-                # Resubscribe to previously subscribed channels
                 if self._subscribed_channels:
                     print(f"[WS] Resubscribing to {len(self._subscribed_channels)} channels...")
                     channels_copy = list(self._subscribed_channels)
@@ -212,7 +250,6 @@ class DeltaWSFeed:
                             continue
                         await self._send_subscribe(channel, symbols)
 
-                # Fire on_connect callback
                 if self.on_connect:
                     try:
                         result = self.on_connect()
@@ -221,17 +258,12 @@ class DeltaWSFeed:
                     except Exception as e:
                         print(f"[WS] on_connect callback error: {e}")
 
-                # Cancel any stale tasks before creating new ones
                 for _t in (self._reader_task, self._heartbeat_task):
                     if _t and not _t.done():
                         _t.cancel()
 
-                # Start reader and heartbeat tasks
                 self._reader_task = asyncio.create_task(self._reader_loop())
                 self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-
-                # Reader/heartbeat continue in the background. When the
-                # socket drops, _reader_loop triggers reconnect handling.
                 return
 
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
@@ -239,6 +271,10 @@ class DeltaWSFeed:
                 self._authenticated = False
                 self._connected_event.clear()
                 self.last_error = str(e)
+                self._last_disconnect_reason = str(e)
+                self._connection_state = (
+                    "reconnecting" if self._running and not self._disconnect_requested else "disconnected"
+                )
                 print(f"[WS] Connection failed: {e}")
 
                 if self.on_disconnect:
@@ -249,7 +285,7 @@ class DeltaWSFeed:
                     except Exception:
                         pass
 
-                # Exponential backoff
+                await self._reset_transport(close_session=True)
                 if not self._running:
                     break
                 self._reconnect_attempt += 1
@@ -263,6 +299,8 @@ class DeltaWSFeed:
 
         if self._running:
             print(f"[WS] Max reconnect attempts ({MAX_RECONNECT_ATTEMPTS}) exhausted")
+            self._connection_state = "exhausted"
+            await self._close_client_session()
             self._running = False
 
     # ── Authentication ──────────────────────────────────────────
@@ -360,6 +398,7 @@ class DeltaWSFeed:
     # ── Message Reader ──────────────────────────────────────────
     async def _reader_loop(self):
         """Read and dispatch WebSocket messages."""
+        disconnect_reason = "reader_loop_ended"
         try:
             async for msg in self._ws:
                 self._last_message_time = _time.time()
@@ -373,36 +412,46 @@ class DeltaWSFeed:
                         print(f"[WS] Invalid JSON: {msg.data[:100]}")
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    print(f"[WS] Error: {self._ws.exception()}")
+                    disconnect_reason = str(self._ws.exception() or "socket_error")
+                    print(f"[WS] Error: {disconnect_reason}")
                     break
 
                 elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
-                    print(f"[WS] Connection closed: {msg.data}")
+                    disconnect_reason = str(msg.data or "socket_closed")
+                    print(f"[WS] Connection closed: {disconnect_reason}")
                     break
 
         except asyncio.CancelledError:
-            return
+            disconnect_reason = "reader_cancelled"
+            raise
         except Exception as e:
             self.last_error = str(e)
+            disconnect_reason = str(e)
             print(f"[WS] Reader error: {e}")
 
         finally:
             self._connected = False
             self._authenticated = False
             self._connected_event.clear()
-            if self._heartbeat_task:
-                self._heartbeat_task.cancel()
+            self._last_disconnect_reason = disconnect_reason
+            self._connection_state = (
+                "reconnecting" if self._running and not self._disconnect_requested else "disconnected"
+            )
+            heartbeat = self._heartbeat_task
+            self._heartbeat_task = None
+            if heartbeat and not heartbeat.done():
+                heartbeat.cancel()
+            await self._reset_transport(close_session=True)
 
             if self.on_disconnect:
                 try:
-                    result = self.on_disconnect("reader_loop_ended")
+                    result = self.on_disconnect(disconnect_reason)
                     if asyncio.iscoroutine(result):
                         await result
                 except Exception:
                     pass
 
-            # Auto-reconnect — cancel any in-flight connect task before spawning a new one
-            if self._running:
+            if self._running and not self._disconnect_requested:
                 print("[WS] Initiating reconnect...")
                 if self._connect_task and not self._connect_task.done():
                     self._connect_task.cancel()
@@ -505,11 +554,13 @@ class DeltaWSFeed:
                     try:
                         await self._ws.ping()
                     except Exception:
+                        self.last_error = "heartbeat_ping_failed"
                         print("[WS] Heartbeat ping failed")
                         break
 
-                # Check for stale connection (no messages in 60s)
                 if _time.time() - self._last_message_time > 60:
+                    self.last_error = "stale_connection"
+                    self._connection_state = "stale"
                     print("[WS] No messages for 60s — connection may be stale")
                     if self._ws and not self._ws.closed:
                         await self._ws.close()
@@ -518,52 +569,43 @@ class DeltaWSFeed:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            self.last_error = str(e)
             print(f"[WS] Heartbeat error: {e}")
 
     # ── Disconnect ──────────────────────────────────────────────
     async def disconnect(self):
         """Gracefully disconnect from WebSocket."""
+        self._disconnect_requested = True
         self._running = False
         self._connected = False
+        self._authenticated = False
         self._connected_event.clear()
+        self._connection_state = "disconnected"
+        self._last_disconnect_reason = "client_disconnect"
 
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
-        if self._reader_task:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
-        if self._connect_task and not self._connect_task.done():
-            self._connect_task.cancel()
-            try:
-                await self._connect_task
-            except asyncio.CancelledError:
-                pass
+        current = asyncio.current_task()
+        for attr in ("_heartbeat_task", "_reader_task", "_connect_task"):
+            task = getattr(self, attr)
+            if task and task is not current and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            setattr(self, attr, None)
 
-        if self._ws and not self._ws.closed:
-            await self._ws.close()
-        if self._session and not self._session.closed:
-            await self._session.close()
-
-        self._heartbeat_task = None
-        self._reader_task = None
-        self._connect_task = None
-        self._ws = None
-        self._session = None
-
+        await self._reset_transport(close_session=True)
         print("[WS] Disconnected")
 
     # ── Status ──────────────────────────────────────────────────
     def get_status(self) -> dict:
+        last_message_age_ms = (
+            int(max(0, (_time.time() - self._last_message_time) * 1000)) if self._last_message_time > 0 else None
+        )
         return {
             "connected": self.connected,
             "authenticated": self._authenticated,
+            "connection_state": self._connection_state,
             "ws_url": self._ws_url,
             "subscribed_channels": [
                 self._format_subscription(*self._parse_subscription_key(spec))
@@ -576,7 +618,13 @@ class DeltaWSFeed:
             "messages_received": self.messages_received,
             "reconnect_count": self.reconnect_count,
             "last_error": self.last_error,
-            "uptime_seconds": int(_time.time() - self._last_message_time) if self._last_message_time > 0 else 0,
+            "last_disconnect_reason": self._last_disconnect_reason,
+            "last_message_age_ms": last_message_age_ms,
+            "connected_at": int(self._last_connected_at) if self._last_connected_at > 0 else None,
+            "reconnecting_since": int(self._last_reconnect_started_at) if self._last_reconnect_started_at > 0 else None,
+            "uptime_seconds": int(_time.time() - self._last_connected_at)
+            if self._last_connected_at > 0 and self.connected
+            else 0,
         }
 
 

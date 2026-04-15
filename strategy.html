@@ -1033,30 +1033,30 @@
 
   <div class="card cf-scalp-status-bar">
     <div class="cf-scalp-status-main">
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span id="cf-scalp-status-dot" style="width:9px;height:9px;border-radius:50%;background:var(--muted);display:inline-block;flex-shrink:0;"></span>
-        <span style="font-size:13px;font-weight:600;" id="cf-scalp-status-label">Engine Idle</span>
+      <div class="cf-scalp-status-chip">
+        <span id="cf-scalp-status-dot" class="cf-scalp-status-dot" data-running="false"></span>
+        <span class="cf-scalp-status-label" id="cf-scalp-status-label">Engine Idle</span>
       </div>
-      <div style="flex:1;min-width:120px;font-size:12px;color:var(--muted);" id="cf-scalp-open-count">0 open trades</div>
+      <div class="cf-scalp-open-count" id="cf-scalp-open-count">0 open trades</div>
     </div>
     <div class="cf-scalp-status-meta">
       <div class="cf-scalp-status-meta-block">
         <div class="cf-status-kicker">Feed Freshness</div>
-        <div id="cf-scalp-feed-meta" class="cf-status-main">Awaiting ticks</div>
-        <div id="cf-scalp-feed-detail" class="cf-scalp-meta-detail">WS idle • 0 msgs • 0 reconnects</div>
+        <div id="cf-scalp-feed-meta" class="cf-status-main" data-state="waiting">Awaiting ticks</div>
+        <div id="cf-scalp-feed-detail" class="cf-scalp-meta-detail" data-state="waiting">WS idle • 0 msgs • 0 reconnects</div>
       </div>
       <div class="cf-scalp-status-meta-block">
         <div class="cf-status-kicker">Execution</div>
-        <div id="cf-scalp-exec-meta" class="cf-status-main">No live fills yet</div>
-        <div id="cf-scalp-exec-detail" class="cf-scalp-meta-detail">Awaiting next broker action</div>
+        <div id="cf-scalp-exec-meta" class="cf-status-main" data-state="neutral">No live fills yet</div>
+        <div id="cf-scalp-exec-detail" class="cf-scalp-meta-detail" data-state="neutral">Awaiting next broker action</div>
       </div>
       <div class="cf-scalp-status-actions">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span style="font-size:12px;color:var(--muted);">Session P&amp;L:</span>
-          <span style="font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;" id="cf-scalp-session-pnl">$0.00</span>
+        <div class="cf-scalp-session-pill">
+          <span class="cf-scalp-session-label">Session P&amp;L:</span>
+          <span class="cf-scalp-session-pnl" id="cf-scalp-session-pnl">$0.00</span>
         </div>
         <button class="btn btn-danger btn-sm" data-cf-click="emergencyStop()">⛔ Master Kill</button>
-        <button class="btn btn-outline btn-sm" data-cf-click="cfLoadScalpStatus()">↻ Refresh</button>
+        <button class="btn btn-outline btn-sm" data-cf-click="cfRefreshScalpWorkspace()">↻ Refresh</button>
       </div>
     </div>
   </div>
@@ -1090,10 +1090,10 @@
     <div class="cf-scalp-entry-note" id="cf-scalp-entry-note">&nbsp;</div>
   </div>
 
-  <div id="cf-scalp-pending-wrap" class="card cf-scalp-pending-wrap" style="display:none;">
+  <div id="cf-scalp-pending-wrap" class="card cf-scalp-pending-wrap" hidden>
     <div class="cf-scalp-pending-head">
-      <div style="font-size:13px;font-weight:700;color:#fbbf24;">Pending Entries</div>
-      <div id="cf-scalp-pending-count" style="font-size:11px;color:var(--muted);">0 armed</div>
+      <div class="cf-scalp-pending-title">Pending Entries</div>
+      <div id="cf-scalp-pending-count" class="cf-scalp-pending-count">0 armed</div>
     </div>
     <div id="cf-scalp-pending-list" class="cf-scalp-pending-list"></div>
   </div>
@@ -1116,7 +1116,7 @@
             <th>Mark</th><th>Unreal. P&amp;L</th><th>TP</th><th>SL</th><th>Add</th><th>Action</th>
           </tr></thead>
           <tbody id="cf-scalp-active-body">
-            <tr><td colspan="10" style="text-align:center;padding:30px;color:var(--muted);">No active positions</td></tr>
+            <tr><td colspan="10" class="cf-table-empty-cell">No active positions</td></tr>
           </tbody>
         </table>
       </div>
@@ -1127,12 +1127,12 @@
   <div class="cf-scalp-workbench cf-scalp-workbench-wide">
 
     <div class="card cf-scalp-form-card">
-      <h3 style="margin:0 0 16px 0;font-size:15px;font-weight:700;">Velocity Entry</h3>
+      <h3 class="cf-scalp-panel-title">Velocity Entry</h3>
 
       <div class="cf-scalp-form-grid cf-scalp-form-grid-tight">
-        <div style="grid-column:span 2;">
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Symbol</label>
-          <select id="cf-scalp-symbol" data-cf-change="cfUpdateScalpSymbol()" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;">
+        <div class="cf-scalp-field cf-scalp-field-full">
+          <label for="cf-scalp-symbol">Symbol</label>
+          <select id="cf-scalp-symbol" data-cf-change="cfUpdateScalpSymbol()" class="cf-scalp-input">
             <option value="BTCUSDT">BTC/USDT</option>
             <option value="ETHUSDT">ETH/USDT</option>
             <option value="SOLUSDT">SOL/USDT</option>
@@ -1142,8 +1142,8 @@
           </select>
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Size</label>
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-qty">Size</label>
           <div class="cf-scalp-qty-row cf-scalp-qty-grid">
             <select id="cf-scalp-qty-mode" class="cf-scalp-type-select cf-scalp-qty-mode-select" data-cf-change="cfUpdateScalpQtyUi()">
               <option value="usdt">Margin $</option>
@@ -1151,12 +1151,12 @@
             </select>
             <input type="number" id="cf-scalp-qty" value="10000" min="0.0001" step="0.0001" class="cf-scalp-input cf-scalp-qty-input">
           </div>
-          <div id="cf-scalp-qty-hint" style="margin-top:4px;font-size:10px;color:var(--muted);">Margin in USD. Switch to Qty for values like 0.0015.</div>
+          <div id="cf-scalp-qty-hint" class="cf-scalp-help">Margin in USD. Switch to Qty for values like 0.0015.</div>
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Leverage</label>
-          <select id="cf-scalp-leverage" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;">
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-leverage">Leverage</label>
+          <select id="cf-scalp-leverage" class="cf-scalp-input">
             <option value="1">1×</option>
             <option value="2">2×</option>
             <option value="5">5×</option>
@@ -1168,73 +1168,73 @@
           </select>
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;gap:6px;margin-bottom:4px;">Risk Cap
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-sl" class="cf-scalp-label-inline">Risk Cap
             <select id="cf-sl-type" data-cf-change="cfUpdateSLTPHints()" class="cf-scalp-type-select">
               <option value="usdt">$</option><option value="pct">%</option>
             </select>
           </label>
-          <input type="number" id="cf-scalp-sl" value="1000" min="0" step="1" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;">
-          <div id="cf-sl-hint" style="margin-top:4px;font-size:10px;color:var(--muted);">Max loss in USDT before auto-exit</div>
+          <input type="number" id="cf-scalp-sl" value="1000" min="0" step="1" class="cf-scalp-input">
+          <div id="cf-sl-hint" class="cf-scalp-help">Max loss in USDT before auto-exit</div>
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;gap:6px;margin-bottom:4px;">Profit Lock
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-tp" class="cf-scalp-label-inline">Profit Lock
             <select id="cf-tp-type" data-cf-change="cfUpdateSLTPHints()" class="cf-scalp-type-select">
               <option value="usdt">$</option><option value="pct">%</option>
             </select>
           </label>
-          <input type="number" id="cf-scalp-tp" value="1000" min="0" step="1" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;">
-          <div id="cf-tp-hint" style="margin-top:4px;font-size:10px;color:var(--muted);">Profit target in USDT before auto-exit</div>
+          <input type="number" id="cf-scalp-tp" value="1000" min="0" step="1" class="cf-scalp-input">
+          <div id="cf-tp-hint" class="cf-scalp-help">Profit target in USDT before auto-exit</div>
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Stop Loss Price</label>
-          <input type="number" id="cf-scalp-sl-price" value="" min="0" step="0.1" placeholder="Optional price-based SL" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;">
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-sl-price">Stop Loss Price</label>
+          <input type="number" id="cf-scalp-sl-price" value="" min="0" step="0.1" placeholder="Optional price-based SL" class="cf-scalp-input">
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Take Profit Price</label>
-          <input type="number" id="cf-scalp-tp-price" value="" min="0" step="0.1" placeholder="Optional price-based TP" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;">
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-tp-price">Take Profit Price</label>
+          <input type="number" id="cf-scalp-tp-price" value="" min="0" step="0.1" placeholder="Optional price-based TP" class="cf-scalp-input">
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Entry Stop</label>
-          <input type="number" id="cf-scalp-entry-stop" value="" min="0" step="0.1" placeholder="Breakout / breakdown trigger" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;">
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-entry-stop">Entry Stop</label>
+          <input type="number" id="cf-scalp-entry-stop" value="" min="0" step="0.1" placeholder="Breakout / breakdown trigger" class="cf-scalp-input">
         </div>
 
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Entry Limit</label>
-          <input type="number" id="cf-scalp-entry-limit" value="" min="0" step="0.1" placeholder="Pullback / fade trigger" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;">
+        <div class="cf-scalp-field">
+          <label for="cf-scalp-entry-limit">Entry Limit</label>
+          <input type="number" id="cf-scalp-entry-limit" value="" min="0" step="0.1" placeholder="Pullback / fade trigger" class="cf-scalp-input">
         </div>
 
-        <div style="grid-column:span 2;">
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Execution Mode</label>
-          <select id="cf-scalp-mode" data-cf-change="cfToggleScalpLiveSafety()" class="cf-scalp-input" style="width:100%;padding:9px 10px;border-radius:8px;font-size:13px;">
+        <div class="cf-scalp-field cf-scalp-field-full">
+          <label for="cf-scalp-mode">Execution Mode</label>
+          <select id="cf-scalp-mode" data-cf-change="cfToggleScalpLiveSafety()" class="cf-scalp-input">
             <option value="paper" selected>📄 Paper</option>
             <option value="live">🔴 Live</option>
           </select>
         </div>
 
-        <div id="cf-scalp-live-safety" class="cf-scalp-live-safety" style="grid-column:span 2;display:none;padding:10px 12px;border-radius:10px;border:1px solid rgba(248,113,113,0.24);background:rgba(248,113,113,0.08);">
-          <label style="display:flex;gap:8px;align-items:flex-start;font-size:11px;color:#fecaca;line-height:1.5;text-transform:none;letter-spacing:0;">
-            <input type="checkbox" id="cf-scalp-live-ack" style="width:14px;height:14px;margin-top:2px;accent-color:#f87171;">
+        <div id="cf-scalp-live-safety" class="cf-scalp-live-safety cf-scalp-field-full" hidden>
+          <label class="cf-scalp-live-safety-copy">
+            <input type="checkbox" id="cf-scalp-live-ack" class="cf-scalp-live-ack">
             <span>I understand live scalp mode will place real Delta orders immediately once submitted.</span>
           </label>
         </div>
 
-        <div style="grid-column:span 2;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
-          <button class="btn" id="cf-scalp-buy-btn" data-cf-click="cfSubmitScalp('BUY')" style="--btn-bg:linear-gradient(180deg,rgba(52,211,153,0.2)0%,rgba(16,185,129,0.35)100%);--btn-border:rgba(52,211,153,0.4);--btn-color:#34d399;font-weight:700;padding:11px;">▲ BUY</button>
-          <button class="btn" id="cf-scalp-sell-btn" data-cf-click="cfSubmitScalp('SELL')" style="--btn-bg:linear-gradient(180deg,rgba(248,113,113,0.2)0%,rgba(239,68,68,0.35)100%);--btn-border:rgba(248,113,113,0.4);--btn-color:#f87171;font-weight:700;padding:11px;">▼ SELL</button>
+        <div class="cf-scalp-field cf-scalp-field-full cf-scalp-actions-grid">
+          <button class="btn cf-scalp-trade-btn cf-scalp-trade-btn-buy" id="cf-scalp-buy-btn" data-cf-click="cfSubmitScalp('BUY')">▲ BUY</button>
+          <button class="btn cf-scalp-trade-btn cf-scalp-trade-btn-sell" id="cf-scalp-sell-btn" data-cf-click="cfSubmitScalp('SELL')">▼ SELL</button>
         </div>
       </div>
-      <div id="cf-scalp-entry-status" style="margin-top:12px;font-size:12px;min-height:18px;color:var(--muted);"></div>
+      <div id="cf-scalp-entry-status" class="cf-scalp-entry-status"></div>
     </div>
 
-    <div class="card" style="padding:20px;">
-      <h3 style="margin:0 0 14px;font-size:15px;font-weight:700;">Event Log</h3>
-      <div id="cf-scalp-event-log" style="max-height:500px;overflow-y:auto;font-size:12px;font-family:'JetBrains Mono',monospace;">
-        <div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>
+    <div class="card cf-scalp-log-card">
+      <h3 class="cf-scalp-panel-title">Event Log</h3>
+      <div id="cf-scalp-event-log" class="cf-scalp-event-log">
+        <div class="cf-scalp-event-empty">No events yet</div>
       </div>
     </div>
   </div>
@@ -1261,7 +1261,7 @@
             <th class="sortable-th" data-cf-click="sortScalpHistory('exit_reason')">Reason <span class="sort-icon sh-sort" id="shs-exit_reason">▲</span></th>
           </tr></thead>
           <tbody id="cf-scalp-history-body">
-            <tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>
+            <tr><td colspan="9" class="cf-table-empty-cell">No trades yet</td></tr>
           </tbody>
         </table>
       </div>

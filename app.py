@@ -543,7 +543,11 @@ async def security_headers_middleware(request: Request, call_next):
         "style-src-attr 'unsafe-inline'; "
         "font-src 'self' https://fonts.gstatic.com data:; "
         "img-src 'self' data: blob: https:; "
-        "connect-src 'self' ws: wss: https:; "
+        "connect-src 'self' ws: wss:; "
+        "worker-src 'self' blob:; "
+        "media-src 'self' data: blob:; "
+        "manifest-src 'self'; "
+        "frame-src 'none'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'; "
@@ -3167,6 +3171,16 @@ def _persist_scalp_runtime_snapshot(engine: ScalpEngine, symbol_hint: str = "") 
         _logger.error("[SCALP] Failed to persist runtime snapshot: %s", exc)
 
 
+def _attach_scalp_runtime_metrics(result: dict, engine: ScalpEngine, symbol_hint: str = "") -> dict:
+    if not isinstance(result, dict):
+        return result
+    status = engine.get_status(symbol_hint)
+    result.setdefault("execution_metrics", dict(status.get("execution_metrics") or {}))
+    result.setdefault("feed_metrics", dict(status.get("feed_metrics") or {}))
+    result.setdefault("entry_controls", dict(status.get("entry_controls") or {}))
+    return result
+
+
 def _scalp_persist_event(event: dict) -> None:
     try:
         events = _load_scalp_events()
@@ -3361,7 +3375,7 @@ async def scalp_enter(request: Request):
                 level="info",
             )
         _persist_scalp_runtime_snapshot(eng, symbol)
-        return result
+        return _attach_scalp_runtime_metrics(result, eng, symbol)
     except Exception as e:
         alerter.alert("Scalp Entry Error", f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3387,9 +3401,13 @@ async def scalp_exit(request: Request):
                 f"Symbol: {t.get('symbol', '—')}\nSide: {t.get('side', '')}\nP&L: ${pnl:,.2f}\nReason: manual\nEntry: ${t.get('entry_price', 0):,.2f}\nExit: ${t.get('exit_price', 0):,.2f}",
                 level="info" if pnl >= 0 else "warn",
             )
-        elif result.get("status") == "error":
+            return _attach_scalp_runtime_metrics(result, eng, t.get("symbol", ""))
+        if result.get("status") == "error":
             alerter.alert("Scalp Exit Failed", f"Trade ID: {trade_id}\nError: {result.get('message', 'unknown')}")
-        return result
+            raise HTTPException(status_code=404, detail=result["message"])
+        return _attach_scalp_runtime_metrics(result, eng)
+    except HTTPException:
+        raise
     except Exception as e:
         alerter.alert("Scalp Exit Error", f"Trade ID: {trade_id}\nError: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3413,7 +3431,7 @@ async def update_scalp_targets(trade_id: int, request: Request):
     if result.get("status") == "error":
         raise HTTPException(status_code=404, detail=result["message"])
     _persist_scalp_runtime_snapshot(eng)
-    return result
+    return _attach_scalp_runtime_metrics(result, eng, result.get("trade", {}).get("symbol", ""))
 
 
 @app.post("/api/scalp/trades/{trade_id}/add")
@@ -3437,7 +3455,7 @@ async def add_scalp_quantity(trade_id: int, request: Request):
         f"Trade ID: {trade_id}\nSymbol: {trade.get('symbol', '—')}\nMode: {trade.get('mode', 'paper')}\nAdded: {qty_value} ({qty_mode})\nNew exposure: ${trade.get('qty_usdt', 0):,.2f} margin",
         level="info",
     )
-    return result
+    return _attach_scalp_runtime_metrics(result, eng, trade.get("symbol", ""))
 
 
 # ── WebSocket ─────────────────────────────────────────────────────

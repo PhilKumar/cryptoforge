@@ -456,6 +456,7 @@ class ScalpEngine:
         self._rest_price_fetches: int = 0
         self._last_execution: Dict[str, Any] = {}
         self._update_task: Optional[asyncio.Task] = None
+        self._ws_shutdown_task: Optional[asyncio.Task] = None
         self._last_update_push: float = 0.0
         self._update_interval_sec: float = 0.25
 
@@ -475,13 +476,28 @@ class ScalpEngine:
         if self._update_task:
             self._update_task.cancel()
             self._update_task = None
+        shutdown_task = None
         if self._ws_feed:
             try:
-                asyncio.get_running_loop().create_task(self._stop_ws_feed())
+                loop = asyncio.get_running_loop()
+                self._ws_shutdown_task = loop.create_task(self._stop_ws_feed())
+                shutdown_task = self._ws_shutdown_task
             except RuntimeError:
                 self._ws_feed = None
                 self._ws_prices.clear()
                 self._ws_subscribed_symbols.clear()
+        return shutdown_task
+
+    async def shutdown(self):
+        shutdown_task = self.stop()
+        if shutdown_task:
+            try:
+                await shutdown_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if self._ws_shutdown_task is shutdown_task:
+                    self._ws_shutdown_task = None
 
     def watch_symbol(self, symbol: str) -> None:
         canonical = self._canonical_symbol(symbol)
@@ -568,22 +584,38 @@ class ScalpEngine:
         verified: bool,
         result: Optional[dict] = None,
         error: str = "",
+        trade_id: int = 0,
+        requested_size: float = 0.0,
+        requested_qty_value: float = 0.0,
+        note: str = "",
+        lifecycle: str = "",
+        fill_status: str = "",
     ) -> None:
         result = result or {}
+        lifecycle_value = str(
+            result.get("order_lifecycle") or lifecycle or ("filled" if verified else "pending") or ""
+        ).strip()
+        fill_status_value = str(
+            result.get("fill_status") or fill_status or lifecycle_value or ("filled" if verified else "pending") or ""
+        ).strip()
         self._last_execution = {
             "phase": phase,
             "symbol": symbol,
             "side": side,
             "mode": mode,
             "verified": bool(verified),
+            "trade_id": int(trade_id or 0),
+            "requested_size": _coerce_float(requested_size, 0.0),
+            "requested_qty_value": _coerce_float(requested_qty_value, 0.0),
             "latency_ms": round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1),
             "ack_ms": round(_coerce_float(result.get("order_ack_ms"), 0.0), 1),
             "verified_at_attempt": int(result.get("verified_at_attempt", 0) or 0),
-            "fill_status": str(result.get("fill_status", "") or ""),
-            "order_lifecycle": str(result.get("order_lifecycle", "") or ""),
+            "fill_status": fill_status_value,
+            "order_lifecycle": lifecycle_value,
             "position_size": _coerce_float(result.get("position_size"), 0.0),
             "order_id": str(result.get("id") or result.get("order_id") or ""),
             "error": str(error or result.get("error") or ""),
+            "note": str(note or result.get("note") or ""),
             "updated_at": str(_now_utc()),
         }
 
@@ -733,6 +765,8 @@ class ScalpEngine:
         if self._ws_feed is None:
             self._ws_feed = DeltaWSFeed()
             self._ws_feed.on_ticker = self._handle_ticker
+            self._ws_feed.on_connect = lambda: self._schedule_update(force=True)
+            self._ws_feed.on_disconnect = lambda reason: self._schedule_update(force=True)
             await self._ws_feed.connect()
             self._log("info", "WebSocket ticker connected for scalp pricing")
 
@@ -755,6 +789,7 @@ class ScalpEngine:
         self._ws_feed = None
         self._ws_prices.clear()
         self._ws_subscribed_symbols.clear()
+        self._ws_shutdown_task = None
 
     async def enter_trade(
         self,
@@ -857,6 +892,19 @@ class ScalpEngine:
                     mode=mode,
                 )
                 self.pending_entries[pending.entry_id] = pending
+                self._remember_execution(
+                    phase="entry",
+                    symbol=symbol,
+                    side=side,
+                    mode=mode,
+                    verified=False,
+                    trade_id=pending.entry_id,
+                    requested_size=size_estimate,
+                    requested_qty_value=qty_value,
+                    note=pending.trigger_summary(),
+                    lifecycle="armed",
+                    fill_status="armed",
+                )
                 self._log("info", f"⏳ Entry armed for {side} {symbol}: {pending.trigger_summary()}")
                 self._schedule_update(force=True)
                 if not self._running:
@@ -961,6 +1009,19 @@ class ScalpEngine:
         if mode == "paper":
             order_id = "PAPER"
         else:
+            self._remember_execution(
+                phase="entry",
+                symbol=symbol,
+                side=side,
+                mode=mode,
+                verified=False,
+                requested_size=size,
+                requested_qty_value=qty_value,
+                note="Broker order submitted",
+                lifecycle="submitted",
+                fill_status="submitted",
+            )
+            self._schedule_update(force=True)
             if not product_id:
                 self._remember_execution(
                     phase="entry_error",
@@ -1038,6 +1099,12 @@ class ScalpEngine:
             mode=mode,
             verified=bool(result.get("verified", mode == "paper")),
             result=result,
+            trade_id=self._trade_counter,
+            requested_size=size,
+            requested_qty_value=qty_value,
+            note="Paper fill confirmed" if mode == "paper" else "Entry fill verified",
+            lifecycle="filled" if mode == "paper" else "",
+            fill_status="paper_fill" if mode == "paper" else "",
         )
 
         mode_label = "[PAPER] " if mode == "paper" else ""
@@ -1089,6 +1156,18 @@ class ScalpEngine:
         for attr in ("target_price", "sl_price", "target_usd", "sl_usd"):
             if attr in kwargs and kwargs[attr] is not None:
                 setattr(trade, attr, kwargs[attr])
+        self._remember_execution(
+            phase="targets",
+            symbol=trade.symbol,
+            side=trade.side,
+            mode=trade.mode,
+            verified=True,
+            trade_id=trade_id,
+            requested_size=trade.size,
+            note="TP/SL updated",
+            lifecycle="updated",
+            fill_status="updated",
+        )
         self._log("info", f"🎯 Trade {trade_id} targets updated: {kwargs}")
         self._schedule_update(force=True)
         return {"status": "ok", "trade": trade.to_dict()}
@@ -1126,6 +1205,20 @@ class ScalpEngine:
 
         result: Dict[str, Any] = {}
         if trade.mode != "paper":
+            self._remember_execution(
+                phase="scale_in",
+                symbol=trade.symbol,
+                side=trade.side,
+                mode=trade.mode,
+                verified=False,
+                trade_id=trade.trade_id,
+                requested_size=add_size,
+                requested_qty_value=qty_value,
+                note="Scale-in order submitted",
+                lifecycle="submitted",
+                fill_status="submitted",
+            )
+            self._schedule_update(force=True)
             try:
                 order_side = "buy" if trade.side == "LONG" else "sell"
                 result = await self._place_verified_order(
@@ -1184,6 +1277,12 @@ class ScalpEngine:
             mode=trade.mode,
             verified=bool(result.get("verified", trade.mode == "paper")),
             result=result,
+            trade_id=trade.trade_id,
+            requested_size=add_size,
+            requested_qty_value=qty_value,
+            note=f"Added {add_size} contracts",
+            lifecycle="filled" if trade.mode == "paper" else "",
+            fill_status="paper_fill" if trade.mode == "paper" else "",
         )
         self._log(
             "info",
@@ -1235,6 +1334,7 @@ class ScalpEngine:
         feed_metrics = {
             "ws_connected": bool(self._ws_feed and getattr(self._ws_feed, "connected", False)),
             "authenticated": bool(ws_status.get("authenticated", False)),
+            "connection_state": str(ws_status.get("connection_state", "idle") or "idle"),
             "symbol": entry_guard.get("symbol") or latest_symbol or None,
             "source": entry_guard.get("source", ""),
             "updated_at": entry_guard.get("updated_at") or (str(latest_ts) if latest_ts else None),
@@ -1245,6 +1345,8 @@ class ScalpEngine:
             "messages_received": int(ws_status.get("messages_received", 0) or 0),
             "reconnect_count": int(ws_status.get("reconnect_count", 0) or 0),
             "last_error": str(ws_status.get("last_error", "") or ""),
+            "last_disconnect_reason": str(ws_status.get("last_disconnect_reason", "") or ""),
+            "last_message_age_ms": ws_status.get("last_message_age_ms"),
             "subscribed_channels": list(ws_status.get("subscribed_channels") or []),
             "pending_auth_channels": list(ws_status.get("pending_auth_channels") or []),
         }
@@ -1441,6 +1543,19 @@ class ScalpEngine:
         if trade.mode == "paper":
             exit_order_id = "PAPER"
         else:
+            self._remember_execution(
+                phase="exit",
+                symbol=trade.symbol,
+                side=trade.side,
+                mode=trade.mode,
+                verified=False,
+                trade_id=trade.trade_id,
+                requested_size=trade.size,
+                note=f"Exit requested ({reason})",
+                lifecycle="submitted",
+                fill_status="submitted",
+            )
+            self._schedule_update(force=True)
             try:
                 close_side = "sell" if trade.side == "LONG" else "buy"
                 result = await self._place_verified_order(
@@ -1525,6 +1640,11 @@ class ScalpEngine:
             mode=trade.mode,
             verified=bool(result.get("verified", trade.mode == "paper")),
             result=result,
+            trade_id=trade.trade_id,
+            requested_size=trade.size,
+            note=f"Exit completed ({reason})",
+            lifecycle="filled" if trade.mode == "paper" else "",
+            fill_status="paper_fill" if trade.mode == "paper" else "",
         )
 
         # Persist to disk via callback (handles both auto and manual exits uniformly)

@@ -504,6 +504,34 @@ class WebSocketFeedContractTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_failed_connect_closes_client_session(self):
+        import engine.ws_feed as ws_mod
+        from engine.ws_feed import DeltaWSFeed
+
+        class FailingSession:
+            def __init__(self):
+                self.closed = False
+
+            async def ws_connect(self, *args, **kwargs):
+                raise OSError("network down")
+
+            async def close(self):
+                self.closed = True
+
+        session = FailingSession()
+        feed = DeltaWSFeed()
+        feed._running = True
+        feed.on_disconnect = lambda reason: setattr(feed, "_running", False)
+
+        with patch.object(ws_mod.aiohttp, "ClientSession", return_value=session):
+            await feed._do_connect()
+
+        self.assertTrue(session.closed)
+        self.assertIsNone(feed._session)
+        status = feed.get_status()
+        self.assertIn(status["connection_state"], {"reconnecting", "disconnected"})
+        self.assertIn("network down", status["last_disconnect_reason"])
+
 
 class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_scalp_paper_entry_skips_broker_lookups_without_cached_price(self):
@@ -787,6 +815,47 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(updated.base_qty, 0.0015)
         self.assertEqual(updated.entry_price, 100.0)
 
+    async def test_scalp_execution_metrics_track_entry_target_add_exit_lifecycle(self):
+        delta = FakeScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine._record_price("BTCUSD", 100.0, source="ws")
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=100,
+            leverage=10,
+            target_usd=10,
+            sl_usd=5,
+            mode="live",
+        )
+        trade_id = entered["trade_id"]
+        entry_exec = engine.get_status()["execution_metrics"]
+        self.assertEqual(entry_exec["phase"], "entry")
+        self.assertEqual(entry_exec["order_lifecycle"], "filled")
+        self.assertEqual(entry_exec["trade_id"], trade_id)
+
+        updated = await engine.update_trade_targets(trade_id, target_usd=12, sl_usd=4)
+        self.assertEqual(updated["status"], "ok")
+        target_exec = engine.get_status()["execution_metrics"]
+        self.assertEqual(target_exec["phase"], "targets")
+        self.assertEqual(target_exec["order_lifecycle"], "updated")
+
+        added = await engine.add_to_trade(trade_id, qty_mode="base", qty_value=0.001)
+        self.assertEqual(added["status"], "ok")
+        add_exec = engine.get_status()["execution_metrics"]
+        self.assertEqual(add_exec["phase"], "scale_in")
+        self.assertEqual(add_exec["order_lifecycle"], "filled")
+        self.assertGreater(add_exec["requested_size"], 0)
+
+        engine.open_trades[trade_id].current_price = 101.0
+        exited = await engine.exit_trade(trade_id, reason="manual")
+        self.assertEqual(exited["status"], "ok")
+        exit_exec = engine.get_status()["execution_metrics"]
+        self.assertEqual(exit_exec["phase"], "exit")
+        self.assertEqual(exit_exec["order_lifecycle"], "filled")
+
 
 class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -1025,6 +1094,31 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         payload = activity.json()
         self.assertEqual(payload["file_trades"][0]["trade_id"], 7)
         self.assertEqual(payload["file_events"][0]["msg"], "from-disk")
+
+    async def test_scalp_exit_missing_trade_returns_404(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            missing = await client.post(
+                "/api/scalp/exit",
+                json={"trade_id": 999999},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(missing.status_code, 404)
+        self.assertIn("not found", missing.json()["error"]["detail"].lower())
+
+    async def test_scalp_status_response_keeps_tight_csp_headers(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            response = await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+
+        csp = response.headers.get("content-security-policy", "")
+        self.assertIn("connect-src 'self' ws: wss:;", csp)
+        self.assertNotIn("connect-src 'self' ws: wss: https:", csp)
+        self.assertIn("frame-src 'none'", csp)
 
 
 class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
