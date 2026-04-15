@@ -4559,6 +4559,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // ══════════════════════════════════════════════════════
 
 var _cfScalpPollTimer = null;
+var _cfScalpActivityTimer = null;
+var _cfScalpLastActivityFetch = 0;
+var _cfScalpActivityInFlight = null;
 var _cfLatestScalpStatus = {};
 // Persistent trade cache — never loses trades across polls
 var _cfTradeCache = new Map();
@@ -4801,9 +4804,13 @@ function cfOperatorNextRead() {
 
 function cfInitScalpPage() {
   cfLoadScalpStatus();
+  cfLoadScalpActivity(true);
   cfRefreshScalpEntryLaneFromState();
   if (!_cfScalpPollTimer) {
     _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 2000);
+  }
+  if (!_cfScalpActivityTimer) {
+    _cfScalpActivityTimer = setInterval(function() { cfLoadScalpActivity(false); }, 15000);
   }
 }
 
@@ -4812,6 +4819,10 @@ showPage = function(pageId, btn) {
   if (pageId !== 'scalp-page' && _cfScalpPollTimer) {
     clearInterval(_cfScalpPollTimer);
     _cfScalpPollTimer = null;
+  }
+  if (pageId !== 'scalp-page' && _cfScalpActivityTimer) {
+    clearInterval(_cfScalpActivityTimer);
+    _cfScalpActivityTimer = null;
   }
   _origShowPage(pageId, btn);
 };
@@ -4852,6 +4863,86 @@ async function cfLoadScalpStatus() {
     const d = await r.json();
     cfApplyScalpStatus(d);
   } catch(e) { }
+}
+
+async function cfLoadScalpActivity(force) {
+  try {
+    const scalpPage = document.getElementById('scalp-page');
+    if (!force && (!scalpPage || !scalpPage.classList.contains('active-page'))) return;
+    const now = Date.now();
+    if (!force && _cfScalpActivityInFlight) return _cfScalpActivityInFlight;
+    if (!force && now - _cfScalpLastActivityFetch < 15000) return;
+    _cfScalpLastActivityFetch = now;
+    _cfScalpActivityInFlight = (async function() {
+      const r = await cfApiFetch('/api/scalp/activity');
+      if (!r.ok) return;
+      const d = await r.json();
+      cfApplyScalpActivity(d || {});
+    })();
+    await _cfScalpActivityInFlight;
+  } catch(e) {
+  } finally {
+    _cfScalpActivityInFlight = null;
+  }
+}
+
+function cfApplyScalpActivity(status) {
+  if (!status || (
+    status.closed_trades === undefined
+    && status.file_trades === undefined
+    && status.event_log === undefined
+    && status.file_events === undefined
+  )) {
+    return;
+  }
+
+  const memTrades = Array.isArray(status.closed_trades) ? status.closed_trades : [];
+  const fileTrades = Array.isArray(status.file_trades) ? status.file_trades : [];
+  [...memTrades, ...fileTrades].forEach(function(t) {
+    const id = (t.trade_id || '') + '|' + (t.entry_time || '');
+    _cfTradeCache.set(id, t);
+  });
+
+  const body = cfEl('cf-scalp-history-body');
+  if (body) {
+    const allTrades = Array.from(_cfTradeCache.values());
+    allTrades.sort(function(a, b) {
+      const ta = a.exit_time || a.entry_time || '';
+      const tb = b.exit_time || b.entry_time || '';
+      return String(tb).localeCompare(String(ta));
+    });
+    if (!allTrades.length) {
+      body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
+    } else {
+      body.innerHTML = allTrades.map(_cfTradeRow).join('');
+    }
+  }
+  _renderTablePager('cf-scalp-history-table', 'cf-scalp-history-table', 'cf-scalp-history-pagination');
+
+  const logEl = cfEl('cf-scalp-event-log');
+  const fileEvents = Array.isArray(status.file_events) ? status.file_events : [];
+  const eventLog = Array.isArray(status.event_log) ? status.event_log : [];
+  const events = [...fileEvents, ...eventLog];
+  events.forEach(function(e) {
+    const key = (e.ts || e.time || '') + '|' + (e.level || e.type || '') + '|' + (e.msg || e.message || '');
+    _cfScalpEventCache.set(key, e);
+  });
+  if (logEl) {
+    const allEvents = Array.from(_cfScalpEventCache.values())
+      .sort(function(a, b) { return String(b.ts || b.time || '').localeCompare(String(a.ts || a.time || '')); })
+      .slice(0, 200);
+    if (!allEvents.length) {
+      logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>';
+    } else {
+      const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
+      logEl.innerHTML = allEvents.map(function(e) {
+        return '<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">'
+          + '<span style="color:var(--muted);margin-right:8px;">' + _escapeHtml(e.time || '') + '</span>'
+          + '<span style="color:' + (evtColors[e.level || e.type] || 'var(--text-dim)') + ';">' + _escapeHtml(e.msg || e.message || '') + '</span>'
+          + '</div>';
+      }).join('');
+    }
+  }
 }
 
 function cfScalpFeedSummary(feed) {
@@ -5104,54 +5195,7 @@ function cfApplyScalpStatus(d) {
     }
 
     cfRenderActivePositions(open);
-
-    const memTrades = Array.isArray(status.closed_trades) ? status.closed_trades : [];
-    const fileTrades = Array.isArray(status.file_trades) ? status.file_trades : [];
-    [...memTrades, ...fileTrades].forEach(function(t) {
-      const id = (t.trade_id || '') + '|' + (t.entry_time || '');
-      _cfTradeCache.set(id, t);
-    });
-
-    const body = cfEl('cf-scalp-history-body');
-    if (body) {
-      const allTrades = Array.from(_cfTradeCache.values());
-      allTrades.sort(function(a, b) {
-        const ta = a.exit_time || a.entry_time || '';
-        const tb = b.exit_time || b.entry_time || '';
-        return String(tb).localeCompare(String(ta));
-      });
-      if (!allTrades.length) {
-        body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No trades yet</td></tr>';
-      } else {
-        body.innerHTML = allTrades.map(_cfTradeRow).join('');
-      }
-    }
-    _renderTablePager('cf-scalp-history-table', 'cf-scalp-history-table', 'cf-scalp-history-pagination');
-
-    const logEl = cfEl('cf-scalp-event-log');
-    if (logEl) {
-      const fileEvents = Array.isArray(status.file_events) ? status.file_events : [];
-      const eventLog = Array.isArray(status.event_log) ? status.event_log : [];
-      const events = [...fileEvents, ...eventLog];
-      events.forEach(function(e) {
-        const key = (e.ts || e.time || '') + '|' + (e.level || e.type || '') + '|' + (e.msg || e.message || '');
-        _cfScalpEventCache.set(key, e);
-      });
-      const allEvents = Array.from(_cfScalpEventCache.values())
-        .sort(function(a, b) { return String(b.ts || b.time || '').localeCompare(String(a.ts || a.time || '')); })
-        .slice(0, 200);
-      if (!allEvents.length) {
-        logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);">No events yet</div>';
-      } else {
-        const evtColors = { entry: 'var(--green)', exit: '#fbbf24', stop: 'var(--red)', error: 'var(--red)', info: 'var(--muted)', warn: '#fbbf24' };
-        logEl.innerHTML = allEvents.map(function(e) {
-          return '<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">'
-            + '<span style="color:var(--muted);margin-right:8px;">' + _escapeHtml(e.time || '') + '</span>'
-            + '<span style="color:' + (evtColors[e.level || e.type] || 'var(--text-dim)') + ';">' + _escapeHtml(e.msg || e.message || '') + '</span>'
-            + '</div>';
-        }).join('');
-      }
-    }
+    cfApplyScalpActivity(status);
   } catch (e) {
     console.error('Scalp status render failed', e);
   }
@@ -5323,11 +5367,13 @@ async function cfSubmitScalp(direction) {
       if (statusEl) { statusEl.textContent = direction + ' entered ✓'; statusEl.style.color = 'var(--green)'; }
       cfToast(`Scalp ${direction} entered on ${cfPrettyScalpSymbol(symbol)}`, 'success');
       await cfLoadScalpStatus();
+      await cfLoadScalpActivity(true);
       setTimeout(cfLoadScalpStatus, 250);
     } else if (d.status === 'pending' || d.entry_id) {
       if (statusEl) { statusEl.textContent = d.message || 'Pending entry armed'; statusEl.style.color = '#fbbf24'; }
       cfToast(d.message || `Pending entry armed for ${cfPrettyScalpSymbol(symbol)}`, 'info');
       await cfLoadScalpStatus();
+      await cfLoadScalpActivity(true);
       setTimeout(cfLoadScalpStatus, 250);
     } else {
       if (statusEl) { statusEl.textContent = d.message || d.status || 'Error'; statusEl.style.color = 'var(--red)'; }
@@ -5355,6 +5401,7 @@ async function cfExitScalpTrade(tradeId) {
     if (d.status === 'ok' || d.status === 'exited') {
       cfToast('Position closed', 'success');
       await cfLoadScalpStatus();
+      await cfLoadScalpActivity(true);
       setTimeout(cfLoadScalpStatus, 200);
     } else {
       cfToast(d.message || 'Exit failed', 'danger');
@@ -5398,6 +5445,7 @@ async function cfModifyScalpTrade(tradeId) {
     if (d.status === 'ok') {
       cfToast(`Trade #${tradeId} updated`, 'success');
       await cfLoadScalpStatus();
+      await cfLoadScalpActivity(true);
       setTimeout(cfLoadScalpStatus, 200);
     } else {
       cfToast(d.message || d.detail || 'Update failed', 'danger');
@@ -5432,6 +5480,7 @@ async function cfAddScalpQuantity(tradeId) {
       qtyInput.value = qtyInput.getAttribute('data-default-qty') || '';
       cfToast(`Added ${qtyValue} qty to trade #${tradeId}`, 'success');
       await cfLoadScalpStatus();
+      await cfLoadScalpActivity(true);
       setTimeout(cfLoadScalpStatus, 200);
     } else {
       cfToast(d.message || d.detail || 'Add failed', 'danger');

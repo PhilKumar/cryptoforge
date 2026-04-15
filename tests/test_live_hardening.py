@@ -994,6 +994,38 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(bad.json()["error"]["detail"], "Unsupported scalp symbol: INVALID")
 
+    async def test_scalp_status_omits_archive_payloads_by_default(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        with (
+            patch.object(self.app_module, "_load_scalp_trades", return_value=[{"trade_id": 1}]),
+            patch.object(self.app_module, "_load_scalp_events", return_value=[{"msg": "from-disk"}]),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+                await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+                status = await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+
+        self.assertEqual(status.status_code, 200)
+        payload = status.json()
+        self.assertNotIn("file_trades", payload)
+        self.assertNotIn("file_events", payload)
+
+    async def test_scalp_activity_route_returns_archive_payloads(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        with (
+            patch.object(self.app_module, "_load_scalp_trades", return_value=[{"trade_id": 7, "symbol": "BTCUSDT"}]),
+            patch.object(
+                self.app_module, "_load_scalp_events", return_value=[{"msg": "from-disk", "time": "10:00:00"}]
+            ),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+                await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+                activity = await client.get("/api/scalp/activity")
+
+        self.assertEqual(activity.status_code, 200)
+        payload = activity.json()
+        self.assertEqual(payload["file_trades"][0]["trade_id"], 7)
+        self.assertEqual(payload["file_events"][0]["msg"], "from-disk")
+
 
 class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

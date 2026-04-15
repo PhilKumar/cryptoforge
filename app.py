@@ -3232,7 +3232,7 @@ def _get_scalp_engine():
 
 
 @app.get("/api/scalp/status")
-async def scalp_status(symbol: str = ""):
+async def scalp_status(symbol: str = "", include_activity: bool = False):
     eng = _get_scalp_engine()
     if symbol:
         symbol = _normalize_scalp_symbol(symbol, allow_blank=True)
@@ -3240,14 +3240,26 @@ async def scalp_status(symbol: str = ""):
     if not eng.open_trades and not eng.pending_entries:
         _restore_scalp_runtime(eng)
     status = eng.get_status(symbol)
-    status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
-    status["file_events"] = list(reversed(_load_scalp_events()[-200:]))
+    if include_activity:
+        status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
+        status["file_events"] = list(reversed(_load_scalp_events()[-200:]))
     return status
 
 
 @app.get("/api/scalp/trades")
 async def scalp_trades():
     return _load_scalp_trades()
+
+
+@app.get("/api/scalp/activity")
+async def scalp_activity():
+    eng = _get_scalp_engine()
+    return {
+        "closed_trades": list(reversed(eng.closed_trades[-50:])),
+        "event_log": list(reversed(eng.event_log[-100:])),
+        "file_trades": list(reversed(_load_scalp_trades()[-100:])),
+        "file_events": list(reversed(_load_scalp_events()[-200:])),
+    }
 
 
 @app.post("/api/scalp/enter")
