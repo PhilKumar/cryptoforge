@@ -219,16 +219,28 @@ def _bootstrap_session_store() -> None:
 _bootstrap_session_store()
 
 
-def _resolve_state_file(filename: str) -> tuple[str, str]:
+def _resolve_state_file(filename: str, *subdirs: str) -> tuple[str, str]:
     legacy_path = os.path.join(_HERE, filename)
-    state_path = os.path.join(_STATE_DIR, filename)
-    if state_path != legacy_path and not os.path.exists(state_path) and os.path.exists(legacy_path):
+    cleaned_subdirs = [str(part).strip().strip("/\\") for part in subdirs if str(part).strip()]
+    state_dir = os.path.join(_STATE_DIR, *cleaned_subdirs) if cleaned_subdirs else _STATE_DIR
+    state_path = os.path.join(state_dir, filename)
+    if state_path == legacy_path:
+        return legacy_path, legacy_path
+
+    migration_sources = [legacy_path]
+    flat_state_path = os.path.join(_STATE_DIR, filename)
+    if cleaned_subdirs and flat_state_path not in {legacy_path, state_path}:
+        migration_sources.append(flat_state_path)
+
+    for source_path in migration_sources:
+        if os.path.exists(state_path) or not os.path.exists(source_path):
+            continue
         try:
             os.makedirs(os.path.dirname(state_path), exist_ok=True)
-            shutil.copy2(legacy_path, state_path)
+            shutil.copy2(source_path, state_path)
         except Exception as exc:
-            _logger.warning("Failed to migrate %s to %s: %s", legacy_path, state_path, exc)
-            return legacy_path, legacy_path
+            _logger.warning("Failed to migrate %s to %s: %s", source_path, state_path, exc)
+            return source_path, source_path
     return legacy_path, state_path
 
 
@@ -3054,9 +3066,9 @@ async def export_live_trades_csv(run_id: str = ""):
 
 # ── Scalp Engine ──────────────────────────────────────────────────
 _scalp_engine: Optional[ScalpEngine] = None
-_LEGACY_SCALP_FILE, _SCALP_FILE = _resolve_state_file("scalp_trades.json")
-_LEGACY_SCALP_EVENTS_FILE, _SCALP_EVENTS_FILE = _resolve_state_file("scalp_events.json")
-_LEGACY_SCALP_RUNTIME_FILE, _SCALP_RUNTIME_FILE = _resolve_state_file("scalp_runtime.json")
+_LEGACY_SCALP_FILE, _SCALP_FILE = _resolve_state_file("scalp_trades.json", "scalp")
+_LEGACY_SCALP_EVENTS_FILE, _SCALP_EVENTS_FILE = _resolve_state_file("scalp_events.json", "scalp")
+_LEGACY_SCALP_RUNTIME_FILE, _SCALP_RUNTIME_FILE = _resolve_state_file("scalp_runtime.json", "scalp")
 
 
 def _load_scalp_trades():
@@ -3187,6 +3199,17 @@ def _attach_scalp_runtime_metrics(result: dict, engine: ScalpEngine, symbol_hint
     result.setdefault("feed_metrics", dict(status.get("feed_metrics") or {}))
     result.setdefault("entry_controls", dict(status.get("entry_controls") or {}))
     return result
+
+
+def _raise_scalp_action_http_error(result: dict, *, default_status: int = 400) -> None:
+    message = str((result or {}).get("message") or "Unknown scalp action error")
+    lowered = message.lower()
+    status_code = default_status
+    if "not found" in lowered or "already closed" in lowered:
+        status_code = 404
+    elif "action in progress" in lowered:
+        status_code = 409
+    raise HTTPException(status_code=status_code, detail=message)
 
 
 def _scalp_persist_event(event: dict) -> None:
@@ -3412,7 +3435,7 @@ async def scalp_exit(request: Request):
             return _attach_scalp_runtime_metrics(result, eng, t.get("symbol", ""))
         if result.get("status") == "error":
             alerter.alert("Scalp Exit Failed", f"Trade ID: {trade_id}\nError: {result.get('message', 'unknown')}")
-            raise HTTPException(status_code=404, detail=result["message"])
+            _raise_scalp_action_http_error(result)
         return _attach_scalp_runtime_metrics(result, eng)
     except HTTPException:
         raise
@@ -3437,7 +3460,7 @@ async def update_scalp_targets(trade_id: int, request: Request):
         raise HTTPException(status_code=400, detail="No target fields provided")
     result = await eng.update_trade_targets(trade_id, **kwargs)
     if result.get("status") == "error":
-        raise HTTPException(status_code=404, detail=result["message"])
+        _raise_scalp_action_http_error(result)
     _persist_scalp_runtime_snapshot(eng)
     return _attach_scalp_runtime_metrics(result, eng, result.get("trade", {}).get("symbol", ""))
 
@@ -3455,7 +3478,7 @@ async def add_scalp_quantity(trade_id: int, request: Request):
     eng = _get_scalp_engine()
     result = await eng.add_to_trade(trade_id, qty_mode=qty_mode, qty_value=qty_value)
     if result.get("status") == "error":
-        raise HTTPException(status_code=404, detail=result["message"])
+        _raise_scalp_action_http_error(result)
     _persist_scalp_runtime_snapshot(eng)
     trade = result.get("trade", {})
     alerter.alert(

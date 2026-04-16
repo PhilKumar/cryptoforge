@@ -395,6 +395,9 @@ class DeltaClient:
                 "verified": False,
                 "fill_status": str(result.get("fill_status", "rejected") or "rejected"),
                 "order_lifecycle": "rejected",
+                "exchange_state": str(result.get("fill_status", "rejected") or "rejected"),
+                "verification_state": "rejected",
+                "verification_summary": "Broker rejected order before verification",
                 "order_ack_ms": order_ack_ms,
                 "broker_latency_ms": order_ack_ms,
             }
@@ -407,6 +410,9 @@ class DeltaClient:
                 "verified": False,
                 "fill_status": "unknown",
                 "order_lifecycle": "submitted",
+                "exchange_state": "accepted",
+                "verification_state": "submitted",
+                "verification_summary": "Order accepted without an order id",
                 "error": "Order accepted without an order id",
                 "order_ack_ms": order_ack_ms,
                 "broker_latency_ms": order_ack_ms,
@@ -434,6 +440,8 @@ class DeltaClient:
                 if filled and state in ("filled", "closed", "completed"):
                     print(f"[DELTA] Order {order_id} VERIFIED filled (attempt {attempt + 1})")
                     fill_price = self._extract_fill_price(filled) or self._extract_fill_price(result)
+                    verification_state = "filled"
+                    verification_summary = "Exchange filled the order"
 
                     # Cross-check position
                     position = await asyncio.to_thread(self.get_position, product_id, True)
@@ -442,16 +450,24 @@ class DeltaClient:
                         expected_size = abs(_as_float(size))
                         if reduce_only and pos_size <= 0:
                             print(f"[DELTA] Position fully closed after reduce-only fill for order {order_id}")
+                            verification_state = "position_confirmed"
+                            verification_summary = "Reduce-only fill verified and position is flat"
                         elif pos_size > 0:
                             print(f"[DELTA] Position confirmed: size={pos_size}")
+                            verification_state = "position_confirmed"
+                            verification_summary = f"Position confirmed at size {pos_size}"
                         else:
                             print(f"[DELTA] WARNING: Position size is 0 after fill (expected ~{expected_size})")
+                            verification_summary = "Exchange filled the order but position size could not be confirmed"
 
                     return {
                         **result,
                         "verified": True,
                         "fill_status": state,
                         "order_lifecycle": "filled",
+                        "exchange_state": state,
+                        "verification_state": verification_state,
+                        "verification_summary": verification_summary,
                         "fill_price": fill_price or None,
                         "position_size": pos_size,
                         "verified_at_attempt": attempt + 1,
@@ -474,11 +490,21 @@ class DeltaClient:
             lifecycle = "rejected"
         elif last_state in {"filled", "closed", "completed"}:
             lifecycle = "filled"
+        verification_summary = f"Order {order_id} could not be verified after {max_verify_attempts} attempts"
+        if lifecycle == "cancelled":
+            verification_summary = "Exchange cancelled the order during verification"
+        elif lifecycle == "partial":
+            verification_summary = "Order partially filled but final position could not be confirmed"
+        elif lifecycle == "rejected":
+            verification_summary = "Exchange rejected the order during verification"
         return {
             **result,
             "verified": False,
             "fill_status": last_state,
             "order_lifecycle": lifecycle,
+            "exchange_state": last_state,
+            "verification_state": lifecycle,
+            "verification_summary": verification_summary,
             "verified_at_attempt": max_verify_attempts,
             "error": f"Order {order_id} could not be verified after {max_verify_attempts} attempts",
             "order_ack_ms": order_ack_ms,

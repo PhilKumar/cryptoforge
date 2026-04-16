@@ -461,6 +461,7 @@ class ScalpEngine:
         self._ws_ensure_cancel_tasks: list[asyncio.Task] = []
         self._last_update_push: float = 0.0
         self._update_interval_sec: float = 0.25
+        self._trade_action_locks: Dict[int, asyncio.Lock] = {}
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -632,6 +633,10 @@ class ScalpEngine:
         fill_status_value = str(
             result.get("fill_status") or fill_status or lifecycle_value or ("filled" if verified else "pending") or ""
         ).strip()
+        exchange_state_value = str(
+            result.get("exchange_state") or result.get("state") or fill_status_value or ""
+        ).strip()
+        verification_state_value = str(result.get("verification_state") or lifecycle_value or "").strip()
         self._last_execution = {
             "phase": phase,
             "symbol": symbol,
@@ -646,6 +651,9 @@ class ScalpEngine:
             "verified_at_attempt": int(result.get("verified_at_attempt", 0) or 0),
             "fill_status": fill_status_value,
             "order_lifecycle": lifecycle_value,
+            "exchange_state": exchange_state_value,
+            "verification_state": verification_state_value,
+            "verification_summary": str(result.get("verification_summary") or result.get("note") or "").strip(),
             "position_size": _coerce_float(result.get("position_size"), 0.0),
             "order_id": str(result.get("id") or result.get("order_id") or ""),
             "error": str(error or result.get("error") or ""),
@@ -735,6 +743,21 @@ class ScalpEngine:
                 return 0
             return max(1, int(round(value * price)))
         return max(1, int(round(value * lev)))
+
+    def _trade_action_lock(self, trade_id: int) -> asyncio.Lock:
+        trade_key = int(trade_id or 0)
+        lock = self._trade_action_locks.get(trade_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._trade_action_locks[trade_key] = lock
+        return lock
+
+    async def _run_trade_action(self, trade_id: int, action: str, runner) -> Dict[str, Any]:
+        lock = self._trade_action_lock(trade_id)
+        if lock.locked():
+            return {"status": "error", "message": f"Trade {trade_id} already has an action in progress"}
+        async with lock:
+            return await runner()
 
     async def _refresh_watch_prices(self, symbols: set[str]) -> None:
         now = _now_utc()
@@ -1179,151 +1202,161 @@ class ScalpEngine:
         trade = self.open_trades.get(trade_id)
         if not trade:
             return {"status": "error", "message": f"Trade {trade_id} not found or already closed"}
-        await self._close_trade(trade, reason)
-        return {"status": "ok", "trade": trade.to_dict()}
+        result = await self._close_trade(trade, reason)
+        if result.get("status") == "ok" and trade_id in self.open_trades:
+            return {"status": "error", "message": f"Trade {trade_id} exit was not confirmed", "trade": trade.to_dict()}
+        return result
 
     async def update_trade_targets(self, trade_id: int, **kwargs) -> Dict[str, Any]:
         """Update TP/SL for an open trade."""
-        trade = self.open_trades.get(trade_id)
-        if not trade:
-            return {"status": "error", "message": f"Trade {trade_id} not found"}
-        for attr in ("target_price", "sl_price", "target_usd", "sl_usd"):
-            if attr in kwargs and kwargs[attr] is not None:
-                setattr(trade, attr, kwargs[attr])
-        self._remember_execution(
-            phase="targets",
-            symbol=trade.symbol,
-            side=trade.side,
-            mode=trade.mode,
-            verified=True,
-            trade_id=trade_id,
-            requested_size=trade.size,
-            note="TP/SL updated",
-            lifecycle="updated",
-            fill_status="updated",
-        )
-        self._log("info", f"🎯 Trade {trade_id} targets updated: {kwargs}")
-        self._schedule_update(force=True)
-        return {"status": "ok", "trade": trade.to_dict()}
+
+        async def _runner() -> Dict[str, Any]:
+            trade = self.open_trades.get(trade_id)
+            if not trade:
+                return {"status": "error", "message": f"Trade {trade_id} not found"}
+            for attr in ("target_price", "sl_price", "target_usd", "sl_usd"):
+                if attr in kwargs and kwargs[attr] is not None:
+                    setattr(trade, attr, kwargs[attr])
+            self._remember_execution(
+                phase="targets",
+                symbol=trade.symbol,
+                side=trade.side,
+                mode=trade.mode,
+                verified=True,
+                trade_id=trade_id,
+                requested_size=trade.size,
+                note="TP/SL updated",
+                lifecycle="updated",
+                fill_status="updated",
+            )
+            self._log("info", f"🎯 Trade {trade_id} targets updated: {kwargs}")
+            self._schedule_update(force=True)
+            return {"status": "ok", "trade": trade.to_dict()}
+
+        return await self._run_trade_action(trade_id, "targets", _runner)
 
     async def add_to_trade(self, trade_id: int, qty_mode: str = "base", qty_value: float = 0.0) -> Dict[str, Any]:
-        trade = self.open_trades.get(trade_id)
-        if not trade:
-            return {"status": "error", "message": f"Trade {trade_id} not found"}
-        qty_mode = "base" if str(qty_mode or "").lower() in {"base", "qty", "coin"} else "usdt"
-        qty_value = _coerce_float(qty_value, 0.0)
-        if qty_value <= 0:
-            return {"status": "error", "message": "Add quantity must be greater than zero"}
+        async def _runner() -> Dict[str, Any]:
+            trade = self.open_trades.get(trade_id)
+            if not trade:
+                return {"status": "error", "message": f"Trade {trade_id} not found"}
 
-        fill_price = self._cached_price(trade.symbol) or trade.current_price or trade.entry_price
-        if fill_price <= 0:
-            try:
-                ticker = await asyncio.to_thread(self.delta.get_ticker, trade.symbol)
-                fill_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
-                if fill_price > 0:
-                    self._rest_price_fetches += 1
-                    self._record_price(trade.symbol, fill_price, source="rest_quote")
-            except Exception:
-                pass
-        if fill_price <= 0:
-            return {"status": "error", "message": f"No live price available for {trade.symbol}"}
+            normalized_qty_mode = "base" if str(qty_mode or "").lower() in {"base", "qty", "coin"} else "usdt"
+            normalized_qty_value = _coerce_float(qty_value, 0.0)
+            if normalized_qty_value <= 0:
+                return {"status": "error", "message": "Add quantity must be greater than zero"}
 
-        add_size = self._resolve_contract_size(
-            qty_mode=qty_mode,
-            qty_value=qty_value,
-            price=fill_price,
-            leverage=trade.leverage,
-        )
-        if add_size <= 0:
-            return {"status": "error", "message": "Unable to resolve add quantity"}
+            fill_price = self._cached_price(trade.symbol) or trade.current_price or trade.entry_price
+            if fill_price <= 0:
+                try:
+                    ticker = await asyncio.to_thread(self.delta.get_ticker, trade.symbol)
+                    fill_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
+                    if fill_price > 0:
+                        self._rest_price_fetches += 1
+                        self._record_price(trade.symbol, fill_price, source="rest_quote")
+                except Exception:
+                    pass
+            if fill_price <= 0:
+                return {"status": "error", "message": f"No live price available for {trade.symbol}"}
 
-        result: Dict[str, Any] = {}
-        if trade.mode != "paper":
+            add_size = self._resolve_contract_size(
+                qty_mode=normalized_qty_mode,
+                qty_value=normalized_qty_value,
+                price=fill_price,
+                leverage=trade.leverage,
+            )
+            if add_size <= 0:
+                return {"status": "error", "message": "Unable to resolve add quantity"}
+
+            result: Dict[str, Any] = {}
+            if trade.mode != "paper":
+                self._remember_execution(
+                    phase="scale_in",
+                    symbol=trade.symbol,
+                    side=trade.side,
+                    mode=trade.mode,
+                    verified=False,
+                    trade_id=trade.trade_id,
+                    requested_size=add_size,
+                    requested_qty_value=normalized_qty_value,
+                    note="Scale-in order submitted",
+                    lifecycle="submitted",
+                    fill_status="submitted",
+                )
+                self._schedule_update(force=True)
+                try:
+                    order_side = "buy" if trade.side == "LONG" else "sell"
+                    result = await self._place_verified_order(
+                        product_id=trade.product_id,
+                        size=add_size,
+                        side=order_side,
+                        order_type="market_order",
+                        leverage=trade.leverage,
+                    )
+                    if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
+                        self._remember_execution(
+                            phase="scale_in_reject",
+                            symbol=trade.symbol,
+                            side=trade.side,
+                            mode=trade.mode,
+                            verified=False,
+                            result=result,
+                        )
+                        return {"status": "error", "message": result.get("error") or "add order could not be verified"}
+                    fill_price = self._extract_order_price(result, fill_price)
+                except Exception as e:
+                    self._remember_execution(
+                        phase="scale_in_error",
+                        symbol=trade.symbol,
+                        side=trade.side,
+                        mode=trade.mode,
+                        verified=False,
+                        error=str(e),
+                    )
+                    return {"status": "error", "message": str(e)}
+
+            old_size = max(int(trade.size or 0), 0)
+            total_size = old_size + add_size
+            weighted_price = (
+                fill_price if old_size <= 0 else ((trade.entry_price * old_size) + (fill_price * add_size)) / total_size
+            )
+            trade.size = total_size
+            trade.entry_price = round(weighted_price, 6)
+            trade.current_price = fill_price
+            trade.last_price_source = "broker_fill" if trade.mode != "paper" else "entry_snapshot"
+            trade.last_price_update = _now_utc()
+            trade._refresh_derived_quantities()
+            if trade.target_pct > 0:
+                trade.target_price = 0.0
+            if trade.sl_pct > 0:
+                trade.sl_price = 0.0
+            trade._apply_percentage_targets()
+
+            self._record_price(
+                trade.symbol, fill_price, source="broker_fill" if trade.mode != "paper" else "entry_snapshot"
+            )
             self._remember_execution(
                 phase="scale_in",
                 symbol=trade.symbol,
                 side=trade.side,
                 mode=trade.mode,
-                verified=False,
+                verified=bool(result.get("verified", trade.mode == "paper")),
+                result=result,
                 trade_id=trade.trade_id,
                 requested_size=add_size,
-                requested_qty_value=qty_value,
-                note="Scale-in order submitted",
-                lifecycle="submitted",
-                fill_status="submitted",
+                requested_qty_value=normalized_qty_value,
+                note=f"Added {add_size} contracts",
+                lifecycle="filled" if trade.mode == "paper" else "",
+                fill_status="paper_fill" if trade.mode == "paper" else "",
+            )
+            self._log(
+                "info",
+                f"➕ SCALP ADD: {trade.side} {trade.symbol} add_size={add_size} fill=${fill_price:,.4f} total_size={trade.size}",
             )
             self._schedule_update(force=True)
-            try:
-                order_side = "buy" if trade.side == "LONG" else "sell"
-                result = await self._place_verified_order(
-                    product_id=trade.product_id,
-                    size=add_size,
-                    side=order_side,
-                    order_type="market_order",
-                    leverage=trade.leverage,
-                )
-                if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
-                    self._remember_execution(
-                        phase="scale_in_reject",
-                        symbol=trade.symbol,
-                        side=trade.side,
-                        mode=trade.mode,
-                        verified=False,
-                        result=result,
-                    )
-                    return {"status": "error", "message": result.get("error") or "add order could not be verified"}
-                fill_price = self._extract_order_price(result, fill_price)
-            except Exception as e:
-                self._remember_execution(
-                    phase="scale_in_error",
-                    symbol=trade.symbol,
-                    side=trade.side,
-                    mode=trade.mode,
-                    verified=False,
-                    error=str(e),
-                )
-                return {"status": "error", "message": str(e)}
+            return {"status": "ok", "trade": trade.to_dict(), "added_size": add_size, "fill_price": fill_price}
 
-        old_size = max(int(trade.size or 0), 0)
-        total_size = old_size + add_size
-        weighted_price = (
-            fill_price if old_size <= 0 else ((trade.entry_price * old_size) + (fill_price * add_size)) / total_size
-        )
-        trade.size = total_size
-        trade.entry_price = round(weighted_price, 6)
-        trade.current_price = fill_price
-        trade.last_price_source = "broker_fill" if trade.mode != "paper" else "entry_snapshot"
-        trade.last_price_update = _now_utc()
-        trade._refresh_derived_quantities()
-        if trade.target_pct > 0:
-            trade.target_price = 0.0
-        if trade.sl_pct > 0:
-            trade.sl_price = 0.0
-        trade._apply_percentage_targets()
-
-        self._record_price(
-            trade.symbol, fill_price, source="broker_fill" if trade.mode != "paper" else "entry_snapshot"
-        )
-        self._remember_execution(
-            phase="scale_in",
-            symbol=trade.symbol,
-            side=trade.side,
-            mode=trade.mode,
-            verified=bool(result.get("verified", trade.mode == "paper")),
-            result=result,
-            trade_id=trade.trade_id,
-            requested_size=add_size,
-            requested_qty_value=qty_value,
-            note=f"Added {add_size} contracts",
-            lifecycle="filled" if trade.mode == "paper" else "",
-            fill_status="paper_fill" if trade.mode == "paper" else "",
-        )
-        self._log(
-            "info",
-            f"➕ SCALP ADD: {trade.side} {trade.symbol} add_size={add_size} fill=${fill_price:,.4f} total_size={trade.size}",
-        )
-        self._schedule_update(force=True)
-        return {"status": "ok", "trade": trade.to_dict(), "added_size": add_size, "fill_price": fill_price}
+        return await self._run_trade_action(trade_id, "add", _runner)
 
     def get_status(self, symbol_hint: str = "") -> dict:
         today_utc = _now_utc().date()
@@ -1570,8 +1603,13 @@ class ScalpEngine:
                     pass
         return result
 
-    async def _close_trade(self, trade: ScalpTrade, reason: str):
+    async def _close_trade(self, trade: ScalpTrade, reason: str) -> Dict[str, Any]:
+        return await self._run_trade_action(trade.trade_id, "exit", lambda: self._close_trade_unlocked(trade, reason))
+
+    async def _close_trade_unlocked(self, trade: ScalpTrade, reason: str) -> Dict[str, Any]:
         """Place exit order (or simulate) and move trade to closed_trades."""
+        if trade.trade_id not in self.open_trades:
+            return {"status": "error", "message": f"Trade {trade.trade_id} not found or already closed"}
         exit_order_id = ""
         result: Dict[str, Any] = {}
         if trade.mode == "paper":
@@ -1626,7 +1664,11 @@ class ScalpEngine:
                             f"Engine stopping to prevent further exposure.",
                         )
                         self.stop()
-                    return  # keep in open_trades — monitor will retry next cycle
+                    return {
+                        "status": "error",
+                        "message": result.get("error") or "exit order could not be verified",
+                        "trade": trade.to_dict(),
+                    }
                 exit_order_id = str(result.get("id", "closed"))
                 trade.current_price = self._extract_order_price(result, trade.current_price)
             except Exception as e:
@@ -1651,7 +1693,7 @@ class ScalpEngine:
                         f"Engine stopping to prevent further exposure.",
                     )
                     self.stop()
-                return  # keep in open_trades — monitor will retry next cycle
+                return {"status": "error", "message": str(e), "trade": trade.to_dict()}
 
         exit_price = trade.current_price
         pnl = trade._compute_pnl(exit_price)
@@ -1667,6 +1709,7 @@ class ScalpEngine:
         closed_dict = trade.to_dict()
         self.closed_trades.append(closed_dict)
         del self.open_trades[trade.trade_id]
+        self._trade_action_locks.pop(int(trade.trade_id), None)
         self._remember_execution(
             phase="exit",
             symbol=trade.symbol,
@@ -1703,6 +1746,7 @@ class ScalpEngine:
             f"PnL={pnl_sign}${pnl:.2f}{exec_tail}",
         )
         self._schedule_update(force=True)
+        return {"status": "ok", "trade": closed_dict}
 
     def _log(self, level: str, msg: str):
         now = _now_utc()

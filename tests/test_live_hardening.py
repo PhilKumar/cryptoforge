@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import tempfile
 import time
@@ -97,6 +98,23 @@ class FakeScalpDelta:
             "verified_at_attempt": 1,
             "fill_price": fill_price,
         }
+
+
+class RejectingExitScalpDelta(FakeScalpDelta):
+    async def place_order_verified(self, **kwargs):
+        if kwargs.get("reduce_only"):
+            self.verified_calls.append(kwargs)
+            return {
+                "id": f"scalp-reject-{len(self.verified_calls)}",
+                "verified": False,
+                "fill_status": "rejected",
+                "order_lifecycle": "rejected",
+                "exchange_state": "rejected",
+                "verification_state": "rejected",
+                "verification_summary": "Exchange rejected reduce-only exit",
+                "error": "Exchange rejected reduce-only exit",
+            }
+        return await super().place_order_verified(**kwargs)
 
 
 class FakeWSFeed:
@@ -589,6 +607,59 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(delta.verified_calls), 2)
         self.assertFalse(engine.open_trades)
         self.assertEqual(engine.closed_trades[-1]["exit_order_id"], "scalp-2")
+
+    async def test_scalp_live_exit_rejection_keeps_trade_open(self):
+        delta = RejectingExitScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=100,
+            leverage=10,
+            target_usd=10,
+            sl_usd=5,
+            mode="live",
+        )
+        trade_id = entered["trade_id"]
+        engine.open_trades[trade_id].current_price = 101.0
+
+        exited = await engine.exit_trade(trade_id, reason="manual")
+
+        self.assertEqual(exited["status"], "error")
+        self.assertIn("rejected", exited["message"].lower())
+        self.assertIn(trade_id, engine.open_trades)
+        self.assertFalse(engine.closed_trades)
+        self.assertEqual(engine.get_status()["execution_metrics"]["phase"], "exit_reject")
+        self.assertEqual(engine.get_status()["execution_metrics"]["order_lifecycle"], "rejected")
+        self.assertEqual(engine.get_status()["execution_metrics"]["verification_state"], "rejected")
+        self.assertIn("rejected", engine.get_status()["execution_metrics"]["verification_summary"].lower())
+
+    async def test_scalp_trade_action_lock_blocks_conflicting_updates(self):
+        delta = FakeScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=100,
+            leverage=10,
+            target_usd=10,
+            sl_usd=5,
+            mode="paper",
+        )
+        trade_id = entered["trade_id"]
+        lock = engine._trade_action_lock(trade_id)
+        await lock.acquire()
+        try:
+            result = await engine.update_trade_targets(trade_id, target_usd=15)
+        finally:
+            lock.release()
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("action in progress", result["message"].lower())
 
     async def test_scalp_ws_ticker_updates_trade_price(self):
         delta = FakeScalpDelta()
@@ -1109,6 +1180,40 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(missing.status_code, 404)
         self.assertIn("not found", missing.json()["error"]["detail"].lower())
 
+    async def test_scalp_target_update_returns_409_when_trade_action_is_busy(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+            self.app_module._scalp_engine._record_price("BTCUSD", 101.25, source="ws")
+            entered = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_value": 1000,
+                    "qty_mode": "usdt",
+                    "leverage": 10,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+            trade_id = entered.json()["trade_id"]
+            lock = self.app_module._scalp_engine._trade_action_lock(trade_id)
+            await lock.acquire()
+            try:
+                conflicted = await client.put(
+                    f"/api/scalp/trades/{trade_id}/targets",
+                    json={"target_usd": 25},
+                    headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+                )
+            finally:
+                lock.release()
+
+        self.assertEqual(conflicted.status_code, 409)
+        self.assertIn("action in progress", conflicted.json()["error"]["detail"].lower())
+
     async def test_scalp_status_response_keeps_tight_csp_headers(self):
         transport = httpx.ASGITransport(app=self.app_module.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
@@ -1119,6 +1224,34 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("connect-src 'self' ws: wss:;", csp)
         self.assertNotIn("connect-src 'self' ws: wss: https:", csp)
         self.assertIn("frame-src 'none'", csp)
+
+
+class StatePathMigrationTests(unittest.TestCase):
+    def test_resolve_state_file_migrates_flat_scalp_state_into_subdirectory(self):
+        app_module = import_module("app")
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_here = os.path.join(tmp, "repo")
+            os.makedirs(legacy_here, exist_ok=True)
+            flat_state_path = os.path.join(tmp, "scalp_runtime.json")
+            with open(flat_state_path, "w") as handle:
+                json.dump({"open_trades": [{"trade_id": 1}]}, handle)
+
+            orig_here = app_module._HERE
+            orig_state_dir = app_module._STATE_DIR
+            try:
+                app_module._HERE = legacy_here
+                app_module._STATE_DIR = tmp
+                legacy_path, state_path = app_module._resolve_state_file("scalp_runtime.json", "scalp")
+            finally:
+                app_module._HERE = orig_here
+                app_module._STATE_DIR = orig_state_dir
+
+            self.assertEqual(legacy_path, os.path.join(legacy_here, "scalp_runtime.json"))
+            self.assertEqual(state_path, os.path.join(tmp, "scalp", "scalp_runtime.json"))
+            self.assertTrue(os.path.exists(state_path))
+            with open(state_path, "r") as handle:
+                migrated = json.load(handle)
+            self.assertEqual(migrated["open_trades"][0]["trade_id"], 1)
 
 
 class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):

@@ -468,6 +468,21 @@
     letter-spacing: 0.6px;
     text-transform: uppercase;
   }
+  .funding-chip-btc {
+    background: rgba(245,158,11,0.14);
+    border: 1px solid rgba(245,158,11,0.35);
+    color: #fbbf24;
+  }
+  .funding-chip-eth {
+    background: rgba(139,92,246,0.14);
+    border: 1px solid rgba(139,92,246,0.35);
+    color: #a78bfa;
+  }
+  .funding-chip-volume {
+    background: rgba(236,72,153,0.14);
+    border: 1px solid rgba(236,72,153,0.35);
+    color: #f472b6;
+  }
   .funding-chip span {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px; font-weight: 600;

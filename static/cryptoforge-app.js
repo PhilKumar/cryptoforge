@@ -5264,12 +5264,15 @@ function cfScalpExecDetail(execMetrics) {
   if (meta.order_id) bits.push('order ' + meta.order_id);
   if (meta.fill_status) bits.push(cfScalpLifecycleLabel(meta.fill_status));
   if (meta.order_lifecycle && meta.order_lifecycle !== meta.fill_status) bits.push(cfScalpLifecycleLabel(meta.order_lifecycle));
+  if (meta.exchange_state && meta.exchange_state !== meta.fill_status) bits.push('exchange ' + cfScalpLifecycleLabel(meta.exchange_state));
+  if (meta.verification_state && meta.verification_state !== meta.order_lifecycle) bits.push('verify ' + cfScalpLifecycleLabel(meta.verification_state));
   if (Number(meta.ack_ms) > 0) bits.push('ack ' + cfFormatLatency(meta.ack_ms));
   if (Number(meta.latency_ms) > 0) bits.push('verify ' + cfFormatLatency(meta.latency_ms));
   if (Number(meta.verified_at_attempt) > 0) bits.push('attempt ' + String(meta.verified_at_attempt));
   if (Number(meta.requested_size) > 0) bits.push('contracts ' + String(meta.requested_size));
   if (Number(meta.requested_qty_value) > 0) bits.push('qty ' + String(meta.requested_qty_value));
   else if (Number(meta.position_size) > 0) bits.push('size ' + String(meta.position_size));
+  if (meta.verification_summary) bits.push(cfTrimUiText(meta.verification_summary, 84));
   if (meta.note) bits.push(cfTrimUiText(meta.note, 72));
   if (meta.error) bits.push(cfTrimUiText(meta.error, 84));
   if (!bits.length) return meta.verified === false ? 'verification failed' : 'awaiting broker metrics';
