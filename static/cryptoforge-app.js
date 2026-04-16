@@ -4606,6 +4606,8 @@ var _cfScalpEventCache = new Map();
 var _cfOpenTradeSnapshot = "";
 var _cfOpenTradeDisplayCache = [];
 var _cfOpenTradeDisplayCacheUntil = 0;
+var _cfScalpActionLocks = new Map();
+var _cfScalpEntrySubmitBusy = "";
 var _cfOperatorFactIndex = 0;
 var _cfOperatorPuzzleIndex = 0;
 var _cfOperatorReadIndex = 0;
@@ -4783,11 +4785,204 @@ function cfTrimUiText(text, maxLen) {
 
 function cfSetScalpEntryButtonState(btn, enabled, reason) {
   if (!btn) return;
+  if (!btn.dataset.defaultLabel) btn.dataset.defaultLabel = btn.textContent.trim();
+  btn.dataset.cfAllowed = enabled ? 'true' : 'false';
   btn.disabled = !enabled;
   btn.classList.toggle('is-disabled', !enabled);
   btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   if (!enabled && reason) btn.title = reason;
   else btn.removeAttribute('title');
+}
+
+function cfTitleCaseText(value) {
+  return String(value || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
+}
+
+function cfScalpNormalizeLifecycle(value) {
+  var raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw === 'paper_fill') return 'filled';
+  if (raw === 'unknown') return 'submitted';
+  if (raw === 'acknowledged') return 'acked';
+  if (raw === 'canceled') return 'cancelled';
+  if (raw === 'partially_filled' || raw === 'partially-filled' || raw === 'partial_fill') return 'partial';
+  return raw;
+}
+
+function cfScalpLifecycleLabel(value) {
+  var raw = cfScalpNormalizeLifecycle(value);
+  var labels = {
+    submitted: 'Submitted',
+    acked: 'Acked',
+    filled: 'Filled',
+    partial: 'Partial',
+    rejected: 'Rejected',
+    cancelled: 'Cancelled',
+    updated: 'Updated',
+    armed: 'Armed'
+  };
+  return labels[raw] || (raw ? cfTitleCaseText(raw) : '');
+}
+
+function cfScalpExecStages(execMetrics) {
+  var meta = execMetrics || {};
+  var phase = String(meta.phase || '').toLowerCase();
+  var lifecycle = cfScalpNormalizeLifecycle(meta.order_lifecycle || meta.fill_status || '');
+  var acked = Number(meta.ack_ms) > 0 || ['acked', 'partial', 'filled', 'cancelled', 'rejected', 'updated'].includes(lifecycle);
+  if (!phase) return [];
+  if (phase === 'armed') return [{ label: 'Armed', tone: 'active' }];
+  if (phase === 'targets') {
+    return [
+      { label: 'Targets', tone: 'done' },
+      { label: 'Updated', tone: lifecycle === 'rejected' || lifecycle === 'cancelled' ? 'error' : 'active' }
+    ];
+  }
+  var finalLabel = phase === 'exit' ? 'Closed' : (phase === 'scale_in' ? 'Scaled' : 'Filled');
+  if (lifecycle === 'partial') finalLabel = 'Partial';
+  else if (lifecycle === 'rejected') finalLabel = 'Rejected';
+  else if (lifecycle === 'cancelled') finalLabel = 'Cancelled';
+  var finalTone = 'pending';
+  if (lifecycle === 'rejected' || lifecycle === 'cancelled' || meta.verified === false) finalTone = 'error';
+  else if (lifecycle === 'partial') finalTone = 'active';
+  else if (meta.verified === true || lifecycle === 'filled' || lifecycle === 'updated') finalTone = 'success';
+  return [
+    { label: 'Submitted', tone: lifecycle === 'submitted' && !acked ? 'active' : 'done' },
+    { label: 'Acked', tone: acked ? (lifecycle === 'acked' ? 'active' : 'done') : 'pending' },
+    { label: finalLabel, tone: finalTone }
+  ];
+}
+
+function cfScalpExecTone(execMetrics) {
+  var meta = execMetrics || {};
+  var phase = String(meta.phase || '').toLowerCase();
+  var lifecycle = cfScalpNormalizeLifecycle(meta.order_lifecycle || meta.fill_status || '');
+  if (!phase) return 'neutral';
+  if (meta.verified === false || meta.error || lifecycle === 'rejected' || lifecycle === 'cancelled') return 'error';
+  if (phase === 'targets' || phase === 'armed' || lifecycle === 'submitted' || lifecycle === 'acked' || lifecycle === 'partial') return 'active';
+  if (lifecycle === 'filled' || lifecycle === 'updated') return 'success';
+  return 'active';
+}
+
+function cfScalpExecDetailHtml(execMetrics) {
+  var meta = execMetrics || {};
+  if (!meta.phase) return '<span class="cf-scalp-exec-note">Awaiting next broker action</span>';
+  var stages = cfScalpExecStages(meta);
+  var detail = cfScalpExecDetail(meta);
+  var html = '';
+  if (stages.length) {
+    html += '<div class="cf-scalp-exec-stage-row">' + stages.map(function(stage) {
+      return '<span class="cf-scalp-exec-chip" data-state="' + _escapeHtml(stage.tone) + '">' + _escapeHtml(stage.label) + '</span>';
+    }).join('') + '</div>';
+  }
+  html += '<div class="cf-scalp-exec-note">' + _escapeHtml(detail) + '</div>';
+  return html;
+}
+
+function cfScalpSyncEntrySubmitUi() {
+  var buyBtn = cfEl('cf-scalp-buy-btn');
+  var sellBtn = cfEl('cf-scalp-sell-btn');
+  [
+    { btn: buyBtn, action: 'BUY', busyLabel: 'Buying…' },
+    { btn: sellBtn, action: 'SELL', busyLabel: 'Selling…' }
+  ].forEach(function(item) {
+    var btn = item.btn;
+    if (!btn) return;
+    if (!btn.dataset.defaultLabel) btn.dataset.defaultLabel = btn.textContent.trim();
+    if (_cfScalpEntrySubmitBusy) {
+      var active = _cfScalpEntrySubmitBusy === item.action;
+      btn.disabled = true;
+      btn.classList.toggle('loading', active);
+      btn.classList.add('is-disabled');
+      btn.setAttribute('aria-disabled', 'true');
+      if (active) btn.setAttribute('aria-busy', 'true');
+      else btn.removeAttribute('aria-busy');
+      btn.textContent = active ? item.busyLabel : btn.dataset.defaultLabel;
+      return;
+    }
+    btn.classList.remove('loading');
+    btn.removeAttribute('aria-busy');
+    btn.textContent = btn.dataset.defaultLabel;
+    var enabled = btn.dataset.cfAllowed !== 'false';
+    btn.disabled = !enabled;
+    btn.classList.toggle('is-disabled', !enabled);
+    btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+  });
+}
+
+function cfSetScalpEntrySubmitBusy(direction) {
+  if (_cfScalpEntrySubmitBusy) return false;
+  _cfScalpEntrySubmitBusy = String(direction || '').toUpperCase();
+  cfScalpSyncEntrySubmitUi();
+  return true;
+}
+
+function cfClearScalpEntrySubmitBusy() {
+  _cfScalpEntrySubmitBusy = '';
+  cfScalpSyncEntrySubmitUi();
+}
+
+function cfScalpTradeActionState(tradeId) {
+  return _cfScalpActionLocks.get(String(tradeId || '')) || '';
+}
+
+function cfSyncScalpTradeActionUi(tradeId) {
+  var key = String(tradeId || '');
+  if (!key) return;
+  var busyAction = cfScalpTradeActionState(key);
+  var busy = !!busyAction;
+  var row = document.querySelector('#cf-scalp-active-body tr[data-tid="' + key + '"]');
+  var setBtn = cfEl('cf-set-btn-' + key);
+  var addBtn = cfEl('cf-add-btn-' + key);
+  var exitBtn = cfEl('cf-exit-btn-' + key);
+  ['cf-tp-usd-', 'cf-tp-price-', 'cf-sl-usd-', 'cf-sl-price-', 'cf-add-qty-'].forEach(function(prefix) {
+    var input = cfEl(prefix + key);
+    if (input) input.disabled = busy;
+  });
+  if (row) row.dataset.busy = busy ? 'true' : 'false';
+  [
+    { btn: addBtn, action: 'add', busyLabel: 'Adding…' },
+    { btn: setBtn, action: 'targets', busyLabel: 'Saving…' },
+    { btn: exitBtn, action: 'exit', busyLabel: 'Exiting…' }
+  ].forEach(function(item) {
+    var btn = item.btn;
+    if (!btn) return;
+    if (!btn.dataset.defaultLabel) btn.dataset.defaultLabel = btn.textContent.trim();
+    var active = busy && busyAction === item.action;
+    btn.disabled = busy;
+    btn.classList.toggle('loading', active);
+    btn.classList.toggle('is-disabled', busy);
+    btn.setAttribute('aria-disabled', busy ? 'true' : 'false');
+    if (active) btn.setAttribute('aria-busy', 'true');
+    else btn.removeAttribute('aria-busy');
+    btn.textContent = active ? item.busyLabel : btn.dataset.defaultLabel;
+  });
+}
+
+function cfSetScalpTradeActionLock(tradeId, action) {
+  var key = String(tradeId || '');
+  if (!key || _cfScalpActionLocks.has(key)) return false;
+  _cfScalpActionLocks.set(key, String(action || 'busy'));
+  cfSyncScalpTradeActionUi(key);
+  return true;
+}
+
+function cfClearScalpTradeActionLock(tradeId) {
+  var key = String(tradeId || '');
+  if (!key) return;
+  _cfScalpActionLocks.delete(key);
+  cfSyncScalpTradeActionUi(key);
+}
+
+function cfSyncAllScalpTradeActionUi(openTrades) {
+  var activeIds = new Set((openTrades || []).map(function(t) {
+    return String(t.trade_id || t.id || '');
+  }).filter(Boolean));
+  Array.from(_cfScalpActionLocks.keys()).forEach(function(key) {
+    if (!activeIds.has(key)) _cfScalpActionLocks.delete(key);
+  });
+  activeIds.forEach(function(key) { cfSyncScalpTradeActionUi(key); });
 }
 
 function cfRenderOperatorFact() {
@@ -5054,9 +5249,9 @@ function cfScalpFeedDetail(feed) {
 function cfScalpExecSummary(execMetrics) {
   const meta = execMetrics || {};
   if (!meta.phase) return 'No broker actions yet';
-  const phase = String(meta.phase || '').replace(/_/g, ' ').toUpperCase();
+  const phase = cfTitleCaseText(meta.phase || '').toUpperCase();
   const symbol = cfPrettyScalpSymbol(meta.symbol || '—');
-  const lifecycle = String(meta.order_lifecycle || meta.fill_status || '').replace(/_/g, ' ').trim();
+  const lifecycle = cfScalpLifecycleLabel(meta.order_lifecycle || meta.fill_status || '');
   const latency = Number(meta.latency_ms) > 0 ? cfFormatLatency(meta.latency_ms) : (meta.verified === false ? 'unverified' : 'pending');
   return [phase, symbol, lifecycle ? lifecycle.toUpperCase() : latency].filter(Boolean).join(' • ');
 }
@@ -5067,8 +5262,8 @@ function cfScalpExecDetail(execMetrics) {
   const bits = [];
   if (meta.trade_id) bits.push('trade #' + meta.trade_id);
   if (meta.order_id) bits.push('order ' + meta.order_id);
-  if (meta.fill_status) bits.push(String(meta.fill_status).replace(/_/g, ' '));
-  if (meta.order_lifecycle && meta.order_lifecycle !== meta.fill_status) bits.push(String(meta.order_lifecycle).replace(/_/g, ' '));
+  if (meta.fill_status) bits.push(cfScalpLifecycleLabel(meta.fill_status));
+  if (meta.order_lifecycle && meta.order_lifecycle !== meta.fill_status) bits.push(cfScalpLifecycleLabel(meta.order_lifecycle));
   if (Number(meta.ack_ms) > 0) bits.push('ack ' + cfFormatLatency(meta.ack_ms));
   if (Number(meta.latency_ms) > 0) bits.push('verify ' + cfFormatLatency(meta.latency_ms));
   if (Number(meta.verified_at_attempt) > 0) bits.push('attempt ' + String(meta.verified_at_attempt));
@@ -5154,6 +5349,7 @@ function cfRefreshScalpEntryLaneFromState() {
   const disableReason = pendingArmed ? '' : (note || entry.reason || feed.entry_block_reason || 'Entry unavailable');
   cfSetScalpEntryButtonState(buyBtn, effectiveAllowed, disableReason);
   cfSetScalpEntryButtonState(sellBtn, effectiveAllowed, disableReason);
+  cfScalpSyncEntrySubmitUi();
 }
 
 function cfApplyScalpStatus(d) {
@@ -5208,18 +5404,14 @@ function cfApplyScalpStatus(d) {
 
     const execMeta = cfEl('cf-scalp-exec-meta');
     if (execMeta) {
-      const phase = execPhase;
-      let execState = 'neutral';
-      if (exec.verified === false || phase.includes('error') || phase.includes('reject')) execState = 'error';
-      else if (phase === 'entry' || phase === 'exit' || phase === 'scale_in') execState = 'success';
-      else if (phase === 'targets' || phase === 'armed') execState = 'active';
+      const execState = cfScalpExecTone(exec);
       execMeta.textContent = cfScalpExecSummary(exec);
       execMeta.dataset.state = execState;
     }
     const execDetail = cfEl('cf-scalp-exec-detail');
     if (execDetail) {
-      execDetail.textContent = cfScalpExecDetail(exec);
-      execDetail.dataset.state = exec.verified === false || exec.error ? 'error' : (execPhase ? 'active' : 'neutral');
+      execDetail.innerHTML = cfScalpExecDetailHtml(exec);
+      execDetail.dataset.state = cfScalpExecTone(exec);
     }
 
     cfRefreshScalpEntryLaneFromState();
@@ -5309,6 +5501,7 @@ function cfRenderActivePositions(open) {
 
   if (!open.length) {
     _cfOpenTradeSnapshot = '';
+    _cfScalpActionLocks.clear();
     body.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">No active positions</td></tr>';
     _renderTablePager('cf-scalp-active-table', 'cf-scalp-active-table', 'cf-scalp-active-pagination');
     return;
@@ -5342,10 +5535,10 @@ function cfRenderActivePositions(open) {
         <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div><div class="table-value-sub">entry</div></div></td>
         <td data-field="mark"><div class="table-value-stack"><div class="table-value-main">$${(t.mark_price || t.current_price || 0).toFixed(4)}</div><div class="table-value-sub">${cfScalpMarkMeta(t)}</div></div></td>
         <td data-field="pnl"><div class="table-value-stack"><div class="table-value-main ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div><div class="table-value-sub ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">unrealized</div></div></td>
-        <td><div class="table-edit-stack table-edit-stack-labeled"><div class="table-field-label">TP $</div><input type="number" class="table-input-sm" id="cf-tp-usd-${tid}" value="${t.target_usd || 0}" step="1" min="0" placeholder="TP $"><div class="table-field-label">TP Px</div><input type="number" class="table-input-sm" id="cf-tp-price-${tid}" value="${t.target_price || 0}" step="0.1" min="0" placeholder="TP price"></div></td>
-        <td><div class="table-edit-stack table-edit-stack-labeled"><div class="table-field-label">SL $</div><input type="number" class="table-input-sm" id="cf-sl-usd-${tid}" value="${t.sl_usd || 0}" step="1" min="0" placeholder="SL $"><div class="table-field-label">SL Px</div><input type="number" class="table-input-sm" id="cf-sl-price-${tid}" value="${t.sl_price || 0}" step="0.1" min="0" placeholder="SL price"></div></td>
-        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack"><div class="table-field-label">Add Qty</div><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="0.0015" step="any" min="0.000001" data-default-qty="0.0015" placeholder="0.0015"><button class="btn btn-outline btn-sm table-add-btn" data-cf-click="cfAddScalpQuantity('${tid}')">Add</button></div></td>
-        <td><div class="table-inline-actions table-action-stack"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Set</button><button class="btn btn-danger btn-sm" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
+        <td><div class="table-edit-stack table-edit-stack-pairs"><label class="table-field-pair"><span class="table-field-label">TP $</span><input type="number" class="table-input-sm" id="cf-tp-usd-${tid}" value="${t.target_usd || 0}" step="1" min="0" placeholder="TP $"></label><label class="table-field-pair"><span class="table-field-label">TP Px</span><input type="number" class="table-input-sm" id="cf-tp-price-${tid}" value="${t.target_price || 0}" step="0.1" min="0" placeholder="TP price"></label></div></td>
+        <td><div class="table-edit-stack table-edit-stack-pairs"><label class="table-field-pair"><span class="table-field-label">SL $</span><input type="number" class="table-input-sm" id="cf-sl-usd-${tid}" value="${t.sl_usd || 0}" step="1" min="0" placeholder="SL $"></label><label class="table-field-pair"><span class="table-field-label">SL Px</span><input type="number" class="table-input-sm" id="cf-sl-price-${tid}" value="${t.sl_price || 0}" step="0.1" min="0" placeholder="SL price"></label></div></td>
+        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack"><label class="table-field-pair table-field-pair-compact"><span class="table-field-label">Add Qty</span><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="0.0015" step="any" min="0.000001" data-default-qty="0.0015" placeholder="0.0015"></label><button class="btn btn-outline btn-sm table-add-btn" id="cf-add-btn-${tid}" data-cf-click="cfAddScalpQuantity('${tid}')">Add</button></div></td>
+        <td><div class="table-inline-actions table-action-stack"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Set</button><button class="btn btn-danger btn-sm" id="cf-exit-btn-${tid}" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
       </tr>`;
     }).join('');
   } else {
@@ -5368,11 +5561,13 @@ function cfRenderActivePositions(open) {
       row.dataset.pnlState = isProfit ? 'profit' : (isLoss ? 'loss' : 'flat');
     });
   }
+  cfSyncAllScalpTradeActionUi(open);
   _renderTablePager('cf-scalp-active-table', 'cf-scalp-active-table', 'cf-scalp-active-pagination');
 }
 
 async function cfSubmitScalp(direction) {
   const statusEl = cfEl('cf-scalp-entry-status');
+  let submitLocked = false;
   try {
     const symbolEl = cfRequireElement('cf-scalp-symbol', 'Symbol');
     const qtyEl = cfRequireElement('cf-scalp-qty', 'Size');
@@ -5407,6 +5602,11 @@ async function cfSubmitScalp(direction) {
       return;
     }
 
+    if (!cfSetScalpEntrySubmitBusy(direction)) {
+      cfToast('A scalp entry is already being submitted', 'info');
+      return;
+    }
+    submitLocked = true;
     if (statusEl) statusEl.textContent = 'Submitting…';
     const payload = { symbol, side: direction, qty_mode: qtyMode, qty_value: qty, leverage, mode };
     if (slType === 'pct' && slVal > 0) payload.stop_loss_pct = slVal;
@@ -5447,11 +5647,19 @@ async function cfSubmitScalp(direction) {
     }
     if (statusEl) { statusEl.textContent = 'Network error'; statusEl.style.color = 'var(--red)'; }
     cfToast((e && e.message) ? e.message : 'Network error submitting scalp', 'danger');
+  } finally {
+    if (submitLocked) cfClearScalpEntrySubmitBusy();
   }
 }
 
 async function cfExitScalpTrade(tradeId) {
+  let locked = false;
   try {
+    if (!cfSetScalpTradeActionLock(tradeId, 'exit')) {
+      cfToast('This trade already has an action in progress', 'info');
+      return;
+    }
+    locked = true;
     const res = await cfApiFetch('/api/scalp/exit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5467,6 +5675,7 @@ async function cfExitScalpTrade(tradeId) {
       cfToast(cfApiErrorDetail(d, 'Exit failed'), 'danger');
     }
   } catch(e) { cfToast((e && e.message) ? e.message : 'Network error exiting trade', 'danger'); }
+  finally { if (locked) cfClearScalpTradeActionLock(tradeId); }
 }
 
 async function cfModifyScalpTrade(tradeId) {
@@ -5494,8 +5703,13 @@ async function cfModifyScalpTrade(tradeId) {
     return;
   }
 
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  let locked = false;
   try {
+    if (!cfSetScalpTradeActionLock(tradeId, 'targets')) {
+      cfToast('This trade already has an action in progress', 'info');
+      return;
+    }
+    locked = true;
     const res = await cfApiFetch('/api/scalp/trades/' + tradeId + '/targets', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -5513,7 +5727,8 @@ async function cfModifyScalpTrade(tradeId) {
   } catch (e) {
     cfToast('Error: ' + e.message, 'danger');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Set'; }
+    if (locked) cfClearScalpTradeActionLock(tradeId);
+    else if (btn) cfSyncScalpTradeActionUi(tradeId);
   }
 }
 
@@ -5530,7 +5745,13 @@ async function cfAddScalpQuantity(tradeId) {
     cfToast('Add quantity must be greater than zero', 'danger');
     return;
   }
+  let locked = false;
   try {
+    if (!cfSetScalpTradeActionLock(tradeId, 'add')) {
+      cfToast('This trade already has an action in progress', 'info');
+      return;
+    }
+    locked = true;
     const res = await cfApiFetch('/api/scalp/trades/' + tradeId + '/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5548,6 +5769,8 @@ async function cfAddScalpQuantity(tradeId) {
     }
   } catch (e) {
     cfToast('Error: ' + e.message, 'danger');
+  } finally {
+    if (locked) cfClearScalpTradeActionLock(tradeId);
   }
 }
 
