@@ -2716,17 +2716,9 @@
 }
 .cf-scalp-qty-grid {
   display: grid;
-  grid-template-columns: minmax(132px, 156px) minmax(0, 1fr);
+  grid-template-columns: minmax(128px, 152px) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
-}
-.cf-scalp-qty-mode-select {
-  width: 100%;
-  min-width: 0;
-  min-height: 52px;
-  padding: 9px 10px;
-  border-radius: 10px;
-  font-size: 14px;
 }
 .cf-scalp-qty-input {
   min-width: 0;
@@ -2899,6 +2891,20 @@
   border: 1px solid rgba(255,255,255,0.12);
   color: var(--accent);
   font-weight: 600;
+}
+.cf-scalp-qty-mode-select,
+.cf-scalp-qty-mode-select.cf-scalp-type-select {
+  display: block;
+  width: 100%;
+  min-width: 128px;
+  min-height: 52px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
+  font-family: var(--font-body);
 }
 .cf-scalp-qty-row {
   display: flex;

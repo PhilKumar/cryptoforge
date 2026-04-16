@@ -959,7 +959,7 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
     async def _restore_session_file(self):
         engine = getattr(self.app_module, "_scalp_engine", None)
         if engine is not None:
-            engine.stop()
+            await engine.shutdown()
             self.app_module._scalp_engine = None
         self.app_module._SESSION_FILE = self._orig_session_file
         if self._orig_state_dir is not None:
@@ -1135,7 +1135,7 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def _restore_runtime_file(self):
         engine = getattr(self.app_module, "_scalp_engine", None)
         if engine is not None:
-            engine.stop()
+            await engine.shutdown()
             self.app_module._scalp_engine = None
         self.app_module._SCALP_RUNTIME_FILE = self._orig_runtime_file
         if self._orig_state_dir is not None:
@@ -1163,6 +1163,7 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.app_module._save_scalp_runtime(self.app_module._snapshot_scalp_runtime(status))
 
         restored_engine = ScalpEngine(FakeScalpDelta([101.25]))
+        self.addAsyncCleanup(restored_engine.shutdown)
         restored = self.app_module._restore_scalp_runtime(restored_engine)
 
         self.assertTrue(restored)

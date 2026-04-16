@@ -457,6 +457,8 @@ class ScalpEngine:
         self._last_execution: Dict[str, Any] = {}
         self._update_task: Optional[asyncio.Task] = None
         self._ws_shutdown_task: Optional[asyncio.Task] = None
+        self._ws_ensure_tasks: set[asyncio.Task] = set()
+        self._ws_ensure_cancel_tasks: list[asyncio.Task] = []
         self._last_update_push: float = 0.0
         self._update_interval_sec: float = 0.25
 
@@ -476,6 +478,11 @@ class ScalpEngine:
         if self._update_task:
             self._update_task.cancel()
             self._update_task = None
+        ensure_tasks = [task for task in self._ws_ensure_tasks if task and not task.done()]
+        self._ws_ensure_tasks.clear()
+        self._ws_ensure_cancel_tasks = ensure_tasks
+        for task in ensure_tasks:
+            task.cancel()
         shutdown_task = None
         if self._ws_feed:
             try:
@@ -490,6 +497,15 @@ class ScalpEngine:
 
     async def shutdown(self):
         shutdown_task = self.stop()
+        ensure_tasks = list(self._ws_ensure_cancel_tasks)
+        self._ws_ensure_cancel_tasks = []
+        for task in ensure_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
         if shutdown_task:
             try:
                 await shutdown_task
@@ -507,10 +523,28 @@ class ScalpEngine:
         if not self._running:
             self.start()
             return
+        self._queue_ws_feed_ensure({canonical})
+
+    def _queue_ws_feed_ensure(self, symbols: set[str]) -> None:
+        pending = {self._canonical_symbol(sym) for sym in symbols if sym}
+        if not _HAS_WS or not pending or not self._running:
+            return
         try:
-            asyncio.get_running_loop().create_task(self._ensure_ws_feed({canonical}))
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+
+        async def _runner() -> None:
+            try:
+                await self._ensure_ws_feed(pending)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                pass
+
+        task = loop.create_task(_runner())
+        self._ws_ensure_tasks.add(task)
+        task.add_done_callback(lambda done: self._ws_ensure_tasks.discard(done))
 
     @staticmethod
     def _entry_freshness_thresholds(source: str) -> tuple[int, int]:
@@ -760,7 +794,7 @@ class ScalpEngine:
         self._update_task = loop.create_task(self._delayed_update(delay))
 
     async def _ensure_ws_feed(self, symbols: set[str]):
-        if not _HAS_WS or not symbols:
+        if not self._running or not _HAS_WS or not symbols:
             return
         if self._ws_feed is None:
             self._ws_feed = DeltaWSFeed()
@@ -911,7 +945,7 @@ class ScalpEngine:
                     self.start()
                 else:
                     try:
-                        asyncio.get_running_loop().create_task(self._ensure_ws_feed({symbol}))
+                        self._queue_ws_feed_ensure({symbol})
                     except RuntimeError:
                         pass
                 return {
@@ -1133,7 +1167,7 @@ class ScalpEngine:
             self.start()
         else:
             try:
-                asyncio.get_running_loop().create_task(self._ensure_ws_feed({symbol}))
+                self._queue_ws_feed_ensure({symbol})
             except RuntimeError:
                 pass
         self._schedule_update(force=True)

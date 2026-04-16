@@ -2808,8 +2808,15 @@ async function refreshTopbarTicker() {
 // ── WebSocket ──────────────────────────────────────────────
 function connectWS() {
   try {
+    if (_cfAppSocket && (_cfAppSocket.readyState === WebSocket.OPEN || _cfAppSocket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
+    _cfAppSocket = ws;
+    ws.onopen = () => {
+      _cfAppSocketConnected = true;
+    };
     ws.onmessage = (e) => {
       let data;
       try { data = JSON.parse(e.data); } catch(err) { console.warn('WS parse error:', err); return; }
@@ -2832,7 +2839,9 @@ function connectWS() {
         return;
       }
       if (data.source === 'scalp' && data.type === 'scalp_status') {
-        cfApplyScalpStatus(data.status || {});
+        _cfScalpLastWsUpdateAt = Date.now();
+        cfMergeScalpStatusPatch(data.status || {});
+        cfApplyScalpStatus(_cfLatestScalpStatus);
         return;
       }
       // Trade events — trigger immediate refresh
@@ -2848,7 +2857,19 @@ function connectWS() {
         loadLiveMonitor();
       }
     };
-    ws.onclose = () => setTimeout(connectWS, 5000);
+    ws.onerror = () => {
+      _cfAppSocketConnected = false;
+    };
+    ws.onclose = () => {
+      if (_cfAppSocket === ws) _cfAppSocket = null;
+      _cfAppSocketConnected = false;
+      _cfScalpLastWsUpdateAt = 0;
+      var scalpPage = document.getElementById('scalp-page');
+      if (scalpPage && scalpPage.classList.contains('active-page')) {
+        setTimeout(cfLoadScalpStatus, 250);
+      }
+      setTimeout(connectWS, 5000);
+    };
   } catch(e) {}
 }
 
@@ -4575,6 +4596,9 @@ var _cfScalpActivityTimer = null;
 var _cfScalpLastActivityFetch = 0;
 var _cfScalpActivityInFlight = null;
 var _cfLatestScalpStatus = {};
+var _cfAppSocket = null;
+var _cfAppSocketConnected = false;
+var _cfScalpLastWsUpdateAt = 0;
 // Persistent trade cache — never loses trades across polls
 var _cfTradeCache = new Map();
 var _cfScalpEventCache = new Map();
@@ -4633,6 +4657,10 @@ const _cfOperatorReads = [
     body: 'The operator who waits through dead tape is usually safer than the one who fills the session with random clicks. Good scalping is mostly selective boredom with a fast trigger.'
   }
 ];
+
+function cfScalpWsFresh() {
+  return _cfAppSocketConnected && _cfScalpLastWsUpdateAt > 0 && (Date.now() - _cfScalpLastWsUpdateAt) < 6000;
+}
 
 const _CF_SCALP_DEFAULTS = Object.freeze({
   symbol: 'BTCUSDT',
@@ -4818,7 +4846,9 @@ function cfInitScalpPage() {
   cfRefreshScalpWorkspace();
   cfRefreshScalpEntryLaneFromState();
   if (!_cfScalpPollTimer) {
-    _cfScalpPollTimer = setInterval(cfLoadScalpStatus, 2000);
+    _cfScalpPollTimer = setInterval(function() {
+      if (!cfScalpWsFresh()) cfLoadScalpStatus();
+    }, 2000);
   }
   if (!_cfScalpActivityTimer) {
     _cfScalpActivityTimer = setInterval(function() { cfLoadScalpActivity(false); }, 15000);
@@ -4905,8 +4935,9 @@ async function cfLoadScalpActivity(force) {
     const scalpPage = document.getElementById('scalp-page');
     if (!force && (!scalpPage || !scalpPage.classList.contains('active-page'))) return;
     const now = Date.now();
+    const minInterval = cfScalpWsFresh() ? 45000 : 15000;
     if (!force && _cfScalpActivityInFlight) return _cfScalpActivityInFlight;
-    if (!force && now - _cfScalpLastActivityFetch < 15000) return;
+    if (!force && now - _cfScalpLastActivityFetch < minInterval) return;
     _cfScalpLastActivityFetch = now;
     _cfScalpActivityInFlight = (async function() {
       const r = await cfApiFetch('/api/scalp/activity');
