@@ -1197,6 +1197,46 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(runtime.get("open_trades") or []), 1)
         self.assertEqual((runtime.get("open_trades") or [])[0].get("symbol"), "BTCUSDT")
 
+    async def test_scalp_action_routes_return_runtime_snapshot(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+            self.app_module._scalp_engine._record_price("BTCUSD", 101.25, source="ws")
+            entered = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_mode": "base",
+                    "qty_value": 0.0015,
+                    "leverage": 10,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+            entry_payload = entered.json()
+            trade_id = entry_payload["trade"]["trade_id"]
+            added = await client.post(
+                f"/api/scalp/trades/{trade_id}/add",
+                json={"qty_mode": "base", "qty_value": 0.0005},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(entered.status_code, 200)
+        self.assertEqual(len(entry_payload.get("open_trades") or []), 1)
+        self.assertEqual(entry_payload.get("open_trades")[0].get("symbol"), "BTCUSDT")
+        self.assertEqual(added.status_code, 200)
+        add_payload = added.json()
+        self.assertEqual(add_payload.get("status"), "ok")
+        self.assertEqual(len(add_payload.get("open_trades") or []), 1)
+        self.assertGreater(
+            add_payload.get("open_trades")[0].get("base_qty", 0),
+            entry_payload.get("open_trades")[0].get("base_qty", 0),
+        )
+        self.assertEqual((add_payload.get("execution_metrics") or {}).get("phase"), "scale_in")
+
 
 class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

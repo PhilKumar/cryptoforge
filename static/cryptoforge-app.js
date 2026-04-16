@@ -4902,8 +4902,9 @@ async function cfLoadScalpStatus() {
     const r = await cfApiFetch(url);
     if (!r.ok) return null;
     const d = await r.json();
-    cfApplyScalpStatus(d);
-    return d;
+    cfMergeScalpStatusPatch(d || {});
+    cfApplyScalpStatus(_cfLatestScalpStatus);
+    return _cfLatestScalpStatus;
   } catch(e) {
     return null;
   }
@@ -4926,6 +4927,12 @@ function cfMergeScalpStatusPatch(payload) {
   if (payload.entry_controls) {
     merged.entry_controls = Object.assign({}, merged.entry_controls || {}, payload.entry_controls);
   }
+  ['open_trades', 'pending_entries', 'closed_trades', 'event_log', 'file_trades', 'file_events'].forEach(function(key) {
+    if (Array.isArray(payload[key])) merged[key] = payload[key].slice();
+  });
+  ['running', 'in_trade', 'session_pnl', 'symbol'].forEach(function(key) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) merged[key] = payload[key];
+  });
   _cfLatestScalpStatus = merged;
   return merged;
 }

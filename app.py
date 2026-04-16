@@ -3175,6 +3175,14 @@ def _attach_scalp_runtime_metrics(result: dict, engine: ScalpEngine, symbol_hint
     if not isinstance(result, dict):
         return result
     status = engine.get_status(symbol_hint)
+    result.setdefault("running", bool(status.get("running")))
+    result.setdefault("in_trade", bool(status.get("in_trade")))
+    if "session_pnl" in status:
+        result.setdefault("session_pnl", status.get("session_pnl"))
+    result.setdefault("open_trades", list(status.get("open_trades") or []))
+    result.setdefault("pending_entries", list(status.get("pending_entries") or []))
+    result.setdefault("closed_trades", list(status.get("closed_trades") or [])[-50:])
+    result.setdefault("event_log", list(status.get("event_log") or [])[-100:])
     result.setdefault("execution_metrics", dict(status.get("execution_metrics") or {}))
     result.setdefault("feed_metrics", dict(status.get("feed_metrics") or {}))
     result.setdefault("entry_controls", dict(status.get("entry_controls") or {}))
