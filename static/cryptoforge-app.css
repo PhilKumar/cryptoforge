@@ -62,6 +62,7 @@
     padding: 0 16px 16px;
     max-width: 1440px;
     margin: 0 auto;
+    overflow-x: hidden;
   }
   body::before {
     content: '';
@@ -322,9 +323,11 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    flex-shrink: 0;
+    flex: 1 1 auto;
+    min-width: 0;
     cursor: pointer;
   }
+  .topbar-brand > div:last-child { min-width: 0; }
   .topbar-brand-icon {
     position: relative;
     width: 36px;
@@ -389,6 +392,9 @@
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text;
     letter-spacing: 1.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .topbar-brand-sub {
     font-size: 9px;
@@ -425,7 +431,7 @@
   .ticker-cell .tc-usd { font-family: var(--font-mono); font-size: 9.5px; font-weight: 500; color: var(--muted); margin-top: 2px; letter-spacing: -0.2px; opacity: 0.7; }
   .ticker-cell .tc-change { font-family: var(--font-mono); font-size: 10px; font-weight: 500; margin-top: 2px; }
 
-  .topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
   .topbar-clock {
     background: rgba(255,255,255,0.035);
     border: 1px solid var(--border);
@@ -2466,7 +2472,10 @@
 
   @media (max-width: 767px) {
     /* -- Global -- */
-    body { padding: 0 !important; }
+    body {
+      padding: 0 !important;
+      background-attachment: scroll;
+    }
     .page-section { padding: 12px !important; }
 
     /* -- Topbar: show ticker on mobile instead of hiding -- */
@@ -2488,13 +2497,23 @@
     .app-topbar {
       flex-wrap: wrap;
       padding: 8px 10px !important;
-      gap: 6px;
+      gap: 8px;
     }
+    .topbar-brand { order: 1; }
     .topbar-brand-text { font-size: 14px; }
     .topbar-brand-sub { display: none; }
     .topbar-brand-icon { width: 30px; height: 30px; }
-    .topbar-right { gap: 4px; }
-    .topbar-clock { font-size: 10px; }
+    .topbar-right {
+      order: 2;
+      gap: 4px;
+      margin-left: auto;
+    }
+    .topbar-clock {
+      font-size: 10px;
+      min-width: 0;
+      text-align: center;
+    }
+    .topbar-icon-btn { flex: 0 0 32px; }
 
     /* -- Asset switcher: compact -- */
     .asset-switcher { padding: 6px 10px !important; gap: 4px !important; }
@@ -2593,6 +2612,10 @@
     /* -- Cards: tighter padding -- */
     .card { padding: 14px !important; }
     .template-grid { grid-template-columns: 1fr !important; }
+    .topbar-ticker {
+      order: 3;
+      width: 100%;
+    }
   }
 
   /* Small phones (< 400px) */
@@ -2602,6 +2625,13 @@
     .stats-grid { grid-template-columns: 1fr !important; }
     .trading-info-grid { grid-template-columns: 1fr !important; }
     .nav-tab { padding: 8px 10px !important; }
+    .topbar-right {
+      width: 100%;
+      justify-content: flex-end;
+    }
+    .topbar-clock {
+      flex: 1 1 auto;
+    }
     #scalp-page div[style*="grid-template-columns:1fr 1fr"][style*="gap:10px"] {
       grid-template-columns: 1fr !important;
     }

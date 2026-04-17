@@ -709,13 +709,25 @@ function showPage(pageId, btn) {
 
 // ── Theme Toggle ───────────────────────────────────────────
 function toggleTheme() {
+  if (typeof window.cfToggleTheme === 'function') {
+    window.cfToggleTheme();
+    return;
+  }
   const html = document.documentElement;
   html.dataset.theme = html.dataset.theme === 'light' ? 'dark' : 'light';
+  html.style.colorScheme = html.dataset.theme;
   localStorage.setItem('cf-theme', html.dataset.theme);
 }
 (function() {
+  if (typeof window.cfApplyTheme === 'function') {
+    window.cfApplyTheme(typeof window.cfGetStoredTheme === 'function' ? window.cfGetStoredTheme() : '', { persist: false });
+    return;
+  }
   const saved = localStorage.getItem('cf-theme');
-  if (saved) document.documentElement.dataset.theme = saved;
+  if (saved) {
+    document.documentElement.dataset.theme = saved;
+    document.documentElement.style.colorScheme = saved;
+  }
 })();
 
 // ── Clock (IST primary) ─────────────────────────────────────

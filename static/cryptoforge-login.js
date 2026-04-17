@@ -1,7 +1,7 @@
-// Restore saved theme
 try {
-  const saved = localStorage.getItem('cf-theme');
-  if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  if (typeof window.cfApplyTheme === 'function') {
+    window.cfApplyTheme(typeof window.cfGetStoredTheme === 'function' ? window.cfGetStoredTheme() : '', { persist: false });
+  }
 } catch(e) {}
 
 const PIN_LENGTH = 6;
