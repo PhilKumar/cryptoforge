@@ -282,6 +282,7 @@ class BacktestRoutePersistenceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         original_run_file = app_module.RUNS_FILE
+        original_legacy_run_file = app_module._LEGACY_RUNS_FILE
         original_state_db_file = getattr(app_module, "_STATE_DB_FILE", "")
         original_fetch_data = app_module._fetch_data
         original_run_backtest = app_module.run_backtest
@@ -289,6 +290,7 @@ class BacktestRoutePersistenceTests(unittest.IsolatedAsyncioTestCase):
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 app_module.RUNS_FILE = os.path.join(tmpdir, "runs.json")
+                app_module._LEGACY_RUNS_FILE = os.path.join(tmpdir, "legacy-runs.json")
                 app_module._STATE_DB_FILE = os.path.join(tmpdir, "cryptoforge_state.db")
                 app_module._fetch_data = lambda **_: df
 
@@ -356,6 +358,7 @@ class BacktestRoutePersistenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(saved["max_daily_loss"], 9.0)
         finally:
             app_module.RUNS_FILE = original_run_file
+            app_module._LEGACY_RUNS_FILE = original_legacy_run_file
             app_module._STATE_DB_FILE = original_state_db_file
             app_module._fetch_data = original_fetch_data
             app_module.run_backtest = original_run_backtest
