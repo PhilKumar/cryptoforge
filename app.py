@@ -3456,8 +3456,9 @@ def _load_scalp_trades():
     trades = list(store.list(_BUCKET_SCALP_TRADES, order_by="updated_at"))
     return sorted(
         trades,
-        key=lambda row: _normalize_datetime((row or {}).get("exit_time") or (row or {}).get("entry_time"))
-        or datetime.min,
+        key=lambda row: (
+            _normalize_datetime((row or {}).get("exit_time") or (row or {}).get("entry_time")) or datetime.min
+        ),
     )
 
 

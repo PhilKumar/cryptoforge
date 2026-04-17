@@ -116,10 +116,10 @@ class SQLiteJSONStore:
                 "WHERE bucket=? ORDER BY created_at DESC, doc_key DESC"
             ),
             ("doc_key", False): (
-                "SELECT doc_key, payload, created_at, updated_at FROM documents " "WHERE bucket=? ORDER BY doc_key ASC"
+                "SELECT doc_key, payload, created_at, updated_at FROM documents WHERE bucket=? ORDER BY doc_key ASC"
             ),
             ("doc_key", True): (
-                "SELECT doc_key, payload, created_at, updated_at FROM documents " "WHERE bucket=? ORDER BY doc_key DESC"
+                "SELECT doc_key, payload, created_at, updated_at FROM documents WHERE bucket=? ORDER BY doc_key DESC"
             ),
             ("updated_at", False): (
                 "SELECT doc_key, payload, created_at, updated_at FROM documents "
