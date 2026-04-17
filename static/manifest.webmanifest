@@ -1,0 +1,39 @@
+{
+  "id": "/",
+  "name": "CryptoForge",
+  "short_name": "CryptoForge",
+  "description": "CryptoForge trading workspace for crypto futures, scalping, live execution, and strategy analysis.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#07090f",
+  "theme_color": "#07090f",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/static/pwa-icons/icon-192.png?v=20260417-1",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/pwa-icons/icon-512.png?v=20260417-1",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/pwa-icons/icon-maskable-192.png?v=20260417-1",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/static/pwa-icons/icon-maskable-512.png?v=20260417-1",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

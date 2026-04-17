@@ -38,7 +38,7 @@ os.chdir(_HERE)
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -488,7 +488,18 @@ def _is_same_origin_request(request: Request) -> bool:
 # ── Auth Middleware (Dependency-based) ────────────────────────────
 async def require_auth(request: Request):
     path = request.url.path
-    if path in ("/api/auth/login", "/api/auth/status", "/api/health", "/login", "/", "/favicon.ico"):
+    if path in (
+        "/api/auth/login",
+        "/api/auth/status",
+        "/api/health",
+        "/login",
+        "/",
+        "/favicon.ico",
+        "/manifest.webmanifest",
+        "/site.webmanifest",
+        "/sw.js",
+        "/apple-touch-icon.png",
+    ):
         return
     if path.startswith("/static"):
         return
@@ -512,7 +523,17 @@ async def request_id_middleware(request: Request, call_next):
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    public = ("/", "/api/auth/login", "/api/auth/status", "/api/health", "/favicon.ico")
+    public = (
+        "/",
+        "/api/auth/login",
+        "/api/auth/status",
+        "/api/health",
+        "/favicon.ico",
+        "/manifest.webmanifest",
+        "/site.webmanifest",
+        "/sw.js",
+        "/apple-touch-icon.png",
+    )
     if path in public or path.startswith("/static"):
         return await call_next(request)
     if path.startswith("/api/"):
@@ -974,10 +995,43 @@ def _estimate_warmup_days(candle_interval: str, indicators: List[str]) -> int:
 
 
 # ── Favicon ───────────────────────────────────────────────────────
-@app.get("/favicon.ico")
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"])
 async def favicon():
     svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#8b5cf6"/><text y=".9em" x="50" text-anchor="middle" font-size="70" font-family="sans-serif">⬡</text></svg>'
     return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.api_route("/apple-touch-icon.png", methods=["GET", "HEAD"])
+async def apple_touch_icon():
+    return FileResponse(
+        os.path.join(_HERE, "static", "pwa-icons", "apple-touch-icon.png"),
+        media_type="image/png",
+    )
+
+
+@app.api_route("/manifest.webmanifest", methods=["GET", "HEAD"])
+async def manifest_webmanifest():
+    return FileResponse(
+        os.path.join(_HERE, "static", "manifest.webmanifest"),
+        media_type="application/manifest+json",
+    )
+
+
+@app.api_route("/site.webmanifest", methods=["GET", "HEAD"])
+async def site_webmanifest():
+    return FileResponse(
+        os.path.join(_HERE, "static", "manifest.webmanifest"),
+        media_type="application/manifest+json",
+    )
+
+
+@app.api_route("/sw.js", methods=["GET", "HEAD"])
+async def service_worker():
+    return FileResponse(
+        os.path.join(_HERE, "static", "sw.js"),
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
 
 
 # ── Serve Frontend ────────────────────────────────────────────────
