@@ -198,7 +198,7 @@ class LiveEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._tmp.cleanup)
 
     def _make_engine(self, broker, run_id):
-        engine = LiveEngine(broker, run_id=run_id)
+        engine = LiveEngine(broker, run_id=run_id, state_db_path=os.path.join(self._tmp.name, "cryptoforge_state.db"))
         engine._state_file = os.path.join(self._tmp.name, f"{run_id}.json")
         engine.configure(
             strategy={
@@ -335,7 +335,11 @@ class PaperEngineParityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_paper_engine_uses_fixed_qty_and_applies_fees(self):
         broker = FakeLiveBroker(position={})
-        engine = PaperTradingEngine(broker, run_id="paper-fixed-qty")
+        engine = PaperTradingEngine(
+            broker,
+            run_id="paper-fixed-qty",
+            state_db_path=os.path.join(self._tmp.name, "cryptoforge_state.db"),
+        )
         engine._state_file = os.path.join(self._tmp.name, "paper-fixed-qty.json")
         engine.configure(
             strategy={
@@ -979,12 +983,15 @@ class SessionSecurityTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self._orig_session_file = self.app_module._SESSION_FILE
         self._orig_state_dir = getattr(self.app_module, "_STATE_DIR", None)
+        self._orig_state_db_file = getattr(self.app_module, "_STATE_DB_FILE", "")
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
         self.app_module._STATE_DIR = self._tmp.name
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
         self.addCleanup(self._restore_session_file)
 
     def _restore_session_file(self):
         self.app_module._SESSION_FILE = self._orig_session_file
+        self.app_module._STATE_DB_FILE = self._orig_state_db_file
         if self._orig_state_dir is not None:
             self.app_module._STATE_DIR = self._orig_state_dir
 
@@ -1023,8 +1030,10 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self._tmp.cleanup)
         self._orig_session_file = self.app_module._SESSION_FILE
         self._orig_state_dir = getattr(self.app_module, "_STATE_DIR", None)
+        self._orig_state_db_file = getattr(self.app_module, "_STATE_DB_FILE", "")
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
         self.addAsyncCleanup(self._restore_session_file)
 
     async def _restore_session_file(self):
@@ -1033,6 +1042,7 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
             await engine.shutdown()
             self.app_module._scalp_engine = None
         self.app_module._SESSION_FILE = self._orig_session_file
+        self.app_module._STATE_DB_FILE = self._orig_state_db_file
         if self._orig_state_dir is not None:
             self.app_module._STATE_DIR = self._orig_state_dir
 
@@ -1226,6 +1236,123 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("frame-src 'none'", csp)
 
 
+class OpsStateRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addAsyncCleanup(self._tmp.cleanup)
+        self._orig_session_file = self.app_module._SESSION_FILE
+        self._orig_state_dir = getattr(self.app_module, "_STATE_DIR", None)
+        self._orig_state_db_file = getattr(self.app_module, "_STATE_DB_FILE", "")
+        self._orig_scalp_engine = getattr(self.app_module, "_scalp_engine", None)
+        self.app_module._STATE_DIR = self._tmp.name
+        self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        self.app_module.live_engines.clear()
+        self.app_module.paper_engines.clear()
+        self.app_module._live_tasks.clear()
+        self.app_module._paper_tasks.clear()
+        self.app_module._stopped_engines.clear()
+        self.app_module._alert_state.clear()
+        self.app_module._scalp_engine = None
+        self.addAsyncCleanup(self._restore_state)
+
+    async def _restore_state(self):
+        engine = getattr(self.app_module, "_scalp_engine", None)
+        if engine is not None:
+            await engine.shutdown()
+        self.app_module._scalp_engine = self._orig_scalp_engine
+        self.app_module._SESSION_FILE = self._orig_session_file
+        self.app_module._STATE_DB_FILE = self._orig_state_db_file
+        if self._orig_state_dir is not None:
+            self.app_module._STATE_DIR = self._orig_state_dir
+        self.app_module.live_engines.clear()
+        self.app_module.paper_engines.clear()
+        self.app_module._live_tasks.clear()
+        self.app_module._paper_tasks.clear()
+        self.app_module._stopped_engines.clear()
+        self.app_module._alert_state.clear()
+
+    async def test_ready_route_reports_state_store_health(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            response = await client.get("/api/ready")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ready"])
+        self.assertTrue(payload["checks"]["state_store_writable"])
+        self.assertIn("runtime", payload)
+        self.assertIn("recovery", payload)
+
+    async def test_backup_route_returns_snapshot_after_auth(self):
+        self.app_module._save([{"id": 11, "name": "Momentum Prime"}])
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            login = await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            self.assertEqual(login.status_code, 200)
+            backup = await client.get("/api/ops/state/backup")
+
+        self.assertEqual(backup.status_code, 200)
+        payload = backup.json()
+        self.assertEqual(payload["format"], "cryptoforge-state-snapshot/v1")
+        self.assertIn("strategies", payload["buckets"])
+        self.assertEqual(payload["buckets"]["strategies"]["11"]["payload"]["name"], "Momentum Prime")
+
+    async def test_restore_route_rejects_active_runtime_without_force(self):
+        self.app_module.live_engines["live-a"] = SimpleNamespace(running=True)
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            restore = await client.post(
+                "/api/ops/state/restore",
+                json={"snapshot": {"format": "cryptoforge-state-snapshot/v1", "buckets": {}}, "replace": True},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(restore.status_code, 409)
+        self.assertIn("active runtime", restore.json()["error"]["detail"].lower())
+
+    async def test_restore_route_replaces_state_and_resets_runtime_caches(self):
+        self.app_module._stopped_engines["paper-a"] = {"mode": "paper", "running": False}
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        snapshot = {
+            "format": "cryptoforge-state-snapshot/v1",
+            "buckets": {
+                "strategies": {
+                    "21": {
+                        "payload": {"id": 21, "name": "Recovered Strategy"},
+                        "created_at": datetime.now().isoformat(),
+                        "updated_at": datetime.now().isoformat(),
+                    }
+                },
+                "runs": {
+                    "91": {
+                        "payload": {"id": 91, "mode": "paper", "strategy_name": "Recovered Strategy"},
+                        "created_at": datetime.now().isoformat(),
+                        "updated_at": datetime.now().isoformat(),
+                    }
+                },
+            },
+        }
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            restore = await client.post(
+                "/api/ops/state/restore",
+                json={"snapshot": snapshot, "replace": True},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(restore.status_code, 200)
+        restored_strategies = self.app_module._load()
+        restored_runs = self.app_module._load_runs()
+        self.assertEqual(restored_strategies[0]["name"], "Recovered Strategy")
+        self.assertEqual(restored_runs[0]["strategy_name"], "Recovered Strategy")
+        self.assertEqual(self.app_module._stopped_engines, {})
+
+
 class StatePathMigrationTests(unittest.TestCase):
     def test_resolve_state_file_migrates_flat_scalp_state_into_subdirectory(self):
         app_module = import_module("app")
@@ -1238,13 +1365,16 @@ class StatePathMigrationTests(unittest.TestCase):
 
             orig_here = app_module._HERE
             orig_state_dir = app_module._STATE_DIR
+            orig_state_db_file = getattr(app_module, "_STATE_DB_FILE", "")
             try:
                 app_module._HERE = legacy_here
                 app_module._STATE_DIR = tmp
+                app_module._STATE_DB_FILE = os.path.join(tmp, "cryptoforge_state.db")
                 legacy_path, state_path = app_module._resolve_state_file("scalp_runtime.json", "scalp")
             finally:
                 app_module._HERE = orig_here
                 app_module._STATE_DIR = orig_state_dir
+                app_module._STATE_DB_FILE = orig_state_db_file
 
             self.assertEqual(legacy_path, os.path.join(legacy_here, "scalp_runtime.json"))
             self.assertEqual(state_path, os.path.join(tmp, "scalp", "scalp_runtime.json"))
@@ -1261,7 +1391,9 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self._tmp.cleanup)
         self._orig_runtime_file = self.app_module._SCALP_RUNTIME_FILE
         self._orig_state_dir = getattr(self.app_module, "_STATE_DIR", None)
+        self._orig_state_db_file = getattr(self.app_module, "_STATE_DB_FILE", "")
         self.app_module._STATE_DIR = self._tmp.name
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
         self.app_module._SCALP_RUNTIME_FILE = os.path.join(self._tmp.name, "scalp_runtime.json")
         self.addAsyncCleanup(self._restore_runtime_file)
 
@@ -1271,6 +1403,7 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
             await engine.shutdown()
             self.app_module._scalp_engine = None
         self.app_module._SCALP_RUNTIME_FILE = self._orig_runtime_file
+        self.app_module._STATE_DB_FILE = self._orig_state_db_file
         if self._orig_state_dir is not None:
             self.app_module._STATE_DIR = self._orig_state_dir
 

@@ -18,6 +18,9 @@ _validate*.py
 *.tmp
 .sessions.json
 live_state_*.json
+cryptoforge_state.db
+cryptoforge_state.db-shm
+cryptoforge_state.db-wal
 cache/
 Tier A*
 e2e-tests/playwright-report/

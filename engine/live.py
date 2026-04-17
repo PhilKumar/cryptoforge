@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from engine.backtest import eval_condition_group
 from engine.indicators import compute_dynamic_indicators
+from state_store import get_json_store
 
 # IST timezone (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -94,11 +95,21 @@ _STATE_DIR = os.path.dirname(os.path.dirname(__file__))
 _DEFAULT_STATE_FILE = os.path.join(_STATE_DIR, "live_state.json")
 
 
+def _state_db_path() -> str:
+    explicit = (os.getenv("CRYPTOFORGE_STATE_DB_PATH") or "").strip()
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit))
+    explicit_dir = (os.getenv("CRYPTOFORGE_STATE_DIR") or "").strip()
+    if explicit_dir:
+        return os.path.join(os.path.abspath(os.path.expanduser(explicit_dir)), "cryptoforge_state.db")
+    return os.path.join(_STATE_DIR, "cryptoforge_state.db")
+
+
 class LiveEngine:
     """Live perpetual futures trading engine with Delta Exchange.
     Multi-engine ready (keyed by run_id). State-persistent across restarts."""
 
-    def __init__(self, broker, run_id: str = None):
+    def __init__(self, broker, run_id: str = None, state_db_path: str = None):
         self.broker = broker
         self.running = False
         self.run_id = run_id
@@ -110,6 +121,9 @@ class LiveEngine:
             self._state_file = os.path.join(_STATE_DIR, f"live_state_{safe_id}.json")
         else:
             self._state_file = _DEFAULT_STATE_FILE
+        self._state_store = get_json_store(state_db_path or _state_db_path())
+        self._state_bucket = "engine_live_state"
+        self._state_key = safe_id if run_id else "__default__"
 
         # Strategy configuration
         self.strategy = {}
@@ -145,7 +159,7 @@ class LiveEngine:
 
     # ── STATE PERSISTENCE ─────────────────────────────────────
     def _save_state(self):
-        """Persist current session state to disk."""
+        """Persist current session state to the local state database."""
         try:
             state = {
                 "session_date": str(self.session_date) if self.session_date else None,
@@ -175,18 +189,21 @@ class LiveEngine:
                 ],
                 "saved_at": str(_now_ist()),
             }
-            with open(self._state_file, "w") as f:
-                _json.dump(state, f, indent=2, default=str)
+            self._state_store.put(self._state_bucket, self._state_key, state)
         except Exception as e:
             print(f"[LIVE] State save failed: {e}")
 
     def _load_state(self):
-        """Load last session state from disk."""
+        """Load last session state from the local state database."""
         try:
-            if not os.path.exists(self._state_file):
+            state = self._state_store.get(self._state_bucket, self._state_key)
+            if not state and os.path.exists(self._state_file):
+                with open(self._state_file, "r") as f:
+                    state = _json.load(f)
+                if isinstance(state, dict):
+                    self._state_store.put(self._state_bucket, self._state_key, state)
+            if not isinstance(state, dict):
                 return
-            with open(self._state_file, "r") as f:
-                state = _json.load(f)
 
             saved_date = state.get("session_date")
             today = str(date_type.today())
@@ -762,6 +779,8 @@ class LiveEngine:
                 if callback:
                     await callback({"type": "error", "message": str(e)})
 
+            if not self.running:
+                break
             await asyncio.sleep(poll_interval)
 
         self.log_event("stop", "Live Trading Engine Stopped")

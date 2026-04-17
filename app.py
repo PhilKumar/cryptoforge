@@ -49,6 +49,7 @@ from engine.backtest import run_backtest
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade
+from state_store import get_json_store
 
 
 # ── Shutdown hook: auto-save running engines to runs.json ─────
@@ -103,6 +104,7 @@ if os.path.exists("static"):
 
 # Initialize Delta client
 delta = DeltaClient()
+APP_BOOT_TS = time.time()
 
 # ── Multi-Engine Registries (keyed by run_id) ────────────────
 live_engines: Dict[str, LiveEngine] = {}
@@ -200,23 +202,20 @@ def _resolve_state_dir() -> str:
 
 
 _STATE_DIR = _resolve_state_dir()
+_STATE_DB_FILE = (os.getenv("CRYPTOFORGE_STATE_DB_PATH") or "").strip()
 _LEGACY_SESSION_FILE = os.path.join(_HERE, ".sessions.json")
 _SESSION_FILE = os.path.join(_STATE_DIR, "sessions.json")
 
+_BUCKET_SESSIONS = "sessions"
+_BUCKET_STRATEGIES = "strategies"
+_BUCKET_RUNS = "runs"
+_BUCKET_SCALP_TRADES = "scalp_trades"
+_BUCKET_SCALP_EVENTS = "scalp_events"
+_BUCKET_SCALP_RUNTIME = "scalp_runtime"
+
 
 def _bootstrap_session_store() -> None:
-    if _SESSION_FILE == _LEGACY_SESSION_FILE:
-        return
-    if os.path.exists(_SESSION_FILE) or not os.path.exists(_LEGACY_SESSION_FILE):
-        return
-    try:
-        os.makedirs(os.path.dirname(_SESSION_FILE), exist_ok=True)
-        shutil.copy2(_LEGACY_SESSION_FILE, _SESSION_FILE)
-    except Exception as exc:
-        _logger.warning("Failed to migrate legacy session store to %s: %s", _SESSION_FILE, exc)
-
-
-_bootstrap_session_store()
+    _seed_mapping_bucket(_BUCKET_SESSIONS, _SESSION_FILE, _LEGACY_SESSION_FILE)
 
 
 def _resolve_state_file(filename: str, *subdirs: str) -> tuple[str, str]:
@@ -242,6 +241,82 @@ def _resolve_state_file(filename: str, *subdirs: str) -> tuple[str, str]:
             _logger.warning("Failed to migrate %s to %s: %s", source_path, state_path, exc)
             return source_path, source_path
     return legacy_path, state_path
+
+
+def _current_state_db_file() -> str:
+    override = str(globals().get("_STATE_DB_FILE") or "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    return os.path.join(_STATE_DIR, "cryptoforge_state.db")
+
+
+def _get_state_store():
+    return get_json_store(_current_state_db_file())
+
+
+def _candidate_state_paths(*paths: str) -> list[str]:
+    seen = set()
+    candidates = []
+    for raw in paths:
+        path = str(raw or "").strip()
+        if not path:
+            continue
+        resolved = os.path.abspath(os.path.expanduser(path))
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append(resolved)
+    return candidates
+
+
+def _load_legacy_json(path: str):
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (json.JSONDecodeError, OSError, IOError) as exc:
+        _logger.warning("Failed to read legacy state %s: %s", path, exc)
+        return None
+
+
+def _seed_mapping_bucket(bucket: str, *paths: str):
+    store = _get_state_store()
+    if store.count(bucket) > 0:
+        return store
+    for path in _candidate_state_paths(*paths):
+        payload = _load_legacy_json(path)
+        if isinstance(payload, dict):
+            store.replace_mapping(bucket, payload)
+            break
+    return store
+
+
+def _seed_list_bucket(bucket: str, *paths: str, key_fn):
+    store = _get_state_store()
+    if store.count(bucket) > 0:
+        return store
+    for path in _candidate_state_paths(*paths):
+        payload = _load_legacy_json(path)
+        if isinstance(payload, list):
+            store.replace_list(bucket, payload, key_fn=key_fn)
+            break
+    return store
+
+
+def _seed_singleton_bucket(bucket: str, key: str, *paths: str):
+    store = _get_state_store()
+    if store.count(bucket) > 0:
+        return store
+    for path in _candidate_state_paths(*paths):
+        payload = _load_legacy_json(path)
+        if isinstance(payload, dict):
+            store.put(bucket, key, payload)
+            break
+    return store
+
+
+_bootstrap_session_store()
 
 
 CSRF_COOKIE_NAME = "cryptoforge_csrf"
@@ -340,41 +415,33 @@ def _session_expired(record: dict, now: Optional[datetime] = None) -> bool:
 
 def _load_sessions() -> dict:
     try:
-        if os.path.exists(_SESSION_FILE):
-            with open(_SESSION_FILE, "r") as f:
-                data = json.loads(f.read())
-            now = _session_now()
-            sessions = {}
-            changed = False
-            for token, raw in data.items():
-                record = _normalize_session_record(raw, now=now)
-                if not record or _session_expired(record, now=now):
-                    changed = True
-                    continue
-                sessions[token] = record
-                if record != raw:
-                    changed = True
-            if changed:
-                _save_sessions(sessions)
-            return sessions
+        store = _seed_mapping_bucket(_BUCKET_SESSIONS, _SESSION_FILE, _LEGACY_SESSION_FILE)
+        data = store.get_mapping(_BUCKET_SESSIONS)
+        now = _session_now()
+        sessions = {}
+        changed = False
+        for token, raw in data.items():
+            record = _normalize_session_record(raw, now=now)
+            if not record or _session_expired(record, now=now):
+                changed = True
+                continue
+            sessions[token] = record
+            if record != raw:
+                changed = True
+        if changed:
+            _save_sessions(sessions)
+        return sessions
     except Exception as exc:
-        _logger.warning("Failed to load session store %s: %s", _SESSION_FILE, exc)
-    return {}
+        _logger.warning("Failed to load session store %s: %s", _current_state_db_file(), exc)
+        return {}
 
 
 def _save_sessions(sessions: dict):
     try:
-        os.makedirs(os.path.dirname(_SESSION_FILE), exist_ok=True)
-        tmp = _SESSION_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            f.write(json.dumps(sessions))
-        os.replace(tmp, _SESSION_FILE)
-        try:
-            os.chmod(_SESSION_FILE, 0o600)
-        except OSError:
-            pass
+        store = _get_state_store()
+        store.replace_mapping(_BUCKET_SESSIONS, dict(sessions or {}))
     except Exception as exc:
-        _logger.warning("Failed to save session store %s: %s", _SESSION_FILE, exc)
+        _logger.warning("Failed to save session store %s: %s", _current_state_db_file(), exc)
 
 
 def _create_session(request=None) -> str:
@@ -492,6 +559,7 @@ async def require_auth(request: Request):
         "/api/auth/login",
         "/api/auth/status",
         "/api/health",
+        "/api/ready",
         "/login",
         "/",
         "/favicon.ico",
@@ -528,6 +596,7 @@ async def auth_middleware(request: Request, call_next):
         "/api/auth/login",
         "/api/auth/status",
         "/api/health",
+        "/api/ready",
         "/favicon.ico",
         "/manifest.webmanifest",
         "/site.webmanifest",
@@ -770,6 +839,12 @@ class OrderRequest(BaseModel):
     order_type: str = "market_order"
     limit_price: Optional[float] = None
     leverage: int = 10
+
+
+class StateRestoreRequest(BaseModel):
+    snapshot: dict
+    replace: bool = True
+    force: bool = False
 
 
 _ALWAYS_AVAILABLE_FIELDS = {
@@ -1157,15 +1232,245 @@ def _run_trade_signatures(run: dict) -> set[tuple]:
     return {_trade_signature(trade) for trade in trades if isinstance(trade, dict)}
 
 
+_OPS_BUCKETS = (
+    _BUCKET_SESSIONS,
+    _BUCKET_STRATEGIES,
+    _BUCKET_RUNS,
+    _BUCKET_SCALP_TRADES,
+    _BUCKET_SCALP_EVENTS,
+    _BUCKET_SCALP_RUNTIME,
+    "engine_live_state",
+    "engine_paper_state",
+)
+
+
+def _bucket_counts_snapshot() -> dict:
+    store = _get_state_store()
+    return {bucket: store.count(bucket) for bucket in _OPS_BUCKETS}
+
+
+def _engine_recovery_candidates(bucket: str) -> list[dict]:
+    snapshot = _get_state_store().export_snapshot()
+    candidates = []
+    for state_key, entry in dict(((snapshot.get("buckets") or {}).get(bucket) or {})).items():
+        payload = dict((entry or {}).get("payload") or {})
+        open_trades = payload.get("open_trades") or []
+        if payload.get("in_trade") or open_trades:
+            candidates.append(
+                {
+                    "state_key": str(state_key),
+                    "run_name": str(payload.get("strategy_name") or state_key),
+                    "symbol": str(payload.get("symbol") or ""),
+                    "open_trades": len(open_trades),
+                    "saved_at": payload.get("saved_at"),
+                }
+            )
+    return candidates
+
+
+def _persisted_scalp_runtime_summary() -> dict:
+    runtime = dict(_load_scalp_runtime() or {})
+    feed = dict(runtime.get("feed_metrics") or {})
+    return {
+        "open_trades": len(runtime.get("open_trades") or []),
+        "pending_entries": len(runtime.get("pending_entries") or []),
+        "feed_state": str(feed.get("state") or "waiting"),
+        "feed_age_ms": feed.get("age_ms"),
+        "feed_symbol": feed.get("symbol"),
+        "updated_at": feed.get("updated_at"),
+    }
+
+
+def _runtime_registry_summary() -> dict:
+    scalp_engine = globals().get("_scalp_engine")
+    scalp_running = bool(scalp_engine and getattr(scalp_engine, "_running", False))
+    scalp_open = len(getattr(scalp_engine, "open_trades", {}) or {}) if scalp_engine else 0
+    scalp_pending = len(getattr(scalp_engine, "pending_entries", {}) or {}) if scalp_engine else 0
+    return {
+        "live_running_runs": sorted(
+            [run_id for run_id, engine in live_engines.items() if getattr(engine, "running", False)]
+        ),
+        "paper_running_runs": sorted(
+            [run_id for run_id, engine in paper_engines.items() if getattr(engine, "running", False)]
+        ),
+        "stopped_engine_snapshots": len(_stopped_engines),
+        "scalp_running": scalp_running,
+        "scalp_open_trades": scalp_open,
+        "scalp_pending_entries": scalp_pending,
+    }
+
+
+def _runtime_recovery_summary() -> dict:
+    registry = _runtime_registry_summary()
+    scalp_state = _persisted_scalp_runtime_summary()
+    return {
+        "live_candidates": _engine_recovery_candidates("engine_live_state"),
+        "paper_candidates": _engine_recovery_candidates("engine_paper_state"),
+        "scalp_persisted_open_trades": scalp_state["open_trades"],
+        "scalp_persisted_pending_entries": scalp_state["pending_entries"],
+        "scalp_recovery_required": bool(
+            scalp_state["open_trades"] and not registry["scalp_running"] and registry["scalp_open_trades"] == 0
+        ),
+    }
+
+
+def _ops_state_summary() -> dict:
+    store = _get_state_store()
+    store_health = store.health()
+    redis_client = _get_redis()
+    registry = _runtime_registry_summary()
+    recovery = _runtime_recovery_summary()
+    scalp_state = _persisted_scalp_runtime_summary()
+    delta_configured = bool(delta._is_configured())
+    ready_checks = {
+        "auth_pin_configured": bool(AUTH_PIN),
+        "state_store_writable": bool(store_health.get("writable")),
+        "state_store_exists": bool(store_health.get("exists")),
+        "delta_configured": delta_configured,
+    }
+    recovery_required = bool(
+        recovery["live_candidates"] or recovery["paper_candidates"] or recovery["scalp_recovery_required"]
+    )
+    return {
+        "status": "degraded" if recovery_required else "ok",
+        "uptime_sec": round(max(time.time() - APP_BOOT_TS, 0.0), 1),
+        "time": str(datetime.now()),
+        "ready": bool(ready_checks["auth_pin_configured"] and ready_checks["state_store_writable"]),
+        "ready_checks": ready_checks,
+        "delta_configured": delta_configured,
+        "state_store": store_health,
+        "bucket_counts": _bucket_counts_snapshot(),
+        "runtime": registry,
+        "recovery": recovery,
+        "scalp_runtime": scalp_state,
+        "rate_limit_backend": "redis" if redis_client is not None else "memory",
+    }
+
+
+def _runtime_has_activity(summary: Optional[dict] = None) -> bool:
+    payload = dict(summary or _runtime_registry_summary())
+    return bool(
+        payload.get("live_running_runs")
+        or payload.get("paper_running_runs")
+        or payload.get("scalp_running")
+        or payload.get("scalp_open_trades")
+        or payload.get("scalp_pending_entries")
+    )
+
+
+async def _reset_runtime_memory() -> None:
+    global _scalp_engine
+
+    scalp_engine = globals().get("_scalp_engine")
+    if scalp_engine is not None:
+        try:
+            await scalp_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown scalp engine during runtime reset: %s", exc)
+    _scalp_engine = None
+
+    for tasks_dict in (_live_tasks, _paper_tasks):
+        for run_id, task_ref in list(tasks_dict.items()):
+            if task_ref and not task_ref.done():
+                task_ref.cancel()
+                try:
+                    await task_ref
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    _logger.warning("Failed to cancel task %s during runtime reset: %s", run_id, exc)
+        tasks_dict.clear()
+
+    live_engines.clear()
+    paper_engines.clear()
+    _stopped_engines.clear()
+    _alert_state.clear()
+
+
+def _validate_state_snapshot(snapshot: dict) -> dict:
+    payload = dict(snapshot or {})
+    if payload.get("format") != "cryptoforge-state-snapshot/v1":
+        raise HTTPException(status_code=400, detail="Unsupported state snapshot format")
+    buckets = payload.get("buckets")
+    if not isinstance(buckets, dict):
+        raise HTTPException(status_code=400, detail="State snapshot buckets are missing or invalid")
+    return payload
+
+
 # ── Health ────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
+    summary = _ops_state_summary()
+    return {
+        "status": summary["status"],
+        "time": summary["time"],
+        "ready": summary["ready"],
+        "delta_configured": summary["delta_configured"],
+        "live_running": bool(summary["runtime"]["live_running_runs"]),
+        "paper_running": bool(summary["runtime"]["paper_running_runs"]),
+        "scalp_running": bool(summary["runtime"]["scalp_running"]),
+        "state_store": {
+            "exists": summary["state_store"]["exists"],
+            "writable": summary["state_store"]["writable"],
+            "size_bytes": summary["state_store"]["size_bytes"],
+        },
+        "recovery_required": bool(
+            summary["recovery"]["live_candidates"]
+            or summary["recovery"]["paper_candidates"]
+            or summary["recovery"]["scalp_recovery_required"]
+        ),
+    }
+
+
+@app.get("/api/ready")
+async def ready():
+    summary = _ops_state_summary()
+    return {
+        "status": "ready" if summary["ready"] and summary["status"] == "ok" else summary["status"],
+        "ready": summary["ready"],
+        "checks": summary["ready_checks"],
+        "runtime": summary["runtime"],
+        "recovery": summary["recovery"],
+        "state_store": summary["state_store"],
+        "time": summary["time"],
+    }
+
+
+@app.get("/api/ops/state/summary")
+async def ops_state_summary():
+    return _ops_state_summary()
+
+
+@app.get("/api/ops/state/backup")
+async def ops_state_backup():
+    snapshot = _get_state_store().export_snapshot()
+    snapshot["meta"] = {
+        "bucket_counts": _bucket_counts_snapshot(),
+        "runtime": _runtime_registry_summary(),
+        "recovery": _runtime_recovery_summary(),
+        "generated_at": str(datetime.now()),
+    }
+    return snapshot
+
+
+@app.post("/api/ops/state/restore")
+async def ops_state_restore(payload: StateRestoreRequest, request: Request):
+    snapshot = _validate_state_snapshot(payload.snapshot)
+    runtime_summary = _runtime_registry_summary()
+    if _runtime_has_activity(runtime_summary):
+        if not payload.force:
+            raise HTTPException(status_code=409, detail="Active runtime detected. Stop engines before restoring state.")
+        await emergency_stop(request)
+    _get_state_store().import_snapshot(snapshot, replace=payload.replace)
+    await _reset_runtime_memory()
+    restored = _ops_state_summary()
     return {
         "status": "ok",
-        "time": str(datetime.now()),
-        "delta_configured": delta._is_configured(),
-        "live_running": any(e.running for e in live_engines.values()),
-        "paper_running": any(e.running for e in paper_engines.values()),
+        "message": "State snapshot restored",
+        "replace": bool(payload.replace),
+        "bucket_counts": restored["bucket_counts"],
+        "recovery": restored["recovery"],
+        "time": restored["time"],
     }
 
 
@@ -1969,7 +2274,7 @@ async def live_start(payload: StrategyPayload):
     if not product:
         return {"status": "error", "message": f"Product not found for {payload.symbol}. Live engine was not started."}
 
-    engine = LiveEngine(delta, run_id=run_id)
+    engine = LiveEngine(delta, run_id=run_id, state_db_path=_current_state_db_file())
     engine.configure(
         strategy=strategy_dict,
         entry_conditions=runtime["entry_conditions"],
@@ -2121,7 +2426,7 @@ async def paper_start(payload: StrategyPayload):
     if run_id in paper_engines and paper_engines[run_id].running:
         return {"status": "already_running", "run_id": run_id}
 
-    engine = PaperTradingEngine(delta, run_id=run_id)
+    engine = PaperTradingEngine(delta, run_id=run_id, state_db_path=_current_state_db_file())
     engine.configure(
         strategy=strategy_dict,
         entry_conditions=runtime["entry_conditions"],
@@ -2730,41 +3035,51 @@ _LEGACY_RUNS_FILE, RUNS_FILE = _resolve_state_file("runs.json")
 
 
 def _load():
-    if os.path.exists(STRAT_FILE):
-        try:
-            with open(STRAT_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError, OSError) as e:
-            _logger.warning("Failed to load %s: %s", STRAT_FILE, e)
-            return []
-    return []
+    try:
+        store = _seed_list_bucket(
+            _BUCKET_STRATEGIES,
+            STRAT_FILE,
+            _LEGACY_STRAT_FILE,
+            key_fn=lambda row, idx: str(int((row or {}).get("id", 0) or idx + 1)),
+        )
+        records = list(store.list(_BUCKET_STRATEGIES, order_by="doc_key"))
+        return sorted(records, key=lambda row: int((row or {}).get("id", 0) or 0))
+    except Exception as e:
+        _logger.warning("Failed to load strategies from %s: %s", _current_state_db_file(), e)
+        return []
 
 
 def _save(d):
-    os.makedirs(os.path.dirname(STRAT_FILE) or ".", exist_ok=True)
-    tmp = STRAT_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(d, f, indent=2)
-    os.replace(tmp, STRAT_FILE)
+    store = _get_state_store()
+    store.replace_list(
+        _BUCKET_STRATEGIES,
+        list(d or []),
+        key_fn=lambda row, idx: str(int((row or {}).get("id", 0) or idx + 1)),
+    )
 
 
 def _load_runs():
-    if os.path.exists(RUNS_FILE):
-        try:
-            with open(RUNS_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError, OSError) as e:
-            _logger.warning("Failed to load %s: %s", RUNS_FILE, e)
-            return []
-    return []
+    try:
+        store = _seed_list_bucket(
+            _BUCKET_RUNS,
+            RUNS_FILE,
+            _LEGACY_RUNS_FILE,
+            key_fn=lambda row, idx: str(int((row or {}).get("id", 0) or idx + 1)),
+        )
+        records = list(store.list(_BUCKET_RUNS, order_by="doc_key"))
+        return sorted(records, key=lambda row: int((row or {}).get("id", 0) or 0))
+    except Exception as e:
+        _logger.warning("Failed to load runs from %s: %s", _current_state_db_file(), e)
+        return []
 
 
 def _save_runs(d):
-    os.makedirs(os.path.dirname(RUNS_FILE) or ".", exist_ok=True)
-    tmp = RUNS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(d, f, indent=2)
-    os.replace(tmp, RUNS_FILE)
+    store = _get_state_store()
+    store.replace_list(
+        _BUCKET_RUNS,
+        list(d or []),
+        key_fn=lambda row, idx: str(int((row or {}).get("id", 0) or idx + 1)),
+    )
 
 
 @app.get("/api/strategies")
@@ -3126,58 +3441,88 @@ _LEGACY_SCALP_RUNTIME_FILE, _SCALP_RUNTIME_FILE = _resolve_state_file("scalp_run
 
 
 def _load_scalp_trades():
-    if os.path.exists(_SCALP_FILE):
-        try:
-            with open(_SCALP_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+    store = _seed_list_bucket(
+        _BUCKET_SCALP_TRADES,
+        _SCALP_FILE,
+        _LEGACY_SCALP_FILE,
+        key_fn=lambda row, idx: "|".join(
+            [
+                str((row or {}).get("trade_id") or idx + 1),
+                str((row or {}).get("entry_time") or ""),
+                str((row or {}).get("exit_time") or ""),
+            ]
+        ),
+    )
+    trades = list(store.list(_BUCKET_SCALP_TRADES, order_by="updated_at"))
+    return sorted(
+        trades,
+        key=lambda row: _normalize_datetime((row or {}).get("exit_time") or (row or {}).get("entry_time"))
+        or datetime.min,
+    )
 
 
 def _save_scalp_trades(trades):
-    os.makedirs(os.path.dirname(_SCALP_FILE) or ".", exist_ok=True)
-    tmp = _SCALP_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(trades, f, indent=2, default=str)
-    os.replace(tmp, _SCALP_FILE)
+    store = _get_state_store()
+    store.replace_list(
+        _BUCKET_SCALP_TRADES,
+        list(trades or []),
+        key_fn=lambda row, idx: "|".join(
+            [
+                str((row or {}).get("trade_id") or idx + 1),
+                str((row or {}).get("entry_time") or ""),
+                str((row or {}).get("exit_time") or ""),
+            ]
+        ),
+    )
 
 
 def _load_scalp_events():
-    if os.path.exists(_SCALP_EVENTS_FILE):
-        try:
-            with open(_SCALP_EVENTS_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+    store = _seed_list_bucket(
+        _BUCKET_SCALP_EVENTS,
+        _SCALP_EVENTS_FILE,
+        _LEGACY_SCALP_EVENTS_FILE,
+        key_fn=lambda row, idx: "|".join(
+            [
+                str((row or {}).get("ts") or idx),
+                str((row or {}).get("level") or ""),
+                str((row or {}).get("msg") or ""),
+            ]
+        ),
+    )
+    events = list(store.list(_BUCKET_SCALP_EVENTS, order_by="updated_at"))
+    return sorted(events, key=lambda row: str((row or {}).get("ts") or ""))
 
 
 def _save_scalp_events(events):
-    os.makedirs(os.path.dirname(_SCALP_EVENTS_FILE) or ".", exist_ok=True)
-    tmp = _SCALP_EVENTS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(events[-300:], f, indent=2, default=str)
-    os.replace(tmp, _SCALP_EVENTS_FILE)
+    trimmed = list(events or [])[-300:]
+    store = _get_state_store()
+    store.replace_list(
+        _BUCKET_SCALP_EVENTS,
+        trimmed,
+        key_fn=lambda row, idx: "|".join(
+            [
+                str((row or {}).get("ts") or idx),
+                str((row or {}).get("level") or ""),
+                str((row or {}).get("msg") or ""),
+            ]
+        ),
+    )
 
 
 def _load_scalp_runtime() -> dict:
-    if os.path.exists(_SCALP_RUNTIME_FILE):
-        try:
-            with open(_SCALP_RUNTIME_FILE, "r") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
-    return {}
+    store = _seed_singleton_bucket(
+        _BUCKET_SCALP_RUNTIME,
+        "current",
+        _SCALP_RUNTIME_FILE,
+        _LEGACY_SCALP_RUNTIME_FILE,
+    )
+    data = store.get(_BUCKET_SCALP_RUNTIME, "current", default={})
+    return data if isinstance(data, dict) else {}
 
 
 def _save_scalp_runtime(runtime_state: dict) -> None:
-    os.makedirs(os.path.dirname(_SCALP_RUNTIME_FILE) or ".", exist_ok=True)
-    tmp = _SCALP_RUNTIME_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(runtime_state, f, indent=2, default=str)
-    os.replace(tmp, _SCALP_RUNTIME_FILE)
+    store = _get_state_store()
+    store.put(_BUCKET_SCALP_RUNTIME, "current", dict(runtime_state or {}))
 
 
 def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
