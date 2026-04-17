@@ -2868,6 +2868,7 @@
   border-left: 3px solid transparent;
 }
 .cf-scalp-workbench-wide {
+  width: 100%;
   grid-template-columns: minmax(560px, 660px) minmax(0, 1fr);
 }
 .cf-scalp-form-grid-tight {
@@ -2994,12 +2995,17 @@
 
 .cf-scalp-workbench {
   display: grid;
+  width: 100%;
   grid-template-columns: minmax(420px, 500px) minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
   margin-bottom: 16px;
 }
 .cf-scalp-form-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
   padding: 20px;
 }
 .cf-scalp-form-head {
@@ -3238,10 +3244,15 @@
   font-weight: 700;
 }
 .cf-scalp-log-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
   padding: 20px;
 }
 .cf-scalp-event-log {
-  max-height: 500px;
+  flex: 1 1 auto;
+  min-height: clamp(420px, 48vh, 720px);
   overflow-y: auto;
   font-size: 12px;
   font-family: var(--font-mono);
