@@ -2998,14 +2998,11 @@
   width: 100%;
   grid-template-columns: minmax(420px, 500px) minmax(0, 1fr);
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
   margin-bottom: 16px;
 }
 .cf-scalp-form-card {
-  display: flex;
-  flex-direction: column;
   min-width: 0;
-  height: 100%;
   padding: 20px;
 }
 .cf-scalp-form-head {
@@ -3244,15 +3241,13 @@
   font-weight: 700;
 }
 .cf-scalp-log-card {
-  display: flex;
-  flex-direction: column;
   min-width: 0;
-  height: 100%;
+  width: 100%;
   padding: 20px;
 }
 .cf-scalp-event-log {
-  flex: 1 1 auto;
-  min-height: clamp(420px, 48vh, 720px);
+  height: clamp(320px, 38vh, 520px);
+  max-height: 520px;
   overflow-y: auto;
   font-size: 12px;
   font-family: var(--font-mono);
