@@ -627,16 +627,30 @@ class ScalpEngine:
         fill_status: str = "",
     ) -> None:
         result = result or {}
-        lifecycle_value = str(
-            result.get("order_lifecycle") or lifecycle or ("filled" if verified else "pending") or ""
-        ).strip()
-        fill_status_value = str(
-            result.get("fill_status") or fill_status or lifecycle_value or ("filled" if verified else "pending") or ""
-        ).strip()
+        phase_value = str(phase or "").strip().lower()
+        default_lifecycle = str(lifecycle or "").strip()
+        if not default_lifecycle:
+            if verified:
+                default_lifecycle = "filled"
+            elif phase_value.endswith("_reject"):
+                default_lifecycle = "rejected"
+            elif phase_value.endswith("_error"):
+                default_lifecycle = "error"
+            elif phase_value == "targets":
+                default_lifecycle = "updated"
+            elif phase_value in {"entry", "exit", "scale_in"}:
+                default_lifecycle = "submitted"
+            else:
+                default_lifecycle = "pending"
+        lifecycle_value = str(result.get("order_lifecycle") or default_lifecycle or "").strip()
+        fill_status_value = str(result.get("fill_status") or fill_status or lifecycle_value or "").strip()
         exchange_state_value = str(
             result.get("exchange_state") or result.get("state") or fill_status_value or ""
         ).strip()
         verification_state_value = str(result.get("verification_state") or lifecycle_value or "").strip()
+        verification_summary_value = str(
+            result.get("verification_summary") or error or result.get("error") or result.get("note") or note or ""
+        ).strip()
         self._last_execution = {
             "phase": phase,
             "symbol": symbol,
@@ -653,7 +667,7 @@ class ScalpEngine:
             "order_lifecycle": lifecycle_value,
             "exchange_state": exchange_state_value,
             "verification_state": verification_state_value,
-            "verification_summary": str(result.get("verification_summary") or result.get("note") or "").strip(),
+            "verification_summary": verification_summary_value,
             "position_size": _coerce_float(result.get("position_size"), 0.0),
             "order_id": str(result.get("id") or result.get("order_id") or ""),
             "error": str(error or result.get("error") or ""),
@@ -1106,6 +1120,9 @@ class ScalpEngine:
                         mode=mode,
                         verified=False,
                         result=result,
+                        requested_size=size,
+                        requested_qty_value=qty_value,
+                        note="Entry order rejected",
                     )
                     return {"status": "error", "message": result.get("error") or "entry order could not be verified"}
                 order_id = str(result.get("id", "placed"))
@@ -1118,6 +1135,9 @@ class ScalpEngine:
                     mode=mode,
                     verified=False,
                     error=str(e),
+                    requested_size=size,
+                    requested_qty_value=qty_value,
+                    note="Entry order failed",
                 )
                 return {"status": "error", "message": str(e)}
 
@@ -1301,6 +1321,9 @@ class ScalpEngine:
                             mode=trade.mode,
                             verified=False,
                             result=result,
+                            trade_id=trade.trade_id,
+                            requested_size=add_size,
+                            requested_qty_value=normalized_qty_value,
                         )
                         return {"status": "error", "message": result.get("error") or "add order could not be verified"}
                     fill_price = self._extract_order_price(result, fill_price)
@@ -1312,6 +1335,9 @@ class ScalpEngine:
                         mode=trade.mode,
                         verified=False,
                         error=str(e),
+                        trade_id=trade.trade_id,
+                        requested_size=add_size,
+                        requested_qty_value=normalized_qty_value,
                     )
                     return {"status": "error", "message": str(e)}
 
@@ -1649,6 +1675,9 @@ class ScalpEngine:
                         mode=trade.mode,
                         verified=False,
                         result=result,
+                        trade_id=trade.trade_id,
+                        requested_size=trade.size,
+                        note=f"Exit rejected ({reason})",
                     )
                     self._log(
                         "error",
@@ -1680,6 +1709,9 @@ class ScalpEngine:
                     mode=trade.mode,
                     verified=False,
                     error=str(e),
+                    trade_id=trade.trade_id,
+                    requested_size=trade.size,
+                    note=f"Exit failed ({reason})",
                 )
                 self._log(
                     "error",

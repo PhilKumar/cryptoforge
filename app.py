@@ -1917,6 +1917,29 @@ def _normalize_scalp_symbol(symbol: str, *, allow_blank: bool = False) -> str:
     return raw
 
 
+def _parse_scalp_mode(body: Dict, *keys, default: str = "paper") -> str:
+    raw = str(_body_value(body, *keys, default=default) or default).strip().lower()
+    if raw not in {"paper", "live"}:
+        raise HTTPException(status_code=400, detail="mode must be paper or live")
+    return raw
+
+
+def _parse_scalp_qty_mode(body: Dict, *keys, default: str = "usdt") -> str:
+    raw = str(_body_value(body, *keys, default=default) or default).strip().lower()
+    aliases = {
+        "usdt": "usdt",
+        "usd": "usdt",
+        "margin": "usdt",
+        "base": "base",
+        "qty": "base",
+        "coin": "base",
+    }
+    normalized = aliases.get(raw)
+    if normalized is None:
+        raise HTTPException(status_code=400, detail="qty_mode must be usdt or base")
+    return normalized
+
+
 @app.get("/api/ticker")
 async def get_ticker():
     """Fetch live prices for top cryptos."""
@@ -3601,15 +3624,31 @@ def _attach_scalp_runtime_metrics(result: dict, engine: ScalpEngine, symbol_hint
     return result
 
 
-def _raise_scalp_action_http_error(result: dict, *, default_status: int = 400) -> None:
+def _scalp_action_status_code(result: dict, *, default_status: int = 400) -> int:
     message = str((result or {}).get("message") or "Unknown scalp action error")
     lowered = message.lower()
-    status_code = default_status
     if "not found" in lowered or "already closed" in lowered:
-        status_code = 404
-    elif "action in progress" in lowered:
-        status_code = 409
-    raise HTTPException(status_code=status_code, detail=message)
+        return 404
+    if "action in progress" in lowered or "no live price available" in lowered or "not confirmed" in lowered:
+        return 409
+    if "must be greater than zero" in lowered or "no target fields provided" in lowered:
+        return 400
+    if "unable to resolve add quantity" in lowered:
+        return 422
+    if "could not be verified" in lowered or "rejected" in lowered or "broker does not support" in lowered:
+        return 502
+    return default_status
+
+
+def _scalp_action_error_response(
+    result: dict, engine: ScalpEngine, symbol_hint: str = "", *, default_status: int = 400
+) -> JSONResponse:
+    payload = _attach_scalp_runtime_metrics(dict(result or {}), engine, symbol_hint)
+    message = str(payload.get("message") or "Unknown scalp action error")
+    payload["status"] = "error"
+    payload["message"] = message
+    payload["error"] = {"detail": message}
+    return JSONResponse(payload, status_code=_scalp_action_status_code(payload, default_status=default_status))
 
 
 def _scalp_persist_event(event: dict) -> None:
@@ -3721,11 +3760,8 @@ async def scalp_enter(request: Request):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
     side = "LONG" if raw_side in {"BUY", "LONG"} else "SHORT"
     leverage = _parse_int_field(body, "leverage", default=50, min_value=1)
-    mode = str(_body_value(body, "mode", default="paper") or "paper").lower()
-    if mode not in {"paper", "live"}:
-        raise HTTPException(status_code=400, detail="mode must be paper or live")
-
-    qty_mode = "base" if str(body.get("qty_mode", "usdt") or "usdt").lower() in {"base", "qty", "coin"} else "usdt"
+    mode = _parse_scalp_mode(body, "mode", default="paper")
+    qty_mode = _parse_scalp_qty_mode(body, "qty_mode", default="usdt")
     default_qty = 0.0015 if qty_mode == "base" else 1000.0
     qty_value = _parse_float_field(body, "qty_value", "qty_base", "qty_usdt", default=default_qty, min_value=0.0)
     entry_stop_price = _parse_float_field(body, "entry_stop_price", "guardrail_price", default=0.0, min_value=0.0)
@@ -3753,7 +3789,12 @@ async def scalp_enter(request: Request):
                 f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nReason: {message}",
                 level="warn",
             )
-            return {"status": "error", "message": message, "entry_controls": entry_controls}
+            return _scalp_action_error_response(
+                {"status": "error", "message": message, "entry_controls": entry_controls},
+                eng,
+                symbol,
+                default_status=409,
+            )
 
     try:
         result = await eng.enter_trade(
@@ -3806,10 +3847,14 @@ async def scalp_enter(request: Request):
                 level="info",
             )
         _persist_scalp_runtime_snapshot(eng, symbol)
+        if result.get("status") == "error":
+            return _scalp_action_error_response(result, eng, symbol)
         return _attach_scalp_runtime_metrics(result, eng, symbol)
     except Exception as e:
         alerter.alert("Scalp Entry Error", f"Symbol: {symbol}\nSide: {side}\nMode: {mode}\nError: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return _scalp_action_error_response(
+            {"status": "error", "message": "Unexpected scalp entry error"}, eng, symbol, default_status=500
+        )
 
 
 @app.post("/api/scalp/exit")
@@ -3835,13 +3880,16 @@ async def scalp_exit(request: Request):
             return _attach_scalp_runtime_metrics(result, eng, t.get("symbol", ""))
         if result.get("status") == "error":
             alerter.alert("Scalp Exit Failed", f"Trade ID: {trade_id}\nError: {result.get('message', 'unknown')}")
-            _raise_scalp_action_http_error(result)
+            symbol_hint = (result.get("trade") or {}).get("symbol", "")
+            return _scalp_action_error_response(result, eng, symbol_hint)
         return _attach_scalp_runtime_metrics(result, eng)
     except HTTPException:
         raise
     except Exception as e:
         alerter.alert("Scalp Exit Error", f"Trade ID: {trade_id}\nError: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return _scalp_action_error_response(
+            {"status": "error", "message": "Unexpected scalp exit error"}, eng, default_status=500
+        )
 
 
 @app.put("/api/scalp/trades/{trade_id}/targets")
@@ -3858,11 +3906,18 @@ async def update_scalp_targets(trade_id: int, request: Request):
             kwargs[key] = _parse_float_field(body, key, default=0.0, min_value=0.0)
     if not kwargs:
         raise HTTPException(status_code=400, detail="No target fields provided")
-    result = await eng.update_trade_targets(trade_id, **kwargs)
-    if result.get("status") == "error":
-        _raise_scalp_action_http_error(result)
-    _persist_scalp_runtime_snapshot(eng)
-    return _attach_scalp_runtime_metrics(result, eng, result.get("trade", {}).get("symbol", ""))
+    try:
+        result = await eng.update_trade_targets(trade_id, **kwargs)
+        _persist_scalp_runtime_snapshot(eng)
+        symbol_hint = (result.get("trade") or {}).get("symbol", "")
+        if result.get("status") == "error":
+            return _scalp_action_error_response(result, eng, symbol_hint)
+        return _attach_scalp_runtime_metrics(result, eng, symbol_hint)
+    except Exception as e:
+        alerter.alert("Scalp Targets Error", f"Trade ID: {trade_id}\nError: {e}")
+        return _scalp_action_error_response(
+            {"status": "error", "message": "Unexpected scalp target update error"}, eng, default_status=500
+        )
 
 
 @app.post("/api/scalp/trades/{trade_id}/add")
@@ -3871,22 +3926,28 @@ async def add_scalp_quantity(trade_id: int, request: Request):
         "scalp_add", max_calls=8, window_sec=15, client_ip=request.client.host if request.client else "global"
     )
     body = await _read_json_body(request)
-    qty_mode = "base" if str(body.get("qty_mode", "base") or "base").lower() in {"base", "qty", "coin"} else "usdt"
+    qty_mode = _parse_scalp_qty_mode(body, "qty_mode", default="base")
     qty_value = _parse_float_field(body, "qty_value", "qty_base", "qty_usdt", default=0.0, min_value=0.0)
     if qty_value <= 0:
         raise HTTPException(status_code=400, detail="qty_value must be greater than zero")
     eng = _get_scalp_engine()
-    result = await eng.add_to_trade(trade_id, qty_mode=qty_mode, qty_value=qty_value)
-    if result.get("status") == "error":
-        _raise_scalp_action_http_error(result)
-    _persist_scalp_runtime_snapshot(eng)
-    trade = result.get("trade", {})
-    alerter.alert(
-        "Scalp Add Quantity",
-        f"Trade ID: {trade_id}\nSymbol: {trade.get('symbol', '—')}\nMode: {trade.get('mode', 'paper')}\nAdded: {qty_value} ({qty_mode})\nNew exposure: ${trade.get('qty_usdt', 0):,.2f} margin",
-        level="info",
-    )
-    return _attach_scalp_runtime_metrics(result, eng, trade.get("symbol", ""))
+    try:
+        result = await eng.add_to_trade(trade_id, qty_mode=qty_mode, qty_value=qty_value)
+        _persist_scalp_runtime_snapshot(eng)
+        trade = result.get("trade", {})
+        if result.get("status") == "error":
+            return _scalp_action_error_response(result, eng, trade.get("symbol", ""))
+        alerter.alert(
+            "Scalp Add Quantity",
+            f"Trade ID: {trade_id}\nSymbol: {trade.get('symbol', '—')}\nMode: {trade.get('mode', 'paper')}\nAdded: {qty_value} ({qty_mode})\nNew exposure: ${trade.get('qty_usdt', 0):,.2f} margin",
+            level="info",
+        )
+        return _attach_scalp_runtime_metrics(result, eng, trade.get("symbol", ""))
+    except Exception as e:
+        alerter.alert("Scalp Add Error", f"Trade ID: {trade_id}\nError: {e}")
+        return _scalp_action_error_response(
+            {"status": "error", "message": "Unexpected scalp add error"}, eng, default_status=500
+        )
 
 
 # ── WebSocket ─────────────────────────────────────────────────────

@@ -117,6 +117,23 @@ class RejectingExitScalpDelta(FakeScalpDelta):
         return await super().place_order_verified(**kwargs)
 
 
+class RejectingScaleInScalpDelta(FakeScalpDelta):
+    async def place_order_verified(self, **kwargs):
+        self.verified_calls.append(kwargs)
+        if len(self.verified_calls) == 1:
+            return {
+                "id": "scalp-entry-1",
+                "verified": True,
+                "verified_at_attempt": 1,
+                "fill_price": 100.5,
+            }
+        return {
+            "id": "scalp-reject-2",
+            "verified": False,
+            "error": "Exchange refused scale-in",
+        }
+
+
 class FakeWSFeed:
     def __init__(self):
         self.on_ticker = None
@@ -931,6 +948,33 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exit_exec["phase"], "exit")
         self.assertEqual(exit_exec["order_lifecycle"], "filled")
 
+    async def test_scalp_execution_metrics_normalize_scale_in_rejection_without_broker_states(self):
+        delta = RejectingScaleInScalpDelta()
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine._record_price("BTCUSD", 100.0, source="ws")
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            size=100,
+            leverage=10,
+            target_usd=10,
+            sl_usd=5,
+            mode="live",
+        )
+        trade_id = entered["trade_id"]
+
+        added = await engine.add_to_trade(trade_id, qty_mode="base", qty_value=0.001)
+
+        self.assertEqual(added["status"], "error")
+        exec_state = engine.get_status()["execution_metrics"]
+        self.assertEqual(exec_state["phase"], "scale_in_reject")
+        self.assertEqual(exec_state["trade_id"], trade_id)
+        self.assertEqual(exec_state["order_lifecycle"], "rejected")
+        self.assertEqual(exec_state["fill_status"], "rejected")
+        self.assertIn("scale-in", exec_state["verification_summary"].lower())
+
 
 class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -1034,6 +1078,9 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        self.app_module._rate_limits.clear()
+        self.app_module._login_attempts.clear()
+        self.app_module._scalp_engine = None
         self.addAsyncCleanup(self._restore_session_file)
 
     async def _restore_session_file(self):
@@ -1092,6 +1139,72 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(bad.json()["error"]["detail"], "Invalid qty_value")
 
+    async def test_scalp_enter_rejects_invalid_qty_mode(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            bad = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_value": 1000,
+                    "qty_mode": "contracts",
+                    "leverage": 10,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["error"]["detail"], "qty_mode must be usdt or base")
+
+    async def test_scalp_entry_block_returns_structured_conflict_payload(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            engine = self.app_module._get_scalp_engine()
+            blocked_status = {
+                "running": False,
+                "in_trade": False,
+                "open_trades": [],
+                "pending_entries": [],
+                "closed_trades": [],
+                "event_log": [],
+                "execution_metrics": {},
+                "feed_metrics": {"state": "stale", "symbol": "BTCUSDT"},
+                "entry_controls": {
+                    "symbol": "BTCUSDT",
+                    "state": "stale",
+                    "paper_allowed": False,
+                    "live_allowed": False,
+                    "reason": "Feed is stale for BTCUSDT. Refresh or wait for a fresh market tick before entering.",
+                },
+            }
+            with patch.object(engine, "get_status", return_value=blocked_status):
+                blocked = await client.post(
+                    "/api/scalp/enter",
+                    json={
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "qty_value": 1000,
+                        "qty_mode": "usdt",
+                        "leverage": 10,
+                        "mode": "paper",
+                    },
+                    headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+                )
+
+        self.assertEqual(blocked.status_code, 409)
+        payload = blocked.json()
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("stale", payload["message"].lower())
+        self.assertEqual(payload["error"]["detail"], payload["message"])
+        self.assertEqual((payload.get("entry_controls") or {}).get("state"), "stale")
+        self.assertIn("execution_metrics", payload)
+
     async def test_scalp_target_update_rejects_invalid_values(self):
         transport = httpx.ASGITransport(app=self.app_module.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
@@ -1134,6 +1247,20 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(bad.json()["error"]["detail"], "Invalid qty_value")
+
+    async def test_scalp_add_rejects_invalid_qty_mode(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            bad = await client.post(
+                "/api/scalp/trades/1/add",
+                json={"qty_mode": "contracts", "qty_value": 1},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["error"]["detail"], "qty_mode must be usdt or base")
 
     async def test_scalp_status_rejects_unsupported_symbol(self):
         transport = httpx.ASGITransport(app=self.app_module.app)
@@ -1395,6 +1522,8 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
         self.app_module._SCALP_RUNTIME_FILE = os.path.join(self._tmp.name, "scalp_runtime.json")
+        self.app_module._rate_limits.clear()
+        self.app_module._scalp_engine = None
         self.addAsyncCleanup(self._restore_runtime_file)
 
     async def _restore_runtime_file(self):
