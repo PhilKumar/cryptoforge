@@ -4569,6 +4569,7 @@ document.addEventListener('DOMContentLoaded', () => {
   cfToggleScalpLiveSafety();
   cfInitOperatorLounge();
   cfRefreshScalpEntryLaneFromState();
+  cfSyncScalpLogPanelHeight();
 
   ['cf-scalp-entry-stop', 'cf-scalp-entry-limit'].forEach(function(id) {
     var el = document.getElementById(id);
@@ -4580,6 +4581,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (scalpAck) scalpAck.addEventListener('change', cfRefreshScalpEntryLaneFromState);
   var scalpMode = document.getElementById('cf-scalp-mode');
   if (scalpMode) scalpMode.addEventListener('change', cfRefreshScalpEntryLaneFromState);
+  window.addEventListener('resize', cfSyncScalpLogPanelHeight);
 
   setInterval(refreshTopbarTicker, 30000);
   setInterval(pollLiveStatus, 10000);
@@ -4763,6 +4765,37 @@ function cfUpdateScalpQtyUi() {
     if (!qtyEl.value || Number(qtyEl.value) <= 1) qtyEl.value = _CF_SCALP_DEFAULTS.qty;
   }
   cfRefreshScalpEntryLaneFromState();
+  cfSyncScalpLogPanelHeight();
+}
+
+var _cfScalpLogPanelHeightRaf = 0;
+function cfSyncScalpLogPanelHeight() {
+  if (_cfScalpLogPanelHeightRaf) window.cancelAnimationFrame(_cfScalpLogPanelHeightRaf);
+  _cfScalpLogPanelHeightRaf = window.requestAnimationFrame(function() {
+    _cfScalpLogPanelHeightRaf = 0;
+    var scalpPage = document.getElementById('scalp-page');
+    var formCard = document.querySelector('.cf-scalp-form-card');
+    var logCard = document.querySelector('.cf-scalp-log-card');
+    var logEl = document.getElementById('cf-scalp-event-log');
+    if (!formCard || !logCard || !logEl) return;
+    if (!scalpPage || !scalpPage.classList.contains('active-page') || window.innerWidth <= 1180) {
+      logCard.style.height = '';
+      logEl.style.height = '';
+      return;
+    }
+    var formHeight = Math.ceil(formCard.getBoundingClientRect().height);
+    if (!Number.isFinite(formHeight) || formHeight <= 0) {
+      logCard.style.height = '';
+      logEl.style.height = '';
+      return;
+    }
+    logCard.style.height = formHeight + 'px';
+    var cardRect = logCard.getBoundingClientRect();
+    var logRect = logEl.getBoundingClientRect();
+    var padBottom = parseFloat(window.getComputedStyle(logCard).paddingBottom) || 0;
+    var available = Math.floor(cardRect.bottom - logRect.top - padBottom);
+    logEl.style.height = Math.max(available, 160) + 'px';
+  });
 }
 
 function cfScalpStateLabel(state) {
@@ -5050,8 +5083,9 @@ function cfOperatorNextRead() {
 }
 
 function cfInitScalpPage() {
-  cfRefreshScalpWorkspace();
+  cfRefreshScalpWorkspace().finally(cfSyncScalpLogPanelHeight);
   cfRefreshScalpEntryLaneFromState();
+  cfSyncScalpLogPanelHeight();
   if (!_cfScalpPollTimer) {
     _cfScalpPollTimer = setInterval(function() {
       if (!cfScalpWsFresh()) cfLoadScalpStatus();
@@ -5824,6 +5858,7 @@ function cfToggleScalpLiveSafety() {
   if (wrap) wrap.hidden = !isLive;
   if (!isLive && ack) ack.checked = false;
   cfRefreshScalpEntryLaneFromState();
+  cfSyncScalpLogPanelHeight();
 }
 
 function cfUpdateSLTPHints() {
