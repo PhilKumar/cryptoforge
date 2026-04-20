@@ -23,6 +23,7 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
@@ -636,3 +637,81 @@ async def create_candle_feed(symbol: str, resolution: str, callback: Callable) -
     await feed.connect()
     await feed.subscribe_candles(symbol, resolution)
     return feed
+
+
+async def _delta_ws_feed_cancel_owned_task(self, attr_name: str, *, timeout: float = 2.0) -> None:
+    task = getattr(self, attr_name, None)
+    if task is None:
+        return
+    if task is asyncio.current_task():
+        setattr(self, attr_name, None)
+        return
+    if not task.done():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            await asyncio.wait_for(task, timeout=timeout)
+    setattr(self, attr_name, None)
+
+
+async def _delta_ws_feed_connect_hardened(self) -> None:
+    self._running = True
+    self._disconnect_requested = False
+    if self.connected:
+        self._connection_state = "connected"
+        return
+    if getattr(self, "_connect_task", None) is None or self._connect_task.done():
+        self._connected_event.clear()
+        self._connection_state = "connecting" if getattr(self, "_reconnect_attempt", 0) == 0 else "reconnecting"
+        self._connect_task = asyncio.create_task(self._do_connect())
+    try:
+        await asyncio.wait_for(self._connected_event.wait(), timeout=15)
+    except asyncio.TimeoutError:
+        self.last_error = "websocket connect timeout"
+        self._last_disconnect_reason = "connect_timeout"
+        self._connection_state = "connect_timeout"
+        await self.disconnect()
+        raise
+    except asyncio.CancelledError:
+        self._last_disconnect_reason = "connect_cancelled"
+        await self.disconnect()
+        raise
+
+
+_ORIG_DELTA_WS_FEED_DO_CONNECT = DeltaWSFeed._do_connect
+
+
+async def _delta_ws_feed_do_connect_hardened(self, *args, **kwargs):
+    try:
+        return await _ORIG_DELTA_WS_FEED_DO_CONNECT(self, *args, **kwargs)
+    except asyncio.CancelledError:
+        self._connected = False
+        self._authenticated = False
+        self._connected_event.clear()
+        self._connection_state = "disconnected"
+        self._last_disconnect_reason = "connect_cancelled"
+        if hasattr(self, "_reset_transport"):
+            await self._reset_transport(close_session=True)
+        raise
+    finally:
+        if getattr(self, "_connect_task", None) is asyncio.current_task():
+            self._connect_task = None
+
+
+async def _delta_ws_feed_disconnect_hardened(self) -> None:
+    self._disconnect_requested = True
+    self._running = False
+    self._connected = False
+    self._authenticated = False
+    self._connected_event.clear()
+    self._connection_state = "disconnected"
+    await _delta_ws_feed_cancel_owned_task(self, "_heartbeat_task")
+    await _delta_ws_feed_cancel_owned_task(self, "_reader_task")
+    await _delta_ws_feed_cancel_owned_task(self, "_connect_task")
+    if hasattr(self, "_reset_transport"):
+        await self._reset_transport(close_session=True)
+
+
+DeltaWSFeed._cancel_owned_task = _delta_ws_feed_cancel_owned_task
+DeltaWSFeed.connect = _delta_ws_feed_connect_hardened
+DeltaWSFeed._do_connect = _delta_ws_feed_do_connect_hardened
+DeltaWSFeed.disconnect = _delta_ws_feed_disconnect_hardened

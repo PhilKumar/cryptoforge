@@ -1932,3 +1932,198 @@ class ScalpEngine:
             except Exception:
                 pass
         print(f"[SCALP][{level.upper()}] {msg}")
+
+
+_ORIG_SCALP_ENGINE_INIT = ScalpEngine.__init__
+_ORIG_SCALP_ENGINE_GET_STATUS = ScalpEngine.get_status
+
+
+def _scalp_engine_init_hardened(self, *args, **kwargs):
+    _ORIG_SCALP_ENGINE_INIT(self, *args, **kwargs)
+    self._last_reconciliation = {}
+    self._last_reconcile_at = None
+    self._reconcile_interval_sec = float(getattr(self, "_reconcile_interval_sec", 20.0) or 20.0)
+
+
+def _scalp_position_size(position: dict) -> float:
+    return abs(
+        _coerce_float(
+            position.get("size")
+            or position.get("position_size")
+            or position.get("contracts")
+            or position.get("qty")
+            or position.get("quantity"),
+            0.0,
+        )
+    )
+
+
+def _scalp_position_entry_price(position: dict, fallback: float) -> float:
+    entry = _coerce_float(
+        position.get("entry_price")
+        or position.get("avg_entry_price")
+        or position.get("average_entry_price")
+        or position.get("avgPrice"),
+        fallback,
+    )
+    return entry if entry > 0 else fallback
+
+
+async def _scalp_delta_get_position(delta, product_id: int) -> dict:
+    getter = getattr(delta, "get_position", None)
+    if not callable(getter):
+        return {}
+    try:
+        position = await asyncio.to_thread(getter, product_id, False)
+    except TypeError:
+        position = await asyncio.to_thread(getter, product_id)
+    return position or {}
+
+
+async def _scalp_engine_reconcile_broker_positions(self, force: bool = False) -> dict:
+    now = _now_utc()
+    last_checked = getattr(self, "_last_reconcile_at", None)
+    if (
+        not force
+        and last_checked is not None
+        and (now - last_checked).total_seconds() < float(getattr(self, "_reconcile_interval_sec", 20.0) or 20.0)
+    ):
+        return dict(getattr(self, "_last_reconciliation", {}) or {})
+    summary = {
+        "checked": 0,
+        "updated": 0,
+        "cleared": 0,
+        "errors": 0,
+        "skipped": 0,
+        "state": "idle",
+        "messages": [],
+        "updated_at": now.isoformat(),
+    }
+    live_trades = [
+        trade for trade in getattr(self, "open_trades", {}).values() if getattr(trade, "mode", "paper") != "paper"
+    ]
+    if not live_trades:
+        self._last_reconcile_at = now
+        self._last_reconciliation = summary
+        return dict(summary)
+    for trade in list(live_trades):
+        product_id = int(getattr(trade, "product_id", 0) or 0)
+        if product_id <= 0:
+            product_lookup = getattr(getattr(self, "delta", None), "get_product_by_symbol", None)
+            if callable(product_lookup):
+                try:
+                    product = await asyncio.to_thread(product_lookup, getattr(trade, "symbol", ""))
+                    product_id = int((product or {}).get("id") or 0)
+                    trade.product_id = product_id
+                except Exception as exc:
+                    summary["errors"] += 1
+                    summary["messages"].append(f"{getattr(trade, 'symbol', 'UNKNOWN')}: product lookup failed ({exc})")
+                    continue
+        if product_id <= 0:
+            summary["skipped"] += 1
+            continue
+        try:
+            position = await _scalp_delta_get_position(self.delta, product_id)
+        except Exception as exc:
+            summary["errors"] += 1
+            summary["messages"].append(f"{getattr(trade, 'symbol', 'UNKNOWN')}: broker reconcile failed ({exc})")
+            if hasattr(self, "_remember_execution"):
+                self._remember_execution(
+                    phase="reconcile_error",
+                    symbol=getattr(trade, "symbol", ""),
+                    side=getattr(trade, "side", ""),
+                    mode=getattr(trade, "mode", ""),
+                    trade_id=getattr(trade, "trade_id", ""),
+                    error=str(exc),
+                )
+            continue
+        summary["checked"] += 1
+        broker_size = _scalp_position_size(position)
+        if broker_size <= 0:
+            exit_price = _coerce_float(getattr(trade, "current_price", 0.0), 0.0) or _coerce_float(
+                getattr(trade, "entry_price", 0.0), 0.0
+            )
+            trade.exit_time = now
+            trade.exit_price = exit_price
+            trade.exit_reason = "broker_flat_reconcile"
+            trade.status = "closed"
+            if hasattr(trade, "_compute_pnl"):
+                trade.pnl = round(trade._compute_pnl(exit_price), 2)
+            closed_row = trade.to_dict() if hasattr(trade, "to_dict") else {}
+            self.closed_trades.append(closed_row)
+            self.closed_trades = list(self.closed_trades)[-250:]
+            getattr(self, "open_trades", {}).pop(getattr(trade, "trade_id", ""), None)
+            getattr(self, "_trade_action_locks", {}).pop(getattr(trade, "trade_id", ""), None)
+            if callable(getattr(self, "_on_trade_closed", None)):
+                try:
+                    self._on_trade_closed(closed_row)
+                except Exception:
+                    pass
+            if hasattr(self, "_remember_execution"):
+                self._remember_execution(
+                    phase="reconcile",
+                    lifecycle="cleared",
+                    fill_status="flat",
+                    symbol=getattr(trade, "symbol", ""),
+                    side=getattr(trade, "side", ""),
+                    mode=getattr(trade, "mode", ""),
+                    trade_id=getattr(trade, "trade_id", ""),
+                    note="Broker reports no open position; cleared local scalp runtime state.",
+                )
+            if hasattr(self, "_log"):
+                self._log(
+                    "warn",
+                    f"Scalp reconcile cleared stale local trade {getattr(trade, 'trade_id', '')} for {getattr(trade, 'symbol', '')}.",
+                )
+            summary["cleared"] += 1
+            continue
+        changed = False
+        broker_entry = _scalp_position_entry_price(position, _coerce_float(getattr(trade, "entry_price", 0.0), 0.0))
+        if broker_entry > 0 and abs(broker_entry - _coerce_float(getattr(trade, "entry_price", 0.0), 0.0)) > 1e-9:
+            trade.entry_price = broker_entry
+            changed = True
+        if abs(broker_size - _coerce_float(getattr(trade, "size", 0.0), 0.0)) > 1e-9:
+            trade.size = broker_size
+            changed = True
+        broker_mark = _coerce_float(position.get("mark_price") or position.get("last_price"), 0.0)
+        if broker_mark > 0:
+            trade.current_price = broker_mark
+            changed = True
+        if hasattr(trade, "_refresh_derived_quantities"):
+            trade._refresh_derived_quantities()
+        if hasattr(self, "_remember_execution"):
+            self._remember_execution(
+                phase="reconcile",
+                lifecycle="updated" if changed else "verified",
+                fill_status="open",
+                symbol=getattr(trade, "symbol", ""),
+                side=getattr(trade, "side", ""),
+                mode=getattr(trade, "mode", ""),
+                trade_id=getattr(trade, "trade_id", ""),
+                result={
+                    "broker_size": broker_size,
+                    "broker_entry_price": broker_entry,
+                    "changed": changed,
+                },
+            )
+        if changed:
+            summary["updated"] += 1
+    summary["state"] = "ok" if summary["errors"] == 0 else "degraded"
+    summary["open_trades"] = len(getattr(self, "open_trades", {}))
+    self._last_reconcile_at = now
+    self._last_reconciliation = summary
+    if hasattr(self, "_schedule_update"):
+        self._schedule_update(force=True)
+    return dict(summary)
+
+
+def _scalp_engine_get_status_hardened(self, *args, **kwargs):
+    status = _ORIG_SCALP_ENGINE_GET_STATUS(self, *args, **kwargs)
+    if isinstance(status, dict):
+        status["reconciliation"] = dict(getattr(self, "_last_reconciliation", {}) or {})
+    return status
+
+
+ScalpEngine.__init__ = _scalp_engine_init_hardened
+ScalpEngine.reconcile_broker_positions = _scalp_engine_reconcile_broker_positions
+ScalpEngine.get_status = _scalp_engine_get_status_hardened

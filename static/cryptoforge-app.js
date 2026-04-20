@@ -5576,7 +5576,7 @@ function cfApplyScalpStatus(d) {
       openCount.textContent = pending.length ? (openText + ' • ' + pending.length + ' pending') : openText;
     }
     const engDot = cfEl('cf-scalp-dot');
-    if (engDot) engDot.style.filter = running ? 'drop-shadow(0 0 4px #34d399)' : '';
+    if (engDot) engDot.classList.toggle('is-live', running);
 
     const feed = status.feed_metrics || {};
     const feedMeta = cfEl('cf-scalp-feed-meta');

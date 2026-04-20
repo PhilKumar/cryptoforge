@@ -3486,3 +3486,7 @@
     max-width: 112px;
   }
 }
+
+.cf-scalp-dot.is-live {
+  filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.45));
+}

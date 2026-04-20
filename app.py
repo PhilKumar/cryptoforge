@@ -95,6 +95,17 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Requested-With"],
 )
 
+
+@app.on_event("shutdown")
+async def _shutdown_runtime_engines() -> None:
+    scalp_engine = globals().get("_scalp_engine")
+    if scalp_engine is not None:
+        try:
+            await scalp_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown scalp engine during app shutdown: %s", exc)
+
+
 from error_handlers import register_error_handlers
 
 register_error_handlers(app)
@@ -3604,6 +3615,7 @@ def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
 
     engine.open_trades = restored_open
     engine.pending_entries = restored_pending
+    engine.closed_trades = list(runtime_state.get("closed_trades") or [])[-50:]
     engine._last_execution = dict(runtime_state.get("execution_metrics") or {})
     if not engine._last_execution:
         restored_rows = list(engine.open_trades.values()) + list(engine.pending_entries.values())
@@ -3798,6 +3810,11 @@ async def scalp_status(symbol: str = "", include_activity: bool = False):
         eng.watch_symbol(symbol)
     if not eng.open_trades and not eng.pending_entries:
         _restore_scalp_runtime(eng)
+    if any(str(getattr(trade, "mode", "paper")).lower() != "paper" for trade in eng.open_trades.values()):
+        try:
+            await eng.reconcile_broker_positions(force=False)
+        except Exception as exc:
+            _logger.warning("[SCALP] Reconcile during status refresh failed: %s", exc)
     status = eng.get_status(symbol)
     if include_activity:
         status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
@@ -3813,11 +3830,15 @@ async def scalp_trades():
 @app.get("/api/scalp/activity")
 async def scalp_activity():
     eng = _get_scalp_engine()
+    stored_trades = list(reversed(_load_scalp_trades()[-100:]))
+    stored_events = list(reversed(_load_scalp_events()[-200:]))
     return {
         "closed_trades": list(reversed(eng.closed_trades[-50:])),
         "event_log": list(reversed(eng.event_log[-100:])),
-        "file_trades": list(reversed(_load_scalp_trades()[-100:])),
-        "file_events": list(reversed(_load_scalp_events()[-200:])),
+        "stored_trades": stored_trades,
+        "stored_events": stored_events,
+        "file_trades": stored_trades,
+        "file_events": stored_events,
     }
 
 
@@ -4069,3 +4090,32 @@ if __name__ == "__main__":
 
     _logger.info("CryptoForge starting — http://%s:%s", config.APP_HOST, config.APP_PORT)
     uvicorn.run("app:app", host=config.APP_HOST, port=config.APP_PORT, reload=False, log_level="info")
+
+_ORIG_SNAPSHOT_SCALP_RUNTIME = _snapshot_scalp_runtime
+
+
+def _snapshot_scalp_runtime(*args, **kwargs):
+    snapshot = _ORIG_SNAPSHOT_SCALP_RUNTIME(*args, **kwargs)
+    source = args[0] if args else kwargs.get("engine")
+    if isinstance(snapshot, dict) and source is not None:
+        try:
+            if isinstance(source, dict):
+                closed_rows = list(source.get("closed_trades") or [])
+            else:
+                status = source.get_status() if hasattr(source, "get_status") else {}
+                closed_rows = list((status or {}).get("closed_trades") or getattr(source, "closed_trades", []) or [])
+            snapshot["closed_trades"] = closed_rows[-50:]
+        except Exception:
+            snapshot.setdefault("closed_trades", [])
+    return snapshot
+
+
+@app.post("/api/scalp/reconcile")
+async def scalp_reconcile():
+    eng = _get_scalp_engine()
+    result = await eng.reconcile_broker_positions(force=True)
+    if "_persist_scalp_runtime_snapshot" in globals():
+        _persist_scalp_runtime_snapshot(eng)
+    if "_attach_scalp_runtime_metrics" in globals():
+        return _attach_scalp_runtime_metrics({"status": "ok", "reconciliation": result}, eng)
+    return {"status": "ok", "reconciliation": result}

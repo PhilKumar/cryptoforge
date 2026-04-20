@@ -1759,3 +1759,140 @@ class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+import asyncio as _asyncio_hardening
+import unittest
+from types import SimpleNamespace as _HardeningNamespace
+
+from engine.scalp import ScalpEngine as _HardeningScalpEngine
+from engine.ws_feed import DeltaWSFeed as _HardeningDeltaWSFeed
+
+
+class WebSocketFeedShutdownHardeningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disconnect_cancels_inflight_connect_and_closes_session(self):
+        feed = _HardeningDeltaWSFeed()
+
+        class _DummySession:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        session = _DummySession()
+        blocker = _asyncio_hardening.Event()
+
+        async def _slow_connect():
+            feed._session = session
+            await blocker.wait()
+
+        feed._running = True
+        feed._connect_task = _asyncio_hardening.create_task(_slow_connect())
+        await _asyncio_hardening.sleep(0)
+        await feed.disconnect()
+        self.assertTrue(session.closed)
+        self.assertIsNone(feed._connect_task)
+
+
+class ScalpReconciliationHardeningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reconcile_clears_stale_local_trade_when_broker_is_flat(self):
+        class _DummyTrade:
+            def __init__(self):
+                self.trade_id = "trade-1"
+                self.symbol = "BTCUSDT"
+                self.side = "LONG"
+                self.mode = "live"
+                self.product_id = 101
+                self.entry_price = 100.0
+                self.current_price = 105.0
+                self.exit_price = 0.0
+                self.exit_time = None
+                self.exit_reason = None
+                self.status = "open"
+                self.size = 1.5
+                self.pnl = 0.0
+
+            def _compute_pnl(self, price):
+                return (price - self.entry_price) * self.size
+
+            def _refresh_derived_quantities(self):
+                return None
+
+            def to_dict(self):
+                return {
+                    "trade_id": self.trade_id,
+                    "symbol": self.symbol,
+                    "status": self.status,
+                    "exit_reason": self.exit_reason,
+                }
+
+        class _DummyDelta:
+            def get_position(self, product_id, strict=False):
+                return {}
+
+        trade = _DummyTrade()
+        engine = _HardeningNamespace(
+            open_trades={trade.trade_id: trade},
+            closed_trades=[],
+            delta=_DummyDelta(),
+            _trade_action_locks={trade.trade_id: object()},
+            _remember_execution=lambda **kwargs: None,
+            _schedule_update=lambda force=False: None,
+            _log=lambda level, message: None,
+            _on_trade_closed=lambda row: None,
+        )
+        result = await _HardeningScalpEngine.reconcile_broker_positions(engine, force=True)
+        self.assertEqual(result["cleared"], 1)
+        self.assertFalse(engine.open_trades)
+        self.assertEqual(engine.closed_trades[-1]["exit_reason"], "broker_flat_reconcile")
+
+    async def test_reconcile_updates_live_trade_size_and_entry_from_broker(self):
+        class _DummyTrade:
+            def __init__(self):
+                self.trade_id = "trade-2"
+                self.symbol = "ETHUSDT"
+                self.side = "LONG"
+                self.mode = "live"
+                self.product_id = 202
+                self.entry_price = 95.0
+                self.current_price = 96.0
+                self.exit_price = 0.0
+                self.exit_time = None
+                self.exit_reason = None
+                self.status = "open"
+                self.size = 1.0
+                self.pnl = 0.0
+
+            def _compute_pnl(self, price):
+                return (price - self.entry_price) * self.size
+
+            def _refresh_derived_quantities(self):
+                return None
+
+            def to_dict(self):
+                return {"trade_id": self.trade_id, "symbol": self.symbol, "status": self.status}
+
+        class _DummyDelta:
+            def get_position(self, product_id, strict=False):
+                return {
+                    "size": "2.25",
+                    "entry_price": "101.5",
+                    "mark_price": "103.0",
+                }
+
+        trade = _DummyTrade()
+        engine = _HardeningNamespace(
+            open_trades={trade.trade_id: trade},
+            closed_trades=[],
+            delta=_DummyDelta(),
+            _trade_action_locks={},
+            _remember_execution=lambda **kwargs: None,
+            _schedule_update=lambda force=False: None,
+            _log=lambda level, message: None,
+            _on_trade_closed=lambda row: None,
+        )
+        result = await _HardeningScalpEngine.reconcile_broker_positions(engine, force=True)
+        self.assertEqual(result["updated"], 1)
+        self.assertAlmostEqual(trade.size, 2.25)
+        self.assertAlmostEqual(trade.entry_price, 101.5)
+        self.assertAlmostEqual(trade.current_price, 103.0)
