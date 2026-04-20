@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cryptoforge-shell-v6';
+const CACHE_NAME = 'cryptoforge-shell-v7';
 const APP_SHELL = [
   '/manifest.webmanifest?v=20260417-1',
   '/apple-touch-icon.png?v=20260417-1',
@@ -10,8 +10,8 @@ const APP_SHELL = [
   '/static/pwa-icons/icon-maskable-192.png?v=20260417-1',
   '/static/pwa-icons/icon-maskable-512.png?v=20260417-1',
   '/static/cryptoforge-boot.js?v=20260417-1',
-  '/static/cryptoforge-app.css?v=20260418-2',
-  '/static/cryptoforge-app.js?v=20260418-2',
+  '/static/cryptoforge-app.css?v=20260420-1',
+  '/static/cryptoforge-app.js?v=20260420-1',
   '/static/cryptoforge-login.css?v=20260408-1',
   '/static/cryptoforge-login.js?v=20260408-1',
   '/static/cryptoforge-pwa.css?v=20260417-1',

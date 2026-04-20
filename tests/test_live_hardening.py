@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pandas as pd
+from starlette.requests import Request as StarletteRequest
 
 from broker.delta import DeltaClient, _CircuitBreaker, _normalize_result_list
 from engine.live import LiveEngine
@@ -927,26 +928,33 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry_exec["phase"], "entry")
         self.assertEqual(entry_exec["order_lifecycle"], "filled")
         self.assertEqual(entry_exec["trade_id"], trade_id)
+        self.assertEqual(engine.get_status()["open_trades"][0]["execution_metrics"]["phase"], "entry")
 
         updated = await engine.update_trade_targets(trade_id, target_usd=12, sl_usd=4)
         self.assertEqual(updated["status"], "ok")
+        self.assertEqual(updated["action"], "targets_updated")
         target_exec = engine.get_status()["execution_metrics"]
         self.assertEqual(target_exec["phase"], "targets")
         self.assertEqual(target_exec["order_lifecycle"], "updated")
+        self.assertEqual(updated["trade"]["execution_metrics"]["phase"], "targets")
 
         added = await engine.add_to_trade(trade_id, qty_mode="base", qty_value=0.001)
         self.assertEqual(added["status"], "ok")
+        self.assertEqual(added["action"], "quantity_added")
         add_exec = engine.get_status()["execution_metrics"]
         self.assertEqual(add_exec["phase"], "scale_in")
         self.assertEqual(add_exec["order_lifecycle"], "filled")
         self.assertGreater(add_exec["requested_size"], 0)
+        self.assertEqual(added["trade"]["execution_metrics"]["phase"], "scale_in")
 
         engine.open_trades[trade_id].current_price = 101.0
         exited = await engine.exit_trade(trade_id, reason="manual")
         self.assertEqual(exited["status"], "ok")
+        self.assertEqual(exited["action"], "exited")
         exit_exec = engine.get_status()["execution_metrics"]
         self.assertEqual(exit_exec["phase"], "exit")
         self.assertEqual(exit_exec["order_lifecycle"], "filled")
+        self.assertEqual(exited["trade"]["execution_metrics"]["phase"], "exit")
 
     async def test_scalp_execution_metrics_normalize_scale_in_rejection_without_broker_states(self):
         delta = RejectingScaleInScalpDelta()
@@ -979,6 +987,27 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
 class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.app_module = import_module("app")
+
+    @staticmethod
+    def _asgi_request(path="/api/dashboard/summary", method="GET"):
+        async def _receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        return StarletteRequest(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode(),
+                "query_string": b"",
+                "headers": [],
+                "client": ("127.0.0.1", 1234),
+                "server": ("testserver.local", 80),
+            },
+            _receive,
+        )
 
     async def test_dashboard_summary_aggregates_all_todays_saved_runs(self):
         fake_runs = [
@@ -1018,6 +1047,18 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status["strategy_name"], "Stopped Paper")
         self.assertFalse(status["running"])
+
+    async def test_security_middleware_converts_dropped_response_to_client_closed(self):
+        request = self._asgi_request()
+
+        async def dropped(_request):
+            raise RuntimeError("No response returned.")
+
+        response = await self.app_module.security_headers_middleware(request, dropped)
+
+        self.assertEqual(response.status_code, 499)
+        self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
+        self.assertIn("connect-src 'self' ws: wss:;", response.headers.get("content-security-policy", ""))
 
 
 class SessionSecurityTests(unittest.TestCase):
@@ -1349,7 +1390,12 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
                 lock.release()
 
         self.assertEqual(conflicted.status_code, 409)
-        self.assertIn("action in progress", conflicted.json()["error"]["detail"].lower())
+        payload = conflicted.json()
+        self.assertIn("action in progress", payload["error"]["detail"].lower())
+        self.assertEqual(payload["error"]["code"], "action_in_progress")
+        self.assertTrue(payload["error"]["retryable"])
+        self.assertEqual(payload["action"], "targets")
+        self.assertEqual(payload["trade_id"], trade_id)
 
     async def test_scalp_status_response_keeps_tight_csp_headers(self):
         transport = httpx.ASGITransport(app=self.app_module.app)
@@ -1566,6 +1612,8 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         restored_trade = next(iter(restored_engine.open_trades.values()))
         self.assertEqual(restored_trade.symbol, "BTCUSDT")
         self.assertGreater(restored_trade.current_price, 0)
+        self.assertEqual(restored_trade.execution_metrics.get("phase"), "entry")
+        self.assertEqual(restored_engine.get_status()["open_trades"][0]["execution_metrics"]["phase"], "entry")
 
     async def test_route_entry_persists_runtime_snapshot(self):
         transport = httpx.ASGITransport(app=self.app_module.app)
@@ -1631,6 +1679,46 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
             entry_payload.get("open_trades")[0].get("base_qty", 0),
         )
         self.assertEqual((add_payload.get("execution_metrics") or {}).get("phase"), "scale_in")
+        self.assertEqual((add_payload.get("open_trades")[0].get("execution_metrics") or {}).get("phase"), "scale_in")
+
+    async def test_scalp_target_route_returns_noop_for_unchanged_targets(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+            self.app_module._scalp_engine._record_price("BTCUSD", 101.25, source="ws")
+            entered = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_mode": "base",
+                    "qty_value": 0.0015,
+                    "leverage": 10,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+            trade_id = entered.json()["trade"]["trade_id"]
+            first = await client.put(
+                f"/api/scalp/trades/{trade_id}/targets",
+                json={"target_usd": 25, "sl_usd": 10},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+            second = await client.put(
+                f"/api/scalp/trades/{trade_id}/targets",
+                json={"target_usd": 25, "sl_usd": 10},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        payload = second.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "noop")
+        self.assertEqual(payload["message"], "TP/SL already set")
+        self.assertEqual((payload.get("trade") or {}).get("execution_metrics", {}).get("phase"), "targets")
 
 
 class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):

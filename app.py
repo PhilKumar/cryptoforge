@@ -552,6 +552,65 @@ def _is_same_origin_request(request: Request) -> bool:
     return True
 
 
+def _is_no_response_returned_error(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and str(exc).strip().rstrip(".") == "No response returned"
+
+
+def _client_closed_response(request: Request) -> Response:
+    response = Response(status_code=499)
+    rid = str(getattr(getattr(request, "state", None), "request_id", "") or "")
+    if rid:
+        response.headers["X-Request-ID"] = rid
+    return response
+
+
+async def _call_next_or_client_closed(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except RuntimeError as exc:
+        if _is_no_response_returned_error(exc):
+            _logger.info(
+                "[%s] Client closed request before response completed: %s %s",
+                getattr(getattr(request, "state", None), "request_id", "-"),
+                request.method,
+                request.url.path,
+            )
+            return _client_closed_response(request)
+        raise
+
+
+def _apply_security_headers(request: Request, response: Response) -> Response:
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), browsing-topics=()"
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "script-src-elem 'self'; "
+        "script-src-attr 'none'; "
+        "style-src 'self' https://fonts.googleapis.com; "
+        "style-src-elem 'self' https://fonts.googleapis.com; "
+        "style-src-attr 'unsafe-inline'; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob: https:; "
+        "connect-src 'self' ws: wss:; "
+        "worker-src 'self' blob:; "
+        "media-src 'self' data: blob:; "
+        "manifest-src 'self'; "
+        "frame-src 'none'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "object-src 'none'"
+    )
+    response.headers["Content-Security-Policy"] = csp
+    if _is_https_request(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 # ── Auth Middleware (Dependency-based) ────────────────────────────
 async def require_auth(request: Request):
     path = request.url.path
@@ -583,7 +642,7 @@ async def request_id_middleware(request: Request, call_next):
 
     rid = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     request.state.request_id = rid
-    response = await call_next(request)
+    response = await _call_next_or_client_closed(request, call_next)
     response.headers["X-Request-ID"] = rid
     return response
 
@@ -604,12 +663,12 @@ async def auth_middleware(request: Request, call_next):
         "/apple-touch-icon.png",
     )
     if path in public or path.startswith("/static"):
-        return await call_next(request)
+        return await _call_next_or_client_closed(request, call_next)
     if path.startswith("/api/"):
         token = _get_session_token(request)
         if not _validate_session(token, request=request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    return await call_next(request)
+    return await _call_next_or_client_closed(request, call_next)
 
 
 @app.middleware("http")
@@ -624,41 +683,13 @@ async def csrf_middleware(request: Request, call_next):
                     return JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
                 if not _is_same_origin_request(request):
                     return JSONResponse({"detail": "Origin validation failed"}, status_code=403)
-    return await call_next(request)
+    return await _call_next_or_client_closed(request, call_next)
 
 
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), browsing-topics=()"
-    csp = (
-        "default-src 'self'; "
-        "script-src 'self'; "
-        "script-src-elem 'self'; "
-        "script-src-attr 'none'; "
-        "style-src 'self' https://fonts.googleapis.com; "
-        "style-src-elem 'self' https://fonts.googleapis.com; "
-        "style-src-attr 'unsafe-inline'; "
-        "font-src 'self' https://fonts.gstatic.com data:; "
-        "img-src 'self' data: blob: https:; "
-        "connect-src 'self' ws: wss:; "
-        "worker-src 'self' blob:; "
-        "media-src 'self' data: blob:; "
-        "manifest-src 'self'; "
-        "frame-src 'none'; "
-        "frame-ancestors 'none'; "
-        "base-uri 'self'; "
-        "form-action 'self'; "
-        "object-src 'none'"
-    )
-    response.headers["Content-Security-Policy"] = csp
-    if _is_https_request(request):
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return response
+    response = await _call_next_or_client_closed(request, call_next)
+    return _apply_security_headers(request, response)
 
 
 # ── Redis (lazy singleton) ────────────────────────────────────────
@@ -3574,6 +3605,13 @@ def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
     engine.open_trades = restored_open
     engine.pending_entries = restored_pending
     engine._last_execution = dict(runtime_state.get("execution_metrics") or {})
+    if not engine._last_execution:
+        restored_rows = list(engine.open_trades.values()) + list(engine.pending_entries.values())
+        for row in restored_rows:
+            metrics = dict(getattr(row, "execution_metrics", {}) or {})
+            if metrics:
+                engine._last_execution = metrics
+                break
     event_log = runtime_state.get("event_log") or []
     if event_log:
         engine.event_log = list(event_log)[-100:]
@@ -3625,17 +3663,39 @@ def _attach_scalp_runtime_metrics(result: dict, engine: ScalpEngine, symbol_hint
 
 
 def _scalp_action_status_code(result: dict, *, default_status: int = 400) -> int:
-    message = str((result or {}).get("message") or "Unknown scalp action error")
-    lowered = message.lower()
-    if "not found" in lowered or "already closed" in lowered:
+    error_code = str((result or {}).get("error_code") or "").strip().lower()
+    if not error_code:
+        message = str((result or {}).get("message") or "Unknown scalp action error")
+        lowered = message.lower()
+        if "not found" in lowered or "already closed" in lowered:
+            error_code = "trade_not_found"
+        elif "action in progress" in lowered:
+            error_code = "action_in_progress"
+        elif "no live price available" in lowered:
+            error_code = "no_live_price"
+        elif "not confirmed" in lowered:
+            error_code = "exit_not_confirmed"
+        elif "must be greater than zero" in lowered:
+            error_code = "invalid_quantity"
+        elif "no target fields provided" in lowered:
+            error_code = "no_target_fields"
+        elif "unable to resolve add quantity" in lowered:
+            error_code = "quantity_resolution_failed"
+        elif "could not be verified" in lowered or "rejected" in lowered:
+            error_code = "broker_rejected"
+        elif "broker does not support" in lowered:
+            error_code = "unsupported_broker"
+        elif lowered:
+            error_code = "unexpected_error"
+    if error_code == "trade_not_found":
         return 404
-    if "action in progress" in lowered or "no live price available" in lowered or "not confirmed" in lowered:
+    if error_code in {"action_in_progress", "no_live_price", "exit_not_confirmed"}:
         return 409
-    if "must be greater than zero" in lowered or "no target fields provided" in lowered:
+    if error_code in {"invalid_quantity", "no_target_fields"}:
         return 400
-    if "unable to resolve add quantity" in lowered:
+    if error_code == "quantity_resolution_failed":
         return 422
-    if "could not be verified" in lowered or "rejected" in lowered or "broker does not support" in lowered:
+    if error_code in {"broker_rejected", "broker_error", "unsupported_broker"}:
         return 502
     return default_status
 
@@ -3645,9 +3705,24 @@ def _scalp_action_error_response(
 ) -> JSONResponse:
     payload = _attach_scalp_runtime_metrics(dict(result or {}), engine, symbol_hint)
     message = str(payload.get("message") or "Unknown scalp action error")
+    error_code = str(payload.get("error_code") or "").strip().lower()
+    if not error_code:
+        provisional_status = _scalp_action_status_code(payload, default_status=default_status)
+        error_code_map = {
+            404: "trade_not_found",
+            409: "action_in_progress",
+            422: "quantity_resolution_failed",
+            502: "broker_rejected",
+        }
+        error_code = error_code_map.get(provisional_status, "unexpected_error")
+        payload["error_code"] = error_code
+    retryable = bool(payload.get("retryable"))
+    if "retryable" not in payload:
+        retryable = error_code in {"action_in_progress", "no_live_price", "exit_not_confirmed", "broker_error"}
+        payload["retryable"] = retryable
     payload["status"] = "error"
     payload["message"] = message
-    payload["error"] = {"detail": message}
+    payload["error"] = {"detail": message, "code": error_code, "retryable": retryable}
     return JSONResponse(payload, status_code=_scalp_action_status_code(payload, default_status=default_status))
 
 

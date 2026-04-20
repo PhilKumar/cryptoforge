@@ -76,6 +76,7 @@ class ScalpTrade:
         entry_time: Optional[datetime] = None,
         mode: str = "live",
         guardrail_price: float = 0.0,
+        execution_metrics: Optional[Dict[str, Any]] = None,
     ):
         self.trade_id = trade_id
         self.symbol = symbol
@@ -102,6 +103,7 @@ class ScalpTrade:
         self.last_price_update = self.entry_time
         self.entry_latency_ms: float = 0.0
         self.exit_latency_ms: float = 0.0
+        self.execution_metrics = dict(execution_metrics or {})
 
         # Resolve absolute TP/SL from percentage if needed
         self.target_pct = target_pct
@@ -250,6 +252,7 @@ class ScalpTrade:
             "exit_latency_ms": self.exit_latency_ms,
             "status": self.status,
             "mode": self.mode,
+            "execution_metrics": dict(self.execution_metrics or {}),
         }
 
     @classmethod
@@ -278,6 +281,7 @@ class ScalpTrade:
             entry_time=_parse_dt(data.get("entry_time")),
             mode=str(data.get("mode", "paper") or "paper"),
             guardrail_price=_coerce_float(data.get("guardrail_price"), 0.0),
+            execution_metrics=data.get("execution_metrics") or {},
         )
         trade.current_price = _coerce_float(data.get("current_price", data.get("mark_price")), trade.entry_price)
         trade.last_price_source = str(data.get("price_source", "restored") or "restored")
@@ -323,6 +327,7 @@ class PendingScalpEntry:
         target_usd: float = 0.0,
         sl_usd: float = 0.0,
         mode: str = "live",
+        execution_metrics: Optional[Dict[str, Any]] = None,
     ):
         self.entry_id = entry_id
         self.symbol = symbol
@@ -344,6 +349,7 @@ class PendingScalpEntry:
         self.sl_usd = sl_usd
         self.mode = mode
         self.created_at = _now_utc()
+        self.execution_metrics = dict(execution_metrics or {})
 
     def should_trigger(self, price: float) -> bool:
         if price <= 0:
@@ -389,6 +395,7 @@ class PendingScalpEntry:
             "created_at": str(self.created_at),
             "qty_usdt": self.margin_usd or round(self.size / max(self.leverage, 1), 4),
             "trigger_summary": self.trigger_summary(),
+            "execution_metrics": dict(self.execution_metrics or {}),
         }
 
     @classmethod
@@ -413,6 +420,7 @@ class PendingScalpEntry:
             target_usd=_coerce_float(data.get("target_usd"), 0.0),
             sl_usd=_coerce_float(data.get("sl_usd"), 0.0),
             mode=str(data.get("mode", "paper") or "paper"),
+            execution_metrics=data.get("execution_metrics") or {},
         )
         pending.created_at = _parse_dt(data.get("created_at")) or pending.created_at
         return pending
@@ -674,6 +682,13 @@ class ScalpEngine:
             "note": str(note or result.get("note") or ""),
             "updated_at": str(_now_utc()),
         }
+        trade_key = int(trade_id or 0)
+        if trade_key > 0:
+            execution_snapshot = dict(self._last_execution)
+            if trade_key in self.open_trades:
+                self.open_trades[trade_key].execution_metrics = execution_snapshot
+            if trade_key in self.pending_entries:
+                self.pending_entries[trade_key].execution_metrics = execution_snapshot
 
     @staticmethod
     def _extract_order_price(order: dict, fallback: float) -> float:
@@ -769,7 +784,14 @@ class ScalpEngine:
     async def _run_trade_action(self, trade_id: int, action: str, runner) -> Dict[str, Any]:
         lock = self._trade_action_lock(trade_id)
         if lock.locked():
-            return {"status": "error", "message": f"Trade {trade_id} already has an action in progress"}
+            return {
+                "status": "error",
+                "action": action,
+                "trade_id": int(trade_id or 0),
+                "message": f"Trade {trade_id} already has an action in progress",
+                "error_code": "action_in_progress",
+                "retryable": True,
+            }
         async with lock:
             return await runner()
 
@@ -1221,10 +1243,24 @@ class ScalpEngine:
         """Manually exit an open scalp trade."""
         trade = self.open_trades.get(trade_id)
         if not trade:
-            return {"status": "error", "message": f"Trade {trade_id} not found or already closed"}
+            return {
+                "status": "error",
+                "action": "exit",
+                "trade_id": int(trade_id or 0),
+                "message": f"Trade {trade_id} not found or already closed",
+                "error_code": "trade_not_found",
+            }
         result = await self._close_trade(trade, reason)
         if result.get("status") == "ok" and trade_id in self.open_trades:
-            return {"status": "error", "message": f"Trade {trade_id} exit was not confirmed", "trade": trade.to_dict()}
+            return {
+                "status": "error",
+                "action": "exit",
+                "trade_id": int(trade_id or 0),
+                "message": f"Trade {trade_id} exit was not confirmed",
+                "trade": trade.to_dict(),
+                "error_code": "exit_not_confirmed",
+                "retryable": True,
+            }
         return result
 
     async def update_trade_targets(self, trade_id: int, **kwargs) -> Dict[str, Any]:
@@ -1233,10 +1269,50 @@ class ScalpEngine:
         async def _runner() -> Dict[str, Any]:
             trade = self.open_trades.get(trade_id)
             if not trade:
-                return {"status": "error", "message": f"Trade {trade_id} not found"}
+                return {
+                    "status": "error",
+                    "action": "targets",
+                    "trade_id": int(trade_id or 0),
+                    "message": f"Trade {trade_id} not found",
+                    "error_code": "trade_not_found",
+                }
+            updates: Dict[str, float] = {}
             for attr in ("target_price", "sl_price", "target_usd", "sl_usd"):
                 if attr in kwargs and kwargs[attr] is not None:
-                    setattr(trade, attr, kwargs[attr])
+                    updates[attr] = _coerce_float(kwargs[attr], 0.0)
+            if not updates:
+                return {
+                    "status": "error",
+                    "action": "targets",
+                    "trade_id": int(trade_id or 0),
+                    "message": "No target fields provided",
+                    "error_code": "no_target_fields",
+                }
+            changed = any(
+                abs(_coerce_float(getattr(trade, attr), 0.0) - value) > 1e-9 for attr, value in updates.items()
+            )
+            if not changed:
+                self._remember_execution(
+                    phase="targets",
+                    symbol=trade.symbol,
+                    side=trade.side,
+                    mode=trade.mode,
+                    verified=True,
+                    trade_id=trade_id,
+                    requested_size=trade.size,
+                    note="TP/SL already set",
+                    lifecycle="updated",
+                    fill_status="updated",
+                )
+                self._schedule_update(force=True)
+                return {
+                    "status": "ok",
+                    "action": "noop",
+                    "message": "TP/SL already set",
+                    "trade": trade.to_dict(),
+                }
+            for attr, value in updates.items():
+                setattr(trade, attr, value)
             self._remember_execution(
                 phase="targets",
                 symbol=trade.symbol,
@@ -1249,9 +1325,9 @@ class ScalpEngine:
                 lifecycle="updated",
                 fill_status="updated",
             )
-            self._log("info", f"🎯 Trade {trade_id} targets updated: {kwargs}")
+            self._log("info", f"🎯 Trade {trade_id} targets updated: {updates}")
             self._schedule_update(force=True)
-            return {"status": "ok", "trade": trade.to_dict()}
+            return {"status": "ok", "action": "targets_updated", "trade": trade.to_dict()}
 
         return await self._run_trade_action(trade_id, "targets", _runner)
 
@@ -1259,12 +1335,24 @@ class ScalpEngine:
         async def _runner() -> Dict[str, Any]:
             trade = self.open_trades.get(trade_id)
             if not trade:
-                return {"status": "error", "message": f"Trade {trade_id} not found"}
+                return {
+                    "status": "error",
+                    "action": "add",
+                    "trade_id": int(trade_id or 0),
+                    "message": f"Trade {trade_id} not found",
+                    "error_code": "trade_not_found",
+                }
 
             normalized_qty_mode = "base" if str(qty_mode or "").lower() in {"base", "qty", "coin"} else "usdt"
             normalized_qty_value = _coerce_float(qty_value, 0.0)
             if normalized_qty_value <= 0:
-                return {"status": "error", "message": "Add quantity must be greater than zero"}
+                return {
+                    "status": "error",
+                    "action": "add",
+                    "trade_id": int(trade_id or 0),
+                    "message": "Add quantity must be greater than zero",
+                    "error_code": "invalid_quantity",
+                }
 
             fill_price = self._cached_price(trade.symbol) or trade.current_price or trade.entry_price
             if fill_price <= 0:
@@ -1277,7 +1365,14 @@ class ScalpEngine:
                 except Exception:
                     pass
             if fill_price <= 0:
-                return {"status": "error", "message": f"No live price available for {trade.symbol}"}
+                return {
+                    "status": "error",
+                    "action": "add",
+                    "trade_id": int(trade_id or 0),
+                    "message": f"No live price available for {trade.symbol}",
+                    "error_code": "no_live_price",
+                    "retryable": True,
+                }
 
             add_size = self._resolve_contract_size(
                 qty_mode=normalized_qty_mode,
@@ -1286,7 +1381,13 @@ class ScalpEngine:
                 leverage=trade.leverage,
             )
             if add_size <= 0:
-                return {"status": "error", "message": "Unable to resolve add quantity"}
+                return {
+                    "status": "error",
+                    "action": "add",
+                    "trade_id": int(trade_id or 0),
+                    "message": "Unable to resolve add quantity",
+                    "error_code": "quantity_resolution_failed",
+                }
 
             result: Dict[str, Any] = {}
             if trade.mode != "paper":
@@ -1325,7 +1426,13 @@ class ScalpEngine:
                             requested_size=add_size,
                             requested_qty_value=normalized_qty_value,
                         )
-                        return {"status": "error", "message": result.get("error") or "add order could not be verified"}
+                        return {
+                            "status": "error",
+                            "action": "add",
+                            "trade_id": int(trade_id or 0),
+                            "message": result.get("error") or "add order could not be verified",
+                            "error_code": "broker_rejected",
+                        }
                     fill_price = self._extract_order_price(result, fill_price)
                 except Exception as e:
                     self._remember_execution(
@@ -1339,7 +1446,14 @@ class ScalpEngine:
                         requested_size=add_size,
                         requested_qty_value=normalized_qty_value,
                     )
-                    return {"status": "error", "message": str(e)}
+                    return {
+                        "status": "error",
+                        "action": "add",
+                        "trade_id": int(trade_id or 0),
+                        "message": str(e),
+                        "error_code": "broker_error",
+                        "retryable": True,
+                    }
 
             old_size = max(int(trade.size or 0), 0)
             total_size = old_size + add_size
@@ -1380,7 +1494,13 @@ class ScalpEngine:
                 f"➕ SCALP ADD: {trade.side} {trade.symbol} add_size={add_size} fill=${fill_price:,.4f} total_size={trade.size}",
             )
             self._schedule_update(force=True)
-            return {"status": "ok", "trade": trade.to_dict(), "added_size": add_size, "fill_price": fill_price}
+            return {
+                "status": "ok",
+                "action": "quantity_added",
+                "trade": trade.to_dict(),
+                "added_size": add_size,
+                "fill_price": fill_price,
+            }
 
         return await self._run_trade_action(trade_id, "add", _runner)
 
@@ -1635,7 +1755,13 @@ class ScalpEngine:
     async def _close_trade_unlocked(self, trade: ScalpTrade, reason: str) -> Dict[str, Any]:
         """Place exit order (or simulate) and move trade to closed_trades."""
         if trade.trade_id not in self.open_trades:
-            return {"status": "error", "message": f"Trade {trade.trade_id} not found or already closed"}
+            return {
+                "status": "error",
+                "action": "exit",
+                "trade_id": int(trade.trade_id or 0),
+                "message": f"Trade {trade.trade_id} not found or already closed",
+                "error_code": "trade_not_found",
+            }
         exit_order_id = ""
         result: Dict[str, Any] = {}
         if trade.mode == "paper":
@@ -1695,8 +1821,11 @@ class ScalpEngine:
                         self.stop()
                     return {
                         "status": "error",
+                        "action": "exit",
+                        "trade_id": int(trade.trade_id or 0),
                         "message": result.get("error") or "exit order could not be verified",
                         "trade": trade.to_dict(),
+                        "error_code": "broker_rejected",
                     }
                 exit_order_id = str(result.get("id", "closed"))
                 trade.current_price = self._extract_order_price(result, trade.current_price)
@@ -1725,7 +1854,15 @@ class ScalpEngine:
                         f"Engine stopping to prevent further exposure.",
                     )
                     self.stop()
-                return {"status": "error", "message": str(e), "trade": trade.to_dict()}
+                return {
+                    "status": "error",
+                    "action": "exit",
+                    "trade_id": int(trade.trade_id or 0),
+                    "message": str(e),
+                    "trade": trade.to_dict(),
+                    "error_code": "broker_error",
+                    "retryable": True,
+                }
 
         exit_price = trade.current_price
         pnl = trade._compute_pnl(exit_price)
@@ -1738,10 +1875,6 @@ class ScalpEngine:
         trade.status = "closed"
         trade.exit_latency_ms = round(_coerce_float(result.get("broker_latency_ms"), 0.0), 1)
 
-        closed_dict = trade.to_dict()
-        self.closed_trades.append(closed_dict)
-        del self.open_trades[trade.trade_id]
-        self._trade_action_locks.pop(int(trade.trade_id), None)
         self._remember_execution(
             phase="exit",
             symbol=trade.symbol,
@@ -1755,6 +1888,10 @@ class ScalpEngine:
             lifecycle="filled" if trade.mode == "paper" else "",
             fill_status="paper_fill" if trade.mode == "paper" else "",
         )
+        closed_dict = trade.to_dict()
+        self.closed_trades.append(closed_dict)
+        del self.open_trades[trade.trade_id]
+        self._trade_action_locks.pop(int(trade.trade_id), None)
 
         # Persist to disk via callback (handles both auto and manual exits uniformly)
         if self._on_trade_closed:
@@ -1778,7 +1915,7 @@ class ScalpEngine:
             f"PnL={pnl_sign}${pnl:.2f}{exec_tail}",
         )
         self._schedule_update(force=True)
-        return {"status": "ok", "trade": closed_dict}
+        return {"status": "ok", "action": "exited", "trade": closed_dict}
 
     def _log(self, level: str, msg: str):
         now = _now_utc()

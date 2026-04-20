@@ -2890,7 +2890,7 @@
 }
 .cf-scalp-qty-grid {
   display: grid;
-  grid-template-columns: minmax(124px, 132px) minmax(0, 1fr);
+  grid-template-columns: minmax(136px, 148px) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
 }
@@ -3111,11 +3111,11 @@
 .cf-scalp-qty-mode-select.cf-scalp-type-select {
   display: block;
   width: 100%;
-  min-width: 124px;
+  min-width: 136px;
   min-height: 52px;
-  padding: 0 24px 0 10px;
+  padding: 0 28px 0 12px;
   border-radius: 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.2;
   text-align: left;
   white-space: nowrap;
@@ -3127,12 +3127,12 @@
 #cf-scalp-qty-mode.cf-scalp-qty-mode-select {
   display: block !important;
   width: 100% !important;
-  min-width: 124px !important;
+  min-width: 136px !important;
   max-width: 100% !important;
   min-height: 52px !important;
-  padding: 0 24px 0 10px !important;
+  padding: 0 28px 0 12px !important;
   border-radius: 10px !important;
-  font-size: 12.5px !important;
+  font-size: 13px !important;
   line-height: 1.2 !important;
   text-align: left !important;
   white-space: nowrap !important;
@@ -3381,9 +3381,18 @@
   .cf-scalp-status-meta {
     grid-template-columns: 1fr;
   }
+  .cf-scalp-status-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 900px) {
+  .table-panel {
+    padding: 18px 16px;
+  }
+  .cf-scalp-form-card {
+    padding: 18px 16px;
+  }
   .cf-scalp-form-grid {
     grid-template-columns: 1fr;
   }
@@ -3393,10 +3402,87 @@
   .cf-scalp-actions-grid {
     grid-template-columns: 1fr;
   }
+  .cf-scalp-active-trade-table {
+    min-width: 1180px;
+  }
+  .table-edit-stack {
+    min-width: 154px;
+    max-width: 164px;
+  }
+  .table-inline-actions-stack {
+    min-width: 148px;
+    max-width: 160px;
+  }
+  .table-action-stack {
+    min-width: 112px;
+    max-width: 120px;
+  }
+  .cf-scalp-trade-exec {
+    max-width: 280px;
+  }
+  .cf-scalp-qty-grid {
+    grid-template-columns: minmax(128px, 140px) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .cf-scalp-status-bar {
+    padding: 12px 14px;
+    gap: 12px;
+  }
+  .cf-scalp-status-main,
+  .cf-scalp-status-actions {
+    justify-content: flex-start;
+    align-items: stretch;
+  }
+  .cf-scalp-status-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .cf-scalp-active-trade-table {
+    min-width: 1040px;
+  }
+  .cf-scalp-workbench,
+  .cf-scalp-workbench-wide {
+    gap: 14px;
+  }
+  .cf-scalp-form-card {
+    padding: 16px 14px;
+  }
+  .cf-scalp-form-card .cf-scalp-input {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .cf-scalp-qty-grid {
+    grid-template-columns: minmax(120px, 132px) minmax(0, 1fr);
+    gap: 10px;
+  }
+  .cf-scalp-panel-title {
+    font-size: 13px;
+  }
 }
 
 @media (max-width: 520px) {
   .cf-scalp-qty-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(112px, 124px) minmax(0, 1fr);
+    gap: 8px;
+  }
+  .table-panel {
+    padding: 16px 14px;
+  }
+  .cf-scalp-active-trade-table {
+    min-width: 980px;
+  }
+  .table-edit-stack {
+    min-width: 144px;
+    max-width: 152px;
+  }
+  .table-inline-actions-stack {
+    min-width: 140px;
+    max-width: 148px;
+  }
+  .table-action-stack {
+    min-width: 104px;
+    max-width: 112px;
   }
 }
