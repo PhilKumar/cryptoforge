@@ -774,6 +774,29 @@ function cfApiErrorDetail(payload, fallback) {
   return fallback;
 }
 
+async function cfReadApiPayload(response) {
+  if (!response) return {};
+  let raw = '';
+  try {
+    raw = await response.text();
+  } catch (_) {
+    raw = '';
+  }
+  if (!raw) {
+    return response.ok
+      ? {}
+      : { status: 'error', message: (String(response.status || '') + ' ' + String(response.statusText || 'Request failed')).trim() };
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return {
+      status: 'error',
+      message: cfTrimUiText(raw, 180) || (String(response.status || '') + ' ' + String(response.statusText || 'Request failed')).trim()
+    };
+  }
+}
+
 function cfEl(id) {
   return document.getElementById(id);
 }
@@ -4621,7 +4644,10 @@ var _cfOpenTradeSnapshot = "";
 var _cfOpenTradeDisplayCache = [];
 var _cfOpenTradeDisplayCacheUntil = 0;
 var _cfScalpActionLocks = new Map();
+var _cfScalpActionCooldowns = new Map();
+var _cfScalpActionCooldownTimer = 0;
 var _cfScalpEntrySubmitBusy = "";
+var _cfScalpLastStatusOkAt = 0;
 var _cfOperatorFactIndex = 0;
 var _cfOperatorPuzzleIndex = 0;
 var _cfOperatorReadIndex = 0;
@@ -4972,20 +4998,82 @@ function cfScalpTradeActionState(tradeId) {
   return _cfScalpActionLocks.get(String(tradeId || '')) || '';
 }
 
+function cfScalpTradeActionBusyMessage(action) {
+  var raw = String(action || '').toLowerCase();
+  if (raw === 'add') return 'Submitting scale-in request…';
+  if (raw === 'targets') return 'Saving TP/SL update…';
+  if (raw === 'exit') return 'Submitting exit request…';
+  return 'Syncing broker action…';
+}
+
+function cfScalpTradeCooldownState(tradeId) {
+  var key = String(tradeId || '');
+  if (!key) return null;
+  var meta = _cfScalpActionCooldowns.get(key);
+  if (!meta) return null;
+  var remainingMs = Math.max(0, Number(meta.until || 0) - Date.now());
+  if (!(remainingMs > 0)) {
+    _cfScalpActionCooldowns.delete(key);
+    return null;
+  }
+  return {
+    action: String(meta.action || 'sync'),
+    remainingMs: remainingMs,
+  };
+}
+
+function cfScheduleScalpTradeCooldownRefresh() {
+  if (_cfScalpActionCooldownTimer || !_cfScalpActionCooldowns.size) return;
+  _cfScalpActionCooldownTimer = window.setTimeout(function() {
+    _cfScalpActionCooldownTimer = 0;
+    Array.from(_cfScalpActionCooldowns.keys()).forEach(function(key) {
+      cfSyncScalpTradeActionUi(key);
+    });
+    if (_cfScalpActionCooldowns.size) cfScheduleScalpTradeCooldownRefresh();
+  }, 150);
+}
+
+function cfStartScalpTradeActionCooldown(tradeId, action, durationMs) {
+  var key = String(tradeId || '');
+  if (!key) return;
+  _cfScalpActionCooldowns.set(key, {
+    action: String(action || 'sync'),
+    until: Date.now() + Math.max(600, Number(durationMs) || 1200),
+  });
+  cfSyncScalpTradeActionUi(key);
+  cfScheduleScalpTradeCooldownRefresh();
+}
+
+function cfScalpTradeActionBlockMessage(tradeId) {
+  var key = String(tradeId || '');
+  if (!key) return 'Trade action is unavailable';
+  var busyAction = cfScalpTradeActionState(key);
+  if (busyAction) return cfScalpTradeActionBusyMessage(busyAction);
+  var cooldown = cfScalpTradeCooldownState(key);
+  if (cooldown) return 'Broker state is syncing • retry in ' + cfFormatLatency(cooldown.remainingMs);
+  return 'This trade already has an action in progress';
+}
+
 function cfSyncScalpTradeActionUi(tradeId) {
   var key = String(tradeId || '');
   if (!key) return;
   var busyAction = cfScalpTradeActionState(key);
+  var cooldown = cfScalpTradeCooldownState(key);
   var busy = !!busyAction;
+  var locked = busy || !!cooldown;
   var row = document.querySelector('#cf-scalp-active-body tr[data-tid="' + key + '"]');
   var setBtn = cfEl('cf-set-btn-' + key);
   var addBtn = cfEl('cf-add-btn-' + key);
   var exitBtn = cfEl('cf-exit-btn-' + key);
+  var syncNote = cfEl('cf-trade-sync-' + key);
   ['cf-tp-usd-', 'cf-tp-price-', 'cf-sl-usd-', 'cf-sl-price-', 'cf-add-qty-'].forEach(function(prefix) {
     var input = cfEl(prefix + key);
-    if (input) input.disabled = busy;
+    if (input) input.disabled = locked;
   });
-  if (row) row.dataset.busy = busy ? 'true' : 'false';
+  if (row) {
+    row.dataset.busy = busy ? 'true' : 'false';
+    row.dataset.cooldown = cooldown ? 'true' : 'false';
+  }
   [
     { btn: addBtn, action: 'add', busyLabel: 'Adding…' },
     { btn: setBtn, action: 'targets', busyLabel: 'Saving…' },
@@ -4995,19 +5083,33 @@ function cfSyncScalpTradeActionUi(tradeId) {
     if (!btn) return;
     if (!btn.dataset.defaultLabel) btn.dataset.defaultLabel = btn.textContent.trim();
     var active = busy && busyAction === item.action;
-    btn.disabled = busy;
+    var cooling = !busy && cooldown && cooldown.action === item.action;
+    btn.disabled = locked;
     btn.classList.toggle('loading', active);
-    btn.classList.toggle('is-disabled', busy);
-    btn.setAttribute('aria-disabled', busy ? 'true' : 'false');
+    btn.classList.toggle('is-disabled', locked);
+    btn.setAttribute('aria-disabled', locked ? 'true' : 'false');
     if (active) btn.setAttribute('aria-busy', 'true');
     else btn.removeAttribute('aria-busy');
-    btn.textContent = active ? item.busyLabel : btn.dataset.defaultLabel;
+    btn.textContent = active ? item.busyLabel : (cooling ? 'Syncing…' : btn.dataset.defaultLabel);
   });
+  if (syncNote) {
+    if (busyAction) {
+      syncNote.textContent = cfScalpTradeActionBusyMessage(busyAction);
+      syncNote.dataset.state = 'active';
+    } else if (cooldown) {
+      syncNote.textContent = 'Broker state is syncing • ' + cfFormatLatency(cooldown.remainingMs);
+      syncNote.dataset.state = 'active';
+    } else {
+      syncNote.textContent = '';
+      syncNote.dataset.state = 'idle';
+    }
+  }
 }
 
 function cfSetScalpTradeActionLock(tradeId, action) {
   var key = String(tradeId || '');
-  if (!key || _cfScalpActionLocks.has(key)) return false;
+  if (!key || _cfScalpActionLocks.has(key) || cfScalpTradeCooldownState(key)) return false;
+  _cfScalpActionCooldowns.delete(key);
   _cfScalpActionLocks.set(key, String(action || 'busy'));
   cfSyncScalpTradeActionUi(key);
   return true;
@@ -5026,6 +5128,9 @@ function cfSyncAllScalpTradeActionUi(openTrades) {
   }).filter(Boolean));
   Array.from(_cfScalpActionLocks.keys()).forEach(function(key) {
     if (!activeIds.has(key)) _cfScalpActionLocks.delete(key);
+  });
+  Array.from(_cfScalpActionCooldowns.keys()).forEach(function(key) {
+    if (!activeIds.has(key)) _cfScalpActionCooldowns.delete(key);
   });
   activeIds.forEach(function(key) { cfSyncScalpTradeActionUi(key); });
 }
@@ -5141,12 +5246,25 @@ async function cfLoadScalpStatus() {
     const symbol = cfScalpSelectedSymbol();
     const url = symbol ? ('/api/scalp/status?symbol=' + encodeURIComponent(symbol)) : '/api/scalp/status';
     const r = await cfApiFetch(url);
-    if (!r.ok) return null;
-    const d = await r.json();
+    const d = await cfReadApiPayload(r);
+    if (!r.ok) {
+      const staleStatus = cfBuildScalpCachedStatus(cfApiErrorDetail(d, 'Status refresh failed'));
+      if (staleStatus) {
+        cfApplyScalpStatus(staleStatus);
+        return staleStatus;
+      }
+      return null;
+    }
+    _cfScalpLastStatusOkAt = Date.now();
     cfMergeScalpStatusPatch(d || {});
     cfApplyScalpStatus(_cfLatestScalpStatus);
     return _cfLatestScalpStatus;
   } catch(e) {
+    const staleStatus = cfBuildScalpCachedStatus((e && e.message) ? e.message : 'Status refresh failed');
+    if (staleStatus) {
+      cfApplyScalpStatus(staleStatus);
+      return staleStatus;
+    }
     return null;
   }
 }
@@ -5178,6 +5296,29 @@ function cfMergeScalpStatusPatch(payload) {
   return merged;
 }
 
+function cfBuildScalpCachedStatus(reason) {
+  const hasLatest = _cfLatestScalpStatus && Object.keys(_cfLatestScalpStatus).length;
+  const hasOpenCache = Array.isArray(_cfOpenTradeDisplayCache) && _cfOpenTradeDisplayCache.length;
+  if (!hasLatest && !hasOpenCache) return null;
+  const staleStatus = Object.assign({}, _cfLatestScalpStatus || {});
+  staleStatus.feed_metrics = Object.assign({}, staleStatus.feed_metrics || {});
+  staleStatus.feed_metrics.state = 'stale';
+  staleStatus.feed_metrics.last_error = reason || 'Status refresh failed';
+  if (!staleStatus.feed_metrics.symbol) staleStatus.feed_metrics.symbol = cfScalpSelectedSymbol();
+  if (_cfScalpLastStatusOkAt > 0) {
+    const staleAge = Date.now() - _cfScalpLastStatusOkAt;
+    staleStatus.feed_metrics.age_ms = Math.max(Number(staleStatus.feed_metrics.age_ms) || 0, staleAge);
+    staleStatus.feed_metrics.last_message_age_ms = Math.max(Number(staleStatus.feed_metrics.last_message_age_ms) || 0, staleAge);
+  }
+  if ((!Array.isArray(staleStatus.open_trades) || !staleStatus.open_trades.length) && hasOpenCache) {
+    staleStatus.open_trades = _cfOpenTradeDisplayCache.slice();
+  }
+  staleStatus.running = !!staleStatus.running || !!(staleStatus.open_trades || []).length || !!(staleStatus.pending_entries || []).length;
+  staleStatus.in_trade = !!(staleStatus.open_trades || []).length;
+  staleStatus.client_snapshot = true;
+  return staleStatus;
+}
+
 async function cfLoadScalpActivity(force) {
   try {
     const scalpPage = document.getElementById('scalp-page');
@@ -5189,8 +5330,8 @@ async function cfLoadScalpActivity(force) {
     _cfScalpLastActivityFetch = now;
     _cfScalpActivityInFlight = (async function() {
       const r = await cfApiFetch('/api/scalp/activity');
+      const d = await cfReadApiPayload(r);
       if (!r.ok) return;
-      const d = await r.json();
       cfApplyScalpActivity(d || {});
     })();
     await _cfScalpActivityInFlight;
@@ -5517,7 +5658,7 @@ function cfApplyScalpStatus(d) {
       sessionPnlEl.dataset.state = pnl > 0 ? 'success' : pnl < 0 ? 'error' : 'neutral';
     }
 
-    cfRenderActivePositions(open);
+    cfRenderActivePositions(open, exec);
     cfApplyScalpActivity(status);
   } catch (e) {
     console.error('Scalp status render failed', e);
@@ -5542,7 +5683,42 @@ function _cfOpenTradeSignature(open) {
   }).join('|');
 }
 
-function cfRenderActivePositions(open) {
+function cfScalpTradeExecMetrics(trade, execMetrics) {
+  const tradeId = String((trade && (trade.trade_id || trade.id)) || '');
+  if (trade && trade.execution_metrics && typeof trade.execution_metrics === 'object' && Object.keys(trade.execution_metrics).length) {
+    return trade.execution_metrics;
+  }
+  const meta = execMetrics || {};
+  if (!meta.phase) return null;
+  if (tradeId && String(meta.trade_id || '') === tradeId) return meta;
+  return null;
+}
+
+function cfRenderScalpTradeExecHtml(trade, execMetrics) {
+  const meta = cfScalpTradeExecMetrics(trade, execMetrics);
+  if (!meta) {
+    const source = cfPriceSourceLabel(trade && trade.price_source);
+    const tone = source === 'WS' ? 'success' : (source === 'REST' ? 'active' : 'pending');
+    return '<div class="cf-scalp-exec-stage-row">'
+      + '<span class="cf-scalp-exec-chip" data-state="done">' + _escapeHtml(String((trade && trade.mode) || 'paper').toUpperCase()) + '</span>'
+      + '<span class="cf-scalp-exec-chip" data-state="' + _escapeHtml(tone) + '">Monitoring</span>'
+      + '</div>'
+      + '<div class="cf-scalp-exec-note">' + _escapeHtml(cfScalpMarkMeta(trade)) + '</div>';
+  }
+  return cfScalpExecDetailHtml(meta);
+}
+
+function cfSyncScalpTradeExecUi(trade, execMetrics) {
+  const key = String((trade && (trade.trade_id || trade.id)) || '');
+  if (!key) return;
+  const el = cfEl('cf-trade-exec-' + key);
+  if (!el) return;
+  const meta = cfScalpTradeExecMetrics(trade, execMetrics);
+  el.innerHTML = cfRenderScalpTradeExecHtml(trade, execMetrics);
+  el.dataset.state = meta ? cfScalpExecTone(meta) : 'neutral';
+}
+
+function cfRenderActivePositions(open, execMetrics) {
   const body = document.getElementById('cf-scalp-active-body');
   const countEl = document.getElementById('cf-scalp-active-count');
   if (!body) return;
@@ -5551,6 +5727,11 @@ function cfRenderActivePositions(open) {
   if (!open.length) {
     _cfOpenTradeSnapshot = '';
     _cfScalpActionLocks.clear();
+    _cfScalpActionCooldowns.clear();
+    if (_cfScalpActionCooldownTimer) {
+      window.clearTimeout(_cfScalpActionCooldownTimer);
+      _cfScalpActionCooldownTimer = 0;
+    }
     body.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">No active positions</td></tr>';
     _renderTablePager('cf-scalp-active-table', 'cf-scalp-active-table', 'cf-scalp-active-pagination');
     return;
@@ -5578,7 +5759,7 @@ function cfRenderActivePositions(open) {
         ? ('$' + Number(t.qty_usdt || 0).toFixed(2) + ' margin')
         : ((t.base_qty ? Number(t.base_qty).toFixed(6) + ' qty' : 'margin'));
       return `<tr data-tid="${tid}" data-pnl-state="${pnlState}">
-        <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">trade #${tid || '—'} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div></td>
+        <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">trade #${tid || '—'} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div><div class="cf-scalp-trade-exec" id="cf-trade-exec-${tid}" data-state="neutral"></div><div class="cf-scalp-trade-sync" id="cf-trade-sync-${tid}" data-state="idle"></div></td>
         <td>${sideTag}</td>
         <td><div class="table-value-stack"><div class="table-value-main">${qtyMain}</div><div class="table-value-sub">${qtySub}</div></div></td>
         <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div><div class="table-value-sub">entry</div></div></td>
@@ -5610,6 +5791,9 @@ function cfRenderActivePositions(open) {
       row.dataset.pnlState = isProfit ? 'profit' : (isLoss ? 'loss' : 'flat');
     });
   }
+  open.forEach(function(t) {
+    cfSyncScalpTradeExecUi(t, execMetrics);
+  });
   cfSyncAllScalpTradeActionUi(open);
   _renderTablePager('cf-scalp-active-table', 'cf-scalp-active-table', 'cf-scalp-active-pagination');
 }
@@ -5671,7 +5855,7 @@ async function cfSubmitScalp(direction) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const d = await res.json();
+    const d = await cfReadApiPayload(res);
     cfMergeScalpStatusPatch(d);
     cfRefreshScalpEntryLaneFromState();
     if (d.status === 'ok' || d.status === 'entered' || d.trade_id) {
@@ -5705,7 +5889,7 @@ async function cfExitScalpTrade(tradeId) {
   let locked = false;
   try {
     if (!cfSetScalpTradeActionLock(tradeId, 'exit')) {
-      cfToast('This trade already has an action in progress', 'info');
+      cfToast(cfScalpTradeActionBlockMessage(tradeId), 'info');
       return;
     }
     locked = true;
@@ -5714,7 +5898,7 @@ async function cfExitScalpTrade(tradeId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ trade_id: tradeId })
     });
-    const d = await res.json();
+    const d = await cfReadApiPayload(res);
     cfMergeScalpStatusPatch(d);
     if (d.status === 'ok' || d.status === 'exited') {
       cfToast('Position closed', 'success');
@@ -5724,7 +5908,12 @@ async function cfExitScalpTrade(tradeId) {
       cfToast(cfApiErrorDetail(d, 'Exit failed'), 'danger');
     }
   } catch(e) { cfToast((e && e.message) ? e.message : 'Network error exiting trade', 'danger'); }
-  finally { if (locked) cfClearScalpTradeActionLock(tradeId); }
+  finally {
+    if (locked) {
+      cfClearScalpTradeActionLock(tradeId);
+      cfStartScalpTradeActionCooldown(tradeId, 'exit');
+    }
+  }
 }
 
 async function cfModifyScalpTrade(tradeId) {
@@ -5755,7 +5944,7 @@ async function cfModifyScalpTrade(tradeId) {
   let locked = false;
   try {
     if (!cfSetScalpTradeActionLock(tradeId, 'targets')) {
-      cfToast('This trade already has an action in progress', 'info');
+      cfToast(cfScalpTradeActionBlockMessage(tradeId), 'info');
       return;
     }
     locked = true;
@@ -5764,7 +5953,7 @@ async function cfModifyScalpTrade(tradeId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const d = await res.json();
+    const d = await cfReadApiPayload(res);
     cfMergeScalpStatusPatch(d);
     if (d.status === 'ok') {
       cfToast(`Trade #${tradeId} updated`, 'success');
@@ -5776,7 +5965,10 @@ async function cfModifyScalpTrade(tradeId) {
   } catch (e) {
     cfToast('Error: ' + e.message, 'danger');
   } finally {
-    if (locked) cfClearScalpTradeActionLock(tradeId);
+    if (locked) {
+      cfClearScalpTradeActionLock(tradeId);
+      cfStartScalpTradeActionCooldown(tradeId, 'targets');
+    }
     else if (btn) cfSyncScalpTradeActionUi(tradeId);
   }
 }
@@ -5797,7 +5989,7 @@ async function cfAddScalpQuantity(tradeId) {
   let locked = false;
   try {
     if (!cfSetScalpTradeActionLock(tradeId, 'add')) {
-      cfToast('This trade already has an action in progress', 'info');
+      cfToast(cfScalpTradeActionBlockMessage(tradeId), 'info');
       return;
     }
     locked = true;
@@ -5806,7 +5998,7 @@ async function cfAddScalpQuantity(tradeId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ qty_mode: 'base', qty_value: qtyValue }),
     });
-    const d = await res.json();
+    const d = await cfReadApiPayload(res);
     cfMergeScalpStatusPatch(d);
     if (d.status === 'ok') {
       qtyInput.value = qtyInput.getAttribute('data-default-qty') || fallbackValue || '';
@@ -5819,7 +6011,10 @@ async function cfAddScalpQuantity(tradeId) {
   } catch (e) {
     cfToast('Error: ' + e.message, 'danger');
   } finally {
-    if (locked) cfClearScalpTradeActionLock(tradeId);
+    if (locked) {
+      cfClearScalpTradeActionLock(tradeId);
+      cfStartScalpTradeActionCooldown(tradeId, 'add');
+    }
   }
 }
 

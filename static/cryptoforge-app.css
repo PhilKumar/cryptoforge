@@ -2856,6 +2856,9 @@
 .cf-scalp-active-trade-table tr[data-busy="true"] .table-input-sm {
   background: rgba(15,23,42,0.42);
 }
+.cf-scalp-active-trade-table tr[data-cooldown="true"] .table-input-sm {
+  box-shadow: inset 0 0 0 1px rgba(251,191,36,0.18);
+}
 #cf-scalp-active-body tr[data-pnl-state="profit"] {
   background: rgba(52,211,153,0.05);
   border-left: 3px solid rgba(52,211,153,0.5);
@@ -2904,6 +2907,42 @@
 }
 .cf-scalp-active-trade-table .table-note {
   white-space: nowrap;
+}
+.cf-scalp-trade-exec {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  min-width: 0;
+  max-width: 360px;
+}
+.cf-scalp-trade-exec .cf-scalp-exec-stage-row {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cf-scalp-trade-exec .cf-scalp-exec-chip {
+  padding: 3px 8px;
+  font-size: 10px;
+}
+.cf-scalp-trade-exec .cf-scalp-exec-note {
+  font-size: 10px;
+  line-height: 1.45;
+}
+.cf-scalp-trade-sync {
+  min-height: 15px;
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+.cf-scalp-trade-sync[data-state="active"] {
+  color: var(--yellow);
+}
+.cf-scalp-trade-sync[data-state="error"] {
+  color: var(--red);
+}
+.cf-scalp-trade-sync[data-state="success"] {
+  color: var(--green);
 }
 .cf-scalp-form-card {
   padding: 22px 24px;
