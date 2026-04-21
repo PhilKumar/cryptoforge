@@ -10,12 +10,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260421-2">
-<link rel="manifest" href="/manifest.webmanifest?v=20260421-2">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260421-3">
+<link rel="manifest" href="/manifest.webmanifest?v=20260421-3">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260417-1"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260421-2">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260421-3">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260417-1">
 <script src="/static/error-handler.js?v=20260408-1" defer></script>
 <script src="/static/pwa.js?v=20260417-1" defer></script>
@@ -602,8 +602,14 @@
         <div class="input-group">
           <label>Trade Side</label>
           <div class="side-toggle">
-            <button class="side-btn long-active" id="side-long" data-cf-click="setSide('LONG')">🟢 LONG</button>
-            <button class="side-btn" id="side-short" data-cf-click="setSide('SHORT')">🔴 SHORT</button>
+            <button class="side-btn long-active" id="side-long" data-cf-click="setSide('LONG')">
+              <span class="side-btn-dot" aria-hidden="true"></span>
+              <span class="side-btn-label">Long</span>
+            </button>
+            <button class="side-btn" id="side-short" data-cf-click="setSide('SHORT')">
+              <span class="side-btn-dot" aria-hidden="true"></span>
+              <span class="side-btn-label">Short</span>
+            </button>
           </div>
         </div>
 
@@ -1441,6 +1447,6 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260421-2" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260421-3" defer></script>
 </body>
 </html>
