@@ -5,7 +5,7 @@
   "description": "CryptoForge trading workspace for crypto futures, scalping, live execution, and strategy analysis.",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
+  "display": "minimal-ui",
   "orientation": "portrait-primary",
   "background_color": "#07090f",
   "theme_color": "#07090f",
