@@ -3490,3 +3490,138 @@
 .cf-scalp-dot.is-live {
   filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.45));
 }
+
+/* ── Final Light-Mode Sync Pass ───────────────────────────────────── */
+[data-theme="light"] .mission-card,
+[data-theme="light"] .execution-brief,
+[data-theme="light"] .safety-panel,
+[data-theme="light"] .results-overview,
+[data-theme="light"] .deploy-summary {
+  border-color: rgba(15, 23, 42, 0.08);
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 34%),
+    radial-gradient(circle at bottom left, rgba(124, 58, 237, 0.05), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+  box-shadow:
+    0 18px 34px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+[data-theme="light"] .mission-card::before {
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.74), transparent 30%, transparent 70%, rgba(124, 58, 237, 0.04));
+}
+
+[data-theme="light"] .mission-eyebrow {
+  color: #7c3aed;
+}
+
+[data-theme="light"] .mission-copy,
+[data-theme="light"] .safety-copy,
+[data-theme="light"] .brief-metric-copy,
+[data-theme="light"] .table-meta {
+  color: #475569;
+}
+
+[data-theme="light"] .mission-pill,
+[data-theme="light"] .safety-chip,
+[data-theme="light"] .mission-mini,
+[data-theme="light"] .brief-metric,
+[data-theme="light"] .intel-pill,
+[data-theme="light"] .overview-card,
+[data-theme="light"] .deploy-summary-item,
+[data-theme="light"] .deploy-check {
+  border-color: rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 10px 20px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+[data-theme="light"] .mission-pill,
+[data-theme="light"] .safety-chip,
+[data-theme="light"] .intel-pill,
+[data-theme="light"] .brief-metric,
+[data-theme="light"] .mission-mini-copy,
+[data-theme="light"] .deploy-check label {
+  color: #475569;
+}
+
+[data-theme="light"] .mission-pill strong,
+[data-theme="light"] .safety-chip strong,
+[data-theme="light"] .intel-pill strong,
+[data-theme="light"] .brief-metric-value,
+[data-theme="light"] .mission-mini-value,
+[data-theme="light"] .overview-value,
+[data-theme="light"] .deploy-summary-item strong,
+[data-theme="light"] .deploy-check label strong,
+[data-theme="light"] .results-overview h3 {
+  color: #0f172a;
+}
+
+[data-theme="light"] .mission-mini-label,
+[data-theme="light"] .brief-metric-label,
+[data-theme="light"] .overview-label,
+[data-theme="light"] .deploy-summary-item span {
+  color: #64748b;
+}
+
+[data-theme="light"] .btn-outline {
+  --btn-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(241, 245, 249, 0.96) 100%);
+  --btn-color: #334155;
+  --btn-border: rgba(15, 23, 42, 0.10);
+  text-shadow: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 10px 20px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="light"] .btn-outline:hover {
+  --btn-bg: linear-gradient(180deg, rgba(248, 250, 252, 1) 0%, rgba(226, 232, 240, 0.96) 100%);
+  --btn-border: rgba(124, 58, 237, 0.18);
+}
+
+[data-theme="light"] .table-surface {
+  border-color: rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 18px 32px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="light"] .trade-table {
+  background: transparent;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: none;
+}
+
+[data-theme="light"] .trade-table th {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.99) 0%, rgba(241, 245, 249, 0.99) 100%);
+  color: #64748b;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 rgba(226, 232, 240, 0.9);
+}
+
+[data-theme="light"] .trade-table td {
+  background: rgba(255, 255, 255, 0.96);
+  color: #1e293b;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+[data-theme="light"] .trade-table tbody tr:nth-child(even) td {
+  background: rgba(248, 250, 252, 0.95);
+}
+
+[data-theme="light"] .trade-table tbody tr:hover td {
+  background: rgba(240, 249, 255, 0.96);
+  color: #0f172a;
+}
+
+[data-theme="light"] .table-value-sub.positive {
+  color: #047857;
+}
+
+[data-theme="light"] .table-value-sub.negative {
+  color: #be123c;
+}
