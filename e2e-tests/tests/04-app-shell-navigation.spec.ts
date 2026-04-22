@@ -58,4 +58,47 @@ test.describe('App Shell Navigation', () => {
     await expectActivePage(page, 'portfolio-page', 'nav-portfolio');
     await expect.poll(() => page.evaluate(() => location.hash)).toBe('#portfolio');
   });
+
+  test('persisted pageshow restore and same-tab clicks do not rerun active-page loaders', async ({ page }) => {
+    await page.click('#nav-results');
+    await expectActivePage(page, 'results-page', 'nav-results');
+
+    await page.evaluate(() => {
+      (window as any).__cfShellCounts = { loadRuns: 0, fetchStrategies: 0 };
+      const origLoadRuns = (window as any).loadRuns;
+      const origFetchStrategies = (window as any).fetchStrategies;
+      (window as any).loadRuns = function (...args: any[]) {
+        (window as any).__cfShellCounts.loadRuns += 1;
+        return origLoadRuns.apply(this, args);
+      };
+      (window as any).fetchStrategies = function (...args: any[]) {
+        (window as any).__cfShellCounts.fetchStrategies += 1;
+        return origFetchStrategies.apply(this, args);
+      };
+    });
+
+    const historyBefore = await page.evaluate(() => history.length);
+
+    await page.click('#nav-results');
+    await expectActivePage(page, 'results-page', 'nav-results');
+
+    await page.evaluate(() => {
+      const evt = new Event('pageshow');
+      Object.defineProperty(evt, 'persisted', { value: true });
+      window.dispatchEvent(evt);
+    });
+
+    const counts = await page.evaluate(() => ({
+      ...(window as any).__cfShellCounts,
+      hash: location.hash,
+      historyLength: history.length,
+      activePage: document.querySelector('.page-section.active-page')?.id || '',
+    }));
+
+    expect(counts.loadRuns).toBe(0);
+    expect(counts.fetchStrategies).toBe(0);
+    expect(counts.hash).toBe('#results');
+    expect(counts.historyLength).toBe(historyBefore);
+    expect(counts.activePage).toBe('results-page');
+  });
 });

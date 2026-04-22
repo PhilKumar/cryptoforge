@@ -10,8 +10,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260422-4">
-<link rel="manifest" href="/manifest.webmanifest?v=20260422-4">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260422-5">
+<link rel="manifest" href="/manifest.webmanifest?v=20260422-5">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260417-1"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
@@ -1083,8 +1083,9 @@
           <span class="cf-scalp-session-label">Session P&amp;L:</span>
           <span class="cf-scalp-session-pnl" id="cf-scalp-session-pnl">$0.00</span>
         </div>
+        <button class="btn btn-outline btn-sm" data-cf-click="cfReconcileScalpBroker({ force: true, showToast: true })">⟳ Broker Sync</button>
         <button class="btn btn-danger btn-sm" data-cf-click="emergencyStop()">⛔ Master Kill</button>
-        <button class="btn btn-outline btn-sm" data-cf-click="cfRefreshScalpWorkspace()">↻ Refresh</button>
+        <button class="btn btn-outline btn-sm" data-cf-click="cfRefreshScalpWorkspace({ forceSync: true, showToast: true })">↻ Refresh</button>
       </div>
     </div>
   </div>
@@ -1454,6 +1455,6 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260422-4" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260422-5" defer></script>
 </body>
 </html>

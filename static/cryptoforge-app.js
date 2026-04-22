@@ -730,9 +730,17 @@ function cfSetActivePageShell(pageId, btn) {
 function showPage(pageId, btn, options) {
   if (!document.getElementById(pageId)) return;
   var opts = options || {};
+  var tabName = cfPageTabName(pageId);
+  var activePage = document.querySelector('.page-section.active-page');
+  var alreadyActive = activePage && activePage.id === pageId;
+  if (alreadyActive && !opts.forceReload) {
+    cfSetActivePageShell(pageId, btn);
+    localStorage.setItem('cf_active_tab', tabName);
+    cfSyncPageHistory(pageId, opts);
+    return;
+  }
   cfSetActivePageShell(pageId, btn);
   // Persist active tab
-  var tabName = cfPageTabName(pageId);
   localStorage.setItem('cf_active_tab', tabName);
   cfSyncPageHistory(pageId, opts);
 
@@ -4726,6 +4734,9 @@ var _cfScalpActionCooldowns = new Map();
 var _cfScalpActionCooldownTimer = 0;
 var _cfScalpEntrySubmitBusy = "";
 var _cfScalpLastStatusOkAt = 0;
+var _cfScalpRefreshInFlight = null;
+var _cfScalpReconcileInFlight = null;
+var _cfScalpLastReconcileAt = 0;
 var _cfOperatorFactIndex = 0;
 var _cfOperatorPuzzleIndex = 0;
 var _cfOperatorReadIndex = 0;
@@ -4970,7 +4981,10 @@ function cfScalpLifecycleLabel(value) {
     rejected: 'Rejected',
     cancelled: 'Cancelled',
     updated: 'Updated',
-    armed: 'Armed'
+    verified: 'Verified',
+    cleared: 'Cleared',
+    armed: 'Armed',
+    error: 'Error'
   };
   return labels[raw] || (raw ? cfTitleCaseText(raw) : '');
 }
@@ -4983,12 +4997,14 @@ function cfScalpPhaseLabel(value) {
     armed: 'Pending Entry',
     targets: 'TP/SL Update',
     scale_in: 'Scale-In',
+    reconcile: 'Broker Sync',
     scale_in_reject: 'Scale-In Reject',
     entry_reject: 'Entry Reject',
     exit_reject: 'Exit Reject',
     scale_in_error: 'Scale-In Error',
     entry_error: 'Entry Error',
     exit_error: 'Exit Error',
+    reconcile_error: 'Broker Sync Error',
   };
   return labels[raw] || (raw ? cfTitleCaseText(raw) : '');
 }
@@ -5027,6 +5043,20 @@ function cfScalpExecStages(execMetrics) {
   var acked = Number(meta.ack_ms) > 0 || ['acked', 'partial', 'filled', 'cancelled', 'rejected', 'updated'].includes(lifecycle);
   if (!phase) return [];
   if (phase === 'armed') return [{ label: 'Armed', tone: 'active' }];
+  if (phase === 'reconcile') {
+    var reconcileLabel = lifecycle === 'cleared' ? 'Cleared' : (lifecycle === 'updated' ? 'Aligned' : 'Verified');
+    var reconcileTone = lifecycle === 'cleared' ? 'active' : 'success';
+    return [
+      { label: 'Broker Sync', tone: 'done' },
+      { label: reconcileLabel, tone: reconcileTone }
+    ];
+  }
+  if (phase === 'reconcile_error') {
+    return [
+      { label: 'Broker Sync', tone: 'done' },
+      { label: 'Error', tone: 'error' }
+    ];
+  }
   if (phase === 'targets') {
     return [
       { label: 'Targets', tone: 'done' },
@@ -5053,6 +5083,8 @@ function cfScalpExecTone(execMetrics) {
   var phase = String(meta.phase || '').toLowerCase();
   var lifecycle = cfScalpNormalizeLifecycle(meta.order_lifecycle || meta.fill_status || '');
   if (!phase) return 'neutral';
+  if (phase === 'reconcile_error') return 'error';
+  if (phase === 'reconcile') return lifecycle === 'cleared' ? 'active' : 'success';
   if (meta.verified === false || meta.error || lifecycle === 'rejected' || lifecycle === 'cancelled') return 'error';
   if (phase === 'targets' || phase === 'armed' || lifecycle === 'submitted' || lifecycle === 'acked' || lifecycle === 'partial') return 'active';
   if (lifecycle === 'filled' || lifecycle === 'updated') return 'success';
@@ -5311,7 +5343,7 @@ function cfOperatorNextRead() {
 }
 
 function cfInitScalpPage() {
-  cfRefreshScalpWorkspace().finally(cfSyncScalpLogPanelHeight);
+  cfRefreshScalpWorkspace({ reconcile: 'auto' }).finally(cfSyncScalpLogPanelHeight);
   cfRefreshScalpEntryLaneFromState();
   cfSyncScalpLogPanelHeight();
   if (!_cfScalpPollTimer) {
@@ -5368,7 +5400,7 @@ async function cfLoadScalpStatus() {
   try {
     const symbol = cfScalpSelectedSymbol();
     const url = symbol ? ('/api/scalp/status?symbol=' + encodeURIComponent(symbol)) : '/api/scalp/status';
-    const r = await cfApiFetch(url);
+    const r = await cfApiFetch(url, { cache: 'no-store' });
     const d = await cfReadApiPayload(r);
     if (!r.ok) {
       const staleStatus = cfBuildScalpCachedStatus(cfApiErrorDetail(d, 'Status refresh failed'));
@@ -5390,11 +5422,6 @@ async function cfLoadScalpStatus() {
     }
     return null;
   }
-}
-
-async function cfRefreshScalpWorkspace() {
-  await cfLoadScalpStatus();
-  await cfLoadScalpActivity(true);
 }
 
 function cfMergeScalpStatusPatch(payload) {
@@ -5442,6 +5469,119 @@ function cfBuildScalpCachedStatus(reason) {
   return staleStatus;
 }
 
+function cfScalpHasLiveExposure(status) {
+  var state = status || {};
+  var openTrades = Array.isArray(state.open_trades) ? state.open_trades : [];
+  var pendingEntries = Array.isArray(state.pending_entries) ? state.pending_entries : [];
+  if (openTrades.some(function(t) { return String((t && t.mode) || '').toLowerCase() === 'live'; })) return true;
+  if (pendingEntries.some(function(t) { return String((t && t.mode) || '').toLowerCase() === 'live'; })) return true;
+  return String((((state.execution_metrics || {}).mode) || '')).toLowerCase() === 'live';
+}
+
+function cfScalpShouldReconcile(status, force) {
+  if (force) return true;
+  var state = status || _cfLatestScalpStatus || {};
+  if (!cfScalpHasLiveExposure(state)) return false;
+  var sinceLast = Date.now() - _cfScalpLastReconcileAt;
+  if (sinceLast < 8000) return false;
+  var phase = String((((state.execution_metrics || {}).phase) || '')).toLowerCase();
+  if ([
+    'entry', 'scale_in', 'exit', 'reconcile',
+    'entry_reject', 'scale_in_reject', 'exit_reject',
+    'entry_error', 'scale_in_error', 'exit_error', 'reconcile_error'
+  ].includes(phase)) {
+    return true;
+  }
+  return Array.isArray(state.open_trades) && state.open_trades.some(function(t) {
+    return String((t && t.mode) || '').toLowerCase() === 'live';
+  });
+}
+
+async function cfReconcileScalpBroker(options) {
+  var opts = options || {};
+  var latest = opts.status || _cfLatestScalpStatus || {};
+  var forced = !!opts.force;
+  if (!forced && !cfScalpShouldReconcile(latest, false)) return latest;
+  if (forced && !cfScalpHasLiveExposure(latest)) {
+    if (opts.showToast) cfToast('No live scalp position needs broker sync right now', 'info');
+    return latest;
+  }
+  if (_cfScalpReconcileInFlight) return _cfScalpReconcileInFlight;
+  _cfScalpReconcileInFlight = (async function() {
+    try {
+      var r = await cfApiFetch('/api/scalp/reconcile', { method: 'POST', cache: 'no-store' });
+      var d = await cfReadApiPayload(r);
+      if (!r.ok) {
+        var errorText = cfApiErrorDetail(d, 'Broker sync failed');
+        cfMergeScalpStatusPatch({
+          execution_metrics: {
+            phase: 'reconcile_error',
+            symbol: (((latest.execution_metrics || {}).symbol) || latest.symbol || cfScalpSelectedSymbol() || ''),
+            mode: (((latest.execution_metrics || {}).mode) || 'live'),
+            error: errorText,
+          }
+        });
+        cfApplyScalpStatus(_cfLatestScalpStatus);
+        if (!opts.silent) cfToast(errorText, 'warning');
+        return d;
+      }
+      _cfScalpLastReconcileAt = Date.now();
+      cfMergeScalpStatusPatch(d || {});
+      cfApplyScalpStatus(_cfLatestScalpStatus);
+      if (opts.showToast) {
+        var rec = d.reconciliation || {};
+        var parts = [];
+        if (Number(rec.checked) > 0) parts.push('checked ' + rec.checked);
+        if (Number(rec.updated) > 0) parts.push('updated ' + rec.updated);
+        if (Number(rec.cleared) > 0) parts.push('cleared ' + rec.cleared);
+        cfToast(parts.length ? ('Broker sync complete • ' + parts.join(' • ')) : 'Broker sync complete', 'success');
+      }
+      return d;
+    } catch (e) {
+      var message = (e && e.message) ? e.message : 'Broker sync failed';
+      cfMergeScalpStatusPatch({
+        execution_metrics: {
+          phase: 'reconcile_error',
+          symbol: (((latest.execution_metrics || {}).symbol) || latest.symbol || cfScalpSelectedSymbol() || ''),
+          mode: (((latest.execution_metrics || {}).mode) || 'live'),
+          error: message,
+        }
+      });
+      cfApplyScalpStatus(_cfLatestScalpStatus);
+      if (!opts.silent) cfToast(message, 'warning');
+      return { status: 'error', message: message };
+    } finally {
+      _cfScalpReconcileInFlight = null;
+    }
+  })();
+  return _cfScalpReconcileInFlight;
+}
+
+async function cfRefreshScalpWorkspace(options) {
+  var opts = (typeof options === 'boolean') ? { forceSync: options } : (options || {});
+  if (_cfScalpRefreshInFlight && !opts.forceReload) return _cfScalpRefreshInFlight;
+  _cfScalpRefreshInFlight = (async function() {
+    var status = await cfLoadScalpStatus();
+    var reconcileMode = opts.forceSync ? 'force' : (opts.reconcile || 'none');
+    if (reconcileMode === 'force' || cfScalpShouldReconcile(status, false)) {
+      await cfReconcileScalpBroker({
+        force: reconcileMode === 'force',
+        status: status,
+        silent: !opts.showToast,
+        showToast: !!opts.showToast && reconcileMode === 'force',
+      });
+      status = await cfLoadScalpStatus();
+    }
+    await cfLoadScalpActivity(true);
+    return status;
+  })();
+  try {
+    return await _cfScalpRefreshInFlight;
+  } finally {
+    _cfScalpRefreshInFlight = null;
+  }
+}
+
 async function cfLoadScalpActivity(force) {
   try {
     const scalpPage = document.getElementById('scalp-page');
@@ -5452,7 +5592,7 @@ async function cfLoadScalpActivity(force) {
     if (!force && now - _cfScalpLastActivityFetch < minInterval) return;
     _cfScalpLastActivityFetch = now;
     _cfScalpActivityInFlight = (async function() {
-      const r = await cfApiFetch('/api/scalp/activity');
+      const r = await cfApiFetch('/api/scalp/activity', { cache: 'no-store' });
       const d = await cfReadApiPayload(r);
       if (!r.ok) return;
       cfApplyScalpActivity(d || {});

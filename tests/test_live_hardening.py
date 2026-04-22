@@ -1720,6 +1720,25 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((add_payload.get("execution_metrics") or {}).get("phase"), "scale_in")
         self.assertEqual((add_payload.get("execution_metrics") or {}).get("requested_qty_value"), 250.0)
 
+    async def test_scalp_reconcile_route_returns_structured_retryable_error(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            engine = self.app_module._get_scalp_engine()
+            with patch.object(engine, "reconcile_broker_positions", side_effect=RuntimeError("broker timeout")):
+                failed = await client.post(
+                    "/api/scalp/reconcile",
+                    headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+                )
+
+        self.assertEqual(failed.status_code, 502)
+        payload = failed.json()
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["error"]["code"], "broker_error")
+        self.assertTrue(payload["error"]["retryable"])
+        self.assertIn("broker sync failed", payload["message"].lower())
+
     async def test_scalp_target_route_returns_noop_for_unchanged_targets(self):
         transport = httpx.ASGITransport(app=self.app_module.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:

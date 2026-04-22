@@ -4129,9 +4129,32 @@ def _snapshot_scalp_runtime(*args, **kwargs):
 @app.post("/api/scalp/reconcile")
 async def scalp_reconcile():
     eng = _get_scalp_engine()
-    result = await eng.reconcile_broker_positions(force=True)
-    if "_persist_scalp_runtime_snapshot" in globals():
-        _persist_scalp_runtime_snapshot(eng)
-    if "_attach_scalp_runtime_metrics" in globals():
-        return _attach_scalp_runtime_metrics({"status": "ok", "reconciliation": result}, eng)
-    return {"status": "ok", "reconciliation": result}
+    symbol_hint = ""
+    try:
+        if getattr(eng, "open_trades", None):
+            first_trade = next(iter(eng.open_trades.values()), None)
+            symbol_hint = str(getattr(first_trade, "symbol", "") or "")
+        if not symbol_hint and getattr(eng, "_watch_symbols", None):
+            symbol_hint = str(next(iter(eng._watch_symbols), "") or "")
+        result = await eng.reconcile_broker_positions(force=True)
+        if isinstance(result, dict) and result.get("status") == "error":
+            return _scalp_action_error_response(result, eng, symbol_hint, default_status=502)
+        if "_persist_scalp_runtime_snapshot" in globals():
+            _persist_scalp_runtime_snapshot(eng)
+        if "_attach_scalp_runtime_metrics" in globals():
+            return _attach_scalp_runtime_metrics({"status": "ok", "reconciliation": result}, eng, symbol_hint)
+        return {"status": "ok", "reconciliation": result}
+    except Exception as exc:
+        _logger.warning("[SCALP] Reconcile route failed: %s", exc)
+        return _scalp_action_error_response(
+            {
+                "status": "error",
+                "action": "reconcile",
+                "message": f"Broker sync failed: {exc}",
+                "error_code": "broker_error",
+                "retryable": True,
+            },
+            eng,
+            symbol_hint,
+            default_status=502,
+        )
