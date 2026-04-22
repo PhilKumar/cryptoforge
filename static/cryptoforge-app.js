@@ -688,14 +688,49 @@ function cfToast(msg, type) {
 })();
 
 // ── Page Navigation ────────────────────────────────────────
-function showPage(pageId, btn) {
+function cfPageTabName(pageId) {
+  return String(pageId || 'dashboard-page').replace(/-page$/, '');
+}
+
+function cfNavButtonForPage(pageId) {
+  return document.getElementById('nav-' + cfPageTabName(pageId));
+}
+
+function cfPageIdFromLocation() {
+  var hash = String(window.location.hash || '').replace(/^#/, '').trim().toLowerCase();
+  if (!hash) return '';
+  var pageId = hash + '-page';
+  return document.getElementById(pageId) ? pageId : '';
+}
+
+function cfSyncPageHistory(pageId, options) {
+  if (!window.history || typeof window.history.pushState !== 'function') return;
+  var opts = options || {};
+  if (opts.skipHistory) return;
+  var url = new URL(window.location.href);
+  url.hash = cfPageTabName(pageId);
+  var state = { pageId: pageId };
+  if (opts.replaceHistory) {
+    window.history.replaceState(state, '', url.toString());
+    return;
+  }
+  var currentState = window.history.state || {};
+  if (currentState.pageId === pageId && window.location.hash === ('#' + cfPageTabName(pageId))) return;
+  window.history.pushState(state, '', url.toString());
+}
+
+function showPage(pageId, btn, options) {
+  if (!document.getElementById(pageId)) return;
+  var opts = options || {};
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active-page'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.getElementById(pageId).classList.add('active-page');
+  if (!btn) btn = cfNavButtonForPage(pageId);
   if (btn) btn.classList.add('active');
   // Persist active tab
-  var tabName = pageId.replace('-page', '');
+  var tabName = cfPageTabName(pageId);
   localStorage.setItem('cf_active_tab', tabName);
+  cfSyncPageHistory(pageId, opts);
 
   if (pageId === 'dashboard-page') { refreshBrokerState(true); loadDashboard(); }
   if (pageId === 'market-page') refreshMarket();
@@ -706,6 +741,11 @@ function showPage(pageId, btn) {
   // Stop live monitor when leaving live page
   if (pageId !== 'live-page') stopLiveMonitor();
 }
+
+window.addEventListener('popstate', function(event) {
+  var pageId = (event.state && event.state.pageId) || cfPageIdFromLocation() || 'dashboard-page';
+  showPage(pageId, cfNavButtonForPage(pageId), { skipHistory: true });
+});
 
 // ── Theme Toggle ───────────────────────────────────────────
 function toggleTheme() {
@@ -4620,12 +4660,15 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(refreshTopbarTicker, 30000);
   setInterval(pollLiveStatus, 10000);
   setInterval(function() { if (document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData(); }, 60000);
-  // Restore last active tab
+  // Restore the initial page and seed browser history so minimal-ui back/refresh works in the installed app
   var savedTab = localStorage.getItem('cf_active_tab');
-  if (savedTab) {
-    var tabBtn = document.getElementById('nav-' + savedTab);
-    if (tabBtn) showPage(savedTab + '-page', tabBtn);
+  var initialPageId = cfPageIdFromLocation();
+  if (!initialPageId && savedTab && document.getElementById(savedTab + '-page')) {
+    initialPageId = savedTab + '-page';
   }
+  if (!initialPageId) initialPageId = 'dashboard-page';
+  showPage(initialPageId, cfNavButtonForPage(initialPageId), { replaceHistory: true });
+
   ['b-name', 'b-capital', 'b-possize-mode', 'b-possize', 'b-sl', 'b-tp', 'b-trail', 'b-fee', 'b-spread', 'b-slippage', 'b-funding', 'b-maxtrades', 'b-from', 'b-to', 'b-interval'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) {
