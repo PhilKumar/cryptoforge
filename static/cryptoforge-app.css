@@ -298,9 +298,9 @@
 
   /* ── Topbar ── */
   .app-topbar {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
     gap: 16px;
     padding: 10px 18px;
     background: rgba(13, 18, 34, 0.97);
@@ -407,6 +407,7 @@
 
   /* Ticker strip */
   .topbar-ticker {
+    justify-self: center;
     display: flex;
     align-items: center;
     background: rgba(255,255,255,0.025);
@@ -431,7 +432,15 @@
   .ticker-cell .tc-usd { font-family: var(--font-mono); font-size: 9.5px; font-weight: 500; color: var(--muted); margin-top: 2px; letter-spacing: -0.2px; opacity: 0.7; }
   .ticker-cell .tc-change { font-family: var(--font-mono); font-size: 10px; font-weight: 500; margin-top: 2px; }
 
-  .topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
+  .topbar-right {
+    justify-self: end;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-shrink: 0;
+    min-width: 0;
+  }
   .topbar-clock {
     background: rgba(255,255,255,0.035);
     border: 1px solid var(--border);
@@ -2843,6 +2852,7 @@
     .ticker-cell .tc-change { font-size: 9px; }
 
     .app-topbar {
+      display: flex;
       flex-wrap: wrap;
       padding: 8px 10px !important;
       gap: 8px;
