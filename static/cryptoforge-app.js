@@ -4081,11 +4081,8 @@ async function loadLiveMonitor() {
     if (_liveEngines.length > 0) {
       renderLivePanel(_liveEngines[_liveSelectedTab], _liveSelectedTab);
     } else {
-      document.getElementById('live-panels-container').innerHTML =
-        '<div style="text-align:center;padding:60px 28px;color:var(--muted);">' +
-        '<div style="font-size:40px;margin-bottom:12px;">📡</div>' +
-        '<div style="font-size:16px;font-weight:600;margin-bottom:6px;">No Active Strategies</div>' +
-        '<div style="font-size:13px;">Deploy a strategy with Paper Trade or Live Trade to see monitoring here.</div></div>';
+      var liveContainer = document.getElementById('live-panels-container');
+      if (liveContainer) liveContainer.innerHTML = cfLiveEmptyStateHtml();
     }
   } catch(e) { console.error('loadLiveMonitor error:', e); }
 }
@@ -4100,19 +4097,19 @@ function renderLiveTabs() {
   var bar = document.getElementById('live-tabs-bar');
   if (!bar) return;
   if (!_liveEngines.length) {
-    bar.innerHTML = '<div style="padding:12px 16px;color:var(--muted);font-size:13px;">No active strategies</div>';
+    bar.innerHTML = cfLiveEmptyRailHtml();
     return;
   }
 
   // Combined summary at left
   var totalPnl = _liveEngines.reduce(function(s, e) { return s + (parseFloat(e.total_pnl) || 0); }, 0);
   var totalRunning = _liveEngines.filter(function(e) { return e.running; }).length;
-  var pnlColor = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  var pnlState = totalPnl >= 0 ? 'positive' : 'negative';
 
-  var html = '<div style="padding:10px 16px 10px 0;border-right:1px solid var(--border);margin-right:4px;display:flex;flex-direction:column;gap:2px;min-width:120px;">';
-  html += '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Combined P&L</div>';
-  html += '<div style="font-size:16px;font-weight:700;font-family:\'JetBrains Mono\',monospace;color:' + pnlColor + ';">' + fmtINR(totalPnl) + '</div>';
-  html += '<div style="font-size:10px;color:var(--muted);">' + totalRunning + ' running</div>';
+  var html = '<div class="live-tabs-summary" data-state="' + pnlState + '">';
+  html += '<div class="live-tabs-summary-label">Combined P&amp;L</div>';
+  html += '<div class="live-tabs-summary-value">' + fmtINR(totalPnl) + '</div>';
+  html += '<div class="live-tabs-summary-meta">' + totalRunning + ' running</div>';
   html += '</div>';
 
   // Individual strategy tabs
@@ -4123,32 +4120,46 @@ function renderLiveTabs() {
     var pnl = parseFloat(eng.total_pnl) || 0;
     var running = eng.running;
     var inTrade = eng.in_trade;
+    var pnlStateClass = pnl >= 0 ? 'positive' : 'negative';
+    var statusClass = running && inTrade ? 'warning' : running ? 'running' : 'stopped';
 
-    // Status dot
-    var statusDot = '';
-    if (running && inTrade) statusDot = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#fbbf24;margin-right:4px;"></span>';
-    else if (running) statusDot = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;margin-right:4px;animation:livePulse 2s infinite;"></span>';
-    else statusDot = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f87171;margin-right:4px;"></span>';
-
-    var borderStyle = active ? 'border-bottom:2px solid var(--accent);' : 'border-bottom:2px solid transparent;';
-    var bgStyle = active ? 'background:rgba(139,92,246,0.08);' : '';
-
-    html += '<div data-cf-click="selectLiveTab(' + idx + ')" style="cursor:pointer;padding:8px 14px;' + borderStyle + bgStyle + 'transition:all 0.15s;min-width:fit-content;">';
-    html += '<div style="display:flex;align-items:center;gap:4px;">';
-    html += statusDot + '<span style="font-size:12px;font-weight:600;white-space:nowrap;">' + name + '</span>';
-    html += '<span style="font-size:10px;">' + modeIcon + '</span>';
-    html += '</div>';
-    html += '<div style="font-size:13px;font-weight:700;font-family:\'JetBrains Mono\',monospace;color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtINR(pnl) + '</div>';
-    html += '</div>';
+    html += '<button class="live-tab-btn' + (active ? ' active' : '') + '" data-cf-click="selectLiveTab(' + idx + ')">';
+    html += '<span class="lt-dot ' + (eng.mode === 'paper' ? 'paper' : 'live') + ' ' + statusClass + '"></span>';
+    html += '<span class="live-tab-copy">';
+    html += '<span class="live-tab-name">' + name + ' <span class="live-tab-mode">' + modeIcon + '</span></span>';
+    html += '<span class="live-tab-pnl ' + pnlStateClass + '">' + fmtINR(pnl) + '</span>';
+    html += '</span>';
+    html += '</button>';
   });
 
   // Refresh button at right
-  html += '<div style="margin-left:auto;padding:8px 12px;display:flex;align-items:center;">';
-  html += '<button class="btn btn-danger btn-sm" data-cf-click="emergencyStop()" style="padding:4px 10px;font-size:11px;margin-right:8px;">⛔ Master Kill</button>';
-  html += '<button class="btn btn-primary btn-sm" data-cf-click="loadLiveMonitor()" style="padding:4px 10px;font-size:11px;">🔄</button>';
+  html += '<div class="live-tabs-actions">';
+  html += '<button class="btn btn-danger btn-sm" data-cf-click="emergencyStop()">⛔ Master Kill</button>';
+  html += '<button class="btn btn-primary btn-sm" data-cf-click="loadLiveMonitor()">🔄 Refresh</button>';
   html += '</div>';
 
   bar.innerHTML = html;
+}
+
+function cfLiveEmptyRailHtml() {
+  return ''
+    + '<div class="live-empty-rail">'
+    + '<div class="live-empty-rail-kicker">Live Monitor</div>'
+    + '<div class="live-empty-rail-copy">Deploy a strategy to populate paper and live engine tabs here.</div>'
+    + '</div>';
+}
+
+function cfLiveEmptyStateHtml() {
+  return ''
+    + '<div class="live-empty-state">'
+    + '<div class="live-empty-icon" aria-hidden="true">📡</div>'
+    + '<div class="live-empty-title">No Active Strategies</div>'
+    + '<div class="live-empty-copy">Deploy a strategy with Paper Trade or Live Trade to see monitoring here.</div>'
+    + '<div class="live-empty-actions">'
+    + '<button class="btn btn-outline btn-sm" data-cf-click="showPage(\'builder-page\', document.getElementById(\'nav-builder\'))">Open Builder</button>'
+    + '<button class="btn btn-outline btn-sm" data-cf-click="showPage(\'results-page\', document.getElementById(\'nav-results\'))">Review Runs</button>'
+    + '</div>'
+    + '</div>';
 }
 
 function renderLivePanel(d, idx) {
