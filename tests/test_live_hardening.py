@@ -1681,6 +1681,45 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((add_payload.get("execution_metrics") or {}).get("phase"), "scale_in")
         self.assertEqual((add_payload.get("open_trades")[0].get("execution_metrics") or {}).get("phase"), "scale_in")
 
+    async def test_scalp_add_route_supports_usdt_margin_scale_in(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            await client.get("/api/scalp/status", params={"symbol": "BTCUSDT"})
+            self.app_module._scalp_engine._record_price("BTCUSD", 101.25, source="ws")
+            entered = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_mode": "usdt",
+                    "qty_value": 1000,
+                    "leverage": 10,
+                    "mode": "paper",
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+            entry_payload = entered.json()
+            trade_id = entry_payload["trade"]["trade_id"]
+            added = await client.post(
+                f"/api/scalp/trades/{trade_id}/add",
+                json={"qty_mode": "usdt", "qty_value": 250},
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(entered.status_code, 200)
+        self.assertEqual(added.status_code, 200)
+        add_payload = added.json()
+        self.assertEqual(add_payload.get("status"), "ok")
+        self.assertEqual(add_payload.get("trade", {}).get("qty_mode"), "usdt")
+        self.assertGreater(
+            add_payload.get("trade", {}).get("qty_usdt", 0),
+            entry_payload.get("trade", {}).get("qty_usdt", 0),
+        )
+        self.assertEqual((add_payload.get("execution_metrics") or {}).get("phase"), "scale_in")
+        self.assertEqual((add_payload.get("execution_metrics") or {}).get("requested_qty_value"), 250.0)
+
     async def test_scalp_target_route_returns_noop_for_unchanged_targets(self):
         transport = httpx.ASGITransport(app=self.app_module.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:

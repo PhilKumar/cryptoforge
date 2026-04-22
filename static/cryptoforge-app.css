@@ -3177,6 +3177,11 @@
   color: var(--muted);
   line-height: 1;
 }
+.table-field-meta {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--muted);
+}
 .table-inline-actions-stack {
   display: grid;
   grid-template-columns: 1fr;
@@ -3186,6 +3191,12 @@
 }
 .table-add-stack {
   align-items: stretch;
+}
+.table-add-stack[data-qty-mode="usdt"] .table-field-label {
+  color: #a5f3fc;
+}
+.table-add-stack[data-qty-mode="base"] .table-field-label {
+  color: #c4b5fd;
 }
 .table-add-input {
   text-align: left;
@@ -3264,7 +3275,8 @@
   white-space: nowrap;
 }
 .cf-scalp-active-trade-table .table-note {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .cf-scalp-trade-exec {
   display: grid;
@@ -3284,6 +3296,7 @@
 .cf-scalp-trade-exec .cf-scalp-exec-note {
   font-size: 10px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .cf-scalp-trade-sync {
   min-height: 15px;
@@ -3292,6 +3305,7 @@
   line-height: 1.4;
   color: var(--muted);
   font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 .cf-scalp-trade-sync[data-state="active"] {
   color: var(--yellow);
@@ -3762,6 +3776,9 @@
   }
   .cf-scalp-active-trade-table {
     min-width: 1180px;
+  }
+  .table-field-meta {
+    font-size: 9.5px;
   }
   .table-edit-stack {
     min-width: 154px;

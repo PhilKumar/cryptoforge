@@ -747,6 +747,18 @@ window.addEventListener('popstate', function(event) {
   showPage(pageId, cfNavButtonForPage(pageId), { skipHistory: true });
 });
 
+window.addEventListener('hashchange', function() {
+  var pageId = cfPageIdFromLocation();
+  if (!pageId) return;
+  showPage(pageId, cfNavButtonForPage(pageId), { skipHistory: true });
+});
+
+window.addEventListener('pageshow', function() {
+  var pageId = cfPageIdFromLocation();
+  if (!pageId) return;
+  showPage(pageId, cfNavButtonForPage(pageId), { replaceHistory: true });
+});
+
 // ── Theme Toggle ───────────────────────────────────────────
 function toggleTheme() {
   if (typeof window.cfToggleTheme === 'function') {
@@ -4951,6 +4963,51 @@ function cfScalpLifecycleLabel(value) {
   return labels[raw] || (raw ? cfTitleCaseText(raw) : '');
 }
 
+function cfScalpPhaseLabel(value) {
+  var raw = String(value || '').trim().toLowerCase();
+  var labels = {
+    entry: 'Entry',
+    exit: 'Exit',
+    armed: 'Pending Entry',
+    targets: 'TP/SL Update',
+    scale_in: 'Scale-In',
+    scale_in_reject: 'Scale-In Reject',
+    entry_reject: 'Entry Reject',
+    exit_reject: 'Exit Reject',
+    scale_in_error: 'Scale-In Error',
+    entry_error: 'Entry Error',
+    exit_error: 'Exit Error',
+  };
+  return labels[raw] || (raw ? cfTitleCaseText(raw) : '');
+}
+
+function cfFormatQtyValue(value, mode) {
+  var num = Number(value || 0);
+  if (!Number.isFinite(num) || num <= 0) return mode === 'base' ? '0.0015' : '1000';
+  if (mode === 'base') {
+    if (num >= 1) return String(num.toFixed(4)).replace(/\.?0+$/, '');
+    if (num >= 0.1) return String(num.toFixed(4)).replace(/\.?0+$/, '');
+    if (num >= 0.01) return String(num.toFixed(5)).replace(/\.?0+$/, '');
+    return String(num.toFixed(6)).replace(/\.?0+$/, '');
+  }
+  return String(num >= 100 ? Math.round(num) : num.toFixed(2)).replace(/\.?0+$/, '');
+}
+
+function cfScalpTradeAddConfig(trade) {
+  var mode = String((trade && trade.qty_mode) || 'usdt').toLowerCase() === 'base' ? 'base' : 'usdt';
+  var seedValue = mode === 'base'
+    ? Number((trade && (trade.qty_value || trade.base_qty)) || 0.0015)
+    : Number((trade && (trade.qty_value || trade.qty_usdt || trade.margin_usd)) || 1000);
+  return {
+    mode: mode,
+    label: mode === 'base' ? 'Add Qty' : 'Add Margin $',
+    helper: mode === 'base' ? 'same unit as entry' : 'margin before leverage',
+    step: mode === 'base' ? '0.0001' : '1',
+    min: mode === 'base' ? '0.000001' : '1',
+    value: cfFormatQtyValue(seedValue, mode),
+  };
+}
+
 function cfScalpExecStages(execMetrics) {
   var meta = execMetrics || {};
   var phase = String(meta.phase || '').toLowerCase();
@@ -5256,7 +5313,7 @@ function cfInitScalpPage() {
 }
 
 var _origShowPage = showPage;
-showPage = function(pageId, btn) {
+showPage = function(pageId, btn, options) {
   if (pageId !== 'scalp-page' && _cfScalpPollTimer) {
     clearInterval(_cfScalpPollTimer);
     _cfScalpPollTimer = null;
@@ -5265,7 +5322,7 @@ showPage = function(pageId, btn) {
     clearInterval(_cfScalpActivityTimer);
     _cfScalpActivityTimer = null;
   }
-  _origShowPage(pageId, btn);
+  _origShowPage(pageId, btn, options);
 };
 
 function _cfTradeRow(t) {
@@ -5490,17 +5547,19 @@ function cfScalpFeedDetail(feed) {
 function cfScalpExecSummary(execMetrics) {
   const meta = execMetrics || {};
   if (!meta.phase) return 'No broker actions yet';
-  const phase = cfTitleCaseText(meta.phase || '').toUpperCase();
+  const phase = cfScalpPhaseLabel(meta.phase || '');
   const symbol = cfPrettyScalpSymbol(meta.symbol || '—');
   const lifecycle = cfScalpLifecycleLabel(meta.order_lifecycle || meta.fill_status || '');
   const latency = Number(meta.latency_ms) > 0 ? cfFormatLatency(meta.latency_ms) : (meta.verified === false ? 'unverified' : 'pending');
-  return [phase, symbol, lifecycle ? lifecycle.toUpperCase() : latency].filter(Boolean).join(' • ');
+  return [phase, symbol, lifecycle || latency].filter(Boolean).join(' • ');
 }
 
 function cfScalpExecDetail(execMetrics) {
   const meta = execMetrics || {};
   if (!meta.phase) return 'Awaiting next broker action';
   const bits = [];
+  const phase = cfScalpPhaseLabel(meta.phase || '');
+  if (phase) bits.push(phase);
   if (meta.trade_id) bits.push('trade #' + meta.trade_id);
   if (meta.order_id) bits.push('order ' + meta.order_id);
   if (meta.fill_status) bits.push(cfScalpLifecycleLabel(meta.fill_status));
@@ -5812,6 +5871,7 @@ function cfRenderActivePositions(open, execMetrics) {
       const qtySub = t.qty_mode === 'base'
         ? ('$' + Number(t.qty_usdt || 0).toFixed(2) + ' margin')
         : ((t.base_qty ? Number(t.base_qty).toFixed(6) + ' qty' : 'margin'));
+      const addConfig = cfScalpTradeAddConfig(t);
       return `<tr data-tid="${tid}" data-pnl-state="${pnlState}">
         <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">trade #${tid || '—'} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div><div class="cf-scalp-trade-exec" id="cf-trade-exec-${tid}" data-state="neutral"></div><div class="cf-scalp-trade-sync" id="cf-trade-sync-${tid}" data-state="idle"></div></td>
         <td>${sideTag}</td>
@@ -5821,8 +5881,8 @@ function cfRenderActivePositions(open, execMetrics) {
         <td data-field="pnl"><div class="table-value-stack"><div class="table-value-main ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div><div class="table-value-sub ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">unrealized</div></div></td>
         <td><div class="table-edit-stack table-edit-stack-pairs"><label class="table-field-pair"><span class="table-field-label">TP $</span><input type="number" class="table-input-sm" id="cf-tp-usd-${tid}" value="${t.target_usd || 0}" step="1" min="0" placeholder="TP $"></label><label class="table-field-pair"><span class="table-field-label">TP Px</span><input type="number" class="table-input-sm" id="cf-tp-price-${tid}" value="${t.target_price || 0}" step="0.1" min="0" placeholder="TP price"></label></div></td>
         <td><div class="table-edit-stack table-edit-stack-pairs"><label class="table-field-pair"><span class="table-field-label">SL $</span><input type="number" class="table-input-sm" id="cf-sl-usd-${tid}" value="${t.sl_usd || 0}" step="1" min="0" placeholder="SL $"></label><label class="table-field-pair"><span class="table-field-label">SL Px</span><input type="number" class="table-input-sm" id="cf-sl-price-${tid}" value="${t.sl_price || 0}" step="0.1" min="0" placeholder="SL price"></label></div></td>
-        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack"><label class="table-field-pair table-field-pair-compact"><span class="table-field-label">Add Qty</span><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="0.0015" step="any" min="0.000001" data-default-qty="0.0015" placeholder="0.0015"></label><button class="btn btn-outline btn-sm table-add-btn" id="cf-add-btn-${tid}" data-cf-click="cfAddScalpQuantity('${tid}')">Add</button></div></td>
-        <td><div class="table-inline-actions table-action-stack"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Set</button><button class="btn btn-danger btn-sm" id="cf-exit-btn-${tid}" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
+        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack" data-qty-mode="${addConfig.mode}"><label class="table-field-pair table-field-pair-compact"><span class="table-field-label">${addConfig.label}</span><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="${addConfig.value}" step="${addConfig.step}" min="${addConfig.min}" data-default-qty="${addConfig.value}" data-qty-mode="${addConfig.mode}" placeholder="${addConfig.value}"></label><div class="table-field-meta">${addConfig.helper}</div><button class="btn btn-outline btn-sm table-add-btn" id="cf-add-btn-${tid}" data-cf-click="cfAddScalpQuantity('${tid}')">Scale In</button></div></td>
+        <td><div class="table-inline-actions table-action-stack"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Save</button><button class="btn btn-danger btn-sm" id="cf-exit-btn-${tid}" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
       </tr>`;
     }).join('');
   } else {
@@ -6033,6 +6093,7 @@ async function cfAddScalpQuantity(tradeId) {
     cfToast('Trade controls are out of date. Reload the page.', 'warning');
     return;
   }
+  const qtyMode = String(qtyInput.getAttribute('data-qty-mode') || 'base').toLowerCase() === 'base' ? 'base' : 'usdt';
   const rawValue = String(qtyInput.value || '').trim();
   const fallbackValue = String(qtyInput.getAttribute('data-default-qty') || qtyInput.placeholder || '').trim();
   const qtyValue = parseFloat(rawValue || fallbackValue);
@@ -6050,13 +6111,16 @@ async function cfAddScalpQuantity(tradeId) {
     const res = await cfApiFetch('/api/scalp/trades/' + tradeId + '/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ qty_mode: 'base', qty_value: qtyValue }),
+      body: JSON.stringify({ qty_mode: qtyMode, qty_value: qtyValue }),
     });
     const d = await cfReadApiPayload(res);
     cfMergeScalpStatusPatch(d);
     if (d.status === 'ok') {
       qtyInput.value = qtyInput.getAttribute('data-default-qty') || fallbackValue || '';
-      cfToast(`Added ${qtyValue} qty to trade #${tradeId}`, 'success');
+      const qtyText = qtyMode === 'base'
+        ? (cfFormatQtyValue(qtyValue, 'base') + ' qty')
+        : ('$' + cfFormatQtyValue(qtyValue, 'usdt') + ' margin');
+      cfToast(`Scaled trade #${tradeId} by ${qtyText}`, 'success');
       await cfRefreshScalpWorkspace();
       setTimeout(cfLoadScalpStatus, 200);
     } else {

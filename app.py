@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
@@ -79,8 +80,27 @@ import atexit
 
 atexit.register(_shutdown_save_engines)
 
+
+async def _shutdown_runtime_engines() -> None:
+    scalp_engine = globals().get("_scalp_engine")
+    if scalp_engine is not None:
+        try:
+            await scalp_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown scalp engine during app shutdown: %s", exc)
+    _shutdown_save_engines()
+
+
+@asynccontextmanager
+async def _app_lifespan(_: FastAPI):
+    try:
+        yield
+    finally:
+        await _shutdown_runtime_engines()
+
+
 # Initialize
-app = FastAPI(title="CryptoForge", version="2.0.0")
+app = FastAPI(title="CryptoForge", version="2.0.0", lifespan=_app_lifespan)
 _ALLOWED_ORIGINS = [
     "https://crypto.philforge.in",
     "https://www.crypto.philforge.in",
@@ -94,16 +114,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Requested-With"],
 )
-
-
-@app.on_event("shutdown")
-async def _shutdown_runtime_engines() -> None:
-    scalp_engine = globals().get("_scalp_engine")
-    if scalp_engine is not None:
-        try:
-            await scalp_engine.shutdown()
-        except Exception as exc:
-            _logger.warning("Failed to shutdown scalp engine during app shutdown: %s", exc)
 
 
 from error_handlers import register_error_handlers
@@ -4033,9 +4043,15 @@ async def add_scalp_quantity(trade_id: int, request: Request):
         trade = result.get("trade", {})
         if result.get("status") == "error":
             return _scalp_action_error_response(result, eng, trade.get("symbol", ""))
+        added_text = f"{qty_value:,.6f} qty" if qty_mode == "base" else f"${qty_value:,.2f} margin"
+        exposure_text = (
+            f"{trade.get('base_qty', 0):,.6f} qty • ${trade.get('qty_usdt', 0):,.2f} margin"
+            if trade.get("qty_mode") == "base"
+            else f"${trade.get('qty_usdt', 0):,.2f} margin • {trade.get('base_qty', 0):,.6f} qty"
+        )
         alerter.alert(
             "Scalp Add Quantity",
-            f"Trade ID: {trade_id}\nSymbol: {trade.get('symbol', '—')}\nMode: {trade.get('mode', 'paper')}\nAdded: {qty_value} ({qty_mode})\nNew exposure: ${trade.get('qty_usdt', 0):,.2f} margin",
+            f"Trade ID: {trade_id}\nSymbol: {trade.get('symbol', '—')}\nMode: {trade.get('mode', 'paper')}\nAdded: {added_text}\nNew exposure: {exposure_text}",
             level="info",
         )
         return _attach_scalp_runtime_metrics(result, eng, trade.get("symbol", ""))
