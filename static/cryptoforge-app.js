@@ -719,14 +719,18 @@ function cfSyncPageHistory(pageId, options) {
   window.history.pushState(state, '', url.toString());
 }
 
-function showPage(pageId, btn, options) {
-  if (!document.getElementById(pageId)) return;
-  var opts = options || {};
-  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active-page'));
-  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+function cfSetActivePageShell(pageId, btn) {
+  document.querySelectorAll('.page-section').forEach(function(p) { p.classList.remove('active-page'); });
+  document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
   document.getElementById(pageId).classList.add('active-page');
   if (!btn) btn = cfNavButtonForPage(pageId);
   if (btn) btn.classList.add('active');
+}
+
+function showPage(pageId, btn, options) {
+  if (!document.getElementById(pageId)) return;
+  var opts = options || {};
+  cfSetActivePageShell(pageId, btn);
   // Persist active tab
   var tabName = cfPageTabName(pageId);
   localStorage.setItem('cf_active_tab', tabName);
@@ -753,10 +757,18 @@ window.addEventListener('hashchange', function() {
   showPage(pageId, cfNavButtonForPage(pageId), { skipHistory: true });
 });
 
-window.addEventListener('pageshow', function() {
+window.addEventListener('pageshow', function(event) {
+  if (!event.persisted) return;
   var pageId = cfPageIdFromLocation();
   if (!pageId) return;
-  showPage(pageId, cfNavButtonForPage(pageId), { replaceHistory: true });
+  var activePage = document.querySelector('.page-section.active-page');
+  var btn = cfNavButtonForPage(pageId);
+  if (activePage && activePage.id === pageId) {
+    cfSetActivePageShell(pageId, btn);
+    cfSyncPageHistory(pageId, { replaceHistory: true });
+    return;
+  }
+  showPage(pageId, btn, { replaceHistory: true });
 });
 
 // ── Theme Toggle ───────────────────────────────────────────
