@@ -1408,6 +1408,18 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("connect-src 'self' ws: wss: https:", csp)
         self.assertIn("frame-src 'none'", csp)
 
+    async def test_pwa_shell_routes_are_not_cacheable(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            sw = await client.get("/sw.js")
+            manifest = await client.get("/manifest.webmanifest")
+
+        self.assertEqual(sw.status_code, 200)
+        self.assertEqual(sw.headers.get("cache-control"), "no-store")
+        self.assertEqual(sw.headers.get("service-worker-allowed"), "/")
+        self.assertEqual(manifest.status_code, 200)
+        self.assertEqual(manifest.headers.get("cache-control"), "no-store")
+
 
 class OpsStateRouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -1738,6 +1750,28 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["error"]["code"], "broker_error")
         self.assertTrue(payload["error"]["retryable"])
         self.assertIn("broker sync failed", payload["message"].lower())
+
+    async def test_scalp_reconcile_route_returns_runtime_metrics_on_success(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            engine = self.app_module._get_scalp_engine()
+            with patch.object(
+                engine,
+                "reconcile_broker_positions",
+                return_value={"checked": 1, "updated": 1, "cleared": 0, "state": "ok"},
+            ):
+                ok = await client.post(
+                    "/api/scalp/reconcile",
+                    headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+                )
+
+        self.assertEqual(ok.status_code, 200)
+        payload = ok.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual((payload.get("reconciliation") or {}).get("updated"), 1)
+        self.assertIn("execution_metrics", payload)
 
     async def test_scalp_target_route_returns_noop_for_unchanged_targets(self):
         transport = httpx.ASGITransport(app=self.app_module.app)

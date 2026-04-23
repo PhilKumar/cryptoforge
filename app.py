@@ -1133,6 +1133,7 @@ async def apple_touch_icon():
     return FileResponse(
         os.path.join(_HERE, "static", "pwa-icons", "apple-touch-icon.png"),
         media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
     )
 
 
@@ -1141,6 +1142,7 @@ async def manifest_webmanifest():
     return FileResponse(
         os.path.join(_HERE, "static", "manifest.webmanifest"),
         media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -1149,6 +1151,7 @@ async def site_webmanifest():
     return FileResponse(
         os.path.join(_HERE, "static", "manifest.webmanifest"),
         media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -1157,7 +1160,7 @@ async def service_worker():
     return FileResponse(
         os.path.join(_HERE, "static", "sw.js"),
         media_type="application/javascript",
-        headers={"Service-Worker-Allowed": "/"},
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
     )
 
 
