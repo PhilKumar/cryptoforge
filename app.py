@@ -45,7 +45,7 @@ from pydantic import BaseModel
 
 import alerter
 import config  # must be first — calls load_dotenv()
-from broker import get_broker_client
+from broker import get_broker_client, get_supported_brokers
 from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
 from engine.live import LiveEngine
@@ -251,6 +251,8 @@ _BUCKET_RUNS = "runs"
 _BUCKET_SCALP_TRADES = "scalp_trades"
 _BUCKET_SCALP_EVENTS = "scalp_events"
 _BUCKET_SCALP_RUNTIME = "scalp_runtime"
+_BUCKET_APP_SETTINGS = "app_settings"
+_APP_SETTINGS_BROKER_KEY = "selected_broker"
 
 
 def _bootstrap_session_store() -> None:
@@ -356,6 +358,86 @@ def _seed_singleton_bucket(bucket: str, key: str, *paths: str):
 
 
 _bootstrap_session_store()
+
+
+def _normalize_broker_name(raw, *, default: str = "delta") -> str:
+    broker_name = str(raw or "").strip().lower()
+    supported = set(get_supported_brokers())
+    if broker_name in supported:
+        return broker_name
+    return default if default in supported else sorted(supported)[0]
+
+
+def _active_broker_name(client=None) -> str:
+    current = client or globals().get("delta")
+    return _normalize_broker_name(getattr(current, "broker_name", None), default="delta")
+
+
+def _broker_is_configured(client=None) -> bool:
+    current = client or globals().get("delta")
+    checker = getattr(current, "_is_configured", None)
+    return bool(checker()) if callable(checker) else False
+
+
+def _available_broker_defs() -> list[dict]:
+    brokers = []
+    for name in get_supported_brokers():
+        client = get_broker_client(name)
+        feed_kind = getattr(client, "get_market_feed_kind", lambda: "polling")()
+        brokers.append(
+            {
+                "name": name,
+                "label": str(getattr(client, "display_name", name.title()) or name.title()),
+                "feed_kind": str(feed_kind or "polling"),
+            }
+        )
+    return brokers
+
+
+def _broker_summary(client=None) -> dict:
+    current = client or globals().get("delta")
+    return {
+        "name": _active_broker_name(current),
+        "label": str(getattr(current, "display_name", "Broker") or "Broker"),
+        "configured": _broker_is_configured(current),
+        "feed_kind": str(getattr(current, "get_market_feed_kind", lambda: "polling")() or "polling"),
+    }
+
+
+def _load_selected_broker_name() -> str:
+    payload = _get_state_store().get(_BUCKET_APP_SETTINGS, _APP_SETTINGS_BROKER_KEY, default={})
+    if isinstance(payload, dict):
+        raw = payload.get("broker") or payload.get("name")
+    else:
+        raw = payload
+    env_default = os.getenv("CRYPTOFORGE_BROKER") or os.getenv("BROKER") or "delta"
+    return _normalize_broker_name(raw, default=_normalize_broker_name(env_default))
+
+
+def _persist_selected_broker_name(name: str) -> None:
+    normalized = _normalize_broker_name(name)
+    _get_state_store().put(
+        _BUCKET_APP_SETTINGS,
+        _APP_SETTINGS_BROKER_KEY,
+        {"broker": normalized, "updated_at": str(datetime.now())},
+    )
+
+
+def _set_active_broker(name: str, *, persist: bool) -> dict:
+    normalized = _normalize_broker_name(name)
+    client = get_broker_client(normalized)
+    globals()["broker"] = client
+    globals()["delta"] = client
+    os.environ["CRYPTOFORGE_BROKER"] = normalized
+    if persist:
+        _persist_selected_broker_name(normalized)
+    return _broker_summary(client)
+
+
+try:
+    _set_active_broker(_load_selected_broker_name(), persist=False)
+except Exception as exc:
+    _logger.warning("Broker state bootstrap failed, keeping startup broker: %s", exc)
 
 
 CSRF_COOKIE_NAME = "cryptoforge_csrf"
@@ -917,6 +999,10 @@ class StateRestoreRequest(BaseModel):
     force: bool = False
 
 
+class BrokerSettingsRequest(BaseModel):
+    broker: str
+
+
 _ALWAYS_AVAILABLE_FIELDS = {
     "current_open",
     "current_high",
@@ -1312,6 +1398,7 @@ _OPS_BUCKETS = (
     _BUCKET_SCALP_TRADES,
     _BUCKET_SCALP_EVENTS,
     _BUCKET_SCALP_RUNTIME,
+    _BUCKET_APP_SETTINGS,
     "engine_live_state",
     "engine_paper_state",
 )
@@ -1387,6 +1474,73 @@ def _runtime_recovery_summary() -> dict:
     }
 
 
+def _broker_runtime_lock_summary() -> dict:
+    registry = _runtime_registry_summary()
+    scalp_engine = globals().get("_scalp_engine")
+    scalp_engine_running = bool(scalp_engine is not None and getattr(scalp_engine, "_running", False))
+    reasons = []
+    if registry["live_running_runs"]:
+        reasons.append("Stop live engines before switching brokers.")
+    if registry["paper_running_runs"]:
+        reasons.append("Stop paper engines before switching brokers.")
+    if registry["scalp_open_trades"]:
+        reasons.append("Close scalp open trades before switching brokers.")
+    if registry["scalp_pending_entries"]:
+        reasons.append("Clear scalp pending entries before switching brokers.")
+    return {
+        "live_running_runs": registry["live_running_runs"],
+        "paper_running_runs": registry["paper_running_runs"],
+        "scalp_engine_running": scalp_engine_running,
+        "scalp_open_trades": registry["scalp_open_trades"],
+        "scalp_pending_entries": registry["scalp_pending_entries"],
+        "switchable": not reasons,
+        "reasons": reasons,
+    }
+
+
+def _broker_settings_payload() -> dict:
+    broker_info = _broker_summary()
+    runtime_locks = _broker_runtime_lock_summary()
+    return {
+        "current_broker": broker_info["name"],
+        "current_label": broker_info["label"],
+        "configured": broker_info["configured"],
+        "feed_kind": broker_info["feed_kind"],
+        "available_brokers": _available_broker_defs(),
+        "switchable": runtime_locks["switchable"],
+        "runtime_locks": runtime_locks,
+    }
+
+
+async def _switch_active_broker(name: str) -> dict:
+    global _scalp_engine, _market_cache, _ticker_cache
+
+    target = _normalize_broker_name(name, default=_active_broker_name())
+    current = _active_broker_name()
+    if target == current:
+        return _broker_summary()
+
+    runtime_locks = _broker_runtime_lock_summary()
+    if not runtime_locks["switchable"]:
+        raise HTTPException(status_code=409, detail="Active runtime prevents broker switching")
+
+    scalp_engine = globals().get("_scalp_engine")
+    if scalp_engine is not None:
+        try:
+            await scalp_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown scalp engine before broker switch: %s", exc)
+    _scalp_engine = None
+
+    broker_info = _set_active_broker(target, persist=True)
+    _market_cache["data"] = None
+    _market_cache["timestamp"] = 0
+    _ticker_cache["data"] = None
+    _ticker_cache["timestamp"] = 0
+    _logger.info("Active broker switched to %s (%s)", broker_info["label"], broker_info["name"])
+    return broker_info
+
+
 def _ops_state_summary() -> dict:
     store = _get_state_store()
     store_health = store.health()
@@ -1394,12 +1548,13 @@ def _ops_state_summary() -> dict:
     registry = _runtime_registry_summary()
     recovery = _runtime_recovery_summary()
     scalp_state = _persisted_scalp_runtime_summary()
-    delta_configured = bool(delta._is_configured())
+    broker_info = _broker_summary()
     ready_checks = {
         "auth_pin_configured": bool(AUTH_PIN),
         "state_store_writable": bool(store_health.get("writable")),
         "state_store_exists": bool(store_health.get("exists")),
-        "delta_configured": delta_configured,
+        "broker_configured": broker_info["configured"],
+        "delta_configured": broker_info["configured"],
     }
     recovery_required = bool(
         recovery["live_candidates"] or recovery["paper_candidates"] or recovery["scalp_recovery_required"]
@@ -1410,7 +1565,9 @@ def _ops_state_summary() -> dict:
         "time": str(datetime.now()),
         "ready": bool(ready_checks["auth_pin_configured"] and ready_checks["state_store_writable"]),
         "ready_checks": ready_checks,
-        "delta_configured": delta_configured,
+        "broker": broker_info,
+        "broker_configured": broker_info["configured"],
+        "delta_configured": broker_info["configured"],
         "state_store": store_health,
         "bucket_counts": _bucket_counts_snapshot(),
         "runtime": registry,
@@ -1478,6 +1635,8 @@ async def health():
         "status": summary["status"],
         "time": summary["time"],
         "ready": summary["ready"],
+        "broker": summary["broker"],
+        "broker_configured": summary["broker_configured"],
         "delta_configured": summary["delta_configured"],
         "live_running": bool(summary["runtime"]["live_running_runs"]),
         "paper_running": bool(summary["runtime"]["paper_running_runs"]),
@@ -1502,6 +1661,7 @@ async def ready():
         "status": "ready" if summary["ready"] and summary["status"] == "ok" else summary["status"],
         "ready": summary["ready"],
         "checks": summary["ready_checks"],
+        "broker": summary["broker"],
         "runtime": summary["runtime"],
         "recovery": summary["recovery"],
         "state_store": summary["state_store"],
@@ -1671,6 +1831,8 @@ async def dashboard_summary(request: Request):
         if worst_run is None or pnl < worst_run.get("pnl", 0):
             worst_run = {"id": r.get("id"), "name": r.get("run_name", ""), "pnl": pnl}
 
+    broker_settings = _broker_settings_payload()
+
     return {
         "strategy_count": len(strats),
         "backtest_count": len(backtest_runs),
@@ -1687,10 +1849,56 @@ async def dashboard_summary(request: Request):
         "live_trades": live_trades_val,
         "best_run": best_run,
         "worst_run": worst_run,
+        **broker_settings,
     }
 
 
 # ── Broker Connection ────────────────────────────────────────────
+@app.get("/api/broker/settings")
+async def get_broker_settings():
+    return {"status": "ok", **_broker_settings_payload()}
+
+
+@app.put("/api/broker/settings")
+async def update_broker_settings(payload: BrokerSettingsRequest, request: Request = None):
+    check_rate_limit(
+        "broker_switch",
+        max_calls=4,
+        window_sec=60,
+        client_ip=request.client.host if request and request.client else "global",
+    )
+    requested_name = str(payload.broker or "").strip().lower()
+    supported = {item["name"] for item in _available_broker_defs()}
+    if requested_name not in supported:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": f"Unsupported broker '{requested_name or 'unknown'}'.",
+                **_broker_settings_payload(),
+            },
+        )
+    target_name = requested_name
+    runtime_locks = _broker_runtime_lock_summary()
+    if target_name != _active_broker_name() and not runtime_locks["switchable"]:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "locked",
+                "message": runtime_locks["reasons"][0]
+                if runtime_locks["reasons"]
+                else "Active runtime prevents broker switching.",
+                **_broker_settings_payload(),
+            },
+        )
+    broker_info = await _switch_active_broker(target_name)
+    return {
+        "status": "ok",
+        "message": f"Broker switched to {broker_info['label']}",
+        **_broker_settings_payload(),
+    }
+
+
 @app.post("/api/broker/check")
 async def check_broker(request: Request = None):
     check_rate_limit(
@@ -1699,46 +1907,67 @@ async def check_broker(request: Request = None):
         window_sec=30,
         client_ip=request.client.host if request and request.client else "global",
     )
+    broker_settings = _broker_settings_payload()
     try:
-        if not delta._is_configured():
+        if not _broker_is_configured():
             return {
                 "status": "not_configured",
-                "broker": _broker_label(),
+                "broker": broker_settings["current_label"],
                 "message": f"{_broker_label()} API credentials not configured.",
+                **broker_settings,
             }
         wallet = delta.get_wallet()
         if isinstance(wallet, dict) and "error" not in wallet:
             return {
                 "status": "connected",
-                "broker": _broker_label(),
+                "broker": broker_settings["current_label"],
                 "message": "Broker connection active",
                 "wallet": wallet,
+                **broker_settings,
             }
         if isinstance(wallet, list):
             return {
                 "status": "connected",
-                "broker": _broker_label(),
+                "broker": broker_settings["current_label"],
                 "message": "Broker connection active",
                 "wallet": wallet,
+                **broker_settings,
             }
         return {
             "status": "error",
-            "broker": _broker_label(),
+            "broker": broker_settings["current_label"],
             "message": wallet.get("error", "Unknown error") if isinstance(wallet, dict) else "Unknown error",
+            **broker_settings,
         }
     except Exception as e:
         error_msg = str(e)
         if "401" in error_msg or "Unauthorized" in error_msg:
             return {
                 "status": "error",
-                "broker": _broker_label(),
+                "broker": broker_settings["current_label"],
                 "message": "Invalid API credentials (401 Unauthorized)",
+                **broker_settings,
             }
         elif "403" in error_msg or "Forbidden" in error_msg:
-            return {"status": "error", "broker": _broker_label(), "message": "Access forbidden (403)"}
+            return {
+                "status": "error",
+                "broker": broker_settings["current_label"],
+                "message": "Access forbidden (403)",
+                **broker_settings,
+            }
         elif "timeout" in error_msg.lower():
-            return {"status": "error", "broker": _broker_label(), "message": "Connection timeout"}
-        return {"status": "error", "broker": _broker_label(), "message": f"Connection error: {str(e)[:100]}"}
+            return {
+                "status": "error",
+                "broker": broker_settings["current_label"],
+                "message": "Connection timeout",
+                **broker_settings,
+            }
+        return {
+            "status": "error",
+            "broker": broker_settings["current_label"],
+            "message": f"Connection error: {str(e)[:100]}",
+            **broker_settings,
+        }
 
 
 @app.post("/api/broker/connect")
@@ -1749,29 +1978,38 @@ async def connect_broker(request: Request = None):
         window_sec=30,
         client_ip=request.client.host if request and request.client else "global",
     )
+    broker_settings = _broker_settings_payload()
     try:
-        if not delta._is_configured():
+        if not _broker_is_configured():
             return {
                 "status": "not_configured",
-                "broker": _broker_label(),
+                "broker": broker_settings["current_label"],
                 "message": "API credentials not configured. Update .env file.",
+                **broker_settings,
             }
         wallet = delta.get_wallet()
         if isinstance(wallet, (dict, list)) and (not isinstance(wallet, dict) or "error" not in wallet):
             return {
                 "status": "connected",
-                "broker": _broker_label(),
+                "broker": broker_settings["current_label"],
                 "message": f"Connected to {_broker_label()}",
                 "wallet": wallet,
+                **broker_settings,
             }
         return {
             "status": "error",
-            "broker": _broker_label(),
+            "broker": broker_settings["current_label"],
             "message": str(wallet.get("error", "Unknown error")) if isinstance(wallet, dict) else "Invalid response",
+            **broker_settings,
         }
     except Exception as e:
         alerter.alert("Broker Connect Failed", f"Error: {e}", level="warn")
-        return {"status": "error", "broker": _broker_label(), "message": f"Connection failed: {str(e)[:100]}"}
+        return {
+            "status": "error",
+            "broker": broker_settings["current_label"],
+            "message": f"Connection failed: {str(e)[:100]}",
+            **broker_settings,
+        }
 
 
 # ── Products & Leverage ──────────────────────────────────────────
@@ -1797,7 +2035,7 @@ async def get_leverage(symbol: str):
 
 @app.get("/api/cryptos")
 async def get_top_cryptos():
-    """Return Delta Exchange tradeable perpetual futures for the frontend."""
+    """Return configured-broker tradeable perpetual futures for the frontend."""
     return config.TOP_25_CRYPTOS
 
 
@@ -2099,9 +2337,12 @@ _CACHE_DIR = os.path.join(_HERE, "cache", "candles")
 os.makedirs(_CACHE_DIR, exist_ok=True)
 
 
-def _cache_path(symbol: str, interval: str) -> str:
-    """Return path to the pickle cache file for a symbol/interval pair."""
-    return os.path.join(_CACHE_DIR, f"{symbol}_{interval}.pkl")
+def _cache_path(symbol: str, interval: str, broker_name: str | None = None) -> str:
+    """Return path to the pickle cache file for a broker/symbol/interval tuple."""
+    broker_dir = _normalize_broker_name(broker_name, default=_active_broker_name())
+    base_dir = os.path.join(_CACHE_DIR, broker_dir)
+    os.makedirs(base_dir, exist_ok=True)
+    return os.path.join(base_dir, f"{symbol}_{interval}.pkl")
 
 
 def _load_cache(symbol: str, interval: str) -> pd.DataFrame:
@@ -2709,7 +2950,7 @@ async def get_wallet():
 # ── Broker Trade History ─────────────────────────────────────────
 @app.get("/api/broker/trades")
 async def get_broker_trades():
-    """Get filled order history from Delta Exchange."""
+    """Get filled order history from the active broker."""
     try:
         orders = delta.get_order_history()
         return {"status": "ok", "trades": orders}
@@ -3310,10 +3551,12 @@ async def cache_status():
     """Show cached candle files and sizes."""
     files = []
     if os.path.exists(_CACHE_DIR):
-        for f in os.listdir(_CACHE_DIR):
-            path = os.path.join(_CACHE_DIR, f)
-            size_mb = os.path.getsize(path) / 1024 / 1024
-            files.append({"file": f, "size_mb": round(size_mb, 2)})
+        for root, _, names in os.walk(_CACHE_DIR):
+            for filename in names:
+                path = os.path.join(root, filename)
+                rel_path = os.path.relpath(path, _CACHE_DIR)
+                size_mb = os.path.getsize(path) / 1024 / 1024
+                files.append({"file": rel_path, "size_mb": round(size_mb, 2)})
     return {"cache_dir": _CACHE_DIR, "files": files}
 
 
@@ -3322,9 +3565,10 @@ async def clear_cache():
     """Clear all cached candle data."""
     cleared = 0
     if os.path.exists(_CACHE_DIR):
-        for f in os.listdir(_CACHE_DIR):
-            os.remove(os.path.join(_CACHE_DIR, f))
-            cleared += 1
+        for root, _, names in os.walk(_CACHE_DIR):
+            for filename in names:
+                os.remove(os.path.join(root, filename))
+                cleared += 1
     return {"cleared": cleared}
 
 

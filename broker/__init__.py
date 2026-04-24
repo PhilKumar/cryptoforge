@@ -24,10 +24,15 @@ def get_broker_client(name: str | None = None) -> BaseBroker:
     return factory()
 
 
+def get_supported_brokers() -> list[str]:
+    return sorted(_BROKER_FACTORIES)
+
+
 __all__ = [
     "BaseBroker",
     "CoinDCXClient",
     "DeltaClient",
     "get_broker_client",
     "get_broker_name",
+    "get_supported_brokers",
 ]

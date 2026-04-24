@@ -1152,6 +1152,108 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("connect-src 'self' ws: wss:;", response.headers.get("content-security-policy", ""))
 
 
+class BrokerSettingsRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_state_db = self.app_module._STATE_DB_FILE
+        self._orig_broker = self.app_module.broker
+        self._orig_delta = self.app_module.delta
+        self._orig_live_engines = self.app_module.live_engines
+        self._orig_paper_engines = self.app_module.paper_engines
+        self._orig_scalp_engine = getattr(self.app_module, "_scalp_engine", None)
+        self._orig_market_cache = dict(self.app_module._market_cache)
+        self._orig_ticker_cache = dict(self.app_module._ticker_cache)
+        self.addCleanup(self._restore_runtime)
+
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        self.app_module.live_engines = {}
+        self.app_module.paper_engines = {}
+        self.app_module._scalp_engine = None
+        self.app_module._market_cache = {"data": {"status": "ok"}, "timestamp": 123.0, "ttl": 120}
+        self.app_module._ticker_cache = {"data": {"status": "ok"}, "timestamp": 456.0, "ttl": 30}
+        self.app_module._set_active_broker("delta", persist=False)
+        self.app_module._persist_selected_broker_name("delta")
+
+    def _restore_runtime(self):
+        self.app_module._STATE_DB_FILE = self._orig_state_db
+        self.app_module.broker = self._orig_broker
+        self.app_module.delta = self._orig_delta
+        self.app_module.live_engines = self._orig_live_engines
+        self.app_module.paper_engines = self._orig_paper_engines
+        self.app_module._scalp_engine = self._orig_scalp_engine
+        self.app_module._market_cache = self._orig_market_cache
+        self.app_module._ticker_cache = self._orig_ticker_cache
+
+    @staticmethod
+    def _asgi_request(path="/api/broker/settings", method="PUT"):
+        async def _receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        return StarletteRequest(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode(),
+                "query_string": b"",
+                "headers": [],
+                "client": ("127.0.0.1", 1234),
+                "server": ("testserver.local", 80),
+            },
+            _receive,
+        )
+
+    async def test_get_broker_settings_exposes_current_broker_and_choices(self):
+        payload = await self.app_module.get_broker_settings()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["current_broker"], "delta")
+        self.assertEqual(payload["current_label"], "Delta Exchange")
+        self.assertTrue(any(item["name"] == "coindcx" for item in payload["available_brokers"]))
+
+    async def test_update_broker_settings_switches_and_persists_selection(self):
+        payload = await self.app_module.update_broker_settings(
+            self.app_module.BrokerSettingsRequest(broker="coindcx"),
+            self._asgi_request(),
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["current_broker"], "coindcx")
+        self.assertEqual(self.app_module._load_selected_broker_name(), "coindcx")
+        self.assertIsNone(self.app_module._market_cache["data"])
+        self.assertEqual(self.app_module._ticker_cache["timestamp"], 0)
+
+    async def test_update_broker_settings_rejects_invalid_broker(self):
+        response = await self.app_module.update_broker_settings(
+            self.app_module.BrokerSettingsRequest(broker="not-a-broker"),
+            self._asgi_request(),
+        )
+        payload = json.loads(response.body.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("Unsupported broker", payload["message"])
+
+    async def test_update_broker_settings_blocks_when_runtime_active(self):
+        running_engine = type("RunningEngine", (), {"running": True})()
+        self.app_module.live_engines = {"live-run": running_engine}
+
+        response = await self.app_module.update_broker_settings(
+            self.app_module.BrokerSettingsRequest(broker="coindcx"),
+            self._asgi_request(),
+        )
+        payload = json.loads(response.body.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(payload["status"], "locked")
+        self.assertFalse(payload["switchable"])
+        self.assertIn("Stop live engines", payload["message"])
+
+
 class SessionSecurityTests(unittest.TestCase):
     def setUp(self):
         self.app_module = import_module("app")

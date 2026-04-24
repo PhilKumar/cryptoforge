@@ -336,6 +336,7 @@ function renderDashboardMission(summary, runs) {
   var totalEngines = (summary.paper_count || 0) + (summary.live_count || 0);
   var hasLive = !!summary.live_running;
   var hasPaper = !!summary.paper_running;
+  var brokerLabel = _brokerLabel();
   var latestRun = runs[0] || null;
   var title = 'Crypto desk is standing by.';
   var copy = 'Backtests, paper engines, live monitoring, and broker connectivity are consolidated into a single operating surface. Start with a controlled paper run, validate regime fit, then graduate only verified setups to live.';
@@ -366,7 +367,7 @@ function renderDashboardMission(summary, runs) {
   if (pillsEl) pillsEl.innerHTML = pills.join('');
   if (laneEl) laneEl.textContent = hasLive ? 'Live Guarded' : hasPaper ? 'Paper Verification' : 'Paper First';
   if (laneCopyEl) laneCopyEl.textContent = hasLive
-    ? 'Real Delta orders are enabled. Operate from monitoring and risk control surfaces.'
+    ? ('Real ' + brokerLabel + ' orders are enabled. Operate from monitoring and risk control surfaces.')
     : hasPaper
       ? 'Paper execution is available for behavior validation before live cutover.'
       : 'Start with paper mode to verify execution flow, fills, and risk behavior before enabling live capital.';
@@ -744,11 +745,11 @@ function showPage(pageId, btn, options) {
   localStorage.setItem('cf_active_tab', tabName);
   cfSyncPageHistory(pageId, opts);
 
-  if (pageId === 'dashboard-page') { refreshBrokerState(true); loadDashboard(); }
+  if (pageId === 'dashboard-page') { loadBrokerSettings(true); refreshBrokerState(true); loadDashboard(); }
   if (pageId === 'market-page') refreshMarket();
   if (pageId === 'results-page' && !_backtestRunning) { loadRuns(); fetchStrategies(); }
   if (pageId === 'live-page') startLiveMonitor();
-  if (pageId === 'portfolio-page') { refreshBrokerState(true); loadPortfolioData(); }
+  if (pageId === 'portfolio-page') { loadBrokerSettings(true); refreshBrokerState(true); loadPortfolioData(); }
   if (pageId === 'scalp-page') cfInitScalpPage();
   // Stop live monitor when leaving live page
   if (pageId !== 'live-page') stopLiveMonitor();
@@ -942,6 +943,52 @@ async function emergencyStop() {
 }
 
 // ── Connect Broker ─────────────────────────────────────────
+function _brokerLabel() {
+  return (_brokerInfo && _brokerInfo.currentLabel) || 'Broker';
+}
+
+function _brokerLockMessage() {
+  var locks = (_brokerInfo && _brokerInfo.runtimeLocks) || {};
+  var reasons = Array.isArray(locks.reasons) ? locks.reasons : [];
+  return reasons[0] || 'Stop active live, paper, or scalp exposure before switching brokers.';
+}
+
+function _renderBrokerSelectOptions() {
+  var brokers = Array.isArray(_brokerInfo.availableBrokers) && _brokerInfo.availableBrokers.length
+    ? _brokerInfo.availableBrokers
+    : [{ name: _brokerInfo.currentBroker || 'delta', label: _brokerLabel() }];
+  document.querySelectorAll('[data-broker-select]').forEach(function(select) {
+    var currentValue = select.value || _brokerInfo.currentBroker;
+    select.innerHTML = brokers.map(function(item) {
+      var label = item.label || item.name || 'Broker';
+      return '<option value="' + _escapeHtml(item.name || '') + '">' + _escapeHtml(label) + '</option>';
+    }).join('');
+    select.value = _brokerInfo.currentBroker || currentValue || brokers[0].name;
+    select.disabled = !_brokerInfo.switchable;
+    select.title = _brokerInfo.switchable ? 'Choose the active broker' : _brokerLockMessage();
+  });
+}
+
+function _applyBrokerConfig(payload) {
+  payload = payload || {};
+  _brokerInfo = {
+    currentBroker: payload.current_broker || _brokerInfo.currentBroker || 'delta',
+    currentLabel: payload.current_label || payload.broker || _brokerInfo.currentLabel || 'Broker',
+    configured: payload.configured != null ? !!payload.configured : !!_brokerInfo.configured,
+    feedKind: payload.feed_kind || _brokerInfo.feedKind || 'polling',
+    availableBrokers: Array.isArray(payload.available_brokers) ? payload.available_brokers : (_brokerInfo.availableBrokers || []),
+    switchable: payload.switchable != null ? !!payload.switchable : (_brokerInfo.switchable != null ? _brokerInfo.switchable : true),
+    runtimeLocks: payload.runtime_locks || _brokerInfo.runtimeLocks || {},
+  };
+  var dashBroker = document.getElementById('dash-broker');
+  if (dashBroker) dashBroker.textContent = _brokerLabel();
+  document.querySelectorAll('[data-broker-switch]').forEach(function(btn) {
+    btn.disabled = !_brokerInfo.switchable;
+    btn.title = _brokerInfo.switchable ? 'Switch the active broker' : _brokerLockMessage();
+  });
+  _renderBrokerSelectOptions();
+}
+
 function _applyBrokerState(connected, message) {
   _brokerConnected = !!connected;
   document.querySelectorAll('[data-broker-toggle]').forEach(function(btn) {
@@ -949,14 +996,31 @@ function _applyBrokerState(connected, message) {
     btn.textContent = _brokerConnected ? '🔌 Disconnect Broker' : '🔗 Connect Broker';
   });
   var brokerCard = document.getElementById('dash-broker-state');
-  if (brokerCard) brokerCard.textContent = message || (_brokerConnected ? 'Connected' : 'Disconnected');
+  if (brokerCard) brokerCard.textContent = message || (_brokerConnected ? (_brokerLabel() + ' connected') : (_brokerLabel() + ' disconnected'));
+}
+
+async function loadBrokerSettings(silent) {
+  try {
+    const r = await cfApiFetch('/api/broker/settings', { cache: 'no-store' });
+    const d = await cfReadApiPayload(r);
+    if (!r.ok || d.status === 'error') throw new Error(cfApiErrorDetail(d, 'Broker settings unavailable'));
+    _applyBrokerConfig(d);
+    return d;
+  } catch (e) {
+    if (!silent) cfToast('Broker settings failed: ' + e.message, 'warning');
+    return null;
+  }
 }
 
 async function refreshBrokerState(silent) {
   try {
-    const r = await cfApiFetch('/api/broker/check', { method: 'POST' });
-    const d = await r.json();
-    _applyBrokerState(d.status === 'connected', d.status === 'connected' ? 'Connected' : (d.message || 'Disconnected'));
+    const r = await cfApiFetch('/api/broker/check', { method: 'POST', cache: 'no-store' });
+    const d = await cfReadApiPayload(r);
+    _applyBrokerConfig(d);
+    _applyBrokerState(
+      d.status === 'connected',
+      d.status === 'connected' ? (_brokerLabel() + ' connected') : (d.message || (_brokerLabel() + ' disconnected'))
+    );
   } catch(e) {
     _applyBrokerState(false, 'Unavailable');
     if (!silent) cfToast('Broker check failed: ' + e.message, 'warning');
@@ -965,11 +1029,12 @@ async function refreshBrokerState(silent) {
 
 async function connectBroker() {
   try {
-    const r = await cfApiFetch('/api/broker/connect', { method: 'POST' });
-    const d = await r.json();
+    const r = await cfApiFetch('/api/broker/connect', { method: 'POST', cache: 'no-store' });
+    const d = await cfReadApiPayload(r);
+    _applyBrokerConfig(d);
     if (d.status === 'connected') {
-      _applyBrokerState(true, 'Connected');
-      cfToast('Connected to Delta Exchange', 'success');
+      _applyBrokerState(true, _brokerLabel() + ' connected');
+      cfToast('Connected to ' + _brokerLabel(), 'success');
     } else {
       _applyBrokerState(false, d.message || 'Disconnected');
       cfToast(d.message || 'Broker not configured', 'warning');
@@ -982,6 +1047,49 @@ async function connectBroker() {
 function disconnectBroker() {
   _applyBrokerState(false, 'Disconnected');
   cfToast('Broker panel disconnected', 'info');
+}
+
+async function switchBroker(scope) {
+  var select = document.querySelector('[data-broker-select="' + String(scope || '') + '"]') || document.querySelector('[data-broker-select]');
+  if (!select) {
+    cfToast('Broker selector is unavailable', 'warning');
+    return;
+  }
+  var targetBroker = String(select.value || '').trim().toLowerCase();
+  if (!targetBroker) {
+    cfToast('Choose a broker first', 'warning');
+    return;
+  }
+  if (targetBroker === _brokerInfo.currentBroker) {
+    cfToast(_brokerLabel() + ' is already active', 'info');
+    return;
+  }
+  try {
+    const r = await cfApiFetch('/api/broker/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ broker: targetBroker }),
+      cache: 'no-store',
+    });
+    const d = await cfReadApiPayload(r);
+    _applyBrokerConfig(d);
+    if (!r.ok || d.status !== 'ok') {
+      throw new Error(cfApiErrorDetail(d, _brokerLockMessage()));
+    }
+    await refreshBrokerState(true);
+    loadDashboard();
+    refreshTopbarTicker();
+    if (document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData();
+    if (document.getElementById('market-page').classList.contains('active-page')) refreshMarket();
+    if (document.getElementById('builder-page').classList.contains('active-page')) fetchLeverage(selectedCrypto);
+    if (document.getElementById('scalp-page').classList.contains('active-page')) {
+      cfRefreshScalpWorkspace({ reconcile: 'manual' }).catch(function() { return null; });
+    }
+    cfToast(d.message || ('Broker switched to ' + _brokerLabel()), 'success');
+  } catch (e) {
+    if (select) select.value = _brokerInfo.currentBroker || select.value;
+    cfToast('Broker switch failed: ' + e.message, 'warning');
+  }
 }
 
 function toggleBrokerConnection() {
@@ -1525,6 +1633,7 @@ async function loadDashboard() {
     const r = await fetch('/api/dashboard/summary', { credentials: 'same-origin' });
     if (r.status === 401) return;
     const d = await r.json();
+    _applyBrokerConfig(d);
     document.getElementById('dash-strats').textContent = d.strategy_count || 0;
     document.getElementById('dash-backtests').textContent = d.backtest_count || 0;
     const pnl = d.today_pnl || 0;
@@ -1897,6 +2006,15 @@ let _mktSortAsc = true;
 const TABLE_PAGE_SIZE = 10;
 const _tablePagerState = {};
 let _brokerConnected = false;
+let _brokerInfo = {
+  currentBroker: 'delta',
+  currentLabel: 'Broker',
+  configured: false,
+  feedKind: 'polling',
+  availableBrokers: [],
+  switchable: true,
+  runtimeLocks: {},
+};
 
 function _safeDomId(value) {
   return String(value || 'table').replace(/[^a-zA-Z0-9_-]+/g, '-');
@@ -2530,8 +2648,9 @@ function _renderMarketRows(coins) {
     var safeName = (c.name || '').replace(/'/g, "\'");
     var safeSymbol = _escapeHtml(c.symbol);
     var safeCoinName = _escapeHtml(c.name);
-    var btnClass = c.delta_tradeable ? 'btn-live' : 'btn-bt';
-    var btnLabel = c.delta_tradeable ? '⚡ Trade' : '📊 Backtest';
+    var tradeable = c.broker_tradeable != null ? !!c.broker_tradeable : !!c.delta_tradeable;
+    var btnClass = tradeable ? 'btn-live' : 'btn-bt';
+    var btnLabel = tradeable ? '⚡ Trade' : '📊 Backtest';
     var tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" data-cf-click="selectCryptoFromMarket(\'' + tradeSym + '\',\'' + safeName + '\')">' + btnLabel + '</button>';
     return '<tr style="cursor:pointer;" data-cf-mouseover="this.style.background=\'rgba(139,92,246,0.04)\'" data-cf-mouseout="this.style.background=\'\'">' +
       '<td style="padding-left:16px;"><div class="table-value-stack"><div class="table-value-main">#' + c.rank + '</div><div class="table-value-sub">rank</div></div></td>' +
@@ -2800,7 +2919,7 @@ async function stopPaper() {
 }
 
 async function startLive() {
-  const ok = await cfConfirm('This will place <b>REAL orders</b> on Delta Exchange with <b>real funds</b>.<br><br>Symbol: <b>' + _escapeHtml(selectedCrypto) + '</b><br>Leverage: <b>' + selectedLeverage + 'x</b><br><br>Are you sure?', 'Go Live', '⚠️', true);
+  const ok = await cfConfirm('This will place <b>REAL orders</b> on ' + _escapeHtml(_brokerLabel()) + ' with <b>real funds</b>.<br><br>Symbol: <b>' + _escapeHtml(selectedCrypto) + '</b><br>Leverage: <b>' + selectedLeverage + 'x</b><br><br>Are you sure?', 'Go Live', '⚠️', true);
   if (!ok) return;
   const payload = {
     run_name: document.getElementById('b-name').value || 'Live',
@@ -3539,7 +3658,7 @@ async function loadPortfolioData() {
             '<td><div class="table-value-stack"><div class="table-value-main">' + (o.size || o.quantity || 0) + '</div><div class="table-value-sub">filled</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(fillPrice) + '</div><div class="table-value-sub">avg fill</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINR(fee) + '</div><div class="table-value-sub">fees</div></div></td>' +
-            '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">Delta</div></td>' +
+            '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">' + _escapeHtml(_brokerLabel()) + '</div></td>' +
             '<td><span class="tag tag-purple">' + orderState + '</span></td>' +
             '</tr>';
         }).join('');
@@ -4663,6 +4782,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderLeverage(leverageOptions, selectedLeverage);
   renderBuilderDeck();
   renderTemplates();
+  loadBrokerSettings(true);
   refreshBrokerState(true);
   loadDashboard();
   refreshTopbarTicker();
