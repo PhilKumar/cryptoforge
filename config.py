@@ -13,6 +13,16 @@ load_dotenv()
 DELTA_API_KEY = os.getenv("DELTA_API_KEY", "YOUR_API_KEY_HERE")
 DELTA_API_SECRET = os.getenv("DELTA_API_SECRET", "YOUR_API_SECRET_HERE")
 
+# ── CoinDCX API Credentials ─────────────────────────────────
+COINDCX_API_KEY = os.getenv("COINDCX_API_KEY", "YOUR_COINDCX_API_KEY_HERE")
+COINDCX_API_SECRET = os.getenv("COINDCX_API_SECRET", "YOUR_COINDCX_API_SECRET_HERE")
+COINDCX_BASE_URL = os.getenv("COINDCX_BASE_URL", "https://api.coindcx.com")
+COINDCX_PUBLIC_URL = os.getenv("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
+COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
+
+# ── Active Broker ────────────────────────────────────────────
+CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "delta")).lower()
+
 # ── Delta Exchange Base URLs ────────────────────────────────
 # Testnet toggle: set DELTA_TESTNET=true to use Delta testnet
 # Same API signatures — just swap keys and this flag

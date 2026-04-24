@@ -23,6 +23,8 @@ from requests.adapters import HTTPAdapter
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
+from .base import BaseBroker
+
 _delta_log = logging.getLogger("cryptoforge.delta")
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 
@@ -135,8 +137,11 @@ class _CircuitBreaker:
 _circuit_breaker = _CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
 
 
-class DeltaClient:
+class DeltaClient(BaseBroker):
     """Delta Exchange REST API client for perpetual futures."""
+
+    broker_name = "delta"
+    display_name = "Delta Exchange"
 
     def __init__(self):
         self.api_key = config.DELTA_API_KEY
@@ -165,6 +170,12 @@ class DeltaClient:
         if upper.endswith("USD") and not upper.endswith("USDT"):
             return upper + "T"
         return upper
+
+    def to_broker_symbol(self, symbol: str) -> str:
+        return self.to_delta_symbol(self.normalize_app_symbol(symbol))
+
+    def from_broker_symbol(self, symbol: str) -> str:
+        return self.from_delta_symbol(symbol)
 
     def _is_configured(self) -> bool:
         return (

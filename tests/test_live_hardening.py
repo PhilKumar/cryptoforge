@@ -13,12 +13,15 @@ import httpx
 import pandas as pd
 from starlette.requests import Request as StarletteRequest
 
+from broker import get_broker_client
+from broker.coindcx import CoinDCXClient
 from broker.delta import DeltaClient, _CircuitBreaker, _normalize_result_list
 from engine.live import LiveEngine
 from engine.live import _select_signal_rows as select_live_signal_rows
 from engine.paper_trading import PaperTradingEngine
 from engine.paper_trading import _select_signal_rows as select_paper_signal_rows
 from engine.scalp import ScalpEngine
+from engine.ws_feed import PollingMarketFeed, create_market_feed
 
 _DEFAULT_PRODUCT = object()
 
@@ -208,6 +211,94 @@ class DeltaPositionNormalizationTests(unittest.TestCase):
     def test_from_delta_symbol_preserves_paxg_contract(self):
         self.assertEqual(DeltaClient.from_delta_symbol("PAXGUSD"), "PAXGUSD")
         self.assertEqual(DeltaClient.from_delta_symbol("BTCUSD"), "BTCUSDT")
+
+
+class BrokerFactoryTests(unittest.TestCase):
+    def test_factory_selects_delta_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            client = get_broker_client("delta")
+        self.assertIsInstance(client, DeltaClient)
+        self.assertEqual(client.broker_name, "delta")
+
+    def test_factory_selects_coindcx(self):
+        client = get_broker_client("coindcx")
+        self.assertIsInstance(client, CoinDCXClient)
+        self.assertEqual(client.broker_name, "coindcx")
+        self.assertEqual(client.to_broker_symbol("BTCUSDT"), "B-BTC_USDT")
+        self.assertEqual(client.from_broker_symbol("B-BTC_USDT"), "BTCUSDT")
+
+
+class CoinDCXClientTests(unittest.TestCase):
+    def test_place_order_translates_notional_to_quantity_and_omits_market_price(self):
+        client = CoinDCXClient()
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(client, "get_ticker", return_value={"mark_price": 20000.0}),
+            patch.object(client, "get_instrument_details", return_value={"base_precision": 4}),
+            patch.object(client, "_private_request", return_value={"id": "coindcx-1"}) as private_request,
+        ):
+            result = client.place_order(
+                product_id="B-BTC_USDT",
+                size=1000.0,
+                side="buy",
+                order_type="market_order",
+                leverage=10,
+            )
+
+        self.assertEqual(result.get("id"), "coindcx-1")
+        payload = private_request.call_args.kwargs["payload"]
+        self.assertEqual(payload["pair"], "B-BTC_USDT")
+        self.assertEqual(payload["side"], "buy")
+        self.assertNotIn("price", payload)
+        self.assertAlmostEqual(payload["size"], 0.05)
+
+    def test_normalize_position_maps_pair_to_app_symbol_and_signed_notional(self):
+        client = CoinDCXClient()
+        position = client._normalize_position(
+            {
+                "pair": "B-ETH_USDT",
+                "avg_price": "2500",
+                "mark_price": "2550",
+                "active_pos": "-0.5",
+                "locked_user_margin": "60",
+                "unrealised_pnl": "-25",
+                "leverage": "10",
+            }
+        )
+
+        self.assertEqual(position["product_symbol"], "ETHUSDT")
+        self.assertAlmostEqual(position["size"], -1275.0)
+        self.assertAlmostEqual(position["margin"], 60.0)
+        self.assertAlmostEqual(position["unrealized_pnl"], -25.0)
+
+
+class FeedFactoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_polling_feed_emits_ticker_updates_for_non_ws_broker(self):
+        class FakePollingBroker:
+            display_name = "CoinDCX"
+
+            def get_market_feed_kind(self):
+                return "polling"
+
+            def get_ticker(self, symbol):
+                return {"symbol": symbol, "mark_price": 123.45}
+
+        broker = FakePollingBroker()
+        feed = create_market_feed(broker)
+        self.assertIsInstance(feed, PollingMarketFeed)
+        feed._poll_interval_sec = 0.01
+
+        seen = []
+        feed.on_ticker = lambda symbol, ticker: seen.append((symbol, ticker.get("mark_price")))
+
+        await feed.connect()
+        await feed.subscribe_ticker("BTCUSDT")
+        await asyncio.sleep(0.05)
+        await feed.disconnect()
+
+        self.assertTrue(seen)
+        self.assertEqual(seen[0][0], "BTCUSDT")
+        self.assertEqual(seen[0][1], 123.45)
 
 
 class LiveEngineHardeningTests(unittest.IsolatedAsyncioTestCase):

@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 try:
-    from engine.ws_feed import DeltaWSFeed
+    from engine.ws_feed import create_market_feed
 
     _HAS_WS = True
 except ImportError:
@@ -55,7 +55,7 @@ class ScalpTrade:
         trade_id: int,
         symbol: str,  # e.g. BTCUSDT
         side: str,  # LONG or SHORT
-        product_id: int,
+        product_id,
         size: int,  # contract units
         entry_price: float,
         leverage: int = 10,
@@ -261,7 +261,7 @@ class ScalpTrade:
             trade_id=int(data.get("trade_id", 0) or 0),
             symbol=str(data.get("symbol", "") or ""),
             side=str(data.get("side", "") or ""),
-            product_id=int(data.get("product_id", 0) or 0),
+            product_id=data.get("product_id", 0) or 0,
             size=int(data.get("size", 0) or 0),
             entry_price=_coerce_float(data.get("entry_price"), 0.0),
             leverage=int(data.get("leverage", 1) or 1),
@@ -856,7 +856,7 @@ class ScalpEngine:
         if not self._running or not _HAS_WS or not symbols:
             return
         if self._ws_feed is None:
-            self._ws_feed = DeltaWSFeed()
+            self._ws_feed = create_market_feed(self.delta)
             self._ws_feed.on_ticker = self._handle_ticker
             self._ws_feed.on_connect = lambda: self._schedule_update(force=True)
             self._ws_feed.on_disconnect = lambda reason: self._schedule_update(force=True)
@@ -1075,7 +1075,7 @@ class ScalpEngine:
             try:
                 product = await asyncio.to_thread(self.delta.get_product_by_symbol, symbol)
                 if product:
-                    product_id = int(product.get("id", 0))
+                    product_id = product.get("id", 0)
             except Exception:
                 pass
 
@@ -1969,7 +1969,7 @@ def _scalp_position_entry_price(position: dict, fallback: float) -> float:
     return entry if entry > 0 else fallback
 
 
-async def _scalp_delta_get_position(delta, product_id: int) -> dict:
+async def _scalp_delta_get_position(delta, product_id) -> dict:
     getter = getattr(delta, "get_position", None)
     if not callable(getter):
         return {}
@@ -2007,19 +2007,19 @@ async def _scalp_engine_reconcile_broker_positions(self, force: bool = False) ->
         self._last_reconciliation = summary
         return dict(summary)
     for trade in list(live_trades):
-        product_id = int(getattr(trade, "product_id", 0) or 0)
-        if product_id <= 0:
+        product_id = getattr(trade, "product_id", 0) or 0
+        if not product_id:
             product_lookup = getattr(getattr(self, "delta", None), "get_product_by_symbol", None)
             if callable(product_lookup):
                 try:
                     product = await asyncio.to_thread(product_lookup, getattr(trade, "symbol", ""))
-                    product_id = int((product or {}).get("id") or 0)
+                    product_id = (product or {}).get("id") or 0
                     trade.product_id = product_id
                 except Exception as exc:
                     summary["errors"] += 1
                     summary["messages"].append(f"{getattr(trade, 'symbol', 'UNKNOWN')}: product lookup failed ({exc})")
                     continue
-        if product_id <= 0:
+        if not product_id:
             summary["skipped"] += 1
             continue
         try:

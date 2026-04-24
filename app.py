@@ -1,7 +1,7 @@
 """
 app.py — CryptoForge FastAPI Backend
-Perpetual futures algo-trading platform powered by Delta Exchange.
-Production-ready: multi-engine, WebSocket, portfolio history, full CRUD.
+Perpetual futures algo-trading platform powered by a configurable broker.
+Production-ready: multi-engine, market feed, portfolio history, full CRUD.
 """
 
 import asyncio
@@ -45,7 +45,8 @@ from pydantic import BaseModel
 
 import alerter
 import config  # must be first — calls load_dotenv()
-from broker.delta import DeltaClient, get_candles_binance
+from broker import get_broker_client
+from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
@@ -123,9 +124,26 @@ register_error_handlers(app)
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Initialize Delta client
-delta = DeltaClient()
+# Initialize broker client
+broker = get_broker_client()
+# Backwards-compatible alias retained while the internal rename is staged.
+delta = broker
 APP_BOOT_TS = time.time()
+
+
+def _broker_label() -> str:
+    return str(getattr(delta, "display_name", "Broker") or "Broker")
+
+
+def _supported_trade_symbols() -> set[str]:
+    try:
+        symbols = set(getattr(delta, "get_supported_symbols", lambda: set())() or set())
+        if symbols:
+            return symbols
+    except Exception:
+        pass
+    return {str(item.get("symbol", "")).upper() for item in config.TOP_25_CRYPTOS if item.get("symbol")}
+
 
 # ── Multi-Engine Registries (keyed by run_id) ────────────────
 live_engines: Dict[str, LiveEngine] = {}
@@ -1685,27 +1703,27 @@ async def check_broker(request: Request = None):
         if not delta._is_configured():
             return {
                 "status": "not_configured",
-                "broker": "Delta Exchange",
-                "message": "Delta API credentials not configured.",
+                "broker": _broker_label(),
+                "message": f"{_broker_label()} API credentials not configured.",
             }
         wallet = delta.get_wallet()
         if isinstance(wallet, dict) and "error" not in wallet:
             return {
                 "status": "connected",
-                "broker": "Delta Exchange",
+                "broker": _broker_label(),
                 "message": "Broker connection active",
                 "wallet": wallet,
             }
         if isinstance(wallet, list):
             return {
                 "status": "connected",
-                "broker": "Delta Exchange",
+                "broker": _broker_label(),
                 "message": "Broker connection active",
                 "wallet": wallet,
             }
         return {
             "status": "error",
-            "broker": "Delta Exchange",
+            "broker": _broker_label(),
             "message": wallet.get("error", "Unknown error") if isinstance(wallet, dict) else "Unknown error",
         }
     except Exception as e:
@@ -1713,14 +1731,14 @@ async def check_broker(request: Request = None):
         if "401" in error_msg or "Unauthorized" in error_msg:
             return {
                 "status": "error",
-                "broker": "Delta Exchange",
+                "broker": _broker_label(),
                 "message": "Invalid API credentials (401 Unauthorized)",
             }
         elif "403" in error_msg or "Forbidden" in error_msg:
-            return {"status": "error", "broker": "Delta Exchange", "message": "Access forbidden (403)"}
+            return {"status": "error", "broker": _broker_label(), "message": "Access forbidden (403)"}
         elif "timeout" in error_msg.lower():
-            return {"status": "error", "broker": "Delta Exchange", "message": "Connection timeout"}
-        return {"status": "error", "broker": "Delta Exchange", "message": f"Connection error: {str(e)[:100]}"}
+            return {"status": "error", "broker": _broker_label(), "message": "Connection timeout"}
+        return {"status": "error", "broker": _broker_label(), "message": f"Connection error: {str(e)[:100]}"}
 
 
 @app.post("/api/broker/connect")
@@ -1735,25 +1753,25 @@ async def connect_broker(request: Request = None):
         if not delta._is_configured():
             return {
                 "status": "not_configured",
-                "broker": "Delta Exchange",
+                "broker": _broker_label(),
                 "message": "API credentials not configured. Update .env file.",
             }
         wallet = delta.get_wallet()
         if isinstance(wallet, (dict, list)) and (not isinstance(wallet, dict) or "error" not in wallet):
             return {
                 "status": "connected",
-                "broker": "Delta Exchange",
-                "message": "Connected to Delta Exchange",
+                "broker": _broker_label(),
+                "message": f"Connected to {_broker_label()}",
                 "wallet": wallet,
             }
         return {
             "status": "error",
-            "broker": "Delta Exchange",
+            "broker": _broker_label(),
             "message": str(wallet.get("error", "Unknown error")) if isinstance(wallet, dict) else "Invalid response",
         }
     except Exception as e:
         alerter.alert("Broker Connect Failed", f"Error: {e}", level="warn")
-        return {"status": "error", "broker": "Delta Exchange", "message": f"Connection failed: {str(e)[:100]}"}
+        return {"status": "error", "broker": _broker_label(), "message": f"Connection failed: {str(e)[:100]}"}
 
 
 # ── Products & Leverage ──────────────────────────────────────────
@@ -1813,8 +1831,8 @@ _STABLECOIN_SKIP = {
     "reth",
 }
 
-# Map CoinGecko symbol → Delta Exchange perp symbol (if tradeable)
-_CG_TO_DELTA = {
+# Map CoinGecko symbol → app trade symbol
+_CG_TO_TRADE = {
     "btc": "BTCUSDT",
     "eth": "ETHUSDT",
     "sol": "SOLUSDT",
@@ -1857,12 +1875,14 @@ async def get_market_top25():
             if c.get("symbol", "").lower() not in _STABLECOIN_SKIP and c.get("id", "") not in _STABLECOIN_SKIP
         ][:25]
 
+        broker_symbols = _supported_trade_symbols()
         coins = []
         for c in filtered:
             sym = c.get("symbol", "").lower()
-            delta_sym = _CG_TO_DELTA.get(sym)
+            broker_sym = _CG_TO_TRADE.get(sym)
             # Every coin gets a USDT trading symbol (Binance format)
-            trade_symbol = delta_sym or (c.get("symbol", "").upper() + "USDT")
+            trade_symbol = broker_sym or (c.get("symbol", "").upper() + "USDT")
+            is_tradeable = trade_symbol in broker_symbols
             coins.append(
                 {
                     "rank": len(coins) + 1,
@@ -1879,8 +1899,10 @@ async def get_market_top25():
                     "ath": c.get("ath", 0),
                     "ath_change_pct": round(c.get("ath_change_percentage", 0) or 0, 1),
                     "circulating_supply": c.get("circulating_supply", 0),
-                    "delta_tradeable": delta_sym is not None,
-                    "delta_symbol": delta_sym,
+                    "delta_tradeable": is_tradeable,
+                    "delta_symbol": trade_symbol if is_tradeable else None,
+                    "broker_tradeable": is_tradeable,
+                    "broker_symbol": trade_symbol if is_tradeable else None,
                     "trade_symbol": trade_symbol,  # always present for backtest
                 }
             )
@@ -1967,7 +1989,7 @@ def _normalize_scalp_symbol(symbol: str, *, allow_blank: bool = False) -> str:
         return "" if allow_blank else "BTCUSDT"
     if raw in {"GOLD", "GOLDUSDT"}:
         raw = "PAXGUSD"
-    if raw not in _DELTA_SYMBOLS:
+    if raw not in _supported_trade_symbols():
         raise HTTPException(status_code=400, detail=f"Unsupported scalp symbol: {raw}")
     return raw
 
@@ -2004,15 +2026,14 @@ async def get_ticker():
 
     try:
         tickers = delta.get_tickers_bulk()
-        # Build a map by symbol — convert Delta India symbols (BTCUSD→BTCUSDT)
+        # Build a map by broker symbol and normalized app symbol.
         ticker_map = {}
         for t in tickers:
             sym = t.get("symbol", "")
             ticker_map[sym] = t
-            # Also map USDT variant so config lookups work
-            usdt_sym = delta.from_delta_symbol(sym)
-            if usdt_sym != sym:
-                ticker_map[usdt_sym] = t
+            app_sym = delta.from_delta_symbol(sym)
+            if app_sym and app_sym != sym:
+                ticker_map[app_sym] = t
 
         result = {"status": "ok", "tickers": {}}
         for crypto in config.TOP_25_CRYPTOS:
@@ -2071,10 +2092,6 @@ async def get_single_ticker(symbol: str):
         return delta.get_ticker(symbol)
     except Exception as e:
         return {"status": "error", "message": str(e)[:100]}
-
-
-# ── Delta Exchange symbols (have perp futures) ───────────────────
-_DELTA_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "PAXGUSD"}
 
 
 # ── Local Candle Cache ────────────────────────────────────────────
@@ -2147,15 +2164,15 @@ def _fetch_data(symbol: str, from_date: str, to_date: str, candle_interval: str 
         _save_cache(df, symbol, candle_interval)
         return df
 
-    # ── 3. Fallback to Delta Exchange ──────────────────────────
-    if symbol in _DELTA_SYMBOLS:
+    # ── 3. Fallback to configured broker ───────────────────────
+    if symbol in _supported_trade_symbols():
         df = delta.get_candles(symbol, resolution=candle_interval, start=from_date, end=to_date)
         if not df.empty:
-            _logger.info("Delta: %d candles fetched", len(df))
+            _logger.info("%s: %d candles fetched", _broker_label(), len(df))
             _save_cache(df, symbol, candle_interval)
             return df
 
-    raise Exception(f"No candle data for {symbol} (tried cache + Binance + Delta)")
+    raise Exception(f"No candle data for {symbol} (tried cache + Binance + {_broker_label()})")
 
 
 # ── Backtest ──────────────────────────────────────────────────────
@@ -3315,7 +3332,8 @@ async def clear_cache():
 async def get_funding_rates(symbol: str):
     """Get funding rate history."""
     try:
-        rates = delta.get_funding_history(symbol)
+        get_funding_history = getattr(delta, "get_funding_history", None)
+        rates = get_funding_history(symbol) if callable(get_funding_history) else []
         return {"status": "ok", "data": rates}
     except Exception as e:
         return {"status": "error", "message": str(e)[:100]}

@@ -84,7 +84,7 @@ def _select_signal_rows(df, interval: str, now: datetime):
 
 # Try to import WebSocket feed (optional enhancement)
 try:
-    from engine.ws_feed import DeltaWSFeed
+    from engine.ws_feed import create_market_feed
 
     _HAS_WS = True
 except ImportError:
@@ -264,7 +264,7 @@ class PaperTradingEngine:
         if not _HAS_WS:
             return
         try:
-            self._ws_feed = DeltaWSFeed()
+            self._ws_feed = create_market_feed(self.broker)
 
             def _on_ticker(sym, ticker):
                 try:

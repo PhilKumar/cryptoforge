@@ -629,6 +629,120 @@ class DeltaWSFeed:
         }
 
 
+class PollingMarketFeed:
+    """Broker-agnostic price feed backed by periodic ticker polling."""
+
+    def __init__(self, broker, poll_interval_sec: float = 1.0):
+        self._broker = broker
+        self._poll_interval_sec = max(float(poll_interval_sec or 1.0), 0.5)
+        self._symbols: Set[str] = set()
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
+        self._connected = False
+
+        self.on_candle: Optional[Callable] = None
+        self.on_ticker: Optional[Callable] = None
+        self.on_order: Optional[Callable] = None
+        self.on_position: Optional[Callable] = None
+        self.on_error: Optional[Callable] = None
+        self.on_connect: Optional[Callable] = None
+        self.on_disconnect: Optional[Callable] = None
+
+        self.messages_received = 0
+        self.reconnect_count = 0
+        self.last_error = ""
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    def get_status(self) -> dict:
+        return {
+            "connected": self.connected,
+            "authenticated": False,
+            "connection_state": "polling" if self._running else "idle",
+            "ws_url": None,
+            "subscribed_channels": [f"ticker:{symbol}" for symbol in sorted(self._symbols)],
+            "pending_auth_channels": [],
+            "messages_received": self.messages_received,
+            "reconnect_count": self.reconnect_count,
+            "last_error": self.last_error,
+            "last_disconnect_reason": "" if self._running else "polling_disconnect",
+            "last_message_age_ms": None,
+            "connected_at": None,
+            "reconnecting_since": None,
+            "uptime_seconds": 0,
+        }
+
+    async def connect(self):
+        if self._running:
+            return
+        self._running = True
+        self._connected = True
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._poll_loop())
+        if self.on_connect:
+            result = self.on_connect()
+            if asyncio.iscoroutine(result):
+                await result
+
+    async def disconnect(self):
+        self._running = False
+        self._connected = False
+        task = self._task
+        self._task = None
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        if self.on_disconnect:
+            result = self.on_disconnect("polling_disconnect")
+            if asyncio.iscoroutine(result):
+                await result
+
+    async def subscribe_candles(self, symbol: str, resolution: str):
+        return None
+
+    async def subscribe_orders(self):
+        return None
+
+    async def subscribe_positions(self):
+        return None
+
+    async def subscribe_ticker(self, symbol: str):
+        self._symbols.add(str(symbol or "").upper())
+
+    async def _poll_loop(self):
+        while self._running:
+            for symbol in sorted(sym for sym in self._symbols if sym):
+                if not self._running:
+                    break
+                try:
+                    ticker = await asyncio.to_thread(self._broker.get_ticker, symbol)
+                    self.messages_received += 1
+                    if self.on_ticker:
+                        result = self.on_ticker(symbol, ticker or {})
+                        if asyncio.iscoroutine(result):
+                            await result
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self.last_error = str(exc)
+                    if self.on_error:
+                        result = self.on_error(self.last_error)
+                        if asyncio.iscoroutine(result):
+                            await result
+            await asyncio.sleep(self._poll_interval_sec)
+
+
+def create_market_feed(broker) -> object:
+    resolver = getattr(broker, "get_market_feed_kind", None)
+    kind = str(resolver() if callable(resolver) else "native_ws").lower()
+    if kind == "polling":
+        return PollingMarketFeed(broker)
+    return DeltaWSFeed()
+
+
 # ── Convenience: Create feed with candle callback ───────────────
 async def create_candle_feed(symbol: str, resolution: str, callback: Callable) -> DeltaWSFeed:
     """Quick helper to create a WebSocket feed for a single candle stream."""

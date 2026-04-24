@@ -84,7 +84,7 @@ def _select_signal_rows(df, interval: str, now: datetime):
 
 # Try to import WebSocket feed (optional enhancement)
 try:
-    from engine.ws_feed import DeltaWSFeed
+    from engine.ws_feed import create_market_feed
 
     _HAS_WS = True
 except ImportError:
@@ -266,7 +266,7 @@ class LiveEngine:
         if not _HAS_WS:
             return
         try:
-            self._ws_feed = DeltaWSFeed()
+            self._ws_feed = create_market_feed(self.broker)
 
             def _on_ticker(sym, ticker):
                 try:
@@ -326,7 +326,7 @@ class LiveEngine:
             return {"error": "Broker does not support verified order placement", "verified": False}
         return await place_verified(**kwargs)
 
-    def _build_reconciled_trade(self, position: dict, symbol: str, leverage: int, product_id: int) -> dict:
+    def _build_reconciled_trade(self, position: dict, symbol: str, leverage: int, product_id) -> dict:
         signed_size = _coerce_float(position.get("size"), 0.0)
         size = abs(signed_size)
         side = "LONG" if signed_size >= 0 else "SHORT"
@@ -354,7 +354,7 @@ class LiveEngine:
             "_exit_attempts": 0,
         }
 
-    async def _reconcile_exchange_position(self, product_id: int, symbol: str, leverage: int):
+    async def _reconcile_exchange_position(self, product_id, symbol: str, leverage: int):
         position = await asyncio.to_thread(self.broker.get_position, product_id, True)
         signed_size = _coerce_float(position.get("size"), 0.0)
         if abs(signed_size) <= 0:
@@ -465,7 +465,8 @@ class LiveEngine:
             )
             + f" | Fee: {fee_pct}% per side | Compounding: {'ON' if compounding else 'OFF'}",
         )
-        self.log_event("warn", "REAL MONEY — Orders will be placed on Delta Exchange")
+        broker_label = getattr(self.broker, "display_name", "broker")
+        self.log_event("warn", f"REAL MONEY — Orders will be placed on {broker_label}")
         if trailing_sl_pct > 0:
             self.log_event("info", f"Trailing SL: {trailing_sl_pct}% from peak move")
         if self.max_daily_loss > 0:
@@ -667,7 +668,7 @@ class LiveEngine:
                             exit_ok = True
                             try:
                                 exit_result = await self._place_verified_order(
-                                    product_id=int(trade.get("product_id", product_id) or product_id),
+                                    product_id=trade.get("product_id", product_id) or product_id,
                                     size=trade.get("size", 1),
                                     side=close_side,
                                     order_type="market_order",
