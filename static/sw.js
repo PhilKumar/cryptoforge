@@ -1,22 +1,22 @@
-const CACHE_NAME = 'cryptoforge-shell-v18';
+const CACHE_NAME = 'cryptoforge-shell-v19';
 const APP_SHELL = [
-  '/manifest.webmanifest?v=20260424-1',
-  '/apple-touch-icon.png?v=20260424-1',
-  '/static/pwa-icons/favicon-16.png?v=20260424-1',
-  '/static/pwa-icons/favicon-32.png?v=20260424-1',
-  '/static/pwa-icons/apple-touch-icon.png?v=20260424-1',
-  '/static/pwa-icons/icon-192.png?v=20260424-1',
-  '/static/pwa-icons/icon-512.png?v=20260424-1',
-  '/static/pwa-icons/icon-maskable-192.png?v=20260424-1',
-  '/static/pwa-icons/icon-maskable-512.png?v=20260424-1',
-  '/static/cryptoforge-boot.js?v=20260417-1',
-  '/static/cryptoforge-app.css?v=20260424-1',
-  '/static/cryptoforge-app.js?v=20260424-1',
+  '/manifest.webmanifest?v=20260426-1',
+  '/apple-touch-icon.png?v=20260426-1',
+  '/static/pwa-icons/favicon-16.png?v=20260426-1',
+  '/static/pwa-icons/favicon-32.png?v=20260426-1',
+  '/static/pwa-icons/apple-touch-icon.png?v=20260426-1',
+  '/static/pwa-icons/icon-192.png?v=20260426-1',
+  '/static/pwa-icons/icon-512.png?v=20260426-1',
+  '/static/pwa-icons/icon-maskable-192.png?v=20260426-1',
+  '/static/pwa-icons/icon-maskable-512.png?v=20260426-1',
+  '/static/cryptoforge-boot.js?v=20260426-1',
+  '/static/cryptoforge-app.css?v=20260426-1',
+  '/static/cryptoforge-app.js?v=20260426-1',
   '/static/cryptoforge-login.css?v=20260408-1',
   '/static/cryptoforge-login.js?v=20260408-1',
-  '/static/cryptoforge-pwa.css?v=20260417-1',
+  '/static/cryptoforge-pwa.css?v=20260426-1',
   '/static/error-handler.js?v=20260408-1',
-  '/static/pwa.js?v=20260417-1'
+  '/static/pwa.js?v=20260426-1'
 ];
 
 self.addEventListener('install', (event) => {
