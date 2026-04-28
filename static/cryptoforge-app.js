@@ -678,17 +678,54 @@ function cfToast(msg, type) {
 // ── Session Expiry Interceptor ─────────────────────────────
 (function() {
   const _fetch = window.fetch;
+  let redirectingForSession = false;
+
+  function requestPath(input) {
+    var raw = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+    if (!raw) return '';
+    try { return new URL(raw, window.location.origin).pathname; } catch (e) { return raw; }
+  }
+
+  function handleExpiredSession() {
+    if (redirectingForSession) return;
+    redirectingForSession = true;
+    cfToast('Session expired - returning to unlock screen', 'warning');
+    setTimeout(function() {
+      if (window.location.pathname !== '/' || window.location.hash) window.location.assign('/');
+      else window.location.reload();
+    }, 900);
+  }
+
   window.fetch = async function() {
     const resp = await _fetch.apply(this, arguments);
-    if (resp.status === 401 && typeof arguments[0] === 'string' && arguments[0].startsWith('/api/') && !arguments[0].includes('/auth/')) {
-      cfToast('Session expired — redirecting to login', 'warning');
-      setTimeout(function() { window.location.reload(); }, 1500);
+    var path = requestPath(arguments[0]);
+    if (resp.status === 401 && path.startsWith('/api/') && !path.startsWith('/api/auth/')) {
+      handleExpiredSession();
     }
     return resp;
   };
 })();
 
 // ── Page Navigation ────────────────────────────────────────
+let _cfPageHistoryDepth = 0;
+
+function cfUpdateAppNavControls() {
+  var backBtn = document.getElementById('topbar-back-btn');
+  if (backBtn) backBtn.disabled = _cfPageHistoryDepth <= 0 && window.history.length <= 1;
+}
+
+function cfAppBack() {
+  if (_cfPageHistoryDepth > 0 || window.history.length > 1) {
+    window.history.back();
+    return;
+  }
+  showPage('dashboard-page', document.getElementById('nav-dashboard'), { replaceHistory: true, forceReload: true });
+}
+
+function cfAppRefresh() {
+  window.location.reload();
+}
+
 function cfPageTabName(pageId) {
   return String(pageId || 'dashboard-page').replace(/-page$/, '');
 }
@@ -710,14 +747,21 @@ function cfSyncPageHistory(pageId, options) {
   if (opts.skipHistory) return;
   var url = new URL(window.location.href);
   url.hash = cfPageTabName(pageId);
-  var state = { pageId: pageId };
+  var state = { pageId: pageId, cfDepth: _cfPageHistoryDepth };
   if (opts.replaceHistory) {
     window.history.replaceState(state, '', url.toString());
+    cfUpdateAppNavControls();
     return;
   }
   var currentState = window.history.state || {};
-  if (currentState.pageId === pageId && window.location.hash === ('#' + cfPageTabName(pageId))) return;
+  if (currentState.pageId === pageId && window.location.hash === ('#' + cfPageTabName(pageId))) {
+    cfUpdateAppNavControls();
+    return;
+  }
+  _cfPageHistoryDepth += 1;
+  state.cfDepth = _cfPageHistoryDepth;
   window.history.pushState(state, '', url.toString());
+  cfUpdateAppNavControls();
 }
 
 function cfSetActivePageShell(pageId, btn) {
@@ -756,6 +800,8 @@ function showPage(pageId, btn, options) {
 }
 
 window.addEventListener('popstate', function(event) {
+  _cfPageHistoryDepth = Math.max(0, Number(event.state && event.state.cfDepth) || 0);
+  cfUpdateAppNavControls();
   var pageId = (event.state && event.state.pageId) || cfPageIdFromLocation() || 'dashboard-page';
   showPage(pageId, cfNavButtonForPage(pageId), { skipHistory: true });
 });
@@ -4778,6 +4824,8 @@ function renderYearlyMonthlyTable() {
 
 // ── Init ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  _cfPageHistoryDepth = Math.max(0, Number(window.history && window.history.state && window.history.state.cfDepth) || 0);
+  cfUpdateAppNavControls();
   initCryptoSelector();
   renderLeverage(leverageOptions, selectedLeverage);
   renderBuilderDeck();
