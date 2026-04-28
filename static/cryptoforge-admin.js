@@ -282,22 +282,31 @@
     await cfAdminSave();
   }
 
-  var originalShowPage = window.showPage;
-  if (typeof originalShowPage === 'function' && !window.__cfAdminShowPageWrapped) {
-    window.__cfAdminShowPageWrapped = true;
-    window.showPage = function (pageId, btn, options) {
-      var result = originalShowPage.call(window, pageId, btn, options);
-      if (pageId === 'admin-page') setTimeout(function () { cfAdminLoad(true); }, 0);
-      return result;
-    };
+  function cfOpenAdminConsole() {
+    var modal = adminEl('admin-console-modal');
+    if (!modal) return;
+    modal.hidden = false;
+    modal.classList.add('open');
+    document.body.classList.add('admin-console-open');
+    cfAdminLoad(true);
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
-    if (document.getElementById('admin-page') && document.getElementById('admin-page').classList.contains('active-page')) {
-      cfAdminLoad(true);
-    }
+  function cfCloseAdminConsole() {
+    var modal = adminEl('admin-console-modal');
+    if (!modal) return;
+    modal.classList.remove('open');
+    modal.hidden = true;
+    document.body.classList.remove('admin-console-open');
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    var modal = adminEl('admin-console-modal');
+    if (modal && !modal.hidden) cfCloseAdminConsole();
   });
 
+  window.cfOpenAdminConsole = cfOpenAdminConsole;
+  window.cfCloseAdminConsole = cfCloseAdminConsole;
   window.cfAdminLoad = cfAdminLoad;
   window.cfAdminSave = cfAdminSave;
   window.cfAdminSwitchBroker = cfAdminSwitchBroker;

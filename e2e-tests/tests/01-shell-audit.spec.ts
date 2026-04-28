@@ -38,7 +38,6 @@ test.describe('Shell Audit', () => {
       { nav: '#nav-market', section: '#market-page', probe: '#market-table' },
       { nav: '#nav-builder', section: '#builder-page', probe: '#backtest-run-btn' },
       { nav: '#nav-results', section: '#results-page', probe: '#runs-table' },
-      { nav: '#nav-admin', section: '#admin-page', probe: '#admin-active-broker-select' },
     ];
 
     for (const check of checks) {

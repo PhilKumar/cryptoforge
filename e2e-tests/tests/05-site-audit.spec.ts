@@ -23,7 +23,6 @@ const shellPages = [
   { hash: '#scalp', nav: '#nav-scalp', section: 'scalp-page', probe: '#cf-scalp-active-table' },
   { hash: '#market', nav: '#nav-market', section: 'market-page', probe: '#market-table' },
   { hash: '#results', nav: '#nav-results', section: 'results-page', probe: '#runs-table' },
-  { hash: '#admin', nav: '#nav-admin', section: 'admin-page', probe: '#admin-active-broker-select' },
 ];
 
 const getRoutes = [
@@ -173,9 +172,9 @@ test.describe('Comprehensive Site Audit', () => {
     expect(issues).toEqual([]);
   });
 
-  test('admin console lists both brokers and masks secret values', async ({ page }) => {
-    await page.click('#nav-admin');
-    await expectActivePage(page, 'admin-page', 'nav-admin');
+  test('admin console modal lists both brokers and masks secret values', async ({ page }) => {
+    await page.click('#topbar-admin-btn');
+    await expect(page.locator('#admin-console-modal')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('#admin-active-broker-select')).toBeVisible({ timeout: 15_000 });
 
     await expect.poll(async () => page.locator('#admin-active-broker-select option').evaluateAll((nodes) => nodes.map((node) => (node as HTMLOptionElement).value)), {

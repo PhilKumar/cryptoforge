@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260428-1">
-<link rel="manifest" href="/manifest.webmanifest?v=20260428-1">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260428-2">
+<link rel="manifest" href="/manifest.webmanifest?v=20260428-2">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260428-1"></script>
+<script src="/static/cryptoforge-boot.js?v=20260428-2"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260428-1">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260428-1">
-<script src="/static/error-handler.js?v=20260428-1" defer></script>
-<script src="/static/pwa.js?v=20260428-1" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260428-2">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260428-2">
+<script src="/static/error-handler.js?v=20260428-2" defer></script>
+<script src="/static/pwa.js?v=20260428-2" defer></script>
 </head>
 <body>
 
@@ -83,9 +83,8 @@
         <path d="M5 17v1a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"></path>
       </svg>
     </button>
-    <button type="button" class="topbar-console-btn" id="topbar-admin-btn" data-cf-click="showPage('admin-page', document.getElementById('nav-admin'))" title="Open Admin Console">
+    <button type="button" class="topbar-icon-btn topbar-console-btn" id="topbar-admin-btn" data-cf-click="cfOpenAdminConsole()" title="Broker & API Console" aria-label="Broker and API Console">
       <span class="topbar-console-icon">⚙</span>
-      <span>Console</span>
     </button>
     <div class="topbar-icon-btn" data-cf-click="toggleTheme()" title="Toggle theme">🌓</div>
     <div class="topbar-icon-btn" data-cf-click="doLogout()" title="Logout">⏻</div>
@@ -182,10 +181,6 @@
     <button id="nav-results" class="nav-tab" data-cf-click="showPage('results-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></span>
       <span class="tab-label">Results</span>
-    </button>
-    <button id="nav-admin" class="nav-tab" data-cf-click="showPage('admin-page', this)">
-      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M9 12l2 2 4-4"/></svg></span>
-      <span class="tab-label">Admin</span>
     </button>
   </div>
 </div>
@@ -1321,20 +1316,20 @@
 
 </div><!-- /scalp-page -->
 
-<!-- ═══════════════════════════════════════════════════════
-     PAGE 8: ADMIN
-     ═══════════════════════════════════════════════════════ -->
-<div id="admin-page" class="page-section">
-  <div class="admin-console-head">
-    <div>
-      <h2>Admin Console</h2>
-      <div class="admin-console-sub" id="admin-console-updated">Runtime configuration</div>
+<!-- ═══ BROKER / API CONSOLE MODAL ═══ -->
+<div class="cf-admin-modal-overlay" id="admin-console-modal" hidden data-cf-click="if(event.target===this)cfCloseAdminConsole()">
+  <div class="cf-admin-modal-panel" role="dialog" aria-modal="true" aria-labelledby="admin-console-title">
+    <div class="admin-console-head">
+      <div>
+        <h2 id="admin-console-title">Broker & API Console</h2>
+        <div class="admin-console-sub" id="admin-console-updated">Runtime configuration</div>
+      </div>
+      <div class="admin-console-actions">
+        <button class="btn btn-outline btn-sm" data-cf-click="cfAdminLoad(false)">Refresh</button>
+        <button class="btn btn-primary btn-sm" id="admin-save-btn" data-cf-click="cfAdminSave()">Save Environment</button>
+        <button class="topbar-icon-btn admin-modal-close" id="admin-console-close" data-cf-click="cfCloseAdminConsole()" title="Close console" aria-label="Close console">×</button>
+      </div>
     </div>
-    <div class="admin-console-actions">
-      <button class="btn btn-outline btn-sm" data-cf-click="cfAdminLoad(false)">Refresh</button>
-      <button class="btn btn-primary btn-sm" id="admin-save-btn" data-cf-click="cfAdminSave()">Save Environment</button>
-    </div>
-  </div>
 
   <div class="stats-grid admin-status-grid">
     <div class="stat-box">
@@ -1409,6 +1404,7 @@
       <div class="admin-field-grid admin-field-grid-compact" id="admin-fields-routing"></div>
       <div class="admin-field-grid admin-field-grid-compact" id="admin-fields-security"></div>
     </section>
+    </div>
   </div>
 </div>
 
@@ -1567,7 +1563,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260428-1" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260428-1" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260428-2" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260428-2" defer></script>
 </body>
 </html>

@@ -20,18 +20,17 @@ test.describe('App Shell Navigation', () => {
     await login(page);
   });
 
-  test('header console and installed-app controls are visible and route correctly', async ({ page }) => {
+  test('header console opens broker settings as a modal, not a page', async ({ page }) => {
     await expect(page.locator('#topbar-refresh-btn')).toBeVisible();
     await expect(page.locator('#topbar-admin-btn')).toBeVisible();
 
     await page.click('#topbar-admin-btn');
-    await expectActivePage(page, 'admin-page', 'nav-admin');
+    await expect(page.locator('#admin-console-modal')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#admin-active-broker-select')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('#topbar-back-btn')).toBeEnabled();
-
-    await page.click('#topbar-back-btn');
     await expectActivePage(page, 'dashboard-page', 'nav-dashboard');
-    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#dashboard');
+
+    await page.click('#admin-console-close');
+    await expect(page.locator('#admin-console-modal')).toBeHidden();
   });
 
   test('browser history tracks shell navigation for the installed-app back button path', async ({ page }) => {
@@ -66,11 +65,6 @@ test.describe('App Shell Navigation', () => {
     await page.evaluate(() => { location.hash = '#live'; });
     await expectActivePage(page, 'live-page', 'nav-live');
     await expect.poll(() => page.evaluate(() => location.hash)).toBe('#live');
-
-    await page.evaluate(() => { location.hash = '#admin'; });
-    await expectActivePage(page, 'admin-page', 'nav-admin');
-    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#admin');
-    await expect(page.locator('#admin-active-broker-select')).toBeVisible({ timeout: 10_000 });
 
     await page.evaluate(() => localStorage.setItem('cf_active_tab', 'portfolio'));
     await page.goto('/');
