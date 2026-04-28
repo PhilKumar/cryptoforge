@@ -10,6 +10,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -37,6 +38,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 os.chdir(_HERE)
 
+from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -389,6 +391,7 @@ def _available_broker_defs() -> list[dict]:
                 "name": name,
                 "label": str(getattr(client, "display_name", name.title()) or name.title()),
                 "feed_kind": str(feed_kind or "polling"),
+                "configured": _broker_is_configured(client),
             }
         )
     return brokers
@@ -1003,6 +1006,12 @@ class BrokerSettingsRequest(BaseModel):
     broker: str
 
 
+class AdminConfigUpdateRequest(BaseModel):
+    values: Dict[str, Optional[str]] = {}
+    clear_keys: List[str] = []
+    active_broker: Optional[str] = None
+
+
 _ALWAYS_AVAILABLE_FIELDS = {
     "current_open",
     "current_high",
@@ -1512,6 +1521,284 @@ def _broker_settings_payload() -> dict:
     }
 
 
+_ENV_PATH = os.path.abspath(os.path.expanduser(os.getenv("CRYPTOFORGE_ENV_PATH") or os.path.join(_HERE, ".env")))
+_ENV_KEY_RE = re.compile(r"^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+_ADMIN_CONFIG_FIELDS = [
+    {
+        "key": "CRYPTOFORGE_BROKER",
+        "label": "Startup Broker",
+        "section": "routing",
+        "kind": "select",
+        "options": get_supported_brokers(),
+        "secret": False,
+    },
+    {"key": "CRYPTOFORGE_PIN", "label": "Unlock PIN", "section": "security", "kind": "password", "secret": True},
+    {"key": "DELTA_API_KEY", "label": "API Key", "section": "delta", "kind": "password", "secret": True},
+    {"key": "DELTA_API_SECRET", "label": "API Secret", "section": "delta", "kind": "password", "secret": True},
+    {
+        "key": "DELTA_REGION",
+        "label": "Region",
+        "section": "delta",
+        "kind": "select",
+        "options": ["india", "global"],
+        "secret": False,
+    },
+    {
+        "key": "DELTA_TESTNET",
+        "label": "Testnet",
+        "section": "delta",
+        "kind": "boolean",
+        "options": ["false", "true"],
+        "secret": False,
+    },
+    {"key": "COINDCX_API_KEY", "label": "API Key", "section": "coindcx", "kind": "password", "secret": True},
+    {"key": "COINDCX_API_SECRET", "label": "API Secret", "section": "coindcx", "kind": "password", "secret": True},
+    {"key": "COINDCX_BASE_URL", "label": "API Base URL", "section": "coindcx", "kind": "text", "secret": False},
+    {"key": "COINDCX_PUBLIC_URL", "label": "Public Data URL", "section": "coindcx", "kind": "text", "secret": False},
+    {
+        "key": "COINDCX_MARGIN_CURRENCY",
+        "label": "Margin Currency",
+        "section": "coindcx",
+        "kind": "text",
+        "secret": False,
+    },
+]
+_ADMIN_CONFIG_FIELD_BY_KEY = {field["key"]: field for field in _ADMIN_CONFIG_FIELDS}
+
+
+def _mask_secret(value: str) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    if len(raw) <= 8:
+        return "****"
+    return raw[:4] + "..." + raw[-4:]
+
+
+def _env_file_values() -> dict:
+    try:
+        return {key: str(value) for key, value in dotenv_values(_ENV_PATH).items() if value is not None}
+    except Exception as exc:
+        _logger.warning("Failed to read env file %s: %s", _ENV_PATH, exc)
+        return {}
+
+
+def _admin_env_value(key: str, values: Optional[dict] = None) -> str:
+    source = values if values is not None else _env_file_values()
+    if key in source:
+        return str(source.get(key) or "")
+    return str(os.getenv(key, "") or "")
+
+
+def _admin_config_field_payload(field: dict, values: dict) -> dict:
+    key = field["key"]
+    value = _admin_env_value(key, values)
+    secret = bool(field.get("secret"))
+    payload = {
+        "key": key,
+        "label": field.get("label") or key,
+        "section": field.get("section") or "app",
+        "kind": field.get("kind") or ("password" if secret else "text"),
+        "secret": secret,
+        "configured": bool(str(value).strip()),
+        "masked": _mask_secret(value) if secret else "",
+        "value": "" if secret else value,
+    }
+    if field.get("options"):
+        payload["options"] = list(field.get("options") or [])
+    return payload
+
+
+def _admin_config_payload() -> dict:
+    values = _env_file_values()
+    return {
+        "status": "ok",
+        "env_path": _ENV_PATH,
+        "env_exists": os.path.exists(_ENV_PATH),
+        "env_writable": os.access(os.path.dirname(_ENV_PATH) or _HERE, os.W_OK),
+        "fields": [_admin_config_field_payload(field, values) for field in _ADMIN_CONFIG_FIELDS],
+        "broker_settings": _broker_settings_payload(),
+        "runtime": _runtime_registry_summary(),
+        "updated_at": str(datetime.now()),
+    }
+
+
+def _serialize_env_value(value: str) -> str:
+    raw = str(value or "")
+    if raw == "":
+        return ""
+    if re.search(r"\s|#|['\"]", raw):
+        return json.dumps(raw)
+    return raw
+
+
+def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
+    field = _ADMIN_CONFIG_FIELD_BY_KEY.get(key)
+    if not field:
+        raise HTTPException(status_code=400, detail=f"Unsupported env key: {key}")
+    raw = "" if value is None else str(value).strip()
+    if "\n" in raw or "\r" in raw:
+        raise HTTPException(status_code=400, detail=f"{key} cannot contain newlines")
+    kind = field.get("kind") or "text"
+    if key == "CRYPTOFORGE_PIN":
+        if not raw:
+            raise HTTPException(status_code=400, detail="CRYPTOFORGE_PIN cannot be empty")
+        if len(raw) < 4:
+            raise HTTPException(status_code=400, detail="CRYPTOFORGE_PIN must be at least 4 characters")
+    if kind == "boolean":
+        lowered = raw.lower()
+        if lowered not in {"true", "false"}:
+            raise HTTPException(status_code=400, detail=f"{key} must be true or false")
+        return lowered
+    if key == "CRYPTOFORGE_BROKER":
+        return _normalize_broker_name(raw)
+    if key == "DELTA_REGION":
+        lowered = raw.lower()
+        if lowered not in {"india", "global"}:
+            raise HTTPException(status_code=400, detail="DELTA_REGION must be india or global")
+        return lowered
+    if key == "COINDCX_MARGIN_CURRENCY":
+        return raw.upper()
+    return raw
+
+
+def _write_env_updates(updates: dict) -> str:
+    if not updates:
+        return ""
+    env_dir = os.path.dirname(_ENV_PATH) or _HERE
+    os.makedirs(env_dir, exist_ok=True)
+    existing_lines = []
+    if os.path.exists(_ENV_PATH):
+        with open(_ENV_PATH, encoding="utf-8") as fh:
+            existing_lines = fh.readlines()
+
+    seen = set()
+    output = []
+    for line in existing_lines:
+        match = _ENV_KEY_RE.match(line)
+        key = match.group(2) if match else ""
+        if key in updates:
+            prefix = "export " if match and match.group(1) else ""
+            output.append(f"{prefix}{key}={_serialize_env_value(updates[key])}\n")
+            seen.add(key)
+        else:
+            output.append(line)
+
+    missing = [key for key in updates if key not in seen]
+    if missing and output and output[-1].strip():
+        output.append("\n")
+    for key in missing:
+        output.append(f"{key}={_serialize_env_value(updates[key])}\n")
+
+    backup_path = ""
+    if os.path.exists(_ENV_PATH):
+        backup_path = _ENV_PATH + ".bak-" + datetime.now().strftime("%Y%m%d%H%M%S")
+        shutil.copy2(_ENV_PATH, backup_path)
+    fd, tmp_path = tempfile.mkstemp(prefix=".env.", suffix=".tmp", dir=env_dir, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.writelines(output)
+        os.replace(tmp_path, _ENV_PATH)
+        try:
+            os.chmod(_ENV_PATH, 0o600)
+        except OSError:
+            pass
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+    return backup_path
+
+
+def _reload_runtime_config_from_env() -> None:
+    global AUTH_PIN, SESSION_SECRET
+
+    load_dotenv(_ENV_PATH, override=True)
+
+    config.DELTA_API_KEY = os.getenv("DELTA_API_KEY", "YOUR_API_KEY_HERE")
+    config.DELTA_API_SECRET = os.getenv("DELTA_API_SECRET", "YOUR_API_SECRET_HERE")
+    config.COINDCX_API_KEY = os.getenv("COINDCX_API_KEY", "YOUR_COINDCX_API_KEY_HERE")
+    config.COINDCX_API_SECRET = os.getenv("COINDCX_API_SECRET", "YOUR_COINDCX_API_SECRET_HERE")
+    config.COINDCX_BASE_URL = os.getenv("COINDCX_BASE_URL", "https://api.coindcx.com")
+    config.COINDCX_PUBLIC_URL = os.getenv("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
+    config.COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
+    config.CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "delta")).lower()
+    config.DELTA_TESTNET = os.getenv("DELTA_TESTNET", "false").lower() == "true"
+    config.DELTA_REGION = os.getenv("DELTA_REGION", "india").lower()
+    if config.DELTA_TESTNET:
+        config.DELTA_BASE_URL = "https://testnet-api.delta.exchange/v2"
+        config.DELTA_WS_URL = "wss://testnet-socket.delta.exchange"
+    elif config.DELTA_REGION == "global":
+        config.DELTA_BASE_URL = "https://api.delta.exchange/v2"
+        config.DELTA_WS_URL = "wss://socket.delta.exchange"
+    else:
+        config.DELTA_BASE_URL = "https://api.india.delta.exchange/v2"
+        config.DELTA_WS_URL = "wss://socket.india.delta.exchange"
+    AUTH_PIN = os.getenv("CRYPTOFORGE_PIN") or os.getenv("CRYPTOFORGE_PASSWORD") or AUTH_PIN
+    SESSION_SECRET = os.getenv("SESSION_SECRET", SESSION_SECRET)
+
+
+async def _apply_admin_config_update(payload: AdminConfigUpdateRequest) -> dict:
+    runtime_locks = _broker_runtime_lock_summary()
+    requested_active = str(payload.active_broker or "").strip().lower()
+    value_updates = dict(payload.values or {})
+    clear_keys = {str(key or "").strip() for key in (payload.clear_keys or []) if str(key or "").strip()}
+
+    if requested_active:
+        requested_active = _normalize_broker_name(requested_active)
+        value_updates["CRYPTOFORGE_BROKER"] = requested_active
+
+    updates = {}
+    for key, value in value_updates.items():
+        key = str(key or "").strip()
+        if not key:
+            continue
+        if key not in _ADMIN_CONFIG_FIELD_BY_KEY:
+            raise HTTPException(status_code=400, detail=f"Unsupported env key: {key}")
+        if _ADMIN_CONFIG_FIELD_BY_KEY[key].get("secret") and (value is None or str(value).strip() == ""):
+            continue
+        updates[key] = _normalize_admin_env_update(key, value)
+
+    for key in clear_keys:
+        if key not in _ADMIN_CONFIG_FIELD_BY_KEY:
+            raise HTTPException(status_code=400, detail=f"Unsupported env key: {key}")
+        if key == "CRYPTOFORGE_PIN":
+            raise HTTPException(status_code=400, detail="CRYPTOFORGE_PIN cannot be cleared from the admin console")
+        updates[key] = ""
+
+    if not updates and not requested_active:
+        return {"status": "ok", "message": "No configuration changes submitted", **_admin_config_payload()}
+
+    broker_sensitive_keys = set(updates) - {"CRYPTOFORGE_PIN"}
+    target_switch = requested_active and requested_active != _active_broker_name()
+    if (broker_sensitive_keys or target_switch) and not runtime_locks["switchable"]:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "locked",
+                "message": runtime_locks["reasons"][0]
+                if runtime_locks["reasons"]
+                else "Stop active broker workflows before changing environment settings.",
+                **_admin_config_payload(),
+            },
+        )
+
+    backup_path = _write_env_updates(updates)
+    _reload_runtime_config_from_env()
+    active_target = requested_active or _active_broker_name()
+    _set_active_broker(active_target, persist=True)
+    _market_cache["data"] = None
+    _market_cache["timestamp"] = 0
+    _ticker_cache["data"] = None
+    _ticker_cache["timestamp"] = 0
+    _logger.info("Admin environment configuration updated: %s", ", ".join(sorted(updates)))
+    return {
+        "status": "ok",
+        "message": "Environment settings saved",
+        "backup_path": backup_path,
+        **_admin_config_payload(),
+    }
+
+
 async def _switch_active_broker(name: str) -> dict:
     global _scalp_engine, _market_cache, _ticker_cache
 
@@ -1854,6 +2141,24 @@ async def dashboard_summary(request: Request):
 
 
 # ── Broker Connection ────────────────────────────────────────────
+
+
+@app.get("/api/admin/config")
+async def get_admin_config():
+    return _admin_config_payload()
+
+
+@app.put("/api/admin/config")
+async def update_admin_config(payload: AdminConfigUpdateRequest, request: Request = None):
+    check_rate_limit(
+        "admin_config_update",
+        max_calls=6,
+        window_sec=60,
+        client_ip=request.client.host if request and request.client else "global",
+    )
+    return await _apply_admin_config_update(payload)
+
+
 @app.get("/api/broker/settings")
 async def get_broker_settings():
     return {"status": "ok", **_broker_settings_payload()}
@@ -2942,9 +3247,12 @@ async def get_positions():
 @app.get("/api/wallet")
 async def get_wallet():
     try:
-        return delta.get_wallet()
+        wallet = delta.get_wallet()
+        if isinstance(wallet, dict) and wallet.get("error"):
+            return {"status": "error", "message": str(wallet.get("error"))[:100], "data": []}
+        return wallet
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"status": "error", "message": str(e)[:100], "data": []}
 
 
 # ── Broker Trade History ─────────────────────────────────────────

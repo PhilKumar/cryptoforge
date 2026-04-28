@@ -53,6 +53,11 @@ test.describe('App Shell Navigation', () => {
     await expectActivePage(page, 'live-page', 'nav-live');
     await expect.poll(() => page.evaluate(() => location.hash)).toBe('#live');
 
+    await page.evaluate(() => { location.hash = '#admin'; });
+    await expectActivePage(page, 'admin-page', 'nav-admin');
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#admin');
+    await expect(page.locator('#admin-active-broker-select')).toBeVisible({ timeout: 10_000 });
+
     await page.evaluate(() => localStorage.setItem('cf_active_tab', 'portfolio'));
     await page.goto('/');
     await expectActivePage(page, 'portfolio-page', 'nav-portfolio');

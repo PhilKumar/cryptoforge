@@ -4153,3 +4153,201 @@
     0 5px 12px rgba(15,23,42,0.05),
     inset 0 1px 0 rgba(255,255,255,0.96);
 }
+
+
+/* ── Admin Console ── */
+.admin-console-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.admin-console-sub,
+.admin-stat-note,
+.admin-field-meta,
+.admin-lock-reasons,
+.admin-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+.admin-console-actions,
+.admin-inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.admin-status-grid .stat-value {
+  font-size: 18px;
+}
+.admin-path-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.admin-console-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.admin-panel-wide {
+  grid-column: 1 / -1;
+}
+.admin-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.admin-kicker {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+.admin-pill {
+  border: 1px solid rgba(251,191,36,0.35);
+  border-radius: 999px;
+  color: #fbbf24;
+  background: rgba(251,191,36,0.10);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+.admin-pill[data-state="ok"] {
+  border-color: rgba(52,211,153,0.35);
+  color: var(--green);
+  background: var(--green-bg);
+}
+.admin-pill[data-state="warn"] {
+  border-color: rgba(251,191,36,0.35);
+  color: #fbbf24;
+  background: rgba(251,191,36,0.10);
+}
+.admin-broker-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.admin-broker-card {
+  text-align: left;
+  border: 1px solid rgba(118,138,176,0.20);
+  background: rgba(255,255,255,0.035);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 13px 14px;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  min-height: 92px;
+}
+.admin-broker-card:hover,
+.admin-broker-card.active {
+  border-color: rgba(157,113,248,0.46);
+  background: rgba(157,113,248,0.12);
+}
+.admin-broker-card-label,
+.admin-broker-card span:last-child {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.admin-broker-card strong {
+  font-family: var(--font-display);
+  font-size: 18px;
+  letter-spacing: 0;
+}
+.admin-lock-reasons {
+  display: grid;
+  gap: 8px;
+}
+.admin-lock-ok,
+.admin-lock-reason {
+  border: 1px solid rgba(118,138,176,0.16);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: rgba(255,255,255,0.035);
+}
+.admin-lock-ok {
+  color: var(--green);
+  border-color: rgba(52,211,153,0.22);
+  background: var(--green-bg);
+}
+.admin-lock-reason {
+  color: #fbbf24;
+  border-color: rgba(251,191,36,0.22);
+  background: rgba(251,191,36,0.08);
+}
+.admin-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.admin-field-grid-compact {
+  margin-top: 12px;
+}
+.admin-field {
+  min-width: 0;
+}
+.admin-field label:first-child {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.admin-field input,
+.admin-field select {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.admin-field-meta {
+  margin-top: 6px;
+  min-height: 18px;
+  overflow-wrap: anywhere;
+}
+.admin-clear-secret {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted) !important;
+  font-size: 12px !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  cursor: pointer;
+}
+.admin-clear-secret input {
+  width: auto;
+  min-width: 16px;
+  box-shadow: none;
+}
+[data-theme="light"] .admin-broker-card,
+[data-theme="light"] .admin-lock-ok,
+[data-theme="light"] .admin-lock-reason {
+  background: rgba(15,23,42,0.03);
+}
+@media (max-width: 900px) {
+  .admin-console-head,
+  .admin-panel-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .admin-console-actions,
+  .admin-inline-actions {
+    justify-content: flex-start;
+  }
+  .admin-console-grid,
+  .admin-field-grid {
+    grid-template-columns: 1fr;
+  }
+}

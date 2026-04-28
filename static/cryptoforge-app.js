@@ -4024,7 +4024,7 @@ function copyEditStrategy(data) {
   cfToast('Run loaded for editing', 'success');
 }
 
-// ── Multi-Engine Live Monitor (PhilForge-style single panel) ───
+// ── Multi-Engine Live Monitor ───────────────────────────────────
 let _liveMonitorInterval = null;
 let _liveEngines = [];
 let _liveSelectedTab = 0; // index of selected tab

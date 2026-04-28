@@ -1,5 +1,5 @@
 /**
- * error-handler.js — PhilForge / CryptoForge Frontend Error System
+ * error-handler.js — CryptoForge Frontend Error System
  * =================================================================
  * Drop-in: add one line to strategy.html <head>:
  *   <script src="/static/error-handler.js" defer></script>
@@ -45,7 +45,7 @@ function _showCrashScreen(message, source) {
   // Only inject once
   if (document.getElementById('_af-crash-screen')) return;
 
-  console.error('[PhilForge] Fatal JS error →', message, source);
+  console.error('[CryptoForge] Fatal JS error ->', message, source);
 
   const screen = document.createElement('div');
   screen.id = '_af-crash-screen';
@@ -738,4 +738,4 @@ function _escHtml(str) {
 
 window._escHtml = _escHtml;
 
-console.info('[PhilForge] error-handler.js loaded — global error handling active.');
+console.info('[CryptoForge] error-handler.js loaded - global error handling active.');
