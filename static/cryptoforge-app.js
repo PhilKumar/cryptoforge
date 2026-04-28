@@ -204,7 +204,7 @@ const TOP_25 = [
   {symbol:"SOLUSDT",name:"Solana",ticker:"SOL",icon:"◎"},
   {symbol:"XRPUSDT",name:"Ripple",ticker:"XRP",icon:"✕"},
   {symbol:"DOGEUSDT",name:"Dogecoin",ticker:"DOGE",icon:"Ð"},
-  {symbol:"PAXGUSD",name:"PAXGUSD",ticker:"PAXGUSD",icon:"🥇"},
+  {symbol:"PAXGUSD",name:"PAXGUSD",ticker:"PAXGUSD",icon:"Au"},
 ];
 
 // ── Core Assets — BTC / ETH / SOL (primary three) ─────────

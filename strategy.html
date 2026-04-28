@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260428-2">
-<link rel="manifest" href="/manifest.webmanifest?v=20260428-2">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260428-3">
+<link rel="manifest" href="/manifest.webmanifest?v=20260428-3">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260428-2"></script>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260428-2">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260428-2">
-<script src="/static/error-handler.js?v=20260428-2" defer></script>
-<script src="/static/pwa.js?v=20260428-2" defer></script>
+<script src="/static/cryptoforge-boot.js?v=20260428-3"></script>
+<link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260428-3">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260428-3">
+<script src="/static/error-handler.js?v=20260428-3" defer></script>
+<script src="/static/pwa.js?v=20260428-3" defer></script>
 </head>
 <body>
 
@@ -43,7 +43,7 @@
     </div>
     <div>
       <div class="topbar-brand-text">CRYPTOFORGE</div>
-      <div class="topbar-brand-sub">Futures • Algorithms • Alpha</div>
+      <div class="topbar-brand-sub">Perpetuals • Execution • Intelligence</div>
     </div>
   </div>
 
@@ -84,10 +84,10 @@
       </svg>
     </button>
     <button type="button" class="topbar-icon-btn topbar-console-btn" id="topbar-admin-btn" data-cf-click="cfOpenAdminConsole()" title="Broker & API Console" aria-label="Broker and API Console">
-      <span class="topbar-console-icon">⚙</span>
+      <span class="topbar-console-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.2 2.2 0 0 1-3.11 3.11l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21.5a2.2 2.2 0 0 1-4.4 0v-.06a1.8 1.8 0 0 0-1.09-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.2 2.2 0 0 1-3.11-3.11l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.09H2.9a2.2 2.2 0 0 1 0-4.4h.06A1.8 1.8 0 0 0 4.6 8a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.2 2.2 0 0 1 3.11-3.11l.04.04A1.8 1.8 0 0 0 9.33 3.3 1.8 1.8 0 0 0 10.42 1.65V1.6a2.2 2.2 0 0 1 4.4 0v.06A1.8 1.8 0 0 0 15.91 3.3a1.8 1.8 0 0 0 1.98-.36l.04-.04a2.2 2.2 0 0 1 3.11 3.11l-.04.04A1.8 1.8 0 0 0 19.4 8c.12.36.3.68.56.94.3.3.73.47 1.17.47h.06a2.2 2.2 0 0 1 0 4.4h-.06A1.8 1.8 0 0 0 19.4 15Z"></path></svg></span>
     </button>
-    <div class="topbar-icon-btn" data-cf-click="toggleTheme()" title="Toggle theme">🌓</div>
-    <div class="topbar-icon-btn" data-cf-click="doLogout()" title="Logout">⏻</div>
+    <button type="button" class="topbar-icon-btn" data-cf-click="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"></path></svg></button>
+    <button type="button" class="topbar-icon-btn" data-cf-click="doLogout()" title="Logout" aria-label="Logout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v9"></path><path d="M6.4 6.4a8 8 0 1 0 11.2 0"></path></svg></button>
   </div>
 </div>
 
@@ -112,7 +112,7 @@
       <span class="ap-icon">Ð</span> DOGE
     </div>
     <div class="asset-pill" id="ap-PAXGUSD" data-cf-click="setQuickAsset('PAXGUSD',this)">
-      <span class="ap-icon">🥇</span> PAXGUSD
+      <span class="ap-icon">Au</span> PAXGUSD
     </div>
     <div class="asset-pill-divider"></div>
     <div class="asset-pill" id="ap-BNBUSDT" data-cf-click="setQuickAsset('BNBUSDT',this)">
@@ -1563,7 +1563,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260428-2" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260428-2" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260428-3" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260428-3" defer></script>
 </body>
 </html>
