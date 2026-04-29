@@ -4,6 +4,51 @@ try {
   }
 } catch(e) {}
 
+
+function syncLoginAppearancePanel() {
+  const state = typeof window.cfGetAppearance === 'function' ? window.cfGetAppearance() : { tint: 'aqua', font: 'terminal' };
+  document.querySelectorAll('[data-login-tint]').forEach((btn) => {
+    const active = btn.getAttribute('data-login-tint') === state.tint;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-login-font]').forEach((btn) => {
+    const active = btn.getAttribute('data-login-font') === state.font;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function initLoginAppearance() {
+  const toggle = document.getElementById('login-appearance-toggle');
+  const panel = document.getElementById('login-appearance-panel');
+  if (!toggle || !panel) return;
+  syncLoginAppearancePanel();
+  toggle.addEventListener('click', () => {
+    panel.hidden = !panel.hidden;
+    panel.classList.toggle('open', !panel.hidden);
+    syncLoginAppearancePanel();
+  });
+  panel.addEventListener('click', (event) => {
+    const tintBtn = event.target.closest('[data-login-tint]');
+    const fontBtn = event.target.closest('[data-login-font]');
+    if (tintBtn && typeof window.cfApplyAppearance === 'function') {
+      window.cfApplyAppearance({ tint: tintBtn.getAttribute('data-login-tint') }, { persist: true });
+      syncLoginAppearancePanel();
+    }
+    if (fontBtn && typeof window.cfApplyAppearance === 'function') {
+      window.cfApplyAppearance({ font: fontBtn.getAttribute('data-login-font') }, { persist: true });
+      syncLoginAppearancePanel();
+    }
+  });
+  document.addEventListener('click', (event) => {
+    if (panel.hidden) return;
+    if (panel.contains(event.target) || toggle.contains(event.target)) return;
+    panel.hidden = true;
+    panel.classList.remove('open');
+  });
+}
+
 const PIN_LENGTH = 6;
 let pin = '';
 let locked = false;
@@ -99,3 +144,5 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Backspace') removeDigit();
   else if (e.key === 'Escape') clearAll();
 });
+
+initLoginAppearance();

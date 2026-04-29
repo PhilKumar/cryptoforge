@@ -2,9 +2,71 @@
     var THEME_KEY = 'cf-theme';
     var THEME_META_SELECTOR = 'meta[name="theme-color"]';
     var THEME_COLORS = {
-      dark: '#07090f',
-      light: '#f8fafc'
+      dark: '#040814',
+      light: '#f5f8fc'
     };
+
+    var APPEARANCE_KEY = 'cf-appearance';
+    var APPEARANCE_DEFAULT = { tint: 'aqua', font: 'terminal' };
+    var APPEARANCE_TINTS = { aqua: true, gold: true, emerald: true, ruby: true, violet: true };
+    var APPEARANCE_FONTS = {
+      terminal: '',
+      institutional: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap',
+      modern: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap',
+      quant: 'https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700;800&family=Roboto+Mono:wght@400;500;600;700&display=swap',
+      editorial: 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap'
+    };
+
+    function normalizeAppearance(value) {
+      var state = value || {};
+      if (typeof state === 'string') state = { tint: state };
+      var tint = APPEARANCE_TINTS[state.tint] ? state.tint : APPEARANCE_DEFAULT.tint;
+      var font = Object.prototype.hasOwnProperty.call(APPEARANCE_FONTS, state.font) ? state.font : APPEARANCE_DEFAULT.font;
+      return { tint: tint, font: font };
+    }
+
+    function getStoredAppearance() {
+      try {
+        var raw = localStorage.getItem(APPEARANCE_KEY);
+        if (!raw) return normalizeAppearance();
+        return normalizeAppearance(JSON.parse(raw));
+      } catch (e) {
+        return normalizeAppearance();
+      }
+    }
+
+    function loadFontTheme(font) {
+      var href = APPEARANCE_FONTS[font] || '';
+      var existing = document.getElementById('cf-appearance-font');
+      if (!href) return;
+      if (existing && existing.getAttribute('href') === href) return;
+      if (!existing) {
+        existing = document.createElement('link');
+        existing.id = 'cf-appearance-font';
+        existing.rel = 'stylesheet';
+        document.head.appendChild(existing);
+      }
+      existing.setAttribute('href', href);
+    }
+
+    function applyAppearance(next, options) {
+      var opts = options || {};
+      var current = getStoredAppearance();
+      var incoming = next || {};
+      if (typeof incoming === 'string') incoming = { tint: incoming };
+      var state = normalizeAppearance({
+        tint: incoming.tint || current.tint,
+        font: incoming.font || current.font
+      });
+      var root = document.documentElement;
+      root.setAttribute('data-tint', state.tint);
+      root.setAttribute('data-font-theme', state.font);
+      loadFontTheme(state.font);
+      if (opts.persist) {
+        try { localStorage.setItem(APPEARANCE_KEY, JSON.stringify(state)); } catch (e) {}
+      }
+      return state;
+    }
 
     function prefersLightTheme() {
       try {
@@ -69,7 +131,10 @@
     window.cfResolveTheme = resolveTheme;
     window.cfApplyTheme = applyTheme;
     window.cfToggleTheme = toggleTheme;
+    window.cfGetAppearance = getStoredAppearance;
+    window.cfApplyAppearance = applyAppearance;
 
+    applyAppearance(getStoredAppearance(), { persist: false });
     applyTheme(getStoredTheme(), { persist: false });
     bindSystemThemeWatcher();
 

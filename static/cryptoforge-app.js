@@ -198,6 +198,82 @@ function _cfBindLegacyAttrBridge() {
 
 _cfBindLegacyAttrBridge();
 
+
+const CF_APPEARANCE_TINT_LABELS = {
+  aqua: 'Aqua Terminal',
+  gold: 'Gold Desk',
+  emerald: 'Emerald Grid',
+  ruby: 'Ruby Risk',
+  violet: 'Violet Pulse'
+};
+const CF_APPEARANCE_FONT_LABELS = {
+  terminal: 'Terminal Pro',
+  institutional: 'Institutional',
+  modern: 'Modern Desk',
+  quant: 'Quant Lab',
+  editorial: 'Premium Serif'
+};
+
+function cfCurrentAppearance() {
+  if (typeof window.cfGetAppearance === 'function') return window.cfGetAppearance();
+  return { tint: 'aqua', font: 'terminal' };
+}
+
+function cfSyncAppearancePanel() {
+  const state = cfCurrentAppearance();
+  document.querySelectorAll('[data-appearance-tint]').forEach(function(btn) {
+    const active = btn.getAttribute('data-appearance-tint') === state.tint;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-appearance-font]').forEach(function(btn) {
+    const active = btn.getAttribute('data-appearance-font') === state.font;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function cfOpenAppearancePanel() {
+  const modal = document.getElementById('appearance-modal');
+  if (!modal) return;
+  cfSyncAppearancePanel();
+  modal.hidden = false;
+  modal.classList.add('open');
+  document.body.classList.add('appearance-open');
+}
+
+function cfCloseAppearancePanel() {
+  const modal = document.getElementById('appearance-modal');
+  if (!modal) return;
+  modal.classList.remove('open');
+  modal.hidden = true;
+  document.body.classList.remove('appearance-open');
+}
+
+function cfSetAppearanceTint(tint) {
+  if (typeof window.cfApplyAppearance === 'function') {
+    window.cfApplyAppearance({ tint: tint }, { persist: true });
+  }
+  cfSyncAppearancePanel();
+  cfToast('Tint changed to ' + (CF_APPEARANCE_TINT_LABELS[tint] || tint), 'success');
+}
+
+function cfSetAppearanceFont(font) {
+  if (typeof window.cfApplyAppearance === 'function') {
+    window.cfApplyAppearance({ font: font }, { persist: true });
+  }
+  cfSyncAppearancePanel();
+  cfToast('Font changed to ' + (CF_APPEARANCE_FONT_LABELS[font] || font), 'success');
+}
+
+function cfResetAppearance() {
+  if (typeof window.cfApplyAppearance === 'function') {
+    window.cfApplyAppearance({ tint: 'aqua', font: 'terminal' }, { persist: true });
+  }
+  cfSyncAppearancePanel();
+  cfToast('Appearance reset', 'info');
+}
+
 const TOP_25 = [
   {symbol:"BTCUSDT",name:"Bitcoin",ticker:"BTC",icon:"₿"},
   {symbol:"ETHUSDT",name:"Ethereum",ticker:"ETH",icon:"Ξ"},
@@ -6507,6 +6583,8 @@ function cfUpdateSLTPHints() {
 // Close run-detail modal on ESC key
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
+    const appearanceModal = document.getElementById('appearance-modal');
+    if (appearanceModal && !appearanceModal.hidden) cfCloseAppearancePanel();
     const m = document.getElementById('run-detail-modal');
     if (m && m.style.display === 'flex') closeRunModal();
   }

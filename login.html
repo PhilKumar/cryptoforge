@@ -8,16 +8,41 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260428-3">
-<link rel="manifest" href="/manifest.webmanifest?v=20260428-3">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260429-1">
+<link rel="manifest" href="/manifest.webmanifest?v=20260429-1">
 <title>CryptoForge — Unlock</title>
-<script src="/static/cryptoforge-boot.js?v=20260428-3"></script>
+<script src="/static/cryptoforge-boot.js?v=20260429-1"></script>
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-login.css?v=20260428-3">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260428-3">
+<link rel="stylesheet" href="/static/cryptoforge-login.css?v=20260429-1">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260429-1">
 
 </head>
 <body>
+
+
+<button type="button" class="login-appearance-toggle" id="login-appearance-toggle" aria-label="Appearance">
+  <span class="login-appearance-dot"></span>
+  <span>Style</span>
+</button>
+<div class="login-appearance-panel" id="login-appearance-panel" hidden>
+  <div class="login-appearance-title">Appearance</div>
+  <div class="login-appearance-label">Tint</div>
+  <div class="login-appearance-grid">
+    <button type="button" data-login-tint="aqua" class="swatch-aqua" aria-label="Aqua tint"></button>
+    <button type="button" data-login-tint="gold" class="swatch-gold" aria-label="Gold tint"></button>
+    <button type="button" data-login-tint="emerald" class="swatch-emerald" aria-label="Emerald tint"></button>
+    <button type="button" data-login-tint="ruby" class="swatch-ruby" aria-label="Ruby tint"></button>
+    <button type="button" data-login-tint="violet" class="swatch-violet" aria-label="Violet tint"></button>
+  </div>
+  <div class="login-appearance-label">Font</div>
+  <div class="login-font-list">
+    <button type="button" data-login-font="terminal">Terminal</button>
+    <button type="button" data-login-font="institutional">Institutional</button>
+    <button type="button" data-login-font="modern">Modern</button>
+    <button type="button" data-login-font="quant">Quant</button>
+    <button type="button" data-login-font="editorial">Serif</button>
+  </div>
+</div>
 
 <div class="unlock-card" id="unlock-card">
   <div class="brand-icon">CF</div>
@@ -53,8 +78,8 @@
   <div class="unlock-footer">Session-secured &middot; Auto-locks after 24h</div>
 </div>
 
-<script src="/static/cryptoforge-login.js?v=20260428-3" defer></script>
-<script src="/static/pwa.js?v=20260428-3" defer></script>
+<script src="/static/cryptoforge-login.js?v=20260429-1" defer></script>
+<script src="/static/pwa.js?v=20260429-1" defer></script>
 
 </body>
 </html>
