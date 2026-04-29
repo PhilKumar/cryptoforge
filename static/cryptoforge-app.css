@@ -3556,6 +3556,14 @@
 .cf-scalp-input-grow {
   flex: 1;
 }
+.cf-scalp-order-select {
+  font-weight: 700;
+}
+.cf-scalp-input:disabled,
+.cf-scalp-type-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .cf-scalp-help {
   margin-top: 4px;
   font-size: 10px;
@@ -3702,7 +3710,8 @@
   color: var(--yellow);
 }
 .cf-scalp-pending-wrap[hidden],
-.cf-scalp-live-safety[hidden] {
+.cf-scalp-live-safety[hidden],
+.cf-scalp-trail-field[hidden] {
   display: none !important;
 }
 .cf-scalp-pending-title {

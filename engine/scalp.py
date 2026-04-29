@@ -47,6 +47,63 @@ def _parse_dt(value):
         return None
 
 
+SCALP_ORDER_TYPE_LABELS = {
+    "market": "Market",
+    "maker_only": "Maker Only",
+    "stop_limit": "Stop Limit",
+    "stop_market": "Stop Market",
+    "trailing_stop": "Trailing Stop",
+    "take_profit_market": "Take Profit Market",
+    "take_profit_limit": "Take Profit Limit",
+}
+
+_SCALP_ORDER_TYPE_ALIASES = {
+    "": "",
+    "market": "market",
+    "market_order": "market",
+    "maker": "maker_only",
+    "maker_only": "maker_only",
+    "post_only": "maker_only",
+    "limit": "maker_only",
+    "limit_order": "maker_only",
+    "stop": "stop_market",
+    "stop_market": "stop_market",
+    "stop_loss_market": "stop_market",
+    "stop_limit": "stop_limit",
+    "stop_loss_limit": "stop_limit",
+    "trailing": "trailing_stop",
+    "trail": "trailing_stop",
+    "trailing_stop": "trailing_stop",
+    "take_profit": "take_profit_market",
+    "take_profit_market": "take_profit_market",
+    "tp_market": "take_profit_market",
+    "take_profit_limit": "take_profit_limit",
+    "tp_limit": "take_profit_limit",
+}
+
+
+def normalize_scalp_order_type(raw, *, entry_stop_price: float = 0.0, entry_limit_price: float = 0.0) -> str:
+    """Normalize the scalp entry order type while preserving legacy stop/limit payloads."""
+
+    key = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = _SCALP_ORDER_TYPE_ALIASES.get(key)
+    if normalized is None:
+        return "invalid"
+    if normalized:
+        return normalized
+    if _coerce_float(entry_stop_price, 0.0) > 0 and _coerce_float(entry_limit_price, 0.0) > 0:
+        return "stop_limit"
+    if _coerce_float(entry_stop_price, 0.0) > 0:
+        return "stop_market"
+    if _coerce_float(entry_limit_price, 0.0) > 0:
+        return "maker_only"
+    return "market"
+
+
+def _scalp_order_type_label(order_type: str) -> str:
+    return SCALP_ORDER_TYPE_LABELS.get(str(order_type or "market"), "Market")
+
+
 class ScalpTrade:
     """Represents a single open crypto scalp position."""
 
@@ -76,6 +133,10 @@ class ScalpTrade:
         entry_time: Optional[datetime] = None,
         mode: str = "live",
         guardrail_price: float = 0.0,
+        entry_order_type: str = "market",
+        maker_only: bool = False,
+        trail_value: float = 0.0,
+        trail_mode: str = "usd",
         execution_metrics: Optional[Dict[str, Any]] = None,
     ):
         self.trade_id = trade_id
@@ -96,6 +157,17 @@ class ScalpTrade:
         self.entry_limit_price = _coerce_float(entry_limit_price, 0.0)
         self.entry_stop_price = _coerce_float(entry_stop_price or guardrail_price, 0.0)
         self.guardrail_price = self.entry_stop_price
+        self.entry_order_type = normalize_scalp_order_type(
+            entry_order_type,
+            entry_stop_price=self.entry_stop_price,
+            entry_limit_price=self.entry_limit_price,
+        )
+        if self.entry_order_type == "invalid":
+            self.entry_order_type = "market"
+        self.order_type = self.entry_order_type
+        self.maker_only = bool(maker_only or self.entry_order_type == "maker_only")
+        self.trail_value = _coerce_float(trail_value, 0.0)
+        self.trail_mode = "pct" if str(trail_mode or "").strip().lower() in {"pct", "percent", "percentage"} else "usd"
         self._exit_guard_until = self.entry_time + timedelta(seconds=2 if mode == "live" else 1)
         self._prefer_fresh_rest_mark_until = self.entry_time + timedelta(seconds=5 if mode == "live" else 2)
         self._post_entry_price_ready = False
@@ -232,6 +304,12 @@ class ScalpTrade:
             "sl_usd": self.sl_usd,
             "entry_limit_price": self.entry_limit_price,
             "entry_stop_price": self.entry_stop_price,
+            "entry_order_type": self.entry_order_type,
+            "order_type": self.entry_order_type,
+            "order_type_label": _scalp_order_type_label(self.entry_order_type),
+            "maker_only": self.maker_only,
+            "trail_value": self.trail_value,
+            "trail_mode": self.trail_mode,
             "order_id": self.order_id,
             "guardrail_price": self.guardrail_price,
             "entry_time": str(self.entry_time),
@@ -281,6 +359,10 @@ class ScalpTrade:
             entry_time=_parse_dt(data.get("entry_time")),
             mode=str(data.get("mode", "paper") or "paper"),
             guardrail_price=_coerce_float(data.get("guardrail_price"), 0.0),
+            entry_order_type=str(data.get("entry_order_type", data.get("order_type", "market")) or "market"),
+            maker_only=bool(data.get("maker_only", False)),
+            trail_value=_coerce_float(data.get("trail_value"), 0.0),
+            trail_mode=str(data.get("trail_mode", "usd") or "usd"),
             execution_metrics=data.get("execution_metrics") or {},
         )
         trade.current_price = _coerce_float(data.get("current_price", data.get("mark_price")), trade.entry_price)
@@ -320,6 +402,11 @@ class PendingScalpEntry:
         entry_limit_price: float = 0.0,
         entry_stop_price: float = 0.0,
         guardrail_price: float = 0.0,
+        order_type: str = "market",
+        maker_only: bool = False,
+        trail_value: float = 0.0,
+        trail_mode: str = "usd",
+        trail_anchor_price: float = 0.0,
         target_price: float = 0.0,
         sl_price: float = 0.0,
         target_pct: float = 0.0,
@@ -341,6 +428,19 @@ class PendingScalpEntry:
         self.entry_limit_price = _coerce_float(entry_limit_price, 0.0)
         self.entry_stop_price = _coerce_float(entry_stop_price or guardrail_price, 0.0)
         self.guardrail_price = self.entry_stop_price
+        self.order_type = normalize_scalp_order_type(
+            order_type,
+            entry_stop_price=self.entry_stop_price,
+            entry_limit_price=self.entry_limit_price,
+        )
+        if self.order_type == "invalid":
+            self.order_type = "market"
+        self.entry_order_type = self.order_type
+        self.maker_only = bool(maker_only or self.order_type == "maker_only")
+        self.trail_value = _coerce_float(trail_value, 0.0)
+        self.trail_mode = "pct" if str(trail_mode or "").strip().lower() in {"pct", "percent", "percentage"} else "usd"
+        self.trail_anchor_price = _coerce_float(trail_anchor_price, 0.0)
+        self.trail_trigger_price = 0.0
         self.target_price = target_price
         self.sl_price = sl_price
         self.target_pct = target_pct
@@ -351,24 +451,86 @@ class PendingScalpEntry:
         self.created_at = _now_utc()
         self.execution_metrics = dict(execution_metrics or {})
 
+    def _stop_hit(self, price: float) -> bool:
+        if self.entry_stop_price <= 0:
+            return False
+        return price >= self.entry_stop_price if self.side == "LONG" else price <= self.entry_stop_price
+
+    def _limit_hit(self, price: float) -> bool:
+        if self.entry_limit_price <= 0:
+            return False
+        return price <= self.entry_limit_price if self.side == "LONG" else price >= self.entry_limit_price
+
+    def _take_profit_hit(self, price: float) -> bool:
+        if self.entry_stop_price <= 0:
+            return False
+        return price <= self.entry_stop_price if self.side == "LONG" else price >= self.entry_stop_price
+
+    def _trail_distance(self) -> float:
+        if self.trail_value <= 0:
+            return 0.0
+        anchor = self.trail_anchor_price or 0.0
+        if self.trail_mode == "pct":
+            return anchor * self.trail_value / 100 if anchor > 0 else 0.0
+        return self.trail_value
+
+    def _update_trailing_anchor(self, price: float) -> None:
+        if self.trail_anchor_price <= 0:
+            self.trail_anchor_price = price
+            return
+        if self.side == "LONG":
+            self.trail_anchor_price = min(self.trail_anchor_price, price)
+        else:
+            self.trail_anchor_price = max(self.trail_anchor_price, price)
+
     def should_trigger(self, price: float) -> bool:
+        price = _coerce_float(price, 0.0)
         if price <= 0:
             return False
-        stop_hit = False
-        limit_hit = False
-        if self.entry_stop_price > 0:
-            stop_hit = price >= self.entry_stop_price if self.side == "LONG" else price <= self.entry_stop_price
-        if self.entry_limit_price > 0:
-            limit_hit = price <= self.entry_limit_price if self.side == "LONG" else price >= self.entry_limit_price
-        return stop_hit or limit_hit
+        order_type = normalize_scalp_order_type(
+            self.order_type,
+            entry_stop_price=self.entry_stop_price,
+            entry_limit_price=self.entry_limit_price,
+        )
+        if order_type == "trailing_stop":
+            self._update_trailing_anchor(price)
+            distance = self._trail_distance()
+            if distance <= 0:
+                return False
+            self.trail_trigger_price = (
+                self.trail_anchor_price + distance if self.side == "LONG" else self.trail_anchor_price - distance
+            )
+            return price >= self.trail_trigger_price if self.side == "LONG" else price <= self.trail_trigger_price
+        if order_type == "maker_only":
+            return self._limit_hit(price)
+        if order_type == "stop_market":
+            return self._stop_hit(price)
+        if order_type == "stop_limit":
+            return self._stop_hit(price) and self._limit_hit(price)
+        if order_type == "take_profit_market":
+            return self._take_profit_hit(price)
+        if order_type == "take_profit_limit":
+            return self._take_profit_hit(price) and self._limit_hit(price)
+        return self._stop_hit(price) or self._limit_hit(price)
 
     def trigger_summary(self) -> str:
-        bits = []
+        bits = [_scalp_order_type_label(self.order_type)]
         if self.entry_stop_price > 0:
-            bits.append(("Stop ≥ " if self.side == "LONG" else "Stop ≤ ") + f"${self.entry_stop_price:,.4f}")
+            if self.order_type in {"take_profit_market", "take_profit_limit"}:
+                label = "TP trigger <= " if self.side == "LONG" else "TP trigger >= "
+            else:
+                label = "Stop >= " if self.side == "LONG" else "Stop <= "
+            bits.append(label + f"${self.entry_stop_price:,.4f}")
         if self.entry_limit_price > 0:
-            bits.append(("Limit ≤ " if self.side == "LONG" else "Limit ≥ ") + f"${self.entry_limit_price:,.4f}")
-        return " • ".join(bits) or "Market"
+            bits.append(("Limit <= " if self.side == "LONG" else "Limit >= ") + f"${self.entry_limit_price:,.4f}")
+        if self.order_type == "trailing_stop":
+            unit = "%" if self.trail_mode == "pct" else " USD"
+            bits.append(f"Trail {self.trail_value:g}{unit}")
+            if self.trail_anchor_price > 0:
+                bits.append(f"Anchor ${self.trail_anchor_price:,.4f}")
+            if self.trail_trigger_price > 0:
+                bits.append(f"Next ${self.trail_trigger_price:,.4f}")
+        return " • ".join(bits)
 
     def to_dict(self) -> dict:
         return {
@@ -384,6 +546,14 @@ class PendingScalpEntry:
             "entry_limit_price": self.entry_limit_price,
             "entry_stop_price": self.entry_stop_price,
             "guardrail_price": self.guardrail_price,
+            "order_type": self.order_type,
+            "entry_order_type": self.entry_order_type,
+            "order_type_label": _scalp_order_type_label(self.order_type),
+            "maker_only": self.maker_only,
+            "trail_value": self.trail_value,
+            "trail_mode": self.trail_mode,
+            "trail_anchor_price": self.trail_anchor_price,
+            "trail_trigger_price": self.trail_trigger_price,
             "target_price": self.target_price,
             "sl_price": self.sl_price,
             "target_pct": self.target_pct,
@@ -413,6 +583,11 @@ class PendingScalpEntry:
             entry_limit_price=_coerce_float(data.get("entry_limit_price"), 0.0),
             entry_stop_price=_coerce_float(data.get("entry_stop_price", data.get("guardrail_price")), 0.0),
             guardrail_price=_coerce_float(data.get("guardrail_price"), 0.0),
+            order_type=str(data.get("entry_order_type", data.get("order_type", "market")) or "market"),
+            maker_only=bool(data.get("maker_only", False)),
+            trail_value=_coerce_float(data.get("trail_value"), 0.0),
+            trail_mode=str(data.get("trail_mode", "usd") or "usd"),
+            trail_anchor_price=_coerce_float(data.get("trail_anchor_price"), 0.0),
             target_price=_coerce_float(data.get("target_price"), 0.0),
             sl_price=_coerce_float(data.get("sl_price"), 0.0),
             target_pct=_coerce_float(data.get("target_pct"), 0.0),
@@ -902,16 +1077,55 @@ class ScalpEngine:
         qty_value: float = 0.0,
         entry_limit_price: float = 0.0,
         entry_stop_price: float = 0.0,
+        order_type: str = "",
+        maker_only: bool = False,
+        trail_value: float = 0.0,
+        trail_mode: str = "usd",
     ) -> Dict[str, Any]:
-        """Place immediately, or arm a pending stop/limit-triggered scalp entry."""
+        """Place immediately, or arm a Delta-style pending scalp entry."""
 
         qty_mode = "base" if str(qty_mode or "").lower() in {"base", "qty", "coin"} else "usdt"
+        raw_order_type = str(order_type or "").strip().lower().replace("-", "_").replace(" ", "_")
         entry_stop_price = _coerce_float(entry_stop_price or guardrail_price, 0.0)
         entry_limit_price = _coerce_float(entry_limit_price, 0.0)
+        if raw_order_type in {"market", "market_order"}:
+            entry_stop_price = 0.0
+            entry_limit_price = 0.0
+        order_type = normalize_scalp_order_type(
+            order_type,
+            entry_stop_price=entry_stop_price,
+            entry_limit_price=entry_limit_price,
+        )
+        trail_value = _coerce_float(trail_value, 0.0)
+        trail_mode = "pct" if str(trail_mode or "").strip().lower() in {"pct", "percent", "percentage"} else "usd"
         qty_value = _coerce_float(qty_value, 0.0)
+        if order_type == "invalid":
+            return {"status": "error", "message": "Unsupported scalp order type"}
+        if order_type == "maker_only" and entry_limit_price <= 0:
+            return {"status": "error", "message": "Entry limit price is required for Maker Only orders"}
+        if (
+            order_type in {"stop_market", "stop_limit", "take_profit_market", "take_profit_limit"}
+            and entry_stop_price <= 0
+        ):
+            return {
+                "status": "error",
+                "message": f"Trigger price is required for {_scalp_order_type_label(order_type)} orders",
+            }
+        if order_type in {"stop_limit", "take_profit_limit"} and entry_limit_price <= 0:
+            return {
+                "status": "error",
+                "message": f"Entry limit price is required for {_scalp_order_type_label(order_type)} orders",
+            }
+        if order_type == "trailing_stop" and trail_value <= 0:
+            return {"status": "error", "message": "Trail value must be greater than zero for Trailing Stop orders"}
         market_price = self._cached_price(symbol)
         needs_price = (
-            qty_mode == "base" or mode != "paper" or entry_stop_price > 0 or entry_limit_price > 0 or size <= 0
+            qty_mode == "base"
+            or mode != "paper"
+            or order_type != "market"
+            or entry_stop_price > 0
+            or entry_limit_price > 0
+            or size <= 0
         )
         if market_price <= 0 and needs_price:
             try:
@@ -926,20 +1140,29 @@ class ScalpEngine:
         if qty_value <= 0 and size > 0 and qty_mode != "base":
             qty_value = round(size / max(leverage, 1), 4)
 
-        has_price_trigger = entry_stop_price > 0 or entry_limit_price > 0
+        has_price_trigger = order_type != "market" or entry_stop_price > 0 or entry_limit_price > 0
         if has_price_trigger:
             should_enter_now = False
-            if market_price > 0:
-                if side == "LONG":
-                    if entry_stop_price > 0 and market_price >= entry_stop_price:
-                        should_enter_now = True
-                    if entry_limit_price > 0 and market_price <= entry_limit_price:
-                        should_enter_now = True
-                else:
-                    if entry_stop_price > 0 and market_price <= entry_stop_price:
-                        should_enter_now = True
-                    if entry_limit_price > 0 and market_price >= entry_limit_price:
-                        should_enter_now = True
+            if market_price <= 0 and order_type == "trailing_stop":
+                return {
+                    "status": "error",
+                    "message": f"A live market price is required to arm a Trailing Stop order for {symbol}",
+                }
+            if market_price > 0 and order_type != "trailing_stop":
+                probe = PendingScalpEntry(
+                    entry_id=0,
+                    symbol=symbol,
+                    side=side,
+                    size=max(size, 0),
+                    leverage=leverage,
+                    entry_limit_price=entry_limit_price,
+                    entry_stop_price=entry_stop_price,
+                    order_type=order_type,
+                    maker_only=maker_only,
+                    trail_value=trail_value,
+                    trail_mode=trail_mode,
+                )
+                should_enter_now = probe.should_trigger(market_price)
             if not should_enter_now:
                 self._trade_counter += 1
                 size_estimate = size
@@ -976,6 +1199,11 @@ class ScalpEngine:
                     margin_usd=margin_usd,
                     entry_limit_price=entry_limit_price,
                     entry_stop_price=entry_stop_price,
+                    order_type=order_type,
+                    maker_only=maker_only,
+                    trail_value=trail_value,
+                    trail_mode=trail_mode,
+                    trail_anchor_price=market_price if order_type == "trailing_stop" else 0.0,
                     target_price=target_price,
                     sl_price=sl_price,
                     target_pct=target_pct,
@@ -1044,6 +1272,10 @@ class ScalpEngine:
             guardrail_price=entry_stop_price,
             entry_limit_price=entry_limit_price,
             entry_stop_price=entry_stop_price,
+            order_type=order_type,
+            maker_only=maker_only,
+            trail_value=trail_value,
+            trail_mode=trail_mode,
             market_price=market_price,
         )
 
@@ -1066,9 +1298,34 @@ class ScalpEngine:
         guardrail_price: float = 0.0,
         entry_limit_price: float = 0.0,
         entry_stop_price: float = 0.0,
+        order_type: str = "",
+        maker_only: bool = False,
+        trail_value: float = 0.0,
+        trail_mode: str = "usd",
         market_price: float = 0.0,
     ) -> Dict[str, Any]:
         """Place a broker order (or simulate in paper mode) and register the scalp trade."""
+
+        raw_order_type = str(order_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if raw_order_type in {"market", "market_order"}:
+            entry_stop_price = 0.0
+            entry_limit_price = 0.0
+            guardrail_price = 0.0
+        entry_order_type = normalize_scalp_order_type(
+            order_type,
+            entry_stop_price=entry_stop_price,
+            entry_limit_price=entry_limit_price,
+        )
+        if entry_order_type == "invalid":
+            entry_order_type = "market"
+        trail_value = _coerce_float(trail_value, 0.0)
+        trail_mode = "pct" if str(trail_mode or "").strip().lower() in {"pct", "percent", "percentage"} else "usd"
+        broker_order_type = (
+            "limit_order"
+            if entry_order_type in {"maker_only", "stop_limit", "take_profit_limit"} and entry_limit_price > 0
+            else "market_order"
+        )
+        broker_limit_price = entry_limit_price if broker_order_type == "limit_order" else None
 
         product_id = 0
         if mode != "paper":
@@ -1090,6 +1347,9 @@ class ScalpEngine:
             except Exception:
                 pass
 
+        if mode == "paper" and broker_limit_price and broker_limit_price > 0:
+            entry_price = broker_limit_price
+
         if size <= 0:
             size = self._resolve_contract_size(
                 qty_mode=qty_mode, qty_value=qty_value, price=entry_price, leverage=leverage
@@ -1110,7 +1370,7 @@ class ScalpEngine:
                 verified=False,
                 requested_size=size,
                 requested_qty_value=qty_value,
-                note="Broker order submitted",
+                note=f"Broker {_scalp_order_type_label(entry_order_type)} order submitted",
                 lifecycle="submitted",
                 fill_status="submitted",
             )
@@ -1131,7 +1391,8 @@ class ScalpEngine:
                     product_id=product_id,
                     size=size,
                     side=order_side,
-                    order_type="market_order",
+                    order_type=broker_order_type,
+                    limit_price=broker_limit_price,
                     leverage=leverage,
                 )
                 if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
@@ -1184,6 +1445,10 @@ class ScalpEngine:
             sl_usd=sl_usd,
             entry_limit_price=entry_limit_price,
             entry_stop_price=entry_stop_price,
+            entry_order_type=entry_order_type,
+            maker_only=maker_only,
+            trail_value=trail_value,
+            trail_mode=trail_mode,
             order_id=order_id,
             mode=mode,
             guardrail_price=guardrail_price,
@@ -1214,10 +1479,14 @@ class ScalpEngine:
                 f" ack={_coerce_float(result.get('order_ack_ms'), 0.0):,.1f}ms"
             )
         trigger_bits = []
+        if entry_order_type != "market":
+            trigger_bits.append(f"type={_scalp_order_type_label(entry_order_type)}")
         if entry_stop_price > 0:
-            trigger_bits.append(f"stop=${entry_stop_price:,.4f}")
+            trigger_bits.append(f"trigger=${entry_stop_price:,.4f}")
         if entry_limit_price > 0:
             trigger_bits.append(f"limit=${entry_limit_price:,.4f}")
+        if entry_order_type == "trailing_stop" and trail_value > 0:
+            trigger_bits.append(f"trail={trail_value:g}{'%' if trail_mode == 'pct' else ' USD'}")
         trigger_text = (" " + " ".join(trigger_bits)) if trigger_bits else ""
         self._log(
             "entry",
@@ -1669,6 +1938,10 @@ class ScalpEngine:
                         guardrail_price=pending.entry_stop_price,
                         entry_limit_price=pending.entry_limit_price,
                         entry_stop_price=pending.entry_stop_price,
+                        order_type=pending.order_type,
+                        maker_only=pending.maker_only,
+                        trail_value=pending.trail_value,
+                        trail_mode=pending.trail_mode,
                         market_price=price,
                     )
                     if result.get("status") != "ok":

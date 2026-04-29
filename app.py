@@ -52,7 +52,7 @@ from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
-from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade
+from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade, normalize_scalp_order_type
 from state_store import get_json_store
 
 
@@ -2868,6 +2868,35 @@ def _parse_scalp_qty_mode(body: Dict, *keys, default: str = "usdt") -> str:
     return normalized
 
 
+def _parse_scalp_order_type(body: Dict, *, entry_stop_price: float, entry_limit_price: float) -> str:
+    raw = _body_value(body, "order_type", "entry_order_type", default="")
+    order_type = normalize_scalp_order_type(
+        raw,
+        entry_stop_price=entry_stop_price,
+        entry_limit_price=entry_limit_price,
+    )
+    if order_type == "invalid":
+        raise HTTPException(status_code=400, detail="Unsupported scalp order type")
+    return order_type
+
+
+def _parse_scalp_trail_mode(body: Dict) -> str:
+    raw = str(_body_value(body, "trail_mode", "trail_type", default="usd") or "usd").strip().lower()
+    aliases = {
+        "usd": "usd",
+        "usdt": "usd",
+        "$": "usd",
+        "price": "usd",
+        "pct": "pct",
+        "%": "pct",
+        "percent": "pct",
+    }
+    normalized = aliases.get(raw)
+    if normalized is None:
+        raise HTTPException(status_code=400, detail="trail_mode must be usd or pct")
+    return normalized
+
+
 @app.get("/api/ticker")
 async def get_ticker():
     """Fetch live prices for top cryptos."""
@@ -4758,6 +4787,17 @@ async def scalp_enter(request: Request):
     qty_value = _parse_float_field(body, "qty_value", "qty_base", "qty_usdt", default=default_qty, min_value=0.0)
     entry_stop_price = _parse_float_field(body, "entry_stop_price", "guardrail_price", default=0.0, min_value=0.0)
     entry_limit_price = _parse_float_field(body, "entry_limit_price", default=0.0, min_value=0.0)
+    explicit_order_type = "order_type" in body or "entry_order_type" in body
+    order_type = _parse_scalp_order_type(
+        body,
+        entry_stop_price=entry_stop_price,
+        entry_limit_price=entry_limit_price,
+    )
+    if explicit_order_type and order_type == "market":
+        entry_stop_price = 0.0
+        entry_limit_price = 0.0
+    trail_mode = _parse_scalp_trail_mode(body)
+    trail_value = _parse_float_field(body, "trail_value", "trail_amount", "trailing_value", default=0.0, min_value=0.0)
     target_price = _parse_float_field(body, "target_price", "tp_price", default=0.0, min_value=0.0)
     sl_price = _parse_float_field(body, "sl_price", default=0.0, min_value=0.0)
     legacy_size = _parse_int_field(body, "size", default=0, min_value=0)
@@ -4767,11 +4807,21 @@ async def scalp_enter(request: Request):
     sl_usd = _parse_float_field(body, "sl_usd", default=0.0, min_value=0.0)
     if qty_value <= 0:
         raise HTTPException(status_code=400, detail="qty_value must be greater than zero")
+    if order_type == "maker_only" and entry_limit_price <= 0:
+        raise HTTPException(status_code=400, detail="entry_limit_price is required for Maker Only orders")
+    if order_type in {"stop_market", "stop_limit", "take_profit_market", "take_profit_limit"} and entry_stop_price <= 0:
+        raise HTTPException(
+            status_code=400, detail="entry_stop_price is required as the trigger price for this order type"
+        )
+    if order_type in {"stop_limit", "take_profit_limit"} and entry_limit_price <= 0:
+        raise HTTPException(status_code=400, detail="entry_limit_price is required for this order type")
+    if order_type == "trailing_stop" and trail_value <= 0:
+        raise HTTPException(status_code=400, detail="trail_value must be greater than zero for Trailing Stop orders")
     if legacy_size <= 0 and qty_mode != "base" and qty_value > 0:
         legacy_size = int(qty_value * leverage)
 
     entry_controls = eng.get_status(symbol).get("entry_controls", {})
-    pending_requested = entry_stop_price > 0 or entry_limit_price > 0
+    pending_requested = order_type != "market" or entry_stop_price > 0 or entry_limit_price > 0
     if not pending_requested:
         allowed = entry_controls.get("paper_allowed") if mode == "paper" else entry_controls.get("live_allowed")
         if not allowed:
@@ -4805,6 +4855,10 @@ async def scalp_enter(request: Request):
             guardrail_price=entry_stop_price,
             entry_limit_price=entry_limit_price,
             entry_stop_price=entry_stop_price,
+            order_type=order_type,
+            maker_only=order_type == "maker_only",
+            trail_value=trail_value,
+            trail_mode=trail_mode,
             mode=mode,
         )
         if result.get("status") == "error":

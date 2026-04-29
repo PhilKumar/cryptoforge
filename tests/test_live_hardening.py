@@ -20,7 +20,7 @@ from engine.live import LiveEngine
 from engine.live import _select_signal_rows as select_live_signal_rows
 from engine.paper_trading import PaperTradingEngine
 from engine.paper_trading import _select_signal_rows as select_paper_signal_rows
-from engine.scalp import ScalpEngine
+from engine.scalp import PendingScalpEntry, ScalpEngine
 from engine.ws_feed import PollingMarketFeed, create_market_feed
 
 _DEFAULT_PRODUCT = object()
@@ -970,6 +970,81 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending["entry_limit_price"], 99.0)
         self.assertEqual(pending["entry_stop_price"], 0.0)
 
+    async def test_scalp_explicit_market_ignores_stale_trigger_fields(self):
+        delta = FakeScalpDelta(ticker_prices=[100.0])
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine._record_price("BTCUSD", 100.0, source="ws")
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            leverage=10,
+            qty_mode="usdt",
+            qty_value=1000,
+            entry_stop_price=105.0,
+            entry_limit_price=99.0,
+            order_type="market",
+            mode="paper",
+        )
+
+        self.assertEqual(entered["status"], "ok")
+        self.assertFalse(engine.pending_entries)
+        trade = entered["trade"]
+        self.assertEqual(trade["order_type"], "market")
+        self.assertEqual(trade["entry_stop_price"], 0.0)
+        self.assertEqual(trade["entry_limit_price"], 0.0)
+
+    async def test_scalp_stop_limit_order_requires_both_trigger_and_limit(self):
+        delta = FakeScalpDelta(ticker_prices=[100.0])
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+
+        missing_limit = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            leverage=10,
+            qty_mode="usdt",
+            qty_value=1000,
+            entry_stop_price=105.0,
+            order_type="stop_limit",
+            mode="paper",
+        )
+        self.assertEqual(missing_limit["status"], "error")
+        self.assertIn("limit", missing_limit["message"].lower())
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            leverage=10,
+            qty_mode="usdt",
+            qty_value=1000,
+            entry_stop_price=105.0,
+            entry_limit_price=106.0,
+            order_type="stop_limit",
+            mode="paper",
+        )
+        self.assertEqual(entered["status"], "pending")
+        self.assertEqual(entered["pending_entry"]["order_type"], "stop_limit")
+
+    async def test_pending_trailing_stop_tracks_anchor_then_triggers(self):
+        pending = PendingScalpEntry(
+            entry_id=1,
+            symbol="BTCUSDT",
+            side="LONG",
+            size=1000,
+            leverage=10,
+            order_type="trailing_stop",
+            trail_value=2.0,
+            trail_mode="usd",
+            trail_anchor_price=100.0,
+        )
+
+        self.assertFalse(pending.should_trigger(99.0))
+        self.assertEqual(pending.trail_anchor_price, 99.0)
+        self.assertFalse(pending.should_trigger(100.5))
+        self.assertTrue(pending.should_trigger(101.0))
+
     async def test_scalp_add_to_trade_scales_position_from_base_quantity(self):
         delta = FakeScalpDelta(ticker_prices=[100.0, 100.0])
         engine = ScalpEngine(delta)
@@ -1416,6 +1491,29 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(bad.json()["error"]["detail"], "Invalid qty_value")
+
+    async def test_scalp_enter_rejects_missing_delta_order_controls(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            csrf = client.cookies.get("cryptoforge_csrf") or ""
+            bad = await client.post(
+                "/api/scalp/enter",
+                json={
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "qty_value": 1000,
+                    "qty_mode": "usdt",
+                    "leverage": 10,
+                    "mode": "paper",
+                    "order_type": "take_profit_limit",
+                    "entry_stop_price": 99.0,
+                },
+                headers={"X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("entry_limit_price", bad.json()["error"]["detail"])
 
     async def test_scalp_enter_rejects_invalid_qty_mode(self):
         transport = httpx.ASGITransport(app=self.app_module.app)

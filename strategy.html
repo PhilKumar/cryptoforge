@@ -1215,6 +1215,20 @@
           </select>
         </div>
 
+        <div class="cf-scalp-field cf-scalp-field-full">
+          <label for="cf-scalp-order-type">Order Type</label>
+          <select id="cf-scalp-order-type" data-cf-change="cfUpdateScalpOrderTypeUi()" class="cf-scalp-input cf-scalp-order-select">
+            <option value="market" selected>Market</option>
+            <option value="maker_only">Maker Only</option>
+            <option value="stop_limit">Stop Limit</option>
+            <option value="stop_market">Stop Market</option>
+            <option value="trailing_stop">Trailing Stop</option>
+            <option value="take_profit_market">Take Profit Market</option>
+            <option value="take_profit_limit">Take Profit Limit</option>
+          </select>
+          <div id="cf-scalp-order-hint" class="cf-scalp-help">Immediate market entry with the selected size.</div>
+        </div>
+
         <div class="cf-scalp-field">
           <label for="cf-scalp-sl" class="cf-scalp-label-inline">Risk Cap
             <select id="cf-sl-type" data-cf-change="cfUpdateSLTPHints()" class="cf-scalp-type-select">
@@ -1246,13 +1260,25 @@
         </div>
 
         <div class="cf-scalp-field">
-          <label for="cf-scalp-entry-stop">Entry Stop</label>
-          <input type="number" id="cf-scalp-entry-stop" value="" min="0" step="0.1" placeholder="Breakout / breakdown trigger" class="cf-scalp-input">
+          <label for="cf-scalp-entry-stop" id="cf-scalp-entry-stop-label">Trigger Price</label>
+          <input type="number" id="cf-scalp-entry-stop" value="" min="0" step="0.1" placeholder="Stop / TP trigger" class="cf-scalp-input">
+          <div id="cf-scalp-entry-stop-hint" class="cf-scalp-help">Used by stop-market, stop-limit, and take-profit orders.</div>
         </div>
 
         <div class="cf-scalp-field">
-          <label for="cf-scalp-entry-limit">Entry Limit</label>
-          <input type="number" id="cf-scalp-entry-limit" value="" min="0" step="0.1" placeholder="Pullback / fade trigger" class="cf-scalp-input">
+          <label for="cf-scalp-entry-limit" id="cf-scalp-entry-limit-label">Limit Price</label>
+          <input type="number" id="cf-scalp-entry-limit" value="" min="0" step="0.1" placeholder="Limit fill price" class="cf-scalp-input">
+          <div id="cf-scalp-entry-limit-hint" class="cf-scalp-help">Used by maker-only, stop-limit, and take-profit-limit orders.</div>
+        </div>
+
+        <div class="cf-scalp-field cf-scalp-trail-field" id="cf-scalp-trail-field" hidden>
+          <label for="cf-scalp-trail-value" class="cf-scalp-label-inline">Trail
+            <select id="cf-scalp-trail-mode" data-cf-change="cfUpdateScalpOrderTypeUi()" class="cf-scalp-type-select">
+              <option value="usd">USD</option><option value="pct">%</option>
+            </select>
+          </label>
+          <input type="number" id="cf-scalp-trail-value" value="" min="0" step="0.1" placeholder="Trailing distance" class="cf-scalp-input">
+          <div id="cf-scalp-trail-hint" class="cf-scalp-help">Buy trails from the lowest tick; sell trails from the highest tick.</div>
         </div>
 
         <div class="cf-scalp-field cf-scalp-field-full">

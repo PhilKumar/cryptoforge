@@ -4916,12 +4916,13 @@ document.addEventListener('DOMContentLoaded', () => {
   cfApplyScalpDefaults();
   cfUpdateSLTPHints();
   cfUpdateScalpSymbol();
+  cfUpdateScalpOrderTypeUi();
   cfToggleScalpLiveSafety();
   cfInitOperatorLounge();
   cfRefreshScalpEntryLaneFromState();
   cfSyncScalpLogPanelHeight();
 
-  ['cf-scalp-entry-stop', 'cf-scalp-entry-limit'].forEach(function(id) {
+  ['cf-scalp-entry-stop', 'cf-scalp-entry-limit', 'cf-scalp-order-type', 'cf-scalp-trail-value', 'cf-scalp-trail-mode'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener('input', cfRefreshScalpEntryLaneFromState);
   });
@@ -5047,8 +5048,11 @@ const _CF_SCALP_DEFAULTS = Object.freeze({
   slType: 'usdt',
   tpType: 'usdt',
   mode: 'paper',
+  orderType: 'market',
   entryStop: '',
   entryLimit: '',
+  trailValue: '',
+  trailMode: 'usd',
   slPrice: '',
   tpPrice: ''
 });
@@ -5073,8 +5077,11 @@ function cfApplyScalpDefaults() {
   setValue('cf-sl-type', defaults.slType);
   setValue('cf-tp-type', defaults.tpType);
   setValue('cf-scalp-mode', defaults.mode);
+  setValue('cf-scalp-order-type', defaults.orderType);
   setValue('cf-scalp-entry-stop', defaults.entryStop);
   setValue('cf-scalp-entry-limit', defaults.entryLimit);
+  setValue('cf-scalp-trail-value', defaults.trailValue);
+  setValue('cf-scalp-trail-mode', defaults.trailMode);
   setValue('cf-scalp-sl-price', defaults.slPrice);
   setValue('cf-scalp-tp-price', defaults.tpPrice);
   var levEl = document.getElementById('cf-scalp-leverage');
@@ -5099,10 +5106,73 @@ function cfScalpSelectedQtyMode() {
   return el && String(el.value).toLowerCase() === 'base' ? 'base' : 'usdt';
 }
 
+const _CF_SCALP_ORDER_HELP = Object.freeze({
+  market: 'Immediate market entry with the selected size.',
+  maker_only: 'Post a limit-style maker entry. Requires a limit price.',
+  stop_limit: 'Arm a stop trigger and fill only inside the limit price.',
+  stop_market: 'Arm a stop trigger, then enter at market when touched.',
+  trailing_stop: 'Arm a trailing entry. Buy follows the low; sell follows the high.',
+  take_profit_market: 'Arm a take-profit trigger, then enter at market when touched.',
+  take_profit_limit: 'Arm a take-profit trigger and fill only inside the limit price.'
+});
+
+function cfScalpSelectedOrderType() {
+  var el = document.getElementById('cf-scalp-order-type');
+  return el && el.value ? String(el.value) : 'market';
+}
+
+function cfScalpOrderLabel(orderType) {
+  return ({
+    market: 'Market',
+    maker_only: 'Maker Only',
+    stop_limit: 'Stop Limit',
+    stop_market: 'Stop Market',
+    trailing_stop: 'Trailing Stop',
+    take_profit_market: 'Take Profit Market',
+    take_profit_limit: 'Take Profit Limit'
+  })[orderType || 'market'] || 'Market';
+}
+
 function cfScalpPendingPriceActive() {
-  var stopEl = document.getElementById('cf-scalp-entry-stop');
-  var limitEl = document.getElementById('cf-scalp-entry-limit');
-  return (!!stopEl && Number(stopEl.value) > 0) || (!!limitEl && Number(limitEl.value) > 0);
+  return cfScalpSelectedOrderType() !== 'market';
+}
+
+function cfUpdateScalpOrderTypeUi() {
+  var orderType = cfScalpSelectedOrderType();
+  var orderHint = document.getElementById('cf-scalp-order-hint');
+  var stopLabel = document.getElementById('cf-scalp-entry-stop-label');
+  var limitLabel = document.getElementById('cf-scalp-entry-limit-label');
+  var stopInput = document.getElementById('cf-scalp-entry-stop');
+  var limitInput = document.getElementById('cf-scalp-entry-limit');
+  var stopHint = document.getElementById('cf-scalp-entry-stop-hint');
+  var limitHint = document.getElementById('cf-scalp-entry-limit-hint');
+  var trailField = document.getElementById('cf-scalp-trail-field');
+  var trailValue = document.getElementById('cf-scalp-trail-value');
+  if (orderHint) orderHint.textContent = _CF_SCALP_ORDER_HELP[orderType] || _CF_SCALP_ORDER_HELP.market;
+  if (stopLabel) stopLabel.textContent = orderType.indexOf('take_profit') === 0 ? 'Take Profit Trigger' : 'Stop / Trigger Price';
+  if (limitLabel) limitLabel.textContent = orderType === 'maker_only' ? 'Maker Limit Price' : 'Limit Price';
+  if (stopInput) {
+    stopInput.placeholder = orderType.indexOf('take_profit') === 0 ? 'TP trigger price' : 'Stop trigger price';
+    stopInput.disabled = orderType === 'market' || orderType === 'maker_only' || orderType === 'trailing_stop';
+  }
+  if (limitInput) {
+    limitInput.placeholder = orderType === 'maker_only' ? 'Maker-only limit' : 'Limit fill price';
+    limitInput.disabled = orderType === 'market' || orderType === 'stop_market' || orderType === 'take_profit_market' || orderType === 'trailing_stop';
+  }
+  if (stopHint) {
+    stopHint.textContent = orderType === 'market' || orderType === 'maker_only' || orderType === 'trailing_stop'
+      ? 'Not required for this order type.'
+      : 'Required trigger price for this conditional order.';
+  }
+  if (limitHint) {
+    limitHint.textContent = orderType === 'maker_only' || orderType === 'stop_limit' || orderType === 'take_profit_limit'
+      ? 'Required limit fill price for this order type.'
+      : 'Not required for this order type.';
+  }
+  if (trailField) trailField.hidden = orderType !== 'trailing_stop';
+  if (trailValue) trailValue.disabled = orderType !== 'trailing_stop';
+  cfRefreshScalpEntryLaneFromState();
+  cfSyncScalpLogPanelHeight();
 }
 
 function cfUpdateScalpQtyUi() {
@@ -5994,6 +6064,8 @@ function cfRefreshScalpEntryLaneFromState() {
   const sellBtn = document.getElementById('cf-scalp-sell-btn');
   const liveAck = document.getElementById('cf-scalp-live-ack');
   const mode = cfScalpSelectedMode();
+  const orderType = cfScalpSelectedOrderType();
+  const orderLabel = cfScalpOrderLabel(orderType);
   const pendingArmed = cfScalpPendingPriceActive();
   const status = _cfLatestScalpStatus || {};
   const entry = status.entry_controls || {};
@@ -6010,7 +6082,7 @@ function cfRefreshScalpEntryLaneFromState() {
 
   let note = '';
   if (pendingArmed) {
-    note = 'Pending price entry armed. The first touched stop or limit level will trigger the order.';
+    note = orderLabel + ' order armed. The scalp engine will wait for the required trigger/fill condition.';
   } else if (requiresAck) {
     note = 'Confirm live mode to enable real orders.';
   } else if (state === 'waiting') {
@@ -6025,7 +6097,7 @@ function cfRefreshScalpEntryLaneFromState() {
     lane.dataset.state = state;
     lane.classList.toggle('has-note', !!note);
   }
-  if (titleEl) titleEl.textContent = 'Velocity Entry';
+  if (titleEl) titleEl.textContent = orderLabel === 'Market' ? 'Velocity Entry' : orderLabel + ' Entry';
   if (stateEl) {
     stateEl.textContent = cfScalpStateLabel(state).toUpperCase();
     stateEl.dataset.state = state;
@@ -6318,6 +6390,7 @@ async function cfSubmitScalp(direction) {
     const slTypeEl = cfRequireElement('cf-sl-type', 'Risk cap type');
     const tpTypeEl = cfRequireElement('cf-tp-type', 'Profit lock type');
     const modeEl = cfRequireElement('cf-scalp-mode', 'Execution mode');
+    const orderTypeEl = cfRequireElement('cf-scalp-order-type', 'Order type');
     const symbol = symbolEl.value;
     const qtyMode = cfScalpSelectedQtyMode();
     const qty = cfFieldNumber('cf-scalp-qty', qtyMode === 'base' ? 0.0015 : 10000);
@@ -6328,6 +6401,10 @@ async function cfSubmitScalp(direction) {
     const tpPrice = cfFieldNumber('cf-scalp-tp-price', 0);
     const entryStop = cfFieldNumber('cf-scalp-entry-stop', 0);
     const entryLimit = cfFieldNumber('cf-scalp-entry-limit', 0);
+    const orderType = orderTypeEl.value || 'market';
+    const trailValue = cfFieldNumber('cf-scalp-trail-value', 0);
+    const trailModeEl = cfEl('cf-scalp-trail-mode');
+    const trailMode = trailModeEl && trailModeEl.value === 'pct' ? 'pct' : 'usd';
     const slType = slTypeEl.value;
     const tpType = tpTypeEl.value;
     const mode = modeEl.value;
@@ -6344,6 +6421,21 @@ async function cfSubmitScalp(direction) {
       cfToast('Enter a valid scalp quantity before placing the trade', 'warning');
       return;
     }
+    const orderLabel = cfScalpOrderLabel(orderType);
+    const failOrderValidation = function(message) {
+      if (statusEl) { statusEl.textContent = message; statusEl.style.color = 'var(--red)'; }
+      cfToast(message, 'warning');
+    };
+    const orderUsesTrigger = orderType === 'stop_market' || orderType === 'stop_limit' || orderType === 'take_profit_market' || orderType === 'take_profit_limit';
+    const orderUsesLimit = orderType === 'maker_only' || orderType === 'stop_limit' || orderType === 'take_profit_limit';
+    if (orderType === 'maker_only' && entryLimit <= 0) return failOrderValidation('Maker Only needs a limit price');
+    if (orderUsesTrigger && entryStop <= 0) {
+      return failOrderValidation(orderLabel + ' needs a trigger price');
+    }
+    if (orderUsesLimit && entryLimit <= 0) {
+      return failOrderValidation(orderLabel + ' needs a limit price');
+    }
+    if (orderType === 'trailing_stop' && trailValue <= 0) return failOrderValidation('Trailing Stop needs a trail value');
 
     if (!cfSetScalpEntrySubmitBusy(direction)) {
       cfToast('A scalp entry is already being submitted', 'info');
@@ -6351,15 +6443,19 @@ async function cfSubmitScalp(direction) {
     }
     submitLocked = true;
     if (statusEl) statusEl.textContent = 'Submitting…';
-    const payload = { symbol, side: direction, qty_mode: qtyMode, qty_value: qty, leverage, mode };
+    const payload = { symbol, side: direction, qty_mode: qtyMode, qty_value: qty, leverage, mode, order_type: orderType };
     if (slType === 'pct' && slVal > 0) payload.stop_loss_pct = slVal;
     else if (slVal > 0) payload.sl_usd = slVal;
     if (tpType === 'pct' && tpVal > 0) payload.take_profit_pct = tpVal;
     else if (tpVal > 0) payload.tp_usd = tpVal;
     if (slPrice > 0) payload.sl_price = slPrice;
     if (tpPrice > 0) payload.target_price = tpPrice;
-    if (entryStop > 0) payload.entry_stop_price = entryStop;
-    if (entryLimit > 0) payload.entry_limit_price = entryLimit;
+    if (orderUsesTrigger && entryStop > 0) payload.entry_stop_price = entryStop;
+    if (orderUsesLimit && entryLimit > 0) payload.entry_limit_price = entryLimit;
+    if (trailValue > 0) {
+      payload.trail_value = trailValue;
+      payload.trail_mode = trailMode;
+    }
     const res = await cfApiFetch('/api/scalp/enter', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
