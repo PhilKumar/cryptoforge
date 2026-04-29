@@ -2150,6 +2150,7 @@ def _scalp_diagnostics_payload(symbol: str = "") -> dict:
         "feed": feed,
         "entry_controls": entry_controls,
         "execution": dict(status.get("execution_metrics") or {}),
+        "run_policy": dict(status.get("run_policy") or {}),
         "guards": {
             "ws_fresh_ms": ScalpEngine._entry_freshness_thresholds("ws")[0],
             "ws_paper_ms": ScalpEngine._entry_freshness_thresholds("ws")[1],

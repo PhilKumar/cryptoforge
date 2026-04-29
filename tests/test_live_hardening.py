@@ -999,6 +999,50 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(updated.base_qty, 0.0015)
         self.assertEqual(updated.entry_price, 100.0)
 
+    async def test_scalp_add_to_trade_preserves_base_exposure_when_price_changes(self):
+        delta = FakeScalpDelta(ticker_prices=[70000.0, 80000.0])
+        engine = ScalpEngine(delta)
+        engine.start = lambda: None
+        engine._record_price("BTCUSD", 70000.0, source="ws")
+
+        entered = await engine.enter_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            leverage=10,
+            qty_mode="base",
+            qty_value=0.0015,
+            target_usd=10,
+            sl_usd=5,
+            mode="paper",
+        )
+        trade_id = entered["trade_id"]
+        initial = engine.open_trades[trade_id]
+        initial_size = initial.size
+        initial_base_qty = initial.base_qty
+        self.assertAlmostEqual(initial_base_qty, 0.0015, places=6)
+
+        engine._record_price("BTCUSD", 80000.0, source="ws")
+        scaled = await engine.add_to_trade(trade_id, qty_mode="base", qty_value=0.0005)
+
+        self.assertEqual(scaled["status"], "ok")
+        updated = engine.open_trades[trade_id]
+        self.assertGreater(updated.size, initial_size)
+        self.assertGreater(updated.base_qty, initial_base_qty)
+        self.assertAlmostEqual(updated.base_qty, 0.002, places=6)
+        self.assertAlmostEqual(updated.entry_price, 72500.0, places=2)
+
+    async def test_scalp_status_declares_continuous_run_policy(self):
+        engine = ScalpEngine(FakeScalpDelta())
+        status = engine.get_status("BTCUSDT")
+        policy = status["run_policy"]
+
+        self.assertEqual(policy["mode"], "continuous")
+        self.assertIsNone(policy["session_end_at"])
+        self.assertTrue(policy["continuous_until_stopped"])
+        self.assertIn("master_kill", policy["stop_conditions"])
+        self.assertIn("target_hit", policy["stop_conditions"])
+        self.assertNotIn("session_end", policy["stop_conditions"])
+
     async def test_scalp_execution_metrics_track_entry_target_add_exit_lifecycle(self):
         delta = FakeScalpDelta()
         engine = ScalpEngine(delta)
@@ -1926,6 +1970,8 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["symbol"], "BTCUSDT")
         self.assertEqual(payload["guards"]["ws_fresh_ms"], 2500)
+        self.assertEqual(payload["run_policy"]["mode"], "continuous")
+        self.assertIsNone(payload["run_policy"]["session_end_at"])
         self.assertEqual(payload["routes"]["add"], "/api/scalp/trades/{trade_id}/add")
         self.assertIn("state_db", payload["persistence"])
         self.assertIn("entry_controls", payload)

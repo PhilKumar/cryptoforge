@@ -1457,8 +1457,19 @@ class ScalpEngine:
 
             old_size = max(int(trade.size or 0), 0)
             total_size = old_size + add_size
+            old_base_qty = _coerce_float(getattr(trade, "base_qty", 0.0), 0.0)
+            if old_base_qty <= 0 and trade.entry_price > 0:
+                old_base_qty = old_size / trade.entry_price
+            # Base exposure must follow the filled contract notional, not just
+            # the requested input, because exchanges round contract size.
+            add_base_qty = add_size / fill_price if fill_price > 0 else 0.0
+            total_base_qty = max(old_base_qty + add_base_qty, 0.0)
             weighted_price = (
-                fill_price if old_size <= 0 else ((trade.entry_price * old_size) + (fill_price * add_size)) / total_size
+                total_size / total_base_qty
+                if total_base_qty > 0
+                else fill_price
+                if old_size <= 0
+                else ((trade.entry_price * old_size) + (fill_price * add_size)) / total_size
             )
             trade.size = total_size
             trade.entry_price = round(weighted_price, 6)
@@ -1466,6 +1477,10 @@ class ScalpEngine:
             trade.last_price_source = "broker_fill" if trade.mode != "paper" else "entry_snapshot"
             trade.last_price_update = _now_utc()
             trade._refresh_derived_quantities()
+            if total_base_qty > 0:
+                trade.base_qty = round(total_base_qty, 8)
+                if trade.qty_mode == "base":
+                    trade.qty_value = trade.base_qty
             if trade.target_pct > 0:
                 trade.target_price = 0.0
             if trade.sl_pct > 0:
@@ -1567,6 +1582,23 @@ class ScalpEngine:
         return {
             "running": self._running,
             "in_trade": len(self.open_trades) > 0,
+            "run_policy": {
+                "mode": "continuous",
+                "session_end_at": None,
+                "continuous_until_stopped": True,
+                "stop_conditions": [
+                    "manual_stop",
+                    "master_kill",
+                    "target_hit",
+                    "sl_hit",
+                    "target_usd_hit",
+                    "sl_usd_hit",
+                    "manual_exit",
+                    "broker_flat_reconcile",
+                    "app_shutdown",
+                    "repeated_live_exit_failure",
+                ],
+            },
             "pending_entries": [p.to_dict() for p in self.pending_entries.values()],
             "open_trades": [t.to_dict() for t in self.open_trades.values()],
             "closed_trades": list(reversed(self.closed_trades[-50:])),
