@@ -29,6 +29,7 @@ const getRoutes = [
   '/api/auth/status',
   '/api/health',
   '/api/ready',
+  '/api/audit/production-readiness',
   '/api/ops/state/summary',
   '/api/ops/state/backup',
   '/api/dashboard/summary',
@@ -60,6 +61,7 @@ const getRoutes = [
   '/api/paper/trades/csv',
   '/api/live/trades/csv',
   '/api/scalp/status',
+  '/api/scalp/diagnostics?symbol=BTCUSDT',
   '/api/scalp/trades',
   '/api/scalp/activity',
 ];

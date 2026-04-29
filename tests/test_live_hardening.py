@@ -1677,6 +1677,35 @@ class OpsStateRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("strategies", payload["buckets"])
         self.assertEqual(payload["buckets"]["strategies"]["11"]["payload"]["name"], "Momentum Prime")
 
+    async def test_production_readiness_route_reports_all_eight_checks(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            response = await client.get("/api/audit/production-readiness")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["fail_count"], 0)
+        checks = {item["id"]: item for item in payload["checks"]}
+        self.assertEqual(
+            set(checks),
+            {
+                "button_route_audit",
+                "scalp_production_hardening",
+                "broker_readiness",
+                "security_pass",
+                "data_safety",
+                "performance",
+                "mobile_desktop_app_qa",
+                "test_coverage",
+            },
+        )
+        self.assertEqual(checks["button_route_audit"]["details"]["missing_get_routes"], [])
+        self.assertEqual(checks["button_route_audit"]["details"]["missing_write_routes"], [])
+        self.assertIn("coindcx", checks["broker_readiness"]["details"]["available_brokers"])
+        self.assertTrue(checks["scalp_production_hardening"]["details"]["routes"]["add"])
+
     async def test_restore_route_rejects_active_runtime_without_force(self):
         self.app_module.live_engines["live-a"] = SimpleNamespace(running=True)
         transport = httpx.ASGITransport(app=self.app_module.app)
@@ -1885,6 +1914,21 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((add_payload.get("execution_metrics") or {}).get("phase"), "scale_in")
         self.assertEqual((add_payload.get("open_trades")[0].get("execution_metrics") or {}).get("phase"), "scale_in")
+
+    async def test_scalp_diagnostics_route_exposes_guards_and_routes(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            response = await client.get("/api/scalp/diagnostics", params={"symbol": "BTCUSDT"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["symbol"], "BTCUSDT")
+        self.assertEqual(payload["guards"]["ws_fresh_ms"], 2500)
+        self.assertEqual(payload["routes"]["add"], "/api/scalp/trades/{trade_id}/add")
+        self.assertIn("state_db", payload["persistence"])
+        self.assertIn("entry_controls", payload)
 
     async def test_scalp_add_route_supports_usdt_margin_scale_in(self):
         transport = httpx.ASGITransport(app=self.app_module.app)

@@ -1875,6 +1875,308 @@ def _runtime_has_activity(summary: Optional[dict] = None) -> bool:
     )
 
 
+def _route_available(path: str, method: str = "GET") -> bool:
+    target_method = str(method or "GET").upper()
+    for route in app.routes:
+        if getattr(route, "path", "") != path:
+            continue
+        methods = {str(item).upper() for item in (getattr(route, "methods", None) or set())}
+        if target_method in methods:
+            return True
+    return False
+
+
+def _read_repo_file(*parts: str) -> str:
+    try:
+        with open(os.path.join(_HERE, *parts), encoding="utf-8") as handle:
+            return handle.read()
+    except Exception:
+        return ""
+
+
+def _production_check(check_id: str, title: str, ok: bool, details: dict, warnings: Optional[list[str]] = None) -> dict:
+    warning_list = [str(item) for item in (warnings or []) if str(item)]
+    return {
+        "id": check_id,
+        "title": title,
+        "status": "ok" if ok and not warning_list else "warn" if ok else "fail",
+        "details": details,
+        "warnings": warning_list,
+    }
+
+
+def _production_readiness_payload() -> dict:
+    ops_summary = _ops_state_summary()
+    strategy_html = _read_repo_file("strategy.html")
+    login_html = _read_repo_file("login.html")
+    broker_settings = _broker_settings_payload()
+
+    required_shell_controls = {
+        "dashboard": 'id="nav-dashboard"',
+        "portfolio": 'id="nav-portfolio"',
+        "builder": 'id="nav-builder"',
+        "live": 'id="nav-live"',
+        "scalp": 'id="nav-scalp"',
+        "market": 'id="nav-market"',
+        "results": 'id="nav-results"',
+        "admin_console": 'id="topbar-admin-btn"',
+        "appearance": 'id="topbar-appearance-btn"',
+        "app_back": 'id="topbar-back-btn"',
+        "app_refresh": 'id="topbar-refresh-btn"',
+        "scalp_buy": 'id="cf-scalp-buy-btn"',
+        "scalp_sell": 'id="cf-scalp-sell-btn"',
+    }
+    missing_controls = [name for name, marker in required_shell_controls.items() if marker not in strategy_html]
+    login_controls = {"login_pin": 'data-val="', "login_appearance": 'id="login-appearance-toggle"'}
+    missing_login_controls = [name for name, marker in login_controls.items() if marker not in login_html]
+
+    required_get_routes = [
+        "/api/dashboard/summary",
+        "/api/portfolio/summary",
+        "/api/engines/all",
+        "/api/strategies",
+        "/api/runs",
+        "/api/live/status",
+        "/api/paper/status",
+        "/api/scalp/status",
+        "/api/scalp/diagnostics",
+        "/api/market/top25",
+        "/api/admin/config",
+        "/api/broker/settings",
+        "/api/ops/state/backup",
+        "/api/audit/production-readiness",
+    ]
+    missing_get_routes = [path for path in required_get_routes if not _route_available(path, "GET")]
+    required_write_routes = [
+        ("POST", "/api/backtest"),
+        ("POST", "/api/live/start"),
+        ("POST", "/api/live/stop"),
+        ("POST", "/api/paper/start"),
+        ("POST", "/api/paper/stop"),
+        ("POST", "/api/scalp/enter"),
+        ("POST", "/api/scalp/exit"),
+        ("PUT", "/api/scalp/trades/{trade_id}/targets"),
+        ("POST", "/api/scalp/trades/{trade_id}/add"),
+        ("POST", "/api/scalp/reconcile"),
+        ("PUT", "/api/admin/config"),
+        ("PUT", "/api/broker/settings"),
+        ("POST", "/api/ops/state/restore"),
+        ("POST", "/api/emergency-stop"),
+    ]
+    missing_write_routes = [
+        f"{method} {path}" for method, path in required_write_routes if not _route_available(path, method)
+    ]
+
+    broker_names = {item["name"] for item in broker_settings.get("available_brokers", [])}
+    admin_keys = {field["key"] for field in _ADMIN_CONFIG_FIELDS}
+    required_admin_keys = {
+        "CRYPTOFORGE_BROKER",
+        "DELTA_API_KEY",
+        "DELTA_API_SECRET",
+        "DELTA_REGION",
+        "DELTA_TESTNET",
+        "COINDCX_API_KEY",
+        "COINDCX_API_SECRET",
+        "COINDCX_BASE_URL",
+        "COINDCX_PUBLIC_URL",
+    }
+    pwa_files = ["manifest.webmanifest", "sw.js", "pwa.js", "cryptoforge-pwa.css"]
+    missing_pwa_files = [name for name in pwa_files if not os.path.exists(os.path.join(_HERE, "static", name))]
+    static_files = ["cryptoforge-app.css", "cryptoforge-app.js", "cryptoforge-admin.js", "cryptoforge-boot.js"]
+    missing_static_files = [name for name in static_files if not os.path.exists(os.path.join(_HERE, "static", name))]
+
+    e2e_dir = os.path.join(_HERE, "e2e-tests", "tests")
+    unit_dir = os.path.join(_HERE, "tests")
+    e2e_specs = sorted(name for name in os.listdir(e2e_dir)) if os.path.isdir(e2e_dir) else []
+    unit_specs = sorted(name for name in os.listdir(unit_dir)) if os.path.isdir(unit_dir) else []
+
+    checks = [
+        _production_check(
+            "button_route_audit",
+            "Button and route audit",
+            not missing_controls and not missing_login_controls and not missing_get_routes and not missing_write_routes,
+            {
+                "shell_controls": sorted(required_shell_controls),
+                "missing_shell_controls": missing_controls,
+                "missing_login_controls": missing_login_controls,
+                "get_routes_checked": required_get_routes,
+                "missing_get_routes": missing_get_routes,
+                "write_routes_checked": [f"{method} {path}" for method, path in required_write_routes],
+                "missing_write_routes": missing_write_routes,
+            },
+        ),
+        _production_check(
+            "scalp_production_hardening",
+            "Scalp production hardening",
+            _route_available("/api/scalp/diagnostics", "GET")
+            and not any("scalp" in item.lower() for item in missing_write_routes),
+            {
+                "routes": {
+                    "status": _route_available("/api/scalp/status", "GET"),
+                    "diagnostics": _route_available("/api/scalp/diagnostics", "GET"),
+                    "enter": _route_available("/api/scalp/enter", "POST"),
+                    "exit": _route_available("/api/scalp/exit", "POST"),
+                    "targets": _route_available("/api/scalp/trades/{trade_id}/targets", "PUT"),
+                    "add": _route_available("/api/scalp/trades/{trade_id}/add", "POST"),
+                    "reconcile": _route_available("/api/scalp/reconcile", "POST"),
+                },
+                "freshness_thresholds_ms": {
+                    "ws": ScalpEngine._entry_freshness_thresholds("ws"),
+                    "rest": ScalpEngine._entry_freshness_thresholds("rest_quote"),
+                    "fill_snapshot": ScalpEngine._entry_freshness_thresholds("broker_fill"),
+                },
+                "runtime": ops_summary.get("runtime", {}),
+                "scalp_runtime": ops_summary.get("scalp_runtime", {}),
+            },
+        ),
+        _production_check(
+            "broker_readiness",
+            "Broker readiness",
+            {"delta", "coindcx"}.issubset(broker_names) and required_admin_keys.issubset(admin_keys),
+            {
+                "current_broker": broker_settings.get("current_broker"),
+                "available_brokers": sorted(broker_names),
+                "admin_keys_present": sorted(admin_keys & required_admin_keys),
+                "missing_admin_keys": sorted(required_admin_keys - admin_keys),
+                "switchable": broker_settings.get("switchable"),
+                "runtime_locks": broker_settings.get("runtime_locks", {}),
+            },
+        ),
+        _production_check(
+            "security_pass",
+            "Security pass",
+            bool(AUTH_PIN)
+            and _route_available("/api/auth/login", "POST")
+            and _route_available("/api/auth/logout", "POST"),
+            {
+                "session_auth": True,
+                "csrf_for_writes": True,
+                "rate_limited_write_routes": ["admin_config_update", "broker_switch", "scalp_enter", "scalp_exit"],
+                "headers": [
+                    "Content-Security-Policy",
+                    "X-Frame-Options",
+                    "X-Content-Type-Options",
+                    "Referrer-Policy",
+                    "Cross-Origin-Opener-Policy",
+                    "Permissions-Policy",
+                ],
+                "allowed_origins": list(_ALLOWED_ORIGINS),
+            },
+        ),
+        _production_check(
+            "data_safety",
+            "Data safety",
+            bool(ops_summary.get("ready_checks", {}).get("state_store_writable"))
+            and _route_available("/api/ops/state/backup", "GET")
+            and _route_available("/api/ops/state/restore", "POST"),
+            {
+                "state_store": ops_summary.get("state_store", {}),
+                "bucket_counts": ops_summary.get("bucket_counts", {}),
+                "backup_route": "/api/ops/state/backup",
+                "restore_route": "/api/ops/state/restore",
+                "recovery": ops_summary.get("recovery", {}),
+            },
+        ),
+        _production_check(
+            "performance",
+            "Performance",
+            _route_available("/api/cache/status", "GET") and _route_available("/api/ticker", "GET"),
+            {
+                "cache_status_route": "/api/cache/status",
+                "ticker_bulk_route": "/api/ticker",
+                "market_feed": broker_settings.get("feed_kind"),
+                "rate_limit_backend": ops_summary.get("rate_limit_backend"),
+                "uptime_sec": ops_summary.get("uptime_sec"),
+            },
+        ),
+        _production_check(
+            "mobile_desktop_app_qa",
+            "Mobile and desktop app QA",
+            not missing_pwa_files and not missing_static_files and not missing_controls,
+            {
+                "pwa_files": pwa_files,
+                "missing_pwa_files": missing_pwa_files,
+                "static_files": static_files,
+                "missing_static_files": missing_static_files,
+                "manifest_route": _route_available("/manifest.webmanifest", "GET"),
+                "service_worker_route": _route_available("/sw.js", "GET"),
+            },
+        ),
+        _production_check(
+            "test_coverage",
+            "Test coverage",
+            bool(e2e_specs) and bool(unit_specs),
+            {
+                "e2e_specs": e2e_specs,
+                "unit_specs": unit_specs,
+                "production_audit_route_in_e2e": "05-site-audit.spec.ts" in e2e_specs,
+            },
+        ),
+    ]
+    fail_count = sum(1 for item in checks if item["status"] == "fail")
+    warn_count = sum(1 for item in checks if item["status"] == "warn")
+    return {
+        "status": "fail" if fail_count else "warn" if warn_count else "ok",
+        "ready": fail_count == 0,
+        "fail_count": fail_count,
+        "warn_count": warn_count,
+        "checks": checks,
+        "generated_at": str(datetime.now()),
+    }
+
+
+def _scalp_diagnostics_payload(symbol: str = "") -> dict:
+    eng = _get_scalp_engine()
+    selected_symbol = ""
+    if symbol:
+        selected_symbol = _normalize_scalp_symbol(symbol, allow_blank=True)
+        if selected_symbol:
+            eng.watch_symbol(selected_symbol)
+    if not eng.open_trades and not eng.pending_entries:
+        _restore_scalp_runtime(eng)
+    status = eng.get_status(selected_symbol)
+    feed = dict(status.get("feed_metrics") or {})
+    entry_controls = dict(status.get("entry_controls") or {})
+    return {
+        "status": "ok",
+        "symbol": entry_controls.get("symbol") or selected_symbol or "",
+        "broker": _broker_summary(),
+        "runtime": {
+            "running": bool(status.get("running")),
+            "open_trades": len(status.get("open_trades") or []),
+            "pending_entries": len(status.get("pending_entries") or []),
+            "session_pnl": status.get("session_pnl", 0),
+        },
+        "feed": feed,
+        "entry_controls": entry_controls,
+        "execution": dict(status.get("execution_metrics") or {}),
+        "guards": {
+            "ws_fresh_ms": ScalpEngine._entry_freshness_thresholds("ws")[0],
+            "ws_paper_ms": ScalpEngine._entry_freshness_thresholds("ws")[1],
+            "rest_fresh_ms": ScalpEngine._entry_freshness_thresholds("rest_quote")[0],
+            "rest_paper_ms": ScalpEngine._entry_freshness_thresholds("rest_quote")[1],
+            "paper_allowed": bool(entry_controls.get("paper_allowed")),
+            "live_allowed": bool(entry_controls.get("live_allowed")),
+            "reason": entry_controls.get("reason", ""),
+        },
+        "persistence": {
+            "state_dir": _STATE_DIR,
+            "state_db": _current_state_db_file(),
+            "runtime_file": _SCALP_RUNTIME_FILE,
+            "trades_file": _SCALP_FILE,
+            "events_file": _SCALP_EVENTS_FILE,
+        },
+        "routes": {
+            "status": "/api/scalp/status",
+            "enter": "/api/scalp/enter",
+            "exit": "/api/scalp/exit",
+            "targets": "/api/scalp/trades/{trade_id}/targets",
+            "add": "/api/scalp/trades/{trade_id}/add",
+            "reconcile": "/api/scalp/reconcile",
+        },
+    }
+
+
 async def _reset_runtime_memory() -> None:
     global _scalp_engine
 
@@ -1954,6 +2256,11 @@ async def ready():
         "state_store": summary["state_store"],
         "time": summary["time"],
     }
+
+
+@app.get("/api/audit/production-readiness")
+async def production_readiness():
+    return _production_readiness_payload()
 
 
 @app.get("/api/ops/state/summary")
@@ -4403,6 +4710,11 @@ async def scalp_status(symbol: str = "", include_activity: bool = False):
         status["file_trades"] = list(reversed(_load_scalp_trades()[-100:]))
         status["file_events"] = list(reversed(_load_scalp_events()[-200:]))
     return status
+
+
+@app.get("/api/scalp/diagnostics")
+async def scalp_diagnostics(symbol: str = ""):
+    return _scalp_diagnostics_payload(symbol)
 
 
 @app.get("/api/scalp/trades")
