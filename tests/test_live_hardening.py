@@ -1241,20 +1241,34 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["live_trades"], 3)
         self.assertEqual(summary["today_pnl"], 32)
 
-    async def test_portfolio_summary_adds_net_pnl_to_filled_orders_after_fees(self):
+    async def test_portfolio_summary_matches_fills_before_showing_net_pnl(self):
+        product = {"contract_value": "0.001", "notional_type": "vanilla"}
         fake_delta = SimpleNamespace(
             get_wallet=lambda: [{"asset_symbol": "USDT", "available_balance": "1000"}],
             get_positions=lambda: [],
             get_order_history=lambda: [
                 {
-                    "id": "filled-profit",
-                    "realized_pnl": "12.75",
-                    "paid_commission": "0.55",
+                    "id": "exit",
+                    "product_id": 27,
+                    "product_symbol": "BTCUSD",
+                    "side": "sell",
+                    "size": 1,
+                    "average_fill_price": "80098",
+                    "paid_commission": "0",
+                    "updated_at": "2026-05-04T14:48:27Z",
+                    "product": product,
                     "state": "closed",
                 },
                 {
-                    "id": "filled-fee-only",
-                    "paid_commission": "0.33",
+                    "id": "entry",
+                    "product_id": 27,
+                    "product_symbol": "BTCUSD",
+                    "side": "buy",
+                    "size": 1,
+                    "average_fill_price": "79440",
+                    "paid_commission": "0.0468696",
+                    "updated_at": "2026-05-04T14:37:16Z",
+                    "product": product,
                     "state": "closed",
                 },
             ],
@@ -1262,13 +1276,34 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.app_module, "delta", fake_delta):
             summary = await self.app_module.get_portfolio_summary()
 
-        first, second = summary["filled_orders"]
-        self.assertEqual(first["gross_pnl"], 12.75)
-        self.assertEqual(first["fees"], 0.55)
-        self.assertEqual(first["net_pnl"], 12.2)
-        self.assertEqual(second["gross_pnl"], 0.0)
-        self.assertEqual(second["fees"], 0.33)
-        self.assertEqual(second["net_pnl"], -0.33)
+        exit_order, entry_order = summary["filled_orders"]
+        self.assertEqual(exit_order["pnl_status"], "realized")
+        self.assertAlmostEqual(exit_order["gross_pnl"], 0.658)
+        self.assertAlmostEqual(exit_order["realized_fees"], 0.0468696)
+        self.assertAlmostEqual(exit_order["net_pnl"], 0.6111304)
+        self.assertEqual(entry_order["pnl_status"], "entry")
+        self.assertIsNone(entry_order["net_pnl"])
+
+    async def test_portfolio_summary_keeps_broker_reported_net_pnl_after_fees(self):
+        fake_delta = SimpleNamespace(
+            get_wallet=lambda: [{"asset_symbol": "USDT", "available_balance": "1000"}],
+            get_positions=lambda: [],
+            get_order_history=lambda: [
+                {
+                    "id": "broker-pnl",
+                    "realized_pnl": "12.75",
+                    "paid_commission": "0.55",
+                    "state": "closed",
+                },
+            ],
+        )
+        with patch.object(self.app_module, "delta", fake_delta):
+            summary = await self.app_module.get_portfolio_summary()
+
+        order = summary["filled_orders"][0]
+        self.assertEqual(order["gross_pnl"], 12.75)
+        self.assertEqual(order["fees"], 0.55)
+        self.assertEqual(order["net_pnl"], 12.2)
 
     async def test_paper_status_with_missing_run_id_uses_stopped_snapshot(self):
         running_engine = type(

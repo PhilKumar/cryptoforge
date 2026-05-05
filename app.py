@@ -3607,14 +3607,21 @@ def _first_order_float(order: dict, keys: tuple[str, ...], default=None):
     return default
 
 
-def _normalize_filled_order(order: dict) -> dict:
-    """Attach fee-aware P/L fields to raw broker filled-order rows."""
-    if not isinstance(order, dict):
-        return order
+def _order_fill_price(order: dict) -> float | None:
+    return _first_order_float(
+        order,
+        ("average_fill_price", "avg_fill_price", "fill_price", "average_price", "avg_price", "price"),
+        None,
+    )
 
-    normalized = dict(order)
-    fees = _first_order_float(
-        normalized,
+
+def _order_fill_size(order: dict) -> float:
+    return _first_order_float(order, ("filled_size", "size", "quantity", "qty"), 0.0) or 0.0
+
+
+def _order_fee(order: dict) -> float:
+    return _first_order_float(
+        order,
         (
             "paid_commission",
             "commission",
@@ -3628,6 +3635,59 @@ def _normalize_filled_order(order: dict) -> dict:
         ),
         0.0,
     )
+
+
+def _order_fill_time(order: dict) -> str:
+    return str(
+        order.get("filled_at") or order.get("updated_at") or order.get("created_at") or order.get("timestamp") or ""
+    )
+
+
+def _order_symbol_key(order: dict) -> str:
+    return str(order.get("product_id") or order.get("product_symbol") or order.get("symbol") or "")
+
+
+def _order_side_sign(order: dict) -> int:
+    side = str(order.get("side") or "").lower()
+    if side in {"buy", "long"}:
+        return 1
+    if side in {"sell", "short"}:
+        return -1
+    return 0
+
+
+def _order_contract_value(order: dict, default: float = 1.0) -> float:
+    product = order.get("product") if isinstance(order.get("product"), dict) else {}
+    value = _safe_float(product.get("contract_value"), 0.0)
+    return value if value > 0 else default
+
+
+def _order_notional_type(order: dict) -> str:
+    product = order.get("product") if isinstance(order.get("product"), dict) else {}
+    return str(product.get("notional_type") or "").lower()
+
+
+def _matched_order_gross_pnl(entry: dict, exit_order: dict, qty: float, open_sign: int) -> float:
+    entry_price = _safe_float(entry.get("entry_price"), 0.0)
+    exit_price = _safe_float(exit_order.get("fill_price"), 0.0)
+    contract_value = _order_contract_value(exit_order, 0.0) or _order_contract_value(entry)
+    notional_type = _order_notional_type(exit_order) or _order_notional_type(entry)
+    if qty <= 0 or entry_price <= 0 or exit_price <= 0:
+        return 0.0
+    if notional_type == "inverse":
+        return open_sign * ((1 / entry_price) - (1 / exit_price)) * qty * contract_value
+    return open_sign * (exit_price - entry_price) * qty * contract_value
+
+
+def _normalize_filled_order(order: dict) -> dict:
+    """Attach normalized fill fields to raw broker filled-order rows."""
+    if not isinstance(order, dict):
+        return order
+
+    normalized = dict(order)
+    fees = _order_fee(normalized)
+    fill_price = _order_fill_price(normalized)
+    fill_size = _order_fill_size(normalized)
     gross_pnl = _first_order_float(
         normalized,
         (
@@ -3654,19 +3714,107 @@ def _normalize_filled_order(order: dict) -> dict:
         None,
     )
 
-    if gross_pnl is None and existing_net_pnl is not None:
-        gross_pnl = existing_net_pnl + fees
-    elif gross_pnl is None:
-        gross_pnl = 0.0
-
     normalized["fees"] = round(fees, 8)
-    normalized["gross_pnl"] = round(gross_pnl, 8)
-    normalized["net_pnl"] = round(gross_pnl - fees, 8)
+    normalized["fill_price"] = round(fill_price, 8) if fill_price is not None else None
+    normalized["filled_size"] = round(fill_size, 8)
+    normalized["filled_at"] = _order_fill_time(normalized)
+    if existing_net_pnl is not None:
+        normalized["net_pnl"] = round(existing_net_pnl, 8)
+        normalized["gross_pnl"] = round(gross_pnl if gross_pnl is not None else existing_net_pnl + fees, 8)
+        normalized["realized_fees"] = fees
+        normalized["pnl_status"] = "broker"
+    elif gross_pnl is not None:
+        normalized["gross_pnl"] = round(gross_pnl, 8)
+        normalized["net_pnl"] = round(gross_pnl - fees, 8)
+        normalized["realized_fees"] = fees
+        normalized["pnl_status"] = "broker"
+    else:
+        normalized["gross_pnl"] = None
+        normalized["net_pnl"] = None
+        normalized["realized_fees"] = None
+        normalized["pnl_status"] = "unmatched"
     return normalized
+
+
+def _is_filled_order(order: dict) -> bool:
+    if not isinstance(order, dict):
+        return False
+    if order.get("net_pnl") is not None or order.get("gross_pnl") is not None:
+        return True
+    return _safe_float(order.get("fill_price"), 0.0) > 0 and _safe_float(order.get("filled_size"), 0.0) > 0
+
+
+def _attach_matched_order_pnl(rows: list[dict]) -> list[dict]:
+    """Derive realized P/L for broker rows that only expose raw fills."""
+    lots_by_symbol: dict[str, list[dict]] = defaultdict(list)
+    sorted_rows = sorted(rows, key=lambda row: (_order_fill_time(row), str(row.get("id") or "")))
+    for order in sorted_rows:
+        if order.get("net_pnl") is not None:
+            continue
+        side_sign = _order_side_sign(order)
+        fill_price = _safe_float(order.get("fill_price"), 0.0)
+        qty = _safe_float(order.get("filled_size"), 0.0)
+        if side_sign == 0 or fill_price <= 0 or qty <= 0:
+            order["pnl_status"] = "unmatched"
+            continue
+
+        symbol_key = _order_symbol_key(order)
+        lots = lots_by_symbol[symbol_key]
+        remaining = qty
+        order_fee = _safe_float(order.get("fees"), 0.0)
+        matched_qty = 0.0
+        gross_pnl = 0.0
+        realized_fees = 0.0
+
+        while remaining > 1e-12 and lots and lots[0]["sign"] != side_sign:
+            lot = lots[0]
+            close_qty = min(remaining, lot["remaining_qty"])
+            if close_qty <= 0:
+                lots.pop(0)
+                continue
+
+            lot_ratio = close_qty / lot["remaining_qty"] if lot["remaining_qty"] else 0.0
+            order_ratio = close_qty / qty if qty else 0.0
+            entry_fee_part = lot["remaining_fee"] * lot_ratio
+            exit_fee_part = order_fee * order_ratio
+
+            gross_pnl += _matched_order_gross_pnl(lot, order, close_qty, lot["sign"])
+            realized_fees += entry_fee_part + exit_fee_part
+            matched_qty += close_qty
+            remaining -= close_qty
+
+            lot["remaining_qty"] -= close_qty
+            lot["remaining_fee"] -= entry_fee_part
+            if lot["remaining_qty"] <= 1e-12:
+                lots.pop(0)
+
+        if matched_qty > 0:
+            order["matched_size"] = round(matched_qty, 8)
+            order["gross_pnl"] = round(gross_pnl, 8)
+            order["realized_fees"] = round(realized_fees, 8)
+            order["net_pnl"] = round(gross_pnl - realized_fees, 8)
+            order["pnl_status"] = "realized" if remaining <= 1e-12 else "partial_realized"
+
+        if remaining > 1e-12:
+            remaining_fee = order_fee * (remaining / qty if qty else 0.0)
+            lots.append(
+                {
+                    "sign": side_sign,
+                    "remaining_qty": remaining,
+                    "remaining_fee": remaining_fee,
+                    "entry_price": fill_price,
+                    "product": order.get("product"),
+                }
+            )
+            if matched_qty <= 0:
+                order["pnl_status"] = "entry"
+    return rows
 
 
 def _normalize_filled_orders(orders, limit: int | None = None) -> list:
     rows = [_normalize_filled_order(order) for order in list(orders or [])]
+    rows = [row for row in rows if _is_filled_order(row)]
+    _attach_matched_order_pnl(rows)
     return rows[:limit] if limit else rows
 
 

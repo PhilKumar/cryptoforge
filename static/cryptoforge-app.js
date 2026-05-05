@@ -3715,7 +3715,6 @@ function _cfFilledOrderFees(order) {
 }
 
 function _cfFilledOrderNetPnl(order) {
-  var fee = _cfFilledOrderFees(order);
   var net = _cfFirstNumber(order, [
     'net_pnl',
     'realized_net_pnl',
@@ -3733,8 +3732,18 @@ function _cfFilledOrderNetPnl(order) {
     'profit_loss',
     'profit_and_loss',
     'pnl'
-  ], 0);
+  ], null);
+  if (gross === null) return null;
+  var fee = _cfFilledOrderFees(order);
   return Math.round((gross - fee) * 100000000) / 100000000;
+}
+
+function _cfFilledOrderPnlSubtext(order, hasPnl) {
+  if (hasPnl) return order && order.pnl_status === 'broker' ? 'broker net' : 'net realized';
+  var status = String((order && order.pnl_status) || '').toLowerCase();
+  if (status === 'entry') return 'entry fill';
+  if (status === 'unmatched') return 'no matched entry';
+  return 'not realized';
 }
 
 // ── Portfolio Page ─────────────────────────────────────────
@@ -3814,13 +3823,18 @@ async function loadPortfolioData() {
         ordTbody.innerHTML = orders.slice(0, 50).map(function(o) {
           var side = (o.side || '').toUpperCase();
           var safeSide = _escapeHtml(side || '--');
-          var fillPrice = parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
-          var ts = o.created_at || o.timestamp || '';
+          var fillPrice = parseFloat(o.fill_price) || parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
+          var ts = o.filled_at || o.updated_at || o.created_at || o.timestamp || '';
           var dt = _getTradeDateParts(ts);
           var symbol = _escapeHtml(o.product_symbol || o.symbol || ('ID:' + (o.product_id || '')));
           var fee = _cfFilledOrderFees(o);
           var netPnl = _cfFilledOrderNetPnl(o);
-          var pnlColor = netPnl >= 0 ? 'var(--green)' : 'var(--red)';
+          var hasPnl = netPnl !== null && !isNaN(netPnl);
+          var pnlColor = hasPnl && netPnl >= 0 ? 'var(--green)' : 'var(--red)';
+          var pnlMain = hasPnl
+            ? '<div class="table-value-main" style="color:' + pnlColor + ';">' + (netPnl >= 0 ? '+' : '') + fmtINR(netPnl) + '</div>'
+            : '<div class="table-value-main" style="color:var(--muted);">—</div>';
+          var pnlSub = _escapeHtml(_cfFilledOrderPnlSubtext(o, hasPnl));
           var orderType = _escapeHtml((o.order_type || o.type || '--').replace('_', ' '));
           var orderState = _escapeHtml(o.state || o.status || 'filled');
           return '<tr>' +
@@ -3830,7 +3844,7 @@ async function loadPortfolioData() {
             '<td><div class="table-value-stack"><div class="table-value-main">' + (o.size || o.quantity || 0) + '</div><div class="table-value-sub">filled</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(fillPrice) + '</div><div class="table-value-sub">avg fill</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINR(fee) + '</div><div class="table-value-sub">fees</div></div></td>' +
-            '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:' + pnlColor + ';">' + (netPnl >= 0 ? '+' : '') + fmtINR(netPnl) + '</div><div class="table-value-sub">net P&amp;L</div></div></td>' +
+            '<td class="num"><div class="table-value-stack">' + pnlMain + '<div class="table-value-sub">' + pnlSub + '</div></div></td>' +
             '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">' + _escapeHtml(_brokerLabel()) + '</div></td>' +
             '<td><span class="tag tag-purple">' + orderState + '</span></td>' +
             '</tr>';
