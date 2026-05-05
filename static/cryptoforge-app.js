@@ -4903,7 +4903,7 @@ function renderMonthlyDailyGrid() {
     var bg = pnlVal > 0 ? 'rgba(34,197,94,0.06)' : pnlVal < 0 ? 'rgba(239,68,68,0.06)' : '';
     html += '<div class="day-cell" style="background:' + bg + ';">';
     html += '<div class="dc-day">' + d + '</div>';
-    html += '<div class="dc-pnl" style="color:' + color + '">$' + pnlVal.toFixed(2) + '</div>';
+    html += '<div class="dc-pnl" style="color:' + color + '">' + fmtINR(pnlVal) + '</div>';
     if (tradesForDay) html += '<div class="dc-trades">' + tradesForDay + ' trades</div>';
     html += '</div>';
   }
@@ -4911,7 +4911,7 @@ function renderMonthlyDailyGrid() {
   // Summary below
   if (tableEl) {
     tableEl.innerHTML = '<div style="display:flex;gap:20px;padding:12px;background:rgba(255,255,255,0.02);border-radius:10px;">'
-      + '<div><span style="color:var(--muted);font-size:12px;">Monthly P&L:</span> <span style="font-weight:700;color:' + (totalPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">$' + totalPnl.toFixed(2) + '</span></div>'
+      + '<div><span style="color:var(--muted);font-size:12px;">Monthly P&L:</span> <span style="font-weight:700;color:' + (totalPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtINR(totalPnl) + '</span></div>'
       + '<div><span style="color:var(--muted);font-size:12px;">Total Trades:</span> <span style="font-weight:700;">' + totalTrades + '</span></div>'
       + '</div>';
   }
@@ -4955,7 +4955,7 @@ function renderYearlyMonthlyTable() {
         var tradeCount = data.trades != null ? data.trades : ((data.real_trades || 0) + (data.paper_trades || 0));
         var color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
         var bg = pnl >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
-        html += '<div class="ytd-cell" style="background:' + bg + ';color:' + color + ';" title="$' + pnl.toFixed(2) + ' (' + tradeCount + ' trades)">$' + (Math.abs(pnl) >= 1000 ? (pnl/1000).toFixed(1) + 'K' : pnl.toFixed(0)) + '</div>';
+        html += '<div class="ytd-cell" style="background:' + bg + ';color:' + color + ';" title="' + fmtINR(pnl) + ' (' + tradeCount + ' trades)">' + fmtINR(pnl) + '</div>';
       }
     });
   });

@@ -1305,6 +1305,65 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order["fees"], 0.55)
         self.assertEqual(order["net_pnl"], 12.2)
 
+    async def test_portfolio_history_uses_broker_realized_fills_for_calendar_totals(self):
+        product = {"contract_value": "0.001", "notional_type": "vanilla"}
+        fake_delta = SimpleNamespace(
+            get_order_history=lambda: [
+                {
+                    "id": "exit",
+                    "product_id": 27,
+                    "product_symbol": "BTCUSD",
+                    "side": "sell",
+                    "size": 1,
+                    "average_fill_price": "80098",
+                    "paid_commission": "0",
+                    "updated_at": "2026-05-04T14:48:27Z",
+                    "product": product,
+                    "state": "closed",
+                },
+                {
+                    "id": "entry",
+                    "product_id": 27,
+                    "product_symbol": "BTCUSD",
+                    "side": "buy",
+                    "size": 1,
+                    "average_fill_price": "79440",
+                    "paid_commission": "0.0468696",
+                    "updated_at": "2026-05-04T14:37:16Z",
+                    "product": product,
+                    "state": "closed",
+                },
+            ]
+        )
+        fake_runs = [
+            {
+                "id": 1,
+                "mode": "paper",
+                "created_at": "2026-05-05 10:00:00",
+                "trades": [{"symbol": "BTCUSDT", "exit_time": "2026-05-05 10:05:00", "pnl": 5.0}],
+            },
+            {
+                "id": 2,
+                "mode": "live",
+                "created_at": "2026-05-04 10:00:00",
+                "trades": [{"symbol": "BTCUSD", "exit_time": "2026-05-04 10:05:00", "pnl": 99.0}],
+            },
+        ]
+        with (
+            patch.object(self.app_module, "delta", fake_delta),
+            patch.object(self.app_module, "_load_runs", return_value=fake_runs),
+        ):
+            history = await self.app_module.get_portfolio_history()
+
+        self.assertEqual(history["status"], "success")
+        self.assertEqual(history["daily"]["2026-05-04"]["real_trades"], 1)
+        self.assertEqual(history["daily"]["2026-05-04"]["paper_trades"], 0)
+        self.assertEqual(history["daily"]["2026-05-05"]["paper_trades"], 1)
+        self.assertAlmostEqual(history["daily"]["2026-05-04"]["real_pnl"], 0.61)
+        self.assertAlmostEqual(history["daily"]["2026-05-05"]["paper_pnl"], 5.0)
+        self.assertAlmostEqual(history["monthly"]["2026-05"]["total_pnl"], 5.61)
+        self.assertAlmostEqual(history["yearly"]["2026"]["total_pnl"], 5.61)
+
     async def test_paper_status_with_missing_run_id_uses_stopped_snapshot(self):
         running_engine = type(
             "RunningEngine", (), {"running": True, "get_status": lambda self: {"strategy_name": "Other"}}

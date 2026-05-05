@@ -4121,16 +4121,78 @@ async def engines_all():
     return {"engines": engines, "count": len(engines)}
 
 
+def _portfolio_history_empty_day() -> dict:
+    return {
+        "real_pnl": 0,
+        "real_net_pnl": 0,
+        "real_gross_pnl": 0,
+        "real_fees": 0,
+        "paper_pnl": 0,
+        "real_trades": 0,
+        "paper_trades": 0,
+        "real_wins": 0,
+        "paper_wins": 0,
+    }
+
+
+def _portfolio_history_day(daily: dict, date_str: str) -> dict:
+    if date_str not in daily:
+        daily[date_str] = _portfolio_history_empty_day()
+    return daily[date_str]
+
+
+def _portfolio_history_order_date(order: dict) -> str:
+    dt = _normalize_datetime(order.get("filled_at") or order.get("updated_at") or order.get("created_at"))
+    if dt:
+        return dt.strftime("%Y-%m-%d")
+    raw = str(order.get("filled_at") or order.get("updated_at") or order.get("created_at") or "")[:10]
+    return raw if len(raw) == 10 else ""
+
+
+def _add_broker_fills_to_portfolio_history(daily: dict) -> bool:
+    """Add realized broker fills to daily history using matched-fill net P/L."""
+    try:
+        orders = _normalize_filled_orders(delta.get_order_history())
+    except Exception as exc:
+        _logger.warning("Broker fills unavailable for portfolio history: %s", exc)
+        return False
+
+    added = 0
+    for order in orders:
+        net_pnl = order.get("net_pnl")
+        if net_pnl is None:
+            continue
+        date_str = _portfolio_history_order_date(order)
+        if not date_str:
+            continue
+        net = _safe_float(net_pnl, 0.0)
+        gross = _safe_float(order.get("gross_pnl"), net)
+        fees = _safe_float(order.get("realized_fees"), _safe_float(order.get("fees"), 0.0))
+        day = _portfolio_history_day(daily, date_str)
+        day["real_pnl"] += net
+        day["real_net_pnl"] += net
+        day["real_gross_pnl"] += gross
+        day["real_fees"] += fees
+        day["real_trades"] += 1
+        if net > 0:
+            day["real_wins"] += 1
+        added += 1
+    return added > 0
+
+
 @app.get("/api/portfolio/history")
 async def get_portfolio_history():
     """Return combined historical P&L from real trades + paper runs for monthly/yearly charts."""
     try:
         daily = {}
+        broker_real_loaded = _add_broker_fills_to_portfolio_history(daily)
         runs = _load_runs()
         seen_trade_signatures = set()
         for r in runs:
             mode = r.get("mode", "backtest")
             if mode not in ("paper", "live"):
+                continue
+            if mode == "live" and broker_real_loaded:
                 continue
             started = r.get("started_at", r.get("created_at", ""))
             run_date = str(started)[:10] if started else ""
@@ -4149,51 +4211,36 @@ async def get_portfolio_history():
                         continue
                     if t_date not in by_date:
                         by_date[t_date] = {"pnl": 0, "count": 0, "wins": 0}
-                    pnl = t.get("pnl", 0)
+                    pnl = _safe_float(t.get("net_pnl", t.get("pnl", 0)), 0.0)
                     by_date[t_date]["pnl"] += pnl
                     by_date[t_date]["count"] += 1
                     if pnl > 0:
                         by_date[t_date]["wins"] += 1
                 for d, data in by_date.items():
-                    if d not in daily:
-                        daily[d] = {
-                            "real_pnl": 0,
-                            "real_net_pnl": 0,
-                            "paper_pnl": 0,
-                            "real_trades": 0,
-                            "paper_trades": 0,
-                            "real_wins": 0,
-                            "paper_wins": 0,
-                        }
+                    day = _portfolio_history_day(daily, d)
                     if mode == "live":
-                        daily[d]["real_pnl"] += round(data["pnl"], 2)
-                        daily[d]["real_net_pnl"] += round(data["pnl"], 2)
-                        daily[d]["real_trades"] += data["count"]
-                        daily[d]["real_wins"] += data["wins"]
+                        day["real_pnl"] += round(data["pnl"], 2)
+                        day["real_net_pnl"] += round(data["pnl"], 2)
+                        day["real_trades"] += data["count"]
+                        day["real_wins"] += data["wins"]
                     else:
-                        daily[d]["paper_pnl"] += round(data["pnl"], 2)
-                        daily[d]["paper_trades"] += data["count"]
-                        daily[d]["paper_wins"] += data["wins"]
+                        day["paper_pnl"] += round(data["pnl"], 2)
+                        day["paper_trades"] += data["count"]
+                        day["paper_wins"] += data["wins"]
             elif run_date:
-                if run_date not in daily:
-                    daily[run_date] = {
-                        "real_pnl": 0,
-                        "real_net_pnl": 0,
-                        "paper_pnl": 0,
-                        "real_trades": 0,
-                        "paper_trades": 0,
-                        "real_wins": 0,
-                        "paper_wins": 0,
-                    }
+                day = _portfolio_history_day(daily, run_date)
                 if mode == "live":
-                    daily[run_date]["real_pnl"] += r.get("total_pnl", 0)
-                    daily[run_date]["real_net_pnl"] += r.get("total_pnl", 0)
-                    daily[run_date]["real_trades"] += r.get("trade_count", 0)
+                    pnl = _safe_float(r.get("total_pnl"), 0.0)
+                    day["real_pnl"] += pnl
+                    day["real_net_pnl"] += pnl
+                    day["real_trades"] += r.get("trade_count", 0)
                 else:
-                    daily[run_date]["paper_pnl"] += r.get("total_pnl", 0)
-                    daily[run_date]["paper_trades"] += r.get("trade_count", 0)
+                    day["paper_pnl"] += _safe_float(r.get("total_pnl"), 0.0)
+                    day["paper_trades"] += r.get("trade_count", 0)
 
         for data in daily.values():
+            for key in ("real_pnl", "real_net_pnl", "real_gross_pnl", "real_fees", "paper_pnl"):
+                data[key] = round(data.get(key, 0), 2)
             data["pnl"] = round(data["real_pnl"] + data["paper_pnl"], 2)
             data["trades"] = int(data["real_trades"] + data["paper_trades"])
             data["wins"] = int(data["real_wins"] + data["paper_wins"])
@@ -4204,28 +4251,50 @@ async def get_portfolio_history():
             ym = date_str[:7]
             y = date_str[:4]
             if ym not in monthly:
-                monthly[ym] = {"real_pnl": 0, "real_net_pnl": 0, "paper_pnl": 0, "total_pnl": 0, "trades": 0, "wins": 0}
+                monthly[ym] = {
+                    "real_pnl": 0,
+                    "real_net_pnl": 0,
+                    "real_gross_pnl": 0,
+                    "real_fees": 0,
+                    "paper_pnl": 0,
+                    "total_pnl": 0,
+                    "trades": 0,
+                    "wins": 0,
+                }
             monthly[ym]["real_pnl"] += d["real_pnl"]
             monthly[ym]["real_net_pnl"] += d.get("real_net_pnl", d["real_pnl"])
+            monthly[ym]["real_gross_pnl"] += d.get("real_gross_pnl", 0)
+            monthly[ym]["real_fees"] += d.get("real_fees", 0)
             monthly[ym]["paper_pnl"] += d["paper_pnl"]
             monthly[ym]["total_pnl"] += d["real_pnl"] + d["paper_pnl"]
             monthly[ym]["trades"] += d["real_trades"] + d["paper_trades"]
             monthly[ym]["wins"] += d["real_wins"] + d["paper_wins"]
             if y not in yearly:
-                yearly[y] = {"real_pnl": 0, "real_net_pnl": 0, "paper_pnl": 0, "total_pnl": 0, "trades": 0, "wins": 0}
+                yearly[y] = {
+                    "real_pnl": 0,
+                    "real_net_pnl": 0,
+                    "real_gross_pnl": 0,
+                    "real_fees": 0,
+                    "paper_pnl": 0,
+                    "total_pnl": 0,
+                    "trades": 0,
+                    "wins": 0,
+                }
             yearly[y]["real_pnl"] += d["real_pnl"]
             yearly[y]["real_net_pnl"] += d.get("real_net_pnl", d["real_pnl"])
+            yearly[y]["real_gross_pnl"] += d.get("real_gross_pnl", 0)
+            yearly[y]["real_fees"] += d.get("real_fees", 0)
             yearly[y]["paper_pnl"] += d["paper_pnl"]
             yearly[y]["total_pnl"] += d["real_pnl"] + d["paper_pnl"]
             yearly[y]["trades"] += d["real_trades"] + d["paper_trades"]
             yearly[y]["wins"] += d["real_wins"] + d["paper_wins"]
 
         for m in monthly.values():
-            for k in ["real_pnl", "real_net_pnl", "paper_pnl", "total_pnl"]:
+            for k in ["real_pnl", "real_net_pnl", "real_gross_pnl", "real_fees", "paper_pnl", "total_pnl"]:
                 m[k] = round(m[k], 2)
             m["pnl"] = m["total_pnl"]
         for y_val in yearly.values():
-            for k in ["real_pnl", "real_net_pnl", "paper_pnl", "total_pnl"]:
+            for k in ["real_pnl", "real_net_pnl", "real_gross_pnl", "real_fees", "paper_pnl", "total_pnl"]:
                 y_val[k] = round(y_val[k], 2)
             y_val["pnl"] = y_val["total_pnl"]
 
