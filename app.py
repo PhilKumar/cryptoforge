@@ -3593,11 +3593,88 @@ async def get_wallet():
 
 
 # ── Broker Trade History ─────────────────────────────────────────
+_MISSING_ORDER_FLOAT = object()
+
+
+def _first_order_float(order: dict, keys: tuple[str, ...], default=None):
+    for key in keys:
+        value = order.get(key)
+        if value in (None, ""):
+            continue
+        parsed = _safe_float(value, _MISSING_ORDER_FLOAT)
+        if parsed is not _MISSING_ORDER_FLOAT:
+            return parsed
+    return default
+
+
+def _normalize_filled_order(order: dict) -> dict:
+    """Attach fee-aware P/L fields to raw broker filled-order rows."""
+    if not isinstance(order, dict):
+        return order
+
+    normalized = dict(order)
+    fees = _first_order_float(
+        normalized,
+        (
+            "paid_commission",
+            "commission",
+            "commission_paid",
+            "total_commission",
+            "fee",
+            "fees",
+            "fee_amount",
+            "trading_fee",
+            "brokerage",
+        ),
+        0.0,
+    )
+    gross_pnl = _first_order_float(
+        normalized,
+        (
+            "gross_pnl",
+            "realized_pnl",
+            "realised_pnl",
+            "realized_profit",
+            "realised_profit",
+            "profit_loss",
+            "profit_and_loss",
+            "pnl",
+        ),
+        None,
+    )
+    existing_net_pnl = _first_order_float(
+        normalized,
+        (
+            "net_pnl",
+            "realized_net_pnl",
+            "realised_net_pnl",
+            "net_profit_loss",
+            "net_profit",
+        ),
+        None,
+    )
+
+    if gross_pnl is None and existing_net_pnl is not None:
+        gross_pnl = existing_net_pnl + fees
+    elif gross_pnl is None:
+        gross_pnl = 0.0
+
+    normalized["fees"] = round(fees, 8)
+    normalized["gross_pnl"] = round(gross_pnl, 8)
+    normalized["net_pnl"] = round(gross_pnl - fees, 8)
+    return normalized
+
+
+def _normalize_filled_orders(orders, limit: int | None = None) -> list:
+    rows = [_normalize_filled_order(order) for order in list(orders or [])]
+    return rows[:limit] if limit else rows
+
+
 @app.get("/api/broker/trades")
 async def get_broker_trades():
     """Get filled order history from the active broker."""
     try:
-        orders = delta.get_order_history()
+        orders = _normalize_filled_orders(delta.get_order_history())
         return {"status": "ok", "trades": orders}
     except Exception as e:
         return {"status": "error", "trades": [], "message": str(e)[:100]}
@@ -3652,7 +3729,7 @@ async def get_portfolio_summary():
             "balance": round(usdt_balance, 2),
             "unrealized_pnl": round(unrealized_pnl, 2),
             "open_positions": open_positions,
-            "filled_orders": orders[:50] if orders else [],
+            "filled_orders": _normalize_filled_orders(orders, limit=50),
         }
     except Exception as e:
         return {

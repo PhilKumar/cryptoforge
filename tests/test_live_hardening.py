@@ -1241,6 +1241,35 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["live_trades"], 3)
         self.assertEqual(summary["today_pnl"], 32)
 
+    async def test_portfolio_summary_adds_net_pnl_to_filled_orders_after_fees(self):
+        fake_delta = SimpleNamespace(
+            get_wallet=lambda: [{"asset_symbol": "USDT", "available_balance": "1000"}],
+            get_positions=lambda: [],
+            get_order_history=lambda: [
+                {
+                    "id": "filled-profit",
+                    "realized_pnl": "12.75",
+                    "paid_commission": "0.55",
+                    "state": "closed",
+                },
+                {
+                    "id": "filled-fee-only",
+                    "paid_commission": "0.33",
+                    "state": "closed",
+                },
+            ],
+        )
+        with patch.object(self.app_module, "delta", fake_delta):
+            summary = await self.app_module.get_portfolio_summary()
+
+        first, second = summary["filled_orders"]
+        self.assertEqual(first["gross_pnl"], 12.75)
+        self.assertEqual(first["fees"], 0.55)
+        self.assertEqual(first["net_pnl"], 12.2)
+        self.assertEqual(second["gross_pnl"], 0.0)
+        self.assertEqual(second["fees"], 0.33)
+        self.assertEqual(second["net_pnl"], -0.33)
+
     async def test_paper_status_with_missing_run_id_uses_stopped_snapshot(self):
         running_engine = type(
             "RunningEngine", (), {"running": True, "get_status": lambda self: {"strategy_name": "Other"}}

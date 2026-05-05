@@ -3689,6 +3689,54 @@ async function downloadLiveCSV() {
   } catch(e) { cfToast('Export failed: ' + e.message, 'error'); }
 }
 
+function _cfFirstNumber(source, keys, fallback) {
+  if (!source) return fallback;
+  for (var i = 0; i < keys.length; i++) {
+    var value = source[keys[i]];
+    if (value === null || value === undefined || value === '') continue;
+    var parsed = parseFloat(value);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function _cfFilledOrderFees(order) {
+  return _cfFirstNumber(order, [
+    'fees',
+    'paid_commission',
+    'commission',
+    'commission_paid',
+    'total_commission',
+    'fee',
+    'fee_amount',
+    'trading_fee',
+    'brokerage'
+  ], 0);
+}
+
+function _cfFilledOrderNetPnl(order) {
+  var fee = _cfFilledOrderFees(order);
+  var net = _cfFirstNumber(order, [
+    'net_pnl',
+    'realized_net_pnl',
+    'realised_net_pnl',
+    'net_profit_loss',
+    'net_profit'
+  ], null);
+  if (net !== null) return net;
+  var gross = _cfFirstNumber(order, [
+    'gross_pnl',
+    'realized_pnl',
+    'realised_pnl',
+    'realized_profit',
+    'realised_profit',
+    'profit_loss',
+    'profit_and_loss',
+    'pnl'
+  ], 0);
+  return Math.round((gross - fee) * 100000000) / 100000000;
+}
+
 // ── Portfolio Page ─────────────────────────────────────────
 async function loadPortfolioData() {
   try {
@@ -3761,7 +3809,7 @@ async function loadPortfolioData() {
     var ordTbody = document.getElementById('pf-orders-body');
     if (ordTbody) {
       if (orders.length === 0) {
-        ordTbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
+        ordTbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
       } else {
         ordTbody.innerHTML = orders.slice(0, 50).map(function(o) {
           var side = (o.side || '').toUpperCase();
@@ -3770,7 +3818,9 @@ async function loadPortfolioData() {
           var ts = o.created_at || o.timestamp || '';
           var dt = _getTradeDateParts(ts);
           var symbol = _escapeHtml(o.product_symbol || o.symbol || ('ID:' + (o.product_id || '')));
-          var fee = parseFloat(o.paid_commission) || 0;
+          var fee = _cfFilledOrderFees(o);
+          var netPnl = _cfFilledOrderNetPnl(o);
+          var pnlColor = netPnl >= 0 ? 'var(--green)' : 'var(--red)';
           var orderType = _escapeHtml((o.order_type || o.type || '--').replace('_', ' '));
           var orderState = _escapeHtml(o.state || o.status || 'filled');
           return '<tr>' +
@@ -3780,6 +3830,7 @@ async function loadPortfolioData() {
             '<td><div class="table-value-stack"><div class="table-value-main">' + (o.size || o.quantity || 0) + '</div><div class="table-value-sub">filled</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(fillPrice) + '</div><div class="table-value-sub">avg fill</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINR(fee) + '</div><div class="table-value-sub">fees</div></div></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:' + pnlColor + ';">' + (netPnl >= 0 ? '+' : '') + fmtINR(netPnl) + '</div><div class="table-value-sub">net P&amp;L</div></div></td>' +
             '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">' + _escapeHtml(_brokerLabel()) + '</div></td>' +
             '<td><span class="tag tag-purple">' + orderState + '</span></td>' +
             '</tr>';
