@@ -1043,6 +1043,15 @@
     white-space: nowrap;
   }
   .trade-table th.num, .trade-table td.num { text-align: right; }
+  .trade-table th.center, .trade-table td.center { text-align: center; }
+  .trade-table td.num .table-value-stack {
+    align-items: flex-end;
+    text-align: right;
+  }
+  .trade-table td.center .table-value-stack {
+    align-items: center;
+    text-align: center;
+  }
   .trade-table td {
     padding: 12px 14px;
     border-bottom: 1px solid rgba(118,138,176,0.08);
@@ -1068,6 +1077,20 @@
   .trade-table thead th:last-child { border-top-right-radius: 16px; }
   .trade-table tbody tr:last-child td:first-child { border-bottom-left-radius: 16px; }
   .trade-table tbody tr:last-child td:last-child { border-bottom-right-radius: 16px; }
+
+  #pf-orders-table {
+    table-layout: fixed;
+    min-width: 1180px;
+  }
+  #pf-orders-table th:nth-child(1), #pf-orders-table td:nth-child(1) { width: 145px; }
+  #pf-orders-table th:nth-child(2), #pf-orders-table td:nth-child(2) { width: 130px; }
+  #pf-orders-table th:nth-child(3), #pf-orders-table td:nth-child(3) { width: 90px; }
+  #pf-orders-table th:nth-child(4), #pf-orders-table td:nth-child(4) { width: 90px; }
+  #pf-orders-table th:nth-child(5), #pf-orders-table td:nth-child(5) { width: 145px; }
+  #pf-orders-table th:nth-child(6), #pf-orders-table td:nth-child(6) { width: 115px; }
+  #pf-orders-table th:nth-child(7), #pf-orders-table td:nth-child(7) { width: 130px; }
+  #pf-orders-table th:nth-child(8), #pf-orders-table td:nth-child(8) { width: 150px; }
+  #pf-orders-table th:nth-child(9), #pf-orders-table td:nth-child(9) { width: 120px; }
 
   .table-panel {
     padding: 20px;

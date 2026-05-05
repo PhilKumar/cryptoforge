@@ -3840,13 +3840,13 @@ async function loadPortfolioData() {
           return '<tr>' +
             '<td><div class="table-datetime"><strong>' + dt.date + '</strong><span>' + (dt.time || '—') + '</span></div></td>' +
             '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">' + orderType + '</div></td>' +
-            '<td><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + safeSide + '</span></td>' +
-            '<td><div class="table-value-stack"><div class="table-value-main">' + (o.size || o.quantity || 0) + '</div><div class="table-value-sub">filled</div></div></td>' +
+            '<td class="center"><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + safeSide + '</span></td>' +
+            '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + (o.size || o.quantity || 0) + '</div><div class="table-value-sub">filled</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(fillPrice) + '</div><div class="table-value-sub">avg fill</div></div></td>' +
             '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINR(fee) + '</div><div class="table-value-sub">fees</div></div></td>' +
             '<td class="num"><div class="table-value-stack">' + pnlMain + '<div class="table-value-sub">' + pnlSub + '</div></div></td>' +
             '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">' + _escapeHtml(_brokerLabel()) + '</div></td>' +
-            '<td><span class="tag tag-purple">' + orderState + '</span></td>' +
+            '<td class="center"><span class="tag tag-purple">' + orderState + '</span></td>' +
             '</tr>';
         }).join('');
       }
