@@ -1305,6 +1305,19 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order["fees"], 0.55)
         self.assertEqual(order["net_pnl"], 12.2)
 
+    def test_portfolio_fx_unavailable_does_not_use_static_rate(self):
+        self.app_module._PORTFOLIO_USD_INR_CACHE.clear()
+        try:
+            with patch.object(self.app_module, "_fetch_portfolio_usd_inr_rate", side_effect=RuntimeError("fx down")):
+                meta = self.app_module._portfolio_usd_inr_rate()
+        finally:
+            self.app_module._PORTFOLIO_USD_INR_CACHE.clear()
+
+        self.assertEqual(meta["rate"], 0.0)
+        self.assertFalse(meta["live"])
+        self.assertTrue(meta["stale"])
+        self.assertFalse(meta["fallback"])
+
     async def test_portfolio_history_uses_broker_realized_fills_for_calendar_totals(self):
         product = {"contract_value": "0.001", "notional_type": "vanilla"}
         fake_delta = SimpleNamespace(

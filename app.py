@@ -140,22 +140,7 @@ def _broker_label() -> str:
     return str(getattr(delta, "display_name", "Broker") or "Broker")
 
 
-_PORTFOLIO_USD_INR_FALLBACK = 95.18
 _PORTFOLIO_USD_INR_CACHE: dict = {}
-
-
-def _portfolio_static_usd_inr_rate() -> tuple[float, str]:
-    for key in ("CRYPTOFORGE_USD_INR_RATE", "USD_INR_RATE"):
-        raw = os.getenv(key)
-        if raw in (None, ""):
-            continue
-        try:
-            rate = float(raw)
-        except (TypeError, ValueError):
-            continue
-        if rate > 0:
-            return round(rate, 4), key
-    return _PORTFOLIO_USD_INR_FALLBACK, "fallback"
 
 
 def _portfolio_fx_cache_ttl_sec() -> int:
@@ -242,7 +227,6 @@ def _portfolio_usd_inr_rate() -> dict:
     if cached and now < float(_PORTFOLIO_USD_INR_CACHE.get("expires_at", 0) or 0):
         return dict(cached)
 
-    static_rate, static_source = _portfolio_static_usd_inr_rate()
     try:
         meta = _fetch_portfolio_usd_inr_rate()
         meta.update(
@@ -261,8 +245,11 @@ def _portfolio_usd_inr_rate() -> dict:
     except (OSError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError, urllib_error.URLError) as exc:
         if cached:
             meta = dict(cached)
+            last_rate = meta.get("rate")
             meta.update(
                 {
+                    "rate": 0.0,
+                    "last_rate": last_rate,
                     "live": False,
                     "stale": True,
                     "fallback": False,
@@ -274,13 +261,14 @@ def _portfolio_usd_inr_rate() -> dict:
             _PORTFOLIO_USD_INR_CACHE["expires_at"] = now + min(300, _portfolio_fx_cache_ttl_sec())
             return meta
         return {
-            "rate": static_rate,
-            "source": static_source,
+            "rate": 0.0,
+            "last_rate": 0.0,
+            "source": "unavailable",
             "source_url": ",".join(_portfolio_fx_urls()),
             "provider_date": "",
             "live": False,
             "stale": True,
-            "fallback": True,
+            "fallback": False,
             "error": str(exc)[:160],
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
             "ttl_sec": _portfolio_fx_cache_ttl_sec(),
@@ -294,6 +282,9 @@ def _portfolio_currency_meta() -> dict:
         "settlement": "USDT",
         "quote": "INR",
         "usd_inr_rate": fx["rate"],
+        "rate_available": bool(
+            fx.get("live") and not fx.get("stale") and not fx.get("fallback") and fx.get("rate", 0) > 0
+        ),
         "rate_source": fx.get("source", ""),
         "rate_source_url": fx.get("source_url", ""),
         "rate_provider_date": fx.get("provider_date", ""),
@@ -306,7 +297,7 @@ def _portfolio_currency_meta() -> dict:
         "rate_note": (
             "Fetched from live FX API; P&L accounting remains in USDT."
             if fx.get("live")
-            else "FX API unavailable; using cached or fallback display conversion. P&L accounting remains in USDT."
+            else "FX API unavailable; INR display is unavailable until a live rate is fetched. P&L accounting remains in USDT."
         ),
     }
 

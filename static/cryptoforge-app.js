@@ -1848,13 +1848,18 @@ async function loadDashboard() {
 // ── USD / INR Currency Formatting ──────────────────────────
 // Accounting remains in USDT. INR is a display-only conversion for readability.
 let _cfUsdInrRate = 0;
-let _cfUsdInrSource = 'default';
-let _cfUsdInrMeta = { live: false, stale: true, fallback: true, providerDate: '', fetchedAt: '' };
+let _cfUsdInrSource = '';
+let _cfUsdInrMeta = { live: false, stale: true, fallback: false, providerDate: '', fetchedAt: '', error: '' };
 
 function cfApplyPortfolioCurrency(meta) {
   var rate = parseFloat(meta && meta.usd_inr_rate);
-  if (rate > 0) _cfUsdInrRate = rate;
-  _cfUsdInrSource = (meta && meta.rate_source) || _cfUsdInrSource || 'default';
+  var usable = rate > 0
+    && !!(meta && meta.rate_available !== false)
+    && !!(meta && meta.rate_live)
+    && !(meta && meta.rate_stale)
+    && !(meta && meta.rate_fallback);
+  _cfUsdInrRate = usable ? rate : 0;
+  _cfUsdInrSource = (meta && meta.rate_source) || '';
   _cfUsdInrMeta = {
     live: !!(meta && meta.rate_live),
     stale: !!(meta && meta.rate_stale),
@@ -1921,11 +1926,10 @@ function fmtRupeesFromUsd(usd, decimals) {
 }
 
 function fmtPortfolioRateLabel() {
-  if (!(_cfUsdInrRate > 0)) return 'FX loading';
-  var state = _cfUsdInrMeta.live && !_cfUsdInrMeta.stale ? ' live' : (_cfUsdInrMeta.stale ? ' stale' : ' approx');
-  var provider = _cfUsdInrSource && _cfUsdInrSource !== 'fallback' ? ' ' + _cfUsdInrSource : '';
+  if (!(_cfUsdInrRate > 0)) return _cfUsdInrMeta.error ? 'FX unavailable' : 'FX loading';
+  var provider = _cfUsdInrSource ? ' ' + _cfUsdInrSource : '';
   var date = _cfUsdInrMeta.providerDate ? ' ' + _cfUsdInrMeta.providerDate : '';
-  return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$' + state + provider + date;
+  return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$ live' + provider + date;
 }
 
 function fmtNum(n)   { return fmtINRLarge(n); }
@@ -4058,7 +4062,7 @@ async function loadPortfolioData() {
     if (balEl) {
       balEl.textContent = fmtINR(bal);
     }
-    _portfolioMoneySubline('pf-balance-inr', bal, 'approx');
+    _portfolioMoneySubline('pf-balance-inr', bal, '');
 
     // ── Unrealized P&L card ──
     var upnl = summary.unrealized_pnl || 0;
@@ -4067,7 +4071,7 @@ async function loadPortfolioData() {
       upnlEl.textContent = fmtINR(upnl);
       upnlEl.style.color = upnl >= 0 ? 'var(--green)' : 'var(--red)';
     }
-    _portfolioMoneySubline('pf-unrealized-inr', upnl, 'approx');
+    _portfolioMoneySubline('pf-unrealized-inr', upnl, '');
 
     // ── Counts ──
     var positions = summary.open_positions || [];
@@ -4127,7 +4131,7 @@ async function loadPortfolioData() {
       var pp = parseFloat(paper.total_pnl) || 0;
       pfPaperPnl.textContent = fmtINR(pp);
       pfPaperPnl.style.color = pp >= 0 ? 'var(--green)' : 'var(--red)';
-      _portfolioMoneySubline('pf-paper-pnl-inr', pp, 'approx');
+      _portfolioMoneySubline('pf-paper-pnl-inr', pp, '');
     }
     var pfPaperTrades = document.getElementById('pf-paper-trades');
     if (pfPaperTrades) pfPaperTrades.textContent = paper.trades_today || paper.closed_trades || 0;
@@ -4150,7 +4154,7 @@ async function loadPortfolioData() {
       var lp = parseFloat(live.total_pnl) || 0;
       pfLivePnl.textContent = fmtINR(lp);
       pfLivePnl.style.color = lp >= 0 ? 'var(--green)' : 'var(--red)';
-      _portfolioMoneySubline('pf-live-pnl-inr', lp, 'approx');
+      _portfolioMoneySubline('pf-live-pnl-inr', lp, '');
     }
     var pfLiveTrades = document.getElementById('pf-live-trades');
     if (pfLiveTrades) pfLiveTrades.textContent = live.trades_today || live.closed_trades || 0;
