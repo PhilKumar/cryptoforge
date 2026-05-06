@@ -3,6 +3,7 @@
   let deferredPrompt = null;
   let registrationReady = false;
   let installDialog = null;
+  let updateBanner = null;
 
   function isStandalone() {
     return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -149,6 +150,42 @@
     });
   }
 
+  function showUpdateBanner(message) {
+    if (updateBanner) {
+      updateBanner.querySelector('.cf-pwa-update-message').textContent = message;
+      return;
+    }
+    updateBanner = document.createElement('div');
+    updateBanner.className = 'cf-pwa-update-banner';
+    updateBanner.innerHTML =
+      '<div><strong>CryptoForge update ready</strong><span class="cf-pwa-update-message"></span></div>' +
+      '<button type="button" class="cf-pwa-update-btn">Reload</button>';
+    updateBanner.querySelector('.cf-pwa-update-message').textContent = message;
+    updateBanner.querySelector('.cf-pwa-update-btn').addEventListener('click', () => {
+      window.location.reload();
+    });
+    document.body.appendChild(updateBanner);
+  }
+
+  function wireServiceWorkerUpdates(registration) {
+    if (!registration) return;
+    if (registration.waiting && navigator.serviceWorker.controller) {
+      showUpdateBanner('A newer app shell is installed. Reload to use the latest portfolio changes.');
+    }
+    registration.addEventListener('updatefound', () => {
+      const worker = registration.installing;
+      if (!worker) return;
+      worker.addEventListener('statechange', () => {
+        if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+          showUpdateBanner('A newer app shell is installed. Reload to use the latest portfolio changes.');
+        }
+      });
+    });
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      showUpdateBanner('The app shell updated in the background. Reload when ready.');
+    });
+  }
+
   async function openInstallPrompt() {
     if (isStandalone()) return;
     if (deferredPrompt) {
@@ -244,8 +281,9 @@
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').then(() => {
+      navigator.serviceWorker.register('/sw.js').then((registration) => {
         registrationReady = true;
+        wireServiceWorkerUpdates(registration);
         syncButtons();
       }).catch(() => {
         registrationReady = false;

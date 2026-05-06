@@ -137,6 +137,54 @@ def _broker_label() -> str:
     return str(getattr(delta, "display_name", "Broker") or "Broker")
 
 
+def _portfolio_usd_inr_rate() -> tuple[float, str]:
+    for key in ("CRYPTOFORGE_USD_INR_RATE", "USD_INR_RATE"):
+        raw = os.getenv(key)
+        if raw in (None, ""):
+            continue
+        try:
+            rate = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if rate > 0:
+            return round(rate, 4), key
+    return 83.0, "default"
+
+
+def _portfolio_currency_meta() -> dict:
+    rate, source = _portfolio_usd_inr_rate()
+    return {
+        "base": "USD",
+        "settlement": "USDT",
+        "quote": "INR",
+        "usd_inr_rate": rate,
+        "rate_source": source,
+        "rate_note": "Approximate display conversion; P&L accounting remains in USDT.",
+    }
+
+
+def _portfolio_sync_meta(
+    status: str,
+    *,
+    order_count: int = 0,
+    realized_count: int = 0,
+    loaded: bool = False,
+    message: str = "",
+) -> dict:
+    broker_info = _broker_summary()
+    return {
+        "status": status,
+        "loaded": bool(loaded),
+        "source": "broker_fills",
+        "broker": broker_info,
+        "broker_label": broker_info.get("label") or _broker_label(),
+        "order_count": int(order_count or 0),
+        "realized_count": int(realized_count or 0),
+        "last_synced_at": datetime.now().isoformat(timespec="seconds"),
+        "message": message,
+    }
+
+
 def _supported_trade_symbols() -> set[str]:
     try:
         symbols = set(getattr(delta, "get_supported_symbols", lambda: set())() or set())
@@ -3872,17 +3920,37 @@ async def get_portfolio_summary():
                     }
                 )
 
+        filled_orders = _normalize_filled_orders(orders, limit=50)
+        realized_count = sum(1 for order in filled_orders if order.get("net_pnl") is not None)
+        broker_sync = _portfolio_sync_meta(
+            "ok" if filled_orders else "empty",
+            order_count=len(filled_orders),
+            realized_count=realized_count,
+            loaded=realized_count > 0,
+            message=(
+                f"{realized_count} realized broker fills reconciled."
+                if realized_count
+                else "No realized broker fills available in the recent order window."
+            ),
+        )
+
         return {
             "status": "ok",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "currency": _portfolio_currency_meta(),
+            "broker_sync": broker_sync,
             "balance": round(usdt_balance, 2),
             "unrealized_pnl": round(unrealized_pnl, 2),
             "open_positions": open_positions,
-            "filled_orders": _normalize_filled_orders(orders, limit=50),
+            "filled_orders": filled_orders,
         }
     except Exception as e:
         return {
             "status": "error",
             "message": str(e)[:200],
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "currency": _portfolio_currency_meta(),
+            "broker_sync": _portfolio_sync_meta("error", message=str(e)[:200]),
             "balance": 0,
             "unrealized_pnl": 0,
             "open_positions": [],
@@ -4149,15 +4217,15 @@ def _portfolio_history_order_date(order: dict) -> str:
     return raw if len(raw) == 10 else ""
 
 
-def _add_broker_fills_to_portfolio_history(daily: dict) -> bool:
+def _add_broker_fills_to_portfolio_history(daily: dict) -> dict:
     """Add realized broker fills to daily history using matched-fill net P/L."""
     try:
         orders = _normalize_filled_orders(delta.get_order_history())
     except Exception as exc:
         _logger.warning("Broker fills unavailable for portfolio history: %s", exc)
-        return False
+        return _portfolio_sync_meta("error", message=str(exc)[:200])
 
-    added = 0
+    realized_count = 0
     for order in orders:
         net_pnl = order.get("net_pnl")
         if net_pnl is None:
@@ -4176,8 +4244,69 @@ def _add_broker_fills_to_portfolio_history(daily: dict) -> bool:
         day["real_trades"] += 1
         if net > 0:
             day["real_wins"] += 1
-        added += 1
-    return added > 0
+        realized_count += 1
+    return _portfolio_sync_meta(
+        "ok" if realized_count else "empty",
+        order_count=len(orders),
+        realized_count=realized_count,
+        loaded=realized_count > 0,
+        message=(
+            f"{realized_count} realized broker fills loaded into the calendar."
+            if realized_count
+            else "No realized broker fills were available for the calendar."
+        ),
+    )
+
+
+def _portfolio_extreme_period(values: dict, value_key: str, *, prefer_max: bool) -> dict | None:
+    rows = [
+        (key, data) for key, data in values.items() if isinstance(data, dict) and int(data.get("trades", 0) or 0) > 0
+    ]
+    if not rows:
+        return None
+    key, data = (
+        max(rows, key=lambda item: _safe_float(item[1].get(value_key), 0.0))
+        if prefer_max
+        else min(rows, key=lambda item: _safe_float(item[1].get(value_key), 0.0))
+    )
+    return {
+        "period": key,
+        "pnl": round(_safe_float(data.get(value_key), 0.0), 2),
+        "trades": int(data.get("trades", 0) or 0),
+    }
+
+
+def _portfolio_history_analytics(daily: dict, monthly: dict, yearly: dict, broker_sync: dict) -> dict:
+    trades = sum(int(data.get("trades", 0) or 0) for data in daily.values())
+    wins = sum(int(data.get("wins", 0) or 0) for data in daily.values())
+    losses = max(trades - wins, 0)
+    real_pnl = sum(_safe_float(data.get("real_pnl"), 0.0) for data in daily.values())
+    paper_pnl = sum(_safe_float(data.get("paper_pnl"), 0.0) for data in daily.values())
+    fees = sum(_safe_float(data.get("real_fees"), 0.0) for data in daily.values())
+    total_pnl = real_pnl + paper_pnl
+    day_count = sum(1 for data in daily.values() if int(data.get("trades", 0) or 0) > 0)
+    active_year = max(yearly.keys()) if yearly else ""
+    active_year_data = yearly.get(active_year, {}) if active_year else {}
+    return {
+        "total_pnl": round(total_pnl, 2),
+        "real_pnl": round(real_pnl, 2),
+        "paper_pnl": round(paper_pnl, 2),
+        "real_fees": round(fees, 2),
+        "trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round((wins / trades * 100) if trades else 0, 2),
+        "avg_trade_pnl": round((total_pnl / trades) if trades else 0, 2),
+        "avg_day_pnl": round((total_pnl / day_count) if day_count else 0, 2),
+        "best_day": _portfolio_extreme_period(daily, "pnl", prefer_max=True),
+        "worst_day": _portfolio_extreme_period(daily, "pnl", prefer_max=False),
+        "best_month": _portfolio_extreme_period(monthly, "total_pnl", prefer_max=True),
+        "worst_month": _portfolio_extreme_period(monthly, "total_pnl", prefer_max=False),
+        "active_year": active_year,
+        "active_year_pnl": round(_safe_float(active_year_data.get("total_pnl"), 0.0), 2),
+        "broker_realized_loaded": bool(broker_sync.get("loaded")),
+        "source": "broker_fills_plus_paper_runs" if broker_sync.get("loaded") else "saved_runs",
+    }
 
 
 @app.get("/api/portfolio/history")
@@ -4185,7 +4314,8 @@ async def get_portfolio_history():
     """Return combined historical P&L from real trades + paper runs for monthly/yearly charts."""
     try:
         daily = {}
-        broker_real_loaded = _add_broker_fills_to_portfolio_history(daily)
+        broker_sync = _add_broker_fills_to_portfolio_history(daily)
+        broker_real_loaded = bool(broker_sync.get("loaded"))
         runs = _load_runs()
         seen_trade_signatures = set()
         for r in runs:
@@ -4244,6 +4374,11 @@ async def get_portfolio_history():
             data["pnl"] = round(data["real_pnl"] + data["paper_pnl"], 2)
             data["trades"] = int(data["real_trades"] + data["paper_trades"])
             data["wins"] = int(data["real_wins"] + data["paper_wins"])
+            data["sources"] = []
+            if data["real_trades"]:
+                data["sources"].append("broker")
+            if data["paper_trades"]:
+                data["sources"].append("paper")
 
         monthly = {}
         yearly = {}
@@ -4298,10 +4433,30 @@ async def get_portfolio_history():
                 y_val[k] = round(y_val[k], 2)
             y_val["pnl"] = y_val["total_pnl"]
 
-        return {"status": "success", "daily": daily, "monthly": monthly, "yearly": yearly}
+        analytics = _portfolio_history_analytics(daily, monthly, yearly, broker_sync)
+        return {
+            "status": "success",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "currency": _portfolio_currency_meta(),
+            "broker_sync": broker_sync,
+            "analytics": analytics,
+            "daily": daily,
+            "monthly": monthly,
+            "yearly": yearly,
+        }
     except Exception as e:
         _logger.error("Portfolio history error: %s", e)
-        return {"status": "error", "message": str(e), "daily": {}, "monthly": {}, "yearly": {}}
+        return {
+            "status": "error",
+            "message": str(e),
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "currency": _portfolio_currency_meta(),
+            "broker_sync": _portfolio_sync_meta("error", message=str(e)[:200]),
+            "analytics": {},
+            "daily": {},
+            "monthly": {},
+            "yearly": {},
+        }
 
 
 # ── Strategy CRUD ─────────────────────────────────────────────────

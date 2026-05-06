@@ -1845,8 +1845,16 @@ async function loadDashboard() {
   } catch(e) { console.error('Dashboard error:', e); }
 }
 
-// ── USD Currency Formatting ─────────────────────────────────
-// All values are in USDT. Display in $ directly — no conversion needed.
+// ── USD / INR Currency Formatting ──────────────────────────
+// Accounting remains in USDT. INR is a display-only conversion for readability.
+let _cfUsdInrRate = 83.0;
+let _cfUsdInrSource = 'default';
+
+function cfApplyPortfolioCurrency(meta) {
+  var rate = parseFloat(meta && meta.usd_inr_rate);
+  if (rate > 0) _cfUsdInrRate = rate;
+  _cfUsdInrSource = (meta && meta.rate_source) || _cfUsdInrSource || 'default';
+}
 
 /**
  * Format a USD P&L / monetary value.
@@ -1888,8 +1896,24 @@ function fmtINRPrice(usdPrice) {
   return '$' + p.toFixed(6);
 }
 
-// Kept for backward compat — same as above
-function usdToINR(usd) { return usd || 0; }
+function usdToINR(usd) {
+  var val = parseFloat(usd);
+  return isNaN(val) ? 0 : val * _cfUsdInrRate;
+}
+
+function fmtRupeesFromUsd(usd, decimals) {
+  var val = usdToINR(usd);
+  var d = decimals !== undefined ? decimals : 2;
+  return (val < 0 ? '-₹' : '₹') + Math.abs(val).toLocaleString('en-IN', {
+    minimumFractionDigits: d,
+    maximumFractionDigits: d
+  });
+}
+
+function fmtPortfolioRateLabel() {
+  return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$' + (_cfUsdInrSource === 'default' ? ' approx' : '');
+}
+
 function fmtNum(n)   { return fmtINRLarge(n); }
 function fmtPrice(p) { return fmtINRPrice(p); }
 
@@ -3746,6 +3770,248 @@ function _cfFilledOrderPnlSubtext(order, hasPnl) {
   return 'not realized';
 }
 
+let _portfolioSummary = null;
+let _portfolioOrders = [];
+let _portfolioOrdersByKey = {};
+let _portfolioOrderQuery = '';
+let _portfolioOrderDense = false;
+
+function _portfolioOrderSymbol(order) {
+  return order && (order.product_symbol || order.symbol || ('ID:' + (order.product_id || ''))) || '--';
+}
+
+function _portfolioOrderSize(order) {
+  return _cfFirstNumber(order, ['filled_size', 'size', 'quantity', 'qty'], 0);
+}
+
+function _portfolioOrderKey(order, idx) {
+  var id = order && (order.id || order.order_id || order.client_order_id);
+  if (id !== undefined && id !== null && id !== '') return 'id:' + String(id);
+  return [
+    idx,
+    order && (order.filled_at || order.updated_at || order.created_at || order.timestamp || ''),
+    _portfolioOrderSymbol(order),
+    order && order.side || '',
+    _portfolioOrderSize(order),
+    order && (order.fill_price || order.average_fill_price || order.price || '')
+  ].join('|');
+}
+
+function _indexPortfolioOrders(orders) {
+  _portfolioOrdersByKey = {};
+  (orders || []).forEach(function(order, idx) {
+    var key = _portfolioOrderKey(order, idx);
+    order._cfPortfolioOrderKey = key;
+    _portfolioOrdersByKey[key] = order;
+  });
+}
+
+function _portfolioFilteredOrders() {
+  var query = String(_portfolioOrderQuery || '').trim().toLowerCase();
+  if (!query) return _portfolioOrders.slice();
+  return _portfolioOrders.filter(function(order) {
+    var haystack = [
+      _portfolioOrderSymbol(order),
+      order.side,
+      order.order_type || order.type,
+      order.state || order.status,
+      order.filled_at || order.updated_at || order.created_at || order.timestamp,
+      order.pnl_status
+    ].join(' ').toLowerCase();
+    return haystack.indexOf(query) !== -1;
+  });
+}
+
+function _portfolioSyncState(sync) {
+  var status = String(sync && sync.status || '').toLowerCase();
+  if (status === 'error') return 'error';
+  if (status === 'ok' && sync && sync.loaded) return 'ok';
+  return 'warn';
+}
+
+function renderPortfolioSyncStatus() {
+  var host = document.getElementById('portfolio-sync-status');
+  if (!host) return;
+  var sync = (_portfolioHistory && _portfolioHistory.broker_sync) || (_portfolioSummary && _portfolioSummary.broker_sync) || {};
+  var currency = (_portfolioHistory && _portfolioHistory.currency) || (_portfolioSummary && _portfolioSummary.currency) || {};
+  cfApplyPortfolioCurrency(currency);
+  var state = _portfolioSyncState(sync);
+  var brokerLabel = sync.broker_label || _brokerLabel();
+  var last = sync.last_synced_at ? _getTradeDateParts(sync.last_synced_at).label : 'not synced';
+  var orderCount = parseInt(sync.order_count || 0, 10);
+  var realizedCount = parseInt(sync.realized_count || 0, 10);
+  var message = sync.message || (state === 'ok' ? 'Broker fills reconciled into portfolio history.' : 'Waiting for realized broker fills.');
+  host.className = 'portfolio-sync-status ' + state;
+  host.innerHTML = '<div class="portfolio-sync-main">'
+    + '<span class="portfolio-sync-dot"></span>'
+    + '<div><strong>' + _escapeHtml(brokerLabel) + ' reconciliation</strong>'
+    + '<span>' + _escapeHtml(message) + '</span></div>'
+    + '</div>'
+    + '<div class="portfolio-sync-meta">'
+    + '<span>' + realizedCount + '/' + orderCount + ' realized fills</span>'
+    + '<span>Updated ' + _escapeHtml(last) + '</span>'
+    + '<span>' + _escapeHtml(fmtPortfolioRateLabel()) + '</span>'
+    + '</div>';
+}
+
+function _portfolioAnalyticsCard(label, main, sub, tone) {
+  return '<div class="portfolio-metric-card ' + (tone || '') + '">'
+    + '<div class="portfolio-metric-label">' + _escapeHtml(label) + '</div>'
+    + '<div class="portfolio-metric-value">' + main + '</div>'
+    + (sub ? '<div class="portfolio-metric-sub">' + sub + '</div>' : '')
+    + '</div>';
+}
+
+function renderPortfolioAnalytics() {
+  var host = document.getElementById('portfolio-analytics-grid');
+  if (!host) return;
+  var a = _portfolioHistory && _portfolioHistory.analytics ? _portfolioHistory.analytics : null;
+  if (!a || !parseInt(a.trades || 0, 10)) {
+    host.innerHTML = _portfolioAnalyticsCard('Net P&L', fmtINR(0), fmtRupeesFromUsd(0) + ' ' + fmtPortfolioRateLabel(), 'neutral')
+      + _portfolioAnalyticsCard('Trades', '0', 'No closed portfolio trades yet.', 'neutral')
+      + _portfolioAnalyticsCard('Fees', fmtINR(0), fmtRupeesFromUsd(0), 'neutral');
+    return;
+  }
+  var total = parseFloat(a.total_pnl) || 0;
+  var real = parseFloat(a.real_pnl) || 0;
+  var fees = parseFloat(a.real_fees) || 0;
+  var best = a.best_day ? (_escapeHtml(a.best_day.period) + ' • ' + fmtINR(parseFloat(a.best_day.pnl) || 0)) : '—';
+  var worst = a.worst_day ? (_escapeHtml(a.worst_day.period) + ' • ' + fmtINR(parseFloat(a.worst_day.pnl) || 0)) : '—';
+  host.innerHTML = _portfolioAnalyticsCard('Net P&L', '<span class="' + (total >= 0 ? 'positive' : 'negative') + '">' + fmtINR(total) + '</span>', fmtRupeesFromUsd(total) + ' ' + fmtPortfolioRateLabel(), total >= 0 ? 'positive' : 'negative')
+    + _portfolioAnalyticsCard('Realized Broker P&L', '<span class="' + (real >= 0 ? 'positive' : 'negative') + '">' + fmtINR(real) + '</span>', fmtRupeesFromUsd(real), real >= 0 ? 'positive' : 'negative')
+    + _portfolioAnalyticsCard('Fees Subtracted', fmtINR(fees), fmtRupeesFromUsd(fees), 'fees')
+    + _portfolioAnalyticsCard('Win Rate', (parseFloat(a.win_rate) || 0).toFixed(1) + '%', (a.wins || 0) + ' wins / ' + (a.losses || 0) + ' losses', 'neutral')
+    + _portfolioAnalyticsCard('Best Day', best, a.best_day ? fmtRupeesFromUsd(parseFloat(a.best_day.pnl) || 0) : '', 'positive')
+    + _portfolioAnalyticsCard('Worst Day', worst, a.worst_day ? fmtRupeesFromUsd(parseFloat(a.worst_day.pnl) || 0) : '', 'negative');
+}
+
+function _portfolioMoneySubline(id, usd, label) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = fmtRupeesFromUsd(usd) + (label ? ' ' + label : '');
+}
+
+function _renderPortfolioOrdersTable() {
+  var ordTbody = document.getElementById('pf-orders-body');
+  if (!ordTbody) return;
+  var orders = _portfolioFilteredOrders();
+  var table = document.getElementById('pf-orders-table');
+  if (table) table.classList.toggle('is-dense', _portfolioOrderDense);
+  var densityBtn = document.getElementById('pf-orders-density-btn');
+  if (densityBtn) densityBtn.textContent = _portfolioOrderDense ? 'Comfort' : 'Dense';
+  if (orders.length === 0) {
+    ordTbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No filled orders match the current filter</td></tr>';
+    _renderTablePager('pf-orders-table', 'pf-orders-table', 'pf-orders-pagination');
+    return;
+  }
+  ordTbody.innerHTML = orders.map(function(o) {
+    var side = (o.side || '').toUpperCase();
+    var safeSide = _escapeHtml(side || '--');
+    var fillPrice = parseFloat(o.fill_price) || parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
+    var ts = o.filled_at || o.updated_at || o.created_at || o.timestamp || '';
+    var dt = _getTradeDateParts(ts);
+    var symbol = _escapeHtml(_portfolioOrderSymbol(o));
+    var fee = _cfFilledOrderFees(o);
+    var netPnl = _cfFilledOrderNetPnl(o);
+    var hasPnl = netPnl !== null && !isNaN(netPnl);
+    var pnlColor = hasPnl && netPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    var pnlMain = hasPnl
+      ? '<div class="table-value-main" style="color:' + pnlColor + ';">' + (netPnl >= 0 ? '+' : '') + fmtINR(netPnl) + '</div><div class="table-value-sub portfolio-inr-sub">' + fmtRupeesFromUsd(netPnl) + '</div>'
+      : '<div class="table-value-main" style="color:var(--muted);">—</div><div class="table-value-sub">no realized P&L</div>';
+    var pnlSub = _escapeHtml(_cfFilledOrderPnlSubtext(o, hasPnl));
+    var orderType = _escapeHtml((o.order_type || o.type || '--').replace('_', ' '));
+    var orderState = _escapeHtml(o.state || o.status || 'filled');
+    var orderKey = _escapeJsString(o._cfPortfolioOrderKey || _portfolioOrderKey(o, 0));
+    var pnlClick = _escapeHtml("showFilledOrderPnlDetails('" + orderKey + "')");
+    return '<tr>' +
+      '<td><div class="table-datetime"><strong>' + dt.date + '</strong><span>' + (dt.time || '—') + '</span></div></td>' +
+      '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">' + orderType + '</div></td>' +
+      '<td class="center"><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + safeSide + '</span></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + _portfolioOrderSize(o) + '</div><div class="table-value-sub">filled</div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(fillPrice) + '</div><div class="table-value-sub">avg fill</div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINR(fee) + '</div><div class="table-value-sub portfolio-inr-sub">' + fmtRupeesFromUsd(fee) + '</div></div></td>' +
+      '<td class="num"><button type="button" class="pnl-detail-btn" data-cf-click="' + pnlClick + '" title="Open P&L audit"><span class="table-value-stack">' + pnlMain + '<span class="table-value-sub">' + pnlSub + '</span></span></button></td>' +
+      '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">' + _escapeHtml(_brokerLabel()) + '</div></td>' +
+      '<td class="center"><span class="tag tag-purple">' + orderState + '</span></td>' +
+      '</tr>';
+  }).join('');
+  _renderTablePager('pf-orders-table', 'pf-orders-table', 'pf-orders-pagination');
+}
+
+function togglePortfolioOrderDensity() {
+  _portfolioOrderDense = !_portfolioOrderDense;
+  _renderPortfolioOrdersTable();
+}
+
+function exportPortfolioOrdersCSV() {
+  var rows = _portfolioFilteredOrders();
+  if (!rows.length) {
+    cfToast('No filled orders to export', 'warning');
+    return;
+  }
+  var header = ['time', 'symbol', 'side', 'size', 'fill_price_usd', 'fees_usd', 'fees_inr', 'net_pnl_usd', 'net_pnl_inr', 'pnl_status', 'order_type', 'status'];
+  var csvRows = [header];
+  rows.forEach(function(order) {
+    var net = _cfFilledOrderNetPnl(order);
+    var fee = _cfFilledOrderFees(order);
+    csvRows.push([
+      order.filled_at || order.updated_at || order.created_at || order.timestamp || '',
+      _portfolioOrderSymbol(order),
+      order.side || '',
+      _portfolioOrderSize(order),
+      order.fill_price || order.average_fill_price || order.price || '',
+      fee,
+      usdToINR(fee).toFixed(2),
+      net === null ? '' : net,
+      net === null ? '' : usdToINR(net).toFixed(2),
+      order.pnl_status || '',
+      order.order_type || order.type || '',
+      order.state || order.status || ''
+    ]);
+  });
+  var csv = csvRows.map(function(row) {
+    return row.map(function(cell) {
+      var value = String(cell == null ? '' : cell);
+      return /[",\n]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
+    }).join(',');
+  }).join('\n');
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'portfolio_filled_orders.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  cfToast('Filled orders exported', 'success');
+}
+
+function showFilledOrderPnlDetails(key) {
+  var order = _portfolioOrdersByKey[key];
+  if (!order) {
+    cfToast('Filled order details are no longer available', 'warning');
+    return;
+  }
+  var net = _cfFilledOrderNetPnl(order);
+  var fee = _cfFilledOrderFees(order);
+  var gross = _cfFirstNumber(order, ['gross_pnl', 'realized_pnl', 'realised_pnl', 'profit_loss', 'pnl'], null);
+  if (gross === null && net !== null) gross = net + fee;
+  var hasPnl = net !== null && !isNaN(net);
+  var status = _cfFilledOrderPnlSubtext(order, hasPnl);
+  var ts = order.filled_at || order.updated_at || order.created_at || order.timestamp || '';
+  var html = '<div class="pf-audit-grid">'
+    + '<div><span>Symbol</span><strong>' + _escapeHtml(_portfolioOrderSymbol(order)) + '</strong></div>'
+    + '<div><span>Side / Size</span><strong>' + _escapeHtml((order.side || '--').toUpperCase()) + ' ' + _portfolioOrderSize(order) + '</strong></div>'
+    + '<div><span>Filled At</span><strong>' + _escapeHtml(_getTradeDateParts(ts).label) + '</strong></div>'
+    + '<div><span>Fill Price</span><strong>' + fmtINRPrice(parseFloat(order.fill_price || order.average_fill_price || order.price) || 0) + '</strong></div>'
+    + '<div><span>Gross P&L</span><strong>' + (gross === null ? '—' : fmtINR(gross)) + '</strong><em>' + (gross === null ? '' : fmtRupeesFromUsd(gross)) + '</em></div>'
+    + '<div><span>Fees Subtracted</span><strong>' + fmtINR(fee) + '</strong><em>' + fmtRupeesFromUsd(fee) + '</em></div>'
+    + '<div><span>Net P&L</span><strong class="' + (hasPnl && net >= 0 ? 'positive' : 'negative') + '">' + (hasPnl ? ((net >= 0 ? '+' : '') + fmtINR(net)) : '—') + '</strong><em>' + (hasPnl ? fmtRupeesFromUsd(net) : '') + '</em></div>'
+    + '<div><span>Status</span><strong>' + _escapeHtml(status) + '</strong></div>'
+    + '</div>'
+    + '<div class="pf-audit-note">' + (hasPnl ? 'Net P&L is gross matched-fill P&L minus entry and exit fees. INR is display-only using ' + _escapeHtml(fmtPortfolioRateLabel()) + '.' : 'This fill has not been matched to a closing fill yet, so realized net P&L is not available.') + '</div>';
+  cfModal('Filled Order P&L Audit', { html: html }, '₹', [{label:'OK', cls:'btn-primary'}]);
+}
+
 // ── Portfolio Page ─────────────────────────────────────────
 async function loadPortfolioData() {
   try {
@@ -3758,6 +4024,9 @@ async function loadPortfolioData() {
     var summary = summaryR.status === 'fulfilled' ? summaryR.value : {};
     var paper = paperR.status === 'fulfilled' ? paperR.value : {};
     var live = liveR.status === 'fulfilled' ? liveR.value : {};
+    _portfolioSummary = summary;
+    cfApplyPortfolioCurrency(summary.currency || {});
+    renderPortfolioSyncStatus();
 
     // Show broker error if portfolio API returned an error
     if (summary.status === 'error' && summary.message) {
@@ -3770,6 +4039,7 @@ async function loadPortfolioData() {
     if (balEl) {
       balEl.textContent = fmtINR(bal);
     }
+    _portfolioMoneySubline('pf-balance-inr', bal, 'approx');
 
     // ── Unrealized P&L card ──
     var upnl = summary.unrealized_pnl || 0;
@@ -3778,6 +4048,7 @@ async function loadPortfolioData() {
       upnlEl.textContent = fmtINR(upnl);
       upnlEl.style.color = upnl >= 0 ? 'var(--green)' : 'var(--red)';
     }
+    _portfolioMoneySubline('pf-unrealized-inr', upnl, 'approx');
 
     // ── Counts ──
     var positions = summary.open_positions || [];
@@ -3815,43 +4086,9 @@ async function loadPortfolioData() {
     }
 
     // ── Filled Orders Table ──
-    var ordTbody = document.getElementById('pf-orders-body');
-    if (ordTbody) {
-      if (orders.length === 0) {
-        ordTbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--muted);">No filled orders</td></tr>';
-      } else {
-        ordTbody.innerHTML = orders.slice(0, 50).map(function(o) {
-          var side = (o.side || '').toUpperCase();
-          var safeSide = _escapeHtml(side || '--');
-          var fillPrice = parseFloat(o.fill_price) || parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
-          var ts = o.filled_at || o.updated_at || o.created_at || o.timestamp || '';
-          var dt = _getTradeDateParts(ts);
-          var symbol = _escapeHtml(o.product_symbol || o.symbol || ('ID:' + (o.product_id || '')));
-          var fee = _cfFilledOrderFees(o);
-          var netPnl = _cfFilledOrderNetPnl(o);
-          var hasPnl = netPnl !== null && !isNaN(netPnl);
-          var pnlColor = hasPnl && netPnl >= 0 ? 'var(--green)' : 'var(--red)';
-          var pnlMain = hasPnl
-            ? '<div class="table-value-main" style="color:' + pnlColor + ';">' + (netPnl >= 0 ? '+' : '') + fmtINR(netPnl) + '</div>'
-            : '<div class="table-value-main" style="color:var(--muted);">—</div>';
-          var pnlSub = _escapeHtml(_cfFilledOrderPnlSubtext(o, hasPnl));
-          var orderType = _escapeHtml((o.order_type || o.type || '--').replace('_', ' '));
-          var orderState = _escapeHtml(o.state || o.status || 'filled');
-          return '<tr>' +
-            '<td><div class="table-datetime"><strong>' + dt.date + '</strong><span>' + (dt.time || '—') + '</span></div></td>' +
-            '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">' + orderType + '</div></td>' +
-            '<td class="center"><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + safeSide + '</span></td>' +
-            '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + (o.size || o.quantity || 0) + '</div><div class="table-value-sub">filled</div></div></td>' +
-            '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtINRPrice(fillPrice) + '</div><div class="table-value-sub">avg fill</div></div></td>' +
-            '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:var(--yellow);">' + fmtINR(fee) + '</div><div class="table-value-sub">fees</div></div></td>' +
-            '<td class="num"><div class="table-value-stack">' + pnlMain + '<div class="table-value-sub">' + pnlSub + '</div></div></td>' +
-            '<td><div class="table-row-label">' + orderType + '</div><div class="table-note">' + _escapeHtml(_brokerLabel()) + '</div></td>' +
-            '<td class="center"><span class="tag tag-purple">' + orderState + '</span></td>' +
-            '</tr>';
-        }).join('');
-      }
-      _renderTablePager('pf-orders-table', 'pf-orders-table', 'pf-orders-pagination');
-    }
+    _portfolioOrders = orders.slice(0, 50);
+    _indexPortfolioOrders(_portfolioOrders);
+    _renderPortfolioOrdersTable();
 
     // ── Paper Trading Summary ──
     var pfPaperStatus = document.getElementById('pf-paper-status');
@@ -3871,6 +4108,7 @@ async function loadPortfolioData() {
       var pp = parseFloat(paper.total_pnl) || 0;
       pfPaperPnl.textContent = fmtINR(pp);
       pfPaperPnl.style.color = pp >= 0 ? 'var(--green)' : 'var(--red)';
+      _portfolioMoneySubline('pf-paper-pnl-inr', pp, 'approx');
     }
     var pfPaperTrades = document.getElementById('pf-paper-trades');
     if (pfPaperTrades) pfPaperTrades.textContent = paper.trades_today || paper.closed_trades || 0;
@@ -3893,6 +4131,7 @@ async function loadPortfolioData() {
       var lp = parseFloat(live.total_pnl) || 0;
       pfLivePnl.textContent = fmtINR(lp);
       pfLivePnl.style.color = lp >= 0 ? 'var(--green)' : 'var(--red)';
+      _portfolioMoneySubline('pf-live-pnl-inr', lp, 'approx');
     }
     var pfLiveTrades = document.getElementById('pf-live-trades');
     if (pfLiveTrades) pfLiveTrades.textContent = live.trades_today || live.closed_trades || 0;
@@ -4846,13 +5085,23 @@ async function loadPortfolioHistory() {
   try {
     var r = await fetch('/api/portfolio/history', { credentials: 'same-origin' });
     _portfolioHistory = await r.json();
+    cfApplyPortfolioCurrency(_portfolioHistory.currency || {});
+    if (_portfolioHistory.status === 'error') {
+      cfToast(_portfolioHistory.message || 'Portfolio history unavailable', 'warning');
+    }
     if (!_monthlyViewMonth) {
       var now = new Date();
       _monthlyViewMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
     }
+    renderPortfolioSyncStatus();
+    renderPortfolioAnalytics();
     renderMonthlyDailyGrid();
     renderYearlyMonthlyTable();
-  } catch(e) { console.error('Portfolio history error:', e); }
+  } catch(e) {
+    console.error('Portfolio history error:', e);
+    cfToast('Failed to load portfolio history', 'warning');
+    renderPortfolioSyncStatus();
+  }
 }
 
 function changeMonthlyMonth(delta) {
@@ -4901,17 +5150,18 @@ function renderMonthlyDailyGrid() {
     var pnlVal = pnlForDay || 0;
     var color = pnlVal > 0 ? 'var(--green)' : pnlVal < 0 ? 'var(--red)' : 'var(--muted)';
     var bg = pnlVal > 0 ? 'rgba(34,197,94,0.06)' : pnlVal < 0 ? 'rgba(239,68,68,0.06)' : '';
-    html += '<div class="day-cell" style="background:' + bg + ';">';
+    html += '<button type="button" class="day-cell" style="background:' + bg + ';" data-cf-click="showPortfolioDayDetails(\'' + key + '\')" title="' + _escapeHtml(key + ' ' + fmtINR(pnlVal) + ' / ' + fmtRupeesFromUsd(pnlVal)) + '">';
     html += '<div class="dc-day">' + d + '</div>';
     html += '<div class="dc-pnl" style="color:' + color + '">' + fmtINR(pnlVal) + '</div>';
+    html += '<div class="dc-inr">' + fmtRupeesFromUsd(pnlVal) + '</div>';
     if (tradesForDay) html += '<div class="dc-trades">' + tradesForDay + ' trades</div>';
-    html += '</div>';
+    html += '</button>';
   }
   gridEl.innerHTML = html;
   // Summary below
   if (tableEl) {
-    tableEl.innerHTML = '<div style="display:flex;gap:20px;padding:12px;background:rgba(255,255,255,0.02);border-radius:10px;">'
-      + '<div><span style="color:var(--muted);font-size:12px;">Monthly P&L:</span> <span style="font-weight:700;color:' + (totalPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtINR(totalPnl) + '</span></div>'
+    tableEl.innerHTML = '<div class="portfolio-period-summary">'
+      + '<div><span>Monthly P&L:</span> <strong style="color:' + (totalPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtINR(totalPnl) + '</strong><em>' + fmtRupeesFromUsd(totalPnl) + '</em></div>'
       + '<div><span style="color:var(--muted);font-size:12px;">Total Trades:</span> <span style="font-weight:700;">' + totalTrades + '</span></div>'
       + '</div>';
   }
@@ -4933,7 +5183,7 @@ function renderYearlyMonthlyTable() {
     var yr = parts[0];
     var mo = parseInt(parts[1]) - 1;
     if (!years[yr]) years[yr] = new Array(12).fill(null);
-    years[yr][mo] = monthly[key];
+    years[yr][mo] = { key: key, data: monthly[key] };
   });
   var yearKeys = Object.keys(years).sort();
   if (yearKeys.length === 0) {
@@ -4947,20 +5197,58 @@ function renderYearlyMonthlyTable() {
   // Rows
   yearKeys.forEach(function(yr) {
     html += '<div class="ytd-year-label">' + yr + '</div>';
-    years[yr].forEach(function(data) {
-      if (data === null) {
+    years[yr].forEach(function(item) {
+      if (item === null) {
         html += '<div class="ytd-cell" style="color:var(--muted);">—</div>';
       } else {
+        var data = item.data || {};
         var pnl = data.total_pnl != null ? data.total_pnl : (data.pnl || 0);
         var tradeCount = data.trades != null ? data.trades : ((data.real_trades || 0) + (data.paper_trades || 0));
         var color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
         var bg = pnl >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
-        html += '<div class="ytd-cell" style="background:' + bg + ';color:' + color + ';" title="' + fmtINR(pnl) + ' (' + tradeCount + ' trades)">' + fmtINR(pnl) + '</div>';
+        html += '<button type="button" class="ytd-cell" style="background:' + bg + ';color:' + color + ';" data-cf-click="showPortfolioMonthDetails(\'' + item.key + '\')" title="' + fmtINR(pnl) + ' / ' + fmtRupeesFromUsd(pnl) + ' (' + tradeCount + ' trades)"><span>' + fmtINR(pnl) + '</span><em>' + fmtRupeesFromUsd(pnl) + '</em></button>';
       }
     });
   });
   html += '</div>';
   cont.innerHTML = html;
+}
+
+function _portfolioPeriodPnl(data) {
+  return data && data.total_pnl != null ? parseFloat(data.total_pnl) || 0 : parseFloat(data && data.pnl) || 0;
+}
+
+function _portfolioPeriodDetailHtml(label, data) {
+  data = data || {};
+  var total = _portfolioPeriodPnl(data);
+  var realNet = parseFloat(data.real_net_pnl != null ? data.real_net_pnl : data.real_pnl) || 0;
+  var gross = parseFloat(data.real_gross_pnl) || 0;
+  var fees = parseFloat(data.real_fees) || 0;
+  var paper = parseFloat(data.paper_pnl) || 0;
+  var trades = data.trades != null ? data.trades : ((data.real_trades || 0) + (data.paper_trades || 0));
+  var wins = data.wins != null ? data.wins : ((data.real_wins || 0) + (data.paper_wins || 0));
+  var source = Array.isArray(data.sources) && data.sources.length ? data.sources.join(' + ') : (data.real_trades ? 'broker' : data.paper_trades ? 'paper' : 'none');
+  return '<div class="pf-audit-grid">'
+    + '<div><span>Period</span><strong>' + _escapeHtml(label) + '</strong></div>'
+    + '<div><span>Total Net P&L</span><strong class="' + (total >= 0 ? 'positive' : 'negative') + '">' + fmtINR(total) + '</strong><em>' + fmtRupeesFromUsd(total) + '</em></div>'
+    + '<div><span>Broker Gross P&L</span><strong>' + fmtINR(gross) + '</strong><em>' + fmtRupeesFromUsd(gross) + '</em></div>'
+    + '<div><span>Broker Fees</span><strong>' + fmtINR(fees) + '</strong><em>' + fmtRupeesFromUsd(fees) + '</em></div>'
+    + '<div><span>Broker Net P&L</span><strong class="' + (realNet >= 0 ? 'positive' : 'negative') + '">' + fmtINR(realNet) + '</strong><em>' + fmtRupeesFromUsd(realNet) + '</em></div>'
+    + '<div><span>Paper P&L</span><strong class="' + (paper >= 0 ? 'positive' : 'negative') + '">' + fmtINR(paper) + '</strong><em>' + fmtRupeesFromUsd(paper) + '</em></div>'
+    + '<div><span>Trades / Wins</span><strong>' + trades + ' / ' + wins + '</strong></div>'
+    + '<div><span>Source</span><strong>' + _escapeHtml(source) + '</strong></div>'
+    + '</div>'
+    + '<div class="pf-audit-note">Broker net P&L equals gross matched-fill P&L minus fees. INR is display-only using ' + _escapeHtml(fmtPortfolioRateLabel()) + '.</div>';
+}
+
+function showPortfolioDayDetails(key) {
+  var data = _portfolioHistory && _portfolioHistory.daily ? _portfolioHistory.daily[key] : null;
+  cfModal('Daily P&L Detail', { html: _portfolioPeriodDetailHtml(key, data || {}) }, '₹', [{label:'OK', cls:'btn-primary'}]);
+}
+
+function showPortfolioMonthDetails(key) {
+  var data = _portfolioHistory && _portfolioHistory.monthly ? _portfolioHistory.monthly[key] : null;
+  cfModal('Monthly P&L Detail', { html: _portfolioPeriodDetailHtml(key, data || {}) }, '₹', [{label:'OK', cls:'btn-primary'}]);
 }
 
 // ── Init ───────────────────────────────────────────────────
@@ -4997,6 +5285,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (scalpAck) scalpAck.addEventListener('change', cfRefreshScalpEntryLaneFromState);
   var scalpMode = document.getElementById('cf-scalp-mode');
   if (scalpMode) scalpMode.addEventListener('change', cfRefreshScalpEntryLaneFromState);
+  var pfOrderSearch = document.getElementById('pf-orders-search');
+  if (pfOrderSearch) {
+    pfOrderSearch.addEventListener('input', function() {
+      _portfolioOrderQuery = pfOrderSearch.value || '';
+      _tablePagerState['pf-orders-table'] = 1;
+      _renderPortfolioOrdersTable();
+    });
+  }
   window.addEventListener('resize', cfSyncScalpLogPanelHeight);
 
   setInterval(refreshTopbarTicker, 30000);

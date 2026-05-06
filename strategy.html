@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260506-1">
-<link rel="manifest" href="/manifest.webmanifest?v=20260506-1">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260506-2">
+<link rel="manifest" href="/manifest.webmanifest?v=20260506-2">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260506-1"></script>
+<script src="/static/cryptoforge-boot.js?v=20260506-2"></script>
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260506-1">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260506-1">
-<script src="/static/error-handler.js?v=20260506-1" defer></script>
-<script src="/static/pwa.js?v=20260506-1" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260506-2">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260506-2">
+<script src="/static/error-handler.js?v=20260506-2" defer></script>
+<script src="/static/pwa.js?v=20260506-2" defer></script>
 </head>
 <body>
 
@@ -928,12 +928,12 @@
     <div class="stat-box">
       <div class="stat-label">Available Balance</div>
       <div class="stat-value" id="pf-balance" style="color:var(--accent);">$0.00</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;">USDT Wallet Balance</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="pf-balance-inr">₹0.00 approx</div>
     </div>
     <div class="stat-box">
       <div class="stat-label">Unrealized P&L</div>
       <div class="stat-value" id="pf-unrealized">$0.00</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;">Open Positions</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="pf-unrealized-inr">₹0.00 approx</div>
     </div>
     <div class="stat-box">
       <div class="stat-label">Open Positions</div>
@@ -945,6 +945,24 @@
       <div class="stat-value" id="pf-order-count" style="color:var(--accent);">0</div>
       <div style="font-size:11px;color:var(--muted);margin-top:6px;">Recent History</div>
     </div>
+  </div>
+
+  <div class="portfolio-sync-status warn" id="portfolio-sync-status" style="margin-bottom:20px;">
+    <div class="portfolio-sync-main">
+      <span class="portfolio-sync-dot"></span>
+      <div><strong>Broker reconciliation</strong><span>Waiting for portfolio data.</span></div>
+    </div>
+    <div class="portfolio-sync-meta"><span>0/0 realized fills</span><span>Updated —</span><span>@ ₹83.00/$ approx</span></div>
+  </div>
+
+  <div class="card" style="margin-bottom:20px;">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Portfolio Analytics</h3>
+        <div class="table-meta">Realized broker P&amp;L, paper P&amp;L, fees, and INR display conversion from the same history feed.</div>
+      </div>
+    </div>
+    <div class="portfolio-analytics-grid" id="portfolio-analytics-grid"></div>
   </div>
 
   <!-- Open Positions -->
@@ -985,6 +1003,11 @@
         <h3 class="table-title">Recent Filled Orders</h3>
         <div class="table-meta">Recent broker fills presented with the same structured table shell as the Live completed-trades ledger.</div>
       </div>
+      <div class="table-actions">
+        <input type="search" class="table-search-input" id="pf-orders-search" placeholder="Search fills" aria-label="Search filled orders">
+        <button class="btn btn-outline btn-sm" id="pf-orders-density-btn" data-cf-click="togglePortfolioOrderDensity()">Dense</button>
+        <button class="btn btn-outline btn-sm" data-cf-click="exportPortfolioOrdersCSV()">CSV</button>
+      </div>
     </div>
     <div class="table-surface">
       <div class="table-scroll">
@@ -1015,7 +1038,7 @@
     <div class="stats-grid" id="pf-paper-stats">
       <div class="stat-box"><div class="stat-label">Status</div><div class="stat-value" id="pf-paper-status" style="font-size:16px;">Idle</div></div>
       <div class="stat-box"><div class="stat-label">Symbol</div><div class="stat-value" id="pf-paper-symbol" style="font-size:16px;">--</div></div>
-      <div class="stat-box"><div class="stat-label">Paper P&L</div><div class="stat-value" id="pf-paper-pnl">$0.00</div></div>
+      <div class="stat-box"><div class="stat-label">Paper P&L</div><div class="stat-value" id="pf-paper-pnl">$0.00</div><div class="portfolio-stat-sub" id="pf-paper-pnl-inr">₹0.00 approx</div></div>
       <div class="stat-box"><div class="stat-label">Trades</div><div class="stat-value" id="pf-paper-trades">0</div></div>
     </div>
   </div>
@@ -1026,7 +1049,7 @@
     <div class="stats-grid" id="pf-live-stats">
       <div class="stat-box"><div class="stat-label">Status</div><div class="stat-value" id="pf-live-status" style="font-size:16px;">Idle</div></div>
       <div class="stat-box"><div class="stat-label">Symbol</div><div class="stat-value" id="pf-live-symbol" style="font-size:16px;">--</div></div>
-      <div class="stat-box"><div class="stat-label">Live P&L</div><div class="stat-value" id="pf-live-pnl">$0.00</div></div>
+      <div class="stat-box"><div class="stat-label">Live P&L</div><div class="stat-value" id="pf-live-pnl">$0.00</div><div class="portfolio-stat-sub" id="pf-live-pnl-inr">₹0.00 approx</div></div>
       <div class="stat-box"><div class="stat-label">Trades</div><div class="stat-value" id="pf-live-trades">0</div></div>
     </div>
   </div>
@@ -1632,7 +1655,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260506-1" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260506-1" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260506-2" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260506-2" defer></script>
 </body>
 </html>

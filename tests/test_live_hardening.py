@@ -1363,6 +1363,12 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(history["daily"]["2026-05-05"]["paper_pnl"], 5.0)
         self.assertAlmostEqual(history["monthly"]["2026-05"]["total_pnl"], 5.61)
         self.assertAlmostEqual(history["yearly"]["2026"]["total_pnl"], 5.61)
+        self.assertEqual(history["currency"]["quote"], "INR")
+        self.assertGreater(history["currency"]["usd_inr_rate"], 0)
+        self.assertTrue(history["broker_sync"]["loaded"])
+        self.assertEqual(history["broker_sync"]["realized_count"], 1)
+        self.assertAlmostEqual(history["analytics"]["real_fees"], 0.05)
+        self.assertAlmostEqual(history["analytics"]["total_pnl"], 5.61)
 
     async def test_paper_status_with_missing_run_id_uses_stopped_snapshot(self):
         running_engine = type(
