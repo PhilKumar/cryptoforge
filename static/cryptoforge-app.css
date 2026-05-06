@@ -1253,24 +1253,90 @@
     text-align: left;
   }
 
-  .portfolio-ops-grid {
+  .portfolio-flow-stack {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    gap: 8px;
     margin-bottom: 20px;
   }
-  .portfolio-ops-grid-compact {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .portfolio-flow-panel {
+    padding: 0;
+    overflow: hidden;
   }
-  .portfolio-ops-card {
+  .portfolio-flow-toggle {
+    width: 100%;
+    min-height: 58px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 28px;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .portfolio-flow-toggle:hover {
+    background: rgba(255,255,255,0.035);
+  }
+  .portfolio-flow-toggle span {
     min-width: 0;
+    display: grid;
+    gap: 3px;
+  }
+  .portfolio-flow-toggle strong {
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.2;
+  }
+  .portfolio-flow-toggle em {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-style: normal;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .portfolio-flow-toggle em[data-state="ok"] {
+    color: var(--green);
+  }
+  .portfolio-flow-toggle em[data-state="warn"] {
+    color: #fbbf24;
+  }
+  .portfolio-flow-toggle em[data-state="error"] {
+    color: var(--red);
+  }
+  .portfolio-flow-toggle b {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    transition: transform 0.18s ease;
+  }
+  .portfolio-flow-panel:not(.is-collapsed) .portfolio-flow-toggle b {
+    transform: rotate(180deg);
+  }
+  .portfolio-flow-body {
+    padding: 0 16px 16px;
+  }
+  .portfolio-flow-panel.is-collapsed .portfolio-flow-body {
+    display: none;
   }
   .portfolio-ops-list,
   .portfolio-alert-list,
   .portfolio-journal-list {
     display: grid;
     gap: 8px;
-    margin-top: 12px;
+    margin-top: 0;
   }
   .portfolio-ops-item,
   .portfolio-alert-item,
@@ -4808,10 +4874,6 @@ body.admin-console-open { overflow: hidden; }
   background: rgba(15,23,42,0.03);
 }
 @media (max-width: 900px) {
-  .portfolio-ops-grid,
-  .portfolio-ops-grid-compact {
-    grid-template-columns: 1fr;
-  }
   .portfolio-journal-item {
     flex-direction: column;
   }

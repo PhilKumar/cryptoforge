@@ -3901,6 +3901,12 @@ function _portfolioMoneyPairLabel(pair) {
   return fmtINR(usd) + '<em>' + fmtDirectINR(data.inr) + '</em>';
 }
 
+function _portfolioMoneyPairText(pair) {
+  var data = pair || {};
+  var usd = parseFloat(data.usd) || 0;
+  return fmtINR(usd) + ' / ' + fmtDirectINR(data.inr);
+}
+
 function _portfolioOpsItem(label, value, sub, state) {
   var safeState = _escapeHtml(state || 'neutral');
   return '<div class="portfolio-ops-item" data-state="' + safeState + '">'
@@ -3908,6 +3914,37 @@ function _portfolioOpsItem(label, value, sub, state) {
     + '<strong>' + value + '</strong>'
     + (sub ? '<em>' + _escapeHtml(sub) + '</em>' : '')
     + '</div>';
+}
+
+function togglePortfolioFlowPanel(panelId) {
+  var panel = document.getElementById(panelId);
+  if (!panel) return;
+  var opening = panel.classList.contains('is-collapsed');
+  document.querySelectorAll('[data-portfolio-flow-panel]').forEach(function(item) {
+    if (item !== panel) {
+      item.classList.add('is-collapsed');
+      var otherBtn = item.querySelector('.portfolio-flow-toggle');
+      if (otherBtn) otherBtn.setAttribute('aria-expanded', 'false');
+    }
+  });
+  panel.classList.toggle('is-collapsed', !opening);
+  var btn = panel.querySelector('.portfolio-flow-toggle');
+  if (btn) btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+}
+
+function _setPortfolioFlowSummary(id, text, state) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text || '—';
+  el.dataset.state = state || 'neutral';
+}
+
+function _countNonOk(rows) {
+  return (rows || []).filter(function(row) {
+    return String(row && (row.status || row.state || row.level) || '').toLowerCase() !== 'ok'
+      && String(row && (row.status || row.state || row.level) || '').toLowerCase() !== 'fresh'
+      && String(row && (row.status || row.state || row.level) || '').toLowerCase() !== 'neutral';
+  }).length;
 }
 
 function _renderPortfolioOpsList(id, rows) {
@@ -3962,6 +3999,12 @@ function renderPortfolioOperations() {
   var freshness = summary.freshness || {};
   var parity = summary.parity || {};
   var safety = summary.safety || {};
+  var alerts = Array.isArray(summary.alerts) ? summary.alerts : [];
+  var journal = Array.isArray(summary.journal) ? summary.journal : [];
+  var recChecks = reconciliation.checks || [];
+  var freshItems = freshness.items || [];
+  var safetyChecks = safety.checks || [];
+  var parityItems = parity.items || [];
   _renderPortfolioOpsList('pf-accounting-grid', [
     { label: 'Available Balance', value: _portfolioMoneyPairLabel(accounting.available_balance), sub: accounting.rate_label || fmtPortfolioRateLabel(), state: 'ok' },
     { label: 'Wallet Balance', value: _portfolioMoneyPairLabel(accounting.wallet_balance), sub: 'Raw wallet balance', state: 'neutral' },
@@ -3970,21 +4013,36 @@ function renderPortfolioOperations() {
     { label: 'Position Margin', value: _portfolioMoneyPairLabel(accounting.position_margin_from_positions), sub: 'Open-position margin', state: 'neutral' },
     { label: 'Recent Fees', value: _portfolioMoneyPairLabel(accounting.recent_realized_fees), sub: 'Realized fills in current window', state: 'fees' }
   ]);
-  _renderPortfolioOpsList('pf-reconciliation-grid', (reconciliation.checks || []).map(function(check) {
+  _renderPortfolioOpsList('pf-reconciliation-grid', recChecks.map(function(check) {
     return { label: check.label, value: _escapeHtml(check.value || check.status || ''), sub: check.detail, state: check.status };
   }));
-  _renderPortfolioOpsList('pf-freshness-grid', (freshness.items || []).map(function(item) {
+  _renderPortfolioOpsList('pf-freshness-grid', freshItems.map(function(item) {
     var age = item.age_sec === null || item.age_sec === undefined ? 'now' : cfFormatLatency((parseFloat(item.age_sec) || 0) * 1000);
     return { label: item.label, value: _escapeHtml(age), sub: item.detail, state: item.state };
   }));
-  _renderPortfolioOpsList('pf-safety-grid', (safety.checks || []).map(function(check) {
+  _renderPortfolioOpsList('pf-safety-grid', safetyChecks.map(function(check) {
     return { label: check.label, value: _escapeHtml(check.value || ''), sub: check.detail, state: check.status };
   }));
-  _renderPortfolioOpsList('pf-parity-grid', (parity.items || []).map(function(item) {
+  _renderPortfolioOpsList('pf-parity-grid', parityItems.map(function(item) {
     return { label: item.label, value: _escapeHtml(item.status || 'ok'), sub: item.detail, state: item.status };
   }));
-  _renderPortfolioAlerts(summary.alerts || []);
-  _renderPortfolioJournal(summary.journal || []);
+  _renderPortfolioAlerts(alerts);
+  _renderPortfolioJournal(journal);
+
+  var availableUsd = accounting.available_balance ? _portfolioMoneyPairText(accounting.available_balance) : '—';
+  var recWarns = _countNonOk(recChecks);
+  var freshWarns = _countNonOk(freshItems);
+  var safetyWarns = _countNonOk(safetyChecks);
+  var parityWarns = _countNonOk(parityItems);
+  var alertWarns = alerts.filter(function(alert) { return String(alert.level || '').toLowerCase() !== 'ok'; }).length;
+  var marginText = 'Idle • margin ' + Number(safety.margin_usage_pct || 0).toFixed(2) + '%';
+  _setPortfolioFlowSummary('pf-accounting-flow-summary', 'Available ' + availableUsd + ' ' + (accounting.rate_label || ''), 'ok');
+  _setPortfolioFlowSummary('pf-reconciliation-flow-summary', (reconciliation.status || 'pending') + ' • ' + (reconciliation.realized_count || 0) + '/' + (reconciliation.order_count || 0) + ' realized', recWarns ? 'warn' : 'ok');
+  _setPortfolioFlowSummary('pf-freshness-flow-summary', freshWarns ? freshWarns + ' stale or pending checks' : freshItems.length + ' fresh checks', freshWarns ? 'warn' : 'ok');
+  _setPortfolioFlowSummary('pf-safety-flow-summary', safetyWarns ? safetyWarns + ' runtime warnings' : marginText, safetyWarns ? 'warn' : 'ok');
+  _setPortfolioFlowSummary('pf-parity-flow-summary', parityWarns ? parityWarns + ' assumptions need review' : parityItems.length + ' checks aligned', parityWarns ? 'warn' : 'ok');
+  _setPortfolioFlowSummary('pf-alerts-flow-summary', alertWarns ? alertWarns + ' active warnings' : 'No active warnings', alertWarns ? 'warn' : 'ok');
+  _setPortfolioFlowSummary('pf-journal-flow-summary', journal.length + ' recent events', journal.length ? 'ok' : 'neutral');
 }
 
 function _portfolioAnalyticsCard(label, main, sub, tone) {
