@@ -1847,7 +1847,7 @@ async function loadDashboard() {
 
 // ── USD / INR Currency Formatting ──────────────────────────
 // Accounting remains in USDT. INR is a display-only conversion for readability.
-let _cfUsdInrRate = 83.0;
+let _cfUsdInrRate = 95.18;
 let _cfUsdInrSource = 'default';
 
 function cfApplyPortfolioCurrency(meta) {

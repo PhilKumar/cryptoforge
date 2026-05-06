@@ -148,7 +148,7 @@ def _portfolio_usd_inr_rate() -> tuple[float, str]:
             continue
         if rate > 0:
             return round(rate, 4), key
-    return 83.0, "default"
+    return 95.18, "default"
 
 
 def _portfolio_currency_meta() -> dict:
