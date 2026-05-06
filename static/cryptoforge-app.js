@@ -1846,10 +1846,19 @@ async function loadDashboard() {
 }
 
 // ── USD / INR Currency Formatting ──────────────────────────
-// Accounting remains in USDT. INR is a display-only conversion for readability.
+// INR display uses broker settlement rates when available; live FX is reference-only.
 let _cfUsdInrRate = 0;
 let _cfUsdInrSource = '';
-let _cfUsdInrMeta = { live: false, stale: true, fallback: false, providerDate: '', fetchedAt: '', error: '' };
+let _cfUsdInrMeta = {
+  live: false,
+  stale: true,
+  fallback: false,
+  providerDate: '',
+  fetchedAt: '',
+  error: '',
+  kind: '',
+  label: ''
+};
 
 function cfApplyPortfolioCurrency(meta) {
   var rate = parseFloat(meta && meta.usd_inr_rate);
@@ -1866,7 +1875,9 @@ function cfApplyPortfolioCurrency(meta) {
     fallback: !!(meta && meta.rate_fallback),
     providerDate: (meta && meta.rate_provider_date) || '',
     fetchedAt: (meta && meta.rate_fetched_at) || '',
-    error: (meta && meta.rate_error) || ''
+    error: (meta && meta.rate_error) || '',
+    kind: (meta && meta.rate_kind) || '',
+    label: (meta && meta.rate_label) || ''
   };
 }
 
@@ -1927,6 +1938,9 @@ function fmtRupeesFromUsd(usd, decimals) {
 
 function fmtPortfolioRateLabel() {
   if (!(_cfUsdInrRate > 0)) return _cfUsdInrMeta.error ? 'FX unavailable' : 'FX loading';
+  if (_cfUsdInrMeta.kind === 'broker_settlement') {
+    return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$ ' + (_cfUsdInrMeta.label || 'broker settlement');
+  }
   var provider = _cfUsdInrSource ? ' ' + _cfUsdInrSource : '';
   var date = _cfUsdInrMeta.providerDate ? ' ' + _cfUsdInrMeta.providerDate : '';
   return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$ live' + provider + date;

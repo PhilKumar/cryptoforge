@@ -1318,6 +1318,34 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(meta["stale"])
         self.assertFalse(meta["fallback"])
 
+    def test_portfolio_currency_uses_delta_india_settlement_rate(self):
+        fake_delta = SimpleNamespace(broker_name="delta", _is_india=True)
+        with (
+            patch.object(self.app_module, "delta", fake_delta),
+            patch.object(
+                self.app_module,
+                "_portfolio_usd_inr_rate",
+                return_value={
+                    "rate": 95.31,
+                    "source": "test-fx",
+                    "source_url": "",
+                    "provider_date": "2026-05-06",
+                    "fetched_at": "2026-05-06T12:00:00",
+                    "live": True,
+                    "stale": False,
+                    "fallback": False,
+                    "error": "",
+                    "ttl_sec": 1800,
+                },
+            ),
+        ):
+            currency = self.app_module._portfolio_currency_meta()
+
+        self.assertEqual(currency["usd_inr_rate"], 85.0)
+        self.assertEqual(currency["rate_kind"], "broker_settlement")
+        self.assertTrue(currency["rate_available"])
+        self.assertEqual(currency["live_fx_usd_inr_rate"], 95.31)
+
     async def test_portfolio_history_uses_broker_realized_fills_for_calendar_totals(self):
         product = {"contract_value": "0.001", "notional_type": "vanilla"}
         fake_delta = SimpleNamespace(

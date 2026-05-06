@@ -141,6 +141,23 @@ def _broker_label() -> str:
 
 
 _PORTFOLIO_USD_INR_CACHE: dict = {}
+_DELTA_INDIA_USD_INR_RATE = 85.0
+_DELTA_INDIA_USD_INR_SOURCE = "https://guides.delta.exchange/delta-exchange-india-user-guide/account-setup/usd-inr-rate"
+
+
+def _portfolio_is_delta_india() -> bool:
+    return _active_broker_name(delta) == "delta" and bool(
+        getattr(delta, "_is_india", getattr(config, "DELTA_REGION", "india").lower() == "india")
+    )
+
+
+def _portfolio_delta_india_usd_inr_rate() -> float:
+    raw = os.getenv("DELTA_INDIA_USD_INR_RATE") or os.getenv("CRYPTOFORGE_DELTA_INDIA_USD_INR_RATE")
+    try:
+        rate = float(raw) if raw not in (None, "") else _DELTA_INDIA_USD_INR_RATE
+    except (TypeError, ValueError):
+        rate = _DELTA_INDIA_USD_INR_RATE
+    return round(rate if rate > 0 else _DELTA_INDIA_USD_INR_RATE, 4)
 
 
 def _portfolio_fx_cache_ttl_sec() -> int:
@@ -277,6 +294,37 @@ def _portfolio_usd_inr_rate() -> dict:
 
 def _portfolio_currency_meta() -> dict:
     fx = _portfolio_usd_inr_rate()
+    if _portfolio_is_delta_india():
+        settlement_rate = _portfolio_delta_india_usd_inr_rate()
+        return {
+            "base": "USD",
+            "settlement": "INR",
+            "quote": "INR",
+            "usd_inr_rate": settlement_rate,
+            "rate_available": True,
+            "rate_kind": "broker_settlement",
+            "rate_label": "Delta settlement",
+            "rate_source": "Delta Exchange India fixed settlement rate",
+            "rate_source_url": _DELTA_INDIA_USD_INR_SOURCE,
+            "rate_provider_date": "",
+            "rate_fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "rate_live": True,
+            "rate_stale": False,
+            "rate_fallback": False,
+            "rate_error": "",
+            "rate_ttl_sec": _portfolio_fx_cache_ttl_sec(),
+            "live_fx_usd_inr_rate": fx.get("rate", 0.0),
+            "live_fx_source": fx.get("source", ""),
+            "live_fx_source_url": fx.get("source_url", ""),
+            "live_fx_provider_date": fx.get("provider_date", ""),
+            "live_fx_available": bool(
+                fx.get("live") and not fx.get("stale") and not fx.get("fallback") and fx.get("rate", 0) > 0
+            ),
+            "rate_note": (
+                "Delta Exchange India uses a fixed USD-INR settlement rate for balances and P&L; live FX "
+                "is reference-only."
+            ),
+        }
     return {
         "base": "USD",
         "settlement": "USDT",
@@ -285,6 +333,8 @@ def _portfolio_currency_meta() -> dict:
         "rate_available": bool(
             fx.get("live") and not fx.get("stale") and not fx.get("fallback") and fx.get("rate", 0) > 0
         ),
+        "rate_kind": "live_fx",
+        "rate_label": "Live FX",
         "rate_source": fx.get("source", ""),
         "rate_source_url": fx.get("source_url", ""),
         "rate_provider_date": fx.get("provider_date", ""),
