@@ -3886,6 +3886,107 @@ function renderPortfolioSyncStatus() {
     + '</div>';
 }
 
+function fmtDirectINR(value) {
+  var val = parseFloat(value);
+  if (value === null || value === undefined || isNaN(val)) return '₹—';
+  return (val < 0 ? '-₹' : '₹') + Math.abs(val).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function _portfolioMoneyPairLabel(pair) {
+  var data = pair || {};
+  var usd = parseFloat(data.usd) || 0;
+  return fmtINR(usd) + '<em>' + fmtDirectINR(data.inr) + '</em>';
+}
+
+function _portfolioOpsItem(label, value, sub, state) {
+  var safeState = _escapeHtml(state || 'neutral');
+  return '<div class="portfolio-ops-item" data-state="' + safeState + '">'
+    + '<span>' + _escapeHtml(label) + '</span>'
+    + '<strong>' + value + '</strong>'
+    + (sub ? '<em>' + _escapeHtml(sub) + '</em>' : '')
+    + '</div>';
+}
+
+function _renderPortfolioOpsList(id, rows) {
+  var host = document.getElementById(id);
+  if (!host) return;
+  if (!rows || !rows.length) {
+    host.innerHTML = _portfolioOpsItem('Waiting', '—', 'Refresh portfolio data.', 'warn');
+    return;
+  }
+  host.innerHTML = rows.map(function(row) {
+    return _portfolioOpsItem(row.label, row.value, row.sub, row.state);
+  }).join('');
+}
+
+function _renderPortfolioAlerts(alerts) {
+  var host = document.getElementById('pf-alerts-list');
+  if (!host) return;
+  var rows = Array.isArray(alerts) ? alerts : [];
+  if (!rows.length) rows = [{ level: 'ok', title: 'No active alerts', message: 'Portfolio checks are waiting for data.' }];
+  host.innerHTML = rows.map(function(alert) {
+    var level = String(alert.level || 'info').toLowerCase();
+    return '<div class="portfolio-alert-item" data-state="' + _escapeHtml(level) + '">'
+      + '<strong>' + _escapeHtml(alert.title || 'Alert') + '</strong>'
+      + '<span>' + _escapeHtml(alert.message || '') + '</span>'
+      + '</div>';
+  }).join('');
+}
+
+function _renderPortfolioJournal(entries) {
+  var host = document.getElementById('pf-journal-list');
+  if (!host) return;
+  var rows = Array.isArray(entries) ? entries : [];
+  if (!rows.length) {
+    host.innerHTML = '<div class="portfolio-journal-item"><strong>No journal entries</strong><span>Refresh portfolio data to load recent events.</span></div>';
+    return;
+  }
+  host.innerHTML = rows.map(function(entry) {
+    var amount = entry.amount === null || entry.amount === undefined || entry.amount === '' ? '' : fmtINR(parseFloat(entry.amount) || 0);
+    var dt = _getTradeDateParts(entry.time || '');
+    return '<div class="portfolio-journal-item">'
+      + '<div><strong>' + _escapeHtml(entry.title || entry.type || 'Event') + '</strong>'
+      + '<span>' + _escapeHtml(entry.detail || '') + '</span></div>'
+      + '<em>' + _escapeHtml(dt.date || '') + (amount ? ' • ' + _escapeHtml(amount) : '') + '</em>'
+      + '</div>';
+  }).join('');
+}
+
+function renderPortfolioOperations() {
+  var summary = _portfolioSummary || {};
+  var accounting = summary.accounting || {};
+  var reconciliation = summary.reconciliation || {};
+  var freshness = summary.freshness || {};
+  var parity = summary.parity || {};
+  var safety = summary.safety || {};
+  _renderPortfolioOpsList('pf-accounting-grid', [
+    { label: 'Available Balance', value: _portfolioMoneyPairLabel(accounting.available_balance), sub: accounting.rate_label || fmtPortfolioRateLabel(), state: 'ok' },
+    { label: 'Wallet Balance', value: _portfolioMoneyPairLabel(accounting.wallet_balance), sub: 'Raw wallet balance', state: 'neutral' },
+    { label: 'Wallet Equity', value: _portfolioMoneyPairLabel(accounting.wallet_equity), sub: 'Wallet balance + unrealized P&L', state: 'neutral' },
+    { label: 'Order Margin', value: _portfolioMoneyPairLabel(accounting.order_margin), sub: 'Open order margin', state: 'neutral' },
+    { label: 'Position Margin', value: _portfolioMoneyPairLabel(accounting.position_margin_from_positions), sub: 'Open-position margin', state: 'neutral' },
+    { label: 'Recent Fees', value: _portfolioMoneyPairLabel(accounting.recent_realized_fees), sub: 'Realized fills in current window', state: 'fees' }
+  ]);
+  _renderPortfolioOpsList('pf-reconciliation-grid', (reconciliation.checks || []).map(function(check) {
+    return { label: check.label, value: _escapeHtml(check.value || check.status || ''), sub: check.detail, state: check.status };
+  }));
+  _renderPortfolioOpsList('pf-freshness-grid', (freshness.items || []).map(function(item) {
+    var age = item.age_sec === null || item.age_sec === undefined ? 'now' : cfFormatLatency((parseFloat(item.age_sec) || 0) * 1000);
+    return { label: item.label, value: _escapeHtml(age), sub: item.detail, state: item.state };
+  }));
+  _renderPortfolioOpsList('pf-safety-grid', (safety.checks || []).map(function(check) {
+    return { label: check.label, value: _escapeHtml(check.value || ''), sub: check.detail, state: check.status };
+  }));
+  _renderPortfolioOpsList('pf-parity-grid', (parity.items || []).map(function(item) {
+    return { label: item.label, value: _escapeHtml(item.status || 'ok'), sub: item.detail, state: item.status };
+  }));
+  _renderPortfolioAlerts(summary.alerts || []);
+  _renderPortfolioJournal(summary.journal || []);
+}
+
 function _portfolioAnalyticsCard(label, main, sub, tone) {
   return '<div class="portfolio-metric-card ' + (tone || '') + '">'
     + '<div class="portfolio-metric-label">' + _escapeHtml(label) + '</div>'
@@ -4035,11 +4136,15 @@ function showFilledOrderPnlDetails(key) {
   var hasPnl = net !== null && !isNaN(net);
   var status = _cfFilledOrderPnlSubtext(order, hasPnl);
   var ts = order.filled_at || order.updated_at || order.created_at || order.timestamp || '';
+  var audit = order.pnl_audit || {};
+  var formula = audit.formula || 'net_pnl = gross_pnl - realized_fees';
   var html = '<div class="pf-audit-grid">'
     + '<div><span>Symbol</span><strong>' + _escapeHtml(_portfolioOrderSymbol(order)) + '</strong></div>'
     + '<div><span>Side / Size</span><strong>' + _escapeHtml((order.side || '--').toUpperCase()) + ' ' + _portfolioOrderSize(order) + '</strong></div>'
     + '<div><span>Filled At</span><strong>' + _escapeHtml(_getTradeDateParts(ts).label) + '</strong></div>'
     + '<div><span>Fill Price</span><strong>' + fmtINRPrice(parseFloat(order.fill_price || order.average_fill_price || order.price) || 0) + '</strong></div>'
+    + '<div><span>Audit Source</span><strong>' + _escapeHtml(audit.source || order.pnl_status || 'unmatched') + '</strong><em>' + _escapeHtml(formula) + '</em></div>'
+    + '<div><span>Matched Size</span><strong>' + _escapeHtml(String(audit.matched_size || order.matched_size || '—')) + '</strong><em>closed quantity used for realized P&L</em></div>'
     + '<div><span>Gross P&L</span><strong>' + (gross === null ? '—' : fmtINR(gross)) + '</strong><em>' + (gross === null ? '' : fmtRupeesFromUsd(gross)) + '</em></div>'
     + '<div><span>Fees Subtracted</span><strong>' + fmtINR(fee) + '</strong><em>' + fmtRupeesFromUsd(fee) + '</em></div>'
     + '<div><span>Net P&L</span><strong class="' + (hasPnl && net >= 0 ? 'positive' : 'negative') + '">' + (hasPnl ? ((net >= 0 ? '+' : '') + fmtINR(net)) : '—') + '</strong><em>' + (hasPnl ? fmtRupeesFromUsd(net) : '') + '</em></div>'
@@ -4064,6 +4169,7 @@ async function loadPortfolioData() {
     _portfolioSummary = summary;
     cfApplyPortfolioCurrency(summary.currency || {});
     renderPortfolioSyncStatus();
+    renderPortfolioOperations();
 
     // Show broker error if portfolio API returned an error
     if (summary.status === 'error' && summary.message) {
@@ -5131,6 +5237,7 @@ async function loadPortfolioHistory() {
       _monthlyViewMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
     }
     renderPortfolioSyncStatus();
+    renderPortfolioOperations();
     renderPortfolioAnalytics();
     renderMonthlyDailyGrid();
     renderYearlyMonthlyTable();

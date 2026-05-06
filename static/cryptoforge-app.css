@@ -1253,6 +1253,106 @@
     text-align: left;
   }
 
+  .portfolio-ops-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .portfolio-ops-grid-compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .portfolio-ops-card {
+    min-width: 0;
+  }
+  .portfolio-ops-list,
+  .portfolio-alert-list,
+  .portfolio-journal-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .portfolio-ops-item,
+  .portfolio-alert-item,
+  .portfolio-journal-item {
+    border: 1px solid rgba(118,138,176,0.14);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.035);
+    padding: 10px 12px;
+    min-width: 0;
+  }
+  .portfolio-ops-item {
+    display: grid;
+    grid-template-columns: minmax(90px, 0.9fr) minmax(0, 1.1fr);
+    gap: 6px 10px;
+    align-items: baseline;
+  }
+  .portfolio-ops-item span,
+  .portfolio-alert-item span,
+  .portfolio-journal-item span {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .portfolio-ops-item strong {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+  .portfolio-ops-item em {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-style: normal;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .portfolio-ops-item[data-state="ok"],
+  .portfolio-alert-item[data-state="ok"] {
+    border-color: rgba(52,211,153,0.22);
+    background: rgba(52,211,153,0.08);
+  }
+  .portfolio-ops-item[data-state="warn"],
+  .portfolio-alert-item[data-state="warning"] {
+    border-color: rgba(251,191,36,0.24);
+    background: rgba(251,191,36,0.08);
+  }
+  .portfolio-ops-item[data-state="error"],
+  .portfolio-alert-item[data-state="error"] {
+    border-color: rgba(248,113,113,0.24);
+    background: rgba(248,113,113,0.08);
+  }
+  .portfolio-alert-item {
+    display: grid;
+    gap: 4px;
+  }
+  .portfolio-alert-item strong,
+  .portfolio-journal-item strong {
+    color: var(--text);
+    font-size: 12px;
+  }
+  .portfolio-journal-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .portfolio-journal-item > div {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+  }
+  .portfolio-journal-item em {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-style: normal;
+    white-space: nowrap;
+  }
+
   .table-panel {
     padding: 20px;
   }
@@ -4648,6 +4748,45 @@ body.admin-console-open { overflow: hidden; }
   min-height: 18px;
   overflow-wrap: anywhere;
 }
+.admin-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.admin-health-item {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(118,138,176,0.16);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.035);
+  min-width: 0;
+}
+.admin-health-item[data-state="ok"] {
+  border-color: rgba(52,211,153,0.22);
+  background: var(--green-bg);
+}
+.admin-health-item[data-state="warn"] {
+  border-color: rgba(251,191,36,0.24);
+  background: rgba(251,191,36,0.08);
+}
+.admin-health-item[data-state="fail"],
+.admin-health-item[data-state="error"] {
+  border-color: rgba(248,113,113,0.24);
+  background: rgba(248,113,113,0.08);
+}
+.admin-health-item strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.admin-health-item span,
+.admin-health-item em {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  font-style: normal;
+}
 .admin-clear-secret {
   display: inline-flex !important;
   align-items: center;
@@ -4669,6 +4808,13 @@ body.admin-console-open { overflow: hidden; }
   background: rgba(15,23,42,0.03);
 }
 @media (max-width: 900px) {
+  .portfolio-ops-grid,
+  .portfolio-ops-grid-compact {
+    grid-template-columns: 1fr;
+  }
+  .portfolio-journal-item {
+    flex-direction: column;
+  }
   .admin-console-head,
   .admin-panel-head {
     flex-direction: column;

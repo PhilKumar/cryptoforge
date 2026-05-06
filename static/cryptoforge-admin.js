@@ -172,6 +172,29 @@
     });
   }
 
+  function adminRenderHealth(health) {
+    var mount = adminEl('admin-health-grid');
+    var pill = adminEl('admin-health-pill');
+    if (!mount) return;
+    var payload = health || {};
+    if (pill) {
+      pill.textContent = String(payload.status || 'pending').toUpperCase();
+      pill.dataset.state = payload.status === 'ok' ? 'ok' : 'warn';
+    }
+    var checks = Array.isArray(payload.checks) ? payload.checks : [];
+    if (!checks.length) {
+      mount.innerHTML = '<div class="admin-health-item" data-state="warn"><strong>Health pending</strong><span>Refresh the console to load runtime checks.</span></div>';
+      return;
+    }
+    mount.innerHTML = checks.map(function (check) {
+      return '<div class="admin-health-item" data-state="' + adminEscape(check.status || 'warn') + '">' +
+        '<strong>' + adminEscape(check.label || 'Check') + '</strong>' +
+        '<span>' + adminEscape(check.detail || '') + '</span>' +
+        '<em>' + adminEscape(check.value || '') + '</em>' +
+      '</div>';
+    }).join('');
+  }
+
   function adminRender(data) {
     adminState = data || {};
     var settings = adminState.broker_settings || {};
@@ -197,6 +220,7 @@
     adminSetPill('admin-coindcx-pill', adminSectionConfigured('coindcx'));
     var runtimePill = adminEl('admin-runtime-pill');
     if (runtimePill) runtimePill.dataset.state = adminField('CRYPTOFORGE_PIN').configured ? 'ok' : 'warn';
+    adminRenderHealth(adminState.health || {});
   }
 
   async function cfAdminLoad(silent) {

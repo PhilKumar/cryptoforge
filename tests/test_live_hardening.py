@@ -1281,8 +1281,15 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(exit_order["gross_pnl"], 0.658)
         self.assertAlmostEqual(exit_order["realized_fees"], 0.0468696)
         self.assertAlmostEqual(exit_order["net_pnl"], 0.6111304)
+        self.assertEqual(exit_order["pnl_audit"]["source"], "matched_fills")
         self.assertEqual(entry_order["pnl_status"], "entry")
         self.assertIsNone(entry_order["net_pnl"])
+        self.assertEqual(summary["accounting"]["available_balance"]["usd"], 1000)
+        self.assertEqual(summary["accounting"]["available_balance"]["inr"], 85000)
+        self.assertEqual(summary["reconciliation"]["realized_count"], 1)
+        self.assertIn("freshness", summary)
+        self.assertIn("journal", summary)
+        self.assertIn("safety", summary)
 
     async def test_portfolio_summary_keeps_broker_reported_net_pnl_after_fees(self):
         fake_delta = SimpleNamespace(
@@ -1320,26 +1327,23 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
 
     def test_portfolio_currency_uses_delta_india_settlement_rate(self):
         fake_delta = SimpleNamespace(broker_name="delta", _is_india=True)
-        with (
-            patch.object(self.app_module, "delta", fake_delta),
-            patch.object(
-                self.app_module,
-                "_portfolio_usd_inr_rate",
-                return_value={
-                    "rate": 95.31,
-                    "source": "test-fx",
-                    "source_url": "",
-                    "provider_date": "2026-05-06",
-                    "fetched_at": "2026-05-06T12:00:00",
-                    "live": True,
-                    "stale": False,
-                    "fallback": False,
-                    "error": "",
-                    "ttl_sec": 1800,
-                },
-            ),
-        ):
-            currency = self.app_module._portfolio_currency_meta()
+        self.app_module._PORTFOLIO_USD_INR_CACHE["meta"] = {
+            "rate": 95.31,
+            "source": "test-fx",
+            "source_url": "",
+            "provider_date": "2026-05-06",
+            "fetched_at": "2026-05-06T12:00:00",
+            "live": True,
+            "stale": False,
+            "fallback": False,
+            "error": "",
+            "ttl_sec": 1800,
+        }
+        try:
+            with patch.object(self.app_module, "delta", fake_delta):
+                currency = self.app_module._portfolio_currency_meta()
+        finally:
+            self.app_module._PORTFOLIO_USD_INR_CACHE.clear()
 
         self.assertEqual(currency["usd_inr_rate"], 85.0)
         self.assertEqual(currency["rate_kind"], "broker_settlement")
@@ -1991,6 +1995,18 @@ class OpsStateRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["checks"]["state_store_writable"])
         self.assertIn("runtime", payload)
         self.assertIn("recovery", payload)
+
+    async def test_admin_health_route_reports_cache_and_runtime_checks(self):
+        transport = httpx.ASGITransport(app=self.app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            response = await client.get("/api/admin/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("health", payload)
+        self.assertIn("checks", payload["health"])
+        self.assertTrue(payload["health"]["cache_version"])
 
     async def test_backup_route_returns_snapshot_after_auth(self):
         self.app_module._save([{"id": 11, "name": "Momentum Prime"}])

@@ -293,8 +293,8 @@ def _portfolio_usd_inr_rate() -> dict:
 
 
 def _portfolio_currency_meta() -> dict:
-    fx = _portfolio_usd_inr_rate()
     if _portfolio_is_delta_india():
+        fx = dict(_PORTFOLIO_USD_INR_CACHE.get("meta") or {})
         settlement_rate = _portfolio_delta_india_usd_inr_rate()
         return {
             "base": "USD",
@@ -325,6 +325,7 @@ def _portfolio_currency_meta() -> dict:
                 "is reference-only."
             ),
         }
+    fx = _portfolio_usd_inr_rate()
     return {
         "base": "USD",
         "settlement": "USDT",
@@ -1856,6 +1857,7 @@ def _admin_config_payload() -> dict:
         "fields": [_admin_config_field_payload(field, values) for field in _ADMIN_CONFIG_FIELDS],
         "broker_settings": _broker_settings_payload(),
         "runtime": _runtime_registry_summary(),
+        "health": _admin_health_payload(),
         "updated_at": str(datetime.now()),
     }
 
@@ -2129,6 +2131,58 @@ def _read_repo_file(*parts: str) -> str:
             return handle.read()
     except Exception:
         return ""
+
+
+def _first_regex_group(pattern: str, text: str) -> str:
+    match = re.search(pattern, text or "")
+    return match.group(1) if match else ""
+
+
+def _admin_health_payload() -> dict:
+    ops = _ops_state_summary()
+    strategy_html = _read_repo_file("strategy.html")
+    sw_js = _read_repo_file("static", "sw.js")
+    cache_version = _first_regex_group(r"cryptoforge-app\.js\?v=([0-9-]+)", strategy_html)
+    service_worker = _first_regex_group(r"CACHE_NAME\s*=\s*'([^']+)'", sw_js)
+    ready = bool(ops.get("ready") and ops.get("status") == "ok")
+    checks = [
+        _portfolio_check(
+            "Readiness",
+            "ok" if ready else "warn",
+            "API readiness and state-store write checks.",
+            str(ops.get("status")),
+        ),
+        _portfolio_check(
+            "Broker",
+            "ok" if ops.get("broker_configured") else "warn",
+            "Active broker credential state.",
+            str((ops.get("broker") or {}).get("label") or ""),
+        ),
+        _portfolio_check(
+            "State Store",
+            "ok" if (ops.get("state_store") or {}).get("writable") else "warn",
+            "Persistent state database health.",
+            str((ops.get("state_store") or {}).get("size_bytes") or 0),
+        ),
+        _portfolio_check(
+            "Runtime", "ok", "Current engine registry.", json.dumps(ops.get("runtime") or {}, sort_keys=True)
+        ),
+        _portfolio_check(
+            "Assets",
+            "ok" if cache_version and service_worker else "warn",
+            "Browser cache and service worker versions.",
+            f"{cache_version} / {service_worker}",
+        ),
+    ]
+    return {
+        "status": "ok" if all(check["status"] == "ok" for check in checks) else "warn",
+        "uptime_sec": ops.get("uptime_sec", 0),
+        "active_port": os.getenv("PORT", ""),
+        "cache_version": cache_version,
+        "service_worker": service_worker,
+        "rate_limit_backend": ops.get("rate_limit_backend"),
+        "checks": checks,
+    }
 
 
 def _production_check(check_id: str, title: str, ok: bool, details: dict, warnings: Optional[list[str]] = None) -> dict:
@@ -2691,6 +2745,11 @@ async def dashboard_summary(request: Request):
 @app.get("/api/admin/config")
 async def get_admin_config():
     return _admin_config_payload()
+
+
+@app.get("/api/admin/health")
+async def get_admin_health():
+    return {"status": "ok", "health": _admin_health_payload(), "ops": _ops_state_summary()}
 
 
 @app.put("/api/admin/config")
@@ -3960,11 +4019,25 @@ def _normalize_filled_order(order: dict) -> dict:
         normalized["gross_pnl"] = round(gross_pnl if gross_pnl is not None else existing_net_pnl + fees, 8)
         normalized["realized_fees"] = fees
         normalized["pnl_status"] = "broker"
+        normalized["pnl_audit"] = {
+            "source": "broker_reported",
+            "gross_pnl": normalized["gross_pnl"],
+            "fees_subtracted": round(fees, 8),
+            "net_pnl": normalized["net_pnl"],
+            "formula": "net_pnl = broker_reported_net_pnl; gross_pnl shown as broker gross or net + fees",
+        }
     elif gross_pnl is not None:
         normalized["gross_pnl"] = round(gross_pnl, 8)
         normalized["net_pnl"] = round(gross_pnl - fees, 8)
         normalized["realized_fees"] = fees
         normalized["pnl_status"] = "broker"
+        normalized["pnl_audit"] = {
+            "source": "broker_reported",
+            "gross_pnl": normalized["gross_pnl"],
+            "fees_subtracted": round(fees, 8),
+            "net_pnl": normalized["net_pnl"],
+            "formula": "net_pnl = broker_reported_gross_pnl - broker_fees",
+        }
     else:
         normalized["gross_pnl"] = None
         normalized["net_pnl"] = None
@@ -4031,6 +4104,14 @@ def _attach_matched_order_pnl(rows: list[dict]) -> list[dict]:
             order["realized_fees"] = round(realized_fees, 8)
             order["net_pnl"] = round(gross_pnl - realized_fees, 8)
             order["pnl_status"] = "realized" if remaining <= 1e-12 else "partial_realized"
+            order["pnl_audit"] = {
+                "source": "matched_fills",
+                "matched_size": round(matched_qty, 8),
+                "gross_pnl": round(gross_pnl, 8),
+                "fees_subtracted": round(realized_fees, 8),
+                "net_pnl": round(gross_pnl - realized_fees, 8),
+                "formula": "net_pnl = matched_fill_gross_pnl - entry_fee_share - exit_fee_share",
+            }
 
         if remaining > 1e-12:
             remaining_fee = order_fee * (remaining / qty if qty else 0.0)
@@ -4055,6 +4136,309 @@ def _normalize_filled_orders(orders, limit: int | None = None) -> list:
     return rows[:limit] if limit else rows
 
 
+def _wallet_rows(wallet) -> list[dict]:
+    if isinstance(wallet, list):
+        return [row for row in wallet if isinstance(row, dict)]
+    if isinstance(wallet, dict):
+        if isinstance(wallet.get("result"), list):
+            return [row for row in wallet["result"] if isinstance(row, dict)]
+        if isinstance(wallet.get("data"), list):
+            return [row for row in wallet["data"] if isinstance(row, dict)]
+        if "error" not in wallet:
+            return [wallet]
+    return []
+
+
+def _wallet_asset_row(wallet, assets: tuple[str, ...] = ("USDT", "USD", "INR")) -> dict:
+    wanted = {asset.upper() for asset in assets}
+    rows = _wallet_rows(wallet)
+    for row in rows:
+        symbol = str(
+            row.get("asset_symbol")
+            or row.get("asset")
+            or row.get("currency")
+            or row.get("margin_currency")
+            or row.get("margin_currency_short_name")
+            or ""
+        ).upper()
+        if symbol in wanted:
+            return row
+    return rows[0] if rows else {}
+
+
+def _wallet_amount(row: dict, *keys: str) -> float:
+    for key in keys:
+        parsed = _safe_float(row.get(key), _MISSING_ORDER_FLOAT)
+        if parsed is not _MISSING_ORDER_FLOAT:
+            return parsed
+    return 0.0
+
+
+def _portfolio_inr_value(usd_value: float, currency: dict) -> float | None:
+    rate = _safe_float(currency.get("usd_inr_rate"), 0.0)
+    if not currency.get("rate_available") or rate <= 0:
+        return None
+    return round(_safe_float(usd_value, 0.0) * rate, 2)
+
+
+def _portfolio_money_pair(usd_value: float, currency: dict) -> dict:
+    usd = round(_safe_float(usd_value, 0.0), 2)
+    return {"usd": usd, "inr": _portfolio_inr_value(usd, currency)}
+
+
+def _portfolio_accounting_payload(wallet, positions: list, filled_orders: list, currency: dict) -> dict:
+    asset_row = _wallet_asset_row(wallet)
+    asset = str(asset_row.get("asset_symbol") or asset_row.get("asset") or asset_row.get("currency") or "USD").upper()
+    available = _wallet_amount(asset_row, "available_balance", "available_margin", "free_balance", "free")
+    wallet_balance = _wallet_amount(asset_row, "balance", "wallet_balance", "total_balance", "equity")
+    blocked_margin = _wallet_amount(asset_row, "blocked_margin", "locked_margin", "hold_balance", "locked_balance")
+    order_margin = _wallet_amount(asset_row, "order_margin", "open_order_margin")
+    position_margin = _wallet_amount(asset_row, "position_margin", "used_margin")
+    position_margin_sum = sum(_safe_float(pos.get("margin"), 0.0) for pos in positions or [])
+    unrealized = sum(_safe_float(pos.get("unrealized_pnl"), 0.0) for pos in positions or [])
+    realized_fees = sum(
+        _safe_float(order.get("realized_fees"), _safe_float(order.get("fees"), 0.0)) for order in filled_orders
+    )
+    realized_net = sum(
+        _safe_float(order.get("net_pnl"), 0.0) for order in filled_orders if order.get("net_pnl") is not None
+    )
+    realized_gross = sum(
+        _safe_float(order.get("gross_pnl"), 0.0) for order in filled_orders if order.get("gross_pnl") is not None
+    )
+    wallet_equity = wallet_balance + unrealized
+    margin_total = max(blocked_margin + order_margin + position_margin, position_margin_sum)
+    return {
+        "asset": asset,
+        "rate_label": currency.get("rate_label") or "INR display",
+        "rate_kind": currency.get("rate_kind") or "",
+        "rate_note": currency.get("rate_note") or "",
+        "available_balance": _portfolio_money_pair(available, currency),
+        "wallet_balance": _portfolio_money_pair(wallet_balance, currency),
+        "wallet_equity": _portfolio_money_pair(wallet_equity, currency),
+        "blocked_margin": _portfolio_money_pair(blocked_margin, currency),
+        "order_margin": _portfolio_money_pair(order_margin, currency),
+        "position_margin": _portfolio_money_pair(position_margin, currency),
+        "position_margin_from_positions": _portfolio_money_pair(position_margin_sum, currency),
+        "total_margin_locked": _portfolio_money_pair(margin_total, currency),
+        "unrealized_pnl": _portfolio_money_pair(unrealized, currency),
+        "recent_realized_gross": _portfolio_money_pair(realized_gross, currency),
+        "recent_realized_fees": _portfolio_money_pair(realized_fees, currency),
+        "recent_realized_net": _portfolio_money_pair(realized_net, currency),
+        "open_positions": len(positions or []),
+        "recent_fills": len(filled_orders or []),
+    }
+
+
+def _portfolio_check(label: str, status: str, detail: str, value: str = "") -> dict:
+    return {"label": label, "status": status, "detail": detail, "value": value}
+
+
+def _portfolio_reconciliation_payload(
+    wallet, positions: list, filled_orders: list, accounting: dict, currency: dict, broker_sync: dict
+) -> dict:
+    wallet_loaded = bool(_wallet_rows(wallet))
+    total_orders = len(filled_orders or [])
+    realized_orders = sum(1 for order in filled_orders or [] if order.get("net_pnl") is not None)
+    unmatched_orders = sum(1 for order in filled_orders or [] if order.get("net_pnl") is None)
+    position_margin_wallet = _safe_float(accounting.get("position_margin", {}).get("usd"), 0.0)
+    position_margin_rows = _safe_float(accounting.get("position_margin_from_positions", {}).get("usd"), 0.0)
+    margin_delta = round(abs(position_margin_wallet - position_margin_rows), 2)
+    checks = [
+        _portfolio_check(
+            "Wallet",
+            "ok" if wallet_loaded else "warn",
+            "Broker wallet payload loaded." if wallet_loaded else "Wallet payload is empty.",
+            accounting.get("asset", ""),
+        ),
+        _portfolio_check(
+            "Positions",
+            "ok" if margin_delta <= 1 else "warn",
+            f"Wallet position margin and open-position margin differ by ${margin_delta:,.2f}.",
+            str(len(positions or [])),
+        ),
+        _portfolio_check(
+            "Filled Orders",
+            "ok" if total_orders else "warn",
+            f"{realized_orders}/{total_orders} recent fills have realized net P&L.",
+            str(total_orders),
+        ),
+        _portfolio_check(
+            "Unmatched Fills",
+            "ok" if unmatched_orders == 0 else "warn",
+            "All recent fills are matched."
+            if unmatched_orders == 0
+            else f"{unmatched_orders} recent fills are entries/open legs.",
+            str(unmatched_orders),
+        ),
+        _portfolio_check(
+            "INR Rate",
+            "ok" if currency.get("rate_available") else "warn",
+            currency.get("rate_note") or "INR conversion metadata loaded.",
+            str(currency.get("rate_label") or ""),
+        ),
+    ]
+    state = "ok" if all(check["status"] == "ok" for check in checks) else "warn"
+    if broker_sync.get("status") == "error":
+        state = "error"
+    return {
+        "status": state,
+        "checks": checks,
+        "wallet_asset": accounting.get("asset", ""),
+        "order_count": total_orders,
+        "realized_count": realized_orders,
+        "unmatched_count": unmatched_orders,
+    }
+
+
+def _portfolio_freshness_payload(generated_at: str, broker_sync: dict, currency: dict) -> dict:
+    now_dt = _normalize_datetime(generated_at) or datetime.now()
+    provider_dt = _normalize_datetime(currency.get("rate_fetched_at") or currency.get("rate_provider_date"))
+    fx_age = round((now_dt - provider_dt).total_seconds()) if provider_dt else None
+    return {
+        "generated_at": generated_at,
+        "items": [
+            {"label": "Wallet", "state": "fresh", "age_sec": 0, "detail": "Fetched with portfolio summary."},
+            {"label": "Positions", "state": "fresh", "age_sec": 0, "detail": "Fetched with portfolio summary."},
+            {"label": "Filled Orders", "state": "fresh", "age_sec": 0, "detail": "Fetched with portfolio summary."},
+            {
+                "label": "Portfolio History",
+                "state": "fresh" if broker_sync.get("loaded") else "warn",
+                "age_sec": 0,
+                "detail": broker_sync.get("message") or "Calendar sync pending.",
+            },
+            {
+                "label": "INR Rate",
+                "state": "fresh" if currency.get("rate_available") else "warn",
+                "age_sec": fx_age,
+                "detail": currency.get("rate_label") or "FX metadata pending.",
+            },
+        ],
+    }
+
+
+def _portfolio_parity_payload(currency: dict) -> dict:
+    return {
+        "items": [
+            {
+                "label": "Fee Model",
+                "detail": "Broker P&L subtracts entry and exit commissions from matched fills.",
+                "status": "ok",
+            },
+            {
+                "label": "Settlement",
+                "detail": currency.get("rate_note") or "INR values use the active broker currency policy.",
+                "status": "ok" if currency.get("rate_available") else "warn",
+            },
+            {
+                "label": "Backtest/Live",
+                "detail": "Calendar totals prefer broker realized fills for live trades and saved runs for paper trades.",
+                "status": "ok",
+            },
+            {
+                "label": "CSV Export",
+                "detail": "Filled-order export includes USD and INR fee/P&L columns from the same display rate.",
+                "status": "ok",
+            },
+        ]
+    }
+
+
+def _portfolio_safety_payload(accounting: dict) -> dict:
+    registry = _runtime_registry_summary()
+    available = _safe_float(accounting.get("available_balance", {}).get("usd"), 0.0)
+    open_margin = _safe_float(accounting.get("total_margin_locked", {}).get("usd"), 0.0)
+    margin_usage = round((open_margin / available * 100) if available > 0 else 0.0, 2)
+    checks = [
+        _portfolio_check(
+            "Kill Switch",
+            "ok" if not registry["live_running_runs"] and not registry["scalp_running"] else "warn",
+            "Idle."
+            if not registry["live_running_runs"] and not registry["scalp_running"]
+            else "Visible while live/scalp workflows run.",
+            "armed" if registry["live_running_runs"] or registry["scalp_running"] else "idle",
+        ),
+        _portfolio_check(
+            "Live Engines",
+            "ok" if not registry["live_running_runs"] else "warn",
+            "Active live run count.",
+            str(len(registry["live_running_runs"])),
+        ),
+        _portfolio_check(
+            "Scalp Exposure",
+            "ok" if not registry["scalp_open_trades"] else "warn",
+            "Open scalp trades.",
+            str(registry["scalp_open_trades"]),
+        ),
+        _portfolio_check(
+            "Margin Usage",
+            "ok" if margin_usage < 50 else "warn",
+            "Open/order margin as a share of available balance.",
+            f"{margin_usage:.2f}%",
+        ),
+    ]
+    return {"checks": checks, "margin_usage_pct": margin_usage, "runtime": registry}
+
+
+def _portfolio_alerts_payload(reconciliation: dict, safety: dict, currency: dict) -> list[dict]:
+    alerts = []
+    if not currency.get("rate_available"):
+        alerts.append({"level": "warning", "title": "INR rate unavailable", "message": currency.get("rate_note", "")})
+    for check in reconciliation.get("checks", []):
+        if check.get("status") != "ok":
+            alerts.append(
+                {"level": "warning", "title": check.get("label", "Reconciliation"), "message": check.get("detail", "")}
+            )
+    for check in safety.get("checks", []):
+        if check.get("status") != "ok":
+            alerts.append(
+                {"level": "warning", "title": check.get("label", "Safety"), "message": check.get("detail", "")}
+            )
+    if not alerts:
+        alerts.append(
+            {
+                "level": "ok",
+                "title": "No active portfolio alerts",
+                "message": "Broker accounting, rate policy, and runtime state are in expected ranges.",
+            }
+        )
+    return alerts[:8]
+
+
+def _portfolio_journal_payload(
+    filled_orders: list, positions: list, broker_sync: dict, generated_at: str
+) -> list[dict]:
+    entries = [
+        {
+            "time": generated_at,
+            "type": "sync",
+            "title": "Portfolio sync",
+            "detail": broker_sync.get("message") or "Portfolio summary refreshed.",
+            "amount": "",
+        }
+    ]
+    for pos in positions or []:
+        entries.append(
+            {
+                "time": generated_at,
+                "type": "position",
+                "title": f"{pos.get('symbol', '')} open position",
+                "detail": f"{pos.get('side', '')} size {pos.get('size', 0)} @ {pos.get('entry_price', 0)}",
+                "amount": round(_safe_float(pos.get("unrealized_pnl"), 0.0), 2),
+            }
+        )
+    for order in (filled_orders or [])[:8]:
+        entries.append(
+            {
+                "time": order.get("filled_at") or order.get("updated_at") or generated_at,
+                "type": "fill",
+                "title": f"{_portfolio_history_order_date(order) or 'Recent'} {order.get('side', '').upper()} {order.get('product_symbol') or order.get('symbol') or ''}",
+                "detail": order.get("pnl_status") or "filled",
+                "amount": None if order.get("net_pnl") is None else round(_safe_float(order.get("net_pnl"), 0.0), 2),
+            }
+        )
+    return entries[:12]
+
+
 @app.get("/api/broker/trades")
 async def get_broker_trades():
     """Get filled order history from the active broker."""
@@ -4069,23 +4453,14 @@ async def get_broker_trades():
 async def get_portfolio_summary():
     """Aggregated portfolio data: balance, positions, recent trades."""
     try:
+        generated_at = datetime.now().isoformat(timespec="seconds")
         wallet = delta.get_wallet()
         positions = delta.get_positions()
         orders = delta.get_order_history()
+        currency = _portfolio_currency_meta()
 
-        # Extract USDT balance
-        usdt_balance = 0.0
-        if isinstance(wallet, list):
-            for w in wallet:
-                if w.get("asset_symbol", "").upper() in ("USDT", "USD"):
-                    usdt_balance = float(w.get("available_balance", 0))
-        elif isinstance(wallet, dict):
-            if "available_balance" in wallet:
-                usdt_balance = float(wallet["available_balance"])
-            elif isinstance(wallet.get("result"), list):
-                for w in wallet["result"]:
-                    if w.get("asset_symbol", "").upper() in ("USDT", "USD"):
-                        usdt_balance = float(w.get("available_balance", 0))
+        wallet_asset = _wallet_asset_row(wallet)
+        usdt_balance = _wallet_amount(wallet_asset, "available_balance", "available_margin", "free_balance", "free")
 
         # Calc unrealized P&L from open positions
         unrealized_pnl = 0.0
@@ -4122,28 +4497,56 @@ async def get_portfolio_summary():
                 else "No realized broker fills available in the recent order window."
             ),
         )
+        accounting = _portfolio_accounting_payload(wallet, open_positions, filled_orders, currency)
+        reconciliation = _portfolio_reconciliation_payload(
+            wallet, open_positions, filled_orders, accounting, currency, broker_sync
+        )
+        freshness = _portfolio_freshness_payload(generated_at, broker_sync, currency)
+        parity = _portfolio_parity_payload(currency)
+        safety = _portfolio_safety_payload(accounting)
+        alerts = _portfolio_alerts_payload(reconciliation, safety, currency)
 
         return {
             "status": "ok",
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "currency": _portfolio_currency_meta(),
+            "generated_at": generated_at,
+            "currency": currency,
             "broker_sync": broker_sync,
             "balance": round(usdt_balance, 2),
             "unrealized_pnl": round(unrealized_pnl, 2),
             "open_positions": open_positions,
             "filled_orders": filled_orders,
+            "accounting": accounting,
+            "reconciliation": reconciliation,
+            "freshness": freshness,
+            "parity": parity,
+            "safety": safety,
+            "alerts": alerts,
+            "journal": _portfolio_journal_payload(filled_orders, open_positions, broker_sync, generated_at),
         }
     except Exception as e:
+        generated_at = datetime.now().isoformat(timespec="seconds")
+        currency = _portfolio_currency_meta()
+        broker_sync = _portfolio_sync_meta("error", message=str(e)[:200])
+        accounting = _portfolio_accounting_payload([], [], [], currency)
+        reconciliation = _portfolio_reconciliation_payload([], [], [], accounting, currency, broker_sync)
+        safety = _portfolio_safety_payload(accounting)
         return {
             "status": "error",
             "message": str(e)[:200],
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "currency": _portfolio_currency_meta(),
-            "broker_sync": _portfolio_sync_meta("error", message=str(e)[:200]),
+            "generated_at": generated_at,
+            "currency": currency,
+            "broker_sync": broker_sync,
             "balance": 0,
             "unrealized_pnl": 0,
             "open_positions": [],
             "filled_orders": [],
+            "accounting": accounting,
+            "reconciliation": reconciliation,
+            "freshness": _portfolio_freshness_payload(generated_at, broker_sync, currency),
+            "parity": _portfolio_parity_payload(currency),
+            "safety": safety,
+            "alerts": _portfolio_alerts_payload(reconciliation, safety, currency),
+            "journal": _portfolio_journal_payload([], [], broker_sync, generated_at),
         }
 
 
