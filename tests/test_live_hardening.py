@@ -1352,6 +1352,22 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(self.app_module, "delta", fake_delta),
             patch.object(self.app_module, "_load_runs", return_value=fake_runs),
+            patch.object(
+                self.app_module,
+                "_portfolio_usd_inr_rate",
+                return_value={
+                    "rate": 95.18,
+                    "source": "test",
+                    "source_url": "",
+                    "provider_date": "2026-05-06",
+                    "fetched_at": "2026-05-06T12:00:00",
+                    "live": True,
+                    "stale": False,
+                    "fallback": False,
+                    "error": "",
+                    "ttl_sec": 1800,
+                },
+            ),
         ):
             history = await self.app_module.get_portfolio_history()
 
@@ -1365,6 +1381,7 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(history["yearly"]["2026"]["total_pnl"], 5.61)
         self.assertEqual(history["currency"]["quote"], "INR")
         self.assertGreater(history["currency"]["usd_inr_rate"], 0)
+        self.assertTrue(history["currency"]["rate_live"])
         self.assertTrue(history["broker_sync"]["loaded"])
         self.assertEqual(history["broker_sync"]["realized_count"], 1)
         self.assertAlmostEqual(history["analytics"]["real_fees"], 0.05)

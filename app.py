@@ -20,7 +20,10 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from urllib import error as urllib_error
 from urllib.parse import urlparse
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 # ── Module-level logger ──────────────────────────────────────────
 logging.basicConfig(
@@ -137,7 +140,11 @@ def _broker_label() -> str:
     return str(getattr(delta, "display_name", "Broker") or "Broker")
 
 
-def _portfolio_usd_inr_rate() -> tuple[float, str]:
+_PORTFOLIO_USD_INR_FALLBACK = 95.18
+_PORTFOLIO_USD_INR_CACHE: dict = {}
+
+
+def _portfolio_static_usd_inr_rate() -> tuple[float, str]:
     for key in ("CRYPTOFORGE_USD_INR_RATE", "USD_INR_RATE"):
         raw = os.getenv(key)
         if raw in (None, ""):
@@ -148,18 +155,159 @@ def _portfolio_usd_inr_rate() -> tuple[float, str]:
             continue
         if rate > 0:
             return round(rate, 4), key
-    return 95.18, "default"
+    return _PORTFOLIO_USD_INR_FALLBACK, "fallback"
+
+
+def _portfolio_fx_cache_ttl_sec() -> int:
+    raw = os.getenv("CRYPTOFORGE_FX_CACHE_TTL_SEC", "1800")
+    try:
+        return max(60, int(float(raw)))
+    except (TypeError, ValueError):
+        return 1800
+
+
+def _portfolio_fx_timeout_sec() -> float:
+    raw = os.getenv("CRYPTOFORGE_FX_TIMEOUT_SEC", "2.5")
+    try:
+        return max(0.5, min(10.0, float(raw)))
+    except (TypeError, ValueError):
+        return 2.5
+
+
+def _portfolio_fx_urls() -> list[str]:
+    raw = (os.getenv("CRYPTOFORGE_USD_INR_RATE_URL") or "").strip()
+    if raw:
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    return [
+        "https://open.er-api.com/v6/latest/USD",
+        "https://api.frankfurter.dev/v2/rate/USD/INR",
+    ]
+
+
+def _parse_portfolio_fx_payload(payload: dict | list, url: str) -> tuple[float, str, str]:
+    if isinstance(payload, dict):
+        rates = payload.get("rates") if isinstance(payload.get("rates"), dict) else {}
+        rate = _safe_float(rates.get("INR"), 0.0)
+        if rate > 0:
+            source = str(payload.get("provider") or urlparse(url).netloc or "fx_api")
+            provider_date = str(payload.get("time_last_update_utc") or payload.get("date") or "")
+            return rate, provider_date, source
+        rate = _safe_float(payload.get("rate"), 0.0)
+        if rate > 0:
+            return rate, str(payload.get("date") or ""), urlparse(url).netloc or "fx_api"
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("base") or "").upper() != "USD" or str(item.get("quote") or "").upper() != "INR":
+                continue
+            rate = _safe_float(item.get("rate"), 0.0)
+            if rate > 0:
+                return rate, str(item.get("date") or ""), urlparse(url).netloc or "fx_api"
+    raise ValueError("USD/INR rate missing from FX payload")
+
+
+def _fetch_portfolio_usd_inr_rate() -> dict:
+    errors = []
+    for url in _portfolio_fx_urls():
+        try:
+            parsed_url = urlparse(url)
+            if parsed_url.scheme != "https":
+                raise ValueError("FX provider URL must use HTTPS")
+            req = UrlRequest(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "CryptoForge/2.0 (+https://crypto.philforge.in)",
+                },
+            )
+            with urlopen(req, timeout=_portfolio_fx_timeout_sec()) as response:  # nosec B310 - HTTPS-only URL.
+                raw = response.read(32768)
+            payload = json.loads(raw.decode("utf-8"))
+            rate, provider_date, source = _parse_portfolio_fx_payload(payload, url)
+            return {
+                "rate": round(rate, 4),
+                "source": source,
+                "source_url": url,
+                "provider_date": provider_date,
+            }
+        except (OSError, TimeoutError, ValueError, json.JSONDecodeError, urllib_error.URLError) as exc:
+            errors.append(f"{urlparse(url).netloc or url}: {str(exc)[:120]}")
+    raise RuntimeError("; ".join(errors) or "No FX providers configured")
+
+
+def _portfolio_usd_inr_rate() -> dict:
+    now = time.time()
+    cached = _PORTFOLIO_USD_INR_CACHE.get("meta")
+    if cached and now < float(_PORTFOLIO_USD_INR_CACHE.get("expires_at", 0) or 0):
+        return dict(cached)
+
+    static_rate, static_source = _portfolio_static_usd_inr_rate()
+    try:
+        meta = _fetch_portfolio_usd_inr_rate()
+        meta.update(
+            {
+                "live": True,
+                "stale": False,
+                "fallback": False,
+                "error": "",
+                "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                "ttl_sec": _portfolio_fx_cache_ttl_sec(),
+            }
+        )
+        _PORTFOLIO_USD_INR_CACHE["meta"] = dict(meta)
+        _PORTFOLIO_USD_INR_CACHE["expires_at"] = now + _portfolio_fx_cache_ttl_sec()
+        return dict(meta)
+    except (OSError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError, urllib_error.URLError) as exc:
+        if cached:
+            meta = dict(cached)
+            meta.update(
+                {
+                    "live": False,
+                    "stale": True,
+                    "fallback": False,
+                    "error": str(exc)[:160],
+                    "ttl_sec": _portfolio_fx_cache_ttl_sec(),
+                }
+            )
+            _PORTFOLIO_USD_INR_CACHE["meta"] = dict(meta)
+            _PORTFOLIO_USD_INR_CACHE["expires_at"] = now + min(300, _portfolio_fx_cache_ttl_sec())
+            return meta
+        return {
+            "rate": static_rate,
+            "source": static_source,
+            "source_url": ",".join(_portfolio_fx_urls()),
+            "provider_date": "",
+            "live": False,
+            "stale": True,
+            "fallback": True,
+            "error": str(exc)[:160],
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "ttl_sec": _portfolio_fx_cache_ttl_sec(),
+        }
 
 
 def _portfolio_currency_meta() -> dict:
-    rate, source = _portfolio_usd_inr_rate()
+    fx = _portfolio_usd_inr_rate()
     return {
         "base": "USD",
         "settlement": "USDT",
         "quote": "INR",
-        "usd_inr_rate": rate,
-        "rate_source": source,
-        "rate_note": "Approximate display conversion; P&L accounting remains in USDT.",
+        "usd_inr_rate": fx["rate"],
+        "rate_source": fx.get("source", ""),
+        "rate_source_url": fx.get("source_url", ""),
+        "rate_provider_date": fx.get("provider_date", ""),
+        "rate_fetched_at": fx.get("fetched_at", ""),
+        "rate_live": bool(fx.get("live")),
+        "rate_stale": bool(fx.get("stale")),
+        "rate_fallback": bool(fx.get("fallback")),
+        "rate_error": fx.get("error", ""),
+        "rate_ttl_sec": fx.get("ttl_sec", _portfolio_fx_cache_ttl_sec()),
+        "rate_note": (
+            "Fetched from live FX API; P&L accounting remains in USDT."
+            if fx.get("live")
+            else "FX API unavailable; using cached or fallback display conversion. P&L accounting remains in USDT."
+        ),
     }
 
 

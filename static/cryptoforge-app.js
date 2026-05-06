@@ -1847,13 +1847,22 @@ async function loadDashboard() {
 
 // ── USD / INR Currency Formatting ──────────────────────────
 // Accounting remains in USDT. INR is a display-only conversion for readability.
-let _cfUsdInrRate = 95.18;
+let _cfUsdInrRate = 0;
 let _cfUsdInrSource = 'default';
+let _cfUsdInrMeta = { live: false, stale: true, fallback: true, providerDate: '', fetchedAt: '' };
 
 function cfApplyPortfolioCurrency(meta) {
   var rate = parseFloat(meta && meta.usd_inr_rate);
   if (rate > 0) _cfUsdInrRate = rate;
   _cfUsdInrSource = (meta && meta.rate_source) || _cfUsdInrSource || 'default';
+  _cfUsdInrMeta = {
+    live: !!(meta && meta.rate_live),
+    stale: !!(meta && meta.rate_stale),
+    fallback: !!(meta && meta.rate_fallback),
+    providerDate: (meta && meta.rate_provider_date) || '',
+    fetchedAt: (meta && meta.rate_fetched_at) || '',
+    error: (meta && meta.rate_error) || ''
+  };
 }
 
 /**
@@ -1898,11 +1907,12 @@ function fmtINRPrice(usdPrice) {
 
 function usdToINR(usd) {
   var val = parseFloat(usd);
-  return isNaN(val) ? 0 : val * _cfUsdInrRate;
+  return isNaN(val) || !(_cfUsdInrRate > 0) ? null : val * _cfUsdInrRate;
 }
 
 function fmtRupeesFromUsd(usd, decimals) {
   var val = usdToINR(usd);
+  if (val === null) return '₹—';
   var d = decimals !== undefined ? decimals : 2;
   return (val < 0 ? '-₹' : '₹') + Math.abs(val).toLocaleString('en-IN', {
     minimumFractionDigits: d,
@@ -1911,7 +1921,11 @@ function fmtRupeesFromUsd(usd, decimals) {
 }
 
 function fmtPortfolioRateLabel() {
-  return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$' + (_cfUsdInrSource === 'default' ? ' approx' : '');
+  if (!(_cfUsdInrRate > 0)) return 'FX loading';
+  var state = _cfUsdInrMeta.live && !_cfUsdInrMeta.stale ? ' live' : (_cfUsdInrMeta.stale ? ' stale' : ' approx');
+  var provider = _cfUsdInrSource && _cfUsdInrSource !== 'fallback' ? ' ' + _cfUsdInrSource : '';
+  var date = _cfUsdInrMeta.providerDate ? ' ' + _cfUsdInrMeta.providerDate : '';
+  return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$' + state + provider + date;
 }
 
 function fmtNum(n)   { return fmtINRLarge(n); }
@@ -3891,6 +3905,11 @@ function _portfolioMoneySubline(id, usd, label) {
   el.textContent = fmtRupeesFromUsd(usd) + (label ? ' ' + label : '');
 }
 
+function _portfolioInrCsvValue(usd) {
+  var value = usdToINR(usd);
+  return value === null ? '' : value.toFixed(2);
+}
+
 function _renderPortfolioOrdersTable() {
   var ordTbody = document.getElementById('pf-orders-body');
   if (!ordTbody) return;
@@ -3961,9 +3980,9 @@ function exportPortfolioOrdersCSV() {
       _portfolioOrderSize(order),
       order.fill_price || order.average_fill_price || order.price || '',
       fee,
-      usdToINR(fee).toFixed(2),
+      _portfolioInrCsvValue(fee),
       net === null ? '' : net,
-      net === null ? '' : usdToINR(net).toFixed(2),
+      net === null ? '' : _portfolioInrCsvValue(net),
       order.pnl_status || '',
       order.order_type || order.type || '',
       order.state || order.status || ''
