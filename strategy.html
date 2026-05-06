@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260506-8">
-<link rel="manifest" href="/manifest.webmanifest?v=20260506-8">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260506-9">
+<link rel="manifest" href="/manifest.webmanifest?v=20260506-9">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260506-8"></script>
+<script src="/static/cryptoforge-boot.js?v=20260506-9"></script>
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260506-8">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260506-8">
-<script src="/static/error-handler.js?v=20260506-8" defer></script>
-<script src="/static/pwa.js?v=20260506-8" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260506-9">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260506-9">
+<script src="/static/error-handler.js?v=20260506-9" defer></script>
+<script src="/static/pwa.js?v=20260506-9" defer></script>
 </head>
 <body>
 
@@ -956,75 +956,81 @@
   </div>
 
   <div class="portfolio-flow-stack">
-    <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-accounting" data-portfolio-flow-panel>
-      <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-accounting')">
-        <span><strong>Broker Accounting</strong><em id="pf-accounting-flow-summary">Waiting for account data</em></span>
-        <b aria-hidden="true">v</b>
-      </button>
-      <div class="portfolio-flow-body">
-        <div class="portfolio-ops-list" id="pf-accounting-grid"></div>
-      </div>
-    </section>
+    <div class="portfolio-flow-grid">
+      <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-accounting" data-portfolio-flow-panel>
+        <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-accounting')">
+          <span><strong>Broker Accounting</strong><em id="pf-accounting-flow-summary">Waiting for account data</em></span>
+          <b aria-hidden="true">v</b>
+        </button>
+        <div class="portfolio-flow-body">
+          <div class="portfolio-ops-list" id="pf-accounting-grid"></div>
+        </div>
+      </section>
 
-    <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-reconciliation" data-portfolio-flow-panel>
-      <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-reconciliation')">
-        <span><strong>Reconciliation</strong><em id="pf-reconciliation-flow-summary">Waiting for broker checks</em></span>
-        <b aria-hidden="true">v</b>
-      </button>
-      <div class="portfolio-flow-body">
-        <div class="portfolio-ops-list" id="pf-reconciliation-grid"></div>
-      </div>
-    </section>
+      <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-reconciliation" data-portfolio-flow-panel>
+        <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-reconciliation')">
+          <span><strong>Reconciliation</strong><em id="pf-reconciliation-flow-summary">Waiting for broker checks</em></span>
+          <b aria-hidden="true">v</b>
+        </button>
+        <div class="portfolio-flow-body">
+          <div class="portfolio-ops-list" id="pf-reconciliation-grid"></div>
+        </div>
+      </section>
+    </div>
 
-    <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-freshness" data-portfolio-flow-panel>
-      <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-freshness')">
-        <span><strong>Freshness</strong><em id="pf-freshness-flow-summary">Waiting for data age</em></span>
-        <b aria-hidden="true">v</b>
-      </button>
-      <div class="portfolio-flow-body">
-        <div class="portfolio-ops-list" id="pf-freshness-grid"></div>
-      </div>
-    </section>
+    <div class="portfolio-flow-grid portfolio-flow-grid-compact">
+      <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-freshness" data-portfolio-flow-panel>
+        <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-freshness')">
+          <span><strong>Freshness</strong><em id="pf-freshness-flow-summary">Waiting for data age</em></span>
+          <b aria-hidden="true">v</b>
+        </button>
+        <div class="portfolio-flow-body">
+          <div class="portfolio-ops-list" id="pf-freshness-grid"></div>
+        </div>
+      </section>
 
-    <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-safety" data-portfolio-flow-panel>
-      <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-safety')">
-        <span><strong>Safety</strong><em id="pf-safety-flow-summary">Waiting for runtime state</em></span>
-        <b aria-hidden="true">v</b>
-      </button>
-      <div class="portfolio-flow-body">
-        <div class="portfolio-ops-list" id="pf-safety-grid"></div>
-      </div>
-    </section>
+      <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-safety" data-portfolio-flow-panel>
+        <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-safety')">
+          <span><strong>Safety</strong><em id="pf-safety-flow-summary">Waiting for runtime state</em></span>
+          <b aria-hidden="true">v</b>
+        </button>
+        <div class="portfolio-flow-body">
+          <div class="portfolio-ops-list" id="pf-safety-grid"></div>
+        </div>
+      </section>
 
-    <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-parity" data-portfolio-flow-panel>
-      <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-parity')">
-        <span><strong>Parity</strong><em id="pf-parity-flow-summary">Waiting for assumptions</em></span>
-        <b aria-hidden="true">v</b>
-      </button>
-      <div class="portfolio-flow-body">
-        <div class="portfolio-ops-list" id="pf-parity-grid"></div>
-      </div>
-    </section>
+      <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-parity" data-portfolio-flow-panel>
+        <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-parity')">
+          <span><strong>Parity</strong><em id="pf-parity-flow-summary">Waiting for assumptions</em></span>
+          <b aria-hidden="true">v</b>
+        </button>
+        <div class="portfolio-flow-body">
+          <div class="portfolio-ops-list" id="pf-parity-grid"></div>
+        </div>
+      </section>
+    </div>
 
-    <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-alerts" data-portfolio-flow-panel>
-      <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-alerts')">
-        <span><strong>Alerts</strong><em id="pf-alerts-flow-summary">Waiting for warnings</em></span>
-        <b aria-hidden="true">v</b>
-      </button>
-      <div class="portfolio-flow-body">
-        <div class="portfolio-alert-list" id="pf-alerts-list"></div>
-      </div>
-    </section>
+    <div class="portfolio-flow-grid">
+      <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-alerts" data-portfolio-flow-panel>
+        <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-alerts')">
+          <span><strong>Alerts</strong><em id="pf-alerts-flow-summary">Waiting for warnings</em></span>
+          <b aria-hidden="true">v</b>
+        </button>
+        <div class="portfolio-flow-body">
+          <div class="portfolio-alert-list" id="pf-alerts-list"></div>
+        </div>
+      </section>
 
-    <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-journal" data-portfolio-flow-panel>
-      <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-journal')">
-        <span><strong>Execution Journal</strong><em id="pf-journal-flow-summary">Waiting for events</em></span>
-        <b aria-hidden="true">v</b>
-      </button>
-      <div class="portfolio-flow-body">
-        <div class="portfolio-journal-list" id="pf-journal-list"></div>
-      </div>
-    </section>
+      <section class="card portfolio-flow-panel is-collapsed" id="pf-flow-journal" data-portfolio-flow-panel>
+        <button type="button" class="portfolio-flow-toggle" aria-expanded="false" data-cf-click="togglePortfolioFlowPanel('pf-flow-journal')">
+          <span><strong>Execution Journal</strong><em id="pf-journal-flow-summary">Waiting for events</em></span>
+          <b aria-hidden="true">v</b>
+        </button>
+        <div class="portfolio-flow-body">
+          <div class="portfolio-journal-list" id="pf-journal-list"></div>
+        </div>
+      </section>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:20px;">
@@ -1738,7 +1744,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260506-8" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260506-8" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260506-9" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260506-9" defer></script>
 </body>
 </html>
