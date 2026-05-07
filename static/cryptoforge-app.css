@@ -909,6 +909,53 @@
   .dashboard-fold .operator-lounge-grid {
     margin: 0;
   }
+  .dashboard-fold #strategies-list {
+    max-height: 220px;
+    overflow: auto;
+    padding-right: 2px;
+  }
+  .dashboard-fold #strategies-list .strat-folder-group {
+    margin-bottom: 8px;
+  }
+  .dashboard-fold #strategies-list .strat-folder-header {
+    padding: 7px 10px;
+    margin-bottom: 4px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .dashboard-fold #strategies-list .strat-folder-header .folder-icon {
+    font-size: 13px;
+  }
+  .dashboard-fold #strategies-list .strat-folder-header .folder-count {
+    font-size: 10px;
+  }
+  .dashboard-fold #strategies-list .strat-row {
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .dashboard-fold #strategies-list .sr-name {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .dashboard-fold #strategies-list .sr-meta {
+    font-size: 10px;
+  }
+  .dashboard-fold #strategies-list .strat-actions {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    max-width: 172px;
+  }
+  .dashboard-fold #strategies-list .strat-actions button {
+    padding: 4px 7px;
+    font-size: 10px;
+    line-height: 1.2;
+  }
   @media (max-width: 1180px) {
     .dashboard-stats-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
