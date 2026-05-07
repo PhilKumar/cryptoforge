@@ -896,6 +896,9 @@
   .dashboard-fold-content {
     padding: 0 14px 14px;
   }
+  .dashboard-fold:not([open]) .dashboard-fold-content {
+    display: none;
+  }
   .dashboard-fold-actions {
     display: flex;
     justify-content: flex-end;
