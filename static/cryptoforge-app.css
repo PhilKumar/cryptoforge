@@ -624,7 +624,7 @@
   @keyframes livePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.75); } }
 
   /* ── Pages ── */
-  .page-section { display: none; animation: fadeIn 0.3s ease; }
+  .page-section { display: none; }
   .page-section.active-page { display: block; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -836,6 +836,7 @@
   .dashboard-fold-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
     gap: 12px;
     margin-top: 12px;
   }
@@ -848,13 +849,17 @@
     overflow: hidden;
   }
   .dashboard-fold-grid .dashboard-fold {
+    min-height: 64px;
     margin-bottom: 0;
+  }
+  .dashboard-fold-grid .dashboard-fold:not([open]) {
+    height: 64px;
   }
   .dashboard-fold summary {
     position: relative;
     display: block;
-    min-height: 54px;
-    padding: 12px 48px 12px 14px;
+    min-height: 64px;
+    padding: 14px 48px 14px 14px;
     cursor: pointer;
     list-style: none;
     user-select: none;
@@ -898,6 +903,10 @@
   .dashboard-fold-content {
     padding: 0 14px 14px;
   }
+  .dashboard-fold-grid .dashboard-fold[open] .dashboard-fold-content {
+    height: 236px;
+    overflow: auto;
+  }
   .dashboard-fold:not([open]) .dashboard-fold-content {
     display: none;
   }
@@ -910,8 +919,8 @@
     margin: 0;
   }
   .dashboard-fold #strategies-list {
-    max-height: 220px;
-    overflow: auto;
+    max-height: none;
+    overflow: visible;
     padding-right: 2px;
   }
   .dashboard-fold #strategies-list .strat-folder-group {

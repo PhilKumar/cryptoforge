@@ -855,7 +855,9 @@ function showPage(pageId, btn, options) {
   var activePage = document.querySelector('.page-section.active-page');
   var alreadyActive = activePage && activePage.id === pageId;
   if (alreadyActive && !opts.forceReload) {
-    cfSetActivePageShell(pageId, btn);
+    document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
+    if (!btn) btn = cfNavButtonForPage(pageId);
+    if (btn) btn.classList.add('active');
     localStorage.setItem('cf_active_tab', tabName);
     cfSyncPageHistory(pageId, opts);
     return;
@@ -895,7 +897,8 @@ window.addEventListener('pageshow', function(event) {
   var activePage = document.querySelector('.page-section.active-page');
   var btn = cfNavButtonForPage(pageId);
   if (activePage && activePage.id === pageId) {
-    cfSetActivePageShell(pageId, btn);
+    document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
+    if (btn) btn.classList.add('active');
     cfSyncPageHistory(pageId, { replaceHistory: true });
     return;
   }
