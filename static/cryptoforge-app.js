@@ -415,21 +415,21 @@ function renderDashboardMission(summary, runs) {
   var brokerLabel = _brokerLabel();
   var latestRun = runs[0] || null;
   var title = 'Crypto desk is standing by.';
-  var copy = 'Backtests, paper engines, live monitoring, and broker connectivity are consolidated into a single operating surface. Start with a controlled paper run, validate regime fit, then graduate only verified setups to live.';
+  var copy = 'No engines running. Start paper validation or review the latest run.';
   if (hasLive) {
     title = 'Live capital is armed across ' + totalEngines + ' engine' + (totalEngines === 1 ? '' : 's') + '.';
-    copy = 'Execution requires tighter discipline now. Monitor broker health, keep risk controls visible, and use the Live workspace for intervention rather than editing strategy state in-flight.';
+    copy = 'Live execution is active. Monitor broker health and risk controls.';
   } else if (hasPaper) {
     title = 'Paper validation is active across ' + (summary.paper_count || totalEngines) + ' engine' + ((summary.paper_count || totalEngines) === 1 ? '' : 's') + '.';
-    copy = 'Use the paper lane to verify fills, signal cadence, and risk packaging before promoting any strategy to live deployment.';
+    copy = 'Paper execution is validating fills, cadence, and risk behavior.';
   } else if (latestRun) {
     title = 'Latest validation: ' + (latestRun.run_name || ('Run #' + latestRun.id));
-    copy = 'Runbook history is available for replay. Review the latest archive, compare outcomes, and tighten the next deployment package before arming the broker.';
+    copy = 'Review the archive, adjust the next setup, then paper-test again.';
   }
   var pills = [
-    '<div class="mission-pill"><strong>Readiness</strong> ' + _escapeHtml(hasLive ? 'Live armed' : hasPaper ? 'Paper active' : 'No engines running') + '</div>',
-    '<div class="mission-pill"><strong>Broker</strong> ' + _escapeHtml(_brokerConnected ? 'Connected' : 'Connection pending') + '</div>',
-    '<div class="mission-pill"><strong>Pipeline</strong> ' + _escapeHtml((summary.backtest_count || 0) + ' archived run' + ((summary.backtest_count || 0) === 1 ? '' : 's')) + '</div>',
+    '<div class="mission-pill"><strong>Status</strong> ' + _escapeHtml(hasLive ? 'Live' : hasPaper ? 'Paper' : 'Idle') + '</div>',
+    '<div class="mission-pill"><strong>Broker</strong> ' + _escapeHtml(_brokerConnected ? 'Connected' : 'Pending') + '</div>',
+    '<div class="mission-pill"><strong>Runs</strong> ' + _escapeHtml(String(summary.backtest_count || 0)) + '</div>',
   ];
   var titleEl = document.getElementById('dash-mission-title');
   var copyEl = document.getElementById('dash-mission-copy');
@@ -1773,12 +1773,12 @@ async function loadDashboard() {
 
     var paperStatusEl = document.getElementById('dash-paper');
     if (paperStatusEl) {
-      paperStatusEl.textContent = d.paper_running ? '🟢 Running (' + (d.paper_count || 1) + ')' : 'Idle';
+      paperStatusEl.textContent = d.paper_running ? 'Running (' + (d.paper_count || 1) + ')' : 'Idle';
       paperStatusEl.style.color = d.paper_running ? 'var(--green)' : 'var(--muted)';
     }
     var liveStatusEl = document.getElementById('dash-live');
     if (liveStatusEl) {
-      liveStatusEl.textContent = d.live_running ? '🔴 LIVE (' + (d.live_count || 1) + ')' : 'Idle';
+      liveStatusEl.textContent = d.live_running ? 'LIVE (' + (d.live_count || 1) + ')' : 'Idle';
       liveStatusEl.style.color = d.live_running ? 'var(--red)' : 'var(--muted)';
     }
     // Pulse ring on live card when active
@@ -1820,9 +1820,9 @@ async function loadDashboard() {
     const runs = await rr.json();
     const cont = document.getElementById('dash-runs-list');
     if (runs.length === 0) {
-      cont.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No runs yet. Go to Builder to create one.</td></tr>';
+      cont.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--muted);">No runs yet. Go to Builder to create one.</td></tr>';
     } else {
-      cont.innerHTML = runs.slice().reverse().map(r => {
+      cont.innerHTML = runs.slice().reverse().slice(0, 8).map(r => {
         const pnl = r.total_pnl || 0;
         const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--muted)';
         const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
@@ -1833,7 +1833,6 @@ async function loadDashboard() {
           <td>${_getModeBadge(r.mode)}</td>
           <td><div class="table-row-label">${runName}</div><div class="table-note">${symbol} • ${tradeCount} trades</div></td>
           <td><div class="table-row-label">${symbol}</div><div class="table-note">${_escapeHtml(String(r.side || 'Both'))}</div></td>
-          <td class="num"><div class="table-value-stack"><div class="table-value-main">${r.leverage || 1}x</div><div class="table-value-sub">leverage</div></div></td>
           <td class="num"><div class="table-value-stack"><div class="table-value-main">${tradeCount}</div><div class="table-value-sub">closed trades</div></div></td>
           <td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:${pnlColor};">${fmtINR(pnl)}</div><div class="table-value-sub">net result</div></div></td>
           <td><div class="table-datetime"><strong>${dt.date}</strong><span>${dt.time || '—'}</span></div></td>

@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260506-9">
-<link rel="manifest" href="/manifest.webmanifest?v=20260506-9">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260507-1">
+<link rel="manifest" href="/manifest.webmanifest?v=20260507-1">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260506-9"></script>
+<script src="/static/cryptoforge-boot.js?v=20260507-1"></script>
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260506-9">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260506-9">
-<script src="/static/error-handler.js?v=20260506-9" defer></script>
-<script src="/static/pwa.js?v=20260506-9" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260507-1">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260507-1">
+<script src="/static/error-handler.js?v=20260507-1" defer></script>
+<script src="/static/pwa.js?v=20260507-1" defer></script>
 </head>
 <body>
 
@@ -203,66 +203,56 @@
     </div>
   </div>
 
-  <div class="mission-grid">
-    <div class="mission-card">
-      <div class="mission-eyebrow">Operator Command</div>
-      <h3 class="mission-title" id="dash-mission-title">Crypto desk is standing by.</h3>
-      <p class="mission-copy" id="dash-mission-copy">Backtests, paper engines, live monitoring, and broker connectivity are consolidated into a single operating surface. Start with a controlled paper run, validate regime fit, then graduate only verified setups to live.</p>
-      <div class="mission-pills" id="dash-mission-pills">
-        <div class="mission-pill"><strong>Readiness</strong> No active engines</div>
-        <div class="mission-pill"><strong>Broker</strong> Broker status pending</div>
-        <div class="mission-pill"><strong>Pipeline</strong> Backtest coverage pending</div>
+  <div class="dashboard-command-card">
+    <div class="dashboard-command-main">
+      <div class="dashboard-command-copyblock">
+        <div class="mission-eyebrow">Command</div>
+        <h3 class="mission-title" id="dash-mission-title">Crypto desk is standing by.</h3>
+        <p class="dashboard-command-copy" id="dash-mission-copy">No engines running. Start paper validation or review the latest run.</p>
+        <div class="mission-pills" id="dash-mission-pills">
+          <div class="mission-pill"><strong>Status</strong> Idle</div>
+          <div class="mission-pill"><strong>Broker</strong> Pending</div>
+          <div class="mission-pill"><strong>Runs</strong> 0</div>
+        </div>
       </div>
       <div class="mission-actions">
-        <button class="btn btn-primary btn-sm" data-cf-click="showPage('builder-page', document.getElementById('nav-builder'))">🧠 Build Strategy</button>
-        <button class="btn btn-outline btn-sm" data-cf-click="showPage('results-page', document.getElementById('nav-results'))">📊 Review Runs</button>
-        <button class="btn btn-outline btn-sm" data-cf-click="showPage('live-page', document.getElementById('nav-live'))">📡 Monitor Live</button>
-      </div>
-    </div>
-    <div class="mission-sidecard">
-      <div class="mission-mini">
-        <div class="mission-mini-label">Deployment Lane</div>
-        <div class="mission-mini-value" id="dash-deploy-lane">Paper First</div>
-        <div class="mission-mini-copy" id="dash-deploy-copy">Use paper mode to verify execution flow, fills, and risk behavior before enabling live capital.</div>
-      </div>
-      <div class="mission-mini">
-        <div class="mission-mini-label">Control Surface</div>
-        <div class="mission-mini-value" id="dash-control-value">0 Engines</div>
-        <div class="mission-mini-copy" id="dash-control-copy">No active paper or live engines are currently driving orders.</div>
+        <button class="btn btn-primary btn-sm" data-cf-click="showPage('builder-page', document.getElementById('nav-builder'))">Builder</button>
+        <button class="btn btn-outline btn-sm" data-cf-click="showPage('results-page', document.getElementById('nav-results'))">Runs</button>
+        <button class="btn btn-outline btn-sm" data-cf-click="showPage('live-page', document.getElementById('nav-live'))">Live</button>
       </div>
     </div>
   </div>
 
-  <div class="stats-grid" id="dash-stats">
+  <div class="stats-grid dashboard-stats-grid" id="dash-stats">
     <div class="stat-box pnl-hero">
       <div class="stat-label">Today's P&amp;L</div>
       <div class="stat-value" id="dash-pnl">$0.00</div>
-      <div style="font-size:10px;color:var(--muted);margin-top:6px;letter-spacing:0.5px;">Combined Real + Paper</div>
+      <div class="stat-sub">Real + paper</div>
     </div>
     <div class="stat-box pnl-hero">
       <div class="stat-label">Paper P&amp;L</div>
       <div class="stat-value" id="dash-paper-pnl">$0.00</div>
-      <div style="font-size:10px;color:var(--muted);margin-top:6px;" id="dash-paper">Idle</div>
+      <div class="stat-sub" id="dash-paper">Idle</div>
     </div>
     <div class="stat-box pnl-hero" id="dash-live-card">
       <div class="stat-label">Live P&amp;L</div>
       <div class="stat-value" id="dash-live-pnl">$0.00</div>
-      <div style="font-size:10px;color:var(--muted);margin-top:6px;" id="dash-live">Idle</div>
+      <div class="stat-sub" id="dash-live">Idle</div>
     </div>
     <div class="stat-box">
       <div class="stat-label">Strategies</div>
       <div class="stat-value" id="dash-strats">0</div>
-      <div style="font-size:10px;color:var(--muted);margin-top:6px;">Saved</div>
+      <div class="stat-sub">Saved</div>
     </div>
     <div class="stat-box">
-      <div class="stat-label">Backtests</div>
+      <div class="stat-label">Runs</div>
       <div class="stat-value" id="dash-backtests">0</div>
-      <div style="font-size:10px;color:var(--muted);margin-top:6px;">Total Runs</div>
+      <div class="stat-sub">Archived</div>
     </div>
     <div class="stat-box">
       <div class="stat-label">Broker</div>
       <div class="stat-value" id="dash-broker" style="font-size: 14px;">Configured Broker</div>
-      <div style="font-size:10px;color:var(--muted);margin-top:6px;" id="dash-broker-state">Checking status…</div>
+      <div class="stat-sub" id="dash-broker-state">Checking status…</div>
     </div>
   </div>
 
@@ -272,22 +262,22 @@
     <div id="dash-engines-list"></div>
   </div>
 
-  <div class="card table-panel">
+  <div class="card table-panel dashboard-table-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
         <h3 class="table-title">Recent Runs</h3>
-        <div class="table-meta">Latest backtest, paper, live, and scalp runs in the same ledger treatment used by Live completed trades.</div>
+        <div class="table-meta">Latest 8 runs. Use Results for the full archive.</div>
       </div>
     </div>
     <div class="table-surface">
       <div class="table-scroll">
         <table class="trade-table" id="dash-runs-table" style="font-size:13px;">
           <thead><tr>
-            <th>Mode</th><th>Name</th><th>Symbol</th><th class="num">Lev</th>
+            <th>Mode</th><th>Name</th><th>Symbol</th>
             <th class="num">Trades</th><th class="num">P&amp;L</th><th>Date</th>
           </tr></thead>
           <tbody id="dash-runs-list">
-            <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No runs yet. Go to Builder to create one.</td></tr>
+            <tr><td colspan="6" style="text-align:center;padding:20px;color:var(--muted);">No runs yet. Go to Builder to create one.</td></tr>
           </tbody>
         </table>
       </div>
@@ -295,53 +285,60 @@
     <div class="pagination-bar" id="dash-runs-pagination" style="display:none;"></div>
   </div>
 
-  <div class="operator-lounge-grid">
-    <section class="operator-lounge-card">
-      <div class="operator-lounge-eyebrow">Did You Know</div>
-      <h3 class="operator-lounge-title">Operator Context</h3>
-      <p class="operator-lounge-copy" id="cf-operator-fact">Funding rates, liquidation bands, and spread expansion shape scalp quality more than most entry signals.</p>
-      <div class="operator-lounge-actions">
-        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextFact()">Next Fact</button>
+  <div class="dashboard-fold-grid">
+    <details class="dashboard-fold">
+      <summary><strong>Quick Start Templates</strong><span>Open only when creating a new setup</span></summary>
+      <div class="dashboard-fold-content">
+        <div class="template-grid" id="template-grid"></div>
       </div>
-    </section>
-    <section class="operator-lounge-card">
-      <div class="operator-lounge-eyebrow">Signal Puzzle</div>
-      <h3 class="operator-lounge-title" id="cf-operator-puzzle-title">Microstructure Drill</h3>
-      <p class="operator-lounge-copy" id="cf-operator-puzzle">If the tape looks strong but the mark price keeps lagging spot, which risk check do you trust first?</p>
-      <div class="operator-lounge-answer" id="cf-operator-answer">Check mark-price freshness and funding/liquidation context before chasing the move.</div>
-      <div class="operator-lounge-actions">
-        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorRevealAnswer()">Reveal Answer</button>
-        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextPuzzle()">Next Puzzle</button>
+    </details>
+
+    <details class="dashboard-fold">
+      <summary><strong>Saved Strategies</strong><span>Stored strategy library</span></summary>
+      <div class="dashboard-fold-content">
+        <div class="dashboard-fold-actions">
+          <button class="btn btn-outline btn-sm" data-cf-click="fetchStrategies()">Refresh</button>
+        </div>
+        <div id="strategies-list">
+          <div style="color:var(--muted);text-align:center;padding:20px;">No saved strategies yet.</div>
+        </div>
       </div>
-    </section>
-    <section class="operator-lounge-card">
-      <div class="operator-lounge-eyebrow">Slow Read</div>
-      <h3 class="operator-lounge-title" id="cf-operator-read-title">Execution Note</h3>
-      <p class="operator-lounge-copy" id="cf-operator-read">A clean setup is not enough. Before going live, verify who owns the move: organic taker flow, liquidation cascade, or funding distortion. The same candle can mean three very different trade-quality profiles.</p>
-      <div class="operator-lounge-actions">
-        <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextRead()">Next Read</button>
-      </div>
-    </section>
+    </details>
   </div>
 
-  <!-- Strategy Templates -->
-  <div class="card">
-    <h3 style="margin-bottom: 14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.7;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Quick Start Templates</h3>
-    <div class="template-grid" id="template-grid"></div>
-  </div>
-
-  <!-- Saved Strategies -->
-  <div class="card" style="margin-top:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <h3>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:-2px;margin-right:6px;"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Saved Strategies
-      </h3>
-      <button class="btn btn-outline btn-sm" data-cf-click="fetchStrategies()">↻ Refresh</button>
+  <details class="dashboard-fold dashboard-fold-wide">
+    <summary><strong>Desk Notes</strong><span>Operator facts, drills, and slow reads</span></summary>
+    <div class="dashboard-fold-content">
+      <div class="operator-lounge-grid">
+        <section class="operator-lounge-card">
+          <div class="operator-lounge-eyebrow">Did You Know</div>
+          <h3 class="operator-lounge-title">Operator Context</h3>
+          <p class="operator-lounge-copy" id="cf-operator-fact">Funding rates, liquidation bands, and spread expansion shape scalp quality more than most entry signals.</p>
+          <div class="operator-lounge-actions">
+            <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextFact()">Next Fact</button>
+          </div>
+        </section>
+        <section class="operator-lounge-card">
+          <div class="operator-lounge-eyebrow">Signal Puzzle</div>
+          <h3 class="operator-lounge-title" id="cf-operator-puzzle-title">Microstructure Drill</h3>
+          <p class="operator-lounge-copy" id="cf-operator-puzzle">If the tape looks strong but the mark price keeps lagging spot, which risk check do you trust first?</p>
+          <div class="operator-lounge-answer" id="cf-operator-answer">Check mark-price freshness and funding/liquidation context before chasing the move.</div>
+          <div class="operator-lounge-actions">
+            <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorRevealAnswer()">Reveal Answer</button>
+            <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextPuzzle()">Next Puzzle</button>
+          </div>
+        </section>
+        <section class="operator-lounge-card">
+          <div class="operator-lounge-eyebrow">Slow Read</div>
+          <h3 class="operator-lounge-title" id="cf-operator-read-title">Execution Note</h3>
+          <p class="operator-lounge-copy" id="cf-operator-read">A clean setup is not enough. Before going live, verify who owns the move: organic taker flow, liquidation cascade, or funding distortion. The same candle can mean three very different trade-quality profiles.</p>
+          <div class="operator-lounge-actions">
+            <button class="btn btn-outline btn-sm" data-cf-click="cfOperatorNextRead()">Next Read</button>
+          </div>
+        </section>
+      </div>
     </div>
-    <div id="strategies-list">
-      <div style="color:var(--muted);text-align:center;padding:20px;">No saved strategies yet.</div>
-    </div>
-  </div>
+  </details>
 </div>
 
 <!-- Deploy Modal -->
@@ -1744,7 +1741,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260506-9" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260506-9" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260507-1" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260507-1" defer></script>
 </body>
 </html>
