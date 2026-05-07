@@ -851,12 +851,10 @@
     margin-bottom: 0;
   }
   .dashboard-fold summary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 24px;
-    align-items: center;
-    gap: 10px;
+    position: relative;
+    display: block;
     min-height: 54px;
-    padding: 12px 14px;
+    padding: 12px 48px 12px 14px;
     cursor: pointer;
     list-style: none;
     user-select: none;
@@ -866,6 +864,9 @@
   }
   .dashboard-fold summary::after {
     content: 'v';
+    position: absolute;
+    top: 50%;
+    right: 14px;
     width: 24px;
     height: 24px;
     display: grid;
@@ -875,10 +876,11 @@
     background: rgba(255,255,255,0.04);
     font-family: var(--font-mono);
     font-size: 11px;
+    transform: translateY(-50%);
     transition: transform 0.18s ease;
   }
   .dashboard-fold[open] summary::after {
-    transform: rotate(180deg);
+    transform: translateY(-50%) rotate(180deg);
   }
   .dashboard-fold summary strong {
     display: block;
