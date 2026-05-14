@@ -3939,6 +3939,10 @@ def _order_fill_time(order: dict) -> str:
     )
 
 
+def _order_fill_sort_time(order: dict) -> datetime:
+    return _normalize_datetime(_order_fill_time(order)) or datetime.min
+
+
 def _order_symbol_key(order: dict) -> str:
     return str(order.get("product_id") or order.get("product_symbol") or order.get("symbol") or "")
 
@@ -4057,7 +4061,7 @@ def _is_filled_order(order: dict) -> bool:
 def _attach_matched_order_pnl(rows: list[dict]) -> list[dict]:
     """Derive realized P/L for broker rows that only expose raw fills."""
     lots_by_symbol: dict[str, list[dict]] = defaultdict(list)
-    sorted_rows = sorted(rows, key=lambda row: (_order_fill_time(row), str(row.get("id") or "")))
+    sorted_rows = sorted(rows, key=lambda row: (_order_fill_sort_time(row), str(row.get("id") or "")))
     for order in sorted_rows:
         if order.get("net_pnl") is not None:
             continue
@@ -4133,6 +4137,7 @@ def _normalize_filled_orders(orders, limit: int | None = None) -> list:
     rows = [_normalize_filled_order(order) for order in list(orders or [])]
     rows = [row for row in rows if _is_filled_order(row)]
     _attach_matched_order_pnl(rows)
+    rows.sort(key=lambda row: (_order_fill_sort_time(row), str(row.get("id") or "")), reverse=True)
     return rows[:limit] if limit else rows
 
 

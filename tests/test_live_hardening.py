@@ -1291,6 +1291,52 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("journal", summary)
         self.assertIn("safety", summary)
 
+    async def test_normalized_filled_orders_sort_by_full_timestamp_before_limit(self):
+        product = {"contract_value": "0.001", "notional_type": "vanilla"}
+        rows = self.app_module._normalize_filled_orders(
+            [
+                {
+                    "id": "early-same-day",
+                    "product_id": 27,
+                    "product_symbol": "BTCUSD",
+                    "side": "buy",
+                    "size": 2,
+                    "average_fill_price": "79102",
+                    "paid_commission": "0.04",
+                    "updated_at": "2026-05-14T04:06:39Z",
+                    "product": product,
+                    "state": "closed",
+                },
+                {
+                    "id": "late-same-day",
+                    "product_id": 27,
+                    "product_symbol": "BTCUSD",
+                    "side": "sell",
+                    "size": 2,
+                    "average_fill_price": "80006",
+                    "paid_commission": "0.19",
+                    "updated_at": "2026-05-14T13:22:52Z",
+                    "product": product,
+                    "state": "closed",
+                },
+                {
+                    "id": "previous-day",
+                    "product_id": 27,
+                    "product_symbol": "BTCUSD",
+                    "side": "buy",
+                    "size": 2,
+                    "average_fill_price": "79357",
+                    "paid_commission": "0.04",
+                    "updated_at": "2026-05-13T17:43:01Z",
+                    "product": product,
+                    "state": "closed",
+                },
+            ],
+            limit=2,
+        )
+
+        self.assertEqual([row["id"] for row in rows], ["late-same-day", "early-same-day"])
+
     async def test_portfolio_summary_keeps_broker_reported_net_pnl_after_fees(self):
         fake_delta = SimpleNamespace(
             get_wallet=lambda: [{"asset_symbol": "USDT", "available_balance": "1000"}],

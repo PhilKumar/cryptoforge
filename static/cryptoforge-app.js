@@ -2889,6 +2889,13 @@ function sortScalpHistory(col) {
 
 // ── Generic Table Sort (for portfolio tables) ──────────
 var _genSortState = {};
+function _cfGenericTableSortText(cell) {
+  if (!cell) return '';
+  var explicit = cell.getAttribute('data-sort');
+  if (explicit !== null && explicit !== '') return String(explicit).trim();
+  return cell.textContent.replace(/[$₹,%x]/g, '').replace(/,/g, '').trim();
+}
+
 function sortGenericTable(tablePrefix, colIdx) {
   var key = tablePrefix + '-' + colIdx;
   if (_genSortState[tablePrefix + '-col'] === colIdx) {
@@ -2913,8 +2920,8 @@ function sortGenericTable(tablePrefix, colIdx) {
   rows.sort(function(a, b) {
     var cellA = a.cells[colIdx], cellB = b.cells[colIdx];
     if (!cellA || !cellB) return 0;
-    var va = cellA.textContent.replace(/[$₹,%x]/g, '').replace(/,/g, '').trim();
-    var vb = cellB.textContent.replace(/[$₹,%x]/g, '').replace(/,/g, '').trim();
+    var va = _cfGenericTableSortText(cellA);
+    var vb = _cfGenericTableSortText(cellB);
     var na = parseFloat(va), nb = parseFloat(vb);
     if (!isNaN(na) && !isNaN(nb)) return asc ? na - nb : nb - na;
     return asc ? va.localeCompare(vb) : vb.localeCompare(va);
@@ -4108,6 +4115,7 @@ function _renderPortfolioOrdersTable() {
     var fillPrice = parseFloat(o.fill_price) || parseFloat(o.average_fill_price) || parseFloat(o.price) || 0;
     var ts = o.filled_at || o.updated_at || o.created_at || o.timestamp || '';
     var dt = _getTradeDateParts(ts);
+    var timeSort = _tradeDateSortValue(ts);
     var symbol = _escapeHtml(_portfolioOrderSymbol(o));
     var fee = _cfFilledOrderFees(o);
     var netPnl = _cfFilledOrderNetPnl(o);
@@ -4122,7 +4130,7 @@ function _renderPortfolioOrdersTable() {
     var orderKey = _escapeJsString(o._cfPortfolioOrderKey || _portfolioOrderKey(o, 0));
     var pnlClick = _escapeHtml("showFilledOrderPnlDetails('" + orderKey + "')");
     return '<tr>' +
-      '<td><div class="table-datetime"><strong>' + dt.date + '</strong><span>' + (dt.time || '—') + '</span></div></td>' +
+      '<td data-sort="' + timeSort + '"><div class="table-datetime"><strong>' + dt.date + '</strong><span>' + (dt.time || '—') + '</span></div></td>' +
       '<td><div class="table-row-label">' + symbol + '</div><div class="table-note">' + orderType + '</div></td>' +
       '<td class="center"><span class="tag ' + (side === 'BUY' ? 'tag-green' : 'tag-red') + '">' + safeSide + '</span></td>' +
       '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + _portfolioOrderSize(o) + '</div><div class="table-value-sub">filled</div></div></td>' +
@@ -4721,6 +4729,29 @@ function _getTradeDateParts(raw) {
   var timeOnly = s.match(/(\d{2}:\d{2}:\d{2})/);
   if (timeOnly) return { date: '—', time: timeOnly[1] + ' IST', label: timeOnly[1] + ' IST' };
   return { date: s, time: '', label: s };
+}
+
+function _tradeDateSortValue(raw) {
+  if (!raw || raw === 'None') return 0;
+  var s = String(raw).trim();
+  var numeric = Number(s);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric < 100000000000 ? numeric * 1000 : numeric;
+  }
+  var normalized = s.replace('T', ' ');
+  var full = normalized.match(/(\d{4})-(\d{2})-(\d{2}).*?(\d{2}):(\d{2}):(\d{2})/);
+  if (full) {
+    return Date.UTC(
+      parseInt(full[1], 10),
+      parseInt(full[2], 10) - 1,
+      parseInt(full[3], 10),
+      parseInt(full[4], 10),
+      parseInt(full[5], 10),
+      parseInt(full[6], 10)
+    );
+  }
+  var parsed = Date.parse(s);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function _fmtTradeDateTime(raw) {
