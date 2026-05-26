@@ -1337,6 +1337,41 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([row["id"] for row in rows], ["late-same-day", "early-same-day"])
 
+    async def test_portfolio_summary_uses_wallet_balance_not_available_for_main_balance(self):
+        currency = {
+            "usd_inr_rate": 85.0,
+            "rate_available": True,
+            "rate_label": "Delta settlement",
+            "rate_kind": "broker_settlement",
+        }
+        fake_delta = SimpleNamespace(
+            get_wallet=lambda: [
+                {
+                    "asset_symbol": "USD",
+                    "balance": "233.91",
+                    "available_balance": "141.23",
+                    "blocked_margin": "92.68",
+                    "position_margin": "92.68",
+                    "balance_inr": "19882.35",
+                    "available_balance_inr": "12004.55",
+                }
+            ],
+            get_positions=lambda: [],
+            get_order_history=lambda: [],
+        )
+        with (
+            patch.object(self.app_module, "delta", fake_delta),
+            patch.object(self.app_module, "_portfolio_currency_meta", return_value=currency),
+        ):
+            summary = await self.app_module.get_portfolio_summary()
+
+        self.assertEqual(summary["balance"], 233.91)
+        self.assertEqual(summary["available_balance"], 141.23)
+        self.assertEqual(summary["accounting"]["wallet_balance"]["usd"], 233.91)
+        self.assertEqual(summary["accounting"]["wallet_balance"]["inr"], 19882.35)
+        self.assertEqual(summary["accounting"]["available_balance"]["usd"], 141.23)
+        self.assertEqual(summary["accounting"]["available_balance"]["inr"], 12004.55)
+
     async def test_portfolio_summary_keeps_broker_reported_net_pnl_after_fees(self):
         fake_delta = SimpleNamespace(
             get_wallet=lambda: [{"asset_symbol": "USDT", "available_balance": "1000"}],

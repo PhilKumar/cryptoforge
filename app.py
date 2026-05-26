@@ -4179,6 +4179,16 @@ def _wallet_amount(row: dict, *keys: str) -> float:
     return 0.0
 
 
+def _wallet_amount_or_none(row: dict, *keys: str) -> float | None:
+    for key in keys:
+        if key not in row or row.get(key) in (None, ""):
+            continue
+        parsed = _safe_float(row.get(key), _MISSING_ORDER_FLOAT)
+        if parsed is not _MISSING_ORDER_FLOAT:
+            return parsed
+    return None
+
+
 def _portfolio_inr_value(usd_value: float, currency: dict) -> float | None:
     rate = _safe_float(currency.get("usd_inr_rate"), 0.0)
     if not currency.get("rate_available") or rate <= 0:
@@ -4186,17 +4196,20 @@ def _portfolio_inr_value(usd_value: float, currency: dict) -> float | None:
     return round(_safe_float(usd_value, 0.0) * rate, 2)
 
 
-def _portfolio_money_pair(usd_value: float, currency: dict) -> dict:
+def _portfolio_money_pair(usd_value: float, currency: dict, inr_value: float | None = None) -> dict:
     usd = round(_safe_float(usd_value, 0.0), 2)
-    return {"usd": usd, "inr": _portfolio_inr_value(usd, currency)}
+    inr = round(_safe_float(inr_value, 0.0), 2) if inr_value is not None else _portfolio_inr_value(usd, currency)
+    return {"usd": usd, "inr": inr}
 
 
 def _portfolio_accounting_payload(wallet, positions: list, filled_orders: list, currency: dict) -> dict:
     asset_row = _wallet_asset_row(wallet)
     asset = str(asset_row.get("asset_symbol") or asset_row.get("asset") or asset_row.get("currency") or "USD").upper()
     available = _wallet_amount(asset_row, "available_balance", "available_margin", "free_balance", "free")
-    wallet_balance = _wallet_amount(asset_row, "balance", "wallet_balance", "total_balance", "equity")
     blocked_margin = _wallet_amount(asset_row, "blocked_margin", "locked_margin", "hold_balance", "locked_balance")
+    wallet_balance = _wallet_amount(asset_row, "balance", "wallet_balance", "total_balance", "equity")
+    if _wallet_amount_or_none(asset_row, "balance", "wallet_balance", "total_balance", "equity") is None:
+        wallet_balance = available + blocked_margin
     order_margin = _wallet_amount(asset_row, "order_margin", "open_order_margin")
     position_margin = _wallet_amount(asset_row, "position_margin", "used_margin")
     position_margin_sum = sum(_safe_float(pos.get("margin"), 0.0) for pos in positions or [])
@@ -4212,20 +4225,35 @@ def _portfolio_accounting_payload(wallet, positions: list, filled_orders: list, 
     )
     wallet_equity = wallet_balance + unrealized
     margin_total = max(blocked_margin + order_margin + position_margin, position_margin_sum)
+    wallet_balance_inr = _wallet_amount_or_none(
+        asset_row, "balance_inr", "wallet_balance_inr", "total_balance_inr", "equity_inr"
+    )
+    available_inr = _wallet_amount_or_none(asset_row, "available_balance_inr", "available_margin_inr", "free_inr")
+    blocked_margin_inr = _wallet_amount_or_none(
+        asset_row, "blocked_margin_inr", "locked_margin_inr", "hold_balance_inr", "locked_balance_inr"
+    )
+    order_margin_inr = _wallet_amount_or_none(asset_row, "order_margin_inr", "open_order_margin_inr")
+    position_margin_inr = _wallet_amount_or_none(asset_row, "position_margin_inr", "used_margin_inr")
+    unrealized_inr = _portfolio_inr_value(unrealized, currency)
+    wallet_equity_inr = (
+        round(wallet_balance_inr + unrealized_inr, 2)
+        if wallet_balance_inr is not None and unrealized_inr is not None
+        else None
+    )
     return {
         "asset": asset,
         "rate_label": currency.get("rate_label") or "INR display",
         "rate_kind": currency.get("rate_kind") or "",
         "rate_note": currency.get("rate_note") or "",
-        "available_balance": _portfolio_money_pair(available, currency),
-        "wallet_balance": _portfolio_money_pair(wallet_balance, currency),
-        "wallet_equity": _portfolio_money_pair(wallet_equity, currency),
-        "blocked_margin": _portfolio_money_pair(blocked_margin, currency),
-        "order_margin": _portfolio_money_pair(order_margin, currency),
-        "position_margin": _portfolio_money_pair(position_margin, currency),
+        "available_balance": _portfolio_money_pair(available, currency, available_inr),
+        "wallet_balance": _portfolio_money_pair(wallet_balance, currency, wallet_balance_inr),
+        "wallet_equity": _portfolio_money_pair(wallet_equity, currency, wallet_equity_inr),
+        "blocked_margin": _portfolio_money_pair(blocked_margin, currency, blocked_margin_inr),
+        "order_margin": _portfolio_money_pair(order_margin, currency, order_margin_inr),
+        "position_margin": _portfolio_money_pair(position_margin, currency, position_margin_inr),
         "position_margin_from_positions": _portfolio_money_pair(position_margin_sum, currency),
         "total_margin_locked": _portfolio_money_pair(margin_total, currency),
-        "unrealized_pnl": _portfolio_money_pair(unrealized, currency),
+        "unrealized_pnl": _portfolio_money_pair(unrealized, currency, unrealized_inr),
         "recent_realized_gross": _portfolio_money_pair(realized_gross, currency),
         "recent_realized_fees": _portfolio_money_pair(realized_fees, currency),
         "recent_realized_net": _portfolio_money_pair(realized_net, currency),
@@ -4516,7 +4544,8 @@ async def get_portfolio_summary():
             "generated_at": generated_at,
             "currency": currency,
             "broker_sync": broker_sync,
-            "balance": round(usdt_balance, 2),
+            "balance": _safe_float(accounting.get("wallet_balance", {}).get("usd"), usdt_balance),
+            "available_balance": round(usdt_balance, 2),
             "unrealized_pnl": round(unrealized_pnl, 2),
             "open_positions": open_positions,
             "filled_orders": filled_orders,
@@ -4542,6 +4571,7 @@ async def get_portfolio_summary():
             "currency": currency,
             "broker_sync": broker_sync,
             "balance": 0,
+            "available_balance": 0,
             "unrealized_pnl": 0,
             "open_positions": [],
             "filled_orders": [],

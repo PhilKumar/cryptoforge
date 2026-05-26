@@ -4015,8 +4015,8 @@ function renderPortfolioOperations() {
   var safetyChecks = safety.checks || [];
   var parityItems = parity.items || [];
   _renderPortfolioOpsList('pf-accounting-grid', [
-    { label: 'Available Balance', value: _portfolioMoneyPairLabel(accounting.available_balance), sub: accounting.rate_label || fmtPortfolioRateLabel(), state: 'ok' },
-    { label: 'Wallet Balance', value: _portfolioMoneyPairLabel(accounting.wallet_balance), sub: 'Raw wallet balance', state: 'neutral' },
+    { label: 'Wallet Balance', value: _portfolioMoneyPairLabel(accounting.wallet_balance), sub: accounting.rate_label || fmtPortfolioRateLabel(), state: 'ok' },
+    { label: 'Available Balance', value: _portfolioMoneyPairLabel(accounting.available_balance), sub: 'Free funds after locked margin', state: 'neutral' },
     { label: 'Wallet Equity', value: _portfolioMoneyPairLabel(accounting.wallet_equity), sub: 'Wallet balance + unrealized P&L', state: 'neutral' },
     { label: 'Order Margin', value: _portfolioMoneyPairLabel(accounting.order_margin), sub: 'Open order margin', state: 'neutral' },
     { label: 'Position Margin', value: _portfolioMoneyPairLabel(accounting.position_margin_from_positions), sub: 'Open-position margin', state: 'neutral' },
@@ -4038,14 +4038,14 @@ function renderPortfolioOperations() {
   _renderPortfolioAlerts(alerts);
   _renderPortfolioJournal(journal);
 
-  var availableUsd = accounting.available_balance ? _portfolioMoneyPairText(accounting.available_balance) : '—';
+  var walletUsd = accounting.wallet_balance ? _portfolioMoneyPairText(accounting.wallet_balance) : '—';
   var recWarns = _countNonOk(recChecks);
   var freshWarns = _countNonOk(freshItems);
   var safetyWarns = _countNonOk(safetyChecks);
   var parityWarns = _countNonOk(parityItems);
   var alertWarns = alerts.filter(function(alert) { return String(alert.level || '').toLowerCase() !== 'ok'; }).length;
   var marginText = 'Idle • margin ' + Number(safety.margin_usage_pct || 0).toFixed(2) + '%';
-  _setPortfolioFlowSummary('pf-accounting-flow-summary', 'Available ' + availableUsd + ' ' + (accounting.rate_label || ''), 'ok');
+  _setPortfolioFlowSummary('pf-accounting-flow-summary', 'Wallet ' + walletUsd + ' ' + (accounting.rate_label || ''), 'ok');
   _setPortfolioFlowSummary('pf-reconciliation-flow-summary', (reconciliation.status || 'pending') + ' • ' + (reconciliation.realized_count || 0) + '/' + (reconciliation.order_count || 0) + ' realized', recWarns ? 'warn' : 'ok');
   _setPortfolioFlowSummary('pf-freshness-flow-summary', freshWarns ? freshWarns + ' stale or pending checks' : freshItems.length + ' fresh checks', freshWarns ? 'warn' : 'ok');
   _setPortfolioFlowSummary('pf-safety-flow-summary', safetyWarns ? safetyWarns + ' runtime warnings' : marginText, safetyWarns ? 'warn' : 'ok');
@@ -4245,12 +4245,19 @@ async function loadPortfolioData() {
     }
 
     // ── Balance card ──
-    var bal = summary.balance || 0;
+    var accounting = summary.accounting || {};
+    var walletPair = accounting.wallet_balance || { usd: summary.balance || 0, inr: null };
+    var availablePair = accounting.available_balance || { usd: summary.available_balance || 0, inr: null };
+    var bal = parseFloat(walletPair.usd);
+    if (isNaN(bal)) bal = summary.balance || 0;
     var balEl = document.getElementById('pf-balance');
     if (balEl) {
       balEl.textContent = fmtINR(bal);
     }
-    _portfolioMoneySubline('pf-balance-inr', bal, '');
+    var balSubEl = document.getElementById('pf-balance-inr');
+    if (balSubEl) {
+      balSubEl.textContent = fmtDirectINR(walletPair.inr) + ' • Avail ' + _portfolioMoneyPairText(availablePair);
+    }
 
     // ── Unrealized P&L card ──
     var upnl = summary.unrealized_pnl || 0;
