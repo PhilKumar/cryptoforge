@@ -1337,7 +1337,7 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([row["id"] for row in rows], ["late-same-day", "early-same-day"])
 
-    async def test_portfolio_summary_uses_wallet_balance_not_available_for_main_balance(self):
+    async def test_portfolio_summary_uses_wallet_equity_for_main_account_value(self):
         currency = {
             "usd_inr_rate": 85.0,
             "rate_available": True,
@@ -1356,7 +1356,17 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
                     "available_balance_inr": "12004.55",
                 }
             ],
-            get_positions=lambda: [],
+            get_positions=lambda: [
+                {
+                    "size": "1",
+                    "product_symbol": "BTCUSD",
+                    "entry_price": "100",
+                    "mark_price": "90",
+                    "unrealized_pnl": "-10",
+                    "realized_pnl": "0",
+                    "margin": "92.68",
+                }
+            ],
             get_order_history=lambda: [],
         )
         with (
@@ -1365,10 +1375,14 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         ):
             summary = await self.app_module.get_portfolio_summary()
 
-        self.assertEqual(summary["balance"], 233.91)
+        self.assertEqual(summary["balance"], 223.91)
+        self.assertEqual(summary["wallet_balance"], 233.91)
+        self.assertEqual(summary["wallet_equity"], 223.91)
         self.assertEqual(summary["available_balance"], 141.23)
         self.assertEqual(summary["accounting"]["wallet_balance"]["usd"], 233.91)
         self.assertEqual(summary["accounting"]["wallet_balance"]["inr"], 19882.35)
+        self.assertEqual(summary["accounting"]["wallet_equity"]["usd"], 223.91)
+        self.assertEqual(summary["accounting"]["wallet_equity"]["inr"], 19032.35)
         self.assertEqual(summary["accounting"]["available_balance"]["usd"], 141.23)
         self.assertEqual(summary["accounting"]["available_balance"]["inr"], 12004.55)
 
