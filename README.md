@@ -53,12 +53,16 @@ Create a `.env` file in the project root:
 ```env
 DELTA_API_KEY=your_key_here
 DELTA_API_SECRET=your_secret_here
+BINANCE_API_KEY=your_binance_key_here
+BINANCE_API_SECRET=your_binance_secret_here
+BINANCE_FUTURES_TESTNET=true
 APP_HOST=127.0.0.1
 APP_PORT=9000
 CRYPTOFORGE_PIN=your_pin_here
 ```
 
 > Get your API credentials at [delta.exchange/app/account/api-keys](https://www.delta.exchange/app/account/api-keys)
+> Binance support targets USD-M Futures. Keep `BINANCE_FUTURES_TESTNET=true` until futures access, symbols, balances, and order sizing have been verified with your Binance account.
 
 ### 3. Run
 

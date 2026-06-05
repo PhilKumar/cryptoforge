@@ -1800,6 +1800,30 @@ _ADMIN_CONFIG_FIELDS = [
         "kind": "text",
         "secret": False,
     },
+    {"key": "BINANCE_API_KEY", "label": "API Key", "section": "binance", "kind": "password", "secret": True},
+    {"key": "BINANCE_API_SECRET", "label": "API Secret", "section": "binance", "kind": "password", "secret": True},
+    {
+        "key": "BINANCE_FUTURES_TESTNET",
+        "label": "Futures Testnet",
+        "section": "binance",
+        "kind": "boolean",
+        "options": ["false", "true"],
+        "secret": False,
+    },
+    {
+        "key": "BINANCE_FUTURES_BASE_URL",
+        "label": "Futures Base URL",
+        "section": "binance",
+        "kind": "text",
+        "secret": False,
+    },
+    {
+        "key": "BINANCE_MARGIN_ASSET",
+        "label": "Margin Asset",
+        "section": "binance",
+        "kind": "text",
+        "secret": False,
+    },
 ]
 _ADMIN_CONFIG_FIELD_BY_KEY = {field["key"]: field for field in _ADMIN_CONFIG_FIELDS}
 
@@ -1898,6 +1922,8 @@ def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
         return lowered
     if key == "COINDCX_MARGIN_CURRENCY":
         return raw.upper()
+    if key == "BINANCE_MARGIN_ASSET":
+        return raw.upper()
     return raw
 
 
@@ -1960,6 +1986,14 @@ def _reload_runtime_config_from_env() -> None:
     config.COINDCX_BASE_URL = os.getenv("COINDCX_BASE_URL", "https://api.coindcx.com")
     config.COINDCX_PUBLIC_URL = os.getenv("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
     config.COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
+    config.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE")
+    config.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "YOUR_BINANCE_API_SECRET_HERE")
+    config.BINANCE_FUTURES_TESTNET = os.getenv("BINANCE_FUTURES_TESTNET", "false").lower() == "true"
+    config.BINANCE_FUTURES_BASE_URL = os.getenv(
+        "BINANCE_FUTURES_BASE_URL",
+        "https://testnet.binancefuture.com" if config.BINANCE_FUTURES_TESTNET else "https://fapi.binance.com",
+    )
+    config.BINANCE_MARGIN_ASSET = os.getenv("BINANCE_MARGIN_ASSET", "USDT").upper()
     config.CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "delta")).lower()
     config.DELTA_TESTNET = os.getenv("DELTA_TESTNET", "false").lower() == "true"
     config.DELTA_REGION = os.getenv("DELTA_REGION", "india").lower()
@@ -2270,6 +2304,11 @@ def _production_readiness_payload() -> dict:
         "COINDCX_API_SECRET",
         "COINDCX_BASE_URL",
         "COINDCX_PUBLIC_URL",
+        "BINANCE_API_KEY",
+        "BINANCE_API_SECRET",
+        "BINANCE_FUTURES_TESTNET",
+        "BINANCE_FUTURES_BASE_URL",
+        "BINANCE_MARGIN_ASSET",
     }
     pwa_files = ["manifest.webmanifest", "sw.js", "pwa.js", "cryptoforge-pwa.css"]
     missing_pwa_files = [name for name in pwa_files if not os.path.exists(os.path.join(_HERE, "static", name))]
@@ -2323,7 +2362,7 @@ def _production_readiness_payload() -> dict:
         _production_check(
             "broker_readiness",
             "Broker readiness",
-            {"delta", "coindcx"}.issubset(broker_names) and required_admin_keys.issubset(admin_keys),
+            {"delta", "coindcx", "binance"}.issubset(broker_names) and required_admin_keys.issubset(admin_keys),
             {
                 "current_broker": broker_settings.get("current_broker"),
                 "available_brokers": sorted(broker_names),
