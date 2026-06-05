@@ -29,6 +29,12 @@ BINANCE_FUTURES_BASE_URL = os.getenv(
     "https://testnet.binancefuture.com" if BINANCE_FUTURES_TESTNET else "https://fapi.binance.com",
 )
 BINANCE_MARGIN_ASSET = os.getenv("BINANCE_MARGIN_ASSET", "USDT").upper()
+BINANCE_SPOT_TESTNET = os.getenv("BINANCE_SPOT_TESTNET", "false").lower() == "true"
+BINANCE_SPOT_BASE_URL = os.getenv(
+    "BINANCE_SPOT_BASE_URL",
+    "https://testnet.binance.vision" if BINANCE_SPOT_TESTNET else "https://api.binance.com",
+)
+BINANCE_SPOT_QUOTE_ASSET = os.getenv("BINANCE_SPOT_QUOTE_ASSET", "USDT").upper()
 
 # ── Active Broker ────────────────────────────────────────────
 CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "delta")).lower()

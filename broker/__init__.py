@@ -1,7 +1,7 @@
 import os
 
 from .base import BaseBroker
-from .binance import BinanceClient
+from .binance import BinanceClient, BinanceSpotClient
 from .coindcx import CoinDCXClient
 from .delta import DeltaClient
 
@@ -9,6 +9,7 @@ _BROKER_FACTORIES = {
     "delta": DeltaClient,
     "coindcx": CoinDCXClient,
     "binance": BinanceClient,
+    "binance_spot": BinanceSpotClient,
 }
 
 
@@ -33,6 +34,7 @@ def get_supported_brokers() -> list[str]:
 __all__ = [
     "BaseBroker",
     "BinanceClient",
+    "BinanceSpotClient",
     "CoinDCXClient",
     "DeltaClient",
     "get_broker_client",

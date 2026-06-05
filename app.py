@@ -1824,6 +1824,28 @@ _ADMIN_CONFIG_FIELDS = [
         "kind": "text",
         "secret": False,
     },
+    {
+        "key": "BINANCE_SPOT_TESTNET",
+        "label": "Spot Testnet",
+        "section": "binance",
+        "kind": "boolean",
+        "options": ["false", "true"],
+        "secret": False,
+    },
+    {
+        "key": "BINANCE_SPOT_BASE_URL",
+        "label": "Spot Base URL",
+        "section": "binance",
+        "kind": "text",
+        "secret": False,
+    },
+    {
+        "key": "BINANCE_SPOT_QUOTE_ASSET",
+        "label": "Spot Quote Asset",
+        "section": "binance",
+        "kind": "text",
+        "secret": False,
+    },
 ]
 _ADMIN_CONFIG_FIELD_BY_KEY = {field["key"]: field for field in _ADMIN_CONFIG_FIELDS}
 
@@ -1924,6 +1946,8 @@ def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
         return raw.upper()
     if key == "BINANCE_MARGIN_ASSET":
         return raw.upper()
+    if key == "BINANCE_SPOT_QUOTE_ASSET":
+        return raw.upper()
     return raw
 
 
@@ -1994,6 +2018,12 @@ def _reload_runtime_config_from_env() -> None:
         "https://testnet.binancefuture.com" if config.BINANCE_FUTURES_TESTNET else "https://fapi.binance.com",
     )
     config.BINANCE_MARGIN_ASSET = os.getenv("BINANCE_MARGIN_ASSET", "USDT").upper()
+    config.BINANCE_SPOT_TESTNET = os.getenv("BINANCE_SPOT_TESTNET", "false").lower() == "true"
+    config.BINANCE_SPOT_BASE_URL = os.getenv(
+        "BINANCE_SPOT_BASE_URL",
+        "https://testnet.binance.vision" if config.BINANCE_SPOT_TESTNET else "https://api.binance.com",
+    )
+    config.BINANCE_SPOT_QUOTE_ASSET = os.getenv("BINANCE_SPOT_QUOTE_ASSET", "USDT").upper()
     config.CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "delta")).lower()
     config.DELTA_TESTNET = os.getenv("DELTA_TESTNET", "false").lower() == "true"
     config.DELTA_REGION = os.getenv("DELTA_REGION", "india").lower()
@@ -2309,6 +2339,9 @@ def _production_readiness_payload() -> dict:
         "BINANCE_FUTURES_TESTNET",
         "BINANCE_FUTURES_BASE_URL",
         "BINANCE_MARGIN_ASSET",
+        "BINANCE_SPOT_TESTNET",
+        "BINANCE_SPOT_BASE_URL",
+        "BINANCE_SPOT_QUOTE_ASSET",
     }
     pwa_files = ["manifest.webmanifest", "sw.js", "pwa.js", "cryptoforge-pwa.css"]
     missing_pwa_files = [name for name in pwa_files if not os.path.exists(os.path.join(_HERE, "static", name))]
@@ -2362,7 +2395,8 @@ def _production_readiness_payload() -> dict:
         _production_check(
             "broker_readiness",
             "Broker readiness",
-            {"delta", "coindcx", "binance"}.issubset(broker_names) and required_admin_keys.issubset(admin_keys),
+            {"delta", "coindcx", "binance", "binance_spot"}.issubset(broker_names)
+            and required_admin_keys.issubset(admin_keys),
             {
                 "current_broker": broker_settings.get("current_broker"),
                 "available_brokers": sorted(broker_names),

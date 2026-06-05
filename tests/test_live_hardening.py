@@ -14,7 +14,7 @@ import pandas as pd
 from starlette.requests import Request as StarletteRequest
 
 from broker import get_broker_client
-from broker.binance import BinanceClient
+from broker.binance import BinanceClient, BinanceSpotClient
 from broker.coindcx import CoinDCXClient
 from broker.delta import DeltaClient, _CircuitBreaker, _normalize_result_list
 from engine.live import LiveEngine
@@ -235,6 +235,13 @@ class BrokerFactoryTests(unittest.TestCase):
         self.assertEqual(client.to_broker_symbol("BTCUSD"), "BTCUSDT")
         self.assertEqual(client.from_broker_symbol("BTCUSDT"), "BTCUSDT")
 
+    def test_factory_selects_binance_spot(self):
+        client = get_broker_client("binance_spot")
+        self.assertIsInstance(client, BinanceSpotClient)
+        self.assertEqual(client.broker_name, "binance_spot")
+        self.assertEqual(client.to_broker_symbol("BTCUSD"), "BTCUSDT")
+        self.assertEqual(client.from_broker_symbol("BTCUSDT"), "BTCUSDT")
+
 
 class BinanceClientTests(unittest.TestCase):
     def test_private_methods_are_safe_without_credentials(self):
@@ -302,6 +309,166 @@ class BinanceClientTests(unittest.TestCase):
             qty = client._resolve_quantity("BTCUSDT", 100, price=70000)
 
         self.assertEqual(qty, "0.001")
+
+
+class BinanceSpotClientTests(unittest.TestCase):
+    def test_private_methods_are_safe_without_credentials(self):
+        client = BinanceSpotClient()
+
+        self.assertFalse(client._is_configured())
+        self.assertEqual(client.get_wallet()["error"], "API not configured")
+        self.assertEqual(client.get_positions(), [])
+        self.assertEqual(client.place_order("BTCUSDT", 25, "buy")["error"], "API not configured")
+
+    def test_exchange_info_products_are_normalized_as_spot(self):
+        client = BinanceSpotClient()
+        exchange_info = {
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "status": "TRADING",
+                    "baseAsset": "BTC",
+                    "quoteAsset": "USDT",
+                    "baseAssetPrecision": 8,
+                    "quoteAssetPrecision": 8,
+                    "quoteOrderQtyMarketAllowed": True,
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "minQty": "0.00001", "maxQty": "9000", "stepSize": "0.00001"},
+                        {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                        {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                    ],
+                }
+            ]
+        }
+        with patch.object(client, "_public_get", return_value=exchange_info):
+            product = client.get_product_by_symbol("BTCUSD")
+
+        self.assertEqual(product["id"], "BTCUSDT")
+        self.assertEqual(product["contract_type"], "spot")
+        self.assertEqual(product["min_notional"], "5")
+        self.assertEqual(product["max_leverage"], 1)
+
+    def test_wallet_balances_are_normalized_and_spot_holdings_map_to_positions(self):
+        client = BinanceSpotClient()
+        account = {
+            "balances": [
+                {"asset": "USDT", "free": "100.50", "locked": "4.50"},
+                {"asset": "BTC", "free": "0.010", "locked": "0.002"},
+                {"asset": "ETH", "free": "0", "locked": "0"},
+            ]
+        }
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(client, "_account", return_value=account),
+            patch.object(client, "get_ticker", return_value={"mark_price": 70000.0}),
+        ):
+            wallet = client.get_wallet()
+            positions = client.get_positions()
+
+        self.assertEqual(wallet[0]["asset_symbol"], "USDT")
+        self.assertEqual(wallet[0]["available_balance"], "100.5")
+        self.assertEqual(wallet[1]["asset_symbol"], "BTC")
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["product_symbol"], "BTCUSDT")
+        self.assertEqual(positions[0]["base_size"], 0.012)
+        self.assertEqual(positions[0]["size"], 840)
+        self.assertEqual(positions[0]["leverage"], 1)
+
+    def test_market_buy_uses_quote_order_quantity(self):
+        client = BinanceSpotClient()
+        product = {
+            "symbol": "BTCUSDT",
+            "base_asset": "BTC",
+            "quote_asset": "USDT",
+            "quote_order_qty_market_allowed": True,
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
+                {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+            ],
+        }
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(client, "get_ticker", return_value={"mark_price": 70000.0}),
+            patch.object(client, "get_product_by_symbol", return_value=product),
+            patch.object(
+                client,
+                "_signed_request",
+                return_value={
+                    "orderId": 123,
+                    "status": "FILLED",
+                    "executedQty": "0.001",
+                    "cummulativeQuoteQty": "70",
+                    "fills": [{"price": "70000", "qty": "0.001", "commission": "0.000001", "commissionAsset": "BTC"}],
+                },
+            ) as signed_request,
+        ):
+            result = client.place_order("BTCUSDT", 50, "buy")
+
+        self.assertEqual(result["id"], 123)
+        self.assertEqual(result["avgPrice"], "70000.0")
+        self.assertEqual(result["fill_price"], 70000.0)
+        self.assertEqual(result["paid_commission"], 0.07)
+        payload = signed_request.call_args.kwargs["params"]
+        self.assertEqual(payload["symbol"], "BTCUSDT")
+        self.assertEqual(payload["side"], "BUY")
+        self.assertEqual(payload["type"], "MARKET")
+        self.assertEqual(payload["quoteOrderQty"], "50")
+        self.assertNotIn("quantity", payload)
+
+    def test_market_sell_translates_notional_to_base_quantity(self):
+        client = BinanceSpotClient()
+        product = {
+            "symbol": "BTCUSDT",
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
+                {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+            ],
+        }
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(client, "get_ticker", return_value={"mark_price": 70000.0}),
+            patch.object(client, "get_product_by_symbol", return_value=product),
+            patch.object(
+                client, "_signed_request", return_value={"orderId": 124, "status": "FILLED"}
+            ) as signed_request,
+        ):
+            result = client.place_order("BTCUSDT", 50, "sell")
+
+        self.assertEqual(result["id"], 124)
+        payload = signed_request.call_args.kwargs["params"]
+        self.assertEqual(payload["side"], "SELL")
+        self.assertEqual(payload["quantity"], "0.00071")
+        self.assertNotIn("quoteOrderQty", payload)
+
+    def test_spot_trade_history_normalizes_my_trades(self):
+        client = BinanceSpotClient()
+        product = {"base_asset": "BTC", "quote_asset": "USDT"}
+        rows = [
+            {
+                "symbol": "BTCUSDT",
+                "id": 10,
+                "orderId": 20,
+                "price": "70000",
+                "qty": "0.001",
+                "quoteQty": "70",
+                "commission": "0.000001",
+                "commissionAsset": "BTC",
+                "time": 1710000000000,
+                "isBuyer": True,
+            }
+        ]
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(client, "_signed_request", side_effect=[rows, [], [], [], [], []]),
+            patch.object(client, "get_product_by_symbol", return_value=product),
+        ):
+            history = client.get_order_history()
+
+        self.assertEqual(history[0]["id"], "BTCUSDT-10")
+        self.assertEqual(history[0]["side"], "buy")
+        self.assertEqual(history[0]["filled_size"], "0.001")
+        self.assertEqual(history[0]["paid_commission"], 0.07)
+        self.assertEqual(history[0]["commission_asset"], "BTC")
 
 
 class CoinDCXClientTests(unittest.TestCase):
@@ -1696,6 +1863,7 @@ class BrokerSettingsRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["current_label"], "Delta Exchange")
         self.assertTrue(any(item["name"] == "coindcx" for item in payload["available_brokers"]))
         self.assertTrue(any(item["name"] == "binance" for item in payload["available_brokers"]))
+        self.assertTrue(any(item["name"] == "binance_spot" for item in payload["available_brokers"]))
 
     async def test_update_broker_settings_switches_and_persists_selection(self):
         payload = await self.app_module.update_broker_settings(
@@ -2222,6 +2390,7 @@ class OpsStateRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(checks["button_route_audit"]["details"]["missing_write_routes"], [])
         self.assertIn("coindcx", checks["broker_readiness"]["details"]["available_brokers"])
         self.assertIn("binance", checks["broker_readiness"]["details"]["available_brokers"])
+        self.assertIn("binance_spot", checks["broker_readiness"]["details"]["available_brokers"])
         self.assertTrue(checks["scalp_production_hardening"]["details"]["routes"]["add"])
 
     async def test_restore_route_rejects_active_runtime_without_force(self):

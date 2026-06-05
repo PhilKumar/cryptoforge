@@ -1,8 +1,9 @@
 """
-broker/binance.py - Binance USD-M futures adapter for CryptoForge.
+broker/binance.py - Binance adapters for CryptoForge.
 
-The adapter targets Binance USDⓈ-M perpetual futures. Public market data works
-without credentials; account, position, and order methods require API keys.
+BinanceClient targets USD-M perpetual futures. BinanceSpotClient targets Spot.
+Public market data works without credentials; account and order methods require
+API keys.
 """
 
 import asyncio
@@ -610,3 +611,480 @@ class BinanceClient(BaseBroker):
         except Exception as exc:
             _binance_log.warning("[BINANCE] Funding history error for %s: %s", pair, exc)
             return []
+
+
+class BinanceSpotClient(BinanceClient):
+    broker_name = "binance_spot"
+    display_name = "Binance Spot"
+
+    def __init__(self):
+        self.api_key = config.BINANCE_API_KEY
+        self.api_secret = config.BINANCE_API_SECRET
+        self.base_url = config.BINANCE_SPOT_BASE_URL.rstrip("/")
+        self.testnet = bool(getattr(config, "BINANCE_SPOT_TESTNET", False))
+        self.quote_asset = config.BINANCE_SPOT_QUOTE_ASSET.upper()
+        self._products_cache = None
+        self._products_ts = 0.0
+        self._CACHE_TTL = 3600
+
+    def _normalize_product(self, raw: dict) -> dict:
+        filters = self._filters_by_type(raw)
+        lot = filters.get("LOT_SIZE", {})
+        market_lot = filters.get("MARKET_LOT_SIZE", {}) or lot
+        price_filter = filters.get("PRICE_FILTER", {})
+        min_notional = filters.get("MIN_NOTIONAL", {}) or filters.get("NOTIONAL", {})
+        return {
+            "id": raw.get("symbol"),
+            "symbol": self.from_broker_symbol(raw.get("symbol")),
+            "broker_symbol": raw.get("symbol"),
+            "pair": raw.get("symbol"),
+            "state": "live" if raw.get("status") == "TRADING" else str(raw.get("status") or "").lower(),
+            "contract_type": "spot",
+            "contract_value": "1",
+            "notional_type": "linear",
+            "base_asset": raw.get("baseAsset"),
+            "quote_asset": raw.get("quoteAsset"),
+            "quantity_precision": raw.get("baseAssetPrecision"),
+            "quote_precision": raw.get("quoteAssetPrecision"),
+            "min_qty": lot.get("minQty"),
+            "max_qty": lot.get("maxQty"),
+            "step_size": lot.get("stepSize"),
+            "market_min_qty": market_lot.get("minQty"),
+            "market_step_size": market_lot.get("stepSize"),
+            "tick_size": price_filter.get("tickSize"),
+            "min_notional": min_notional.get("minNotional") or min_notional.get("notional"),
+            "quote_order_qty_market_allowed": bool(raw.get("quoteOrderQtyMarketAllowed", True)),
+            "max_leverage": 1,
+            "default_leverage": 1,
+            **raw,
+        }
+
+    def get_products(self, force_refresh: bool = False) -> list:
+        now = _time.time()
+        if self._products_cache and not force_refresh and (now - self._products_ts) < self._CACHE_TTL:
+            return list(self._products_cache)
+        payload = self._public_get("/api/v3/exchangeInfo")
+        symbols = payload.get("symbols", []) if isinstance(payload, dict) else []
+        products = [
+            self._normalize_product(item)
+            for item in symbols
+            if item.get("quoteAsset") == self.quote_asset and item.get("status") == "TRADING"
+        ]
+        self._products_cache = products
+        self._products_ts = now
+        return list(products)
+
+    def get_perpetual_futures(self) -> list:
+        return self.get_products()
+
+    def get_leverage_info(self, symbol: str) -> dict:
+        return {
+            "max_leverage": 1,
+            "default": 1,
+            "options": [1],
+            "initial_margin": 100.0,
+            "maintenance_margin": 0.0,
+            "mode": "spot",
+        }
+
+    def get_candles(self, symbol: str, resolution: str = "5m", start: str = None, end: str = None) -> pd.DataFrame:
+        pair = self.to_broker_symbol(symbol)
+        interval_map = {
+            "1m": "1m",
+            "3m": "3m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "1h": "1h",
+            "2h": "2h",
+            "4h": "4h",
+            "6h": "6h",
+            "1d": "1d",
+            "1D": "1d",
+            "1w": "1w",
+            "1W": "1w",
+        }
+        params = {"symbol": pair, "interval": interval_map.get(resolution, "5m"), "limit": 1000}
+        if start:
+            params["startTime"] = int(datetime.strptime(start, "%Y-%m-%d").timestamp() * 1000)
+        if end:
+            params["endTime"] = int(datetime.strptime(end, "%Y-%m-%d").timestamp() * 1000)
+        candles = self._public_get("/api/v3/klines", params=params)
+        if not candles:
+            return pd.DataFrame()
+        df = pd.DataFrame(
+            candles,
+            columns=[
+                "time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "trades",
+                "taker_base_volume",
+                "taker_quote_volume",
+                "ignore",
+            ],
+        )
+        df["datetime"] = pd.to_datetime(df["time"], unit="ms", utc=True)
+        for col in ("open", "high", "low", "close", "volume"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df.set_index("datetime", inplace=True)
+        df.sort_index(inplace=True)
+        return df[["open", "high", "low", "close", "volume"]]
+
+    def get_ticker(self, symbol: str) -> dict:
+        pair = self.to_broker_symbol(symbol)
+        try:
+            ticker = self._public_get("/api/v3/ticker/24hr", params={"symbol": pair})
+            last_price = self.coerce_float(ticker.get("lastPrice"), 0.0)
+            return {
+                "symbol": self.from_broker_symbol(pair),
+                "broker_symbol": pair,
+                "mark_price": last_price,
+                "last_price": last_price,
+                "close": last_price,
+                "volume_24h": self.coerce_float(ticker.get("volume"), 0.0),
+                "turnover_24h": self.coerce_float(ticker.get("quoteVolume"), 0.0),
+                "open_interest": 0.0,
+                "funding_rate": 0.0,
+                "price_change_24h": self.coerce_float(ticker.get("priceChangePercent"), 0.0),
+                "high_24h": self.coerce_float(ticker.get("highPrice"), 0.0),
+                "low_24h": self.coerce_float(ticker.get("lowPrice"), 0.0),
+            }
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Ticker error for %s: %s", pair, exc)
+            return {"symbol": self.from_broker_symbol(pair), "mark_price": 0.0, "last_price": 0.0}
+
+    def get_tickers_bulk(self) -> list:
+        try:
+            rows = self._public_get("/api/v3/ticker/24hr")
+            return [
+                {
+                    "symbol": item.get("symbol"),
+                    "mark_price": self.coerce_float(item.get("lastPrice"), 0.0),
+                    "last_price": self.coerce_float(item.get("lastPrice"), 0.0),
+                    "close": self.coerce_float(item.get("lastPrice"), 0.0),
+                    "volume": self.coerce_float(item.get("volume"), 0.0),
+                    "turnover": self.coerce_float(item.get("quoteVolume"), 0.0),
+                    "price_change_percent_24h": self.coerce_float(item.get("priceChangePercent"), 0.0),
+                    "high": self.coerce_float(item.get("highPrice"), 0.0),
+                    "low": self.coerce_float(item.get("lowPrice"), 0.0),
+                }
+                for item in rows or []
+                if isinstance(item, dict)
+            ]
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Bulk ticker error: %s", exc)
+            return []
+
+    def _account(self) -> dict:
+        return self._signed_request("GET", "/api/v3/account")
+
+    def _spot_balance_rows(self, account: dict) -> list[dict]:
+        rows = []
+        for item in account.get("balances", []) if isinstance(account, dict) else []:
+            asset = str(item.get("asset") or "").upper()
+            free = self.coerce_float(item.get("free"), 0.0)
+            locked = self.coerce_float(item.get("locked"), 0.0)
+            total = free + locked
+            if total <= 0 and asset != self.quote_asset:
+                continue
+            rows.append(
+                {
+                    "asset_symbol": asset,
+                    "asset": asset,
+                    "balance": str(total),
+                    "wallet_balance": str(total),
+                    "total_balance": str(total),
+                    "equity": str(total),
+                    "available_balance": str(free),
+                    "free_balance": str(free),
+                    "locked_balance": str(locked),
+                    "blocked_margin": str(locked),
+                    "order_margin": str(locked),
+                    "position_margin": "0",
+                    "unrealized_pnl": "0",
+                    "account_type": "spot",
+                    "raw": item,
+                }
+            )
+        rows.sort(key=lambda row: (row["asset_symbol"] != self.quote_asset, row["asset_symbol"]))
+        return rows
+
+    def get_wallet(self) -> dict:
+        if not self._is_configured():
+            return {"error": "API not configured"}
+        try:
+            return self._spot_balance_rows(self._account())
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Wallet error: %s", exc)
+            return {"error": str(exc)}
+
+    def _balance_position(self, wallet_row: dict) -> dict | None:
+        asset = str(wallet_row.get("asset_symbol") or "").upper()
+        total_qty = self.coerce_float(wallet_row.get("total_balance"), 0.0)
+        if not asset or asset == self.quote_asset or total_qty <= 0:
+            return None
+        pair = f"{asset}{self.quote_asset}"
+        ticker = self.get_ticker(pair)
+        mark_price = self.coerce_float(ticker.get("mark_price") or ticker.get("last_price"), 0.0)
+        return {
+            "product_id": pair,
+            "product_symbol": self.from_broker_symbol(pair),
+            "symbol": self.from_broker_symbol(pair),
+            "size": round(total_qty * mark_price, 8) if mark_price > 0 else 0.0,
+            "base_size": total_qty,
+            "entry_price": 0.0,
+            "mark_price": mark_price,
+            "unrealized_pnl": 0.0,
+            "realized_pnl": 0.0,
+            "margin": 0.0,
+            "liquidation_price": 0.0,
+            "leverage": 1,
+            "margin_type": "spot_cash",
+            "position_side": "LONG",
+            "raw": wallet_row.get("raw") or wallet_row,
+        }
+
+    def get_positions(self) -> list:
+        if not self._is_configured():
+            return []
+        wallet = self.get_wallet()
+        if not isinstance(wallet, list):
+            return []
+        return [position for position in (self._balance_position(row) for row in wallet) if position]
+
+    def get_position(self, product_id: str, strict: bool = False) -> dict:
+        pair = self.to_broker_symbol(product_id)
+        for position in self.get_positions():
+            if str(position.get("product_id") or "").upper() == pair:
+                return position
+        return {}
+
+    @staticmethod
+    def _filter_positive_float(value, default: float = 0.0) -> float:
+        parsed = BaseBroker.coerce_float(value, default)
+        return parsed if parsed > 0 else default
+
+    def _spot_order_quantity(
+        self, pair: str, size: float, side: str, order_type: str, price: float
+    ) -> tuple[dict, str]:
+        product = self.get_product_by_symbol(pair)
+        filters = self._filters_by_type(product or {})
+        lot = filters.get("MARKET_LOT_SIZE", {}) if self._order_type(order_type) == "MARKET" else {}
+        if not lot or self._filter_positive_float(lot.get("stepSize"), 0.0) <= 0:
+            lot = filters.get("LOT_SIZE", {})
+        step = lot.get("stepSize") or "0.000001"
+        min_qty = self._filter_positive_float(lot.get("minQty"), 0.0)
+        min_notional_filter = filters.get("MIN_NOTIONAL", {}) or filters.get("NOTIONAL", {})
+        min_notional = self._filter_positive_float(
+            min_notional_filter.get("minNotional") or min_notional_filter.get("notional"),
+            0.0,
+        )
+        notional_size = self.coerce_float(size, 0.0)
+        if notional_size <= 0:
+            return {}, "Spot order size must be greater than zero"
+        if min_notional and notional_size < min_notional:
+            return {}, f"Spot order size {notional_size:g} is below Binance minimum notional {min_notional:g}"
+
+        side_upper = str(side or "").upper()
+        order_type_upper = self._order_type(order_type)
+        if side_upper == "BUY" and order_type_upper == "MARKET" and product.get("quote_order_qty_market_allowed", True):
+            return {"quoteOrderQty": self._decimal_floor(notional_size, "0.00000001")}, ""
+
+        if price <= 0:
+            return {}, f"Unable to resolve Binance Spot price for {pair}"
+        qty = self._decimal_floor(notional_size / price, step)
+        if self.coerce_float(qty, 0.0) < min_qty:
+            return {}, f"Spot order quantity {qty} is below Binance minimum quantity {min_qty:g}"
+        return {"quantity": qty}, ""
+
+    def place_order(
+        self,
+        product_id: str,
+        size: float,
+        side: str,
+        order_type: str = "market_order",
+        limit_price: float = None,
+        leverage: int = 1,
+        reduce_only: bool = False,
+    ) -> dict:
+        if not self._is_configured():
+            return {"error": "API not configured"}
+        pair = self.to_broker_symbol(product_id)
+        side_upper = str(side or "").upper()
+        if side_upper not in {"BUY", "SELL"}:
+            return {"error": "Binance Spot supports only buy and sell orders"}
+
+        order_type_upper = self._order_type(order_type)
+        ticker = self.get_ticker(pair)
+        price_for_qty = self.coerce_float(limit_price or ticker.get("mark_price") or ticker.get("last_price"), 0.0)
+        quantity_payload, error = self._spot_order_quantity(
+            pair,
+            self.coerce_float(size, 0.0),
+            side_upper,
+            order_type,
+            price_for_qty,
+        )
+        if error:
+            return {"error": error}
+
+        payload = {
+            "symbol": pair,
+            "side": side_upper,
+            "type": order_type_upper,
+            "newOrderRespType": "FULL",
+            **quantity_payload,
+        }
+        if order_type_upper == "LIMIT":
+            if not limit_price:
+                return {"error": "Limit price is required for Binance Spot limit orders"}
+            payload.update({"price": str(limit_price), "timeInForce": "GTC"})
+        try:
+            result = self._signed_request("POST", "/api/v3/order", params=payload)
+            if isinstance(result, dict):
+                result.setdefault("id", result.get("orderId"))
+                result.setdefault("product_symbol", pair)
+                result.setdefault("symbol", pair)
+                self._attach_spot_order_fill_fields(result, pair)
+            return result
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Order error: %s", exc)
+            return {"error": str(exc)}
+
+    def get_order(self, product_id: str, order_id) -> dict:
+        if not self._is_configured() or not order_id:
+            return {}
+        return self._signed_request(
+            "GET",
+            "/api/v3/order",
+            params={"symbol": self.to_broker_symbol(product_id), "orderId": order_id},
+        )
+
+    def cancel_order(self, order_id: str, product_id: str = "") -> dict:
+        if not self._is_configured():
+            return {"error": "API not configured"}
+        try:
+            return self._signed_request(
+                "DELETE", "/api/v3/order", params={"symbol": self.to_broker_symbol(product_id), "orderId": order_id}
+            )
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Cancel error: %s", exc)
+            return {"error": str(exc)}
+
+    def get_orders(self, product_id: str = None, state: str = "open") -> list:
+        if not self._is_configured():
+            return []
+        pair = self.to_broker_symbol(product_id or "BTCUSDT")
+        try:
+            if str(state or "").lower() == "open":
+                return self._signed_request("GET", "/api/v3/openOrders", params={"symbol": pair})
+            return self._signed_request("GET", "/api/v3/allOrders", params={"symbol": pair, "limit": 100})
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Orders error: %s", exc)
+            return []
+
+    def _trade_fee_in_quote(self, row: dict) -> float:
+        commission = self.coerce_float(row.get("commission"), 0.0)
+        commission_asset = str(row.get("commissionAsset") or "").upper()
+        symbol = str(row.get("symbol") or "").upper()
+        product = self.get_product_by_symbol(symbol) or {}
+        base_asset = str(product.get("base_asset") or "").upper()
+        quote_asset = str(product.get("quote_asset") or self.quote_asset).upper()
+        price = self.coerce_float(row.get("price"), 0.0)
+        if commission_asset == quote_asset:
+            return round(commission, 8)
+        if commission_asset == base_asset and price > 0:
+            return round(commission * price, 8)
+        return 0.0
+
+    def _attach_spot_order_fill_fields(self, result: dict, pair: str) -> dict:
+        if not isinstance(result, dict):
+            return result
+        fills = result.get("fills") if isinstance(result.get("fills"), list) else []
+        executed_qty = self.coerce_float(result.get("executedQty"), 0.0)
+        quote_qty = self.coerce_float(result.get("cummulativeQuoteQty"), 0.0)
+        weighted_quote = 0.0
+        fill_qty = 0.0
+        fee_quote = 0.0
+        product = self.get_product_by_symbol(pair) or {}
+        base_asset = str(product.get("base_asset") or "").upper()
+        quote_asset = str(product.get("quote_asset") or self.quote_asset).upper()
+        for fill in fills:
+            price = self.coerce_float(fill.get("price"), 0.0)
+            qty = self.coerce_float(fill.get("qty"), 0.0)
+            commission = self.coerce_float(fill.get("commission"), 0.0)
+            commission_asset = str(fill.get("commissionAsset") or "").upper()
+            weighted_quote += price * qty
+            fill_qty += qty
+            if commission_asset == quote_asset:
+                fee_quote += commission
+            elif commission_asset == base_asset and price > 0:
+                fee_quote += commission * price
+
+        avg_price = weighted_quote / fill_qty if fill_qty > 0 else 0.0
+        if avg_price <= 0 and executed_qty > 0 and quote_qty > 0:
+            avg_price = quote_qty / executed_qty
+        if avg_price > 0:
+            result.setdefault("avgPrice", str(round(avg_price, 8)))
+            result.setdefault("average_fill_price", round(avg_price, 8))
+            result.setdefault("fill_price", round(avg_price, 8))
+        if executed_qty > 0:
+            result.setdefault("filled_size", executed_qty)
+            result.setdefault("size", executed_qty)
+        if quote_qty > 0:
+            result.setdefault("quote_size", quote_qty)
+        result.setdefault("paid_commission", round(fee_quote, 8))
+        return result
+
+    def get_order_history(self) -> list:
+        if not self._is_configured():
+            return []
+        end_ms = int(round(_time.time() * 1000))
+        start_ms = int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)
+        trades = []
+        symbols = [f"{asset}{self.quote_asset}" for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")]
+        for symbol in symbols:
+            try:
+                rows = self._signed_request(
+                    "GET",
+                    "/api/v3/myTrades",
+                    params={"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000},
+                )
+            except Exception as exc:
+                _binance_log.warning("[BINANCE SPOT] Trades error for %s: %s", symbol, exc)
+                continue
+            for row in rows or []:
+                row = dict(row)
+                trade_id = row.get("id")
+                order_id = row.get("orderId")
+                row["trade_id"] = trade_id
+                row["id"] = f"{symbol}-{trade_id}"
+                row.setdefault("order_id", order_id)
+                row.setdefault("product_symbol", self.from_broker_symbol(row.get("symbol")))
+                row.setdefault("side", "buy" if row.get("isBuyer") else "sell")
+                row.setdefault("average_fill_price", row.get("price"))
+                row.setdefault("fill_price", row.get("price"))
+                row.setdefault("size", row.get("qty"))
+                row.setdefault("filled_size", row.get("qty"))
+                row.setdefault("quote_size", row.get("quoteQty"))
+                row.setdefault("paid_commission", self._trade_fee_in_quote(row))
+                row.setdefault("paid_commission_native", row.get("commission"))
+                row.setdefault("commission_asset", row.get("commissionAsset"))
+                row.setdefault("state", "closed")
+                row.setdefault("order_type", "spot trade")
+                row.setdefault("product", {"notional_type": "linear", "contract_value": "1"})
+                row.setdefault("updated_at", datetime.utcfromtimestamp(int(row.get("time", 0)) / 1000).isoformat())
+                trades.append(row)
+        trades.sort(key=lambda item: item.get("time") or 0, reverse=True)
+        return trades
+
+    def set_leverage(self, product_id: str, leverage: int) -> dict:
+        return {"status": "ok", "message": "Binance Spot uses cash balance only; leverage is fixed at 1x."}
+
+    def get_funding_history(self, symbol: str) -> list:
+        return []

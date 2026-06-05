@@ -56,13 +56,15 @@ DELTA_API_SECRET=your_secret_here
 BINANCE_API_KEY=your_binance_key_here
 BINANCE_API_SECRET=your_binance_secret_here
 BINANCE_FUTURES_TESTNET=true
+BINANCE_SPOT_TESTNET=true
+BINANCE_SPOT_QUOTE_ASSET=USDT
 APP_HOST=127.0.0.1
 APP_PORT=9000
 CRYPTOFORGE_PIN=your_pin_here
 ```
 
 > Get your API credentials at [delta.exchange/app/account/api-keys](https://www.delta.exchange/app/account/api-keys)
-> Binance support targets USD-M Futures. Keep `BINANCE_FUTURES_TESTNET=true` until futures access, symbols, balances, and order sizing have been verified with your Binance account.
+> Binance support includes separate `Binance Futures` and `Binance Spot` broker choices. Keep the matching testnet flag enabled until access, symbols, balances, and order sizing have been verified with your Binance account.
 
 ### 3. Run
 
