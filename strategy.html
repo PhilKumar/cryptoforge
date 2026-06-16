@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260605-2">
-<link rel="manifest" href="/manifest.webmanifest?v=20260605-2">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260616-1">
+<link rel="manifest" href="/manifest.webmanifest?v=20260616-1">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260605-2"></script>
+<script src="/static/cryptoforge-boot.js?v=20260616-1"></script>
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260605-2">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260605-2">
-<script src="/static/error-handler.js?v=20260605-2" defer></script>
-<script src="/static/pwa.js?v=20260605-2" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260616-1">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260616-1">
+<script src="/static/error-handler.js?v=20260616-1" defer></script>
+<script src="/static/pwa.js?v=20260616-1" defer></script>
 </head>
 <body>
 
@@ -163,6 +163,10 @@
     <button id="nav-portfolio" class="nav-tab" data-cf-click="showPage('portfolio-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></span>
       <span class="tab-label">Portfolio</span>
+    </button>
+    <button id="nav-allocator" class="nav-tab" data-cf-click="showPage('allocator-page', this)">
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8"/><path d="M8 11h3"/><path d="M13 11h3"/><path d="M8 15h3"/><path d="M13 15h3"/></svg></span>
+      <span class="tab-label">Allocator</span>
     </button>
     <button id="nav-builder" class="nav-tab" data-cf-click="showPage('builder-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
@@ -339,6 +343,99 @@
       </div>
     </div>
   </details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     BTC ALLOCATION CALCULATOR
+     ═══════════════════════════════════════════════════════ -->
+<div id="allocator-page" class="page-section">
+  <div class="allocator-header">
+    <div>
+      <h2>BTC Allocation Calculator</h2>
+      <div class="table-meta">High-to-low allocation ladder using the saved previous allocation total.</div>
+    </div>
+    <div class="allocator-memory">
+      <span>Saved Previous Allocation</span>
+      <strong id="btc-alloc-memory">0</strong>
+    </div>
+  </div>
+
+  <div class="allocator-grid">
+    <section class="card allocator-input-panel">
+      <h3>Inputs</h3>
+      <div class="allocator-form-grid">
+        <div class="input-group">
+          <label for="btc-alloc-high">Bitcoin High Price</label>
+          <input type="number" id="btc-alloc-high" min="0" step="0.01" inputmode="decimal" placeholder="66992" data-cf-keydown="if(event.key==='Enter'){calculateBtcAllocation()}">
+        </div>
+        <div class="input-group">
+          <label for="btc-alloc-low">Bitcoin Low / Current Price</label>
+          <input type="number" id="btc-alloc-low" min="0" step="0.01" inputmode="decimal" placeholder="66560" data-cf-keydown="if(event.key==='Enter'){calculateBtcAllocation()}">
+        </div>
+      </div>
+      <div class="allocator-actions">
+        <button class="btn btn-primary" data-cf-click="calculateBtcAllocation()">Calculate</button>
+        <button class="btn btn-outline" data-cf-click="resetBtcAllocation()">Reset</button>
+      </div>
+      <div class="allocator-error" id="btc-alloc-error" role="alert" aria-live="polite"></div>
+    </section>
+
+    <section class="card allocator-result-panel">
+      <h3>Current Result</h3>
+      <div class="table-surface">
+        <div class="table-scroll">
+          <table class="trade-table allocator-result-table">
+            <thead>
+              <tr>
+                <th class="num">Fall %</th>
+                <th class="num">Total Allocation Required</th>
+                <th class="num">Previous Allocation</th>
+                <th class="num">Fresh Allocation</th>
+                <th class="num">20%</th>
+                <th class="num">30%</th>
+                <th class="num">50%</th>
+              </tr>
+            </thead>
+            <tbody id="btc-alloc-result-body">
+              <tr><td colspan="7" class="cf-table-empty-cell">No calculation yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card table-panel allocator-history-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Calculation History</h3>
+        <div class="table-meta">Each row records the previous allocation used before the new total was saved.</div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table allocator-history-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th class="num">High</th>
+              <th class="num">Low / Current</th>
+              <th class="num">Fall %</th>
+              <th class="num">Total Required</th>
+              <th class="num">Previous</th>
+              <th class="num">Fresh</th>
+              <th class="num">20%</th>
+              <th class="num">30%</th>
+              <th class="num">50%</th>
+            </tr>
+          </thead>
+          <tbody id="btc-alloc-history-body">
+            <tr><td colspan="10" class="cf-table-empty-cell">No allocation history yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 </div>
 
 <!-- Deploy Modal -->
@@ -1741,7 +1838,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260605-2" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260605-2" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260616-1" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260616-1" defer></script>
 </body>
 </html>

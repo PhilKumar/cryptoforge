@@ -872,6 +872,7 @@ function showPage(pageId, btn, options) {
   if (pageId === 'results-page' && !_backtestRunning) { loadRuns(); fetchStrategies(); }
   if (pageId === 'live-page') startLiveMonitor();
   if (pageId === 'portfolio-page') { loadBrokerSettings(true); refreshBrokerState(true); loadPortfolioData(); }
+  if (pageId === 'allocator-page') renderBtcAllocationCalculator();
   if (pageId === 'scalp-page') cfInitScalpPage();
   // Stop live monitor when leaving live page
   if (pageId !== 'live-page') stopLiveMonitor();
@@ -5496,6 +5497,178 @@ function showPortfolioMonthDetails(key) {
   cfModal('Monthly P&L Detail', { html: _portfolioPeriodDetailHtml(key, data || {}) }, '₹', [{label:'OK', cls:'btn-primary'}]);
 }
 
+// ── BTC Allocation Calculator ─────────────────────────────
+const BTC_ALLOCATION_STORAGE_KEY = 'cf_btc_allocation_state_v1';
+let _btcAllocationState = {
+  previousTotalAllocation: 0,
+  lastResult: null,
+  history: []
+};
+
+function _btcAllocationDefaultState() {
+  return {
+    previousTotalAllocation: 0,
+    lastResult: null,
+    history: []
+  };
+}
+
+function _btcAllocationLoadState() {
+  try {
+    var raw = localStorage.getItem(BTC_ALLOCATION_STORAGE_KEY);
+    if (!raw) {
+      _btcAllocationState = _btcAllocationDefaultState();
+      return;
+    }
+    var parsed = JSON.parse(raw);
+    _btcAllocationState = {
+      previousTotalAllocation: Math.max(0, Math.round(Number(parsed.previousTotalAllocation) || 0)),
+      lastResult: parsed.lastResult && typeof parsed.lastResult === 'object' ? parsed.lastResult : null,
+      history: Array.isArray(parsed.history) ? parsed.history.slice(0, 100) : []
+    };
+  } catch (error) {
+    _btcAllocationState = _btcAllocationDefaultState();
+  }
+}
+
+function _btcAllocationSaveState() {
+  try {
+    localStorage.setItem(BTC_ALLOCATION_STORAGE_KEY, JSON.stringify(_btcAllocationState));
+  } catch (error) {
+    console.warn('Unable to save BTC allocation state:', error);
+  }
+}
+
+function _btcAllocationNumber(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return NaN;
+  return Number(String(value).replace(/,/g, '').trim());
+}
+
+function _btcAllocationFormatWhole(value) {
+  var num = Math.round(Number(value) || 0);
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+}
+
+function _btcAllocationFormatPrice(value) {
+  var num = Number(value) || 0;
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(num);
+}
+
+function _btcAllocationFormatPercent(value) {
+  return (Number(value) || 0).toFixed(2) + '%';
+}
+
+function _btcAllocationFormatTime(value) {
+  var date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) date = new Date();
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function _btcAllocationResultCells(row) {
+  return ''
+    + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(row.fallPercent) + '</span></td>'
+    + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatWhole(row.totalAllocationRequired) + '</span></td>'
+    + '<td class="num"><span class="allocator-value-muted">' + _btcAllocationFormatWhole(row.previousAllocation) + '</span></td>'
+    + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatWhole(row.freshAllocation) + '</span></td>'
+    + '<td class="num">' + _btcAllocationFormatWhole(row.split20) + '</td>'
+    + '<td class="num">' + _btcAllocationFormatWhole(row.split30) + '</td>'
+    + '<td class="num">' + _btcAllocationFormatWhole(row.split50) + '</td>';
+}
+
+function renderBtcAllocationCalculator() {
+  var memoryEl = document.getElementById('btc-alloc-memory');
+  if (memoryEl) memoryEl.textContent = _btcAllocationFormatWhole(_btcAllocationState.previousTotalAllocation);
+
+  var resultBody = document.getElementById('btc-alloc-result-body');
+  if (resultBody) {
+    if (_btcAllocationState.lastResult) {
+      resultBody.innerHTML = '<tr>' + _btcAllocationResultCells(_btcAllocationState.lastResult) + '</tr>';
+    } else {
+      resultBody.innerHTML = '<tr><td colspan="7" class="cf-table-empty-cell">No calculation yet</td></tr>';
+    }
+  }
+
+  var historyBody = document.getElementById('btc-alloc-history-body');
+  if (!historyBody) return;
+  var rows = Array.isArray(_btcAllocationState.history) ? _btcAllocationState.history : [];
+  if (!rows.length) {
+    historyBody.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">No allocation history yet</td></tr>';
+    return;
+  }
+  historyBody.innerHTML = rows.map(function(row) {
+    return '<tr>'
+      + '<td><div class="table-datetime"><div class="table-datetime-date">' + _escapeHtml(_btcAllocationFormatTime(row.createdAt)) + '</div><div class="table-note">calculation</div></div></td>'
+      + '<td class="num">' + _btcAllocationFormatPrice(row.bitcoinHigh) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatPrice(row.bitcoinLow) + '</td>'
+      + _btcAllocationResultCells(row)
+      + '</tr>';
+  }).join('');
+}
+
+function _btcAllocationError(message) {
+  var errorEl = document.getElementById('btc-alloc-error');
+  if (errorEl) errorEl.textContent = message || '';
+}
+
+function _btcAllocationValidate(high, low) {
+  if (!Number.isFinite(high)) return 'Bitcoin High Price must be a valid number.';
+  if (!Number.isFinite(low)) return 'Bitcoin Low / Current Price must be a valid number.';
+  if (high <= 0) return 'Bitcoin High Price must be greater than 0.';
+  if (low <= 0) return 'Bitcoin Low / Current Price must be greater than 0.';
+  if (low > high) return 'Bitcoin Low / Current Price cannot be greater than Bitcoin High Price.';
+  return '';
+}
+
+function calculateBtcAllocation() {
+  var highEl = document.getElementById('btc-alloc-high');
+  var lowEl = document.getElementById('btc-alloc-low');
+  var high = _btcAllocationNumber(highEl ? highEl.value : '');
+  var low = _btcAllocationNumber(lowEl ? lowEl.value : '');
+  var error = _btcAllocationValidate(high, low);
+  if (error) {
+    _btcAllocationError(error);
+    return;
+  }
+
+  var previousAllocation = Math.max(0, Math.round(Number(_btcAllocationState.previousTotalAllocation) || 0));
+  var fallPercent = Math.round((((high - low) / high) * 100) * 100) / 100;
+  var totalAllocationRequired = Math.round(fallPercent * 1000);
+  var freshAllocation = Math.max(0, totalAllocationRequired - previousAllocation);
+  var row = {
+    id: 'btc-alloc-' + Date.now(),
+    createdAt: new Date().toISOString(),
+    bitcoinHigh: high,
+    bitcoinLow: low,
+    fallPercent: fallPercent,
+    totalAllocationRequired: totalAllocationRequired,
+    previousAllocation: previousAllocation,
+    freshAllocation: freshAllocation,
+    split20: Math.round(freshAllocation * 0.20),
+    split30: Math.round(freshAllocation * 0.30),
+    split50: Math.round(freshAllocation * 0.50)
+  };
+
+  _btcAllocationState.previousTotalAllocation = Math.max(previousAllocation, totalAllocationRequired);
+  _btcAllocationState.lastResult = row;
+  _btcAllocationState.history = [row].concat(_btcAllocationState.history || []).slice(0, 100);
+  _btcAllocationSaveState();
+  _btcAllocationError('');
+  renderBtcAllocationCalculator();
+}
+
+function resetBtcAllocation() {
+  _btcAllocationState = _btcAllocationDefaultState();
+  _btcAllocationSaveState();
+  _btcAllocationError('');
+  renderBtcAllocationCalculator();
+  if (typeof cfToast === 'function') cfToast('BTC allocation memory reset', 'success');
+}
+
 // ── Init ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   _cfPageHistoryDepth = Math.max(0, Number(window.history && window.history.state && window.history.state.cfDepth) || 0);
@@ -5504,6 +5677,8 @@ document.addEventListener('DOMContentLoaded', () => {
   renderLeverage(leverageOptions, selectedLeverage);
   renderBuilderDeck();
   renderTemplates();
+  _btcAllocationLoadState();
+  renderBtcAllocationCalculator();
   loadBrokerSettings(true);
   refreshBrokerState(true);
   loadDashboard();
