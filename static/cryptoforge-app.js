@@ -5549,12 +5549,26 @@ function _btcAllocationNumber(value) {
 
 function _btcAllocationFormatWhole(value) {
   var num = Math.round(Number(value) || 0);
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(num);
 }
 
-function _btcAllocationFormatPrice(value) {
+function _btcAllocationFormatRupees(value, maxFractionDigits) {
   var num = Number(value) || 0;
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(num);
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFractionDigits === undefined ? 0 : maxFractionDigits
+  }).format(num);
+}
+
+function _btcAllocationFormatRupeesWhole(value) {
+  return _btcAllocationFormatRupees(Math.round(Number(value) || 0), 0);
+}
+
+function _btcAllocationFormatRupeesPrice(value) {
+  var num = Number(value) || 0;
+  return _btcAllocationFormatRupees(num, 2);
 }
 
 function _btcAllocationFormatPercent(value) {
@@ -5579,17 +5593,27 @@ function _btcAllocationFormatTime(value) {
 function _btcAllocationResultCells(row) {
   return ''
     + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(row.fallPercent) + '</span></td>'
-    + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatWhole(row.totalAllocationRequired) + '</span></td>'
-    + '<td class="num"><span class="allocator-value-muted">' + _btcAllocationFormatWhole(row.previousAllocation) + '</span></td>'
-    + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatWhole(row.freshAllocation) + '</span></td>'
-    + '<td class="num">' + _btcAllocationFormatWhole(row.split20) + '</td>'
-    + '<td class="num">' + _btcAllocationFormatWhole(row.split30) + '</td>'
-    + '<td class="num">' + _btcAllocationFormatWhole(row.split50) + '</td>';
+    + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.totalAllocationRequired) + '</span></td>'
+    + '<td class="num"><span class="allocator-value-muted">' + _btcAllocationFormatRupeesWhole(row.previousAllocation) + '</span></td>'
+    + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatRupeesWhole(row.freshAllocation) + '</span></td>'
+    + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.split20) + '</td>'
+    + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.split30) + '</td>'
+    + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.split50) + '</td>';
+}
+
+function _btcAllocationSplitConfig(splitKey) {
+  var key = splitKey || 'split20';
+  var configs = {
+    split20: { key: 'split20', pct: '20%', fib: 'Fib 2', source: 'allocation20' },
+    split30: { key: 'split30', pct: '30%', fib: 'Fib 4', source: 'allocation30' },
+    split50: { key: 'split50', pct: '50%', fib: 'Fib 8', source: 'allocation50' }
+  };
+  return configs[key] || configs.split20;
 }
 
 function renderBtcAllocationCalculator() {
   var memoryEl = document.getElementById('btc-alloc-memory');
-  if (memoryEl) memoryEl.textContent = _btcAllocationFormatWhole(_btcAllocationState.previousTotalAllocation);
+  if (memoryEl) memoryEl.textContent = _btcAllocationFormatRupeesWhole(_btcAllocationState.previousTotalAllocation);
 
   var resultBody = document.getElementById('btc-alloc-result-body');
   if (resultBody) {
@@ -5600,14 +5624,21 @@ function renderBtcAllocationCalculator() {
     }
   }
 
-  var trackBtn = document.getElementById('btc-alloc-track-latest');
+  var trackBtn20 = document.getElementById('btc-alloc-track-latest-20');
+  var trackBtn30 = document.getElementById('btc-alloc-track-latest-30');
+  var trackBtn50 = document.getElementById('btc-alloc-track-latest-50');
   var trackHint = document.getElementById('btc-alloc-track-hint');
   var last = _btcAllocationState.lastResult;
   var canTrack = !!(last && Number(last.split20) > 0);
-  if (trackBtn) trackBtn.disabled = !canTrack;
+  if (trackBtn20) trackBtn20.disabled = !canTrack;
+  if (trackBtn30) trackBtn30.disabled = !(last && Number(last.split30) > 0);
+  if (trackBtn50) trackBtn50.disabled = !(last && Number(last.split50) > 0);
   if (trackHint) {
     trackHint.textContent = canTrack
-      ? 'Ready: ' + _btcAllocationFormatWhole(last.split20) + ' at ' + _btcAllocationFormatPrice(last.bitcoinLow)
+      ? 'Ready: 20% ' + _btcAllocationFormatRupeesWhole(last.split20)
+        + ' | 30% ' + _btcAllocationFormatRupeesWhole(last.split30)
+        + ' | 50% ' + _btcAllocationFormatRupeesWhole(last.split50)
+        + ' at ' + _btcAllocationFormatRupeesPrice(last.bitcoinLow)
       : 'Waiting for a valid allocation';
   }
 
@@ -5620,8 +5651,8 @@ function renderBtcAllocationCalculator() {
       historyBody.innerHTML = rows.map(function(row) {
         return '<tr>'
           + '<td><div class="table-datetime"><div class="table-datetime-date">' + _escapeHtml(_btcAllocationFormatTime(row.createdAt)) + '</div><div class="table-note">calculation</div></div></td>'
-          + '<td class="num">' + _btcAllocationFormatPrice(row.bitcoinHigh) + '</td>'
-          + '<td class="num">' + _btcAllocationFormatPrice(row.bitcoinLow) + '</td>'
+          + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.bitcoinHigh) + '</td>'
+          + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.bitcoinLow) + '</td>'
           + _btcAllocationResultCells(row)
           + '</tr>';
       }).join('');
@@ -5672,13 +5703,21 @@ function _btcBuyTrackerReadForm() {
   };
 }
 
-function _btcBuyTrackerSetForm(high, buyPrice, buyingValue) {
+function _btcBuyTrackerSetForm(high, buyPrice, buyingValue, splitKey) {
   var highEl = document.getElementById('btc-buy-high');
   var buyPriceEl = document.getElementById('btc-buy-price');
   var buyingValueEl = document.getElementById('btc-buy-value');
   if (highEl) highEl.value = Number.isFinite(high) ? String(high) : '';
   if (buyPriceEl) buyPriceEl.value = Number.isFinite(buyPrice) ? String(buyPrice) : '';
   if (buyingValueEl) buyingValueEl.value = Number.isFinite(buyingValue) ? String(Math.round(buyingValue)) : '';
+  [highEl, buyPriceEl, buyingValueEl].forEach(function(el) {
+    if (!el) return;
+    if (Number.isFinite(high) && Number.isFinite(buyPrice) && Number.isFinite(buyingValue)) {
+      el.dataset.btcAllocationFill = splitKey || 'manual';
+    } else {
+      delete el.dataset.btcAllocationFill;
+    }
+  });
 }
 
 function _btcBuyTrackerComputedRows() {
@@ -5722,10 +5761,10 @@ function renderBtcBuyTracker() {
   var avgEl = document.getElementById('btc-buy-average-price');
   var avgFundEl = document.getElementById('btc-buy-average-fund');
   if (rowsEl) rowsEl.textContent = _btcAllocationFormatWhole(computedRows.length);
-  if (valueEl) valueEl.textContent = _btcAllocationFormatWhole(latest ? latest.totalBuyingValue : 0);
+  if (valueEl) valueEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.totalBuyingValue : 0);
   if (qtyEl) qtyEl.textContent = _btcAllocationFormatQty(latest ? latest.totalBtcQty : 0);
-  if (avgEl) avgEl.textContent = _btcAllocationFormatWhole(latest ? latest.averageBuyPrice : 0);
-  if (avgFundEl) avgFundEl.textContent = _btcAllocationFormatWhole(latest ? latest.averageFund : 0);
+  if (avgEl) avgEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.averageBuyPrice : 0);
+  if (avgFundEl) avgFundEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.averageFund : 0);
 
   var body = document.getElementById('btc-buy-tracker-body');
   if (!body) return;
@@ -5734,19 +5773,24 @@ function renderBtcBuyTracker() {
     return;
   }
   body.innerHTML = computedRows.map(function(row) {
-    var sourceNote = row.source === 'allocation20' ? '<div class="table-note">allocation 20%</div>' : '';
+    var sourceLabels = {
+      allocation20: 'allocation 20%',
+      allocation30: 'allocation 30%',
+      allocation50: 'allocation 50%'
+    };
+    var sourceNote = sourceLabels[row.source] ? '<div class="table-note">' + sourceLabels[row.source] + '</div>' : '';
     return '<tr>'
-      + '<td class="num">' + _btcAllocationFormatPrice(row.btcHigh) + sourceNote + '</td>'
-      + '<td class="num">' + _btcAllocationFormatPrice(row.buyPrice) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatWhole(row.buyingValue) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.btcHigh) + sourceNote + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.buyPrice) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.buyingValue) + '</td>'
       + '<td class="num">' + _btcAllocationFormatQty(row.btcQty) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatWhole(row.totalBuyingValue) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.totalBuyingValue) + '</td>'
       + '<td class="num">' + _btcAllocationFormatQty(row.totalBtcQty) + '</td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatWhole(row.averageBuyPrice) + '</span></td>'
-      + '<td class="num">' + _btcAllocationFormatPrice(row.currentBtcPrice) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatWhole(row.twentyFivePercentLevel) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatPrice(row.addPrice) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatWhole(row.averageFund) + '</td>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.averageBuyPrice) + '</span></td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.currentBtcPrice) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.twentyFivePercentLevel) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.addPrice) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.averageFund) + '</td>'
       + '<td class="center"><button class="btn btn-outline btn-sm allocator-row-delete" data-cf-click="deleteBtcBuyTrackerRow(\'' + _escapeHtml(row.id) + '\')">Delete</button></td>'
       + '</tr>';
   }).join('');
@@ -5766,7 +5810,7 @@ function _btcBuyTrackerAddRow(row, options) {
   if (row.sourceAllocationId && _btcAllocationState.buyRows.some(function(existing) {
     return existing.sourceAllocationId === row.sourceAllocationId && existing.source === row.source;
   })) {
-    _btcBuyTrackerError('This latest 20% allocation is already in the buy tracker.');
+    _btcBuyTrackerError('This latest allocation split is already in the buy tracker.');
     return false;
   }
   _btcAllocationState.buyRows.push({
@@ -5796,37 +5840,39 @@ function addBtcBuyTrackerRow() {
   if (added) _btcBuyTrackerSetForm(NaN, NaN, NaN);
 }
 
-function prefillLatestBtcAllocationBuy() {
+function prefillLatestBtcAllocationBuy(splitKey) {
   var last = _btcAllocationState.lastResult;
+  var config = _btcAllocationSplitConfig(splitKey);
   if (!last) {
     _btcBuyTrackerError('Calculate a BTC allocation before filling the tracker.');
     return;
   }
-  var buyingValue = Math.round(Number(last.split20) || 0);
+  var buyingValue = Math.round(Number(last[config.key]) || 0);
   if (buyingValue <= 0) {
-    _btcBuyTrackerError('Latest 20% allocation is 0. Calculate a larger fresh allocation before filling the tracker.');
+    _btcBuyTrackerError('Latest ' + config.pct + ' allocation is 0. Calculate a larger fresh allocation before filling the tracker.');
     return;
   }
-  _btcBuyTrackerSetForm(Number(last.bitcoinHigh), Number(last.bitcoinLow), buyingValue);
+  _btcBuyTrackerSetForm(Number(last.bitcoinHigh), Number(last.bitcoinLow), buyingValue, config.key);
   _btcBuyTrackerError('');
 }
 
-function addLatestBtcAllocationToBuyTracker() {
+function addLatestBtcAllocationToBuyTracker(splitKey) {
   var last = _btcAllocationState.lastResult;
+  var config = _btcAllocationSplitConfig(splitKey);
   if (!last) {
-    _btcBuyTrackerError('Calculate a BTC allocation before tracking the latest 20%.');
+    _btcBuyTrackerError('Calculate a BTC allocation before tracking the latest split.');
     return;
   }
-  var buyingValue = Math.round(Number(last.split20) || 0);
+  var buyingValue = Math.round(Number(last[config.key]) || 0);
   if (buyingValue <= 0) {
-    _btcBuyTrackerError('Latest 20% allocation is 0. Nothing was added to the tracker.');
+    _btcBuyTrackerError('Latest ' + config.pct + ' allocation is 0. Nothing was added to the tracker.');
     return;
   }
   _btcBuyTrackerAddRow({
     btcHigh: Number(last.bitcoinHigh),
     buyPrice: Number(last.bitcoinLow),
     buyingValue: buyingValue,
-    source: 'allocation20',
+    source: config.source,
     sourceAllocationId: last.id || ''
   });
 }
@@ -5846,6 +5892,14 @@ function resetBtcBuyTracker() {
   _btcBuyTrackerError('');
   renderBtcAllocationCalculator();
   if (typeof cfToast === 'function') cfToast('BTC buy tracker reset', 'success');
+}
+
+function clearBtcAllocationHistory() {
+  _btcAllocationState.history = [];
+  _btcAllocationSaveState();
+  _btcAllocationError('');
+  renderBtcAllocationCalculator();
+  if (typeof cfToast === 'function') cfToast('BTC calculation history cleared', 'success');
 }
 
 function calculateBtcAllocation() {
@@ -5882,6 +5936,7 @@ function calculateBtcAllocation() {
   _btcAllocationState.history = [row].concat(_btcAllocationState.history || []).slice(0, 100);
   _btcAllocationSaveState();
   _btcAllocationError('');
+  if (row.split20 > 0) prefillLatestBtcAllocationBuy('split20');
   renderBtcAllocationCalculator();
 }
 

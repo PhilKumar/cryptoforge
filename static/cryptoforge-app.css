@@ -1045,6 +1045,13 @@
     font-size: 11px;
     font-weight: 700;
   }
+  .allocator-history-toolbar {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .allocator-history-toolbar .btn {
+    flex: 0 0 auto;
+  }
   .allocator-history-panel {
     margin-top: 14px;
   }
@@ -1088,8 +1095,8 @@
   }
   .allocator-buy-form {
     display: grid;
-    grid-template-columns: repeat(3, minmax(170px, 1fr)) minmax(280px, auto);
-    gap: 10px;
+    grid-template-columns: repeat(3, minmax(170px, 1fr));
+    gap: 10px 12px;
     align-items: end;
     margin: 14px 0 4px;
   }
@@ -1097,10 +1104,15 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    grid-column: 1 / -1;
+  }
+  .allocator-buy-actions .btn {
+    min-width: 110px;
+    justify-content: center;
   }
   .allocator-buy-table {
-    min-width: 1500px;
+    min-width: 1620px;
   }
   .allocator-row-delete {
     min-width: 70px;
@@ -1135,7 +1147,6 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
     .allocator-buy-actions {
-      grid-column: 1 / -1;
       justify-content: flex-start;
     }
   }
@@ -1169,12 +1180,19 @@
     }
     .allocator-buy-actions {
       display: grid;
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .allocator-buy-actions .btn,
     .allocator-track-actions .btn {
       justify-content: center;
       width: 100%;
+    }
+    .allocator-history-toolbar {
+      display: grid;
+    }
+    .allocator-history-toolbar .btn {
+      width: 100%;
+      justify-content: center;
     }
   }
   .builder-insight-grid {
