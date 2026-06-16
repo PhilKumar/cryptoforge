@@ -391,9 +391,9 @@
                 <th class="num">Total Allocation Required</th>
                 <th class="num">Previous Allocation</th>
                 <th class="num">Fresh Allocation</th>
-                <th class="num">20%</th>
-                <th class="num">30%</th>
-                <th class="num">50%</th>
+                <th class="num">Fib 2 / 20%</th>
+                <th class="num">Fib 4 / 30%</th>
+                <th class="num">Fib 8 / 50%</th>
               </tr>
             </thead>
             <tbody id="btc-alloc-result-body">
@@ -401,6 +401,10 @@
             </tbody>
           </table>
         </div>
+      </div>
+      <div class="allocator-track-actions">
+        <button class="btn btn-outline btn-sm" id="btc-alloc-track-latest" data-cf-click="addLatestBtcAllocationToBuyTracker()">Track Latest 20%</button>
+        <span id="btc-alloc-track-hint">Waiting for a valid allocation</span>
       </div>
     </section>
   </div>
@@ -424,13 +428,76 @@
               <th class="num">Total Required</th>
               <th class="num">Previous</th>
               <th class="num">Fresh</th>
-              <th class="num">20%</th>
-              <th class="num">30%</th>
-              <th class="num">50%</th>
+              <th class="num">Fib 2 / 20%</th>
+              <th class="num">Fib 4 / 30%</th>
+              <th class="num">Fib 8 / 50%</th>
             </tr>
           </thead>
           <tbody id="btc-alloc-history-body">
             <tr><td colspan="10" class="cf-table-empty-cell">No allocation history yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card table-panel allocator-buy-panel">
+    <div class="table-toolbar allocator-buy-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">BTC Buy Tracker</h3>
+        <div class="table-meta">Tracks filled or planned BTC buys using weighted average price and cumulative quantity.</div>
+      </div>
+      <div class="allocator-buy-summary">
+        <div><span>Rows</span><strong id="btc-buy-total-rows">0</strong></div>
+        <div><span>Total Value</span><strong id="btc-buy-total-value">0</strong></div>
+        <div><span>Total BTC</span><strong id="btc-buy-total-qty">0.00000000</strong></div>
+        <div><span>Avg Buy</span><strong id="btc-buy-average-price">0</strong></div>
+        <div><span>Avg Fund</span><strong id="btc-buy-average-fund">0</strong></div>
+      </div>
+    </div>
+
+    <div class="allocator-buy-form">
+      <div class="input-group">
+        <label for="btc-buy-high">BTC High Price</label>
+        <input type="number" id="btc-buy-high" min="0" step="0.01" inputmode="decimal" placeholder="66992" data-cf-keydown="if(event.key==='Enter'){addBtcBuyTrackerRow()}">
+      </div>
+      <div class="input-group">
+        <label for="btc-buy-price">Buy Price</label>
+        <input type="number" id="btc-buy-price" min="0" step="0.01" inputmode="decimal" placeholder="66560" data-cf-keydown="if(event.key==='Enter'){addBtcBuyTrackerRow()}">
+      </div>
+      <div class="input-group">
+        <label for="btc-buy-value">Buying Value</label>
+        <input type="number" id="btc-buy-value" min="0" step="1" inputmode="decimal" placeholder="128" data-cf-keydown="if(event.key==='Enter'){addBtcBuyTrackerRow()}">
+      </div>
+      <div class="allocator-buy-actions">
+        <button class="btn btn-primary" data-cf-click="addBtcBuyTrackerRow()">Add Row</button>
+        <button class="btn btn-outline" data-cf-click="prefillLatestBtcAllocationBuy()">Fill Latest 20%</button>
+        <button class="btn btn-outline" data-cf-click="resetBtcBuyTracker()">Reset Tracker</button>
+      </div>
+    </div>
+    <div class="allocator-error" id="btc-buy-error" role="alert" aria-live="polite"></div>
+
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table allocator-buy-table">
+          <thead>
+            <tr>
+              <th class="num">BTC High</th>
+              <th class="num">Buy Price</th>
+              <th class="num">Buying Value</th>
+              <th class="num">BTC Qty</th>
+              <th class="num">Total Buying Value</th>
+              <th class="num">Total BTC Qty</th>
+              <th class="num">Average Buy Price</th>
+              <th class="num">Current BTC / Underlying Price</th>
+              <th class="num">25% High to Average</th>
+              <th class="num">Add Price</th>
+              <th class="num">Average Fund</th>
+              <th class="center">Action</th>
+            </tr>
+          </thead>
+          <tbody id="btc-buy-tracker-body">
+            <tr><td colspan="12" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>
           </tbody>
         </table>
       </div>

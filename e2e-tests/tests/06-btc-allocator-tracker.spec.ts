@@ -1,0 +1,71 @@
+import { expect, Page, test } from '@playwright/test';
+
+const PIN = process.env.E2E_PIN || '123456';
+
+async function login(page: Page) {
+  await page.goto('/');
+  for (const digit of PIN.split('')) {
+    await page.click(`button.key[data-val="${digit}"]`);
+  }
+  await page.waitForSelector('.nav-tab', { timeout: 10_000 });
+}
+
+async function addBuyRow(page: Page, high: string, buyPrice: string, buyingValue: string) {
+  await page.fill('#btc-buy-high', high);
+  await page.fill('#btc-buy-price', buyPrice);
+  await page.fill('#btc-buy-value', buyingValue);
+  await page.click('.allocator-buy-actions button:has-text("Add Row")');
+}
+
+test.describe('BTC Allocator And Buy Tracker', () => {
+  test('latest 20% allocation seeds buy tracker and keeps weighted totals correct', async ({ page }) => {
+    test.setTimeout(60_000);
+    const pageErrors: string[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+
+    await login(page);
+    await page.click('#nav-allocator');
+    await expect(page.locator('#allocator-page')).toHaveClass(/active-page/);
+
+    await page.fill('#btc-alloc-high', '66992');
+    await page.fill('#btc-alloc-low', '66560');
+    await page.click('.allocator-input-panel button:has-text("Calculate")');
+
+    await expect(page.locator('#btc-alloc-result-body')).toContainText('0.64%');
+    await expect(page.locator('#btc-alloc-result-body')).toContainText('640');
+    await expect(page.locator('#btc-alloc-result-body')).toContainText('128');
+    await expect(page.locator('#btc-alloc-track-hint')).toContainText('Ready: 128');
+
+    await page.click('#btc-alloc-track-latest');
+    await expect(page.locator('#btc-buy-tracker-body tr')).toHaveCount(1);
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('0.00192308');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('66,884');
+
+    await addBuyRow(page, '66992', '66474', '26');
+    await addBuyRow(page, '66992', '66368', '32');
+
+    await expect(page.locator('#btc-buy-tracker-body tr')).toHaveCount(3);
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('0.00231421');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('66,545');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('0.00279637');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('66,515');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('66,873');
+    await expect(page.locator('#btc-buy-total-value')).toHaveText('186');
+    await expect(page.locator('#btc-buy-total-qty')).toHaveText('0.00279637');
+    await expect(page.locator('#btc-buy-average-price')).toHaveText('66,515');
+    await expect(page.locator('#btc-buy-average-fund')).toHaveText('62');
+
+    await addBuyRow(page, '100', '101', '10');
+    await expect(page.locator('#btc-buy-error')).toHaveText('Buy Price cannot be greater than BTC High Price.');
+    await expect(page.locator('#btc-buy-tracker-body tr')).toHaveCount(3);
+
+    await page.locator('#btc-buy-tracker-body button:has-text("Delete")').nth(1).click();
+    await expect(page.locator('#btc-buy-tracker-body tr')).toHaveCount(2);
+
+    await page.click('.allocator-buy-actions button:has-text("Reset Tracker")');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('No BTC buy rows yet');
+    await expect(page.locator('#btc-buy-total-value')).toHaveText('0');
+
+    expect(pageErrors).toEqual([]);
+  });
+});

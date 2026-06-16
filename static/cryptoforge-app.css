@@ -1004,7 +1004,8 @@
   }
   .allocator-input-panel,
   .allocator-result-panel,
-  .allocator-history-panel {
+  .allocator-history-panel,
+  .allocator-buy-panel {
     padding: 16px;
   }
   .allocator-input-panel h3,
@@ -1032,11 +1033,77 @@
   .allocator-result-table {
     min-width: 760px;
   }
+  .allocator-track-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .allocator-track-actions span {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
   .allocator-history-panel {
     margin-top: 14px;
   }
   .allocator-history-table {
     min-width: 1040px;
+  }
+  .allocator-buy-panel {
+    margin-top: 14px;
+  }
+  .allocator-buy-toolbar {
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .allocator-buy-summary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(92px, 1fr));
+    gap: 8px;
+    min-width: min(100%, 610px);
+  }
+  .allocator-buy-summary div {
+    padding: 9px 10px;
+    border: 1px solid rgba(118,138,176,0.16);
+    border-radius: 10px;
+    background: rgba(12,20,36,0.68);
+  }
+  .allocator-buy-summary span {
+    display: block;
+    color: var(--muted);
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .allocator-buy-summary strong {
+    display: block;
+    margin-top: 4px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1.2;
+  }
+  .allocator-buy-form {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(170px, 1fr)) minmax(280px, auto);
+    gap: 10px;
+    align-items: end;
+    margin: 14px 0 4px;
+  }
+  .allocator-buy-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .allocator-buy-table {
+    min-width: 1500px;
+  }
+  .allocator-row-delete {
+    min-width: 70px;
   }
   .allocator-value-primary {
     color: var(--text);
@@ -1056,6 +1123,20 @@
     }
     .allocator-grid {
       grid-template-columns: 1fr;
+    }
+    .allocator-buy-toolbar {
+      display: grid;
+    }
+    .allocator-buy-summary {
+      width: 100%;
+      min-width: 0;
+    }
+    .allocator-buy-form {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .allocator-buy-actions {
+      grid-column: 1 / -1;
+      justify-content: flex-start;
     }
   }
   @media (max-width: 760px) {
@@ -1079,6 +1160,21 @@
     .allocator-actions .btn {
       flex: 1 1 140px;
       justify-content: center;
+    }
+    .allocator-buy-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .allocator-buy-form {
+      grid-template-columns: 1fr;
+    }
+    .allocator-buy-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+    .allocator-buy-actions .btn,
+    .allocator-track-actions .btn {
+      justify-content: center;
+      width: 100%;
     }
   }
   .builder-insight-grid {
