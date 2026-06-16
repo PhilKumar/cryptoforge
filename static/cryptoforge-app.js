@@ -5681,38 +5681,31 @@ function _btcAllocationValidate(high, low) {
   return '';
 }
 
-function _btcBuyTrackerValidate(high, buyPrice, buyingValue) {
-  if (!Number.isFinite(high)) return 'BTC High Price must be a valid number.';
+function _btcBuyTrackerValidate(buyPrice, buyAmount) {
   if (!Number.isFinite(buyPrice)) return 'Buy Price must be a valid number.';
-  if (!Number.isFinite(buyingValue)) return 'Buying Value must be a valid number.';
-  if (high <= 0) return 'BTC High Price must be greater than 0.';
+  if (!Number.isFinite(buyAmount)) return 'Buy Amount must be a valid number.';
   if (buyPrice <= 0) return 'Buy Price must be greater than 0.';
-  if (buyingValue <= 0) return 'Buying Value must be greater than 0.';
-  if (buyPrice > high) return 'Buy Price cannot be greater than BTC High Price.';
+  if (buyAmount <= 0) return 'Buy Amount must be greater than 0.';
   return '';
 }
 
 function _btcBuyTrackerReadForm() {
-  var highEl = document.getElementById('btc-buy-high');
   var buyPriceEl = document.getElementById('btc-buy-price');
-  var buyingValueEl = document.getElementById('btc-buy-value');
+  var buyAmountEl = document.getElementById('btc-buy-value');
   return {
-    high: _btcAllocationNumber(highEl ? highEl.value : ''),
     buyPrice: _btcAllocationNumber(buyPriceEl ? buyPriceEl.value : ''),
-    buyingValue: _btcAllocationNumber(buyingValueEl ? buyingValueEl.value : '')
+    buyAmount: _btcAllocationNumber(buyAmountEl ? buyAmountEl.value : '')
   };
 }
 
-function _btcBuyTrackerSetForm(high, buyPrice, buyingValue, splitKey) {
-  var highEl = document.getElementById('btc-buy-high');
+function _btcBuyTrackerSetForm(buyPrice, buyAmount, splitKey) {
   var buyPriceEl = document.getElementById('btc-buy-price');
-  var buyingValueEl = document.getElementById('btc-buy-value');
-  if (highEl) highEl.value = Number.isFinite(high) ? String(high) : '';
+  var buyAmountEl = document.getElementById('btc-buy-value');
   if (buyPriceEl) buyPriceEl.value = Number.isFinite(buyPrice) ? String(buyPrice) : '';
-  if (buyingValueEl) buyingValueEl.value = Number.isFinite(buyingValue) ? String(Math.round(buyingValue)) : '';
-  [highEl, buyPriceEl, buyingValueEl].forEach(function(el) {
+  if (buyAmountEl) buyAmountEl.value = Number.isFinite(buyAmount) ? String(Math.round(buyAmount)) : '';
+  [buyPriceEl, buyAmountEl].forEach(function(el) {
     if (!el) return;
-    if (Number.isFinite(high) && Number.isFinite(buyPrice) && Number.isFinite(buyingValue)) {
+    if (Number.isFinite(buyPrice) && Number.isFinite(buyAmount)) {
       el.dataset.btcAllocationFill = splitKey || 'manual';
     } else {
       delete el.dataset.btcAllocationFill;
@@ -5722,31 +5715,23 @@ function _btcBuyTrackerSetForm(high, buyPrice, buyingValue, splitKey) {
 
 function _btcBuyTrackerComputedRows() {
   var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
-  var totalBuyingValue = 0;
-  var totalBtcQty = 0;
+  var totalBuyAmount = 0;
+  var weightedPriceAmount = 0;
   return rows.map(function(row, index) {
-    var btcHigh = Number(row.btcHigh) || 0;
     var buyPrice = Number(row.buyPrice) || 0;
-    var buyingValue = Number(row.buyingValue) || 0;
-    var btcQty = buyPrice > 0 ? (buyingValue / buyPrice) : 0;
-    totalBuyingValue += buyingValue;
-    totalBtcQty += btcQty;
-    var averageBuyPrice = totalBtcQty > 0 ? (totalBuyingValue / totalBtcQty) : 0;
+    var buyAmount = Number(row.buyAmount !== undefined ? row.buyAmount : row.buyingValue) || 0;
+    totalBuyAmount += buyAmount;
+    weightedPriceAmount += buyPrice * buyAmount;
+    var averageBuyPrice = totalBuyAmount > 0 ? (weightedPriceAmount / totalBuyAmount) : 0;
     var roundedAverageBuyPrice = Math.round(averageBuyPrice);
     return {
       id: row.id,
       index: index + 1,
-      btcHigh: btcHigh,
       buyPrice: buyPrice,
-      buyingValue: buyingValue,
-      btcQty: btcQty,
-      totalBuyingValue: totalBuyingValue,
-      totalBtcQty: totalBtcQty,
+      buyAmount: buyAmount,
+      totalBuyAmount: totalBuyAmount,
       averageBuyPrice: roundedAverageBuyPrice,
-      currentBtcPrice: buyPrice,
-      twentyFivePercentLevel: Math.round(btcHigh - ((btcHigh - roundedAverageBuyPrice) * 0.25)),
-      addPrice: buyPrice,
-      averageFund: Math.round(totalBuyingValue / (index + 1)),
+      averageBuyAmount: Math.round(totalBuyAmount / (index + 1)),
       source: row.source || 'manual'
     };
   });
@@ -5757,19 +5742,17 @@ function renderBtcBuyTracker() {
   var latest = computedRows.length ? computedRows[computedRows.length - 1] : null;
   var rowsEl = document.getElementById('btc-buy-total-rows');
   var valueEl = document.getElementById('btc-buy-total-value');
-  var qtyEl = document.getElementById('btc-buy-total-qty');
   var avgEl = document.getElementById('btc-buy-average-price');
   var avgFundEl = document.getElementById('btc-buy-average-fund');
   if (rowsEl) rowsEl.textContent = _btcAllocationFormatWhole(computedRows.length);
-  if (valueEl) valueEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.totalBuyingValue : 0);
-  if (qtyEl) qtyEl.textContent = _btcAllocationFormatQty(latest ? latest.totalBtcQty : 0);
+  if (valueEl) valueEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.totalBuyAmount : 0);
   if (avgEl) avgEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.averageBuyPrice : 0);
-  if (avgFundEl) avgFundEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.averageFund : 0);
+  if (avgFundEl) avgFundEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.averageBuyAmount : 0);
 
   var body = document.getElementById('btc-buy-tracker-body');
   if (!body) return;
   if (!computedRows.length) {
-    body.innerHTML = '<tr><td colspan="12" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
+    body.innerHTML = '<tr><td colspan="5" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
     return;
   }
   body.innerHTML = computedRows.map(function(row) {
@@ -5780,17 +5763,10 @@ function renderBtcBuyTracker() {
     };
     var sourceNote = sourceLabels[row.source] ? '<div class="table-note">' + sourceLabels[row.source] + '</div>' : '';
     return '<tr>'
-      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.btcHigh) + sourceNote + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.buyPrice) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.buyingValue) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatQty(row.btcQty) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.totalBuyingValue) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatQty(row.totalBtcQty) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.buyPrice) + sourceNote + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.buyAmount) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.averageBuyAmount) + '</td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.averageBuyPrice) + '</span></td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.currentBtcPrice) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.twentyFivePercentLevel) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.addPrice) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.averageFund) + '</td>'
       + '<td class="center"><button class="btn btn-outline btn-sm allocator-row-delete" data-cf-click="deleteBtcBuyTrackerRow(\'' + _escapeHtml(row.id) + '\')">Delete</button></td>'
       + '</tr>';
   }).join('');
@@ -5798,10 +5774,9 @@ function renderBtcBuyTracker() {
 
 function _btcBuyTrackerAddRow(row, options) {
   var opts = options || {};
-  var high = Number(row.btcHigh);
   var buyPrice = Number(row.buyPrice);
-  var buyingValue = Number(row.buyingValue);
-  var error = _btcBuyTrackerValidate(high, buyPrice, buyingValue);
+  var buyAmount = Number(row.buyAmount !== undefined ? row.buyAmount : row.buyingValue);
+  var error = _btcBuyTrackerValidate(buyPrice, buyAmount);
   if (error) {
     _btcBuyTrackerError(error);
     return false;
@@ -5816,9 +5791,8 @@ function _btcBuyTrackerAddRow(row, options) {
   _btcAllocationState.buyRows.push({
     id: 'btc-buy-' + Date.now() + '-' + Math.round(Math.random() * 100000),
     createdAt: new Date().toISOString(),
-    btcHigh: high,
     buyPrice: buyPrice,
-    buyingValue: buyingValue,
+    buyAmount: buyAmount,
     source: row.source || 'manual',
     sourceAllocationId: row.sourceAllocationId || ''
   });
@@ -5832,9 +5806,8 @@ function _btcBuyTrackerAddRow(row, options) {
 function addBtcBuyTrackerRow() {
   var form = _btcBuyTrackerReadForm();
   var added = _btcBuyTrackerAddRow({
-    btcHigh: form.high,
     buyPrice: form.buyPrice,
-    buyingValue: form.buyingValue,
+    buyAmount: form.buyAmount,
     source: 'manual'
   });
   if (added) _btcBuyTrackerSetForm(NaN, NaN, NaN);
@@ -5847,12 +5820,12 @@ function prefillLatestBtcAllocationBuy(splitKey) {
     _btcBuyTrackerError('Calculate a BTC allocation before filling the tracker.');
     return;
   }
-  var buyingValue = Math.round(Number(last[config.key]) || 0);
-  if (buyingValue <= 0) {
+  var buyAmount = Math.round(Number(last[config.key]) || 0);
+  if (buyAmount <= 0) {
     _btcBuyTrackerError('Latest ' + config.pct + ' allocation is 0. Calculate a larger fresh allocation before filling the tracker.');
     return;
   }
-  _btcBuyTrackerSetForm(Number(last.bitcoinHigh), Number(last.bitcoinLow), buyingValue, config.key);
+  _btcBuyTrackerSetForm(Number(last.bitcoinLow), buyAmount, config.key);
   _btcBuyTrackerError('');
 }
 
@@ -5863,15 +5836,14 @@ function addLatestBtcAllocationToBuyTracker(splitKey) {
     _btcBuyTrackerError('Calculate a BTC allocation before tracking the latest split.');
     return;
   }
-  var buyingValue = Math.round(Number(last[config.key]) || 0);
-  if (buyingValue <= 0) {
+  var buyAmount = Math.round(Number(last[config.key]) || 0);
+  if (buyAmount <= 0) {
     _btcBuyTrackerError('Latest ' + config.pct + ' allocation is 0. Nothing was added to the tracker.');
     return;
   }
   _btcBuyTrackerAddRow({
-    btcHigh: Number(last.bitcoinHigh),
     buyPrice: Number(last.bitcoinLow),
-    buyingValue: buyingValue,
+    buyAmount: buyAmount,
     source: config.source,
     sourceAllocationId: last.id || ''
   });

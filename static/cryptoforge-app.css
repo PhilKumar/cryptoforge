@@ -1067,9 +1067,9 @@
   }
   .allocator-buy-summary {
     display: grid;
-    grid-template-columns: repeat(5, minmax(92px, 1fr));
+    grid-template-columns: repeat(4, minmax(112px, 1fr));
     gap: 8px;
-    min-width: min(100%, 610px);
+    min-width: min(100%, 560px);
   }
   .allocator-buy-summary div {
     padding: 9px 10px;
@@ -1095,7 +1095,7 @@
   }
   .allocator-buy-form {
     display: grid;
-    grid-template-columns: repeat(3, minmax(170px, 1fr));
+    grid-template-columns: repeat(2, minmax(170px, 1fr));
     gap: 10px 12px;
     align-items: end;
     margin: 14px 0 4px;
@@ -1112,7 +1112,7 @@
     justify-content: center;
   }
   .allocator-buy-table {
-    min-width: 1620px;
+    min-width: 720px;
   }
   .allocator-row-delete {
     min-width: 70px;
@@ -1144,7 +1144,7 @@
       min-width: 0;
     }
     .allocator-buy-form {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .allocator-buy-actions {
       justify-content: flex-start;

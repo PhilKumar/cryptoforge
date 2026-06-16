@@ -448,28 +448,23 @@
     <div class="table-toolbar allocator-buy-toolbar">
       <div class="table-title-group">
         <h3 class="table-title">BTC Buy Tracker</h3>
-        <div class="table-meta">Tracks filled or planned BTC buys using weighted average price and cumulative quantity.</div>
+        <div class="table-meta">Tracks BTC buy price and rupee buy amount using the same weighted average logic as the sheet.</div>
       </div>
       <div class="allocator-buy-summary">
         <div><span>Rows</span><strong id="btc-buy-total-rows">0</strong></div>
-        <div><span>Total Value</span><strong id="btc-buy-total-value">₹0</strong></div>
-        <div><span>Total BTC</span><strong id="btc-buy-total-qty">0.00000000</strong></div>
+        <div><span>Total Buy Amount</span><strong id="btc-buy-total-value">₹0</strong></div>
         <div><span>Avg Buy</span><strong id="btc-buy-average-price">₹0</strong></div>
-        <div><span>Avg Fund</span><strong id="btc-buy-average-fund">₹0</strong></div>
+        <div><span>Avg Amount</span><strong id="btc-buy-average-fund">₹0</strong></div>
       </div>
     </div>
 
     <div class="allocator-buy-form">
       <div class="input-group">
-        <label for="btc-buy-high">BTC High Price ₹</label>
-        <input type="number" id="btc-buy-high" min="0" step="0.01" inputmode="decimal" placeholder="66992" data-cf-keydown="if(event.key==='Enter'){addBtcBuyTrackerRow()}">
-      </div>
-      <div class="input-group">
         <label for="btc-buy-price">Buy Price ₹</label>
         <input type="number" id="btc-buy-price" min="0" step="0.01" inputmode="decimal" placeholder="66560" data-cf-keydown="if(event.key==='Enter'){addBtcBuyTrackerRow()}">
       </div>
       <div class="input-group">
-        <label for="btc-buy-value">Buying Value ₹</label>
+        <label for="btc-buy-value">Buy Amount ₹</label>
         <input type="number" id="btc-buy-value" min="0" step="1" inputmode="decimal" placeholder="128" data-cf-keydown="if(event.key==='Enter'){addBtcBuyTrackerRow()}">
       </div>
       <div class="allocator-buy-actions">
@@ -487,22 +482,15 @@
         <table class="trade-table allocator-buy-table">
           <thead>
             <tr>
-              <th class="num">BTC High ₹</th>
               <th class="num">Buy Price ₹</th>
-              <th class="num">Buying Value ₹</th>
-              <th class="num">BTC Qty</th>
-              <th class="num">Total Buying Value ₹</th>
-              <th class="num">Total BTC Qty</th>
+              <th class="num">Buy Amount ₹</th>
+              <th class="num">Avg Buy Amount ₹</th>
               <th class="num">Average Buy Price ₹</th>
-              <th class="num">Current BTC / Underlying Price ₹</th>
-              <th class="num">25% High to Average ₹</th>
-              <th class="num">Add Price ₹</th>
-              <th class="num">Average Fund ₹</th>
               <th class="center">Action</th>
             </tr>
           </thead>
           <tbody id="btc-buy-tracker-body">
-            <tr><td colspan="12" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>
+            <tr><td colspan="5" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>
           </tbody>
         </table>
       </div>
