@@ -5713,17 +5713,39 @@ function _btcBuyTrackerSetForm(buyPrice, buyAmount, splitKey) {
   });
 }
 
+function _btcBuyTrackerCurrentHigh() {
+  var highEl = document.getElementById('btc-alloc-high');
+  var inputHigh = _btcAllocationNumber(highEl ? highEl.value : '');
+  if (Number.isFinite(inputHigh) && inputHigh > 0) return inputHigh;
+
+  var resultHigh = Number(_btcAllocationState.lastResult && _btcAllocationState.lastResult.bitcoinHigh);
+  if (Number.isFinite(resultHigh) && resultHigh > 0) return resultHigh;
+
+  var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var rowHigh = Number(rows[i].targetHigh !== undefined ? rows[i].targetHigh : rows[i].btcHigh);
+    if (Number.isFinite(rowHigh) && rowHigh > 0) return rowHigh;
+  }
+  return NaN;
+}
+
 function _btcBuyTrackerComputedRows() {
   var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
   var totalBuyAmount = 0;
   var weightedPriceAmount = 0;
+  var fallbackHigh = _btcBuyTrackerCurrentHigh();
   return rows.map(function(row, index) {
     var buyPrice = Number(row.buyPrice) || 0;
     var buyAmount = Number(row.buyAmount !== undefined ? row.buyAmount : row.buyingValue) || 0;
+    var targetHigh = Number(row.targetHigh !== undefined ? row.targetHigh : row.btcHigh);
+    if (!(Number.isFinite(targetHigh) && targetHigh > 0)) targetHigh = fallbackHigh;
     totalBuyAmount += buyAmount;
     weightedPriceAmount += buyPrice * buyAmount;
     var averageBuyPrice = totalBuyAmount > 0 ? (weightedPriceAmount / totalBuyAmount) : 0;
     var roundedAverageBuyPrice = Math.round(averageBuyPrice);
+    var targetPrice = Number.isFinite(targetHigh) && targetHigh > 0
+      ? Math.round(roundedAverageBuyPrice + ((targetHigh - roundedAverageBuyPrice) * 0.25))
+      : null;
     return {
       id: row.id,
       index: index + 1,
@@ -5731,6 +5753,7 @@ function _btcBuyTrackerComputedRows() {
       buyAmount: buyAmount,
       totalBuyAmount: totalBuyAmount,
       averageBuyPrice: roundedAverageBuyPrice,
+      targetPrice: targetPrice,
       averageBuyAmount: Math.round(totalBuyAmount / (index + 1)),
       source: row.source || 'manual'
     };
@@ -5752,7 +5775,7 @@ function renderBtcBuyTracker() {
   var body = document.getElementById('btc-buy-tracker-body');
   if (!body) return;
   if (!computedRows.length) {
-    body.innerHTML = '<tr><td colspan="5" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
     return;
   }
   body.innerHTML = computedRows.map(function(row) {
@@ -5767,6 +5790,7 @@ function renderBtcBuyTracker() {
       + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.buyAmount) + '</td>'
       + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.averageBuyAmount) + '</td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.averageBuyPrice) + '</span></td>'
+      + '<td class="num"><span class="allocator-value-primary">' + (row.targetPrice === null ? '-' : _btcAllocationFormatRupeesWhole(row.targetPrice)) + '</span></td>'
       + '<td class="center"><button class="btn btn-outline btn-sm allocator-row-delete" data-cf-click="deleteBtcBuyTrackerRow(\'' + _escapeHtml(row.id) + '\')">Delete</button></td>'
       + '</tr>';
   }).join('');
@@ -5793,6 +5817,7 @@ function _btcBuyTrackerAddRow(row, options) {
     createdAt: new Date().toISOString(),
     buyPrice: buyPrice,
     buyAmount: buyAmount,
+    targetHigh: Number(row.targetHigh) || _btcBuyTrackerCurrentHigh(),
     source: row.source || 'manual',
     sourceAllocationId: row.sourceAllocationId || ''
   });
@@ -5808,6 +5833,7 @@ function addBtcBuyTrackerRow() {
   var added = _btcBuyTrackerAddRow({
     buyPrice: form.buyPrice,
     buyAmount: form.buyAmount,
+    targetHigh: _btcBuyTrackerCurrentHigh(),
     source: 'manual'
   });
   if (added) _btcBuyTrackerSetForm(NaN, NaN, NaN);
@@ -5844,6 +5870,7 @@ function addLatestBtcAllocationToBuyTracker(splitKey) {
   _btcBuyTrackerAddRow({
     buyPrice: Number(last.bitcoinLow),
     buyAmount: buyAmount,
+    targetHigh: Number(last.bitcoinHigh),
     source: config.source,
     sourceAllocationId: last.id || ''
   });
