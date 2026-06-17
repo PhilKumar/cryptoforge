@@ -5507,7 +5507,8 @@ let _btcAllocationState = {
   lastResult: null,
   history: [],
   buyRows: [],
-  fibLast: null
+  fibLast: null,
+  fibLadders: []
 };
 
 function _btcAllocationDefaultState() {
@@ -5519,7 +5520,8 @@ function _btcAllocationDefaultState() {
     lastResult: null,
     history: [],
     buyRows: [],
-    fibLast: null
+    fibLast: null,
+    fibLadders: []
   };
 }
 
@@ -5591,6 +5593,13 @@ function _btcAllocationLoadState() {
     var previousHigh = Number(parsed.previousHigh);
     var previousKey = _btcAllocationHighKey(previousHigh);
     var previousTotalAllocationExact = previousKey ? (Number(previousByHigh[previousKey]) || 0) : 0;
+    var fibLadders = Array.isArray(parsed.fibLadders) ? parsed.fibLadders.slice(0, 12) : [];
+    if (!fibLadders.length && parsed.fibLast && typeof parsed.fibLast === 'object') fibLadders = [parsed.fibLast];
+    fibLadders = fibLadders.filter(function(item) { return item && typeof item === 'object'; }).map(function(item, index) {
+      if (!item.id) item.id = 'btc-fib-' + (item.createdAt || Date.now()) + '-' + index;
+      if (item.open === undefined) item.open = index === 0;
+      return item;
+    });
     _btcAllocationState = {
       previousTotalAllocation: Math.round(previousTotalAllocationExact),
       previousTotalAllocationExact: previousTotalAllocationExact,
@@ -5599,7 +5608,8 @@ function _btcAllocationLoadState() {
       lastResult: lastResult,
       history: history,
       buyRows: Array.isArray(parsed.buyRows) ? parsed.buyRows.slice(0, 250) : [],
-      fibLast: parsed.fibLast && typeof parsed.fibLast === 'object' ? parsed.fibLast : null
+      fibLast: fibLadders.length ? fibLadders[0] : null,
+      fibLadders: fibLadders
     };
   } catch (error) {
     _btcAllocationState = _btcAllocationDefaultState();
@@ -5802,24 +5812,6 @@ function _btcFibLevelConfigs() {
   ];
 }
 
-function _btcFibReadSelectedLevels() {
-  var checked = Array.prototype.slice.call(document.querySelectorAll('.btc-fib-level-check:checked'))
-    .map(function(el) { return Number(el.value); });
-  return _btcFibLevelConfigs().filter(function(config) {
-    return checked.indexOf(config.level) !== -1;
-  });
-}
-
-function _btcFibSyncLevelInputs(last) {
-  var rows = last && Array.isArray(last.rows) ? last.rows : [];
-  var selected = rows.length
-    ? rows.map(function(row) { return Number(row.level); })
-    : _btcFibLevelConfigs().map(function(config) { return config.level; });
-  Array.prototype.slice.call(document.querySelectorAll('.btc-fib-level-check')).forEach(function(el) {
-    el.checked = selected.indexOf(Number(el.value)) !== -1;
-  });
-}
-
 function _btcFibReadInputs() {
   var fibHighEl = document.getElementById('btc-fib-high');
   var fibLowEl = document.getElementById('btc-fib-low');
@@ -5832,8 +5824,7 @@ function _btcFibReadInputs() {
     motherHigh: _btcAllocationCurrentMotherHigh(),
     capital: _btcAllocationNumber(capitalEl ? capitalEl.value : ''),
     symbol: String(symbolEl && symbolEl.value ? symbolEl.value : 'BTCUSDT').trim().toUpperCase(),
-    leverage: Math.max(1, Math.round(_btcAllocationNumber(leverageEl ? leverageEl.value : '1') || 1)),
-    levels: _btcFibReadSelectedLevels()
+    leverage: Math.max(1, Math.round(_btcAllocationNumber(leverageEl ? leverageEl.value : '1') || 1))
   };
 }
 
@@ -5850,27 +5841,16 @@ function _btcFibValidate(input) {
   if (input.capital <= 0) return 'Total Fund must be greater than 0.';
   if (!input.symbol) return 'Symbol is required.';
   if (!Number.isFinite(input.leverage) || input.leverage < 1) return 'Leverage must be at least 1.';
-  if (!Array.isArray(input.levels) || !input.levels.length) return 'Select at least one Fib level: 2, 4, or 8.';
   return '';
 }
 
-function calculateBtcFibLadder() {
-  var input = _btcFibReadInputs();
-  var error = _btcFibValidate(input);
-  if (error) {
-    _btcFibError(error);
-    return;
-  }
+function _btcFibBuildLadder(input, open) {
   var range = input.fibHigh - input.fibLow;
   var fallPercentExact = ((input.motherHigh - input.fibLow) / input.motherHigh) * 100;
   var totalAllocationExact = input.capital * (fallPercentExact / 100);
-  var previousRows = _btcAllocationState.fibLast && Array.isArray(_btcAllocationState.fibLast.rows)
-    ? _btcAllocationState.fibLast.rows
-    : [];
-  var rows = input.levels.map(function(config) {
+  var rows = _btcFibLevelConfigs().map(function(config) {
     var price = input.fibHigh - (range * config.level);
     var amountInrExact = totalAllocationExact * config.pct;
-    var previous = previousRows.find(function(row) { return Number(row.level) === Number(config.level); });
     return {
       level: config.level,
       pct: config.pct,
@@ -5880,16 +5860,11 @@ function calculateBtcFibLadder() {
       amountInr: Math.round(amountInrExact),
       amountInrExact: amountInrExact,
       amountUsdt: _btcFibInrToUsdt(amountInrExact),
-      status: '',
-      open: !!(previous && previous.open)
+      status: ''
     };
   });
-  var badRow = rows.find(function(row) { return !Number.isFinite(row.price) || row.price <= 0; });
-  if (badRow) {
-    _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Fib High and Fib Low.');
-    return;
-  }
-  _btcAllocationState.fibLast = {
+  return {
+    id: 'btc-fib-' + Date.now() + '-' + Math.round(Math.random() * 100000),
     createdAt: new Date().toISOString(),
     motherHigh: input.motherHigh,
     fibHigh: input.fibHigh,
@@ -5900,75 +5875,135 @@ function calculateBtcFibLadder() {
     range: range,
     fallPercent: Math.round(fallPercentExact * 1000) / 1000,
     totalAllocation: Math.round(totalAllocationExact),
-    selectedLevels: input.levels.map(function(config) { return config.level; }),
+    open: open !== false,
     rows: rows
   };
+}
+
+function calculateBtcFibLadder() {
+  var input = _btcFibReadInputs();
+  var error = _btcFibValidate(input);
+  if (error) {
+    _btcFibError(error);
+    return;
+  }
+  var ladder = _btcFibBuildLadder(input, true);
+  var badRow = ladder.rows.find(function(row) { return !Number.isFinite(row.price) || row.price <= 0; });
+  if (badRow) {
+    _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Fib High and Fib Low.');
+    return;
+  }
+  _btcAllocationState.fibLadders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
+  _btcAllocationState.fibLadders.forEach(function(item) { item.open = false; });
+  _btcAllocationState.fibLadders.unshift(ladder);
+  _btcAllocationState.fibLast = ladder;
   _btcAllocationSaveState();
   _btcFibError('');
   renderBtcFibLadder();
 }
 
-function _btcFibDetailHtml(row, last, amountUsdt) {
-  var splitPercent = Math.round((Number(row.pct) || 0) * 100) + '%';
-  return ''
-    + '<div class="allocator-fib-flow-panel">'
-    + '<div class="allocator-fib-flow-grid">'
-    + '<div><span>Mother High</span><strong>' + _btcAllocationFormatRupeesPrice(last.motherHigh) + '</strong></div>'
-    + '<div><span>Fib High</span><strong>' + _btcAllocationFormatRupeesPrice(last.fibHigh) + '</strong></div>'
-    + '<div><span>Fib Low</span><strong>' + _btcAllocationFormatRupeesPrice(last.fibLow) + '</strong></div>'
-    + '<div><span>Range</span><strong>' + _btcAllocationFormatRupeesPrice(last.range) + '</strong></div>'
-    + '<div><span>Total Allocation</span><strong>' + _btcAllocationFormatRupeesWhole(last.totalAllocation) + '</strong></div>'
-    + '<div><span>Selected Split</span><strong>' + _escapeHtml(splitPercent) + '</strong></div>'
-    + '<div><span>Buy Amount</span><strong>' + _btcAllocationFormatRupeesWhole(row.amountInr) + '</strong></div>'
-    + '<div><span>Order Size</span><strong>' + _escapeHtml(_btcFibFormatUsdt(amountUsdt)) + '</strong></div>'
-    + '</div>'
-    + '<div class="table-note" style="margin-top:10px;">Buy price = Fib High - range x ' + _escapeHtml(row.level)
-    + '. Allocation = Mother High to Fib Low fall x Total Fund x ' + _escapeHtml(splitPercent) + '.</div>'
-    + '</div>';
+function _btcFibLadderTitle(ladder, index) {
+  return 'Fib ' + (index + 1);
 }
 
-function renderBtcFibLadder() {
-  var body = document.getElementById('btc-fib-body');
-  if (!body) return;
-  var last = _btcAllocationState.fibLast;
-  _btcFibSyncLevelInputs(last);
-  if (!last || !Array.isArray(last.rows) || !last.rows.length) {
-    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">No Fib ladder yet</td></tr>';
-    return;
-  }
-  body.innerHTML = last.rows.map(function(row) {
+function _btcFibLadderRowsHtml(ladder) {
+  return (Array.isArray(ladder.rows) ? ladder.rows : []).map(function(row) {
     var amountUsdt = _btcFibInrToUsdt(row.amountInrExact || row.amountInr);
     row.amountUsdt = amountUsdt;
     var status = row.status || (amountUsdt ? ('Rate ' + fmtPortfolioRateLabel()) : 'Load live USD/INR rate before placing');
-    var expanded = !!row.open;
-    return '<tr class="allocator-fib-main-row">'
-      + '<td><div class="table-row-label">' + _escapeHtml(row.label || ('Fib ' + row.level)) + '</div><div class="table-note">Fib High - range x ' + _escapeHtml(row.level) + '</div>'
-      + '<button type="button" class="allocator-fib-toggle" aria-expanded="' + (expanded ? 'true' : 'false') + '" data-cf-click="toggleBtcFibDetail(' + Number(row.level) + ')">' + (expanded ? 'Hide details' : 'Show details') + '</button></td>'
+    return '<tr>'
+      + '<td><div class="table-row-label">' + _escapeHtml(row.label || ('Fib ' + row.level)) + '</div><div class="table-note">Fib High - range x ' + _escapeHtml(row.level) + '</div></td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesPrice(row.price) + '</span></td>'
-      + '<td class="num">' + _btcAllocationFormatPercent(row.fallPercent || last.fallPercent) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatPercent(row.fallPercent || ladder.fallPercent) + '</td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.amountInr) + '</span></td>'
       + '<td class="num">' + _escapeHtml(_btcFibFormatUsdt(amountUsdt)) + '</td>'
-      + '<td class="center"><button class="btn btn-outline btn-sm" data-cf-click="placeBtcFibOrder(' + Number(row.level) + ',\'paper\')">Paper Buy</button></td>'
-      + '<td class="center"><button class="btn btn-danger btn-sm" data-cf-click="placeBtcFibOrder(' + Number(row.level) + ',\'live\')">Broker Buy</button></td>'
+      + '<td class="center"><button class="btn btn-outline btn-sm" data-cf-click="placeBtcFibOrder(\'' + _escapeHtml(ladder.id) + '\',' + Number(row.level) + ',\'paper\')">Paper Buy</button></td>'
+      + '<td class="center"><button class="btn btn-danger btn-sm" data-cf-click="placeBtcFibOrder(\'' + _escapeHtml(ladder.id) + '\',' + Number(row.level) + ',\'live\')">Broker Buy</button></td>'
       + '<td><div class="table-note">' + _escapeHtml(status) + '</div></td>'
-      + '</tr>'
-      + '<tr class="allocator-fib-detail-row"' + (expanded ? '' : ' hidden') + '><td colspan="8">' + _btcFibDetailHtml(row, last, amountUsdt) + '</td></tr>';
+      + '</tr>';
   }).join('');
 }
 
-function toggleBtcFibDetail(level) {
-  var last = _btcAllocationState.fibLast;
-  var row = last && Array.isArray(last.rows)
-    ? last.rows.find(function(item) { return Number(item.level) === Number(level); })
-    : null;
-  if (!row) return;
-  row.open = !row.open;
+function _btcFibLadderTableHtml(ladder) {
+  return ''
+    + '<div class="table-scroll">'
+    + '<table class="trade-table allocator-fib-table">'
+    + '<thead><tr>'
+    + '<th>Level</th>'
+    + '<th class="num">Buy Price ₹</th>'
+    + '<th class="num">Fall %</th>'
+    + '<th class="num">Buy Amount ₹</th>'
+    + '<th class="num">Order Size USDT</th>'
+    + '<th class="center">Paper</th>'
+    + '<th class="center">Broker</th>'
+    + '<th>Status</th>'
+    + '</tr></thead>'
+    + '<tbody>' + _btcFibLadderRowsHtml(ladder) + '</tbody>'
+    + '</table>'
+    + '</div>'
+}
+
+function renderBtcFibLadder() {
+  var host = document.getElementById('btc-fib-ladders');
+  if (!host) return;
+  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
+  if (!ladders.length) {
+    host.innerHTML = '<div class="cf-table-empty-cell">No Fib ladder yet</div>';
+    return;
+  }
+  host.innerHTML = ladders.map(function(ladder, index) {
+    if (!ladder.id) ladder.id = 'btc-fib-' + index;
+    var open = !!ladder.open;
+    var title = _btcFibLadderTitle(ladder, index);
+    return '<section class="allocator-fib-card">'
+      + '<div class="allocator-fib-card-head">'
+      + '<button type="button" class="allocator-fib-card-toggle" aria-expanded="' + (open ? 'true' : 'false') + '" data-cf-click="toggleBtcFibLadder(\'' + _escapeHtml(ladder.id) + '\')">'
+      + '<span class="allocator-fib-card-title">' + _escapeHtml(title) + '</span>'
+      + '<span>High ' + _escapeHtml(_btcAllocationFormatRupeesPrice(ladder.fibHigh)) + '</span>'
+      + '<span>Low ' + _escapeHtml(_btcAllocationFormatRupeesPrice(ladder.fibLow)) + '</span>'
+      + '<span>Fall ' + _escapeHtml(_btcAllocationFormatPercent(ladder.fallPercent)) + '</span>'
+      + '<span>Total ' + _escapeHtml(_btcAllocationFormatRupeesWhole(ladder.totalAllocation)) + '</span>'
+      + '<strong>' + (open ? 'Close' : 'Open') + '</strong>'
+      + '</button>'
+      + '<button type="button" class="btn btn-outline btn-sm allocator-fib-delete" data-cf-click="deleteBtcFibLadder(\'' + _escapeHtml(ladder.id) + '\')">Delete</button>'
+      + '</div>'
+      + '<div class="allocator-fib-card-body"' + (open ? '' : ' hidden') + '>'
+      + _btcFibLadderTableHtml(ladder)
+      + '</div>'
+      + '</section>';
+  }).join('');
+}
+
+function _btcFibFindLadder(ladderId) {
+  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
+  if (!ladderId && ladders.length) return ladders[0];
+  return ladders.find(function(item) { return String(item.id) === String(ladderId); }) || null;
+}
+
+function toggleBtcFibLadder(ladderId) {
+  var ladder = _btcFibFindLadder(ladderId);
+  if (!ladder) return;
+  ladder.open = !ladder.open;
+  _btcAllocationState.fibLast = ladder;
   _btcAllocationSaveState();
   renderBtcFibLadder();
 }
 
-async function placeBtcFibOrder(level, mode) {
-  var last = _btcAllocationState.fibLast;
+function deleteBtcFibLadder(ladderId) {
+  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
+  _btcAllocationState.fibLadders = ladders.filter(function(item) { return String(item.id) !== String(ladderId); });
+  _btcAllocationState.fibLast = _btcAllocationState.fibLadders.length ? _btcAllocationState.fibLadders[0] : null;
+  _btcAllocationSaveState();
+  renderBtcFibLadder();
+}
+
+async function placeBtcFibOrder(ladderId, level, mode) {
+  if (mode === undefined) {
+    mode = level;
+    level = ladderId;
+    ladderId = null;
+  }
+  var last = _btcFibFindLadder(ladderId) || _btcAllocationState.fibLast;
   var row = last && Array.isArray(last.rows)
     ? last.rows.find(function(item) { return Number(item.level) === Number(level); })
     : null;
