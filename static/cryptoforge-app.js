@@ -5605,6 +5605,7 @@ function _btcAllocationLoadState() {
       var bTime = Date.parse(b.createdAt || '');
       return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
     });
+    fibLadders = _btcFibRebuildStoredLadders(fibLadders);
     _btcAllocationState = {
       previousTotalAllocation: Math.round(previousTotalAllocationExact),
       previousTotalAllocationExact: previousTotalAllocationExact,
@@ -5878,8 +5879,8 @@ function _btcFibRowTotalAmount(ladder, row) {
   return Math.max(0, Number(row.amountInrExact) || Number(row.amountInr) || 0);
 }
 
-function _btcFibFindPreviousForInput(input) {
-  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
+function _btcFibFindPreviousInList(input, ladders) {
+  ladders = Array.isArray(ladders) ? ladders : [];
   var motherKey = _btcAllocationHighKey(input.motherHigh);
   var capitalKey = _btcAllocationHighKey(input.capital);
   for (var i = ladders.length - 1; i >= 0; i--) {
@@ -5889,6 +5890,11 @@ function _btcFibFindPreviousForInput(input) {
     }
   }
   return null;
+}
+
+function _btcFibFindPreviousForInput(input) {
+  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
+  return _btcFibFindPreviousInList(input, ladders);
 }
 
 function _btcFibBuildLadder(input, open, previousLadder) {
@@ -5948,6 +5954,40 @@ function _btcFibBuildLadder(input, open, previousLadder) {
     open: open !== false,
     rows: rows
   };
+}
+
+function _btcFibStoredInput(ladder) {
+  var input = {
+    fibHigh: Number(ladder && ladder.fibHigh),
+    fibLow: Number(ladder && ladder.fibLow),
+    motherHigh: Number(ladder && ladder.motherHigh),
+    capital: Number(ladder && ladder.capital),
+    symbol: String(ladder && ladder.symbol ? ladder.symbol : 'BTCUSDT').trim().toUpperCase(),
+    leverage: Math.max(1, Math.round(Number(ladder && ladder.leverage) || 1))
+  };
+  return _btcFibValidate(input) ? null : input;
+}
+
+function _btcFibRebuildStoredLadders(ladders) {
+  var rebuilt = [];
+  (Array.isArray(ladders) ? ladders : []).forEach(function(ladder) {
+    var input = _btcFibStoredInput(ladder);
+    if (!input) {
+      rebuilt.push(ladder);
+      return;
+    }
+    var previousLadder = _btcFibFindPreviousInList(input, rebuilt);
+    var next = _btcFibBuildLadder(input, ladder.open, previousLadder);
+    next.id = ladder.id || next.id;
+    next.createdAt = ladder.createdAt || next.createdAt;
+    next.open = ladder.open !== false;
+    next.rows.forEach(function(row) {
+      var oldRow = _btcFibFindRowForLevel(ladder, row.level);
+      if (oldRow && oldRow.status) row.status = oldRow.status;
+    });
+    rebuilt.push(next);
+  });
+  return rebuilt;
 }
 
 function calculateBtcFibLadder() {
