@@ -1067,7 +1067,7 @@
   }
   .allocator-fib-form {
     display: grid;
-    grid-template-columns: repeat(5, minmax(120px, 1fr)) auto;
+    grid-template-columns: repeat(6, minmax(118px, 1fr)) auto;
     gap: 10px 12px;
     align-items: end;
     margin-bottom: 4px;
@@ -1080,8 +1080,84 @@
     min-width: 130px;
     justify-content: center;
   }
+  .allocator-fib-levels {
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border: 1px solid rgba(94, 129, 172, 0.42);
+    border-radius: 10px;
+    background: rgba(9, 16, 32, 0.52);
+  }
+  .allocator-fib-levels label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text);
+    font: 800 12px var(--font-ui);
+    white-space: nowrap;
+  }
+  .allocator-fib-levels input {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent-cyan);
+  }
   .allocator-fib-table {
     min-width: 1080px;
+  }
+  .allocator-fib-toggle {
+    margin-top: 7px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(125, 162, 209, 0.26);
+    background: rgba(18, 31, 51, 0.76);
+    color: var(--text-muted);
+    font: 700 11px var(--font-ui);
+    cursor: pointer;
+  }
+  .allocator-fib-toggle[aria-expanded="true"] {
+    color: var(--accent-cyan);
+    border-color: rgba(34, 211, 238, 0.44);
+  }
+  .allocator-fib-detail-row[hidden] {
+    display: none;
+  }
+  .allocator-fib-detail-row td {
+    padding: 0;
+    background: rgba(3, 10, 22, 0.72);
+  }
+  .allocator-fib-flow-panel {
+    margin: 0;
+    padding: 14px 18px 18px;
+    border-top: 1px solid rgba(125, 162, 209, 0.14);
+    background:
+      linear-gradient(135deg, rgba(12, 22, 38, 0.94), rgba(10, 30, 42, 0.82));
+  }
+  .allocator-fib-flow-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .allocator-fib-flow-grid div {
+    padding: 10px 12px;
+    border: 1px solid rgba(118,138,176,0.15);
+    border-radius: 8px;
+    background: rgba(8, 15, 28, 0.72);
+  }
+  .allocator-fib-flow-grid span {
+    display: block;
+    color: var(--text-muted);
+    font: 700 10px var(--font-ui);
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+  .allocator-fib-flow-grid strong {
+    display: block;
+    margin-top: 4px;
+    color: var(--text);
+    font: 800 16px var(--font-display);
   }
   .allocator-buy-panel {
     margin-top: 14px;
@@ -1221,6 +1297,9 @@
     .allocator-track-actions .btn {
       justify-content: center;
       width: 100%;
+    }
+    .allocator-fib-flow-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .allocator-history-toolbar {
       display: grid;
