@@ -122,6 +122,7 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await expect(resultCells.nth(2)).toHaveText('₹2,436');
     await expect(resultCells.nth(3)).toHaveText('₹0');
 
+    await page.fill('#btc-fib-high', '66992');
     await page.fill('#btc-fib-low', '66560');
     await page.fill('#btc-fib-capital', '100000');
     await page.fill('#btc-fib-symbol', 'BTCUSDT');

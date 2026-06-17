@@ -1067,7 +1067,7 @@
   }
   .allocator-fib-form {
     display: grid;
-    grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+    grid-template-columns: repeat(5, minmax(120px, 1fr)) auto;
     gap: 10px 12px;
     align-items: end;
     margin-bottom: 4px;

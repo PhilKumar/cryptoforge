@@ -5795,13 +5795,13 @@ async function _btcFibEnsureFxRate() {
 }
 
 function _btcFibReadInputs() {
-  var high = _btcAllocationCurrentMotherHigh();
+  var fibHighEl = document.getElementById('btc-fib-high');
   var fibLowEl = document.getElementById('btc-fib-low');
   var capitalEl = document.getElementById('btc-fib-capital');
   var symbolEl = document.getElementById('btc-fib-symbol');
   var leverageEl = document.getElementById('btc-fib-leverage');
   return {
-    motherHigh: high,
+    fibHigh: _btcAllocationNumber(fibHighEl ? fibHighEl.value : ''),
     fibLow: _btcAllocationNumber(fibLowEl ? fibLowEl.value : ''),
     capital: _btcAllocationNumber(capitalEl ? capitalEl.value : ''),
     symbol: String(symbolEl && symbolEl.value ? symbolEl.value : 'BTCUSDT').trim().toUpperCase(),
@@ -5810,10 +5810,11 @@ function _btcFibReadInputs() {
 }
 
 function _btcFibValidate(input) {
-  if (!Number.isFinite(input.motherHigh) || input.motherHigh <= 0) return 'Enter Mother Candle High in the allocation inputs first.';
+  if (!Number.isFinite(input.fibHigh)) return 'Fib High must be a valid number.';
+  if (input.fibHigh <= 0) return 'Fib High must be greater than 0.';
   if (!Number.isFinite(input.fibLow)) return 'Fib Low must be a valid number.';
   if (input.fibLow <= 0) return 'Fib Low must be greater than 0.';
-  if (input.fibLow >= input.motherHigh) return 'Fib Low must be below Mother Candle High.';
+  if (input.fibLow >= input.fibHigh) return 'Fib Low must be below Fib High.';
   if (!Number.isFinite(input.capital)) return 'Total Fund must be a valid number.';
   if (input.capital <= 0) return 'Total Fund must be greater than 0.';
   if (!input.symbol) return 'Symbol is required.';
@@ -5828,15 +5829,15 @@ function calculateBtcFibLadder() {
     _btcFibError(error);
     return;
   }
-  var range = input.motherHigh - input.fibLow;
-  var fallPercentExact = (range / input.motherHigh) * 100;
+  var range = input.fibHigh - input.fibLow;
+  var fallPercentExact = (range / input.fibHigh) * 100;
   var totalAllocationExact = input.capital * (fallPercentExact / 100);
   var rows = [
     { level: 2, pct: 0.20, label: 'Fib 2.0 / 20%' },
     { level: 4, pct: 0.30, label: 'Fib 4.0 / 30%' },
     { level: 8, pct: 0.50, label: 'Fib 8.0 / 50%' }
   ].map(function(config) {
-    var price = input.motherHigh - (range * config.level);
+    var price = input.fibHigh - (range * config.level);
     var amountInrExact = totalAllocationExact * config.pct;
     return {
       level: config.level,
@@ -5852,12 +5853,12 @@ function calculateBtcFibLadder() {
   });
   var badRow = rows.find(function(row) { return !Number.isFinite(row.price) || row.price <= 0; });
   if (badRow) {
-    _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Mother High and Fib Low.');
+    _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Fib High and Fib Low.');
     return;
   }
   _btcAllocationState.fibLast = {
     createdAt: new Date().toISOString(),
-    motherHigh: input.motherHigh,
+    fibHigh: input.fibHigh,
     fibLow: input.fibLow,
     capital: input.capital,
     symbol: input.symbol,
@@ -5885,7 +5886,7 @@ function renderBtcFibLadder() {
     row.amountUsdt = amountUsdt;
     var status = row.status || (amountUsdt ? ('Rate ' + fmtPortfolioRateLabel()) : 'Load live USD/INR rate before placing');
     return '<tr>'
-      + '<td><div class="table-row-label">' + _escapeHtml(row.label || ('Fib ' + row.level)) + '</div><div class="table-note">Mother High - range x ' + _escapeHtml(row.level) + '</div></td>'
+      + '<td><div class="table-row-label">' + _escapeHtml(row.label || ('Fib ' + row.level)) + '</div><div class="table-note">Fib High - range x ' + _escapeHtml(row.level) + '</div></td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesPrice(row.price) + '</span></td>'
       + '<td class="num">' + _btcAllocationFormatPercent(row.fallPercent || last.fallPercent) + '</td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.amountInr) + '</span></td>'
