@@ -1005,6 +1005,7 @@
   .allocator-input-panel,
   .allocator-result-panel,
   .allocator-history-panel,
+  .allocator-fib-panel,
   .allocator-buy-panel {
     padding: 16px;
   }
@@ -1057,6 +1058,30 @@
   }
   .allocator-history-table {
     min-width: 1040px;
+  }
+  .allocator-fib-panel {
+    margin-top: 14px;
+  }
+  .allocator-fib-toolbar {
+    margin-bottom: 12px;
+  }
+  .allocator-fib-form {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+    gap: 10px 12px;
+    align-items: end;
+    margin-bottom: 4px;
+  }
+  .allocator-fib-actions {
+    display: flex;
+    justify-content: flex-start;
+  }
+  .allocator-fib-actions .btn {
+    min-width: 130px;
+    justify-content: center;
+  }
+  .allocator-fib-table {
+    min-width: 1080px;
   }
   .allocator-buy-panel {
     margin-top: 14px;
@@ -1112,7 +1137,7 @@
     justify-content: center;
   }
   .allocator-buy-table {
-    min-width: 720px;
+    min-width: 860px;
   }
   .allocator-row-delete {
     min-width: 70px;
@@ -1146,6 +1171,12 @@
     .allocator-buy-form {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    .allocator-fib-form {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .allocator-fib-actions {
+      grid-column: 1 / -1;
+    }
     .allocator-buy-actions {
       justify-content: flex-start;
     }
@@ -1178,11 +1209,15 @@
     .allocator-buy-form {
       grid-template-columns: 1fr;
     }
+    .allocator-fib-form {
+      grid-template-columns: 1fr;
+    }
     .allocator-buy-actions {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .allocator-buy-actions .btn,
+    .allocator-fib-actions .btn,
     .allocator-track-actions .btn {
       justify-content: center;
       width: 100%;

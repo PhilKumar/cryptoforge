@@ -100,6 +100,7 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await page.click('#btc-alloc-track-latest-20');
     await expect(page.locator('#btc-buy-tracker-body tr')).toHaveCount(1);
     await expect(page.locator('#btc-buy-tracker-body')).toContainText('₹65,635');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('₹65,658');
     await expect(page.locator('#btc-buy-tracker-body')).toContainText('₹27');
 
     await page.fill('#btc-alloc-low', '65623');
@@ -121,6 +122,22 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await expect(resultCells.nth(2)).toHaveText('₹2,436');
     await expect(resultCells.nth(3)).toHaveText('₹0');
 
+    await page.fill('#btc-fib-low', '66560');
+    await page.fill('#btc-fib-capital', '100000');
+    await page.fill('#btc-fib-symbol', 'BTCUSDT');
+    await page.fill('#btc-fib-leverage', '1');
+    await page.click('.allocator-fib-actions button:has-text("Calculate Fib")');
+    await expect(page.locator('#btc-fib-body tr')).toHaveCount(3);
+    await expect(page.locator('#btc-fib-body')).toContainText('Fib 2.0 / 20%');
+    await expect(page.locator('#btc-fib-body')).toContainText('₹66,128');
+    await expect(page.locator('#btc-fib-body')).toContainText('₹129');
+    await expect(page.locator('#btc-fib-body')).toContainText('Fib 4.0 / 30%');
+    await expect(page.locator('#btc-fib-body')).toContainText('₹65,264');
+    await expect(page.locator('#btc-fib-body')).toContainText('₹193');
+    await expect(page.locator('#btc-fib-body')).toContainText('Fib 8.0 / 50%');
+    await expect(page.locator('#btc-fib-body')).toContainText('₹63,536');
+    await expect(page.locator('#btc-fib-body')).toContainText('₹322');
+
     await page.click('.allocator-buy-actions button:has-text("Reset Tracker")');
     await expect(page.locator('#btc-buy-tracker-body')).toContainText('No BTC buy rows yet');
     await expect(page.locator('#btc-buy-total-value')).toHaveText('₹0');
@@ -135,6 +152,7 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await addBuyRow(page, '26000', '2000');
     await expect(page.locator('#btc-buy-tracker-body tr')).toHaveCount(4);
     await expect(page.locator('#btc-buy-average-price')).toHaveText('₹26,024');
+    await expect(page.locator('#btc-buy-tracker-body')).toContainText('₹36,266');
     await expect(page.locator('#btc-buy-average-fund')).toHaveText('₹630');
 
     await page.locator('#btc-buy-tracker-body button:has-text("Delete")').nth(1).click();

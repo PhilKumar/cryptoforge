@@ -5506,7 +5506,8 @@ let _btcAllocationState = {
   previousByHigh: {},
   lastResult: null,
   history: [],
-  buyRows: []
+  buyRows: [],
+  fibLast: null
 };
 
 function _btcAllocationDefaultState() {
@@ -5517,7 +5518,8 @@ function _btcAllocationDefaultState() {
     previousByHigh: {},
     lastResult: null,
     history: [],
-    buyRows: []
+    buyRows: [],
+    fibLast: null
   };
 }
 
@@ -5596,7 +5598,8 @@ function _btcAllocationLoadState() {
       previousByHigh: previousByHigh,
       lastResult: lastResult,
       history: history,
-      buyRows: Array.isArray(parsed.buyRows) ? parsed.buyRows.slice(0, 250) : []
+      buyRows: Array.isArray(parsed.buyRows) ? parsed.buyRows.slice(0, 250) : [],
+      fibLast: parsed.fibLast && typeof parsed.fibLast === 'object' ? parsed.fibLast : null
     };
   } catch (error) {
     _btcAllocationState = _btcAllocationDefaultState();
@@ -5664,6 +5667,29 @@ function _btcAllocationPreviousForHigh(high) {
   if (!key) return 0;
   var memory = _btcAllocationState.previousByHigh || {};
   return Math.max(0, Number(memory[key]) || 0);
+}
+
+function _btcAllocationCurrentMotherHigh() {
+  var highEl = document.getElementById('btc-alloc-high');
+  var inputHigh = _btcAllocationNumber(highEl ? highEl.value : '');
+  if (Number.isFinite(inputHigh) && inputHigh > 0) return inputHigh;
+
+  var resultHigh = Number(_btcAllocationState.lastResult && _btcAllocationState.lastResult.bitcoinHigh);
+  if (Number.isFinite(resultHigh) && resultHigh > 0) return resultHigh;
+
+  var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var rowHigh = Number(rows[i].targetHigh || rows[i].btcHigh);
+    if (Number.isFinite(rowHigh) && rowHigh > 0) return rowHigh;
+  }
+  return NaN;
+}
+
+function _btcAllocationTargetQuarter(averageBuyPrice, motherHigh) {
+  var avg = Number(averageBuyPrice);
+  var high = Number(motherHigh);
+  if (!Number.isFinite(avg) || avg <= 0 || !Number.isFinite(high) || high <= avg) return null;
+  return Math.round(avg + ((high - avg) * 0.25));
 }
 
 function _btcAllocationResultCells(row) {
@@ -5735,7 +5761,207 @@ function renderBtcAllocationCalculator() {
     }
   }
 
+  renderBtcFibLadder();
   renderBtcBuyTracker();
+}
+
+function _btcFibError(message) {
+  var errorEl = document.getElementById('btc-fib-error');
+  if (errorEl) errorEl.textContent = message || '';
+}
+
+function _btcFibFormatUsdt(value) {
+  var num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return '-';
+  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+}
+
+function _btcFibInrToUsdt(amountInr) {
+  var rate = Number(_cfUsdInrRate) || 0;
+  var amount = Number(amountInr) || 0;
+  return rate > 0 && amount > 0 ? amount / rate : null;
+}
+
+async function _btcFibEnsureFxRate() {
+  if ((Number(_cfUsdInrRate) || 0) > 0) return true;
+  try {
+    var response = await fetch('/api/portfolio/summary', { credentials: 'same-origin', cache: 'no-store' });
+    var payload = await response.json();
+    if (payload && payload.currency) cfApplyPortfolioCurrency(payload.currency);
+  } catch (error) {
+    console.warn('Unable to load USD/INR rate for Fib orders:', error);
+  }
+  return (Number(_cfUsdInrRate) || 0) > 0;
+}
+
+function _btcFibReadInputs() {
+  var high = _btcAllocationCurrentMotherHigh();
+  var fibLowEl = document.getElementById('btc-fib-low');
+  var capitalEl = document.getElementById('btc-fib-capital');
+  var symbolEl = document.getElementById('btc-fib-symbol');
+  var leverageEl = document.getElementById('btc-fib-leverage');
+  return {
+    motherHigh: high,
+    fibLow: _btcAllocationNumber(fibLowEl ? fibLowEl.value : ''),
+    capital: _btcAllocationNumber(capitalEl ? capitalEl.value : ''),
+    symbol: String(symbolEl && symbolEl.value ? symbolEl.value : 'BTCUSDT').trim().toUpperCase(),
+    leverage: Math.max(1, Math.round(_btcAllocationNumber(leverageEl ? leverageEl.value : '1') || 1))
+  };
+}
+
+function _btcFibValidate(input) {
+  if (!Number.isFinite(input.motherHigh) || input.motherHigh <= 0) return 'Enter Mother Candle High in the allocation inputs first.';
+  if (!Number.isFinite(input.fibLow)) return 'Fib Low must be a valid number.';
+  if (input.fibLow <= 0) return 'Fib Low must be greater than 0.';
+  if (input.fibLow >= input.motherHigh) return 'Fib Low must be below Mother Candle High.';
+  if (!Number.isFinite(input.capital)) return 'Total Fund must be a valid number.';
+  if (input.capital <= 0) return 'Total Fund must be greater than 0.';
+  if (!input.symbol) return 'Symbol is required.';
+  if (!Number.isFinite(input.leverage) || input.leverage < 1) return 'Leverage must be at least 1.';
+  return '';
+}
+
+function calculateBtcFibLadder() {
+  var input = _btcFibReadInputs();
+  var error = _btcFibValidate(input);
+  if (error) {
+    _btcFibError(error);
+    return;
+  }
+  var range = input.motherHigh - input.fibLow;
+  var fallPercentExact = (range / input.motherHigh) * 100;
+  var totalAllocationExact = input.capital * (fallPercentExact / 100);
+  var rows = [
+    { level: 2, pct: 0.20, label: 'Fib 2.0 / 20%' },
+    { level: 4, pct: 0.30, label: 'Fib 4.0 / 30%' },
+    { level: 8, pct: 0.50, label: 'Fib 8.0 / 50%' }
+  ].map(function(config) {
+    var price = input.motherHigh - (range * config.level);
+    var amountInrExact = totalAllocationExact * config.pct;
+    return {
+      level: config.level,
+      pct: config.pct,
+      label: config.label,
+      price: price,
+      fallPercent: fallPercentExact,
+      amountInr: Math.round(amountInrExact),
+      amountInrExact: amountInrExact,
+      amountUsdt: _btcFibInrToUsdt(amountInrExact),
+      status: ''
+    };
+  });
+  var badRow = rows.find(function(row) { return !Number.isFinite(row.price) || row.price <= 0; });
+  if (badRow) {
+    _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Mother High and Fib Low.');
+    return;
+  }
+  _btcAllocationState.fibLast = {
+    createdAt: new Date().toISOString(),
+    motherHigh: input.motherHigh,
+    fibLow: input.fibLow,
+    capital: input.capital,
+    symbol: input.symbol,
+    leverage: input.leverage,
+    range: range,
+    fallPercent: Math.round(fallPercentExact * 1000) / 1000,
+    totalAllocation: Math.round(totalAllocationExact),
+    rows: rows
+  };
+  _btcAllocationSaveState();
+  _btcFibError('');
+  renderBtcFibLadder();
+}
+
+function renderBtcFibLadder() {
+  var body = document.getElementById('btc-fib-body');
+  if (!body) return;
+  var last = _btcAllocationState.fibLast;
+  if (!last || !Array.isArray(last.rows) || !last.rows.length) {
+    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">No Fib ladder yet</td></tr>';
+    return;
+  }
+  body.innerHTML = last.rows.map(function(row) {
+    var amountUsdt = _btcFibInrToUsdt(row.amountInrExact || row.amountInr);
+    row.amountUsdt = amountUsdt;
+    var status = row.status || (amountUsdt ? ('Rate ' + fmtPortfolioRateLabel()) : 'Load live USD/INR rate before placing');
+    return '<tr>'
+      + '<td><div class="table-row-label">' + _escapeHtml(row.label || ('Fib ' + row.level)) + '</div><div class="table-note">Mother High - range x ' + _escapeHtml(row.level) + '</div></td>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesPrice(row.price) + '</span></td>'
+      + '<td class="num">' + _btcAllocationFormatPercent(row.fallPercent || last.fallPercent) + '</td>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.amountInr) + '</span></td>'
+      + '<td class="num">' + _escapeHtml(_btcFibFormatUsdt(amountUsdt)) + '</td>'
+      + '<td class="center"><button class="btn btn-outline btn-sm" data-cf-click="placeBtcFibOrder(' + Number(row.level) + ',\'paper\')">Paper Buy</button></td>'
+      + '<td class="center"><button class="btn btn-danger btn-sm" data-cf-click="placeBtcFibOrder(' + Number(row.level) + ',\'live\')">Broker Buy</button></td>'
+      + '<td><div class="table-note">' + _escapeHtml(status) + '</div></td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function placeBtcFibOrder(level, mode) {
+  var last = _btcAllocationState.fibLast;
+  var row = last && Array.isArray(last.rows)
+    ? last.rows.find(function(item) { return Number(item.level) === Number(level); })
+    : null;
+  if (!last || !row) {
+    _btcFibError('Calculate the Fib ladder before placing an order.');
+    return;
+  }
+  var rateReady = await _btcFibEnsureFxRate();
+  var amountUsdt = rateReady ? _btcFibInrToUsdt(row.amountInrExact || row.amountInr) : null;
+  if (!amountUsdt) {
+    _btcFibError('Live USD/INR rate is unavailable. Refresh Portfolio once, then calculate the Fib ladder again.');
+    renderBtcFibLadder();
+    return;
+  }
+  var isLive = String(mode || '').toLowerCase() === 'live';
+  if (isLive) {
+    var ok = await cfConfirm(
+      'This will place a REAL broker BUY limit entry.<br><br>'
+        + 'Symbol: <b>' + _escapeHtml(last.symbol || 'BTCUSDT') + '</b><br>'
+        + 'Level: <b>Fib ' + _escapeHtml(row.level) + '.0</b><br>'
+        + 'Limit: <b>' + _escapeHtml(_btcAllocationFormatRupeesPrice(row.price)) + '</b><br>'
+        + 'Amount: <b>' + _escapeHtml(_btcAllocationFormatRupeesWhole(row.amountInr)) + ' / ' + _escapeHtml(_btcFibFormatUsdt(amountUsdt)) + '</b>',
+      'Confirm Broker Buy',
+      '⚠️',
+      true
+    );
+    if (!ok) return;
+  }
+  row.status = 'Submitting ' + (isLive ? 'broker' : 'paper') + ' buy...';
+  _btcAllocationSaveState();
+  renderBtcFibLadder();
+  try {
+    var payload = {
+      symbol: last.symbol || 'BTCUSDT',
+      side: 'BUY',
+      qty_mode: 'usdt',
+      qty_value: amountUsdt,
+      leverage: Math.max(1, Math.round(Number(last.leverage) || 1)),
+      mode: isLive ? 'live' : 'paper',
+      order_type: 'maker_only',
+      entry_limit_price: Number(row.price)
+    };
+    var response = await cfApiFetch('/api/scalp/enter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok || data.status === 'error') {
+      throw new Error(cfApiErrorDetail(data, 'Order failed'));
+    }
+    row.status = data.message || ('Fib ' + row.level + '.0 ' + (isLive ? 'broker' : 'paper') + ' buy armed');
+    _btcAllocationSaveState();
+    renderBtcFibLadder();
+    if (typeof cfToast === 'function') cfToast(row.status, 'success');
+    if (typeof cfRefreshScalpWorkspace === 'function') cfRefreshScalpWorkspace();
+  } catch (error) {
+    row.status = 'Failed: ' + (error && error.message ? error.message : 'Order failed');
+    _btcAllocationSaveState();
+    _btcFibError(row.status);
+    renderBtcFibLadder();
+    if (typeof cfToast === 'function') cfToast(row.status, 'error');
+  }
 }
 
 function _btcAllocationError(message) {
@@ -5749,11 +5975,11 @@ function _btcBuyTrackerError(message) {
 }
 
 function _btcAllocationValidate(high, low) {
-  if (!Number.isFinite(high)) return 'Bitcoin High Price must be a valid number.';
+  if (!Number.isFinite(high)) return 'Mother Candle High must be a valid number.';
   if (!Number.isFinite(low)) return 'Bitcoin Low / Current Price must be a valid number.';
-  if (high <= 0) return 'Bitcoin High Price must be greater than 0.';
+  if (high <= 0) return 'Mother Candle High must be greater than 0.';
   if (low <= 0) return 'Bitcoin Low / Current Price must be greater than 0.';
-  if (low > high) return 'Bitcoin Low / Current Price cannot be greater than Bitcoin High Price.';
+  if (low > high) return 'Bitcoin Low / Current Price cannot be greater than Mother Candle High.';
   return '';
 }
 
@@ -5793,20 +6019,26 @@ function _btcBuyTrackerComputedRows() {
   var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
   var totalBuyAmount = 0;
   var weightedPriceAmount = 0;
+  var fallbackHigh = _btcAllocationCurrentMotherHigh();
   return rows.map(function(row, index) {
     var buyPrice = Number(row.buyPrice) || 0;
     var buyAmount = Number(row.buyAmount !== undefined ? row.buyAmount : row.buyingValue) || 0;
+    var targetHigh = Number(row.targetHigh || row.btcHigh);
+    if (!(Number.isFinite(targetHigh) && targetHigh > 0)) targetHigh = fallbackHigh;
     totalBuyAmount += buyAmount;
     weightedPriceAmount += buyPrice * buyAmount;
     var averageBuyPrice = totalBuyAmount > 0 ? (weightedPriceAmount / totalBuyAmount) : 0;
     var roundedAverageBuyPrice = Math.round(averageBuyPrice);
+    var targetPrice = _btcAllocationTargetQuarter(averageBuyPrice, targetHigh);
     return {
       id: row.id,
       index: index + 1,
       buyPrice: buyPrice,
       buyAmount: buyAmount,
+      targetHigh: targetHigh,
       totalBuyAmount: totalBuyAmount,
       averageBuyPrice: roundedAverageBuyPrice,
+      targetPrice: targetPrice,
       averageBuyAmount: Math.round(totalBuyAmount / (index + 1)),
       source: row.source || 'manual'
     };
@@ -5828,7 +6060,7 @@ function renderBtcBuyTracker() {
   var body = document.getElementById('btc-buy-tracker-body');
   if (!body) return;
   if (!computedRows.length) {
-    body.innerHTML = '<tr><td colspan="5" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
     return;
   }
   body.innerHTML = computedRows.map(function(row) {
@@ -5843,6 +6075,7 @@ function renderBtcBuyTracker() {
       + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.buyAmount) + '</td>'
       + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.averageBuyAmount) + '</td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.averageBuyPrice) + '</span></td>'
+      + '<td class="num"><span class="allocator-value-primary">' + (row.targetPrice === null ? '-' : _btcAllocationFormatRupeesWhole(row.targetPrice)) + '</span></td>'
       + '<td class="center"><button class="btn btn-outline btn-sm allocator-row-delete" data-cf-click="deleteBtcBuyTrackerRow(\'' + _escapeHtml(row.id) + '\')">Delete</button></td>'
       + '</tr>';
   }).join('');
@@ -5869,6 +6102,7 @@ function _btcBuyTrackerAddRow(row, options) {
     createdAt: new Date().toISOString(),
     buyPrice: buyPrice,
     buyAmount: buyAmount,
+    targetHigh: Number(row.targetHigh) || _btcAllocationCurrentMotherHigh(),
     source: row.source || 'manual',
     sourceAllocationId: row.sourceAllocationId || ''
   });
@@ -5884,6 +6118,7 @@ function addBtcBuyTrackerRow() {
   var added = _btcBuyTrackerAddRow({
     buyPrice: form.buyPrice,
     buyAmount: form.buyAmount,
+    targetHigh: _btcAllocationCurrentMotherHigh(),
     source: 'manual'
   });
   if (added) _btcBuyTrackerSetForm(NaN, NaN, NaN);
@@ -5920,6 +6155,7 @@ function addLatestBtcAllocationToBuyTracker(splitKey) {
   _btcBuyTrackerAddRow({
     buyPrice: Number(last.bitcoinLow),
     buyAmount: buyAmount,
+    targetHigh: Number(last.bitcoinHigh),
     source: config.source,
     sourceAllocationId: last.id || ''
   });

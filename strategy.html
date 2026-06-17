@@ -365,7 +365,7 @@
       <h3>Inputs</h3>
       <div class="allocator-form-grid">
         <div class="input-group">
-          <label for="btc-alloc-high">Bitcoin High Price ₹</label>
+          <label for="btc-alloc-high">Mother Candle High ₹</label>
           <input type="number" id="btc-alloc-high" min="0" step="0.01" inputmode="decimal" placeholder="66992" data-cf-keydown="if(event.key==='Enter'){calculateBtcAllocation()}">
         </div>
         <div class="input-group">
@@ -410,6 +410,58 @@
       </div>
     </section>
   </div>
+
+  <section class="card table-panel allocator-fib-panel">
+    <div class="table-toolbar allocator-fib-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Fib Buy Ladder</h3>
+        <div class="table-meta">Uses Mother Candle High from above, a separate Fib Low, and capital-based allocation for Fib 2.0, 4.0, and 8.0 buy levels.</div>
+      </div>
+    </div>
+    <div class="allocator-fib-form">
+      <div class="input-group">
+        <label for="btc-fib-low">Fib Low ₹</label>
+        <input type="number" id="btc-fib-low" min="0" step="0.01" inputmode="decimal" placeholder="66560" data-cf-keydown="if(event.key==='Enter'){calculateBtcFibLadder()}">
+      </div>
+      <div class="input-group">
+        <label for="btc-fib-capital">Total Fund ₹</label>
+        <input type="number" id="btc-fib-capital" min="0" step="1" inputmode="decimal" value="100000" data-cf-keydown="if(event.key==='Enter'){calculateBtcFibLadder()}">
+      </div>
+      <div class="input-group">
+        <label for="btc-fib-symbol">Symbol</label>
+        <input type="text" id="btc-fib-symbol" value="BTCUSDT" data-cf-keydown="if(event.key==='Enter'){calculateBtcFibLadder()}">
+      </div>
+      <div class="input-group">
+        <label for="btc-fib-leverage">Leverage</label>
+        <input type="number" id="btc-fib-leverage" min="1" step="1" inputmode="numeric" value="1" data-cf-keydown="if(event.key==='Enter'){calculateBtcFibLadder()}">
+      </div>
+      <div class="allocator-fib-actions">
+        <button class="btn btn-primary" data-cf-click="calculateBtcFibLadder()">Calculate Fib</button>
+      </div>
+    </div>
+    <div class="allocator-error" id="btc-fib-error" role="alert" aria-live="polite"></div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table allocator-fib-table">
+          <thead>
+            <tr>
+              <th>Level</th>
+              <th class="num">Buy Price ₹</th>
+              <th class="num">Fall %</th>
+              <th class="num">Buy Amount ₹</th>
+              <th class="num">Order Size USDT</th>
+              <th class="center">Paper</th>
+              <th class="center">Broker</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="btc-fib-body">
+            <tr><td colspan="8" class="cf-table-empty-cell">No Fib ladder yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 
   <section class="card table-panel allocator-history-panel">
     <div class="table-toolbar allocator-history-toolbar">
@@ -486,11 +538,12 @@
               <th class="num">Buy Amount ₹</th>
               <th class="num">Avg Buy Amount ₹</th>
               <th class="num">Average Buy Price ₹</th>
+              <th class="num">Target 0.25 ₹</th>
               <th class="center">Action</th>
             </tr>
           </thead>
           <tbody id="btc-buy-tracker-body">
-            <tr><td colspan="5" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>
+            <tr><td colspan="6" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>
           </tbody>
         </table>
       </div>
