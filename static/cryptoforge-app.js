@@ -5600,6 +5600,11 @@ function _btcAllocationLoadState() {
       if (item.open === undefined) item.open = index === 0;
       return item;
     });
+    fibLadders.sort(function(a, b) {
+      var aTime = Date.parse(a.createdAt || '');
+      var bTime = Date.parse(b.createdAt || '');
+      return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
+    });
     _btcAllocationState = {
       previousTotalAllocation: Math.round(previousTotalAllocationExact),
       previousTotalAllocationExact: previousTotalAllocationExact,
@@ -5608,7 +5613,7 @@ function _btcAllocationLoadState() {
       lastResult: lastResult,
       history: history,
       buyRows: Array.isArray(parsed.buyRows) ? parsed.buyRows.slice(0, 250) : [],
-      fibLast: fibLadders.length ? fibLadders[0] : null,
+      fibLast: fibLadders.length ? fibLadders[fibLadders.length - 1] : null,
       fibLadders: fibLadders
     };
   } catch (error) {
@@ -5844,19 +5849,46 @@ function _btcFibValidate(input) {
   return '';
 }
 
-function _btcFibBuildLadder(input, open) {
+function _btcFibPreviousTotal(ladder) {
+  if (!ladder) return 0;
+  return Number(ladder.totalAllocationRequiredExact !== undefined ? ladder.totalAllocationRequiredExact : ladder.totalAllocation) || 0;
+}
+
+function _btcFibPreviousFall(ladder) {
+  if (!ladder) return 0;
+  return Number(ladder.totalFallPercentExact !== undefined ? ladder.totalFallPercentExact : ladder.fallPercent) || 0;
+}
+
+function _btcFibFindPreviousForInput(input) {
+  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
+  var motherKey = _btcAllocationHighKey(input.motherHigh);
+  var capitalKey = _btcAllocationHighKey(input.capital);
+  for (var i = ladders.length - 1; i >= 0; i--) {
+    var ladder = ladders[i];
+    if (_btcAllocationHighKey(ladder.motherHigh) === motherKey && _btcAllocationHighKey(ladder.capital) === capitalKey) {
+      return ladder;
+    }
+  }
+  return null;
+}
+
+function _btcFibBuildLadder(input, open, previousLadder) {
   var range = input.fibHigh - input.fibLow;
-  var fallPercentExact = ((input.motherHigh - input.fibLow) / input.motherHigh) * 100;
-  var totalAllocationExact = input.capital * (fallPercentExact / 100);
+  var totalFallPercentExact = ((input.motherHigh - input.fibLow) / input.motherHigh) * 100;
+  var totalAllocationRequiredExact = input.capital * (totalFallPercentExact / 100);
+  var previousAllocationExact = _btcFibPreviousTotal(previousLadder);
+  var previousFallPercentExact = _btcFibPreviousFall(previousLadder);
+  var freshAllocationExact = Math.max(0, totalAllocationRequiredExact - previousAllocationExact);
+  var freshFallPercentExact = Math.max(0, totalFallPercentExact - previousFallPercentExact);
   var rows = _btcFibLevelConfigs().map(function(config) {
     var price = input.fibHigh - (range * config.level);
-    var amountInrExact = totalAllocationExact * config.pct;
+    var amountInrExact = freshAllocationExact * config.pct;
     return {
       level: config.level,
       pct: config.pct,
       label: config.label,
       price: price,
-      fallPercent: fallPercentExact,
+      fallPercent: freshFallPercentExact,
       amountInr: Math.round(amountInrExact),
       amountInrExact: amountInrExact,
       amountUsdt: _btcFibInrToUsdt(amountInrExact),
@@ -5873,8 +5905,17 @@ function _btcFibBuildLadder(input, open) {
     symbol: input.symbol,
     leverage: input.leverage,
     range: range,
-    fallPercent: Math.round(fallPercentExact * 1000) / 1000,
-    totalAllocation: Math.round(totalAllocationExact),
+    totalFallPercentExact: totalFallPercentExact,
+    previousFallPercentExact: previousFallPercentExact,
+    fallPercent: Math.round(freshFallPercentExact * 1000) / 1000,
+    totalAllocationRequiredExact: totalAllocationRequiredExact,
+    totalAllocationRequired: Math.round(totalAllocationRequiredExact),
+    previousAllocationExact: previousAllocationExact,
+    previousAllocation: Math.round(previousAllocationExact),
+    freshAllocationExact: freshAllocationExact,
+    freshAllocation: Math.round(freshAllocationExact),
+    totalAllocation: Math.round(freshAllocationExact),
+    previousFibId: previousLadder ? previousLadder.id : '',
     open: open !== false,
     rows: rows
   };
@@ -5887,7 +5928,8 @@ function calculateBtcFibLadder() {
     _btcFibError(error);
     return;
   }
-  var ladder = _btcFibBuildLadder(input, true);
+  var previousLadder = _btcFibFindPreviousForInput(input);
+  var ladder = _btcFibBuildLadder(input, true, previousLadder);
   var badRow = ladder.rows.find(function(row) { return !Number.isFinite(row.price) || row.price <= 0; });
   if (badRow) {
     _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Fib High and Fib Low.');
@@ -5895,7 +5937,7 @@ function calculateBtcFibLadder() {
   }
   _btcAllocationState.fibLadders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
   _btcAllocationState.fibLadders.forEach(function(item) { item.open = false; });
-  _btcAllocationState.fibLadders.unshift(ladder);
+  _btcAllocationState.fibLadders.push(ladder);
   _btcAllocationState.fibLast = ladder;
   _btcAllocationSaveState();
   _btcFibError('');
@@ -5931,8 +5973,8 @@ function _btcFibLadderTableHtml(ladder) {
     + '<thead><tr>'
     + '<th>Level</th>'
     + '<th class="num">Buy Price ₹</th>'
-    + '<th class="num">Fall %</th>'
-    + '<th class="num">Buy Amount ₹</th>'
+    + '<th class="num">Fresh Fall %</th>'
+    + '<th class="num">Fresh Buy Amount ₹</th>'
     + '<th class="num">Order Size USDT</th>'
     + '<th class="center">Paper</th>'
     + '<th class="center">Broker</th>'
@@ -5940,7 +5982,7 @@ function _btcFibLadderTableHtml(ladder) {
     + '</tr></thead>'
     + '<tbody>' + _btcFibLadderRowsHtml(ladder) + '</tbody>'
     + '</table>'
-    + '</div>'
+    + '</div>';
 }
 
 function renderBtcFibLadder() {
@@ -5961,8 +6003,8 @@ function renderBtcFibLadder() {
       + '<span class="allocator-fib-card-title">' + _escapeHtml(title) + '</span>'
       + '<span>High ' + _escapeHtml(_btcAllocationFormatRupeesPrice(ladder.fibHigh)) + '</span>'
       + '<span>Low ' + _escapeHtml(_btcAllocationFormatRupeesPrice(ladder.fibLow)) + '</span>'
-      + '<span>Fall ' + _escapeHtml(_btcAllocationFormatPercent(ladder.fallPercent)) + '</span>'
-      + '<span>Total ' + _escapeHtml(_btcAllocationFormatRupeesWhole(ladder.totalAllocation)) + '</span>'
+      + '<span>Fresh Fall ' + _escapeHtml(_btcAllocationFormatPercent(ladder.fallPercent)) + '</span>'
+      + '<span>Fresh ' + _escapeHtml(_btcAllocationFormatRupeesWhole(ladder.freshAllocation !== undefined ? ladder.freshAllocation : ladder.totalAllocation)) + '</span>'
       + '<strong>' + (open ? 'Close' : 'Open') + '</strong>'
       + '</button>'
       + '<button type="button" class="btn btn-outline btn-sm allocator-fib-delete" data-cf-click="deleteBtcFibLadder(\'' + _escapeHtml(ladder.id) + '\')">Delete</button>'
@@ -5976,7 +6018,7 @@ function renderBtcFibLadder() {
 
 function _btcFibFindLadder(ladderId) {
   var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
-  if (!ladderId && ladders.length) return ladders[0];
+  if (!ladderId && ladders.length) return ladders[ladders.length - 1];
   return ladders.find(function(item) { return String(item.id) === String(ladderId); }) || null;
 }
 
@@ -5992,7 +6034,7 @@ function toggleBtcFibLadder(ladderId) {
 function deleteBtcFibLadder(ladderId) {
   var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
   _btcAllocationState.fibLadders = ladders.filter(function(item) { return String(item.id) !== String(ladderId); });
-  _btcAllocationState.fibLast = _btcAllocationState.fibLadders.length ? _btcAllocationState.fibLadders[0] : null;
+  _btcAllocationState.fibLast = _btcAllocationState.fibLadders.length ? _btcAllocationState.fibLadders[_btcAllocationState.fibLadders.length - 1] : null;
   _btcAllocationSaveState();
   renderBtcFibLadder();
 }
