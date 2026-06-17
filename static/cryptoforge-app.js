@@ -5818,6 +5818,7 @@ function _btcFibValidate(input) {
   if (!Number.isFinite(input.fibLow)) return 'Fib Low must be a valid number.';
   if (input.fibLow <= 0) return 'Fib Low must be greater than 0.';
   if (input.fibLow >= input.fibHigh) return 'Fib Low must be below Fib High.';
+  if (input.fibLow >= input.motherHigh) return 'Fib Low must be below Mother Candle High to calculate allocation.';
   if (!Number.isFinite(input.capital)) return 'Total Fund must be a valid number.';
   if (input.capital <= 0) return 'Total Fund must be greater than 0.';
   if (!input.symbol) return 'Symbol is required.';
@@ -5833,14 +5834,14 @@ function calculateBtcFibLadder() {
     return;
   }
   var range = input.fibHigh - input.fibLow;
+  var fallPercentExact = ((input.motherHigh - input.fibLow) / input.motherHigh) * 100;
+  var totalAllocationExact = input.capital * (fallPercentExact / 100);
   var rows = [
     { level: 2, pct: 0.20, label: 'Fib 2.0 / 20%' },
     { level: 4, pct: 0.30, label: 'Fib 4.0 / 30%' },
     { level: 8, pct: 0.50, label: 'Fib 8.0 / 50%' }
   ].map(function(config) {
     var price = input.fibHigh - (range * config.level);
-    var fallPercentExact = ((input.motherHigh - price) / input.motherHigh) * 100;
-    var totalAllocationExact = input.capital * (fallPercentExact / 100);
     var amountInrExact = totalAllocationExact * config.pct;
     return {
       level: config.level,
@@ -5859,11 +5860,6 @@ function calculateBtcFibLadder() {
     _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Fib High and Fib Low.');
     return;
   }
-  var aboveMotherRow = rows.find(function(row) { return !Number.isFinite(row.fallPercent) || row.fallPercent <= 0; });
-  if (aboveMotherRow) {
-    _btcFibError('Fib ' + aboveMotherRow.level + '.0 buy price must be below Mother Candle High to calculate allocation.');
-    return;
-  }
   _btcAllocationState.fibLast = {
     createdAt: new Date().toISOString(),
     motherHigh: input.motherHigh,
@@ -5873,6 +5869,8 @@ function calculateBtcFibLadder() {
     symbol: input.symbol,
     leverage: input.leverage,
     range: range,
+    fallPercent: Math.round(fallPercentExact * 1000) / 1000,
+    totalAllocation: Math.round(totalAllocationExact),
     rows: rows
   };
   _btcAllocationSaveState();
