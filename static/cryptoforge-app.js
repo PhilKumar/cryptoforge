@@ -5501,6 +5501,8 @@ function showPortfolioMonthDetails(key) {
 const BTC_ALLOCATION_STORAGE_KEY = 'cf_btc_allocation_state_v1';
 let _btcAllocationState = {
   previousTotalAllocation: 0,
+  previousTotalAllocationExact: 0,
+  previousHigh: null,
   lastResult: null,
   history: [],
   buyRows: []
@@ -5509,6 +5511,8 @@ let _btcAllocationState = {
 function _btcAllocationDefaultState() {
   return {
     previousTotalAllocation: 0,
+    previousTotalAllocationExact: 0,
+    previousHigh: null,
     lastResult: null,
     history: [],
     buyRows: []
@@ -5523,9 +5527,21 @@ function _btcAllocationLoadState() {
       return;
     }
     var parsed = JSON.parse(raw);
+    var previousTotalAllocation = Math.max(0, Math.round(Number(parsed.previousTotalAllocation) || 0));
+    var previousTotalAllocationExact = Number(parsed.previousTotalAllocationExact);
+    if (!Number.isFinite(previousTotalAllocationExact) || previousTotalAllocationExact < 0) {
+      previousTotalAllocationExact = previousTotalAllocation;
+    }
+    var lastResult = parsed.lastResult && typeof parsed.lastResult === 'object' ? parsed.lastResult : null;
+    var previousHigh = Number(parsed.previousHigh);
+    if ((!Number.isFinite(previousHigh) || previousHigh <= 0) && lastResult) {
+      previousHigh = Number(lastResult.bitcoinHigh);
+    }
     _btcAllocationState = {
-      previousTotalAllocation: Math.max(0, Math.round(Number(parsed.previousTotalAllocation) || 0)),
-      lastResult: parsed.lastResult && typeof parsed.lastResult === 'object' ? parsed.lastResult : null,
+      previousTotalAllocation: previousTotalAllocation,
+      previousTotalAllocationExact: previousTotalAllocationExact,
+      previousHigh: Number.isFinite(previousHigh) && previousHigh > 0 ? previousHigh : null,
+      lastResult: lastResult,
       history: Array.isArray(parsed.history) ? parsed.history.slice(0, 100) : [],
       buyRows: Array.isArray(parsed.buyRows) ? parsed.buyRows.slice(0, 250) : []
     };
@@ -5572,7 +5588,7 @@ function _btcAllocationFormatRupeesPrice(value) {
 }
 
 function _btcAllocationFormatPercent(value) {
-  return (Number(value) || 0).toFixed(2) + '%';
+  return (Number(value) || 0).toFixed(3) + '%';
 }
 
 function _btcAllocationFormatQty(value) {
@@ -5588,6 +5604,12 @@ function _btcAllocationFormatTime(value) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function _btcAllocationSameHigh(a, b) {
+  var first = Number(a);
+  var second = Number(b);
+  return Number.isFinite(first) && Number.isFinite(second) && Math.abs(first - second) < 0.000001;
 }
 
 function _btcAllocationResultCells(row) {
@@ -5713,39 +5735,17 @@ function _btcBuyTrackerSetForm(buyPrice, buyAmount, splitKey) {
   });
 }
 
-function _btcBuyTrackerCurrentHigh() {
-  var highEl = document.getElementById('btc-alloc-high');
-  var inputHigh = _btcAllocationNumber(highEl ? highEl.value : '');
-  if (Number.isFinite(inputHigh) && inputHigh > 0) return inputHigh;
-
-  var resultHigh = Number(_btcAllocationState.lastResult && _btcAllocationState.lastResult.bitcoinHigh);
-  if (Number.isFinite(resultHigh) && resultHigh > 0) return resultHigh;
-
-  var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
-  for (var i = rows.length - 1; i >= 0; i--) {
-    var rowHigh = Number(rows[i].targetHigh !== undefined ? rows[i].targetHigh : rows[i].btcHigh);
-    if (Number.isFinite(rowHigh) && rowHigh > 0) return rowHigh;
-  }
-  return NaN;
-}
-
 function _btcBuyTrackerComputedRows() {
   var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
   var totalBuyAmount = 0;
   var weightedPriceAmount = 0;
-  var fallbackHigh = _btcBuyTrackerCurrentHigh();
   return rows.map(function(row, index) {
     var buyPrice = Number(row.buyPrice) || 0;
     var buyAmount = Number(row.buyAmount !== undefined ? row.buyAmount : row.buyingValue) || 0;
-    var targetHigh = Number(row.targetHigh !== undefined ? row.targetHigh : row.btcHigh);
-    if (!(Number.isFinite(targetHigh) && targetHigh > 0)) targetHigh = fallbackHigh;
     totalBuyAmount += buyAmount;
     weightedPriceAmount += buyPrice * buyAmount;
     var averageBuyPrice = totalBuyAmount > 0 ? (weightedPriceAmount / totalBuyAmount) : 0;
     var roundedAverageBuyPrice = Math.round(averageBuyPrice);
-    var targetPrice = Number.isFinite(targetHigh) && targetHigh > 0
-      ? Math.round(roundedAverageBuyPrice + ((targetHigh - roundedAverageBuyPrice) * 0.25))
-      : null;
     return {
       id: row.id,
       index: index + 1,
@@ -5753,7 +5753,6 @@ function _btcBuyTrackerComputedRows() {
       buyAmount: buyAmount,
       totalBuyAmount: totalBuyAmount,
       averageBuyPrice: roundedAverageBuyPrice,
-      targetPrice: targetPrice,
       averageBuyAmount: Math.round(totalBuyAmount / (index + 1)),
       source: row.source || 'manual'
     };
@@ -5775,7 +5774,7 @@ function renderBtcBuyTracker() {
   var body = document.getElementById('btc-buy-tracker-body');
   if (!body) return;
   if (!computedRows.length) {
-    body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
+    body.innerHTML = '<tr><td colspan="5" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
     return;
   }
   body.innerHTML = computedRows.map(function(row) {
@@ -5790,7 +5789,6 @@ function renderBtcBuyTracker() {
       + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.buyAmount) + '</td>'
       + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.averageBuyAmount) + '</td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.averageBuyPrice) + '</span></td>'
-      + '<td class="num"><span class="allocator-value-primary">' + (row.targetPrice === null ? '-' : _btcAllocationFormatRupeesWhole(row.targetPrice)) + '</span></td>'
       + '<td class="center"><button class="btn btn-outline btn-sm allocator-row-delete" data-cf-click="deleteBtcBuyTrackerRow(\'' + _escapeHtml(row.id) + '\')">Delete</button></td>'
       + '</tr>';
   }).join('');
@@ -5817,7 +5815,6 @@ function _btcBuyTrackerAddRow(row, options) {
     createdAt: new Date().toISOString(),
     buyPrice: buyPrice,
     buyAmount: buyAmount,
-    targetHigh: Number(row.targetHigh) || _btcBuyTrackerCurrentHigh(),
     source: row.source || 'manual',
     sourceAllocationId: row.sourceAllocationId || ''
   });
@@ -5833,7 +5830,6 @@ function addBtcBuyTrackerRow() {
   var added = _btcBuyTrackerAddRow({
     buyPrice: form.buyPrice,
     buyAmount: form.buyAmount,
-    targetHigh: _btcBuyTrackerCurrentHigh(),
     source: 'manual'
   });
   if (added) _btcBuyTrackerSetForm(NaN, NaN, NaN);
@@ -5870,7 +5866,6 @@ function addLatestBtcAllocationToBuyTracker(splitKey) {
   _btcBuyTrackerAddRow({
     buyPrice: Number(last.bitcoinLow),
     buyAmount: buyAmount,
-    targetHigh: Number(last.bitcoinHigh),
     source: config.source,
     sourceAllocationId: last.id || ''
   });
@@ -5912,25 +5907,39 @@ function calculateBtcAllocation() {
     return;
   }
 
-  var previousAllocation = Math.max(0, Math.round(Number(_btcAllocationState.previousTotalAllocation) || 0));
-  var fallPercent = Math.round((((high - low) / high) * 100) * 100) / 100;
-  var totalAllocationRequired = Math.round(fallPercent * 1000);
-  var freshAllocation = Math.max(0, totalAllocationRequired - previousAllocation);
+  var savedHigh = Number(_btcAllocationState.previousHigh);
+  var sameHigh = _btcAllocationSameHigh(savedHigh, high);
+  var previousAllocationExact = sameHigh
+    ? Math.max(0, Number(_btcAllocationState.previousTotalAllocationExact) || Number(_btcAllocationState.previousTotalAllocation) || 0)
+    : 0;
+  var previousAllocation = Math.round(previousAllocationExact);
+  var fallPercentExact = ((high - low) / high) * 100;
+  var fallPercent = Math.round(fallPercentExact * 1000) / 1000;
+  var totalAllocationRequiredExact = fallPercentExact * 1000;
+  var totalAllocationRequired = Math.round(totalAllocationRequiredExact);
+  var freshAllocationExact = Math.max(0, totalAllocationRequiredExact - previousAllocationExact);
+  var freshAllocation = Math.round(freshAllocationExact);
   var row = {
     id: 'btc-alloc-' + Date.now(),
     createdAt: new Date().toISOString(),
     bitcoinHigh: high,
     bitcoinLow: low,
     fallPercent: fallPercent,
+    fallPercentExact: fallPercentExact,
+    totalAllocationRequiredExact: totalAllocationRequiredExact,
     totalAllocationRequired: totalAllocationRequired,
+    previousAllocationExact: previousAllocationExact,
     previousAllocation: previousAllocation,
+    freshAllocationExact: freshAllocationExact,
     freshAllocation: freshAllocation,
-    split20: Math.round(freshAllocation * 0.20),
-    split30: Math.round(freshAllocation * 0.30),
-    split50: Math.round(freshAllocation * 0.50)
+    split20: Math.round(freshAllocationExact * 0.20),
+    split30: Math.round(freshAllocationExact * 0.30),
+    split50: Math.round(freshAllocationExact * 0.50)
   };
 
-  _btcAllocationState.previousTotalAllocation = Math.max(previousAllocation, totalAllocationRequired);
+  _btcAllocationState.previousTotalAllocationExact = Math.max(previousAllocationExact, totalAllocationRequiredExact);
+  _btcAllocationState.previousTotalAllocation = Math.round(_btcAllocationState.previousTotalAllocationExact);
+  _btcAllocationState.previousHigh = high;
   _btcAllocationState.lastResult = row;
   _btcAllocationState.history = [row].concat(_btcAllocationState.history || []).slice(0, 100);
   _btcAllocationSaveState();
