@@ -5849,14 +5849,33 @@ function _btcFibValidate(input) {
   return '';
 }
 
-function _btcFibPreviousTotal(ladder) {
-  if (!ladder) return 0;
-  return Number(ladder.totalAllocationRequiredExact !== undefined ? ladder.totalAllocationRequiredExact : ladder.totalAllocation) || 0;
+function _btcFibFindRowForLevel(ladder, level) {
+  var rows = ladder && Array.isArray(ladder.rows) ? ladder.rows : [];
+  return rows.find(function(row) { return Number(row.level) === Number(level); }) || null;
 }
 
-function _btcFibPreviousFall(ladder) {
-  if (!ladder) return 0;
-  return Number(ladder.totalFallPercentExact !== undefined ? ladder.totalFallPercentExact : ladder.fallPercent) || 0;
+function _btcFibRowTotalFallPercent(ladder, row) {
+  if (!ladder || !row) return 0;
+  var stored = Number(row.totalFallPercentExact);
+  if (Number.isFinite(stored) && stored >= 0) return stored;
+  var motherHigh = Number(ladder.motherHigh);
+  var price = Number(row.price);
+  if (Number.isFinite(motherHigh) && motherHigh > 0 && Number.isFinite(price)) {
+    return Math.max(0, ((motherHigh - price) / motherHigh) * 100);
+  }
+  return Math.max(0, Number(row.fallPercent) || 0);
+}
+
+function _btcFibRowTotalAmount(ladder, row) {
+  if (!ladder || !row) return 0;
+  var stored = Number(row.totalAmountInrExact);
+  if (Number.isFinite(stored) && stored >= 0) return stored;
+  var capital = Number(ladder.capital);
+  var pct = Number(row.pct);
+  if (Number.isFinite(capital) && capital > 0 && Number.isFinite(pct) && pct > 0) {
+    return capital * (_btcFibRowTotalFallPercent(ladder, row) / 100) * pct;
+  }
+  return Math.max(0, Number(row.amountInrExact) || Number(row.amountInr) || 0);
 }
 
 function _btcFibFindPreviousForInput(input) {
@@ -5874,27 +5893,37 @@ function _btcFibFindPreviousForInput(input) {
 
 function _btcFibBuildLadder(input, open, previousLadder) {
   var range = input.fibHigh - input.fibLow;
-  var totalFallPercentExact = ((input.motherHigh - input.fibLow) / input.motherHigh) * 100;
-  var totalAllocationRequiredExact = input.capital * (totalFallPercentExact / 100);
-  var previousAllocationExact = _btcFibPreviousTotal(previousLadder);
-  var previousFallPercentExact = _btcFibPreviousFall(previousLadder);
-  var freshAllocationExact = Math.max(0, totalAllocationRequiredExact - previousAllocationExact);
-  var freshFallPercentExact = Math.max(0, totalFallPercentExact - previousFallPercentExact);
   var rows = _btcFibLevelConfigs().map(function(config) {
     var price = input.fibHigh - (range * config.level);
-    var amountInrExact = freshAllocationExact * config.pct;
+    var totalFallPercentExact = Math.max(0, ((input.motherHigh - price) / input.motherHigh) * 100);
+    var totalAmountInrExact = input.capital * (totalFallPercentExact / 100) * config.pct;
+    var previousRow = _btcFibFindRowForLevel(previousLadder, config.level);
+    var previousFallPercentExact = _btcFibRowTotalFallPercent(previousLadder, previousRow);
+    var previousAmountInrExact = _btcFibRowTotalAmount(previousLadder, previousRow);
+    var freshFallPercentExact = Math.max(0, totalFallPercentExact - previousFallPercentExact);
+    var amountInrExact = Math.max(0, totalAmountInrExact - previousAmountInrExact);
     return {
       level: config.level,
       pct: config.pct,
       label: config.label,
       price: price,
+      totalFallPercentExact: totalFallPercentExact,
+      previousFallPercentExact: previousFallPercentExact,
       fallPercent: freshFallPercentExact,
+      totalAmountInrExact: totalAmountInrExact,
+      previousAmountInrExact: previousAmountInrExact,
       amountInr: Math.round(amountInrExact),
       amountInrExact: amountInrExact,
       amountUsdt: _btcFibInrToUsdt(amountInrExact),
       status: ''
     };
   });
+  var totalFallPercentExact = rows.reduce(function(max, row) { return Math.max(max, Number(row.totalFallPercentExact) || 0); }, 0);
+  var previousFallPercentExact = rows.reduce(function(max, row) { return Math.max(max, Number(row.previousFallPercentExact) || 0); }, 0);
+  var freshFallPercentExact = rows.reduce(function(max, row) { return Math.max(max, Number(row.fallPercent) || 0); }, 0);
+  var totalAllocationRequiredExact = rows.reduce(function(total, row) { return total + (Number(row.totalAmountInrExact) || 0); }, 0);
+  var previousAllocationExact = rows.reduce(function(total, row) { return total + (Number(row.previousAmountInrExact) || 0); }, 0);
+  var freshAllocationExact = rows.reduce(function(total, row) { return total + (Number(row.amountInrExact) || 0); }, 0);
   return {
     id: 'btc-fib-' + Date.now() + '-' + Math.round(Math.random() * 100000),
     createdAt: new Date().toISOString(),
@@ -5956,7 +5985,7 @@ function _btcFibLadderRowsHtml(ladder) {
     return '<tr>'
       + '<td><div class="table-row-label">' + _escapeHtml(row.label || ('Fib ' + row.level)) + '</div><div class="table-note">Fib High - range x ' + _escapeHtml(row.level) + '</div></td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesPrice(row.price) + '</span></td>'
-      + '<td class="num">' + _btcAllocationFormatPercent(row.fallPercent || ladder.fallPercent) + '</td>'
+      + '<td class="num">' + _btcAllocationFormatPercent(row.fallPercent !== undefined ? row.fallPercent : ladder.fallPercent) + '</td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.amountInr) + '</span></td>'
       + '<td class="num">' + _escapeHtml(_btcFibFormatUsdt(amountUsdt)) + '</td>'
       + '<td class="center"><button class="btn btn-outline btn-sm" data-cf-click="placeBtcFibOrder(\'' + _escapeHtml(ladder.id) + '\',' + Number(row.level) + ',\'paper\')">Paper Buy</button></td>'
