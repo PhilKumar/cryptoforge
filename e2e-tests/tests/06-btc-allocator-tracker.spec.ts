@@ -26,6 +26,55 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await page.click('#nav-allocator');
     await expect(page.locator('#allocator-page')).toHaveClass(/active-page/);
 
+    await page.evaluate(() => {
+      localStorage.setItem('cf_btc_allocation_state_v1', JSON.stringify({
+        previousTotalAllocation: 2440,
+        previousHigh: 65725,
+        lastResult: {
+          bitcoinHigh: 65725,
+          bitcoinLow: 65635,
+          fallPercent: 0.137,
+          totalAllocationRequired: 137,
+          previousAllocation: 2440,
+          freshAllocation: 0,
+          split20: 0,
+          split30: 0,
+          split50: 0,
+        },
+        history: [
+          {
+            createdAt: new Date().toISOString(),
+            bitcoinHigh: 65725,
+            bitcoinLow: 65635,
+            fallPercent: 0.137,
+            totalAllocationRequired: 137,
+            previousAllocation: 2440,
+            freshAllocation: 0,
+            split20: 0,
+            split30: 0,
+            split50: 0,
+          },
+          {
+            createdAt: new Date().toISOString(),
+            bitcoinHigh: 66992,
+            bitcoinLow: 65360,
+            fallPercent: 2.437,
+            totalAllocationRequired: 2436,
+            previousAllocation: 930,
+            freshAllocation: 1506,
+            split20: 301,
+            split30: 452,
+            split50: 753,
+          },
+        ],
+        buyRows: [],
+      }));
+      (window as any)._btcAllocationLoadState();
+      (window as any).renderBtcAllocationCalculator();
+    });
+    await expect(page.locator('#btc-alloc-memory')).toHaveText('₹0');
+    await expect(page.locator('#btc-alloc-result-body')).toContainText('No calculation yet');
+
     await page.fill('#btc-alloc-high', '65725');
     await page.fill('#btc-alloc-low', '65635');
     await page.click('.allocator-input-panel button:has-text("Calculate")');
@@ -69,8 +118,8 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await page.click('.allocator-input-panel button:has-text("Calculate")');
     await expect(resultCells.nth(0)).toHaveText('0.645%');
     await expect(resultCells.nth(1)).toHaveText('₹645');
-    await expect(resultCells.nth(2)).toHaveText('₹0');
-    await expect(resultCells.nth(3)).toHaveText('₹645');
+    await expect(resultCells.nth(2)).toHaveText('₹2,436');
+    await expect(resultCells.nth(3)).toHaveText('₹0');
 
     await page.click('.allocator-buy-actions button:has-text("Reset Tracker")');
     await expect(page.locator('#btc-buy-tracker-body')).toContainText('No BTC buy rows yet');
@@ -93,6 +142,8 @@ test.describe('BTC Allocator And Buy Tracker', () => {
 
     await page.click('#btc-alloc-clear-history');
     await expect(page.locator('#btc-alloc-history-body')).toContainText('No allocation history yet');
+    await expect(page.locator('#btc-alloc-result-body')).toContainText('No calculation yet');
+    await expect(page.locator('#btc-alloc-memory')).toHaveText('₹0');
 
     expect(pageErrors).toEqual([]);
   });
