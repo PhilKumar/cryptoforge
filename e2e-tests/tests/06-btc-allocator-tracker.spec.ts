@@ -131,24 +131,30 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await expect(page.locator('#btc-fib-body tr')).toHaveCount(3);
     await expect(page.locator('#btc-fib-body')).toContainText('Fib 2.0 / 20%');
     await expect(page.locator('#btc-fib-body')).toContainText('₹66,128');
-    await expect(page.locator('#btc-fib-body')).toContainText('₹129');
+    await expect(page.locator('#btc-fib-body tr').nth(0)).toContainText('1.290%');
+    await expect(page.locator('#btc-fib-body tr').nth(0)).toContainText('₹258');
     await expect(page.locator('#btc-fib-body')).toContainText('Fib 4.0 / 30%');
     await expect(page.locator('#btc-fib-body')).toContainText('₹65,264');
-    await expect(page.locator('#btc-fib-body')).toContainText('₹193');
+    await expect(page.locator('#btc-fib-body tr').nth(1)).toContainText('2.579%');
+    await expect(page.locator('#btc-fib-body tr').nth(1)).toContainText('₹774');
     await expect(page.locator('#btc-fib-body')).toContainText('Fib 8.0 / 50%');
     await expect(page.locator('#btc-fib-body')).toContainText('₹63,536');
-    await expect(page.locator('#btc-fib-body')).toContainText('₹322');
+    await expect(page.locator('#btc-fib-body tr').nth(2)).toContainText('5.159%');
+    await expect(page.locator('#btc-fib-body tr').nth(2)).toContainText('₹2,579');
 
     await page.fill('#btc-fib-high', '65914.53');
     await page.fill('#btc-fib-low', '65788');
     await page.fill('#btc-fib-capital', '100000');
     await page.click('.allocator-fib-actions button:has-text("Calculate Fib")');
     await expect(page.locator('#btc-fib-body tr').nth(0)).toContainText('₹65,661.47');
-    await expect(page.locator('#btc-fib-body tr').nth(0)).toContainText('₹38');
+    await expect(page.locator('#btc-fib-body tr').nth(0)).toContainText('1.986%');
+    await expect(page.locator('#btc-fib-body tr').nth(0)).toContainText('₹397');
     await expect(page.locator('#btc-fib-body tr').nth(1)).toContainText('₹65,408.41');
-    await expect(page.locator('#btc-fib-body tr').nth(1)).toContainText('₹58');
+    await expect(page.locator('#btc-fib-body tr').nth(1)).toContainText('2.364%');
+    await expect(page.locator('#btc-fib-body tr').nth(1)).toContainText('₹709');
     await expect(page.locator('#btc-fib-body tr').nth(2)).toContainText('₹64,902.29');
-    await expect(page.locator('#btc-fib-body tr').nth(2)).toContainText('₹96');
+    await expect(page.locator('#btc-fib-body tr').nth(2)).toContainText('3.119%');
+    await expect(page.locator('#btc-fib-body tr').nth(2)).toContainText('₹1,560');
 
     await page.click('.allocator-buy-actions button:has-text("Reset Tracker")');
     await expect(page.locator('#btc-buy-tracker-body')).toContainText('No BTC buy rows yet');

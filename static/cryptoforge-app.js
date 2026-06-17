@@ -5803,6 +5803,7 @@ function _btcFibReadInputs() {
   return {
     fibHigh: _btcAllocationNumber(fibHighEl ? fibHighEl.value : ''),
     fibLow: _btcAllocationNumber(fibLowEl ? fibLowEl.value : ''),
+    motherHigh: _btcAllocationCurrentMotherHigh(),
     capital: _btcAllocationNumber(capitalEl ? capitalEl.value : ''),
     symbol: String(symbolEl && symbolEl.value ? symbolEl.value : 'BTCUSDT').trim().toUpperCase(),
     leverage: Math.max(1, Math.round(_btcAllocationNumber(leverageEl ? leverageEl.value : '1') || 1))
@@ -5810,6 +5811,8 @@ function _btcFibReadInputs() {
 }
 
 function _btcFibValidate(input) {
+  if (!Number.isFinite(input.motherHigh)) return 'Enter Mother Candle High in Inputs before calculating the Fib ladder.';
+  if (input.motherHigh <= 0) return 'Mother Candle High must be greater than 0.';
   if (!Number.isFinite(input.fibHigh)) return 'Fib High must be a valid number.';
   if (input.fibHigh <= 0) return 'Fib High must be greater than 0.';
   if (!Number.isFinite(input.fibLow)) return 'Fib Low must be a valid number.';
@@ -5830,14 +5833,14 @@ function calculateBtcFibLadder() {
     return;
   }
   var range = input.fibHigh - input.fibLow;
-  var fallPercentExact = (range / input.fibHigh) * 100;
-  var totalAllocationExact = input.capital * (fallPercentExact / 100);
   var rows = [
     { level: 2, pct: 0.20, label: 'Fib 2.0 / 20%' },
     { level: 4, pct: 0.30, label: 'Fib 4.0 / 30%' },
     { level: 8, pct: 0.50, label: 'Fib 8.0 / 50%' }
   ].map(function(config) {
     var price = input.fibHigh - (range * config.level);
+    var fallPercentExact = ((input.motherHigh - price) / input.motherHigh) * 100;
+    var totalAllocationExact = input.capital * (fallPercentExact / 100);
     var amountInrExact = totalAllocationExact * config.pct;
     return {
       level: config.level,
@@ -5856,16 +5859,20 @@ function calculateBtcFibLadder() {
     _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Fib High and Fib Low.');
     return;
   }
+  var aboveMotherRow = rows.find(function(row) { return !Number.isFinite(row.fallPercent) || row.fallPercent <= 0; });
+  if (aboveMotherRow) {
+    _btcFibError('Fib ' + aboveMotherRow.level + '.0 buy price must be below Mother Candle High to calculate allocation.');
+    return;
+  }
   _btcAllocationState.fibLast = {
     createdAt: new Date().toISOString(),
+    motherHigh: input.motherHigh,
     fibHigh: input.fibHigh,
     fibLow: input.fibLow,
     capital: input.capital,
     symbol: input.symbol,
     leverage: input.leverage,
     range: range,
-    fallPercent: Math.round(fallPercentExact * 1000) / 1000,
-    totalAllocation: Math.round(totalAllocationExact),
     rows: rows
   };
   _btcAllocationSaveState();
