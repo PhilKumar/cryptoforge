@@ -5857,10 +5857,11 @@ function _btcFibFindRowForLevel(ladder, level) {
 
 function _btcFibBuildLadder(input, open) {
   var range = input.fibHigh - input.fibLow;
+  var fallPercentExact = Math.max(0, ((input.motherHigh - input.fibLow) / input.motherHigh) * 100);
+  var totalAllocationRequiredExact = input.capital * (fallPercentExact / 100);
   var rows = _btcFibLevelConfigs().map(function(config) {
     var price = input.fibHigh - (range * config.level);
-    var fallPercentExact = Math.max(0, ((input.motherHigh - price) / input.motherHigh) * 100);
-    var amountInrExact = input.capital * (fallPercentExact / 100) * config.pct;
+    var amountInrExact = totalAllocationRequiredExact * config.pct;
     return {
       level: config.level,
       pct: config.pct,
@@ -5877,10 +5878,9 @@ function _btcFibBuildLadder(input, open) {
       status: ''
     };
   });
-  var totalFallPercentExact = rows.reduce(function(max, row) { return Math.max(max, Number(row.totalFallPercentExact) || 0); }, 0);
+  var totalFallPercentExact = fallPercentExact;
   var previousFallPercentExact = 0;
   var freshFallPercentExact = totalFallPercentExact;
-  var totalAllocationRequiredExact = rows.reduce(function(total, row) { return total + (Number(row.totalAmountInrExact) || 0); }, 0);
   var previousAllocationExact = 0;
   var freshAllocationExact = totalAllocationRequiredExact;
   return {
