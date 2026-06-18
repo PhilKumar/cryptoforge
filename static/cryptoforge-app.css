@@ -1052,14 +1052,12 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    align-self: end;
+    align-self: start;
+    padding-top: 25px;
   }
   .allocator-minor-actions .btn {
-    min-height: 56px;
     min-width: 118px;
     justify-content: center;
-    padding-top: 0;
-    padding-bottom: 0;
   }
   .allocator-minor-result-table {
     min-width: 680px;
@@ -1105,15 +1103,13 @@
   .allocator-fib-actions {
     display: flex;
     align-items: center;
-    align-self: end;
+    align-self: start;
     justify-content: flex-start;
+    padding-top: 25px;
   }
   .allocator-fib-actions .btn {
-    min-height: 56px;
     min-width: 130px;
     justify-content: center;
-    padding-top: 0;
-    padding-bottom: 0;
   }
   .allocator-fib-ladders {
     display: grid;
@@ -1273,6 +1269,7 @@
     .allocator-minor-actions,
     .allocator-fib-actions {
       grid-column: 1 / -1;
+      padding-top: 0;
     }
     .allocator-fib-card-toggle {
       grid-template-columns: repeat(2, minmax(0, 1fr));
