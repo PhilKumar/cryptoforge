@@ -6168,17 +6168,36 @@ function _btcAllocationError(message) {
   if (errorEl) errorEl.textContent = message || '';
 }
 
+function _btcMinorDifferenceError(message) {
+  var errorEl = document.getElementById('btc-minor-error');
+  if (errorEl) errorEl.textContent = message || '';
+}
+
 function _btcBuyTrackerError(message) {
   var errorEl = document.getElementById('btc-buy-error');
   if (errorEl) errorEl.textContent = message || '';
 }
 
 function _btcAllocationValidate(high, low) {
-  if (!Number.isFinite(high)) return 'Mother Candle High must be a valid number.';
-  if (!Number.isFinite(low)) return 'Bitcoin Low / Current Price must be a valid number.';
-  if (high <= 0) return 'Mother Candle High must be greater than 0.';
-  if (low <= 0) return 'Bitcoin Low / Current Price must be greater than 0.';
-  if (low > high) return 'Bitcoin Low / Current Price cannot be greater than Mother Candle High.';
+  if (!Number.isFinite(high)) return 'Major Mother Candle High must be a valid number.';
+  if (!Number.isFinite(low)) return 'Major Mother Candle Low must be a valid number.';
+  if (high <= 0) return 'Major Mother Candle High must be greater than 0.';
+  if (low <= 0) return 'Major Mother Candle Low must be greater than 0.';
+  if (low > high) return 'Major Mother Candle Low cannot be greater than Major Mother Candle High.';
+  return '';
+}
+
+function _btcMinorDifferenceValidate(majorHigh, majorLow, minorHigh, minorLow) {
+  if (!Number.isFinite(majorHigh)) return 'Major High must be a valid number.';
+  if (!Number.isFinite(majorLow)) return 'Major Low must be a valid number.';
+  if (!Number.isFinite(minorHigh)) return 'Minor High must be a valid number.';
+  if (!Number.isFinite(minorLow)) return 'Minor Low must be a valid number.';
+  if (majorHigh <= 0) return 'Major High must be greater than 0.';
+  if (majorLow <= 0) return 'Major Low must be greater than 0.';
+  if (minorHigh <= 0) return 'Minor High must be greater than 0.';
+  if (minorLow <= 0) return 'Minor Low must be greater than 0.';
+  if (majorLow > majorHigh) return 'Major Low cannot be greater than Major High.';
+  if (minorLow > minorHigh) return 'Minor Low cannot be greater than Minor High.';
   return '';
 }
 
@@ -6375,6 +6394,47 @@ function resetBtcBuyTracker() {
   _btcBuyTrackerError('');
   renderBtcAllocationCalculator();
   if (typeof cfToast === 'function') cfToast('BTC buy tracker reset', 'success');
+}
+
+function calculateBtcMinorDifference() {
+  var majorHighEl = document.getElementById('btc-minor-major-high');
+  var majorLowEl = document.getElementById('btc-minor-major-low');
+  var minorHighEl = document.getElementById('btc-minor-high');
+  var minorLowEl = document.getElementById('btc-minor-low');
+  var majorHigh = _btcAllocationNumber(majorHighEl ? majorHighEl.value : '');
+  var majorLow = _btcAllocationNumber(majorLowEl ? majorLowEl.value : '');
+  var minorHigh = _btcAllocationNumber(minorHighEl ? minorHighEl.value : '');
+  var minorLow = _btcAllocationNumber(minorLowEl ? minorLowEl.value : '');
+  var error = _btcMinorDifferenceValidate(majorHigh, majorLow, minorHigh, minorLow);
+  if (error) {
+    _btcMinorDifferenceError(error);
+    return;
+  }
+
+  var majorFallPercent = ((majorHigh - majorLow) / majorHigh) * 100;
+  var minorFallPercent = ((minorHigh - minorLow) / minorHigh) * 100;
+  var differencePercent = majorFallPercent - minorFallPercent;
+  var allocation = Math.max(0, differencePercent) * 1000;
+  var body = document.getElementById('btc-minor-result-body');
+  if (body) {
+    body.innerHTML = '<tr>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(majorFallPercent) + '</span></td>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(minorFallPercent) + '</span></td>'
+      + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatPercent(differencePercent) + '</span></td>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(allocation) + '</span></td>'
+      + '</tr>';
+  }
+  _btcMinorDifferenceError('');
+}
+
+function resetBtcMinorDifference() {
+  ['btc-minor-major-high', 'btc-minor-major-low', 'btc-minor-high', 'btc-minor-low'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  var body = document.getElementById('btc-minor-result-body');
+  if (body) body.innerHTML = '<tr><td colspan="4" class="cf-table-empty-cell">No minor calculation yet</td></tr>';
+  _btcMinorDifferenceError('');
 }
 
 function clearBtcAllocationHistory() {

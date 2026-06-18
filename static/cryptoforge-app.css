@@ -1004,6 +1004,7 @@
   }
   .allocator-input-panel,
   .allocator-result-panel,
+  .allocator-minor-panel,
   .allocator-history-panel,
   .allocator-fib-panel,
   .allocator-buy-panel {
@@ -1033,6 +1034,31 @@
   }
   .allocator-result-table {
     min-width: 760px;
+  }
+  .allocator-minor-panel {
+    margin-top: 14px;
+  }
+  .allocator-minor-toolbar {
+    margin-bottom: 12px;
+  }
+  .allocator-minor-form {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(130px, 1fr)) auto;
+    gap: 10px 12px;
+    align-items: end;
+    margin-bottom: 4px;
+  }
+  .allocator-minor-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .allocator-minor-actions .btn {
+    min-width: 118px;
+    justify-content: center;
+  }
+  .allocator-minor-result-table {
+    min-width: 680px;
   }
   .allocator-track-actions {
     display: flex;
@@ -1229,9 +1255,13 @@
     .allocator-buy-form {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    .allocator-minor-form {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     .allocator-fib-form {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    .allocator-minor-actions,
     .allocator-fib-actions {
       grid-column: 1 / -1;
     }
@@ -1273,6 +1303,9 @@
     .allocator-buy-form {
       grid-template-columns: 1fr;
     }
+    .allocator-minor-form {
+      grid-template-columns: 1fr;
+    }
     .allocator-fib-form {
       grid-template-columns: 1fr;
     }
@@ -1281,6 +1314,7 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .allocator-buy-actions .btn,
+    .allocator-minor-actions .btn,
     .allocator-fib-actions .btn,
     .allocator-track-actions .btn {
       justify-content: center;
