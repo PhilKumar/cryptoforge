@@ -1052,10 +1052,14 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    align-self: end;
   }
   .allocator-minor-actions .btn {
+    min-height: 56px;
     min-width: 118px;
     justify-content: center;
+    padding-top: 0;
+    padding-bottom: 0;
   }
   .allocator-minor-result-table {
     min-width: 680px;
@@ -1100,11 +1104,16 @@
   }
   .allocator-fib-actions {
     display: flex;
+    align-items: center;
+    align-self: end;
     justify-content: flex-start;
   }
   .allocator-fib-actions .btn {
+    min-height: 56px;
     min-width: 130px;
     justify-content: center;
+    padding-top: 0;
+    padding-bottom: 0;
   }
   .allocator-fib-ladders {
     display: grid;
