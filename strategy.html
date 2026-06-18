@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260618-5">
-<link rel="manifest" href="/manifest.webmanifest?v=20260618-5">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260618-6">
+<link rel="manifest" href="/manifest.webmanifest?v=20260618-6">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260618-5"></script>
+<script src="/static/cryptoforge-boot.js?v=20260618-6"></script>
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260618-5">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260618-5">
-<script src="/static/error-handler.js?v=20260618-5" defer></script>
-<script src="/static/pwa.js?v=20260618-5" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260618-6">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260618-6">
+<script src="/static/error-handler.js?v=20260618-6" defer></script>
+<script src="/static/pwa.js?v=20260618-6" defer></script>
 </head>
 <body>
 
@@ -415,7 +415,7 @@
     <div class="table-toolbar allocator-minor-toolbar">
       <div class="table-title-group">
         <h3 class="table-title">Minor Mother Candle Difference</h3>
-        <div class="table-meta">Calculates Major High to Minor Low percent minus the completed Major High to Major Low percent. Allocation uses 1% = ₹1,000.</div>
+        <div class="table-meta">If Minor High is inside the Major range, this shows only the remaining difference. If not, it is treated as a separate Major setup.</div>
       </div>
     </div>
     <div class="allocator-minor-form">
@@ -446,14 +446,15 @@
         <table class="trade-table allocator-minor-result-table">
           <thead>
             <tr>
-              <th class="num">Major Fall %</th>
-              <th class="num">Major to Minor Low %</th>
+              <th>Setup</th>
+              <th class="num">Base Fall %</th>
+              <th class="num">Total Fall %</th>
               <th class="num">Difference %</th>
               <th class="num">Difference Allocation ₹</th>
             </tr>
           </thead>
           <tbody id="btc-minor-result-body">
-            <tr><td colspan="4" class="cf-table-empty-cell">No minor calculation yet</td></tr>
+            <tr><td colspan="5" class="cf-table-empty-cell">No minor calculation yet</td></tr>
           </tbody>
         </table>
       </div>
@@ -1986,7 +1987,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260618-5" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260618-5" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260618-6" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260618-6" defer></script>
 </body>
 </html>

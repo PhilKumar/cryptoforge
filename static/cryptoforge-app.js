@@ -5858,11 +5858,21 @@ function _btcFibFindRowForLevel(ladder, level) {
 function _btcFibFindPreviousInList(input, ladders) {
   ladders = Array.isArray(ladders) ? ladders : [];
   var motherKey = _btcAllocationHighKey(input.motherHigh);
+  var inputCapital = Number(input.capital);
+  var previous = null;
+  var previousAllocation = 0;
   for (var i = ladders.length - 1; i >= 0; i--) {
     var ladder = ladders[i];
-    if (_btcAllocationHighKey(ladder.motherHigh) === motherKey) return ladder;
+    if (_btcAllocationHighKey(ladder.motherHigh) !== motherKey) continue;
+    var ladderCapital = Number(ladder.capital);
+    if (Number.isFinite(inputCapital) && Number.isFinite(ladderCapital) && Math.abs(inputCapital - ladderCapital) > 0.000001) continue;
+    var ladderAllocation = _btcFibPreviousTotalAllocation(ladder);
+    if (!previous || ladderAllocation >= previousAllocation) {
+      previous = ladder;
+      previousAllocation = ladderAllocation;
+    }
   }
-  return null;
+  return previous;
 }
 
 function _btcFibPreviousTotalFall(ladder) {
@@ -6085,7 +6095,7 @@ function toggleBtcFibLadder(ladderId) {
 
 function deleteBtcFibLadder(ladderId) {
   var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
-  _btcAllocationState.fibLadders = ladders.filter(function(item) { return String(item.id) !== String(ladderId); });
+  _btcAllocationState.fibLadders = _btcFibRebuildStoredLadders(ladders.filter(function(item) { return String(item.id) !== String(ladderId); }));
   _btcAllocationState.fibLast = _btcAllocationState.fibLadders.length ? _btcAllocationState.fibLadders[_btcAllocationState.fibLadders.length - 1] : null;
   _btcAllocationSaveState();
   renderBtcFibLadder();
@@ -6198,8 +6208,11 @@ function _btcMinorDifferenceValidate(majorHigh, majorLow, minorHigh, minorLow) {
   if (minorLow <= 0) return 'Minor Low must be greater than 0.';
   if (majorLow > majorHigh) return 'Major Low cannot be greater than Major High.';
   if (minorLow > minorHigh) return 'Minor Low cannot be greater than Minor High.';
-  if (minorHigh > majorHigh || minorHigh < majorLow) return 'Minor High must be inside the Major High to Major Low range.';
   return '';
+}
+
+function _btcMinorHighInsideMajor(majorHigh, majorLow, minorHigh) {
+  return Number(minorHigh) <= Number(majorHigh) && Number(minorHigh) >= Number(majorLow);
 }
 
 function _btcBuyTrackerValidate(buyPrice, buyAmount) {
@@ -6412,14 +6425,19 @@ function calculateBtcMinorDifference() {
     return;
   }
 
+  var isRelatedMinor = _btcMinorHighInsideMajor(majorHigh, majorLow, minorHigh);
   var majorFallPercent = ((majorHigh - majorLow) / majorHigh) * 100;
-  var totalToMinorLowPercent = ((majorHigh - minorLow) / majorHigh) * 100;
-  var differencePercent = totalToMinorLowPercent - majorFallPercent;
+  var baseFallPercent = isRelatedMinor ? majorFallPercent : 0;
+  var totalToMinorLowPercent = isRelatedMinor
+    ? ((majorHigh - minorLow) / majorHigh) * 100
+    : ((minorHigh - minorLow) / minorHigh) * 100;
+  var differencePercent = Math.max(0, totalToMinorLowPercent - baseFallPercent);
   var allocation = Math.max(0, differencePercent) * 1000;
   var body = document.getElementById('btc-minor-result-body');
   if (body) {
     body.innerHTML = '<tr>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(majorFallPercent) + '</span></td>'
+      + '<td><div class="table-row-label">' + (isRelatedMinor ? 'Related minor' : 'Separate major') + '</div><div class="table-note">' + (isRelatedMinor ? 'Major allocation is subtracted' : 'Minor high is outside major range') + '</div></td>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(baseFallPercent) + '</span></td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(totalToMinorLowPercent) + '</span></td>'
       + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatPercent(differencePercent) + '</span></td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(allocation) + '</span></td>'
@@ -6434,7 +6452,7 @@ function resetBtcMinorDifference() {
     if (el) el.value = '';
   });
   var body = document.getElementById('btc-minor-result-body');
-  if (body) body.innerHTML = '<tr><td colspan="4" class="cf-table-empty-cell">No minor calculation yet</td></tr>';
+  if (body) body.innerHTML = '<tr><td colspan="5" class="cf-table-empty-cell">No minor calculation yet</td></tr>';
   _btcMinorDifferenceError('');
 }
 
