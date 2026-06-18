@@ -147,14 +147,14 @@ test.describe('BTC Allocator And Buy Tracker', () => {
     await page.fill('#btc-fib-capital', '100000');
     await page.click('.allocator-fib-actions button:has-text("Add Fib")');
     await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(0)).toContainText('₹65,661.47');
-    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(0)).toContainText('1.797%');
-    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(0)).toContainText('₹359');
+    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(0)).toContainText('1.152%');
+    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(0)).toContainText('₹230');
     await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(1)).toContainText('₹65,408.41');
-    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(1)).toContainText('1.797%');
-    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(1)).toContainText('₹539');
+    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(1)).toContainText('1.152%');
+    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(1)).toContainText('₹346');
     await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(2)).toContainText('₹64,902.29');
-    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(2)).toContainText('1.797%');
-    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(2)).toContainText('₹899');
+    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(2)).toContainText('1.152%');
+    await expect(page.locator('#btc-fib-ladders .allocator-fib-card:last-child tbody tr').nth(2)).toContainText('₹576');
 
     await page.fill('#btc-alloc-high', '66200');
     await page.fill('#btc-alloc-low', '65788');
