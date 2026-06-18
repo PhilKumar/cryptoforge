@@ -873,6 +873,7 @@ function showPage(pageId, btn, options) {
   if (pageId === 'live-page') startLiveMonitor();
   if (pageId === 'portfolio-page') { loadBrokerSettings(true); refreshBrokerState(true); loadPortfolioData(); }
   if (pageId === 'allocator-page') renderBtcAllocationCalculator();
+  if (pageId === 'journal-page') renderTradeJournal();
   if (pageId === 'scalp-page') cfInitScalpPage();
   // Stop live monitor when leaving live page
   if (pageId !== 'live-page') stopLiveMonitor();
@@ -6532,6 +6533,490 @@ function resetBtcAllocation() {
   if (typeof cfToast === 'function') cfToast('BTC allocation memory reset', 'success');
 }
 
+// ── Trade Journal ──────────────────────────────────────────
+const CF_TRADE_JOURNAL_STORAGE_KEY = 'cf_trade_journal_state_v1';
+const CF_TRADE_JOURNAL_FRAMES = ['5m', '15m', '1H', '4H'];
+let _cfTradeJournalState = {
+  entries: [],
+  draft: null,
+  activeTimeframe: '5m',
+  filterTimeframe: 'all',
+  openId: ''
+};
+let _cfTradeJournalBound = false;
+
+function _cfTradeJournalToday() {
+  var date = new Date();
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 10);
+}
+
+function _cfTradeJournalDefaultDraft() {
+  return {
+    id: '',
+    date: _cfTradeJournalToday(),
+    timeframe: _cfTradeJournalState.activeTimeframe || '5m',
+    symbol: selectedCrypto || 'BTCUSDT',
+    side: 'Long',
+    result: 'Open',
+    setup: '',
+    pnl: '',
+    entryPrice: '',
+    exitPrice: '',
+    emotion: 'Calm',
+    grade: 7,
+    tags: [],
+    thesis: '',
+    execution: '',
+    lesson: ''
+  };
+}
+
+function _cfTradeJournalLoadState() {
+  try {
+    var raw = localStorage.getItem(CF_TRADE_JOURNAL_STORAGE_KEY);
+    var parsed = raw ? JSON.parse(raw) : {};
+    _cfTradeJournalState = {
+      entries: Array.isArray(parsed.entries) ? parsed.entries.slice(0, 500) : [],
+      draft: parsed.draft && typeof parsed.draft === 'object' ? parsed.draft : null,
+      activeTimeframe: CF_TRADE_JOURNAL_FRAMES.indexOf(parsed.activeTimeframe) >= 0 ? parsed.activeTimeframe : '5m',
+      filterTimeframe: parsed.filterTimeframe || 'all',
+      openId: parsed.openId || ''
+    };
+  } catch (error) {
+    _cfTradeJournalState = { entries: [], draft: null, activeTimeframe: '5m', filterTimeframe: 'all', openId: '' };
+  }
+}
+
+function _cfTradeJournalSaveState() {
+  try {
+    localStorage.setItem(CF_TRADE_JOURNAL_STORAGE_KEY, JSON.stringify(_cfTradeJournalState));
+  } catch (error) {
+    console.warn('Unable to save trade journal:', error);
+  }
+}
+
+function _cfTradeJournalField(id) {
+  return document.getElementById(id);
+}
+
+function _cfTradeJournalReadNumber(id) {
+  var el = _cfTradeJournalField(id);
+  if (!el || String(el.value || '').trim() === '') return '';
+  var value = Number(String(el.value).replace(/,/g, '').trim());
+  return Number.isFinite(value) ? value : '';
+}
+
+function _cfTradeJournalTagsFromField() {
+  var el = _cfTradeJournalField('journal-tags');
+  return String(el && el.value ? el.value : '')
+    .split('|')
+    .map(function(tag) { return tag.trim(); })
+    .filter(Boolean);
+}
+
+function _cfTradeJournalSetTags(tags) {
+  var el = _cfTradeJournalField('journal-tags');
+  if (el) el.value = (Array.isArray(tags) ? tags : []).join('|');
+}
+
+function _cfTradeJournalReadForm() {
+  var timeframe = _cfTradeJournalState.activeTimeframe || '5m';
+  return {
+    id: String((_cfTradeJournalField('journal-edit-id') || {}).value || ''),
+    date: String((_cfTradeJournalField('journal-date') || {}).value || _cfTradeJournalToday()),
+    timeframe: timeframe,
+    symbol: String((_cfTradeJournalField('journal-symbol') || {}).value || 'BTCUSDT').trim().toUpperCase(),
+    side: String((_cfTradeJournalField('journal-side') || {}).value || 'Long'),
+    result: String((_cfTradeJournalField('journal-result') || {}).value || 'Open'),
+    setup: String((_cfTradeJournalField('journal-setup') || {}).value || '').trim(),
+    pnl: _cfTradeJournalReadNumber('journal-pnl'),
+    entryPrice: _cfTradeJournalReadNumber('journal-entry-price'),
+    exitPrice: _cfTradeJournalReadNumber('journal-exit-price'),
+    emotion: String((_cfTradeJournalField('journal-emotion') || {}).value || 'Calm'),
+    grade: Math.max(1, Math.min(10, Math.round(Number((_cfTradeJournalField('journal-grade') || {}).value) || 7))),
+    tags: _cfTradeJournalTagsFromField(),
+    thesis: String((_cfTradeJournalField('journal-thesis') || {}).value || '').trim(),
+    execution: String((_cfTradeJournalField('journal-execution') || {}).value || '').trim(),
+    lesson: String((_cfTradeJournalField('journal-lesson') || {}).value || '').trim()
+  };
+}
+
+function _cfTradeJournalApplyDraft(draft) {
+  var data = Object.assign(_cfTradeJournalDefaultDraft(), draft || {});
+  if (CF_TRADE_JOURNAL_FRAMES.indexOf(data.timeframe) < 0) data.timeframe = '5m';
+  _cfTradeJournalState.activeTimeframe = data.timeframe;
+  [
+    ['journal-edit-id', data.id || ''],
+    ['journal-date', data.date || _cfTradeJournalToday()],
+    ['journal-symbol', data.symbol || 'BTCUSDT'],
+    ['journal-side', data.side || 'Long'],
+    ['journal-result', data.result || 'Open'],
+    ['journal-setup', data.setup || ''],
+    ['journal-pnl', data.pnl === '' || data.pnl === null || data.pnl === undefined ? '' : data.pnl],
+    ['journal-entry-price', data.entryPrice === '' || data.entryPrice === null || data.entryPrice === undefined ? '' : data.entryPrice],
+    ['journal-exit-price', data.exitPrice === '' || data.exitPrice === null || data.exitPrice === undefined ? '' : data.exitPrice],
+    ['journal-emotion', data.emotion || 'Calm'],
+    ['journal-grade', data.grade || 7],
+    ['journal-thesis', data.thesis || ''],
+    ['journal-execution', data.execution || ''],
+    ['journal-lesson', data.lesson || '']
+  ].forEach(function(pair) {
+    var el = _cfTradeJournalField(pair[0]);
+    if (el) el.value = pair[1];
+  });
+  _cfTradeJournalSetTags(Array.isArray(data.tags) ? data.tags : []);
+  _cfTradeJournalUpdateGradeLabel();
+  renderTradeJournal();
+}
+
+function _cfTradeJournalStoreDraftFromForm() {
+  _cfTradeJournalState.draft = _cfTradeJournalReadForm();
+  _cfTradeJournalSaveState();
+  _cfTradeJournalUpdateGradeLabel();
+  _cfTradeJournalRenderTagButtons();
+}
+
+function _cfTradeJournalUpdateGradeLabel() {
+  var label = document.getElementById('journal-grade-label');
+  var grade = Number((_cfTradeJournalField('journal-grade') || {}).value) || 7;
+  if (label) label.textContent = Math.max(1, Math.min(10, Math.round(grade))) + '/10';
+}
+
+function _cfTradeJournalError(message) {
+  var el = document.getElementById('journal-error');
+  if (el) el.textContent = message || '';
+}
+
+function _cfTradeJournalValidate(entry) {
+  if (!entry.date) return 'Choose a journal date.';
+  if (CF_TRADE_JOURNAL_FRAMES.indexOf(entry.timeframe) < 0) return 'Choose 5m, 15m, 1H, or 4H.';
+  if (!entry.symbol) return 'Symbol is required.';
+  if (entry.pnl !== '' && !Number.isFinite(Number(entry.pnl))) return 'P&L must be a valid number.';
+  var hasJournalText = !!(entry.setup || entry.thesis || entry.execution || entry.lesson || (entry.tags && entry.tags.length));
+  if (!hasJournalText) return 'Add a setup, execution note, lesson, or tag before saving.';
+  return '';
+}
+
+function _cfTradeJournalFormatDate(value) {
+  if (!value) return '--';
+  var parts = String(value).split('-').map(Number);
+  if (parts.length !== 3) return value;
+  var date = new Date(parts[0], parts[1] - 1, parts[2]);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function _cfTradeJournalFormatShortDate(value) {
+  if (!value) return '--';
+  var parts = String(value).split('-').map(Number);
+  if (parts.length !== 3) return value;
+  var date = new Date(parts[0], parts[1] - 1, parts[2]);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+function _cfTradeJournalFormatNumber(value) {
+  if (value === '' || value === null || value === undefined) return '-';
+  var num = Number(value);
+  if (!Number.isFinite(num)) return '-';
+  return (num > 0 ? '+' : '') + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(num);
+}
+
+function _cfTradeJournalResultClass(result) {
+  var value = String(result || '').toLowerCase();
+  if (value === 'win') return 'is-win';
+  if (value === 'loss') return 'is-loss';
+  if (value === 'breakeven') return 'is-flat';
+  if (value === 'skipped') return 'is-skipped';
+  return 'is-open';
+}
+
+function _cfTradeJournalRenderTagButtons() {
+  var tags = _cfTradeJournalTagsFromField();
+  document.querySelectorAll('.journal-tag-chip[data-journal-tag]').forEach(function(btn) {
+    btn.classList.toggle('active', tags.indexOf(btn.dataset.journalTag) >= 0);
+  });
+}
+
+function _cfTradeJournalStats(entries) {
+  var today = _cfTradeJournalToday();
+  var todayRows = entries.filter(function(entry) { return entry.date === today; });
+  var pnl = todayRows.reduce(function(total, entry) {
+    var value = Number(entry.pnl);
+    return total + (Number.isFinite(value) ? value : 0);
+  }, 0);
+  var closed = todayRows.filter(function(entry) { return entry.result === 'Win' || entry.result === 'Loss'; });
+  var wins = closed.filter(function(entry) { return entry.result === 'Win'; }).length;
+  var frameCounts = {};
+  CF_TRADE_JOURNAL_FRAMES.forEach(function(frame) { frameCounts[frame] = 0; });
+  todayRows.forEach(function(entry) {
+    if (frameCounts[entry.timeframe] !== undefined) frameCounts[entry.timeframe] += 1;
+  });
+  var bestFrame = CF_TRADE_JOURNAL_FRAMES.reduce(function(best, frame) {
+    return frameCounts[frame] > frameCounts[best] ? frame : best;
+  }, '5m');
+  return {
+    todayRows: todayRows,
+    todayCount: todayRows.length,
+    pnl: pnl,
+    winRate: closed.length ? Math.round((wins / closed.length) * 100) : 0,
+    bestFrame: frameCounts[bestFrame] ? bestFrame : '--',
+    frameCounts: frameCounts
+  };
+}
+
+function _cfTradeJournalEntryHtml(entry) {
+  var open = _cfTradeJournalState.openId === entry.id;
+  var resultClass = _cfTradeJournalResultClass(entry.result);
+  var tags = (Array.isArray(entry.tags) ? entry.tags : []).map(function(tag) {
+    return '<span>' + _escapeHtml(tag) + '</span>';
+  }).join('');
+  var priceBits = [];
+  if (entry.entryPrice !== '' && entry.entryPrice !== undefined) priceBits.push('Entry ' + _cfTradeJournalFormatNumber(entry.entryPrice));
+  if (entry.exitPrice !== '' && entry.exitPrice !== undefined) priceBits.push('Exit ' + _cfTradeJournalFormatNumber(entry.exitPrice));
+  return '<article class="journal-entry-card ' + resultClass + '">'
+    + '<button type="button" class="journal-entry-toggle" aria-expanded="' + (open ? 'true' : 'false') + '" data-cf-click="toggleTradeJournalEntry(\'' + _escapeHtml(entry.id) + '\')">'
+    + '<span class="journal-entry-main"><strong>' + _escapeHtml(entry.symbol || 'BTCUSDT') + '</strong><em>' + _escapeHtml(entry.side || 'Long') + ' • ' + _escapeHtml(entry.timeframe || '5m') + ' • ' + _escapeHtml(_cfTradeJournalFormatShortDate(entry.date)) + '</em></span>'
+    + '<span class="journal-entry-setup">' + _escapeHtml(entry.setup || 'Journal entry') + '</span>'
+    + '<span class="journal-entry-result">' + _escapeHtml(entry.result || 'Open') + '</span>'
+    + '<span class="journal-entry-pnl">' + _escapeHtml(_cfTradeJournalFormatNumber(entry.pnl)) + '</span>'
+    + '<strong class="journal-entry-open-label">' + (open ? 'Close' : 'Open') + '</strong>'
+    + '</button>'
+    + '<div class="journal-entry-body"' + (open ? '' : ' hidden') + '>'
+    + '<div class="journal-entry-meta">'
+    + '<div><span>Date</span><strong>' + _escapeHtml(_cfTradeJournalFormatDate(entry.date)) + '</strong></div>'
+    + '<div><span>Mindset</span><strong>' + _escapeHtml(entry.emotion || 'Calm') + '</strong></div>'
+    + '<div><span>Discipline</span><strong>' + _escapeHtml(String(entry.grade || 7)) + '/10</strong></div>'
+    + '<div><span>Prices</span><strong>' + _escapeHtml(priceBits.join(' • ') || '-') + '</strong></div>'
+    + '</div>'
+    + (tags ? '<div class="journal-entry-tags">' + tags + '</div>' : '')
+    + '<div class="journal-entry-notes">'
+    + '<section><h4>Setup Read</h4><p>' + _escapeHtml(entry.thesis || '-') + '</p></section>'
+    + '<section><h4>Execution</h4><p>' + _escapeHtml(entry.execution || '-') + '</p></section>'
+    + '<section><h4>Lesson</h4><p>' + _escapeHtml(entry.lesson || '-') + '</p></section>'
+    + '</div>'
+    + '<div class="journal-entry-card-actions">'
+    + '<button class="btn btn-outline btn-sm" data-cf-click="editTradeJournalEntry(\'' + _escapeHtml(entry.id) + '\')">Edit</button>'
+    + '<button class="btn btn-danger btn-sm" data-cf-click="deleteTradeJournalEntry(\'' + _escapeHtml(entry.id) + '\')">Delete</button>'
+    + '</div>'
+    + '</div>'
+    + '</article>';
+}
+
+function renderTradeJournal() {
+  var page = document.getElementById('journal-page');
+  if (!page) return;
+
+  var currentDraft = _cfTradeJournalReadForm();
+  _cfTradeJournalState.activeTimeframe = currentDraft.timeframe || _cfTradeJournalState.activeTimeframe || '5m';
+
+  document.querySelectorAll('.journal-tf-btn[data-journal-tf]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.journalTf === _cfTradeJournalState.activeTimeframe);
+  });
+  _cfTradeJournalRenderTagButtons();
+  _cfTradeJournalUpdateGradeLabel();
+
+  var dateLabel = document.getElementById('journal-date-stamp');
+  if (dateLabel) dateLabel.textContent = _cfTradeJournalFormatDate(currentDraft.date || _cfTradeJournalToday());
+  var formTitle = document.getElementById('journal-form-title');
+  if (formTitle) formTitle.textContent = currentDraft.id ? 'Edit Entry' : 'New Entry';
+
+  var entries = Array.isArray(_cfTradeJournalState.entries) ? _cfTradeJournalState.entries : [];
+  var stats = _cfTradeJournalStats(entries);
+  var statsHost = document.getElementById('journal-stat-grid');
+  if (statsHost) {
+    statsHost.innerHTML = ''
+      + '<div class="journal-stat-card"><span>Today</span><strong>' + _escapeHtml(String(stats.todayCount)) + '</strong></div>'
+      + '<div class="journal-stat-card"><span>Net P&amp;L</span><strong class="' + (stats.pnl > 0 ? 'positive' : stats.pnl < 0 ? 'negative' : '') + '">' + _escapeHtml(_cfTradeJournalFormatNumber(stats.pnl)) + '</strong></div>'
+      + '<div class="journal-stat-card"><span>Win Rate</span><strong>' + _escapeHtml(String(stats.winRate)) + '%</strong></div>'
+      + '<div class="journal-stat-card"><span>Best Frame</span><strong>' + _escapeHtml(stats.bestFrame) + '</strong></div>';
+  }
+
+  var frameHost = document.getElementById('journal-frame-grid');
+  if (frameHost) {
+    frameHost.innerHTML = CF_TRADE_JOURNAL_FRAMES.map(function(frame) {
+      var count = stats.frameCounts[frame] || 0;
+      return '<div class="journal-frame-card"><span>' + _escapeHtml(frame) + '</span><strong>' + _escapeHtml(String(count)) + '</strong></div>';
+    }).join('');
+  }
+
+  var filterEl = document.getElementById('journal-filter-timeframe');
+  if (filterEl) filterEl.value = _cfTradeJournalState.filterTimeframe || 'all';
+  var filtered = entries.filter(function(entry) {
+    return !_cfTradeJournalState.filterTimeframe || _cfTradeJournalState.filterTimeframe === 'all' || entry.timeframe === _cfTradeJournalState.filterTimeframe;
+  });
+  filtered.sort(function(a, b) {
+    var dateCompare = String(b.date || '').localeCompare(String(a.date || ''));
+    if (dateCompare !== 0) return dateCompare;
+    return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+  });
+
+  var countEl = document.getElementById('journal-entry-count');
+  if (countEl) countEl.textContent = filtered.length ? (filtered.length + ' saved entries') : 'No entries saved';
+  var list = document.getElementById('journal-entry-list');
+  if (list) {
+    list.innerHTML = filtered.length
+      ? filtered.map(_cfTradeJournalEntryHtml).join('')
+      : '<div class="cf-table-empty-cell">No journal entries yet</div>';
+  }
+}
+
+function setTradeJournalTimeframe(timeframe) {
+  if (CF_TRADE_JOURNAL_FRAMES.indexOf(timeframe) < 0) return;
+  _cfTradeJournalState.activeTimeframe = timeframe;
+  _cfTradeJournalStoreDraftFromForm();
+  renderTradeJournal();
+}
+
+function toggleTradeJournalTag(tag) {
+  var tags = _cfTradeJournalTagsFromField();
+  var index = tags.indexOf(tag);
+  if (index >= 0) tags.splice(index, 1);
+  else tags.push(tag);
+  _cfTradeJournalSetTags(tags);
+  _cfTradeJournalStoreDraftFromForm();
+  renderTradeJournal();
+}
+
+function saveTradeJournalEntry() {
+  var entry = _cfTradeJournalReadForm();
+  var error = _cfTradeJournalValidate(entry);
+  if (error) {
+    _cfTradeJournalError(error);
+    return;
+  }
+  var now = new Date().toISOString();
+  var existingId = entry.id;
+  if (!existingId) entry.id = 'journal-' + Date.now() + '-' + Math.round(Math.random() * 100000);
+  entry.createdAt = existingId ? '' : now;
+  entry.updatedAt = now;
+  _cfTradeJournalState.entries = Array.isArray(_cfTradeJournalState.entries) ? _cfTradeJournalState.entries : [];
+  if (existingId) {
+    _cfTradeJournalState.entries = _cfTradeJournalState.entries.map(function(item) {
+      if (item.id !== existingId) return item;
+      return Object.assign({}, item, entry, { createdAt: item.createdAt || now, updatedAt: now });
+    });
+  } else {
+    _cfTradeJournalState.entries.unshift(entry);
+  }
+  _cfTradeJournalState.entries = _cfTradeJournalState.entries.slice(0, 500);
+  _cfTradeJournalState.openId = entry.id;
+  _cfTradeJournalState.draft = Object.assign(_cfTradeJournalDefaultDraft(), {
+    date: entry.date,
+    timeframe: entry.timeframe,
+    symbol: entry.symbol,
+    side: entry.side
+  });
+  _cfTradeJournalSaveState();
+  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
+  _cfTradeJournalError('');
+  if (typeof cfToast === 'function') cfToast(existingId ? 'Journal entry updated' : 'Journal entry saved', 'success');
+}
+
+function newTradeJournalEntry() {
+  _cfTradeJournalState.draft = _cfTradeJournalDefaultDraft();
+  _cfTradeJournalSaveState();
+  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
+  _cfTradeJournalError('');
+}
+
+function clearTradeJournalDraft() {
+  var current = _cfTradeJournalReadForm();
+  _cfTradeJournalState.draft = Object.assign(_cfTradeJournalDefaultDraft(), {
+    date: current.date || _cfTradeJournalToday(),
+    timeframe: _cfTradeJournalState.activeTimeframe || '5m',
+    symbol: current.symbol || selectedCrypto || 'BTCUSDT'
+  });
+  _cfTradeJournalSaveState();
+  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
+  _cfTradeJournalError('');
+}
+
+function editTradeJournalEntry(entryId) {
+  var entry = (_cfTradeJournalState.entries || []).find(function(item) { return item.id === entryId; });
+  if (!entry) return;
+  _cfTradeJournalState.draft = Object.assign({}, entry);
+  _cfTradeJournalSaveState();
+  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
+  var top = document.querySelector('.journal-compose-card');
+  if (top && typeof top.scrollIntoView === 'function') top.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function deleteTradeJournalEntry(entryId) {
+  if (!window.confirm('Delete this journal entry?')) return;
+  _cfTradeJournalState.entries = (_cfTradeJournalState.entries || []).filter(function(item) { return item.id !== entryId; });
+  if (_cfTradeJournalState.openId === entryId) _cfTradeJournalState.openId = '';
+  _cfTradeJournalSaveState();
+  renderTradeJournal();
+  if (typeof cfToast === 'function') cfToast('Journal entry deleted', 'info');
+}
+
+function toggleTradeJournalEntry(entryId) {
+  _cfTradeJournalState.openId = _cfTradeJournalState.openId === entryId ? '' : entryId;
+  _cfTradeJournalSaveState();
+  renderTradeJournal();
+}
+
+function setTradeJournalFilter(timeframe) {
+  _cfTradeJournalState.filterTimeframe = timeframe || 'all';
+  _cfTradeJournalSaveState();
+  renderTradeJournal();
+}
+
+function _cfTradeJournalCsvCell(value) {
+  var text = String(value === undefined || value === null ? '' : value);
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+
+function exportTradeJournalCsv() {
+  var entries = Array.isArray(_cfTradeJournalState.entries) ? _cfTradeJournalState.entries : [];
+  if (!entries.length) {
+    if (typeof cfToast === 'function') cfToast('No journal entries to export', 'info');
+    return;
+  }
+  var headers = ['Date', 'Timeframe', 'Symbol', 'Side', 'Result', 'Setup', 'PnL', 'Entry', 'Exit', 'Mindset', 'Discipline', 'Tags', 'Setup Read', 'Execution', 'Lesson'];
+  var lines = [headers.map(_cfTradeJournalCsvCell).join(',')].concat(entries.map(function(entry) {
+    return [
+      entry.date,
+      entry.timeframe,
+      entry.symbol,
+      entry.side,
+      entry.result,
+      entry.setup,
+      entry.pnl,
+      entry.entryPrice,
+      entry.exitPrice,
+      entry.emotion,
+      entry.grade,
+      (entry.tags || []).join('|'),
+      entry.thesis,
+      entry.execution,
+      entry.lesson
+    ].map(_cfTradeJournalCsvCell).join(',');
+  }));
+  var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var link = document.createElement('a');
+  link.href = url;
+  link.download = 'cryptoforge-trade-journal.csv';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function cfInitTradeJournal() {
+  if (!_cfTradeJournalState.draft) _cfTradeJournalState.draft = _cfTradeJournalDefaultDraft();
+  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
+  if (_cfTradeJournalBound) return;
+  _cfTradeJournalBound = true;
+  document.querySelectorAll('[data-journal-field]').forEach(function(el) {
+    el.addEventListener('input', _cfTradeJournalStoreDraftFromForm);
+    el.addEventListener('change', _cfTradeJournalStoreDraftFromForm);
+  });
+}
+
 // ── Init ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   _cfPageHistoryDepth = Math.max(0, Number(window.history && window.history.state && window.history.state.cfDepth) || 0);
@@ -6542,6 +7027,8 @@ document.addEventListener('DOMContentLoaded', () => {
   renderTemplates();
   _btcAllocationLoadState();
   renderBtcAllocationCalculator();
+  _cfTradeJournalLoadState();
+  cfInitTradeJournal();
   loadBrokerSettings(true);
   refreshBrokerState(true);
   loadDashboard();

@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260618-6">
-<link rel="manifest" href="/manifest.webmanifest?v=20260618-6">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260618-7">
+<link rel="manifest" href="/manifest.webmanifest?v=20260618-7">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260618-6"></script>
+<script src="/static/cryptoforge-boot.js?v=20260618-7"></script>
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260618-6">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260618-6">
-<script src="/static/error-handler.js?v=20260618-6" defer></script>
-<script src="/static/pwa.js?v=20260618-6" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260618-7">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260618-7">
+<script src="/static/error-handler.js?v=20260618-7" defer></script>
+<script src="/static/pwa.js?v=20260618-7" defer></script>
 </head>
 <body>
 
@@ -188,6 +188,10 @@
     <button id="nav-results" class="nav-tab" data-cf-click="showPage('results-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></span>
       <span class="tab-label">Results</span>
+    </button>
+    <button id="nav-journal" class="nav-tab" data-cf-click="showPage('journal-page', this)">
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
+      <span class="tab-label">Journal</span>
     </button>
   </div>
 </div>
@@ -1124,7 +1128,174 @@
 
 
 <!-- ═══════════════════════════════════════════════════════
-     PAGE 5: LIVE TRADING
+     PAGE 5: TRADE JOURNAL
+     ═══════════════════════════════════════════════════════ -->
+<div id="journal-page" class="page-section">
+  <div class="journal-header">
+    <div>
+      <h2>Trade Journal</h2>
+      <div class="table-meta">Daily trade notes across 5m, 15m, 1H, and 4H.</div>
+    </div>
+    <div class="journal-date-card">
+      <span id="journal-date-label">Today</span>
+      <strong id="journal-date-stamp">--</strong>
+    </div>
+  </div>
+
+  <div class="journal-layout">
+    <section class="card journal-compose-card">
+      <div class="journal-compose-head">
+        <div>
+          <h3 id="journal-form-title">New Entry</h3>
+          <div class="table-meta">One clean record for the trade you took or reviewed.</div>
+        </div>
+        <div class="journal-timeframe-tabs" role="tablist" aria-label="Journal timeframe">
+          <button type="button" class="journal-tf-btn active" data-journal-tf="5m" data-cf-click="setTradeJournalTimeframe('5m')">5m</button>
+          <button type="button" class="journal-tf-btn" data-journal-tf="15m" data-cf-click="setTradeJournalTimeframe('15m')">15m</button>
+          <button type="button" class="journal-tf-btn" data-journal-tf="1H" data-cf-click="setTradeJournalTimeframe('1H')">1H</button>
+          <button type="button" class="journal-tf-btn" data-journal-tf="4H" data-cf-click="setTradeJournalTimeframe('4H')">4H</button>
+        </div>
+      </div>
+
+      <input type="hidden" id="journal-edit-id" data-journal-field>
+      <input type="hidden" id="journal-tags" data-journal-field>
+
+      <div class="journal-form-grid">
+        <div class="input-group">
+          <label for="journal-date">Date</label>
+          <input type="date" id="journal-date" data-journal-field>
+        </div>
+        <div class="input-group">
+          <label for="journal-symbol">Symbol</label>
+          <input type="text" id="journal-symbol" value="BTCUSDT" placeholder="BTCUSDT" data-journal-field>
+        </div>
+        <div class="input-group">
+          <label for="journal-side">Side</label>
+          <select id="journal-side" data-journal-field>
+            <option value="Long">Long</option>
+            <option value="Short">Short</option>
+            <option value="Spot Buy">Spot Buy</option>
+            <option value="Review">Review</option>
+          </select>
+        </div>
+        <div class="input-group">
+          <label for="journal-result">Result</label>
+          <select id="journal-result" data-journal-field>
+            <option value="Open">Open</option>
+            <option value="Win">Win</option>
+            <option value="Loss">Loss</option>
+            <option value="Breakeven">Breakeven</option>
+            <option value="Skipped">Skipped</option>
+          </select>
+        </div>
+        <div class="input-group">
+          <label for="journal-setup">Setup</label>
+          <input type="text" id="journal-setup" placeholder="Liquidity sweep, Fib ladder, CPR, breakout" data-journal-field>
+        </div>
+        <div class="input-group">
+          <label for="journal-pnl">P&amp;L</label>
+          <input type="number" id="journal-pnl" step="0.01" inputmode="decimal" placeholder="0" data-journal-field>
+        </div>
+        <div class="input-group">
+          <label for="journal-entry-price">Entry</label>
+          <input type="number" id="journal-entry-price" step="0.01" inputmode="decimal" placeholder="Entry price" data-journal-field>
+        </div>
+        <div class="input-group">
+          <label for="journal-exit-price">Exit</label>
+          <input type="number" id="journal-exit-price" step="0.01" inputmode="decimal" placeholder="Exit price" data-journal-field>
+        </div>
+      </div>
+
+      <div class="journal-mind-row">
+        <div class="input-group">
+          <label for="journal-emotion">Mindset</label>
+          <select id="journal-emotion" data-journal-field>
+            <option value="Calm">Calm</option>
+            <option value="Patient">Patient</option>
+            <option value="Confident">Confident</option>
+            <option value="Hesitant">Hesitant</option>
+            <option value="FOMO">FOMO</option>
+            <option value="Revenge">Revenge</option>
+          </select>
+        </div>
+        <div class="input-group journal-grade-field">
+          <label for="journal-grade">Discipline <span id="journal-grade-label">7/10</span></label>
+          <input type="range" id="journal-grade" min="1" max="10" step="1" value="7" data-journal-field>
+        </div>
+      </div>
+
+      <div class="journal-tag-row" aria-label="Journal tags">
+        <button type="button" class="journal-tag-chip" data-journal-tag="Followed plan" data-cf-click="toggleTradeJournalTag('Followed plan')">Followed plan</button>
+        <button type="button" class="journal-tag-chip" data-journal-tag="Chased" data-cf-click="toggleTradeJournalTag('Chased')">Chased</button>
+        <button type="button" class="journal-tag-chip" data-journal-tag="Good entry" data-cf-click="toggleTradeJournalTag('Good entry')">Good entry</button>
+        <button type="button" class="journal-tag-chip" data-journal-tag="Early exit" data-cf-click="toggleTradeJournalTag('Early exit')">Early exit</button>
+        <button type="button" class="journal-tag-chip" data-journal-tag="Late entry" data-cf-click="toggleTradeJournalTag('Late entry')">Late entry</button>
+        <button type="button" class="journal-tag-chip" data-journal-tag="No trade" data-cf-click="toggleTradeJournalTag('No trade')">No trade</button>
+      </div>
+
+      <div class="journal-notes-grid">
+        <div class="input-group">
+          <label for="journal-thesis">Setup Read</label>
+          <textarea id="journal-thesis" rows="4" placeholder="What did price, trend, liquidity, or fib level show?" data-journal-field></textarea>
+        </div>
+        <div class="input-group">
+          <label for="journal-execution">Execution</label>
+          <textarea id="journal-execution" rows="4" placeholder="Entry, management, exit, mistake, or patience note." data-journal-field></textarea>
+        </div>
+        <div class="input-group journal-note-wide">
+          <label for="journal-lesson">Lesson</label>
+          <textarea id="journal-lesson" rows="3" placeholder="One sentence to carry into the next session." data-journal-field></textarea>
+        </div>
+      </div>
+
+      <div class="journal-error" id="journal-error" role="alert" aria-live="polite"></div>
+      <div class="journal-actions">
+        <button class="btn btn-primary" data-cf-click="saveTradeJournalEntry()">Save Entry</button>
+        <button class="btn btn-outline" data-cf-click="newTradeJournalEntry()">New Entry</button>
+        <button class="btn btn-outline" data-cf-click="clearTradeJournalDraft()">Clear Draft</button>
+      </div>
+    </section>
+
+    <aside class="journal-side-panel">
+      <div class="journal-stat-grid" id="journal-stat-grid">
+        <div class="journal-stat-card"><span>Today</span><strong>0</strong></div>
+        <div class="journal-stat-card"><span>Net P&amp;L</span><strong>0</strong></div>
+        <div class="journal-stat-card"><span>Win Rate</span><strong>0%</strong></div>
+        <div class="journal-stat-card"><span>Best Frame</span><strong>--</strong></div>
+      </div>
+      <section class="card journal-focus-card">
+        <div class="journal-focus-title">Today's Frame</div>
+        <div class="journal-frame-grid" id="journal-frame-grid"></div>
+      </section>
+    </aside>
+  </div>
+
+  <section class="card table-panel journal-entries-panel">
+    <div class="table-toolbar journal-entry-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Journal Entries</h3>
+        <div class="table-meta" id="journal-entry-count">No entries saved</div>
+      </div>
+      <div class="journal-entry-actions">
+        <select id="journal-filter-timeframe" data-cf-change="setTradeJournalFilter(this.value)">
+          <option value="all">All frames</option>
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="1H">1H</option>
+          <option value="4H">4H</option>
+        </select>
+        <button class="btn btn-outline btn-sm" data-cf-click="exportTradeJournalCsv()">CSV</button>
+      </div>
+    </div>
+    <div class="journal-entry-list" id="journal-entry-list">
+      <div class="cf-table-empty-cell">No journal entries yet</div>
+    </div>
+  </section>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════
+     PAGE 6: LIVE TRADING
      ═══════════════════════════════════════════════════════ -->
 <div id="live-page" class="page-section live-page-shell">
 
@@ -1987,7 +2158,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260618-6" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260618-6" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260618-7" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260618-7" defer></script>
 </body>
 </html>
