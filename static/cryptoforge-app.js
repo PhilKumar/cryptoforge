@@ -6198,6 +6198,7 @@ function _btcMinorDifferenceValidate(majorHigh, majorLow, minorHigh, minorLow) {
   if (minorLow <= 0) return 'Minor Low must be greater than 0.';
   if (majorLow > majorHigh) return 'Major Low cannot be greater than Major High.';
   if (minorLow > minorHigh) return 'Minor Low cannot be greater than Minor High.';
+  if (minorHigh > majorHigh || minorHigh < majorLow) return 'Minor High must be inside the Major High to Major Low range.';
   return '';
 }
 
@@ -6412,14 +6413,14 @@ function calculateBtcMinorDifference() {
   }
 
   var majorFallPercent = ((majorHigh - majorLow) / majorHigh) * 100;
-  var minorFallPercent = ((minorHigh - minorLow) / minorHigh) * 100;
-  var differencePercent = majorFallPercent - minorFallPercent;
+  var totalToMinorLowPercent = ((majorHigh - minorLow) / majorHigh) * 100;
+  var differencePercent = totalToMinorLowPercent - majorFallPercent;
   var allocation = Math.max(0, differencePercent) * 1000;
   var body = document.getElementById('btc-minor-result-body');
   if (body) {
     body.innerHTML = '<tr>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(majorFallPercent) + '</span></td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(minorFallPercent) + '</span></td>'
+      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(totalToMinorLowPercent) + '</span></td>'
       + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatPercent(differencePercent) + '</span></td>'
       + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(allocation) + '</span></td>'
       + '</tr>';
