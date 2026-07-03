@@ -472,6 +472,16 @@ class BinanceSpotClientTests(unittest.TestCase):
 
 
 class CoinDCXClientTests(unittest.TestCase):
+    def test_invalid_base_urls_fall_back_to_full_hosts(self):
+        with (
+            patch("broker.coindcx.config.COINDCX_BASE_URL", ""),
+            patch("broker.coindcx.config.COINDCX_PUBLIC_URL", "/exchange/v1"),
+        ):
+            client = CoinDCXClient()
+
+        self.assertEqual(client.base_url, "https://api.coindcx.com")
+        self.assertEqual(client.public_url, "https://public.coindcx.com")
+
     def test_place_order_translates_notional_to_quantity_and_omits_market_price(self):
         client = CoinDCXClient()
         with (

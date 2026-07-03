@@ -18,6 +18,7 @@ import sys
 import time as _time
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlparse
 
 import pandas as pd
 import requests
@@ -35,6 +36,18 @@ _http_session = requests.Session()
 _adapter = HTTPAdapter(pool_connections=4, pool_maxsize=10, max_retries=0)
 _http_session.mount("https://", _adapter)
 _http_session.mount("http://", _adapter)
+
+_COINDCX_DEFAULT_BASE_URL = "https://api.coindcx.com"
+_COINDCX_DEFAULT_PUBLIC_URL = "https://public.coindcx.com"
+
+
+def _coindcx_clean_url(value: str | None, default: str) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    parsed = urlparse(raw)
+    if not raw or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        _coindcx_log.warning("[COINDCX] Invalid base URL %r; using %s", value, default)
+        return default
+    return raw
 
 
 def _request_with_retry(
@@ -92,8 +105,8 @@ class CoinDCXClient(BaseBroker):
     def __init__(self):
         self.api_key = config.COINDCX_API_KEY
         self.api_secret = config.COINDCX_API_SECRET
-        self.base_url = config.COINDCX_BASE_URL.rstrip("/")
-        self.public_url = config.COINDCX_PUBLIC_URL.rstrip("/")
+        self.base_url = _coindcx_clean_url(config.COINDCX_BASE_URL, _COINDCX_DEFAULT_BASE_URL)
+        self.public_url = _coindcx_clean_url(config.COINDCX_PUBLIC_URL, _COINDCX_DEFAULT_PUBLIC_URL)
         self.margin_currency = config.COINDCX_MARGIN_CURRENCY
         self._products_cache = None
         self._products_ts = 0.0

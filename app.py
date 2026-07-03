@@ -1944,6 +1944,22 @@ def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
         return lowered
     if key == "COINDCX_MARGIN_CURRENCY":
         return raw.upper()
+    if key == "COINDCX_BASE_URL":
+        if raw:
+            parsed = urlparse(raw)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise HTTPException(
+                    status_code=400, detail="COINDCX_BASE_URL must start with https:// and include a host"
+                )
+        return raw or "https://api.coindcx.com"
+    if key == "COINDCX_PUBLIC_URL":
+        if raw:
+            parsed = urlparse(raw)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise HTTPException(
+                    status_code=400, detail="COINDCX_PUBLIC_URL must start with https:// and include a host"
+                )
+        return raw or "https://public.coindcx.com"
     if key == "BINANCE_MARGIN_ASSET":
         return raw.upper()
     if key == "BINANCE_SPOT_QUOTE_ASSET":
@@ -2007,8 +2023,8 @@ def _reload_runtime_config_from_env() -> None:
     config.DELTA_API_SECRET = os.getenv("DELTA_API_SECRET", "YOUR_API_SECRET_HERE")
     config.COINDCX_API_KEY = os.getenv("COINDCX_API_KEY", "YOUR_COINDCX_API_KEY_HERE")
     config.COINDCX_API_SECRET = os.getenv("COINDCX_API_SECRET", "YOUR_COINDCX_API_SECRET_HERE")
-    config.COINDCX_BASE_URL = os.getenv("COINDCX_BASE_URL", "https://api.coindcx.com")
-    config.COINDCX_PUBLIC_URL = os.getenv("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
+    config.COINDCX_BASE_URL = os.getenv("COINDCX_BASE_URL") or "https://api.coindcx.com"
+    config.COINDCX_PUBLIC_URL = os.getenv("COINDCX_PUBLIC_URL") or "https://public.coindcx.com"
     config.COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
     config.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE")
     config.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "YOUR_BINANCE_API_SECRET_HERE")

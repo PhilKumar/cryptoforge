@@ -4,6 +4,7 @@
 # ============================================================
 
 import os
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -16,8 +17,18 @@ DELTA_API_SECRET = os.getenv("DELTA_API_SECRET", "YOUR_API_SECRET_HERE")
 # ── CoinDCX API Credentials ─────────────────────────────────
 COINDCX_API_KEY = os.getenv("COINDCX_API_KEY", "YOUR_COINDCX_API_KEY_HERE")
 COINDCX_API_SECRET = os.getenv("COINDCX_API_SECRET", "YOUR_COINDCX_API_SECRET_HERE")
-COINDCX_BASE_URL = os.getenv("COINDCX_BASE_URL", "https://api.coindcx.com")
-COINDCX_PUBLIC_URL = os.getenv("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
+
+
+def _env_url(name: str, default: str) -> str:
+    raw = (os.getenv(name) or "").strip().rstrip("/")
+    parsed = urlparse(raw)
+    if not raw or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return default
+    return raw
+
+
+COINDCX_BASE_URL = _env_url("COINDCX_BASE_URL", "https://api.coindcx.com")
+COINDCX_PUBLIC_URL = _env_url("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
 COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
 
 # ── Binance USD-M Futures API Credentials ───────────────────
