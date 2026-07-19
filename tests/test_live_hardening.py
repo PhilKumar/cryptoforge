@@ -13,6 +13,7 @@ import httpx
 import pandas as pd
 from starlette.requests import Request as StarletteRequest
 
+import config
 from broker import get_broker_client
 from broker.binance import BinanceSpotClient
 from broker.coindcx import CoinDCXClient
@@ -2854,3 +2855,74 @@ class ScalpReconciliationHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(trade.size, 2.25)
         self.assertAlmostEqual(trade.entry_price, 101.5)
         self.assertAlmostEqual(trade.current_price, 103.0)
+
+
+class AdminConfigEnvReloadTests(unittest.TestCase):
+    """Regression test: a blank BINANCE_SPOT_BASE_URL in .env must fall back
+    to the production default, not resolve to an empty string. A blank env
+    var previously survived `os.getenv(key, default)` (whose default only
+    applies when the key is absent, not when it's present-but-empty),
+    leaving broker.base_url == "" and turning every request into a
+    schemeless path like '/api/v3/account'."""
+
+    def setUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_env_path = self.app_module._ENV_PATH
+        self._orig_base_url = config.BINANCE_SPOT_BASE_URL
+        self._orig_testnet = config.BINANCE_SPOT_TESTNET
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.app_module._ENV_PATH = self._orig_env_path
+        config.BINANCE_SPOT_BASE_URL = self._orig_base_url
+        config.BINANCE_SPOT_TESTNET = self._orig_testnet
+        # load_dotenv(override=True) permanently sets os.environ for any key
+        # present in the temp .env file — undo that so tests don't leak.
+        os.environ.pop("BINANCE_SPOT_BASE_URL", None)
+        os.environ.pop("BINANCE_SPOT_TESTNET", None)
+
+    def _write_env(self, contents: str) -> str:
+        env_path = os.path.join(self._tmp.name, ".env")
+        with open(env_path, "w") as handle:
+            handle.write(contents)
+        return env_path
+
+    def test_blank_spot_base_url_falls_back_to_default(self):
+        self.app_module._ENV_PATH = self._write_env("BINANCE_SPOT_BASE_URL=\nBINANCE_SPOT_TESTNET=false\n")
+        os.environ["BINANCE_SPOT_BASE_URL"] = ""
+        try:
+            self.app_module._reload_runtime_config_from_env()
+        finally:
+            os.environ.pop("BINANCE_SPOT_BASE_URL", None)
+        self.assertEqual(config.BINANCE_SPOT_BASE_URL, "https://api.binance.com")
+
+    def test_blank_spot_base_url_falls_back_to_testnet_default(self):
+        self.app_module._ENV_PATH = self._write_env("BINANCE_SPOT_BASE_URL=\nBINANCE_SPOT_TESTNET=true\n")
+        os.environ["BINANCE_SPOT_BASE_URL"] = ""
+        try:
+            self.app_module._reload_runtime_config_from_env()
+        finally:
+            os.environ.pop("BINANCE_SPOT_BASE_URL", None)
+        self.assertEqual(config.BINANCE_SPOT_BASE_URL, "https://testnet.binance.vision")
+
+    def test_explicit_spot_base_url_is_kept(self):
+        custom = "https://custom.example.com/binance"
+        self.app_module._ENV_PATH = self._write_env(f"BINANCE_SPOT_BASE_URL={custom}\n")
+        os.environ["BINANCE_SPOT_BASE_URL"] = custom
+        try:
+            self.app_module._reload_runtime_config_from_env()
+        finally:
+            os.environ.pop("BINANCE_SPOT_BASE_URL", None)
+        self.assertEqual(config.BINANCE_SPOT_BASE_URL, custom)
+
+    def test_broker_client_built_after_blank_reload_has_valid_base_url(self):
+        self.app_module._ENV_PATH = self._write_env("BINANCE_SPOT_BASE_URL=\n")
+        os.environ["BINANCE_SPOT_BASE_URL"] = ""
+        try:
+            self.app_module._reload_runtime_config_from_env()
+        finally:
+            os.environ.pop("BINANCE_SPOT_BASE_URL", None)
+        client = BinanceSpotClient()
+        self.assertEqual(client.base_url, "https://api.binance.com")

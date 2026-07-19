@@ -2040,9 +2040,9 @@ def _reload_runtime_config_from_env() -> None:
     config.BINANCE_SPOT_API_KEY = os.getenv("BINANCE_SPOT_API_KEY") or config.BINANCE_API_KEY
     config.BINANCE_SPOT_API_SECRET = os.getenv("BINANCE_SPOT_API_SECRET") or config.BINANCE_API_SECRET
     config.BINANCE_SPOT_TESTNET = os.getenv("BINANCE_SPOT_TESTNET", "false").lower() == "true"
-    config.BINANCE_SPOT_BASE_URL = os.getenv(
-        "BINANCE_SPOT_BASE_URL",
-        "https://testnet.binance.vision" if config.BINANCE_SPOT_TESTNET else "https://api.binance.com",
+    config.BINANCE_SPOT_BASE_URL = (
+        os.getenv("BINANCE_SPOT_BASE_URL")
+        or ("https://testnet.binance.vision" if config.BINANCE_SPOT_TESTNET else "https://api.binance.com")
     ).rstrip("/")
     config.BINANCE_SPOT_QUOTE_ASSET = os.getenv("BINANCE_SPOT_QUOTE_ASSET", "USDT").upper()
     config.CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "binance")).lower()
