@@ -707,9 +707,28 @@ class CascadeEngine:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
 
         now_ts = int(time.time())
-        mother_ts = int(mother_timestamp or (now_ts // FIVE_MIN_SEC) * FIVE_MIN_SEC)
+        if mother_timestamp:
+            mother_ts = int(mother_timestamp)
+        else:
+            # No timestamp given: the mother candle is a past candle the user
+            # read off the chart, so find the recent 5m candle whose high
+            # matches the entered mother high and anchor there. Defaulting to
+            # "now" would make the engine wait for future candles forever and
+            # ignore all the history that already formed the trendlines.
+            detected = await self._resolve_mother_timestamp(symbol, mother_high)
+            if detected is None:
+                return {
+                    "error": (
+                        "Could not find a recent 5m candle matching that mother high. "
+                        "Set the Mother Candle Time so the engine can replay from it, "
+                        "or double-check the high value."
+                    )
+                }
+            mother_ts = detected
         if mother_ts > now_ts:
             return {"error": "Mother candle timestamp cannot be in the future"}
+        if mother_ts < now_ts - 90 * 86400:
+            return {"error": "Mother candle is more than 90 days old — pick a more recent mother candle"}
 
         campaign = Campaign(
             campaign_id=uuid.uuid4().hex[:10],
@@ -853,9 +872,13 @@ class CascadeEngine:
         changed = False
         # New closed candles drive the state machine.
         changed |= await self._candle_step(campaign)
+        # Keep the live price fresh for the UI (Last Price) and paper TP checks.
+        had_price = campaign.symbol in self._price_cache
+        price = await self._get_price(campaign.symbol)
+        if not had_price and price:
+            changed = True  # surface the first price so the status card fills in
         # Paper TP check against the live price.
         if campaign.mode == "paper" and campaign.state in ACTIVE_STATES and campaign.filled_base_qty > 0:
-            price = await self._get_price(campaign.symbol)
             tp = compute_tp_price(campaign)
             if price and tp and price >= tp:
                 self._complete_campaign(campaign, tp)
@@ -881,6 +904,34 @@ class CascadeEngine:
             price = cached[0] if cached else 0.0
         self._price_cache[symbol] = (price, time.monotonic())
         return price
+
+    async def _resolve_mother_timestamp(self, symbol: str, mother_high: float) -> Optional[int]:
+        """
+        Find the open timestamp of the recent closed 5m candle whose high most
+        closely matches mother_high (within ~0.15%). Prefers the most recent
+        candle on ties. Returns None if no close match is in the recent window
+        (then the caller asks the user to supply the timestamp explicitly).
+        """
+        try:
+            df = await self.broker.async_get_candles(symbol, resolution="5m")
+        except Exception as exc:
+            _log.warning("[CASCADE] mother candle lookup failed for %s: %s", symbol, exc)
+            return None
+        if df is None or df.empty or mother_high <= 0:
+            return None
+        now = int(time.time())
+        tolerance = max(mother_high * 0.0015, 0.01)
+        best_ts = None
+        best_diff = None
+        for index, row in df.iterrows():
+            ts = int(index.timestamp())
+            if ts + FIVE_MIN_SEC > now:
+                continue  # skip the still-forming candle
+            diff = abs(_coerce_float(row.get("high")) - mother_high)
+            if diff <= tolerance and (best_diff is None or diff <= best_diff):
+                best_diff = diff
+                best_ts = ts
+        return best_ts
 
     async def _fetch_closed_5m(self, symbol: str, since_ts: int) -> List[Candle]:
         """Fetch closed 5m candles with open ts > since_ts, paging as needed."""

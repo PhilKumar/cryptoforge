@@ -1,6 +1,9 @@
 """CascadeEngine tests: paper-mode state machine + live desired-state order sync."""
 
+import time
 import unittest
+
+import pandas as pd
 
 from engine.cascade import (
     Campaign,
@@ -10,6 +13,8 @@ from engine.cascade import (
     build_fib_ladder_and_pool,
     plan_leg_orders,
 )
+
+_RECENT_TS = (int(time.time()) - 3600) // 300 * 300  # a truthy, in-window mother timestamp
 
 
 class FakeCascadeBroker:
@@ -22,6 +27,7 @@ class FakeCascadeBroker:
         self.order_lookup = {}  # order_id -> raw status row for get_order
         self._next_order_id = 1000
         self.configured = True
+        self.candles_df = None  # optional DataFrame returned by async_get_candles
 
     def _is_configured(self):
         return self.configured
@@ -31,6 +37,9 @@ class FakeCascadeBroker:
 
     def get_ticker(self, symbol):
         return {"symbol": symbol, "last_price": 0.0, "mark_price": 0.0}
+
+    async def async_get_candles(self, symbol, **kwargs):
+        return self.candles_df
 
     def place_order(self, product_id, size, side, order_type="market_order", limit_price=None, **kwargs):
         self._next_order_id += 1
@@ -325,7 +334,7 @@ class CascadeEngineApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_and_stop_campaign(self):
         engine = _mk_engine()
-        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=0)
+        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS)
         self.assertEqual(result["status"], "ok")
         campaign_id = result["campaign"]["campaign_id"]
         self.assertEqual(engine.campaigns[campaign_id].state, "WAITING_FIRST_DEPTH")
@@ -365,6 +374,63 @@ class CascadeEngineApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored, 1)
         self.assertIn(campaign.campaign_id, engine2.campaigns)
         self.assertEqual(engine2.campaigns[campaign.campaign_id].state, "TRENDLINE_ACTIVE")
+
+
+class CascadeMotherTimestampTests(unittest.IsolatedAsyncioTestCase):
+    """A blank mother timestamp must anchor to the historical mother candle
+    (found by matching the mother high), not to 'now' — otherwise the engine
+    waits for future candles forever and never draws a trendline."""
+
+    def _candles_df(self, rows):
+        # rows: list of (ts_seconds, high). Build a UTC DatetimeIndex frame.
+        index = pd.to_datetime([ts for ts, _ in rows], unit="s", utc=True)
+        return pd.DataFrame(
+            {
+                "open": [h for _, h in rows],
+                "high": [h for _, h in rows],
+                "low": [h - 50 for _, h in rows],
+                "close": [h - 10 for _, h in rows],
+                "volume": [1.0 for _ in rows],
+            },
+            index=index,
+        )
+
+    async def test_blank_timestamp_auto_detects_mother_candle(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        now = int(time.time())
+        mother_ts = (now - 4 * 3600) // 300 * 300  # 4h ago, aligned to 5m
+        broker.candles_df = self._candles_df(
+            [
+                (mother_ts - 600, 64800.0),
+                (mother_ts, 64967.25),  # the mother candle high
+                (mother_ts + 600, 64700.0),
+            ]
+        )
+        result = await engine.start_campaign("BTCUSDT", 2000, 64967.25, 64816.11)
+        engine.stop()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["campaign"]["mother_timestamp"], mother_ts)
+        # Anchored in the past, so the engine will replay history rather than
+        # sitting at "now" waiting for future candles.
+        self.assertLess(result["campaign"]["mother_timestamp"], now - 3600)
+
+    async def test_blank_timestamp_errors_when_no_match(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        now = int(time.time())
+        broker.candles_df = self._candles_df([(now - 900, 50000.0), (now - 600, 50100.0)])
+        result = await engine.start_campaign("BTCUSDT", 2000, 64967.25, 64816.11)
+        engine.stop()
+        self.assertIn("error", result)
+        self.assertIn("Mother Candle Time", result["error"])
+
+    async def test_explicit_timestamp_is_used_as_is(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS)
+        engine.stop()
+        self.assertEqual(result["campaign"]["mother_timestamp"], _RECENT_TS)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
-from tests.test_cascade_engine import FakeCascadeBroker
+from tests.test_cascade_engine import _RECENT_TS, FakeCascadeBroker
 
 
 class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -81,7 +81,7 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
                     "capital_usd": 2000,
                     "mother_high": 105,
                     "mother_low": 99,
-                    "mother_timestamp": 0,
+                    "mother_timestamp": _RECENT_TS,
                 },
                 headers=self._csrf_headers,
             )
@@ -129,7 +129,7 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
                     "capital_usd": 2000,
                     "mother_high": 105,
                     "mother_low": 99,
-                    "mother_timestamp": 0,
+                    "mother_timestamp": _RECENT_TS,
                 },
                 headers=self._csrf_headers,
             )
@@ -149,7 +149,7 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
                     "capital_usd": 2000,
                     "mother_high": 105,
                     "mother_low": 99,
-                    "mother_timestamp": 0,
+                    "mother_timestamp": _RECENT_TS,
                 },
                 headers=self._csrf_headers,
             )
@@ -166,7 +166,7 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
                     "capital_usd": 2000,
                     "mother_high": 105,
                     "mother_low": 99,
-                    "mother_timestamp": 0,
+                    "mother_timestamp": _RECENT_TS,
                 },
                 headers=self._csrf_headers,
             )
@@ -187,7 +187,7 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
                     "capital_usd": 2000,
                     "mother_high": 105,
                     "mother_low": 99,
-                    "mother_timestamp": 0,
+                    "mother_timestamp": _RECENT_TS,
                 },
                 headers=self._csrf_headers,
             )
