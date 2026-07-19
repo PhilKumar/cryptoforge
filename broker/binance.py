@@ -10,7 +10,7 @@ import hashlib
 import hmac
 import logging
 import time as _time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 from urllib.parse import urlencode
 
@@ -700,19 +700,42 @@ class BinanceSpotClient(BaseBroker):
         result.setdefault("paid_commission", round(fee_quote, 8))
         return result
 
+    _MAJOR_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+
+    def _order_history_symbols(self) -> list[str]:
+        """Symbols to pull trade history for: the majors plus every asset the
+        account currently holds, so trades in any held coin are included."""
+        symbols = [f"{asset}{self.quote_asset}" for asset in self._MAJOR_ASSETS]
+        seen = set(symbols)
+        try:
+            wallet = self.get_wallet()
+        except Exception:
+            wallet = None
+        for row in wallet if isinstance(wallet, list) else []:
+            asset = str(row.get("asset_symbol") or "").upper()
+            if not asset or asset == self.quote_asset:
+                continue
+            pair = f"{asset}{self.quote_asset}"
+            if pair not in seen:
+                seen.add(pair)
+                symbols.append(pair)
+        return symbols
+
     def get_order_history(self) -> list:
         if not self._is_configured():
             return []
-        end_ms = int(round(_time.time() * 1000))
-        start_ms = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+        # NOTE: Binance /api/v3/myTrades rejects any startTime/endTime window
+        # longer than 24h. Omit the window entirely and fetch the most recent
+        # trades per symbol (limit only) so history is not silently dropped.
+        per_symbol_limit = int(getattr(config, "BINANCE_SPOT_TRADE_LIMIT", 0) or 500)
+        per_symbol_limit = max(1, min(per_symbol_limit, 1000))
         trades = []
-        symbols = [f"{asset}{self.quote_asset}" for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")]
-        for symbol in symbols:
+        for symbol in self._order_history_symbols():
             try:
                 rows = self._signed_request(
                     "GET",
                     "/api/v3/myTrades",
-                    params={"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000},
+                    params={"symbol": symbol, "limit": per_symbol_limit},
                 )
             except Exception as exc:
                 _binance_log.warning("[BINANCE SPOT] Trades error for %s: %s", symbol, exc)

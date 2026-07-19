@@ -388,9 +388,16 @@ class BinanceSpotClientTests(unittest.TestCase):
                 "isBuyer": True,
             }
         ]
+        captured_params = []
+
+        def _signed(method, path, params=None):
+            captured_params.append(dict(params or {}))
+            return rows if params and params.get("symbol") == "BTCUSDT" else []
+
         with (
             patch.object(client, "_is_configured", return_value=True),
-            patch.object(client, "_signed_request", side_effect=[rows, [], [], [], [], []]),
+            patch.object(client, "get_wallet", return_value=[]),
+            patch.object(client, "_signed_request", side_effect=_signed),
             patch.object(client, "get_product_by_symbol", return_value=product),
         ):
             history = client.get_order_history()
@@ -400,6 +407,24 @@ class BinanceSpotClientTests(unittest.TestCase):
         self.assertEqual(history[0]["filled_size"], "0.001")
         self.assertEqual(history[0]["paid_commission"], 0.07)
         self.assertEqual(history[0]["commission_asset"], "BTC")
+        # Binance rejects myTrades windows > 24h, so no startTime/endTime must
+        # be sent — only a per-symbol limit.
+        for params in captured_params:
+            self.assertNotIn("startTime", params)
+            self.assertNotIn("endTime", params)
+            self.assertIn("limit", params)
+
+    def test_spot_trade_history_includes_held_assets_beyond_majors(self):
+        client = BinanceSpotClient()
+        wallet = [
+            {"asset_symbol": "USDT", "total_balance": "100"},
+            {"asset_symbol": "PEPE", "total_balance": "1000000"},  # non-major holding
+        ]
+        with patch.object(client, "get_wallet", return_value=wallet):
+            symbols = client._order_history_symbols()
+        self.assertIn("BTCUSDT", symbols)  # majors always covered
+        self.assertIn("PEPEUSDT", symbols)  # held asset added
+        self.assertNotIn("USDTUSDT", symbols)  # quote asset never paired with itself
 
 
 class CoinDCXClientTests(unittest.TestCase):
@@ -1592,6 +1617,39 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order["gross_pnl"], 12.75)
         self.assertEqual(order["fees"], 0.55)
         self.assertEqual(order["net_pnl"], 12.2)
+
+    async def test_portfolio_enriches_spot_position_entry_and_unrealized_pnl(self):
+        """Spot holdings have no broker-reported entry price; derive it from
+        fills so the positions table and Unrealized P&L are not left at 0."""
+        fake_delta = SimpleNamespace(
+            get_wallet=lambda: [{"asset_symbol": "USDT", "available_balance": "1000"}],
+            get_positions=lambda: [
+                {
+                    "product_id": "BTCUSDT",
+                    "product_symbol": "BTCUSDT",
+                    "symbol": "BTCUSDT",
+                    "size": 6800.0,  # notional (qty * mark)
+                    "base_size": 0.1,
+                    "entry_price": 0.0,  # spot broker cannot report this
+                    "mark_price": 68000.0,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": 0.0,
+                }
+            ],
+            get_order_history=lambda: [
+                {"symbol": "BTCUSDT", "side": "buy", "price": "60000", "qty": "0.06", "time": 1},
+                {"symbol": "BTCUSDT", "side": "buy", "price": "65000", "qty": "0.04", "time": 2},
+            ],
+        )
+        with patch.object(self.app_module, "delta", fake_delta):
+            summary = await self.app_module.get_portfolio_summary()
+
+        pos = summary["open_positions"][0]
+        # Weighted avg entry = (0.06*60000 + 0.04*65000) / 0.10 = 62000
+        self.assertAlmostEqual(pos["entry_price"], 62000.0)
+        # uPnL = (68000 - 62000) * 0.1 = 600
+        self.assertAlmostEqual(pos["unrealized_pnl"], 600.0)
+        self.assertAlmostEqual(summary["unrealized_pnl"], 600.0)
 
     def test_portfolio_fx_unavailable_does_not_use_static_rate(self):
         self.app_module._PORTFOLIO_USD_INR_CACHE.clear()

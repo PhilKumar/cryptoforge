@@ -4270,6 +4270,40 @@ def _normalize_filled_orders(orders, limit: int | None = None) -> list:
     return rows[:limit] if limit else rows
 
 
+def _cost_basis_from_orders(orders) -> dict:
+    """Weighted-average cost per symbol from raw fills, keyed by both broker
+    symbol and app symbol. Buys add to the position; sells reduce it
+    proportionally, keeping the running average. Used to give spot holdings an
+    entry price (and thus unrealized P&L) the broker itself does not report."""
+    agg: dict[str, dict] = {}
+    ordered = sorted(
+        list(orders or []),
+        key=lambda row: _safe_float(row.get("time") or row.get("timestamp") or 0, 0.0),
+    )
+    for row in ordered:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("symbol") or row.get("product_symbol") or "").upper()
+        if not key:
+            continue
+        price = _safe_float(row.get("price") or row.get("fill_price") or row.get("average_fill_price"), 0.0)
+        qty = _safe_float(row.get("qty") or row.get("filled_size") or row.get("size"), 0.0)
+        if price <= 0 or qty <= 0:
+            continue
+        side = str(row.get("side") or "").lower()
+        is_buy = side == "buy" or bool(row.get("isBuyer"))
+        entry = agg.setdefault(key, {"qty": 0.0, "cost": 0.0})
+        if is_buy:
+            entry["qty"] += qty
+            entry["cost"] += qty * price
+        elif entry["qty"] > 0:
+            avg = entry["cost"] / entry["qty"]
+            sell_qty = min(qty, entry["qty"])
+            entry["qty"] -= sell_qty
+            entry["cost"] -= sell_qty * avg
+    return {key: (v["cost"] / v["qty"]) for key, v in agg.items() if v["qty"] > 1e-9}
+
+
 def _wallet_rows(wallet) -> list[dict]:
     if isinstance(wallet, list):
         return [row for row in wallet if isinstance(row, dict)]
@@ -4624,21 +4658,37 @@ async def get_portfolio_summary():
         wallet_asset = _wallet_asset_row(wallet)
         usdt_balance = _wallet_amount(wallet_asset, "available_balance", "available_margin", "free_balance", "free")
 
+        # Cost basis derived from fills — used to give spot holdings an entry
+        # price and unrealized P&L, which the spot broker does not report.
+        cost_basis = _cost_basis_from_orders(orders)
+
         # Calc unrealized P&L from open positions
         unrealized_pnl = 0.0
         open_positions = []
         for p in positions or []:
-            upnl = float(p.get("unrealized_pnl", 0))
+            entry_price = _safe_float(p.get("entry_price"), 0.0)
+            mark_price = _safe_float(p.get("mark_price"), 0.0)
+            base_size = _safe_float(p.get("base_size"), 0.0)
+            upnl = _safe_float(p.get("unrealized_pnl"), 0.0)
+            if entry_price <= 0:
+                avg = cost_basis.get(str(p.get("product_id") or "").upper()) or cost_basis.get(
+                    str(p.get("product_symbol") or p.get("symbol") or "").upper()
+                )
+                if avg and avg > 0:
+                    entry_price = avg
+                    if mark_price > 0 and base_size:
+                        upnl = (mark_price - avg) * base_size
             unrealized_pnl += upnl
             if float(p.get("size", 0)) != 0:
                 open_positions.append(
                     {
                         "symbol": p.get("product_symbol", p.get("symbol", "")),
                         "size": p.get("size", 0),
+                        "base_size": base_size,
                         "side": "LONG" if float(p.get("size", 0)) > 0 else "SHORT",
-                        "entry_price": p.get("entry_price", 0),
-                        "mark_price": p.get("mark_price", p.get("mark_price", 0)),
-                        "unrealized_pnl": upnl,
+                        "entry_price": round(entry_price, 8),
+                        "mark_price": mark_price,
+                        "unrealized_pnl": round(upnl, 8),
                         "realized_pnl": float(p.get("realized_pnl", 0)),
                         "margin": p.get("margin", 0),
                         "liquidation_price": p.get("liquidation_price", 0),
