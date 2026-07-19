@@ -20,7 +20,7 @@ Backtest, paper trade, and go live on [Delta Exchange](https://www.delta.exchang
 ## Stack
 
 - **Backend:** Python 3.11 · FastAPI · Uvicorn
-- **Broker:** Delta Exchange REST API (HMAC-SHA256 auth) + Binance public API fallback
+- **Broker:** Binance Spot REST API (default, HMAC-SHA256 auth) with Delta Exchange and CoinDCX adapters
 - **Frontend:** Single-page HTML/CSS/JS (no build step)
 - **Data:** Pandas · NumPy
 
@@ -55,7 +55,6 @@ DELTA_API_KEY=your_key_here
 DELTA_API_SECRET=your_secret_here
 BINANCE_API_KEY=your_binance_key_here
 BINANCE_API_SECRET=your_binance_secret_here
-BINANCE_FUTURES_TESTNET=true
 BINANCE_SPOT_TESTNET=true
 BINANCE_SPOT_QUOTE_ASSET=USDT
 APP_HOST=127.0.0.1
@@ -64,7 +63,7 @@ CRYPTOFORGE_PIN=your_pin_here
 ```
 
 > Get your API credentials at [delta.exchange/app/account/api-keys](https://www.delta.exchange/app/account/api-keys)
-> Binance support includes separate `Binance Futures` and `Binance Spot` broker choices. Keep the matching testnet flag enabled until access, symbols, balances, and order sizing have been verified with your Binance account.
+> `Binance Spot` is the default broker (`CRYPTOFORGE_BROKER=binance`). Keep `BINANCE_SPOT_TESTNET=true` until access, symbols, balances, and order sizing have been verified with your Binance account. Delta Exchange and CoinDCX remain available as alternate brokers.
 
 ### 3. Run
 

@@ -600,8 +600,12 @@ def _seed_singleton_bucket(bucket: str, key: str, *paths: str):
 _bootstrap_session_store()
 
 
-def _normalize_broker_name(raw, *, default: str = "delta") -> str:
+_LEGACY_BROKER_ALIASES = {"binance_spot": "binance", "binance_futures": "binance"}
+
+
+def _normalize_broker_name(raw, *, default: str = "binance") -> str:
     broker_name = str(raw or "").strip().lower()
+    broker_name = _LEGACY_BROKER_ALIASES.get(broker_name, broker_name)
     supported = set(get_supported_brokers())
     if broker_name in supported:
         return broker_name
@@ -610,7 +614,7 @@ def _normalize_broker_name(raw, *, default: str = "delta") -> str:
 
 def _active_broker_name(client=None) -> str:
     current = client or globals().get("delta")
-    return _normalize_broker_name(getattr(current, "broker_name", None), default="delta")
+    return _normalize_broker_name(getattr(current, "broker_name", None), default="binance")
 
 
 def _broker_is_configured(client=None) -> bool:
@@ -651,7 +655,7 @@ def _load_selected_broker_name() -> str:
         raw = payload.get("broker") or payload.get("name")
     else:
         raw = payload
-    env_default = os.getenv("CRYPTOFORGE_BROKER") or os.getenv("BROKER") or "delta"
+    env_default = os.getenv("CRYPTOFORGE_BROKER") or os.getenv("BROKER") or "binance"
     return _normalize_broker_name(raw, default=_normalize_broker_name(env_default))
 
 
@@ -1803,28 +1807,6 @@ _ADMIN_CONFIG_FIELDS = [
     {"key": "BINANCE_API_KEY", "label": "API Key", "section": "binance", "kind": "password", "secret": True},
     {"key": "BINANCE_API_SECRET", "label": "API Secret", "section": "binance", "kind": "password", "secret": True},
     {
-        "key": "BINANCE_FUTURES_TESTNET",
-        "label": "Futures Testnet",
-        "section": "binance",
-        "kind": "boolean",
-        "options": ["false", "true"],
-        "secret": False,
-    },
-    {
-        "key": "BINANCE_FUTURES_BASE_URL",
-        "label": "Futures Base URL",
-        "section": "binance",
-        "kind": "text",
-        "secret": False,
-    },
-    {
-        "key": "BINANCE_MARGIN_ASSET",
-        "label": "Margin Asset",
-        "section": "binance",
-        "kind": "text",
-        "secret": False,
-    },
-    {
         "key": "BINANCE_SPOT_TESTNET",
         "label": "Spot Testnet",
         "section": "binance",
@@ -1960,10 +1942,16 @@ def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
                     status_code=400, detail="COINDCX_PUBLIC_URL must start with https:// and include a host"
                 )
         return raw or "https://public.coindcx.com"
-    if key == "BINANCE_MARGIN_ASSET":
-        return raw.upper()
     if key == "BINANCE_SPOT_QUOTE_ASSET":
         return raw.upper()
+    if key == "BINANCE_SPOT_BASE_URL":
+        if raw:
+            parsed = urlparse(raw)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise HTTPException(
+                    status_code=400, detail="BINANCE_SPOT_BASE_URL must start with https:// and include a host"
+                )
+        return raw
     return raw
 
 
@@ -2028,19 +2016,15 @@ def _reload_runtime_config_from_env() -> None:
     config.COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
     config.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE")
     config.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "YOUR_BINANCE_API_SECRET_HERE")
-    config.BINANCE_FUTURES_TESTNET = os.getenv("BINANCE_FUTURES_TESTNET", "false").lower() == "true"
-    config.BINANCE_FUTURES_BASE_URL = os.getenv(
-        "BINANCE_FUTURES_BASE_URL",
-        "https://testnet.binancefuture.com" if config.BINANCE_FUTURES_TESTNET else "https://fapi.binance.com",
-    )
-    config.BINANCE_MARGIN_ASSET = os.getenv("BINANCE_MARGIN_ASSET", "USDT").upper()
+    config.BINANCE_SPOT_API_KEY = os.getenv("BINANCE_SPOT_API_KEY") or config.BINANCE_API_KEY
+    config.BINANCE_SPOT_API_SECRET = os.getenv("BINANCE_SPOT_API_SECRET") or config.BINANCE_API_SECRET
     config.BINANCE_SPOT_TESTNET = os.getenv("BINANCE_SPOT_TESTNET", "false").lower() == "true"
     config.BINANCE_SPOT_BASE_URL = os.getenv(
         "BINANCE_SPOT_BASE_URL",
         "https://testnet.binance.vision" if config.BINANCE_SPOT_TESTNET else "https://api.binance.com",
-    )
+    ).rstrip("/")
     config.BINANCE_SPOT_QUOTE_ASSET = os.getenv("BINANCE_SPOT_QUOTE_ASSET", "USDT").upper()
-    config.CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "delta")).lower()
+    config.CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "binance")).lower()
     config.DELTA_TESTNET = os.getenv("DELTA_TESTNET", "false").lower() == "true"
     config.DELTA_REGION = os.getenv("DELTA_REGION", "india").lower()
     if config.DELTA_TESTNET:
@@ -2352,9 +2336,6 @@ def _production_readiness_payload() -> dict:
         "COINDCX_PUBLIC_URL",
         "BINANCE_API_KEY",
         "BINANCE_API_SECRET",
-        "BINANCE_FUTURES_TESTNET",
-        "BINANCE_FUTURES_BASE_URL",
-        "BINANCE_MARGIN_ASSET",
         "BINANCE_SPOT_TESTNET",
         "BINANCE_SPOT_BASE_URL",
         "BINANCE_SPOT_QUOTE_ASSET",
@@ -2411,8 +2392,7 @@ def _production_readiness_payload() -> dict:
         _production_check(
             "broker_readiness",
             "Broker readiness",
-            {"delta", "coindcx", "binance", "binance_spot"}.issubset(broker_names)
-            and required_admin_keys.issubset(admin_keys),
+            {"delta", "coindcx", "binance"}.issubset(broker_names) and required_admin_keys.issubset(admin_keys),
             {
                 "current_broker": broker_settings.get("current_broker"),
                 "available_brokers": sorted(broker_names),

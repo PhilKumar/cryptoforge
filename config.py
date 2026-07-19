@@ -31,24 +31,20 @@ COINDCX_BASE_URL = _env_url("COINDCX_BASE_URL", "https://api.coindcx.com")
 COINDCX_PUBLIC_URL = _env_url("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
 COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
 
-# ── Binance USD-M Futures API Credentials ───────────────────
+# ── Binance Spot API Credentials ────────────────────────────
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "YOUR_BINANCE_API_SECRET_HERE")
-BINANCE_FUTURES_TESTNET = os.getenv("BINANCE_FUTURES_TESTNET", "false").lower() == "true"
-BINANCE_FUTURES_BASE_URL = os.getenv(
-    "BINANCE_FUTURES_BASE_URL",
-    "https://testnet.binancefuture.com" if BINANCE_FUTURES_TESTNET else "https://fapi.binance.com",
-)
-BINANCE_MARGIN_ASSET = os.getenv("BINANCE_MARGIN_ASSET", "USDT").upper()
+BINANCE_SPOT_API_KEY = os.getenv("BINANCE_SPOT_API_KEY") or BINANCE_API_KEY
+BINANCE_SPOT_API_SECRET = os.getenv("BINANCE_SPOT_API_SECRET") or BINANCE_API_SECRET
 BINANCE_SPOT_TESTNET = os.getenv("BINANCE_SPOT_TESTNET", "false").lower() == "true"
-BINANCE_SPOT_BASE_URL = os.getenv(
+BINANCE_SPOT_BASE_URL = _env_url(
     "BINANCE_SPOT_BASE_URL",
     "https://testnet.binance.vision" if BINANCE_SPOT_TESTNET else "https://api.binance.com",
 )
 BINANCE_SPOT_QUOTE_ASSET = os.getenv("BINANCE_SPOT_QUOTE_ASSET", "USDT").upper()
 
 # ── Active Broker ────────────────────────────────────────────
-CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "delta")).lower()
+CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "binance")).lower()
 
 # ── Delta Exchange Base URLs ────────────────────────────────
 # Testnet toggle: set DELTA_TESTNET=true to use Delta testnet

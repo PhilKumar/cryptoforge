@@ -4,7 +4,8 @@
     routing: 'Routing',
     security: 'Security',
     delta: 'Delta',
-    coindcx: 'CoinDCX'
+    coindcx: 'CoinDCX',
+    binance: 'Binance Spot'
   };
 
   function adminEl(id) { return document.getElementById(id); }
@@ -215,9 +216,10 @@
 
     adminRenderBrokerCards(settings);
     adminRenderLocks(settings);
-    ['delta', 'coindcx', 'routing', 'security'].forEach(adminRenderFieldSection);
+    ['delta', 'coindcx', 'binance', 'routing', 'security'].forEach(adminRenderFieldSection);
     adminSetPill('admin-delta-pill', adminSectionConfigured('delta'));
     adminSetPill('admin-coindcx-pill', adminSectionConfigured('coindcx'));
+    adminSetPill('admin-binance-pill', adminSectionConfigured('binance'));
     var runtimePill = adminEl('admin-runtime-pill');
     if (runtimePill) runtimePill.dataset.state = adminField('CRYPTOFORGE_PIN').configured ? 'ok' : 'warn';
     adminRenderHealth(adminState.health || {});
