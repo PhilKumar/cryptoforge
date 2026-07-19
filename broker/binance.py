@@ -425,6 +425,11 @@ class BinanceSpotClient(BaseBroker):
         parsed = BaseBroker.coerce_float(value, default)
         return parsed if parsed > 0 else default
 
+    def _round_price_to_tick(self, pair: str, price: float) -> str:
+        product = self.get_product_by_symbol(pair) or {}
+        tick = str(product.get("tick_size") or "") or "0.01"
+        return self._decimal_floor(self.coerce_float(price, 0.0), tick)
+
     def _spot_order_quantity(
         self, pair: str, size: float, side: str, order_type: str, price: float
     ) -> tuple[dict, str]:
@@ -460,6 +465,28 @@ class BinanceSpotClient(BaseBroker):
             return {}, f"Spot order quantity {qty} is below Binance minimum quantity {min_qty:g}"
         return {"quantity": qty}, ""
 
+    def _base_qty_payload(self, pair: str, base_qty: float, price: float) -> tuple[dict, str]:
+        product = self.get_product_by_symbol(pair) or {}
+        if not product:
+            return {}, f"Unknown Binance Spot symbol {pair}"
+        filters = self._filters_by_type(product)
+        lot = filters.get("LOT_SIZE", {})
+        step = lot.get("stepSize") or "0.000001"
+        qty = self._decimal_floor(self.coerce_float(base_qty, 0.0), step)
+        qty_value = self.coerce_float(qty, 0.0)
+        if qty_value <= 0:
+            return {}, "Spot order base quantity must be greater than zero"
+        min_qty = self._filter_positive_float(lot.get("minQty"), 0.0)
+        if qty_value < min_qty:
+            return {}, f"Spot order quantity {qty} is below Binance minimum quantity {min_qty:g}"
+        min_notional_filter = filters.get("MIN_NOTIONAL", {}) or filters.get("NOTIONAL", {})
+        min_notional = self._filter_positive_float(
+            min_notional_filter.get("minNotional") or min_notional_filter.get("notional"), 0.0
+        )
+        if min_notional and price > 0 and qty_value * price < min_notional:
+            return {}, (f"Spot order notional {qty_value * price:g} is below Binance minimum notional {min_notional:g}")
+        return {"quantity": qty}, ""
+
     def place_order(
         self,
         product_id: str,
@@ -469,6 +496,8 @@ class BinanceSpotClient(BaseBroker):
         limit_price: float = None,
         leverage: int = 1,
         reduce_only: bool = False,
+        client_order_id: str = None,
+        base_qty: float = None,
     ) -> dict:
         if not self._is_configured():
             return {"error": "API not configured"}
@@ -480,13 +509,16 @@ class BinanceSpotClient(BaseBroker):
         order_type_upper = self._order_type(order_type)
         ticker = self.get_ticker(pair)
         price_for_qty = self.coerce_float(limit_price or ticker.get("mark_price") or ticker.get("last_price"), 0.0)
-        quantity_payload, error = self._spot_order_quantity(
-            pair,
-            self.coerce_float(size, 0.0),
-            side_upper,
-            order_type,
-            price_for_qty,
-        )
+        if base_qty is not None:
+            quantity_payload, error = self._base_qty_payload(pair, base_qty, price_for_qty)
+        else:
+            quantity_payload, error = self._spot_order_quantity(
+                pair,
+                self.coerce_float(size, 0.0),
+                side_upper,
+                order_type,
+                price_for_qty,
+            )
         if error:
             return {"error": error}
 
@@ -497,10 +529,15 @@ class BinanceSpotClient(BaseBroker):
             "newOrderRespType": "FULL",
             **quantity_payload,
         }
+        if client_order_id:
+            payload["newClientOrderId"] = str(client_order_id)
         if order_type_upper == "LIMIT":
             if not limit_price:
                 return {"error": "Limit price is required for Binance Spot limit orders"}
-            payload.update({"price": str(limit_price), "timeInForce": "GTC"})
+            tick_price = self._round_price_to_tick(pair, self.coerce_float(limit_price, 0.0))
+            if self.coerce_float(tick_price, 0.0) <= 0:
+                return {"error": f"Unable to resolve a valid limit price for {pair}"}
+            payload.update({"price": tick_price, "timeInForce": "GTC"})
         try:
             result = self._signed_request("POST", "/api/v3/order", params=payload)
             if isinstance(result, dict):
@@ -523,6 +560,8 @@ class BinanceSpotClient(BaseBroker):
         leverage: int = 1,
         reduce_only: bool = False,
         max_verify_attempts: int = 3,
+        client_order_id: str = None,
+        base_qty: float = None,
     ) -> dict:
         started_at = _time.perf_counter()
         result = self.place_order(
@@ -533,6 +572,8 @@ class BinanceSpotClient(BaseBroker):
             limit_price=limit_price,
             leverage=leverage,
             reduce_only=reduce_only,
+            client_order_id=client_order_id,
+            base_qty=base_qty,
         )
         order_ack_ms = round((_time.perf_counter() - started_at) * 1000, 1)
         if isinstance(result, dict) and result.get("error"):
@@ -573,14 +614,15 @@ class BinanceSpotClient(BaseBroker):
             "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
         }
 
-    def get_order(self, product_id: str, order_id) -> dict:
-        if not self._is_configured() or not order_id:
+    def get_order(self, product_id: str, order_id=None, client_order_id: str = None) -> dict:
+        if not self._is_configured() or not (order_id or client_order_id):
             return {}
-        return self._signed_request(
-            "GET",
-            "/api/v3/order",
-            params={"symbol": self.to_broker_symbol(product_id), "orderId": order_id},
-        )
+        params = {"symbol": self.to_broker_symbol(product_id)}
+        if order_id:
+            params["orderId"] = order_id
+        else:
+            params["origClientOrderId"] = client_order_id
+        return self._signed_request("GET", "/api/v3/order", params=params)
 
     def cancel_order(self, order_id: str, product_id: str = "") -> dict:
         if not self._is_configured():

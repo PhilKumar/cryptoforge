@@ -875,6 +875,7 @@ function showPage(pageId, btn, options) {
   if (pageId === 'allocator-page') renderBtcAllocationCalculator();
   if (pageId === 'journal-page') renderTradeJournal();
   if (pageId === 'scalp-page') cfInitScalpPage();
+  if (pageId === 'cascade-page') cfInitCascadePage();
   // Stop live monitor when leaving live page
   if (pageId !== 'live-page') stopLiveMonitor();
 }
@@ -3257,6 +3258,13 @@ function connectWS() {
         _cfScalpLastWsUpdateAt = Date.now();
         cfMergeScalpStatusPatch(data.status || {});
         cfApplyScalpStatus(_cfLatestScalpStatus);
+        return;
+      }
+      if (data.source === 'cascade' && data.type === 'cascade_status') {
+        if (typeof cfRenderCascadeStatus === 'function' && document.getElementById('cf-cascade-campaigns')) {
+          _cfCascadeLastStatus = data.status || {};
+          cfRenderCascadeStatus(_cfCascadeLastStatus);
+        }
         return;
       }
       // Trade events — trigger immediate refresh
@@ -8816,3 +8824,284 @@ document.addEventListener('keydown', function(e) {
     if (m && m.style.display === 'flex') closeRunModal();
   }
 });
+
+
+// ═══ CASCADE CAMPAIGNS ══════════════════════════════════════════
+var _cfCascadePollTimer = null;
+var _cfCascadeLastStatus = null;
+
+function cfInitCascadePage() {
+  cfLoadCascadeStatus(false);
+  if (!_cfCascadePollTimer) {
+    _cfCascadePollTimer = setInterval(function() { cfLoadCascadeStatus(false); }, 3000);
+  }
+}
+
+var _cfCascadeOrigShowPage = showPage;
+showPage = function(pageId, btn, options) {
+  if (pageId !== 'cascade-page' && _cfCascadePollTimer) {
+    clearInterval(_cfCascadePollTimer);
+    _cfCascadePollTimer = null;
+  }
+  _cfCascadeOrigShowPage(pageId, btn, options);
+};
+
+function _cfCascadeSetError(message) {
+  var node = document.getElementById('cf-cascade-error');
+  if (node) node.textContent = message || '';
+}
+
+function _cfCascadeFmt(value, digits) {
+  var num = Number(value);
+  if (!isFinite(num)) return '--';
+  return num.toLocaleString('en-US', { maximumFractionDigits: digits == null ? 2 : digits });
+}
+
+async function cfLoadCascadeStatus(showToast) {
+  try {
+    var response = await cfApiFetch('/api/cascade/status', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Cascade status unavailable'));
+    _cfCascadeLastStatus = data;
+    cfRenderCascadeStatus(data);
+    if (showToast) cfToast('Cascade status refreshed', 'success');
+  } catch (error) {
+    if (showToast) cfToast('Cascade refresh failed: ' + error.message, 'danger');
+  }
+}
+
+function cfRenderCascadeStatus(data) {
+  var engineState = document.getElementById('cf-cascade-engine-state');
+  if (engineState) {
+    var active = Number(data.active_count || 0);
+    engineState.textContent = data.running ? ('Running · ' + active + ' active') : 'Idle';
+  }
+  cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
+  cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
+  cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
+}
+
+function _cfCascadeLadderRows(campaign) {
+  var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
+  if (!legs.length) return '<div class="table-meta">No legs yet — waiting for the first trendline touch.</div>';
+  var leg = legs[legs.length - 1];
+  var orders = leg.pending_orders || {};
+  var rows = [2, 4, 8].map(function(level) {
+    var order = orders[String(level)] || orders[level] || {};
+    var status = String(order.status || '--');
+    var tone = status === 'FILLED' ? 'var(--green, #3fae56)'
+      : (status === 'PLACED' || status === 'PENDING') ? 'var(--accent, #1f6fd6)'
+      : 'var(--text-muted, #888)';
+    return '<tr>'
+      + '<td>L' + level + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(order.price) + '</td>'
+      + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
+      + '<td class="num">$' + _cfCascadeFmt(order.usd_notional) + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(order.quantity, 8) + '</td>'
+      + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status) + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
+    + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th><th class="num">Amount</th><th class="num">Qty</th><th>Status</th></tr></thead>'
+    + '<tbody>' + rows + '</tbody></table></div></div>';
+}
+
+function _cfCascadeCampaignCard(campaign) {
+  var cid = _escapeHtml(campaign.campaign_id || '');
+  var stateTone = campaign.state === 'TRENDLINE_ACTIVE' ? 'ok' : 'warn';
+  var mode = String(campaign.mode || 'paper').toUpperCase();
+  var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
+  var fills = Array.isArray(campaign.all_fills) ? campaign.all_fills : [];
+  var tp = campaign.tp_price || campaign.display_tp_price;
+  var modeBadge = mode === 'LIVE'
+    ? '<span class="admin-pill" data-state="warn">LIVE</span>'
+    : '<span class="admin-pill" data-state="ok">PAPER</span>';
+  var goLive = mode !== 'LIVE' && fills.length === 0
+    ? '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeSetLive(\'' + cid + '\')">Go Live</button>'
+    : '';
+  return '<div class="card" style="margin-bottom:12px;padding:14px;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<div style="display:flex;align-items:center;gap:8px;">'
+    + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
+    + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(campaign.state || '') + '</span>'
+    + modeBadge
+    + '<span class="table-meta">#' + cid + '</span>'
+    + '</div>'
+    + '<div style="display:flex;gap:6px;">'
+    + goLive
+    + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
+    + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'
+    + '</div></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:12px 0;">'
+    + '<div class="stat-box"><div class="stat-label">Mother High</div><div class="stat-value">' + _cfCascadeFmt(campaign.mother_high) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label">Last Price</div><div class="stat-value">' + _cfCascadeFmt(campaign.last_price) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label">Trendline / Leg</div><div class="stat-value">' + (campaign.active_trendline_id || '--') + ' / ' + legs.length + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label">Avg Entry</div><div class="stat-value">' + _cfCascadeFmt(campaign.avg_entry_price) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-value">' + _cfCascadeFmt(tp) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label">Spent / Capital</div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div></div>'
+    + '</div>'
+    + _cfCascadeLadderRows(campaign)
+    + (fills.length
+      ? '<div class="table-meta" style="margin-top:8px;">' + fills.length + ' fill(s) — latest: L'
+        + _escapeHtml(String(fills[fills.length - 1].level)) + ' @ ' + _cfCascadeFmt(fills[fills.length - 1].price) + '</div>'
+      : '')
+    + '</div>';
+}
+
+function cfRenderCascadeCampaigns(campaigns) {
+  var mount = document.getElementById('cf-cascade-campaigns');
+  if (!mount) return;
+  if (!campaigns.length) {
+    mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">No campaigns yet — start one on the left.</div>';
+    return;
+  }
+  mount.innerHTML = campaigns.map(_cfCascadeCampaignCard).join('');
+}
+
+function cfRenderCascadeEvents(campaigns) {
+  var mount = document.getElementById('cf-cascade-events');
+  if (!mount) return;
+  var events = [];
+  campaigns.forEach(function(campaign) {
+    (campaign.event_log || []).forEach(function(event) { events.push(event); });
+  });
+  events.sort(function(a, b) { return String(a.timestamp || '').localeCompare(String(b.timestamp || '')); });
+  if (!events.length) {
+    mount.innerHTML = '<div class="cf-table-empty-cell">No events yet</div>';
+    return;
+  }
+  mount.innerHTML = events.slice(-80).reverse().map(function(event) {
+    var tone = event.level === 'error' || event.level === 'warn' ? 'var(--red, #d9534f)'
+      : event.level === 'fill' || event.level === 'complete' ? 'var(--green, #3fae56)'
+      : 'var(--text-muted, #888)';
+    return '<div style="padding:3px 0;font-size:12.5px;border-bottom:1px solid var(--border, rgba(128,128,128,.15));">'
+      + '<span style="color:' + tone + ';font-weight:600;">[' + _escapeHtml(event.level || 'info') + ']</span> '
+      + '<span class="table-meta">' + _escapeHtml(event.timestamp || '') + '</span> '
+      + _escapeHtml(event.message || '')
+      + '</div>';
+  }).join('');
+}
+
+function cfRenderCascadeClosed(closed) {
+  var body = document.getElementById('cf-cascade-closed-body');
+  if (!body) return;
+  if (!closed.length) {
+    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">No closed campaigns yet</td></tr>';
+    return;
+  }
+  body.innerHTML = closed.slice().reverse().map(function(campaign) {
+    var pnl = Number(campaign.realized_pnl);
+    var pnlText = isFinite(pnl) ? (pnl >= 0 ? '+' : '') + _cfCascadeFmt(pnl) : '--';
+    return '<tr>'
+      + '<td>#' + _escapeHtml(campaign.campaign_id || '') + '</td>'
+      + '<td>' + _escapeHtml(campaign.symbol || '') + '</td>'
+      + '<td>' + _escapeHtml(String(campaign.mode || '').toUpperCase()) + '</td>'
+      + '<td>' + _escapeHtml(campaign.close_reason || campaign.state || '') + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(campaign.avg_entry_price) + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(campaign.tp_price) + '</td>'
+      + '<td class="num" style="color:' + (pnl >= 0 ? 'var(--green, #3fae56)' : 'var(--red, #d9534f)') + ';">' + pnlText + '</td>'
+      + '<td>' + _escapeHtml(campaign.closed_at || '') + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function cfCascadeStartCampaign() {
+  _cfCascadeSetError('');
+  var symbol = (document.getElementById('cf-cascade-symbol') || {}).value || '';
+  var capital = Number((document.getElementById('cf-cascade-capital') || {}).value || 0);
+  var motherHigh = Number((document.getElementById('cf-cascade-mother-high') || {}).value || 0);
+  var motherLow = Number((document.getElementById('cf-cascade-mother-low') || {}).value || 0);
+  var motherTimeRaw = (document.getElementById('cf-cascade-mother-time') || {}).value || '';
+  var mode = (document.getElementById('cf-cascade-mode') || {}).value || 'paper';
+
+  if (!symbol.trim()) return _cfCascadeSetError('Enter a symbol (e.g. BTCUSDT).');
+  if (!(capital > 0)) return _cfCascadeSetError('Enter the campaign capital in USD.');
+  if (!(motherHigh > 0) || !(motherLow > 0) || motherHigh <= motherLow) {
+    return _cfCascadeSetError('Mother candle high must be greater than mother candle low.');
+  }
+  if (mode === 'live') {
+    var confirmed = window.confirm(
+      'LIVE mode places REAL orders on Binance Spot with real money.\n\n'
+      + symbol.trim().toUpperCase() + ' — capital $' + capital + '\n\nStart live campaign?'
+    );
+    if (!confirmed) return;
+  }
+
+  var payload = {
+    symbol: symbol.trim().toUpperCase(),
+    capital_usd: capital,
+    mother_high: motherHigh,
+    mother_low: motherLow,
+    mode: mode
+  };
+  if (motherTimeRaw) {
+    var parsed = Date.parse(motherTimeRaw);
+    if (isFinite(parsed)) payload.mother_timestamp = Math.floor(parsed / 1000);
+  }
+
+  var button = document.getElementById('cf-cascade-start-btn');
+  if (button) button.disabled = true;
+  try {
+    var response = await cfApiFetch('/api/cascade/campaigns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Failed to start campaign'));
+    cfToast('Cascade campaign started (' + mode.toUpperCase() + ')', 'success');
+    cfLoadCascadeStatus(false);
+  } catch (error) {
+    _cfCascadeSetError(error.message);
+    cfToast('Campaign start failed: ' + error.message, 'danger');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function _cfCascadeAction(url, options, successMessage) {
+  try {
+    var response = await cfApiFetch(url, options);
+    var data = await cfReadApiPayload(response);
+    if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Request failed'));
+    if (successMessage) cfToast(successMessage, 'success');
+    cfLoadCascadeStatus(false);
+    return data;
+  } catch (error) {
+    cfToast(error.message, 'danger');
+    return null;
+  }
+}
+
+function cfCascadeStopCampaign(campaignId) {
+  if (!window.confirm('Stop campaign #' + campaignId + '? Resting orders will be cancelled.')) return;
+  _cfCascadeAction(
+    '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/stop',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    'Campaign stopped'
+  );
+}
+
+function cfCascadeSetLive(campaignId) {
+  if (!window.confirm(
+    'Flip campaign #' + campaignId + ' to LIVE?\n\nAll planned ladder orders will be placed on Binance Spot with real money.'
+  )) return;
+  _cfCascadeAction(
+    '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/mode',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'live' }) },
+    'Campaign is now LIVE'
+  );
+}
+
+function cfCascadeDeleteCampaign(campaignId) {
+  if (!window.confirm('Delete campaign #' + campaignId + '? Active orders are cancelled and the campaign is archived.')) return;
+  _cfCascadeAction(
+    '/api/cascade/campaigns/' + encodeURIComponent(campaignId),
+    { method: 'DELETE' },
+    'Campaign deleted'
+  );
+}
+
+function cfCascadeReconcile() {
+  _cfCascadeAction('/api/cascade/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 'Cascade reconciled with broker');
+}

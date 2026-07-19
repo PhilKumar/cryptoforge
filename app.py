@@ -53,6 +53,8 @@ import config  # must be first — calls load_dotenv()
 from broker import get_broker_client, get_supported_brokers
 from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
+from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
+from engine.cascade import CascadeEngine
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade, normalize_scalp_order_type
@@ -94,6 +96,13 @@ async def _shutdown_runtime_engines() -> None:
             await scalp_engine.shutdown()
         except Exception as exc:
             _logger.warning("Failed to shutdown scalp engine during app shutdown: %s", exc)
+    cascade_engine = globals().get("_cascade_engine")
+    if cascade_engine is not None:
+        try:
+            _persist_cascade_runtime_snapshot(cascade_engine)
+            await cascade_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown cascade engine during app shutdown: %s", exc)
     _shutdown_save_engines()
 
 
@@ -491,6 +500,9 @@ _BUCKET_RUNS = "runs"
 _BUCKET_SCALP_TRADES = "scalp_trades"
 _BUCKET_SCALP_EVENTS = "scalp_events"
 _BUCKET_SCALP_RUNTIME = "scalp_runtime"
+_BUCKET_CASCADE_RUNTIME = "cascade_runtime"
+_BUCKET_CASCADE_EVENTS = "cascade_events"
+_BUCKET_CASCADE_CLOSED = "cascade_closed"
 _BUCKET_APP_SETTINGS = "app_settings"
 _APP_SETTINGS_BROKER_KEY = "selected_broker"
 
@@ -1697,6 +1709,9 @@ def _runtime_registry_summary() -> dict:
     scalp_running = bool(scalp_engine and getattr(scalp_engine, "_running", False))
     scalp_open = len(getattr(scalp_engine, "open_trades", {}) or {}) if scalp_engine else 0
     scalp_pending = len(getattr(scalp_engine, "pending_entries", {}) or {}) if scalp_engine else 0
+    cascade_engine = globals().get("_cascade_engine")
+    cascade_active = len(getattr(cascade_engine, "active_campaigns", []) or []) if cascade_engine else 0
+    cascade_live = len(getattr(cascade_engine, "live_campaigns", []) or []) if cascade_engine else 0
     return {
         "live_running_runs": sorted(
             [run_id for run_id, engine in live_engines.items() if getattr(engine, "running", False)]
@@ -1708,6 +1723,9 @@ def _runtime_registry_summary() -> dict:
         "scalp_running": scalp_running,
         "scalp_open_trades": scalp_open,
         "scalp_pending_entries": scalp_pending,
+        "cascade_running": bool(cascade_engine and getattr(cascade_engine, "_running", False)),
+        "cascade_active_campaigns": cascade_active,
+        "cascade_live_campaigns": cascade_live,
     }
 
 
@@ -1738,12 +1756,15 @@ def _broker_runtime_lock_summary() -> dict:
         reasons.append("Close scalp open trades before switching brokers.")
     if registry["scalp_pending_entries"]:
         reasons.append("Clear scalp pending entries before switching brokers.")
+    if registry["cascade_active_campaigns"]:
+        reasons.append("Stop cascade campaigns before switching brokers.")
     return {
         "live_running_runs": registry["live_running_runs"],
         "paper_running_runs": registry["paper_running_runs"],
         "scalp_engine_running": scalp_engine_running,
         "scalp_open_trades": registry["scalp_open_trades"],
         "scalp_pending_entries": registry["scalp_pending_entries"],
+        "cascade_active_campaigns": registry["cascade_active_campaigns"],
         "switchable": not reasons,
         "reasons": reasons,
     }
@@ -2122,6 +2143,15 @@ async def _switch_active_broker(name: str) -> dict:
             _logger.warning("Failed to shutdown scalp engine before broker switch: %s", exc)
     _scalp_engine = None
 
+    cascade_engine = globals().get("_cascade_engine")
+    if cascade_engine is not None:
+        try:
+            _persist_cascade_runtime_snapshot(cascade_engine)
+            await cascade_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown cascade engine before broker switch: %s", exc)
+    globals()["_cascade_engine"] = None
+
     broker_info = _set_active_broker(target, persist=True)
     _market_cache["data"] = None
     _market_cache["timestamp"] = 0
@@ -2296,6 +2326,7 @@ def _production_readiness_payload() -> dict:
         "/api/scalp/status",
         "/api/scalp/diagnostics",
         "/api/market/top25",
+        "/api/cascade/status",
         "/api/admin/config",
         "/api/broker/settings",
         "/api/ops/state/backup",
@@ -2539,7 +2570,7 @@ def _scalp_diagnostics_payload(symbol: str = "") -> dict:
 
 
 async def _reset_runtime_memory() -> None:
-    global _scalp_engine
+    global _scalp_engine, _cascade_engine
 
     scalp_engine = globals().get("_scalp_engine")
     if scalp_engine is not None:
@@ -2548,6 +2579,14 @@ async def _reset_runtime_memory() -> None:
         except Exception as exc:
             _logger.warning("Failed to shutdown scalp engine during runtime reset: %s", exc)
     _scalp_engine = None
+
+    cascade_engine = globals().get("_cascade_engine")
+    if cascade_engine is not None:
+        try:
+            await cascade_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown cascade engine during runtime reset: %s", exc)
+    _cascade_engine = None
 
     for tasks_dict in (_live_tasks, _paper_tasks):
         for run_id, task_ref in list(tasks_dict.items()):
@@ -2714,6 +2753,27 @@ async def emergency_stop(request: Request):
                 results["scalp:engine"] = "stopped"
         except Exception as e:
             results["scalp:engine"] = f"error: {str(e)}"
+
+    # Stop cascade campaigns: cancel resting orders (entries + TP), never
+    # market-sell holdings — the spot position simply remains in the wallet.
+    cascade_engine = globals().get("_cascade_engine")
+    if cascade_engine is not None:
+        for campaign in list(getattr(cascade_engine, "active_campaigns", []) or []):
+            try:
+                result = await cascade_engine.stop_campaign(campaign.campaign_id, cancel_orders=True)
+                results[f"cascade:campaign:{campaign.campaign_id}"] = (
+                    "stopped" if result.get("status") == "ok" else result.get("error", "error")
+                )
+                stopped += 1
+            except Exception as e:
+                results[f"cascade:campaign:{campaign.campaign_id}"] = f"error: {str(e)}"
+        try:
+            if getattr(cascade_engine, "_running", False):
+                cascade_engine.stop()
+                results["cascade:engine"] = "stopped"
+            _persist_cascade_runtime_snapshot(cascade_engine)
+        except Exception as e:
+            results["cascade:engine"] = f"error: {str(e)}"
 
     # Cancel all tasks
     for name, tasks_dict in [("live", _live_tasks), ("paper", _paper_tasks)]:
@@ -6247,3 +6307,212 @@ async def scalp_reconcile():
             symbol_hint,
             default_status=502,
         )
+
+
+# ── Cascade Engine ────────────────────────────────────────────────
+_cascade_engine: Optional[CascadeEngine] = None
+
+
+def _load_cascade_runtime() -> dict:
+    data = _get_state_store().get(_BUCKET_CASCADE_RUNTIME, "current", default={})
+    return data if isinstance(data, dict) else {}
+
+
+def _save_cascade_runtime(runtime_state: dict) -> None:
+    _get_state_store().put(_BUCKET_CASCADE_RUNTIME, "current", dict(runtime_state or {}))
+
+
+def _snapshot_cascade_runtime(status: dict) -> dict:
+    return {
+        "saved_at": str(datetime.now()),
+        "campaigns": list(status.get("campaigns") or []),
+        "closed_campaigns": list(status.get("closed_campaigns") or [])[-20:],
+    }
+
+
+def _persist_cascade_runtime_snapshot(engine: "CascadeEngine") -> None:
+    try:
+        _save_cascade_runtime(_snapshot_cascade_runtime(engine.get_status()))
+    except Exception as exc:
+        _logger.error("[CASCADE] Failed to persist runtime snapshot: %s", exc)
+
+
+def _load_cascade_events() -> list:
+    data = _get_state_store().get(_BUCKET_CASCADE_EVENTS, "log", default=[])
+    return data if isinstance(data, list) else []
+
+
+def _cascade_persist_event(event: dict) -> None:
+    try:
+        events = _load_cascade_events()
+        events.append(dict(event or {}))
+        _get_state_store().put(_BUCKET_CASCADE_EVENTS, "log", events[-500:])
+    except Exception as exc:
+        _logger.error("[CASCADE] Failed to persist event: %s", exc)
+
+
+def _cascade_persist_closed(campaign: dict) -> None:
+    try:
+        store = _get_state_store()
+        closed = store.get(_BUCKET_CASCADE_CLOSED, "campaigns", default=[])
+        closed = closed if isinstance(closed, list) else []
+        key = campaign.get("campaign_id")
+        closed = [row for row in closed if row.get("campaign_id") != key]
+        closed.append(dict(campaign or {}))
+        store.put(_BUCKET_CASCADE_CLOSED, "campaigns", closed[-100:])
+    except Exception as exc:
+        _logger.error("[CASCADE] Failed to persist closed campaign: %s", exc)
+
+    reason = str(campaign.get("close_reason") or "")
+    if reason in {"tp_filled", "mother_broken"}:
+        pnl = campaign.get("realized_pnl")
+        alerter.alert(
+            "Cascade Campaign Closed",
+            f"Symbol: {campaign.get('symbol', '—')}\nMode: {campaign.get('mode', '')}\n"
+            f"Reason: {reason}\n"
+            + (f"P&L: ${float(pnl):,.2f}\n" if pnl is not None else "")
+            + f"Avg entry: {campaign.get('avg_entry_price') or '—'}\nTP: {campaign.get('tp_price') or '—'}",
+            level="info" if reason == "tp_filled" else "warn",
+        )
+
+
+def _broadcast_cascade_update(status: dict) -> None:
+    try:
+        _save_cascade_runtime(_snapshot_cascade_runtime(status))
+    except Exception as exc:
+        _logger.error("[CASCADE] Failed to persist runtime state: %s", exc)
+
+    async def _push():
+        payload = {"source": "cascade", "type": "cascade_status", "status": status}
+        for ws in ws_clients.copy():
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                if ws in ws_clients:
+                    ws_clients.remove(ws)
+
+    try:
+        asyncio.get_running_loop().create_task(_push())
+    except RuntimeError:
+        pass  # no running loop (e.g. during tests) — snapshot is already saved
+
+
+def _restore_cascade_runtime(engine: "CascadeEngine") -> bool:
+    runtime_state = _load_cascade_runtime()
+    snapshots = runtime_state.get("campaigns") or []
+    if not snapshots:
+        return False
+    restored = engine.restore_campaigns(snapshots)
+    if restored and engine.active_campaigns and not engine._running:
+        engine.start()
+        try:
+            asyncio.get_running_loop().create_task(engine.reconcile())
+        except RuntimeError:
+            pass
+    return bool(restored)
+
+
+def _get_cascade_engine() -> "CascadeEngine":
+    global _cascade_engine
+    if _cascade_engine is None:
+        _cascade_engine = CascadeEngine(
+            delta,
+            on_campaign_closed=_cascade_persist_closed,
+            on_event=_cascade_persist_event,
+            on_update=_broadcast_cascade_update,
+        )
+        _restore_cascade_runtime(_cascade_engine)
+    return _cascade_engine
+
+
+@app.get("/api/cascade/status")
+async def cascade_status():
+    eng = _get_cascade_engine()
+    if not eng.campaigns:
+        _restore_cascade_runtime(eng)
+    return eng.get_status()
+
+
+@app.post("/api/cascade/campaigns")
+async def cascade_start_campaign(request: Request):
+    check_rate_limit("cascade_start", max_calls=3, window_sec=10)
+    body = await _read_json_body(request)
+    mode = str(body.get("mode") or "paper").strip().lower()
+    if mode == "live" and not _broker_is_configured():
+        raise HTTPException(status_code=409, detail="Broker API keys are not configured — cannot start a live campaign")
+    eng = _get_cascade_engine()
+    mother_timestamp = body.get("mother_timestamp")
+    try:
+        mother_timestamp = int(float(mother_timestamp)) if mother_timestamp not in (None, "") else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="mother_timestamp must be an epoch-seconds number")
+    result = await eng.start_campaign(
+        symbol=str(body.get("symbol") or ""),
+        capital_usd=body.get("capital_usd") or body.get("capital") or 0,
+        mother_high=body.get("mother_high") or 0,
+        mother_low=body.get("mother_low") or 0,
+        mother_timestamp=mother_timestamp,
+        mode=mode,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
+@app.post("/api/cascade/campaigns/{campaign_id}/stop")
+async def cascade_stop_campaign(campaign_id: str, request: Request):
+    check_rate_limit("cascade_stop", max_calls=6, window_sec=10)
+    body = await _read_json_body(request)
+    cancel_orders = bool(body.get("cancel_orders", True))
+    eng = _get_cascade_engine()
+    result = await eng.stop_campaign(campaign_id, cancel_orders=cancel_orders)
+    if result.get("error"):
+        raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
+@app.post("/api/cascade/campaigns/{campaign_id}/mode")
+async def cascade_set_mode(campaign_id: str, request: Request):
+    check_rate_limit("cascade_mode", max_calls=3, window_sec=10)
+    body = await _read_json_body(request)
+    eng = _get_cascade_engine()
+    result = await eng.set_mode(campaign_id, str(body.get("mode") or ""))
+    if result.get("error"):
+        raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
+@app.get("/api/cascade/campaigns/{campaign_id}/events")
+async def cascade_campaign_events(campaign_id: str):
+    eng = _get_cascade_engine()
+    campaign = eng.campaigns.get(campaign_id)
+    campaign_events = list(campaign.event_log) if campaign else []
+    persisted = [e for e in _load_cascade_events() if e.get("campaign_id") == campaign_id]
+    return {"status": "ok", "campaign_id": campaign_id, "events": campaign_events, "persisted_events": persisted[-200:]}
+
+
+@app.delete("/api/cascade/campaigns/{campaign_id}")
+async def cascade_delete_campaign(campaign_id: str):
+    check_rate_limit("cascade_delete", max_calls=6, window_sec=10)
+    eng = _get_cascade_engine()
+    campaign = eng.campaigns.get(campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+    if campaign.state in CASCADE_ACTIVE_STATES:
+        await eng.stop_campaign(campaign_id, cancel_orders=True)
+    result = eng.delete_campaign(campaign_id)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    return {"status": "ok", "campaign_id": campaign_id}
+
+
+@app.post("/api/cascade/reconcile")
+async def cascade_reconcile():
+    eng = _get_cascade_engine()
+    result = await eng.reconcile()
+    _persist_cascade_runtime_snapshot(eng)
+    return result
