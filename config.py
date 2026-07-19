@@ -29,7 +29,7 @@ def _env_url(name: str, default: str) -> str:
 
 COINDCX_BASE_URL = _env_url("COINDCX_BASE_URL", "https://api.coindcx.com")
 COINDCX_PUBLIC_URL = _env_url("COINDCX_PUBLIC_URL", "https://public.coindcx.com")
-COINDCX_MARGIN_CURRENCY = os.getenv("COINDCX_MARGIN_CURRENCY", "USDT").upper()
+COINDCX_MARGIN_CURRENCY = (os.getenv("COINDCX_MARGIN_CURRENCY") or "USDT").upper()
 
 # ── Binance Spot API Credentials ────────────────────────────
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE")
@@ -41,7 +41,7 @@ BINANCE_SPOT_BASE_URL = _env_url(
     "BINANCE_SPOT_BASE_URL",
     "https://testnet.binance.vision" if BINANCE_SPOT_TESTNET else "https://api.binance.com",
 )
-BINANCE_SPOT_QUOTE_ASSET = os.getenv("BINANCE_SPOT_QUOTE_ASSET", "USDT").upper()
+BINANCE_SPOT_QUOTE_ASSET = (os.getenv("BINANCE_SPOT_QUOTE_ASSET") or "USDT").upper()
 
 # ── Active Broker ────────────────────────────────────────────
 CRYPTOFORGE_BROKER = os.getenv("CRYPTOFORGE_BROKER", os.getenv("BROKER", "binance")).lower()

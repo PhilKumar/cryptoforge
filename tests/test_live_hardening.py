@@ -2872,16 +2872,25 @@ class AdminConfigEnvReloadTests(unittest.TestCase):
         self._orig_env_path = self.app_module._ENV_PATH
         self._orig_base_url = config.BINANCE_SPOT_BASE_URL
         self._orig_testnet = config.BINANCE_SPOT_TESTNET
+        self._orig_quote_asset = config.BINANCE_SPOT_QUOTE_ASSET
+        self._orig_margin_currency = config.COINDCX_MARGIN_CURRENCY
         self.addCleanup(self._restore)
 
     def _restore(self):
         self.app_module._ENV_PATH = self._orig_env_path
         config.BINANCE_SPOT_BASE_URL = self._orig_base_url
         config.BINANCE_SPOT_TESTNET = self._orig_testnet
+        config.BINANCE_SPOT_QUOTE_ASSET = self._orig_quote_asset
+        config.COINDCX_MARGIN_CURRENCY = self._orig_margin_currency
         # load_dotenv(override=True) permanently sets os.environ for any key
         # present in the temp .env file — undo that so tests don't leak.
-        os.environ.pop("BINANCE_SPOT_BASE_URL", None)
-        os.environ.pop("BINANCE_SPOT_TESTNET", None)
+        for key in (
+            "BINANCE_SPOT_BASE_URL",
+            "BINANCE_SPOT_TESTNET",
+            "BINANCE_SPOT_QUOTE_ASSET",
+            "COINDCX_MARGIN_CURRENCY",
+        ):
+            os.environ.pop(key, None)
 
     def _write_env(self, contents: str) -> str:
         env_path = os.path.join(self._tmp.name, ".env")
@@ -2926,3 +2935,37 @@ class AdminConfigEnvReloadTests(unittest.TestCase):
             os.environ.pop("BINANCE_SPOT_BASE_URL", None)
         client = BinanceSpotClient()
         self.assertEqual(client.base_url, "https://api.binance.com")
+
+    def test_blank_spot_quote_asset_falls_back_to_usdt(self):
+        """Regression: a blank BINANCE_SPOT_QUOTE_ASSET broke get_product_by_symbol
+        (zero products ever matched item.get("quoteAsset") == ""), which is what
+        produced 'Symbol BTCUSDT not found on Binance Spot', and also broke
+        portfolio position/order-history symbol construction (f"{asset}{quote}")."""
+        self.app_module._ENV_PATH = self._write_env("BINANCE_SPOT_QUOTE_ASSET=\n")
+        os.environ["BINANCE_SPOT_QUOTE_ASSET"] = ""
+        try:
+            self.app_module._reload_runtime_config_from_env()
+        finally:
+            os.environ.pop("BINANCE_SPOT_QUOTE_ASSET", None)
+        self.assertEqual(config.BINANCE_SPOT_QUOTE_ASSET, "USDT")
+        client = BinanceSpotClient()
+        self.assertEqual(client.quote_asset, "USDT")
+
+    def test_blank_coindcx_margin_currency_falls_back_to_usdt(self):
+        self.app_module._ENV_PATH = self._write_env("COINDCX_MARGIN_CURRENCY=\n")
+        os.environ["COINDCX_MARGIN_CURRENCY"] = ""
+        try:
+            self.app_module._reload_runtime_config_from_env()
+        finally:
+            os.environ.pop("COINDCX_MARGIN_CURRENCY", None)
+        self.assertEqual(config.COINDCX_MARGIN_CURRENCY, "USDT")
+
+    def test_normalize_admin_env_update_coerces_blank_optional_fields(self):
+        """Write-side defense in depth: even if the admin form submits a blank
+        value for these fields, persist the sane default instead of an empty
+        string, so re-saving the form can never reintroduce the bug."""
+        self.assertEqual(self.app_module._normalize_admin_env_update("BINANCE_SPOT_QUOTE_ASSET", ""), "USDT")
+        self.assertEqual(self.app_module._normalize_admin_env_update("COINDCX_MARGIN_CURRENCY", ""), "USDT")
+        self.assertEqual(
+            self.app_module._normalize_admin_env_update("BINANCE_SPOT_BASE_URL", ""), "https://api.binance.com"
+        )
