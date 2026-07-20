@@ -295,10 +295,16 @@ class Campaign:
     # Live swing being tracked: the dip, the rise that confirms it, and the
     # running high of that rise. Once risen is True the dip is frozen — later
     # lower lows begin a new swing instead of dragging this one down.
-    swing_low: Optional[float] = None
-    swing_high: Optional[float] = None
+    swing_low: Optional[float] = None  # the dip being tracked
+    swing_low_timestamp: Optional[int] = None
+    swing_high: Optional[float] = None  # highest high since the last cut (trendline anchor)
     swing_high_timestamp: Optional[int] = None
-    swing_risen: bool = False
+    swing_risen: bool = False  # a rise confirmed the dip, so it is frozen
+    anchor_high: Optional[float] = None  # highest high up to the dip (trendline anchor)
+    anchor_high_timestamp: Optional[int] = None
+    touch_high: Optional[float] = None  # high of the candle that touched the trendline
+    touch_high_timestamp: Optional[int] = None
+    broken_above: bool = False  # active trendline has been closed above
     last_processed_ts: int = 0  # last processed closed 5m candle open ts
     closed_at: str = ""
     close_reason: str = ""
@@ -357,9 +363,15 @@ class Campaign:
             "realized_pnl": self.realized_pnl,
             "mother_broken_above": self.mother_broken_above,
             "swing_low": self.swing_low,
+            "swing_low_timestamp": self.swing_low_timestamp,
             "swing_high": self.swing_high,
             "swing_high_timestamp": self.swing_high_timestamp,
             "swing_risen": self.swing_risen,
+            "anchor_high": self.anchor_high,
+            "anchor_high_timestamp": self.anchor_high_timestamp,
+            "touch_high": self.touch_high,
+            "touch_high_timestamp": self.touch_high_timestamp,
+            "broken_above": self.broken_above,
             "last_processed_ts": self.last_processed_ts,
             "closed_at": self.closed_at,
             "close_reason": self.close_reason,
@@ -393,9 +405,15 @@ class Campaign:
             "realized_pnl",
             "mother_broken_above",
             "swing_low",
+            "swing_low_timestamp",
             "swing_high",
             "swing_high_timestamp",
             "swing_risen",
+            "anchor_high",
+            "anchor_high_timestamp",
+            "touch_high",
+            "touch_high_timestamp",
+            "broken_above",
             "last_processed_ts",
             "closed_at",
             "close_reason",
@@ -1097,84 +1115,134 @@ class CascadeEngine:
 
     # ── state machine ────────────────────────────────────────────
     #
-    # A swing is a dip followed by a rise. The dip is the running low; the
-    # rise is the running high after it, and the first higher high FREEZES the
-    # dip (later lower lows begin a new swing rather than dragging this one
-    # down). When a red candle closes below that frozen dip, the swing is cut:
-    # a trendline is drawn from the mother high to the swing high and the fib
-    # is anchored 0 = swing high, 1 = swing low. There is no candle-count
-    # logic anywhere — only the rise and the cut.
+    # 1. Track the dip (running low) and the highest high since the last cut.
+    # 2. When price rises off the dip, the dip freezes and the trendline is
+    #    drawn: mother high -> the highest high up to that dip.
+    # 3. A TOUCH of that line (high crosses it, close stays below) records the
+    #    touching candle's high — that becomes fib 0.
+    # 4. When a red candle CLOSES BELOW the frozen dip, the fib is drawn:
+    #    0 = touch high, 1 = the dip.
+    # 5. One trendline can host many fibs. A new one is only drawn once the
+    #    line has been closed above AND the low is then cut; it is anchored to
+    #    the latest high before the new dip.
 
     def _process_candle(self, campaign: Campaign, candle: Candle) -> None:
-        # Mother-high breach ends the hunt in every state.
         if candle.high >= campaign.mother_high:
             self._mother_broken(campaign)
             return
 
         if campaign.swing_low is None:
-            # Seed the first swing from the mother candle itself, so a cut
-            # before any genuine rise cannot anchor a fib at the mother high.
-            campaign.swing_low = campaign.mother_low
-            campaign.swing_high = campaign.mother_high
-            campaign.swing_high_timestamp = campaign.mother_timestamp
-            campaign.swing_risen = False
+            self._restart_swing(campaign, candle, seed_from_mother=True)
 
-        if leg_broken(candle, campaign.swing_low):
+        tl = campaign.active_trendline
+
+        if tl is not None:
+            line = trendline_price(tl, candle.timestamp)
+            if candle.close > line:
+                campaign.broken_above = True
+            elif candle.high >= line and candle.high < campaign.mother_high:
+                # Touch: the wick crosses the line but the candle closes below it.
+                if campaign.touch_high is None or candle.high > campaign.touch_high:
+                    campaign.touch_high = candle.high
+                    campaign.touch_high_timestamp = candle.timestamp
+
+        # The anchor is the highest high since the last fib — it spans skipped
+        # cuts, so the line attaches to the real high before the depth.
+        if campaign.active_trendline_id is None:
+            if campaign.anchor_high is None or candle.high > campaign.anchor_high:
+                campaign.anchor_high = candle.high
+                campaign.anchor_high_timestamp = candle.timestamp
+
+        # A cut only counts once the dip has been confirmed by a rise. Before
+        # that, a lower close is simply the dip still extending downward.
+        if campaign.swing_risen and campaign.swing_low is not None and leg_broken(candle, campaign.swing_low):
             self._cut_swing(campaign, candle)
         else:
-            if not campaign.swing_risen and candle.low < campaign.swing_low:
+            if not campaign.swing_risen and campaign.swing_low is not None and candle.low < campaign.swing_low:
                 campaign.swing_low = candle.low
+                campaign.swing_low_timestamp = candle.timestamp
             if campaign.swing_high is None or candle.high > campaign.swing_high:
+                # A higher high is the rise: it confirms and freezes the dip.
                 campaign.swing_high = candle.high
                 campaign.swing_high_timestamp = candle.timestamp
-                campaign.swing_risen = True
+                if not campaign.swing_risen and campaign.swing_low is not None:
+                    campaign.swing_risen = True
+                    if campaign.active_trendline_id is None:
+                        self._draw_trendline(campaign)
 
-        # Paper fill checks run after ladder management so freshly placed
-        # orders are honored. Levels on 15m confirm only on closed 15m candles.
         if campaign.mode == "paper" and campaign.state in ACTIVE_STATES:
             self._paper_fill_check(campaign, candle)
 
-    def _restart_swing(self, campaign: Campaign, candle: Candle) -> None:
-        campaign.swing_low = candle.low
-        campaign.swing_high = candle.high
-        campaign.swing_high_timestamp = candle.timestamp
+    def _restart_swing(self, campaign: Campaign, candle: Candle, seed_from_mother: bool = False) -> None:
+        if seed_from_mother:
+            campaign.swing_low = campaign.mother_low
+            campaign.swing_low_timestamp = campaign.mother_timestamp
+            campaign.swing_high = None
+            campaign.swing_high_timestamp = None
+        else:
+            campaign.swing_low = candle.low
+            campaign.swing_low_timestamp = candle.timestamp
+            campaign.swing_high = candle.high
+            campaign.swing_high_timestamp = candle.timestamp
         campaign.swing_risen = False
+        campaign.touch_high = None
+        campaign.touch_high_timestamp = None
 
-    def _cut_swing(self, campaign: Campaign, candle: Candle) -> None:
-        """A red candle closed below the swing low. If the swing had a genuine
-        rise, draw its trendline and fib; either way start the next swing."""
-        high = campaign.swing_high
-        low = campaign.swing_low
-        high_ts = campaign.swing_high_timestamp
-        drawable = (
-            campaign.swing_risen and high is not None and low is not None and high > low and high < campaign.mother_high
-        )
-        if drawable:
-            self._draw_trendline_and_leg(campaign, high, low, high_ts)
-        self._restart_swing(campaign, candle)
-
-    def _draw_trendline_and_leg(
-        self, campaign: Campaign, swing_high: float, swing_low: float, swing_high_ts: Optional[int]
-    ) -> None:
+    def _draw_trendline(self, campaign: Campaign) -> Optional[Trendline]:
+        """Anchor the line at the mother high and the highest high reached
+        before the dip that was just frozen."""
+        anchor_price = campaign.anchor_high
+        anchor_ts = campaign.anchor_high_timestamp
+        if anchor_price is None or anchor_ts is None or anchor_price >= campaign.mother_high:
+            return None
         tl = Trendline(
             trendline_id=len(campaign.trendlines) + 1,
             anchor1_price=campaign.mother_high,
             anchor1_timestamp=campaign.mother_timestamp,
-            anchor2_price=swing_high,
-            anchor2_timestamp=int(swing_high_ts or campaign.mother_timestamp),
+            anchor2_price=anchor_price,
+            anchor2_timestamp=int(anchor_ts),
         )
         campaign.trendlines.append(tl)
         campaign.active_trendline_id = tl.trendline_id
+        campaign.broken_above = False
+        campaign.state = "TRENDLINE_ACTIVE"
+        self._log_event(
+            campaign,
+            "trendline",
+            f"Trendline {tl.trendline_id} drawn: mother high {campaign.mother_high:g} -> "
+            f"latest high before the depth {anchor_price:g}",
+        )
+        return tl
 
+    def _cut_swing(self, campaign: Campaign, candle: Candle) -> None:
+        """A red candle closed below the dip. If the trendline was touched
+        during this swing, that touch high and this dip become the next fib."""
+        low = campaign.swing_low
+        touch = campaign.touch_high
+        touch_ts = campaign.touch_high_timestamp
+        was_broken = campaign.broken_above
+
+        if touch is not None and low is not None and touch > low and touch < campaign.mother_high:
+            self._draw_leg(campaign, touch, low, touch_ts)
+
+        self._restart_swing(campaign, candle)
+        if was_broken:
+            # The line was closed above and the low has now been cut: retire it
+            # and let the next frozen dip draw a fresh one.
+            campaign.active_trendline_id = None
+            campaign.broken_above = False
+
+    def _draw_leg(self, campaign: Campaign, touch_high: float, swing_low: float, touch_ts: Optional[int]) -> None:
+        tl_id = campaign.active_trendline_id or (len(campaign.trendlines) or 1)
         prior_leg = campaign.current_leg
         leg = Leg(
             leg_id=len(campaign.legs) + 1,
-            trendline_id=tl.trendline_id,
+            trendline_id=tl_id,
             low=swing_low,
-            touch_high=swing_high,
-            touch_timestamp=int(swing_high_ts or campaign.mother_timestamp),
+            touch_high=touch_high,
+            touch_timestamp=int(touch_ts or campaign.mother_timestamp),
         )
-        leg.finalized = True  # both anchors are fixed the moment the low is cut
+        leg.finalized = True
         campaign.legs.append(leg)
         if prior_leg is not None:
             cancel_and_carry_forward(prior_leg, leg)
@@ -1183,18 +1251,17 @@ class CascadeEngine:
             plan_leg_orders(campaign, leg)
         except CascadeModelError as exc:
             campaign.legs.pop()
-            campaign.trendlines.pop()
-            campaign.active_trendline_id = tl.trendline_id - 1 or None
             self._log_event(campaign, "error", f"Fib rejected: {exc}")
             return
 
-        campaign.state = "TRENDLINE_ACTIVE"
+        campaign.anchor_high = None
+        campaign.anchor_high_timestamp = None
         placed = [order for order in leg.pending_orders.values() if order.status == "PENDING"]
         self._log_event(
             campaign,
             "leg",
-            f"Fib {leg.leg_id} drawn on trendline {tl.trendline_id}: 0={swing_high:g} 1={swing_low:g} "
-            f"(down {leg.leg_pct_from_mother:.3f}% from mother high, pool ${_coerce_float(leg.pool_usd):,.2f}"
+            f"Fib {leg.leg_id} drawn on trendline {tl_id}: 0={touch_high:g} (touch) 1={swing_low:g} "
+            f"({_coerce_float(leg.allocation_pct):.3f}% allocation, pool ${_coerce_float(leg.pool_usd):,.2f}"
             f"{', escalated' if leg.escalated else ''}) — "
             + (
                 ", ".join(f"L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in placed)

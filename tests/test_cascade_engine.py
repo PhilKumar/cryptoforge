@@ -138,12 +138,14 @@ class CascadeSwingModelTests(unittest.TestCase):
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
 
     def test_reproduces_the_users_first_fib_exactly(self):
+        """fib 0 is the high of the candle that TOUCHES the trendline (00:40,
+        64,928.00) — not the swing's highest high."""
         self._feed_real(6)
         self.assertEqual(len(self.campaign.legs), 1)
         leg = self.campaign.legs[0]
-        self.assertAlmostEqual(leg.touch_high, 64938.00)  # fib 0
-        self.assertAlmostEqual(leg.low, 64790.01)  # fib 1
-        for level, expected in ((2, 64642.02), (4, 64346.04), (8, 63754.08)):
+        self.assertAlmostEqual(leg.touch_high, 64928.00)  # fib 0 = touch
+        self.assertAlmostEqual(leg.low, 64790.01)  # fib 1 = the dip
+        for level, expected in ((2, 64652.02), (4, 64376.04), (8, 63824.08)):
             self.assertAlmostEqual(leg.fib.level_price(level), expected, places=2)
 
     def test_reproduces_the_users_second_fib_exactly(self):
@@ -154,24 +156,22 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertAlmostEqual(leg.low, 64416.00)  # fib 1 — the "ultimate low"
         self.assertAlmostEqual(leg.fib.level_price(2), 63802.60, places=2)
 
-    def test_cut_without_a_genuine_rise_draws_nothing(self):
-        """00:30 closes below 64,804.76, but that dip's only 'high' preceded it
-        inside a red candle — no dip-and-rise, so no fib."""
+    def test_no_fib_before_the_trendline_is_touched(self):
+        """Cuts during the initial slide draw nothing: the line has not been
+        touched yet, so there is no fib 0 to anchor to."""
         self._feed_real(3)
         self.assertEqual(len(self.campaign.legs), 0)
-        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
 
-    def test_rise_freezes_the_dip_so_later_lows_start_a_new_swing(self):
-        self._feed_real(11)  # dip 64,416.00 frozen by the rise to 65,029.40
+    def test_rise_freezes_the_dip(self):
+        self._feed_real(11)  # dip 64,416.00 frozen by the rise off it
         self.assertAlmostEqual(self.campaign.swing_low, 64416.00)
         self.assertTrue(self.campaign.swing_risen)
-        self.assertAlmostEqual(self.campaign.swing_high, 65029.40)
 
-    def test_trendline_is_anchored_mother_high_to_swing_high(self):
+    def test_trendline_anchors_to_the_latest_high_before_the_depth(self):
         self._feed_real(6)
         tl = self.campaign.trendlines[0]
-        self.assertAlmostEqual(tl.anchor1_price, 65107.99)
-        self.assertAlmostEqual(tl.anchor2_price, 64938.00)
+        self.assertAlmostEqual(tl.anchor1_price, 65107.99)  # mother high
+        self.assertAlmostEqual(tl.anchor2_price, 65051.98)  # highest high before the dip
 
     def test_fall_pct_and_pool_follow_the_leg_low(self):
         self._feed_real(12)
@@ -193,6 +193,7 @@ class CascadeSwingModelTests(unittest.TestCase):
         self._feed_real(6)
         _feed(self.engine, self.campaign, Candle(99 * 300, 65000.0, 65200.0, 64900.0, 65150.0))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
+        self.assertTrue(self.campaign.mother_broken_above)
 
 
 class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
