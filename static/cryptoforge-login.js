@@ -6,7 +6,7 @@ try {
 
 
 function syncLoginAppearancePanel() {
-  const state = typeof window.cfGetAppearance === 'function' ? window.cfGetAppearance() : { tint: 'arctic', font: 'swiss' };
+  const state = typeof window.cfGetAppearance === 'function' ? window.cfGetAppearance() : { tint: 'gold', font: 'institutional' };
   document.querySelectorAll('[data-login-tint]').forEach((btn) => {
     const active = btn.getAttribute('data-login-tint') === state.tint;
     btn.classList.toggle('active', active);

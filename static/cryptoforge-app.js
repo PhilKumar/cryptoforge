@@ -200,6 +200,7 @@ _cfBindLegacyAttrBridge();
 
 
 const CF_APPEARANCE_TINT_LABELS = {
+  gold: 'Gold Desk',
   arctic: 'Arctic Steel',
   magenta: 'Magenta Flux',
   citrus: 'Citrus Signal',
@@ -207,6 +208,7 @@ const CF_APPEARANCE_TINT_LABELS = {
   bronze: 'Bronze Archive'
 };
 const CF_APPEARANCE_FONT_LABELS = {
+  institutional: 'Institutional',
   swiss: 'Swiss Precision',
   grotesk: 'Neo Grotesk',
   editorial: 'Editorial Sharp',
@@ -216,7 +218,7 @@ const CF_APPEARANCE_FONT_LABELS = {
 
 function cfCurrentAppearance() {
   if (typeof window.cfGetAppearance === 'function') return window.cfGetAppearance();
-  return { tint: 'arctic', font: 'swiss' };
+  return { tint: 'gold', font: 'institutional' };
 }
 
 function cfSyncAppearancePanel() {
@@ -7798,18 +7800,18 @@ function _cfCascadeCampaignCard(campaign) {
     + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'
     + '</div></div>'
     + '<div class="cf-cascade-stats">'
-    + '<div class="stat-box"><div class="stat-label">Mother High</div><div class="stat-value">' + _cfCascadeFmt(campaign.mother_high) + '</div></div>'
-    + '<div class="stat-box"><div class="stat-label">Last Price</div><div class="stat-value">' + _cfCascadeFmt(campaign.last_price) + '</div></div>'
-    + '<div class="stat-box"><div class="stat-label">Down from Mother</div><div class="stat-value">'
+    + '<div class="stat-box"><div class="stat-label" title="Mother High"><span>Mother High</span></div><div class="stat-value">' + _cfCascadeFmt(campaign.mother_high) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label" title="Last Price"><span>Last Price</span></div><div class="stat-value">' + _cfCascadeFmt(campaign.last_price) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label" title="Down from Mother"><span>Down from Mother</span></div><div class="stat-value">'
       + (isFinite(Number(campaign.fall_pct_from_mother)) ? Number(campaign.fall_pct_from_mother).toFixed(3) + '%' : '--')
       + '</div><div class="admin-stat-note">allocated ' + (isFinite(Number(campaign.allocated_pct)) ? Number(campaign.allocated_pct).toFixed(3) : '0') + '%</div></div>'
-    + '<div class="stat-box"><div class="stat-label">Avg Entry</div><div class="stat-value">' + _cfCascadeFmt(campaign.avg_entry_price) + '</div></div>'
-    + '<div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-value">' + _cfCascadeFmt(tp) + '</div></div>'
-    + '<div class="stat-box"><div class="stat-label">In Position / Capital</div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div>'
+    + '<div class="stat-box"><div class="stat-label" title="Avg Entry"><span>Avg Entry</span></div><div class="stat-value">' + _cfCascadeFmt(campaign.avg_entry_price) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label" title="Take Profit"><span>Take Profit</span></div><div class="stat-value">' + _cfCascadeFmt(tp) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label" title="In Position / Capital"><span>In Position / Capital</span></div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div>'
       + (Number(campaign.carry_forward_usd) > 0
         ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.carry_forward_usd) + ' carried</div>' : '')
       + '</div>'
-    + '<div class="stat-box"><div class="stat-label">Rounds Closed</div><div class="stat-value">'
+    + '<div class="stat-box"><div class="stat-label" title="Rounds Closed"><span>Rounds Closed</span></div><div class="stat-value">'
       + _escapeHtml(String(campaign.rounds_closed || 0)) + '</div>'
       + '<div class="admin-stat-note">realised $' + _cfCascadeFmt(campaign.realized_pnl_total || 0) + '</div></div>'
     + '</div>'
@@ -7821,6 +7823,24 @@ function _cfCascadeCampaignCard(campaign) {
     + '</div>';
 }
 
+function _cfCascadeMarkClippedLabels(root) {
+  var labels = (root || document).querySelectorAll('.cf-cascade-stats .stat-label');
+  for (var i = 0; i < labels.length; i++) {
+    var label = labels[i];
+    var track = label.firstElementChild;
+    if (!track) continue;
+    var overflow = track.scrollWidth - label.clientWidth;
+    if (overflow > 1) {
+      label.classList.add('is-clipped');
+      // Slide by exactly the hidden amount plus a small tail.
+      label.style.setProperty('--cf-marquee-shift', '-' + (overflow + 4) + 'px');
+    } else {
+      label.classList.remove('is-clipped');
+      label.style.removeProperty('--cf-marquee-shift');
+    }
+  }
+}
+
 function cfRenderCascadeCampaigns(campaigns) {
   var mount = document.getElementById('cf-cascade-campaigns');
   if (!mount) return;
@@ -7829,6 +7849,7 @@ function cfRenderCascadeCampaigns(campaigns) {
     return;
   }
   mount.innerHTML = campaigns.map(_cfCascadeCampaignCard).join('');
+  _cfCascadeMarkClippedLabels(mount);
 }
 
 function cfRenderCascadeEvents(campaigns) {

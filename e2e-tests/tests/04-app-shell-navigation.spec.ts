@@ -27,7 +27,8 @@ test.describe('App Shell Navigation', () => {
     await page.click('#topbar-admin-btn');
     await expect(page.locator('#admin-console-modal')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#admin-active-broker-select')).toBeVisible({ timeout: 10_000 });
-    await expectActivePage(page, 'dashboard-page', 'nav-dashboard');
+    // Journal is the landing page — opening the console must not navigate away.
+    await expectActivePage(page, 'journal-page', 'nav-journal');
 
     await page.click('#admin-console-close');
     await expect(page.locator('#admin-console-modal')).toBeHidden();
@@ -49,8 +50,8 @@ test.describe('App Shell Navigation', () => {
     await expect.poll(() => page.evaluate(() => location.hash)).toBe('#builder');
 
     await page.goBack();
-    await expectActivePage(page, 'dashboard-page', 'nav-dashboard');
-    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#dashboard');
+    await expectActivePage(page, 'journal-page', 'nav-journal');
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#journal');
   });
 
   test('deep links, reloads, hash changes, and saved-tab restore stay deterministic', async ({ page }) => {

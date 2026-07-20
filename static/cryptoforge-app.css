@@ -5995,6 +5995,17 @@ html[data-tint="arctic"] {
   --tint-secondary-rgb: 56, 189, 248;
   --tint-tertiary-rgb: 148, 163, 184;
 }
+html[data-tint="gold"] {
+  --accent: #f59e0b;
+  --accent2: #fb923c;
+  --border-acc: rgba(245,158,11,0.34);
+  --tint-primary: #f59e0b;
+  --tint-secondary: #f97316;
+  --tint-tertiary: #fde047;
+  --tint-primary-rgb: 245, 158, 11;
+  --tint-secondary-rgb: 249, 115, 22;
+  --tint-tertiary-rgb: 253, 224, 71;
+}
 html[data-tint="magenta"] {
   --accent: #e879f9;
   --accent2: #c084fc;
@@ -6040,6 +6051,7 @@ html[data-tint="bronze"] {
   --tint-tertiary-rgb: 231, 201, 169;
 }
 html[data-theme="light"][data-tint="arctic"]  { --accent: #1d4ed8; --accent2: #0369a1; --border-acc: rgba(29,78,216,0.24); }
+html[data-theme="light"][data-tint="gold"]    { --accent: #b45309; --accent2: #ea580c; --border-acc: rgba(180,83,9,0.24); }
 html[data-theme="light"][data-tint="magenta"] { --accent: #a21caf; --accent2: #7e22ce; --border-acc: rgba(162,28,175,0.24); }
 html[data-theme="light"][data-tint="citrus"]  { --accent: #4d7c0f; --accent2: #a16207; --border-acc: rgba(77,124,15,0.24); }
 html[data-theme="light"][data-tint="graphite"]{ --accent: #334155; --accent2: #475569; --border-acc: rgba(51,65,85,0.24); }
@@ -6049,6 +6061,7 @@ html[data-theme="light"][data-tint="bronze"]  { --accent: #92400e; --accent2: #7
    names an unloaded family silently falls back to the system face and all the
    options end up looking the same. */
 html[data-font-theme="swiss"]     { --font-body: 'Inter', sans-serif;        --font-display: 'Inter', sans-serif;         --font-mono: 'Fira Code', monospace; }
+html[data-font-theme="institutional"] { --font-body: 'IBM Plex Sans', sans-serif;  --font-display: 'IBM Plex Sans', sans-serif; --font-mono: 'IBM Plex Mono', monospace; }
 html[data-font-theme="grotesk"]   { --font-body: 'Manrope', sans-serif;      --font-display: 'Archivo', sans-serif;       --font-mono: 'Fira Code', monospace; }
 html[data-font-theme="editorial"] { --font-body: 'Source Sans 3', sans-serif;--font-display: 'Newsreader', serif;         --font-mono: 'Source Code Pro', monospace; }
 html[data-font-theme="techno"]    { --font-body: 'Chakra Petch', sans-serif; --font-display: 'Chakra Petch', sans-serif;  --font-mono: 'Share Tech Mono', monospace; }
@@ -6202,6 +6215,7 @@ body.appearance-open { overflow: hidden; }
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 10px 18px rgba(0,0,0,0.18);
   flex: 0 0 auto;
 }
+.swatch-gold     { background: linear-gradient(135deg, #fde047, #f59e0b 55%, #f97316); }
 .swatch-arctic   { background: linear-gradient(135deg, #93c5fd, #60a5fa 52%, #38bdf8); }
 .swatch-magenta  { background: linear-gradient(135deg, #f0abfc, #e879f9 52%, #c084fc); }
 .swatch-citrus   { background: linear-gradient(135deg, #d9f99d, #a3e635 52%, #facc15); }
@@ -6219,6 +6233,7 @@ body.appearance-open { overflow: hidden; }
   border: 1px solid rgba(var(--tint-primary-rgb),0.18);
   font-size: 17px;
 }
+.font-institutional .appearance-font-sample { font-family: 'IBM Plex Sans', sans-serif; }
 .font-swiss .appearance-font-sample     { font-family: 'Inter', sans-serif; }
 .font-grotesk .appearance-font-sample   { font-family: 'Archivo', sans-serif; }
 .font-editorial .appearance-font-sample { font-family: 'Newsreader', serif; }
@@ -6710,14 +6725,14 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-cascade-card { padding: 14px 16px; margin-bottom: 12px; }
   .cf-cascade-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
   .cf-cascade-head .admin-pill { font-size: 10px; padding: 2px 8px; }
-  /* One row, always. Seven stats side by side; if the card gets too narrow the
-     row scrolls horizontally rather than wrapping onto a second line. */
+  /* One row, always — seven compact stats beside the start form. Labels are
+     clipped rather than wrapped; hovering a box marquees the full heading. */
   .cf-cascade-stats {
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: minmax(104px, 1fr);
-    gap: 8px;
-    margin: 12px 0 10px;
+    grid-auto-columns: minmax(78px, 1fr);
+    gap: 5px;
+    margin: 10px 0 8px;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: thin;
@@ -6727,17 +6742,38 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-cascade-stats::-webkit-scrollbar-thumb {
     background: rgba(118,138,176,0.28); border-radius: 999px;
   }
-  .cf-cascade-stats .stat-box { min-width: 0; }
+  .cf-cascade-stats .stat-box { min-width: 0; padding: 6px 8px; }
   .cf-cascade-stats .stat-box { padding: 8px 10px; border-radius: 10px; }
+  /* The label is a viewport; the span inside is the track that slides. */
   .cf-cascade-stats .stat-label {
-    font-size: 9.5px; letter-spacing: .07em; text-transform: uppercase;
-    color: var(--muted); margin-bottom: 2px; white-space: nowrap;
+    font-size: 8.5px; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 2px;
+    overflow: hidden; white-space: nowrap;
+  }
+  .cf-cascade-stats .stat-label > span {
+    display: inline-block; white-space: nowrap; will-change: transform;
+  }
+  /* Only labels too wide for their box get the animation, flagged in JS. */
+  .cf-cascade-stats .stat-box:hover .stat-label.is-clipped > span,
+  .cf-cascade-stats .stat-box:focus-within .stat-label.is-clipped > span {
+    animation: cfStatMarquee 4.5s linear infinite;
+  }
+  @keyframes cfStatMarquee {
+    0%, 12%   { transform: translateX(0); }
+    88%, 100% { transform: translateX(var(--cf-marquee-shift, -50%)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cf-cascade-stats .stat-box:hover .stat-label.is-clipped > span { animation: none; }
   }
   .cf-cascade-stats .stat-value {
-    font-size: 15px; font-weight: 650; line-height: 1.25;
+    font-size: 12.5px; font-weight: 650; line-height: 1.2;
     font-variant-numeric: tabular-nums; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
   }
-  .cf-cascade-stats .admin-stat-note { font-size: 9.5px; color: var(--muted); margin-top: 1px; }
+  .cf-cascade-stats .admin-stat-note {
+    font-size: 8.5px; color: var(--muted); margin-top: 1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .cf-cascade-card .trade-table { font-size: 12px; }
   .cf-cascade-card .trade-table th,
   .cf-cascade-card .trade-table td { padding: 5px 8px; }
@@ -6761,26 +6797,8 @@ html[data-theme="light"] .journal-entry-notes section {
   }
   @media (max-width: 560px) {
     .cf-cascade-form { grid-template-columns: minmax(0, 1fr); }
-    .cf-cascade-stats { grid-auto-columns: minmax(96px, 1fr); gap: 6px; }
-    .cf-cascade-stats .stat-box { padding: 7px 9px; }
-    .cf-cascade-stats .stat-value { font-size: 13.5px; }
-  }
-
-  /* Campaign cards need the full width so the seven stats fit on one row
-     without scrolling — the start form sits above them instead of beside. */
-  .cf-cascade-grid { grid-template-columns: minmax(0, 1fr); }
-  .cf-cascade-grid .allocator-input-panel .cf-cascade-form {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  @media (max-width: 900px) {
-    .cf-cascade-grid .allocator-input-panel .cf-cascade-form {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-  @media (max-width: 560px) {
-    .cf-cascade-grid .allocator-input-panel .cf-cascade-form {
-      grid-template-columns: minmax(0, 1fr);
-    }
+    .cf-cascade-stats { grid-auto-columns: minmax(84px, 1fr); gap: 5px; }
+    .cf-cascade-stats .stat-value { font-size: 12px; }
   }
 
   /* ── Engine status chip: a quiet inline badge, not a hero number ── */
