@@ -62,19 +62,27 @@ class FibLadderPoolTests(unittest.TestCase):
         self.assertAlmostEqual(fib.level_price(4), 92.0)
         self.assertAlmostEqual(fib.level_price(8), 82.0)
 
-    def test_pool_uses_incremental_depth_pct(self):
+    def test_first_fib_funds_off_the_mother_high(self):
         campaign = _campaign(capital=2000.0, mother_high=100.0)
         leg1 = _leg(campaign, low=95.0, touch_high=97.0)
         build_fib_ladder_and_pool(campaign, leg1)
-        # 5% depth => pool 5 * (2000/100) = $100
+        # 5% down from the mother high => pool 5 * (2000/100) = $100
+        self.assertAlmostEqual(leg1.allocation_pct, 5.0)
         self.assertAlmostEqual(leg1.pool_usd, 100.0)
-        self.assertAlmostEqual(campaign.cumulative_used_pct, 5.0)
 
+    def test_later_fibs_fund_off_the_previous_fib_level_1(self):
+        """Each fib after the first only funds the remaining move from the
+        previous fib's level 1 down to its own level 1."""
+        campaign = _campaign(capital=2000.0, mother_high=100.0)
+        leg1 = _leg(campaign, low=95.0, touch_high=97.0)
+        build_fib_ladder_and_pool(campaign, leg1)
         leg2 = _leg(campaign, low=92.0, touch_high=95.0, leg_id=2)
         build_fib_ladder_and_pool(campaign, leg2)
-        # 8% total depth, 5% already used => incremental 3% => $60
-        self.assertAlmostEqual(leg2.pool_usd, 60.0)
-        self.assertAlmostEqual(campaign.cumulative_used_pct, 8.0)
+        # (95 - 92) / 95 = 3.158%, measured from fib 1 level 1 — not from the mother high
+        self.assertAlmostEqual(leg2.allocation_pct, (95.0 - 92.0) / 95.0 * 100, places=6)
+        self.assertAlmostEqual(leg2.pool_usd, leg2.allocation_pct * 20, places=6)
+        # total fall from the mother high is still reported for display
+        self.assertAlmostEqual(leg2.leg_pct_from_mother, 8.0)
 
     def test_escalation_flag_above_one_percent_touch_depth(self):
         campaign = _campaign(mother_high=100.0)
@@ -133,10 +141,12 @@ class PlanLegOrdersTests(unittest.TestCase):
         # The carried pool joins the next leg's pool.
         leg2 = _leg(campaign, low=99.0, touch_high=99.5, leg_id=2)
         build_fib_ladder_and_pool(campaign, leg2)
-        self.assertAlmostEqual(leg2.pool_usd, (1.0 - 0.15) * 20.0)
+        # funded off fib 1's level 1 (99.85), not the mother high
+        self.assertAlmostEqual(leg2.pool_usd, (99.85 - 99.0) / 99.85 * 100 * 20.0, places=6)
         plan_leg_orders(campaign, leg2)
         total = sum(o.usd_notional for o in leg2.pending_orders.values())
-        self.assertAlmostEqual(total, leg2.pool_usd + 3.0, places=6)
+        # per-level notionals round to cents, so allow a sub-cent difference
+        self.assertAlmostEqual(total, leg2.pool_usd + 3.0, places=1)
         self.assertAlmostEqual(campaign.carry_forward_usd, 0.0)
 
     def test_carry_forward_quantity_is_valued_at_new_level_price(self):

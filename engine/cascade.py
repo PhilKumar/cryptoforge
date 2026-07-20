@@ -216,7 +216,8 @@ class Leg:
     touch_timestamp: int
     created_via_break: bool = False
     fib: Optional[FibLadder] = None
-    leg_pct_from_mother: Optional[float] = None
+    leg_pct_from_mother: Optional[float] = None  # total fall from the mother high
+    allocation_pct: Optional[float] = None  # percent this leg funds (see build_fib_ladder_and_pool)
     pool_usd: Optional[float] = None
     escalated: bool = False
     finalized: bool = False  # swing complete (low broke again)
@@ -233,6 +234,7 @@ class Leg:
             "created_via_break": self.created_via_break,
             "fib": self.fib.to_dict() if self.fib else None,
             "leg_pct_from_mother": self.leg_pct_from_mother,
+            "allocation_pct": self.allocation_pct,
             "pool_usd": self.pool_usd,
             "escalated": self.escalated,
             "finalized": self.finalized,
@@ -253,6 +255,7 @@ class Leg:
         if data.get("fib"):
             leg.fib = FibLadder.from_dict(data["fib"])
         leg.leg_pct_from_mother = data.get("leg_pct_from_mother")
+        leg.allocation_pct = data.get("allocation_pct")
         leg.pool_usd = data.get("pool_usd")
         leg.escalated = bool(data.get("escalated"))
         leg.finalized = bool(data.get("finalized"))
@@ -447,12 +450,23 @@ def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
         raise CascadeModelError(f"leg {leg.leg_id}: touch_high {leg.touch_high} must exceed leg low {leg.low}")
     leg.fib = FibLadder(high_anchor=leg.touch_high, low_anchor=leg.low)
 
+    # Total fall from the mother high down to this fib's level 1, for display.
     leg.leg_pct_from_mother = (campaign.mother_high - leg.low) / campaign.mother_high * 100
     touch_pct_from_mother = (campaign.mother_high - leg.touch_high) / campaign.mother_high * 100
 
-    incremental_pct = max(leg.leg_pct_from_mother - campaign.cumulative_used_pct, 0.0)
-    leg.pool_usd = incremental_pct * campaign.capital_unit_per_pct
-    campaign.cumulative_used_pct = max(campaign.cumulative_used_pct, leg.leg_pct_from_mother)
+    # Funding percent: the first fib measures from the mother high down to its
+    # level 1; every fib after that measures the remaining move from the PREVIOUS
+    # fib's level 1 down to its own level 1, so each leg only funds new ground.
+    prior_leg = campaign.legs[-2] if len(campaign.legs) >= 2 else None
+    if prior_leg is None or not prior_leg.low:
+        allocation_pct = leg.leg_pct_from_mother
+    else:
+        allocation_pct = (prior_leg.low - leg.low) / prior_leg.low * 100
+    allocation_pct = max(allocation_pct, 0.0)
+
+    leg.allocation_pct = allocation_pct
+    leg.pool_usd = allocation_pct * campaign.capital_unit_per_pct
+    campaign.cumulative_used_pct += allocation_pct
     leg.escalated = touch_pct_from_mother > ESCALATION_THRESHOLD_PCT
 
 
@@ -854,6 +868,7 @@ class CascadeEngine:
                     "escalated": leg.escalated,
                     "pool_usd": leg.pool_usd,
                     "fall_pct_from_mother": leg.leg_pct_from_mother,
+                    "allocation_pct": leg.allocation_pct,
                     "levels": levels,
                     "orders": [
                         {
