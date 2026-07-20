@@ -1237,8 +1237,9 @@ class CascadeEngine:
                     "leg",
                     f"Leg {leg.leg_id} swing finalized (touch high {leg.touch_high:g}); new depth window open",
                 )
-                if campaign.pending_break:
-                    self._create_trendline_from_break(campaign, candle)
+                # The decisive low-break itself draws the next trendline — it does
+                # not also require the line to have been broken upward first.
+                self._create_trendline_from_break(campaign, candle)
                 return
             # A new low without a decisive break means the swing is still
             # forming, so the fib low anchor follows price down.
@@ -1265,9 +1266,9 @@ class CascadeEngine:
             campaign.depth_low = candle.low
             campaign.depth_low_timestamp = candle.timestamp
 
-        if campaign.pending_break and leg is not None and leg_broken(candle, leg.low):
-            self._create_trendline_from_break(campaign, candle)
-            return
+        # NOTE: the next trendline is drawn once, at the moment the leg finalises
+        # (see the swing branch above). Re-triggering here on every later red
+        # close below the old leg low would spawn a new line per candle.
 
         classification = classify_candle(campaign.mother_high, tl, candle)
         if classification == "BREAK" and not campaign.pending_break:
@@ -1283,9 +1284,10 @@ class CascadeEngine:
         # high. The highs that broke it now constrain find_valid_anchor2, so the
         # replacement comes out shallower. A break while the line is still above
         # the depth low is left alone: price often returns to touch it.
+        tl_has_leg = any(item.trendline_id == tl.trendline_id for item in campaign.legs)
         if (
             campaign.pending_break
-            and leg is None
+            and not tl_has_leg
             and campaign.depth_low is not None
             and trendline_price(tl, candle.timestamp) < campaign.depth_low
         ):
@@ -1340,8 +1342,9 @@ class CascadeEngine:
         campaign.active_trendline_id = None
         campaign.pending_break = False
         campaign.state = "WAITING_FIRST_DEPTH"
-        campaign.depth_low = None
-        campaign.depth_low_timestamp = None
+        # Keep depth_low: it is the running minimum since the previous leg's
+        # touch and is what the next fib anchors to. Retiring a line that was
+        # never touched must not throw that depth away.
         campaign.red_candles_seen = 0
         self._log_event(
             campaign,

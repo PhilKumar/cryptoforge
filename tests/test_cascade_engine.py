@@ -204,6 +204,27 @@ class CascadeScenarioTests(unittest.TestCase):
         self.assertEqual(leg.low, 97.0)  # anchor still moves
         self.assertAlmostEqual(after, before)  # but no extra capital committed
 
+    def test_low_break_draws_next_trendline_without_a_prior_upward_break(self):
+        """The decisive low-break alone draws the next trendline — it does not
+        also require the line to have been broken upward first."""
+        self._run_scenario(upto=4)  # leg 1 created, low 99.5, no BREAK yet
+        self.assertFalse(self.campaign.pending_break)
+        self.assertEqual(len(self.campaign.trendlines), 1)
+        # Red candle closing below the leg low finalises leg 1 and draws TL2.
+        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 100.2, 98.0, 98.5))
+        self.assertTrue(self.campaign.legs[0].finalized)
+        self.assertEqual(len(self.campaign.trendlines), 2)
+
+    def test_only_one_trendline_is_drawn_per_completed_leg(self):
+        """Later red closes below the finalised leg's low must not each spawn
+        another trendline — that produced a new line on nearly every candle."""
+        self._run_scenario(upto=4)
+        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 100.2, 98.0, 98.5))
+        self.assertEqual(len(self.campaign.trendlines), 2)
+        for step in range(6, 12):  # keep closing below the old leg low
+            _feed(self.engine, self.campaign, Candle(step * 300, 98.5, 98.6, 97.0, 97.5))
+        self.assertLessEqual(len(self.campaign.trendlines), 3)
+
     def test_low_break_finalizes_leg_and_creates_trendline2(self):
         self._run_scenario(upto=7)
         leg = self.campaign.legs[0]
