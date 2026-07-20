@@ -6535,6 +6535,17 @@ async def cascade_set_mode(campaign_id: str, request: Request):
     return result
 
 
+@app.get("/api/cascade/campaigns/{campaign_id}/chart")
+async def cascade_campaign_chart(campaign_id: str):
+    eng = _get_cascade_engine()
+    if not eng.campaigns:
+        _restore_cascade_runtime(eng)
+    result = await eng.get_chart_data(campaign_id)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 @app.get("/api/cascade/campaigns/{campaign_id}/events")
 async def cascade_campaign_events(campaign_id: str):
     eng = _get_cascade_engine()

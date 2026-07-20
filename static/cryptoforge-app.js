@@ -6951,8 +6951,9 @@ function editTradeJournalEntry(entryId) {
   if (top && typeof top.scrollIntoView === 'function') top.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function deleteTradeJournalEntry(entryId) {
-  if (!window.confirm('Delete this journal entry?')) return;
+async function deleteTradeJournalEntry(entryId) {
+  var ok = await cfConfirm('Delete this journal entry?', 'Delete Entry', '🗑️');
+  if (!ok) return;
   _cfTradeJournalState.entries = (_cfTradeJournalState.entries || []).filter(function(item) { return item.id !== entryId; });
   if (_cfTradeJournalState.openId === entryId) _cfTradeJournalState.openId = '';
   _cfTradeJournalSaveState();
@@ -8928,6 +8929,7 @@ function _cfCascadeCampaignCard(campaign) {
     + '<span class="table-meta">#' + cid + '</span>'
     + '</div>'
     + '<div style="display:flex;gap:6px;">'
+    + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
     + goLive
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
     + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'
@@ -9020,9 +9022,11 @@ async function cfCascadeStartCampaign() {
     return _cfCascadeSetError('Mother candle high must be greater than mother candle low.');
   }
   if (mode === 'live') {
-    var confirmed = window.confirm(
-      'LIVE mode places REAL orders on Binance Spot with real money.\n\n'
-      + symbol.trim().toUpperCase() + ' — capital $' + capital + '\n\nStart live campaign?'
+    var confirmed = await cfConfirm(
+      '<p><strong>LIVE mode places real orders on Binance Spot with real money.</strong></p>'
+      + '<p>' + _escapeHtml(symbol.trim().toUpperCase()) + ' — capital $' + _escapeHtml(String(capital)) + '</p>'
+      + '<p>Start this live campaign?</p>',
+      'Start LIVE Campaign', '🔴', true
     );
     if (!confirmed) return;
   }
@@ -9073,8 +9077,13 @@ async function _cfCascadeAction(url, options, successMessage) {
   }
 }
 
-function cfCascadeStopCampaign(campaignId) {
-  if (!window.confirm('Stop campaign #' + campaignId + '? Resting orders will be cancelled.')) return;
+async function cfCascadeStopCampaign(campaignId) {
+  var ok = await cfConfirm(
+    '<p>Stop campaign <strong>#' + _escapeHtml(campaignId) + '</strong>?</p>'
+    + '<p>Any resting orders on the exchange will be cancelled.</p>',
+    'Stop Campaign', '⏹️', true
+  );
+  if (!ok) return;
   _cfCascadeAction(
     '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/stop',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
@@ -9082,10 +9091,13 @@ function cfCascadeStopCampaign(campaignId) {
   );
 }
 
-function cfCascadeSetLive(campaignId) {
-  if (!window.confirm(
-    'Flip campaign #' + campaignId + ' to LIVE?\n\nAll planned ladder orders will be placed on Binance Spot with real money.'
-  )) return;
+async function cfCascadeSetLive(campaignId) {
+  var ok = await cfConfirm(
+    '<p>Flip campaign <strong>#' + _escapeHtml(campaignId) + '</strong> to <strong>LIVE</strong>?</p>'
+    + '<p>All planned ladder orders will be placed on Binance Spot with real money.</p>',
+    'Go Live', '🔴', true
+  );
+  if (!ok) return;
   _cfCascadeAction(
     '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/mode',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'live' }) },
@@ -9093,8 +9105,13 @@ function cfCascadeSetLive(campaignId) {
   );
 }
 
-function cfCascadeDeleteCampaign(campaignId) {
-  if (!window.confirm('Delete campaign #' + campaignId + '? Active orders are cancelled and the campaign is archived.')) return;
+async function cfCascadeDeleteCampaign(campaignId) {
+  var ok = await cfConfirm(
+    '<p>Delete campaign <strong>#' + _escapeHtml(campaignId) + '</strong>?</p>'
+    + '<p>Active orders are cancelled and the campaign is archived.</p>',
+    'Delete Campaign', '🗑️', true
+  );
+  if (!ok) return;
   _cfCascadeAction(
     '/api/cascade/campaigns/' + encodeURIComponent(campaignId),
     { method: 'DELETE' },
@@ -9104,4 +9121,190 @@ function cfCascadeDeleteCampaign(campaignId) {
 
 function cfCascadeReconcile() {
   _cfCascadeAction('/api/cascade/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 'Cascade reconciled with broker');
+}
+
+
+// ═══ CASCADE CHART ══════════════════════════════════════════════
+var _cfCascadeChartId = '';
+
+function _cfCascadeUtc(ts) {
+  if (!ts) return '--';
+  var d = new Date(Number(ts) * 1000);
+  if (isNaN(d.getTime())) return '--';
+  return d.toISOString().slice(5, 16).replace('T', ' ');
+}
+
+function _cfCascadeChartSvg(d) {
+  var candles = (d.candles || []).slice();
+  if (!candles.length) return '';
+  var W = 960, H = 420, padL = 8, padR = 104, padT = 16, padB = 22;
+  var plotW = W - padL - padR, plotH = H - padT - padB;
+  var n = candles.length, cw = plotW / n;
+
+  var lo = candles[0].l, hi = candles[0].h;
+  candles.forEach(function (c) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; });
+  if (d.mother && d.mother.high) hi = Math.max(hi, d.mother.high);
+  var leg = (d.legs || []).length ? d.legs[d.legs.length - 1] : null;
+  if (leg) { hi = Math.max(hi, leg.touch_high); lo = Math.min(lo, leg.low); }
+  var span = (hi - lo) || 1, padP = span * 0.08;
+  var maxP = hi + padP, minP = lo - padP;
+
+  function X(i) { return padL + i * cw + cw / 2; }
+  function Y(p) { return padT + (maxP - p) / (maxP - minP) * plotH; }
+  function Xt(t) {
+    var t0 = candles[0].t, t1 = candles[n - 1].t;
+    if (t1 === t0) return X(0);
+    return padL + cw / 2 + ((t - t0) / (t1 - t0)) * (plotW - cw);
+  }
+  function inView(p) { return p >= minP && p <= maxP; }
+
+  var parts = [];
+  parts.push('<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>');
+
+  // candles
+  var bodyW = Math.max(cw * 0.6, 1);
+  candles.forEach(function (c, i) {
+    var up = c.c >= c.o;
+    var col = up ? '#3fae56' : '#d9534f';
+    var x = X(i);
+    parts.push('<line x1="' + x.toFixed(1) + '" y1="' + Y(c.h).toFixed(1) + '" x2="' + x.toFixed(1) +
+      '" y2="' + Y(c.l).toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+    var yTop = Y(Math.max(c.o, c.c)), yBot = Y(Math.min(c.o, c.c));
+    parts.push('<rect x="' + (x - bodyW / 2).toFixed(1) + '" y="' + yTop.toFixed(1) + '" width="' + bodyW.toFixed(1) +
+      '" height="' + Math.max(yBot - yTop, 1).toFixed(1) + '" fill="' + col + '"/>');
+  });
+
+  function hline(price, color, label, dash) {
+    if (!inView(price)) return;
+    var y = Y(price).toFixed(1);
+    parts.push('<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y +
+      '" stroke="' + color + '" stroke-width="1"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
+    parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (parseFloat(y) + 3.5) +
+      '" fill="' + color + '" font-size="10" font-family="monospace">' + _escapeHtml(label) + '</text>');
+  }
+
+  // mother candle high
+  if (d.mother && d.mother.high) {
+    hline(d.mother.high, '#a855f7', 'mother ' + d.mother.high.toFixed(2), '5,3');
+  }
+
+  // trendlines (linear in time -> straight line across the visible window)
+  var tlColors = ['#1f6fd6', '#c2410c', '#0891b2', '#7c3aed'];
+  (d.trendlines || []).forEach(function (tl, idx) {
+    var a1 = tl.a1, a2 = tl.a2;
+    if (!a1 || !a2 || a2.t === a1.t) return;
+    var slope = (a2.p - a1.p) / (a2.t - a1.t);
+    var t0 = candles[0].t, t1 = candles[n - 1].t;
+    var p0 = a1.p + slope * (t0 - a1.t), p1 = a1.p + slope * (t1 - a1.t);
+    var col = tlColors[idx % tlColors.length];
+    parts.push('<line x1="' + Xt(t0).toFixed(1) + '" y1="' + Y(p0).toFixed(1) + '" x2="' + Xt(t1).toFixed(1) +
+      '" y2="' + Y(p1).toFixed(1) + '" stroke="' + col + '" stroke-width="' + (tl.active ? 2 : 1.2) +
+      '" opacity="' + (tl.active ? 1 : 0.65) + '"/>');
+    if (inView(p1)) {
+      parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (Y(p1) + 3.5).toFixed(1) + '" fill="' + col +
+        '" font-size="10" font-family="monospace">TL' + tl.id + (tl.active ? ' *' : '') + '</text>');
+    }
+  });
+
+  // fib anchors + levels of the current leg
+  if (leg) {
+    hline(leg.touch_high, '#22d3ee', 'fib 0  ' + leg.touch_high.toFixed(2));
+    hline(leg.low, '#f59e0b', 'fib 1  ' + leg.low.toFixed(2));
+    [2, 4, 8].forEach(function (lv) {
+      var p = leg.levels ? leg.levels[String(lv)] : null;
+      if (p != null) hline(p, '#64748b', 'fib ' + lv + '  ' + Number(p).toFixed(2), '3,3');
+    });
+    // mark the touch high candle
+    if (leg.touch_timestamp) {
+      parts.push('<circle cx="' + Xt(leg.touch_timestamp).toFixed(1) + '" cy="' + Y(leg.touch_high).toFixed(1) +
+        '" r="3.5" fill="none" stroke="#22d3ee" stroke-width="1.5"/>');
+    }
+  }
+
+  // take profit
+  if (d.tp_price) hline(d.tp_price, '#10b981', 'TP ' + Number(d.tp_price).toFixed(2), '6,3');
+
+  // fills
+  (d.fills || []).forEach(function (f) {
+    if (!f || !f.price || !inView(f.price)) return;
+    parts.push('<circle cx="' + Xt(f.timestamp).toFixed(1) + '" cy="' + Y(f.price).toFixed(1) +
+      '" r="3" fill="#22c55e"/>');
+  });
+
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:760px;display:block;" ' +
+    'xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
+}
+
+function _cfCascadeChartTables(d) {
+  var rows = [];
+  (d.trendlines || []).forEach(function (tl) {
+    rows.push('<tr><td>Trendline ' + tl.id + (tl.active ? ' <span class="tag tag-green">active</span>' : '') + '</td>'
+      + '<td>anchor1 (mother high)</td><td class="num">' + _cfCascadeFmt(tl.a1.p) + '</td><td>' + _cfCascadeUtc(tl.a1.t) + ' UTC</td></tr>');
+    rows.push('<tr><td></td><td>anchor2 (red candle open)</td><td class="num">' + _cfCascadeFmt(tl.a2.p) + '</td><td>' + _cfCascadeUtc(tl.a2.t) + ' UTC</td></tr>');
+  });
+  (d.legs || []).forEach(function (leg) {
+    rows.push('<tr><td>Leg ' + leg.leg_id + (leg.finalized ? '' : ' <span class="tag tag-purple">forming</span>') + '</td>'
+      + '<td>fib 0 — swing high</td><td class="num">' + _cfCascadeFmt(leg.touch_high) + '</td><td>' + _cfCascadeUtc(leg.touch_timestamp) + ' UTC</td></tr>');
+    rows.push('<tr><td></td><td>fib 1 — leg low</td><td class="num">' + _cfCascadeFmt(leg.low) + '</td><td>—</td></tr>');
+    [2, 4, 8].forEach(function (lv) {
+      var p = leg.levels ? leg.levels[String(lv)] : null;
+      if (p == null) return;
+      var order = (leg.orders || []).find(function (o) { return o.level === lv; }) || {};
+      rows.push('<tr><td></td><td>fib ' + lv + ' — buy level</td><td class="num">' + _cfCascadeFmt(p) + '</td><td>'
+        + _escapeHtml(order.status || '--') + (order.usd_notional ? ' · $' + _cfCascadeFmt(order.usd_notional) : '') + '</td></tr>');
+    });
+  });
+  if (!rows.length) return '<div class="table-meta" style="padding:8px 0;">No trendline or fib marked yet.</div>';
+  return '<div class="table-surface" style="margin-top:10px;"><div class="table-scroll">'
+    + '<table class="trade-table"><thead><tr><th>Object</th><th>Anchor</th><th class="num">Price</th><th>Time / Status</th></tr></thead>'
+    + '<tbody>' + rows.join('') + '</tbody></table></div></div>';
+}
+
+function _cfCascadeChartHtml(d) {
+  var candles = d.candles || [];
+  if (!candles.length) {
+    return '<div class="cf-table-empty-cell" style="padding:16px;">No candles replayed yet for this campaign. '
+      + 'If it was just created, wait for the next 5m candle or hit Broker Sync.</div>';
+  }
+  var legend = '<div class="table-meta" style="margin-bottom:8px;">'
+    + '<span style="color:#a855f7;">— mother high</span> &nbsp; '
+    + '<span style="color:#1f6fd6;">— trendline</span> &nbsp; '
+    + '<span style="color:#22d3ee;">— fib 0 (swing high)</span> &nbsp; '
+    + '<span style="color:#f59e0b;">— fib 1 (leg low)</span> &nbsp; '
+    + '<span style="color:#64748b;">— fib 2/4/8 buys</span> &nbsp; '
+    + '<span style="color:#10b981;">— take profit</span>'
+    + '</div>';
+  return legend + _cfCascadeChartSvg(d) + _cfCascadeChartTables(d);
+}
+
+async function cfCascadeShowChart(campaignId) {
+  var panel = document.getElementById('cf-cascade-chart-panel');
+  var body = document.getElementById('cf-cascade-chart-body');
+  if (!panel || !body) return;
+  _cfCascadeChartId = campaignId;
+  panel.style.display = '';
+  body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
+  try {
+    var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/chart', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
+    body.innerHTML = _cfCascadeChartHtml(data);
+    var meta = document.getElementById('cf-cascade-chart-meta');
+    if (meta) {
+      meta.textContent = data.symbol + ' · ' + data.state + ' · ' + (data.candles || []).length
+        + ' candles since mother candle (' + _cfCascadeUtc(data.mother && data.mother.t) + ' UTC)';
+    }
+  } catch (error) {
+    body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(error.message) + '</div>';
+  }
+}
+
+function cfCascadeRefreshChart() {
+  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId);
+}
+
+function cfCascadeHideChart() {
+  var panel = document.getElementById('cf-cascade-chart-panel');
+  if (panel) panel.style.display = 'none';
+  _cfCascadeChartId = '';
 }

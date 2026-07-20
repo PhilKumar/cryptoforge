@@ -817,6 +817,86 @@ class CascadeEngine:
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+    async def get_chart_data(self, campaign_id: str, max_candles: int = 300) -> dict:
+        """
+        Candles plus the geometry the engine actually used — trendline anchors,
+        each leg's fib anchors/levels, ladder order prices and fills — so the
+        marked levels can be verified visually against a real chart.
+        """
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            return {"error": f"Campaign {campaign_id} not found"}
+
+        history = self._candles_5m.get(campaign_id) or []
+        if not history:
+            # Engine restarted (candle history is in-memory only) — refetch.
+            history = await self._fetch_closed_5m(campaign.symbol, campaign.mother_timestamp)
+            if history:
+                self._candles_5m[campaign_id] = history
+
+        candles = [
+            {"t": c.timestamp, "o": c.open, "h": c.high, "l": c.low, "c": c.close} for c in history[-max_candles:]
+        ]
+        # Always include the mother candle itself as the left anchor of the view.
+        mother = {
+            "t": campaign.mother_timestamp,
+            "high": campaign.mother_high,
+            "low": campaign.mother_low,
+        }
+        trendlines = [
+            {
+                "id": tl.trendline_id,
+                "a1": {"t": tl.anchor1_timestamp, "p": tl.anchor1_price},
+                "a2": {"t": tl.anchor2_timestamp, "p": tl.anchor2_price},
+                "active": tl.trendline_id == campaign.active_trendline_id,
+            }
+            for tl in campaign.trendlines
+        ]
+        legs = []
+        for leg in campaign.legs:
+            levels = {}
+            if leg.fib:
+                levels = {str(lv): leg.fib.level_price(lv) for lv in (0, 1, 2, 4, 8)}
+            legs.append(
+                {
+                    "leg_id": leg.leg_id,
+                    "trendline_id": leg.trendline_id,
+                    "touch_high": leg.touch_high,
+                    "touch_timestamp": leg.touch_timestamp,
+                    "low": leg.low,
+                    "finalized": leg.finalized,
+                    "escalated": leg.escalated,
+                    "pool_usd": leg.pool_usd,
+                    "levels": levels,
+                    "orders": [
+                        {
+                            "level": order.level,
+                            "price": order.price,
+                            "usd_notional": order.usd_notional,
+                            "status": order.status,
+                            "fill_price": order.fill_price,
+                        }
+                        for order in sorted(leg.pending_orders.values(), key=lambda o: o.level)
+                    ],
+                }
+            )
+        price_meta = self._price_cache.get(campaign.symbol)
+        return {
+            "status": "ok",
+            "campaign_id": campaign.campaign_id,
+            "symbol": campaign.symbol,
+            "state": campaign.state,
+            "mode": campaign.mode,
+            "mother": mother,
+            "candles": candles,
+            "trendlines": trendlines,
+            "legs": legs,
+            "fills": [f.to_dict() for f in campaign.all_fills],
+            "avg_entry_price": campaign.avg_entry_price,
+            "tp_price": compute_tp_price(campaign),
+            "last_price": price_meta[0] if price_meta else None,
+        }
+
     def restore_campaigns(self, snapshots: List[dict]) -> int:
         restored = 0
         for snapshot in snapshots or []:
