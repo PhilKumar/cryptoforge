@@ -9,6 +9,9 @@ Model (ported from the user's Automation_Trade cascade_lib v2):
   high < mother high) spins a LEG with a fib ladder anchored touch_high →
   running-min low. Resting LIMIT BUY orders are placed at fib levels 2/4/8
   with 20/30/50% of the leg's pool (incremental depth pct × capital/100).
+  While the swing is still forming, BOTH anchors track: the high follows new
+  highs and the low follows new lows, so the fib always spans the full swing
+  (deepest low → highest high) and the ladder reprices onto it.
 - A BREAK (close above the line) arms pending_break; a later decisive
   low-break (red close below the last leg's low) creates a NEW trendline
   anchored back to the mother high, which needs its own future touch.
@@ -568,10 +571,50 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
         )
 
 
+def deepen_leg_low(campaign: Campaign, leg: Leg, new_low: float) -> bool:
+    """
+    Price made a new low while the swing was still forming (no decisive
+    low-break). The fib low anchor follows it down — symmetric to the way
+    touch_high follows new highs — so the ladder stays anchored to the full
+    swing (deepest low → highest high) rather than to a low frozen at the
+    moment of the touch.
+
+    The extra depth releases its proportional share of campaign capital into
+    the leg pool, split across the levels that are still open, then the
+    ladder reprices onto the new, deeper level prices.
+    """
+    if leg.fib is None or new_low <= 0 or new_low >= leg.low:
+        return False
+
+    leg.low = new_low
+    new_pct = (campaign.mother_high - new_low) / campaign.mother_high * 100
+    incremental_pct = max(new_pct - campaign.cumulative_used_pct, 0.0)
+    leg.leg_pct_from_mother = new_pct
+    campaign.cumulative_used_pct = max(campaign.cumulative_used_pct, new_pct)
+
+    open_levels = [level for level, order in leg.pending_orders.items() if order.is_open]
+    committed = campaign.spent_usd + sum(leg.pending_orders[level].usd_notional for level in open_levels)
+    headroom = max(campaign.capital_usd - committed, 0.0)
+    additional = min(incremental_pct * campaign.capital_unit_per_pct, headroom)
+    if additional > 0:
+        leg.pool_usd = _coerce_float(leg.pool_usd) + additional
+        weight = sum(LEVEL_ALLOCATION.get(level, 0.0) for level in open_levels)
+        if weight > 0:
+            for level in open_levels:
+                order = leg.pending_orders[level]
+                order.usd_notional = round(order.usd_notional + additional * LEVEL_ALLOCATION[level] / weight, 2)
+        else:
+            # Nothing open to absorb it (all merged/filled) — ride to the next leg.
+            campaign.carry_forward_usd += additional
+
+    reprice_leg_orders(campaign, leg)
+    return True
+
+
 def reprice_leg_orders(campaign: Campaign, leg: Leg) -> bool:
     """
-    Swing high rose: rebuild the fib and move still-open orders to the new
-    (deeper) level prices. Filled/merged/carried orders are untouched.
+    Swing anchor moved: rebuild the fib and move still-open orders to the new
+    level prices. Filled/merged/carried orders are untouched.
     Returns True if any open order moved.
     """
     if leg.fib is None:
@@ -1170,6 +1213,15 @@ class CascadeEngine:
                 if campaign.pending_break:
                     self._create_trendline_from_break(campaign, candle)
                 return
+            # A new low without a decisive break means the swing is still
+            # forming, so the fib low anchor follows price down.
+            if candle.low < leg.low and deepen_leg_low(campaign, leg, candle.low):
+                self._log_event(
+                    campaign,
+                    "reprice",
+                    f"Leg {leg.leg_id} swing low deepened to {leg.low:g}; ladder repriced "
+                    f"(pool ${_coerce_float(leg.pool_usd):,.2f})",
+                )
             classification = classify_candle(campaign.mother_high, tl, candle)
             if classification == "BREAK":
                 if not campaign.pending_break:

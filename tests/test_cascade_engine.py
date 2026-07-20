@@ -157,6 +157,46 @@ class CascadeScenarioTests(unittest.TestCase):
         self.assertAlmostEqual(leg.pending_orders[2].price, 103 - 2 * 3.5)
         self.assertGreaterEqual(leg.pending_orders[2].rev, 1)
 
+    def test_swing_low_deepens_and_reprices_ladder(self):
+        """A new low during the swing (no decisive red close below the leg low)
+        must pull fib 1 down with it, so the fib spans the full swing. Verified
+        against the user's TradingView reading of 2026-07-19 BTCUSDT."""
+        self._run_scenario(upto=4)  # leg 1 created, low = 99.5
+        leg = self.campaign.legs[0]
+        self.assertEqual(leg.low, 99.5)
+        old_l4_price = leg.pending_orders[4].price
+
+        # Green candle that wicks below the leg low but closes above it:
+        # not a decisive break, so the swing low must deepen instead.
+        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 101.0, 98.0, 100.5))
+
+        self.assertEqual(leg.low, 98.0)
+        self.assertTrue(self.campaign.swing_tracking)
+        self.assertFalse(leg.finalized)
+        # fib rebuilt on the deeper low, so levels sit lower than before
+        self.assertAlmostEqual(leg.fib.low_anchor, 98.0)
+        self.assertAlmostEqual(leg.pending_orders[4].price, leg.fib.level_price(4))
+        self.assertLess(leg.pending_orders[4].price, old_l4_price)
+
+    def test_red_close_below_leg_low_still_finalizes_instead_of_deepening(self):
+        """A decisive low-break must end the swing, not deepen it."""
+        self._run_scenario(upto=4)
+        leg = self.campaign.legs[0]
+        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 100.2, 98.0, 98.5))  # red, closes below 99.5
+        self.assertTrue(leg.finalized)
+        self.assertFalse(self.campaign.swing_tracking)
+        self.assertEqual(leg.low, 99.5)  # unchanged — swing ended here
+
+    def test_deepening_respects_capital_cap(self):
+        self._run_scenario(upto=4)
+        leg = self.campaign.legs[0]
+        self.campaign.capital_usd = 1.0  # no headroom left
+        before = sum(o.usd_notional for o in leg.pending_orders.values() if o.is_open)
+        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 101.0, 97.0, 100.5))
+        after = sum(o.usd_notional for o in leg.pending_orders.values() if o.is_open)
+        self.assertEqual(leg.low, 97.0)  # anchor still moves
+        self.assertAlmostEqual(after, before)  # but no extra capital committed
+
     def test_low_break_finalizes_leg_and_creates_trendline2(self):
         self._run_scenario(upto=7)
         leg = self.campaign.legs[0]
