@@ -1,28 +1,24 @@
 """
 engine/cascade.py — autonomous "cascade" campaign engine.
 
-Model (ported from the user's Automation_Trade cascade_lib v2):
-- A campaign anchors on a manually chosen MOTHER CANDLE. Down-trendlines are
-  drawn with anchor1 = always the mother high; anchor2 = a valid red candle
-  open (find_valid_anchor2).
-- A TOUCH of the active trendline (high crosses the line, close stays below,
-  high < mother high) spins a LEG with a fib ladder anchored touch_high →
-  running-min low. Resting LIMIT BUY orders are placed at fib levels 2/4/8
-  with 20/30/50% of the leg's pool (incremental depth pct × capital/100).
-  While the swing is still forming, BOTH anchors track: the high follows new
-  highs and the low follows new lows, so the fib always spans the full swing
-  (deepest low → highest high) and the ladder reprices onto it.
-- A BREAK (close above the line) arms pending_break; a later decisive
-  low-break (red close below the last leg's low) creates a NEW trendline
-  anchored back to the mother high, which needs its own future touch.
+Model (as specified by the user against their TradingView drawings):
+- A campaign anchors on a manually chosen MOTHER CANDLE.
+- A SWING is a dip followed by a rise. The dip is the running low; the first
+  higher high after it is the rise, which FREEZES the dip — later lower lows
+  start a new swing rather than dragging this one down.
+- When a red candle CLOSES BELOW that frozen dip, the swing is cut. At that
+  moment a trendline is drawn from the mother high to the swing high, and the
+  fib is anchored 0 = swing high, 1 = swing low. There is no candle-count
+  logic anywhere in this process — only the rise and the cut.
+- Resting LIMIT BUY orders go on fib levels 2/4/8 with 20/30/50% of the leg's
+  pool. Funding follows the fall percentage from the mother high down to that
+  leg's fib 1: pool = incremental fall % x capital / 100.
 - Take profit: a resting LIMIT SELL for the whole filled position measured
   from the average entry back toward the mother high —
-  avg_entry + 0.25 × (mother_high − avg_entry) — re-placed whenever a new
+  avg_entry + 0.25 x (mother_high - avg_entry) — re-placed whenever a new
   fill moves the average.
-- Fund allocation follows the fall percentage from the mother high down to
-  the leg's fib 1 (its low): pool = incremental fall % × capital / 100.
 - Binance min-notional handling: per-level USD below the minimum merges into
-  the next deeper level (2→4→8); if the whole pool is below the minimum it
+  the next deeper level (2->4->8); if the whole pool is below the minimum it
   carries forward to the next leg.
 
 Campaigns default to paper mode (simulated fills at live prices). Live mode
@@ -49,7 +45,6 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
-RED_CANDLES_TO_CONFIRM = 2  # red candles after the mother candle that confirm the first depth
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
@@ -117,42 +112,9 @@ def trendline_price(tl: Trendline, at_timestamp: int) -> float:
     return y1 + slope * (at_timestamp - x1)
 
 
-def classify_candle(mother_high: float, tl: Trendline, candle: Candle) -> str:
-    """Returns 'BREAK', 'TOUCH', or 'NONE'."""
-    line = trendline_price(tl, candle.timestamp)
-    if candle.close > line:
-        return "BREAK"
-    if candle.high >= line and candle.close < line and candle.high < mother_high:
-        return "TOUCH"
-    return "NONE"
-
-
 def leg_broken(candle: Candle, current_low: float) -> bool:
     """Decisive break: a red candle whose CLOSE is below the reference low."""
     return candle.is_red and candle.close < current_low
-
-
-def find_valid_anchor2(anchor1_price, anchor1_ts, candles_between, epsilon=1e-9):
-    """
-    Search backward from the red candle closest to the depth toward anchor1,
-    returning the first candidate whose connecting line is not crossed by any
-    earlier candle's CLOSE.
-    """
-    red_candidates = [c for c in candles_between if c.is_red]
-    for candidate in reversed(red_candidates):
-        if candidate.timestamp == anchor1_ts:
-            continue
-        slope = (candidate.open - anchor1_price) / (candidate.timestamp - anchor1_ts)
-        violated = False
-        for c in candles_between:
-            if c.timestamp < candidate.timestamp:
-                line_price_at_c = anchor1_price + slope * (c.timestamp - anchor1_ts)
-                if c.close > line_price_at_c + epsilon:
-                    violated = True
-                    break
-        if not violated:
-            return candidate.open, candidate.timestamp
-    return None, None
 
 
 @dataclass
@@ -318,7 +280,6 @@ class Campaign:
     trendlines: List[Trendline] = field(default_factory=list)
     legs: List[Leg] = field(default_factory=list)
     active_trendline_id: Optional[int] = None
-    pending_break: bool = False
     all_fills: List[Fill] = field(default_factory=list)
     avg_entry_price: Optional[float] = None
     tp_price: Optional[float] = None  # active TP once fills exist; display estimate before
@@ -328,10 +289,13 @@ class Campaign:
     filled_base_qty: float = 0.0
     realized_pnl: Optional[float] = None
     mother_broken_above: bool = False
-    swing_tracking: bool = False
-    depth_low: Optional[float] = None
-    depth_low_timestamp: Optional[int] = None
-    red_candles_seen: int = 0
+    # Live swing being tracked: the dip, the rise that confirms it, and the
+    # running high of that rise. Once risen is True the dip is frozen — later
+    # lower lows begin a new swing instead of dragging this one down.
+    swing_low: Optional[float] = None
+    swing_high: Optional[float] = None
+    swing_high_timestamp: Optional[int] = None
+    swing_risen: bool = False
     last_processed_ts: int = 0  # last processed closed 5m candle open ts
     closed_at: str = ""
     close_reason: str = ""
@@ -380,7 +344,6 @@ class Campaign:
             "trendlines": [tl.to_dict() for tl in self.trendlines],
             "legs": [leg.to_dict() for leg in self.legs],
             "active_trendline_id": self.active_trendline_id,
-            "pending_break": self.pending_break,
             "all_fills": [f.to_dict() for f in self.all_fills],
             "avg_entry_price": self.avg_entry_price,
             "tp_price": self.tp_price,
@@ -390,10 +353,10 @@ class Campaign:
             "filled_base_qty": self.filled_base_qty,
             "realized_pnl": self.realized_pnl,
             "mother_broken_above": self.mother_broken_above,
-            "swing_tracking": self.swing_tracking,
-            "depth_low": self.depth_low,
-            "depth_low_timestamp": self.depth_low_timestamp,
-            "red_candles_seen": self.red_candles_seen,
+            "swing_low": self.swing_low,
+            "swing_high": self.swing_high,
+            "swing_high_timestamp": self.swing_high_timestamp,
+            "swing_risen": self.swing_risen,
             "last_processed_ts": self.last_processed_ts,
             "closed_at": self.closed_at,
             "close_reason": self.close_reason,
@@ -418,7 +381,6 @@ class Campaign:
             "cumulative_used_pct",
             "carry_forward_usd",
             "active_trendline_id",
-            "pending_break",
             "avg_entry_price",
             "tp_price",
             "tp_order_id",
@@ -427,10 +389,10 @@ class Campaign:
             "filled_base_qty",
             "realized_pnl",
             "mother_broken_above",
-            "swing_tracking",
-            "depth_low",
-            "depth_low_timestamp",
-            "red_candles_seen",
+            "swing_low",
+            "swing_high",
+            "swing_high_timestamp",
+            "swing_risen",
             "last_processed_ts",
             "closed_at",
             "close_reason",
@@ -582,72 +544,6 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
             status="PENDING",
             client_order_id=f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-0",
         )
-
-
-def deepen_leg_low(campaign: Campaign, leg: Leg, new_low: float) -> bool:
-    """
-    Price made a new low while the swing was still forming (no decisive
-    low-break). The fib low anchor follows it down — symmetric to the way
-    touch_high follows new highs — so the ladder stays anchored to the full
-    swing (deepest low → highest high) rather than to a low frozen at the
-    moment of the touch.
-
-    The extra depth releases its proportional share of campaign capital into
-    the leg pool, split across the levels that are still open, then the
-    ladder reprices onto the new, deeper level prices.
-    """
-    if leg.fib is None or new_low <= 0 or new_low >= leg.low:
-        return False
-
-    leg.low = new_low
-    new_pct = (campaign.mother_high - new_low) / campaign.mother_high * 100
-    incremental_pct = max(new_pct - campaign.cumulative_used_pct, 0.0)
-    leg.leg_pct_from_mother = new_pct
-    campaign.cumulative_used_pct = max(campaign.cumulative_used_pct, new_pct)
-
-    open_levels = [level for level, order in leg.pending_orders.items() if order.is_open]
-    committed = campaign.spent_usd + sum(leg.pending_orders[level].usd_notional for level in open_levels)
-    headroom = max(campaign.capital_usd - committed, 0.0)
-    additional = min(incremental_pct * campaign.capital_unit_per_pct, headroom)
-    if additional > 0:
-        leg.pool_usd = _coerce_float(leg.pool_usd) + additional
-        weight = sum(LEVEL_ALLOCATION.get(level, 0.0) for level in open_levels)
-        if weight > 0:
-            for level in open_levels:
-                order = leg.pending_orders[level]
-                order.usd_notional = round(order.usd_notional + additional * LEVEL_ALLOCATION[level] / weight, 2)
-        else:
-            # Nothing open to absorb it (all merged/filled) — ride to the next leg.
-            campaign.carry_forward_usd += additional
-
-    reprice_leg_orders(campaign, leg)
-    return True
-
-
-def reprice_leg_orders(campaign: Campaign, leg: Leg) -> bool:
-    """
-    Swing anchor moved: rebuild the fib and move still-open orders to the new
-    level prices. Filled/merged/carried orders are untouched.
-    Returns True if any open order moved.
-    """
-    if leg.fib is None:
-        return False
-    leg.fib = FibLadder(high_anchor=leg.touch_high, low_anchor=leg.low)
-    moved = False
-    for level, order in leg.pending_orders.items():
-        if not order.is_open:
-            continue
-        new_price = max(leg.fib.level_price(level), 0.0)
-        if new_price <= 0 or order.price is None or abs(new_price - order.price) < 1e-12:
-            continue
-        order.price = new_price
-        order.quantity = order.usd_notional / new_price if new_price > 0 else 0.0
-        order.rev += 1
-        order.client_order_id = f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-{order.rev}"
-        if order.status == "PLACED":
-            order.status = "PENDING"  # sync will cancel the old order and place the new one
-        moved = True
-    return moved
 
 
 # ── Engine ──────────────────────────────────────────────────────────
@@ -1160,6 +1056,14 @@ class CascadeEngine:
         )
 
     # ── state machine ────────────────────────────────────────────
+    #
+    # A swing is a dip followed by a rise. The dip is the running low; the
+    # rise is the running high after it, and the first higher high FREEZES the
+    # dip (later lower lows begin a new swing rather than dragging this one
+    # down). When a red candle closes below that frozen dip, the swing is cut:
+    # a trendline is drawn from the mother high to the swing high and the fib
+    # is anchored 0 = swing high, 1 = swing low. There is no candle-count
+    # logic anywhere — only the rise and the cut.
 
     def _process_candle(self, campaign: Campaign, candle: Candle) -> None:
         # Mother-high breach ends the hunt in every state.
@@ -1167,219 +1071,96 @@ class CascadeEngine:
             self._mother_broken(campaign)
             return
 
-        if campaign.state == "WAITING_FIRST_DEPTH":
-            self._process_waiting_first_depth(campaign, candle)
-        elif campaign.state == "TRENDLINE_ACTIVE":
-            self._process_trendline_active(campaign, candle)
+        if campaign.swing_low is None:
+            # Seed the first swing from the mother candle itself, so a cut
+            # before any genuine rise cannot anchor a fib at the mother high.
+            campaign.swing_low = campaign.mother_low
+            campaign.swing_high = campaign.mother_high
+            campaign.swing_high_timestamp = campaign.mother_timestamp
+            campaign.swing_risen = False
 
-        # Paper fill checks run after ladder management so freshly repriced
+        if leg_broken(candle, campaign.swing_low):
+            self._cut_swing(campaign, candle)
+        else:
+            if not campaign.swing_risen and candle.low < campaign.swing_low:
+                campaign.swing_low = candle.low
+            if campaign.swing_high is None or candle.high > campaign.swing_high:
+                campaign.swing_high = candle.high
+                campaign.swing_high_timestamp = candle.timestamp
+                campaign.swing_risen = True
+
+        # Paper fill checks run after ladder management so freshly placed
         # orders are honored. Levels on 15m confirm only on closed 15m candles.
         if campaign.mode == "paper" and campaign.state in ACTIVE_STATES:
             self._paper_fill_check(campaign, candle)
 
-    def _process_waiting_first_depth(self, campaign: Campaign, candle: Candle) -> None:
-        if campaign.depth_low is None or candle.low < campaign.depth_low:
-            campaign.depth_low = candle.low
-            campaign.depth_low_timestamp = candle.timestamp
-        if candle.is_red:
-            campaign.red_candles_seen += 1
+    def _restart_swing(self, campaign: Campaign, candle: Candle) -> None:
+        campaign.swing_low = candle.low
+        campaign.swing_high = candle.high
+        campaign.swing_high_timestamp = candle.timestamp
+        campaign.swing_risen = False
 
-        # The depth is confirmed by RED_CANDLES_TO_CONFIRM red candles, not by a
-        # price threshold: a shallow first leg is still a valid leg, and waiting
-        # for a fixed fall % draws the trendline too late to catch its touch.
-        if campaign.red_candles_seen < RED_CANDLES_TO_CONFIRM:
-            return
-        between = self._candles_between(campaign, candle.timestamp)
-        anchor2_price, anchor2_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
-        if anchor2_price is None:
-            return
+    def _cut_swing(self, campaign: Campaign, candle: Candle) -> None:
+        """A red candle closed below the swing low. If the swing had a genuine
+        rise, draw its trendline and fib; either way start the next swing."""
+        high = campaign.swing_high
+        low = campaign.swing_low
+        high_ts = campaign.swing_high_timestamp
+        drawable = (
+            campaign.swing_risen and high is not None and low is not None and high > low and high < campaign.mother_high
+        )
+        if drawable:
+            self._draw_trendline_and_leg(campaign, high, low, high_ts)
+        self._restart_swing(campaign, candle)
+
+    def _draw_trendline_and_leg(
+        self, campaign: Campaign, swing_high: float, swing_low: float, swing_high_ts: Optional[int]
+    ) -> None:
         tl = Trendline(
             trendline_id=len(campaign.trendlines) + 1,
             anchor1_price=campaign.mother_high,
             anchor1_timestamp=campaign.mother_timestamp,
-            anchor2_price=anchor2_price,
-            anchor2_timestamp=anchor2_ts,
+            anchor2_price=swing_high,
+            anchor2_timestamp=int(swing_high_ts or campaign.mother_timestamp),
         )
         campaign.trendlines.append(tl)
         campaign.active_trendline_id = tl.trendline_id
-        campaign.state = "TRENDLINE_ACTIVE"
-        self._log_event(
-            campaign,
-            "trendline",
-            f"Trendline {tl.trendline_id} drawn (mother high {campaign.mother_high:g} → "
-            f"red open {anchor2_price:g}); depth {campaign.depth_low:g}",
-        )
-
-    def _process_trendline_active(self, campaign: Campaign, candle: Candle) -> None:
-        tl = campaign.active_trendline
-        if tl is None:
-            return
-        leg = campaign.current_leg
-
-        if campaign.swing_tracking and leg is not None and not leg.finalized:
-            # The up-swing continues (even through a break) until the low breaks.
-            if candle.high > leg.touch_high:
-                leg.touch_high = candle.high
-                leg.touch_timestamp = candle.timestamp
-                if reprice_leg_orders(campaign, leg):
-                    self._log_event(
-                        campaign,
-                        "reprice",
-                        f"Leg {leg.leg_id} swing high rose to {leg.touch_high:g}; ladder repriced",
-                    )
-            if leg_broken(candle, leg.low):
-                leg.finalized = True
-                campaign.swing_tracking = False
-                campaign.depth_low = candle.low
-                campaign.depth_low_timestamp = candle.timestamp
-                self._log_event(
-                    campaign,
-                    "leg",
-                    f"Leg {leg.leg_id} swing finalized (touch high {leg.touch_high:g}); new depth window open",
-                )
-                # The decisive low-break itself draws the next trendline — it does
-                # not also require the line to have been broken upward first.
-                self._create_trendline_from_break(campaign, candle)
-                return
-            # A new low without a decisive break means the swing is still
-            # forming, so the fib low anchor follows price down.
-            if candle.low < leg.low and deepen_leg_low(campaign, leg, candle.low):
-                self._log_event(
-                    campaign,
-                    "reprice",
-                    f"Leg {leg.leg_id} swing low deepened to {leg.low:g}; ladder repriced "
-                    f"(pool ${_coerce_float(leg.pool_usd):,.2f})",
-                )
-            classification = classify_candle(campaign.mother_high, tl, candle)
-            if classification == "BREAK":
-                if not campaign.pending_break:
-                    campaign.pending_break = True
-                    self._log_event(
-                        campaign, "break", f"Trendline {tl.trendline_id} broken (close above line); awaiting low-break"
-                    )
-            return
-
-        # Not swing-tracking: maintain the running depth low for the next leg.
-        # The trendline itself is fixed once drawn — re-anchoring it to each new
-        # depth only steepens it until it breaks before it can ever be touched.
-        if campaign.depth_low is None or candle.low < campaign.depth_low:
-            campaign.depth_low = candle.low
-            campaign.depth_low_timestamp = candle.timestamp
-
-        # NOTE: the next trendline is drawn once, at the moment the leg finalises
-        # (see the swing branch above). Re-triggering here on every later red
-        # close below the old leg low would spawn a new line per candle.
-
-        classification = classify_candle(campaign.mother_high, tl, candle)
-        if classification == "BREAK" and not campaign.pending_break:
-            campaign.pending_break = True
-            self._log_event(
-                campaign, "break", f"Trendline {tl.trendline_id} broken (close above line); awaiting low-break"
-            )
-
-        # A broken trendline that has since slid below the running depth low can
-        # never be touched again. With no leg on it the model's recovery path
-        # (break + low-break of the last leg's low) cannot run, which would
-        # strand the campaign forever — so retire it and redraw from the mother
-        # high. The highs that broke it now constrain find_valid_anchor2, so the
-        # replacement comes out shallower. A break while the line is still above
-        # the depth low is left alone: price often returns to touch it.
-        tl_has_leg = any(item.trendline_id == tl.trendline_id for item in campaign.legs)
-        if (
-            campaign.pending_break
-            and not tl_has_leg
-            and campaign.depth_low is not None
-            and trendline_price(tl, candle.timestamp) < campaign.depth_low
-        ):
-            self._discard_untouched_trendline(campaign, tl)
-            return
-
-        if classification == "BREAK":
-            return
-        if classification != "TOUCH":
-            return
-        if campaign.depth_low is None or campaign.depth_low >= candle.high:
-            return
 
         prior_leg = campaign.current_leg
-        new_leg = Leg(
+        leg = Leg(
             leg_id=len(campaign.legs) + 1,
             trendline_id=tl.trendline_id,
-            low=campaign.depth_low,
-            touch_high=candle.high,
-            touch_timestamp=candle.timestamp,
+            low=swing_low,
+            touch_high=swing_high,
+            touch_timestamp=int(swing_high_ts or campaign.mother_timestamp),
         )
-        campaign.legs.append(new_leg)
-        campaign.pending_break = False
-        campaign.swing_tracking = True
+        leg.finalized = True  # both anchors are fixed the moment the low is cut
+        campaign.legs.append(leg)
         if prior_leg is not None:
-            cancel_and_carry_forward(prior_leg, new_leg)
+            cancel_and_carry_forward(prior_leg, leg)
         try:
-            build_fib_ladder_and_pool(campaign, new_leg)
-            plan_leg_orders(campaign, new_leg)
+            build_fib_ladder_and_pool(campaign, leg)
+            plan_leg_orders(campaign, leg)
         except CascadeModelError as exc:
             campaign.legs.pop()
-            campaign.swing_tracking = False
-            self._log_event(campaign, "error", f"Leg rejected: {exc}")
+            campaign.trendlines.pop()
+            campaign.active_trendline_id = tl.trendline_id - 1 or None
+            self._log_event(campaign, "error", f"Fib rejected: {exc}")
             return
-        placed = [order for order in new_leg.pending_orders.values() if order.status == "PENDING"]
+
+        campaign.state = "TRENDLINE_ACTIVE"
+        placed = [order for order in leg.pending_orders.values() if order.status == "PENDING"]
         self._log_event(
             campaign,
             "leg",
-            f"Leg {new_leg.leg_id} touch at {new_leg.touch_high:g} (low {new_leg.low:g}, "
-            f"pool ${new_leg.pool_usd:,.2f}{', escalated' if new_leg.escalated else ''}) — "
+            f"Fib {leg.leg_id} drawn on trendline {tl.trendline_id}: 0={swing_high:g} 1={swing_low:g} "
+            f"(down {leg.leg_pct_from_mother:.3f}% from mother high, pool ${_coerce_float(leg.pool_usd):,.2f}"
+            f"{', escalated' if leg.escalated else ''}) — "
             + (
-                "orders: " + ", ".join(f"L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in placed)
+                ", ".join(f"L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in placed)
                 if placed
                 else f"pool below minimum, ${campaign.carry_forward_usd:,.2f} carried forward"
             ),
-        )
-
-    def _discard_untouched_trendline(self, campaign: Campaign, tl: Trendline) -> None:
-        """Retire a trendline that was broken before producing any leg and go
-        back to depth-hunting so a fresh line is drawn from the mother high.
-        The broken line is kept in history (inactive) for the chart."""
-        campaign.active_trendline_id = None
-        campaign.pending_break = False
-        campaign.state = "WAITING_FIRST_DEPTH"
-        # Keep depth_low: it is the running minimum since the previous leg's
-        # touch and is what the next fib anchors to. Retiring a line that was
-        # never touched must not throw that depth away.
-        campaign.red_candles_seen = 0
-        self._log_event(
-            campaign,
-            "trendline",
-            f"Trendline {tl.trendline_id} broken before any touch — discarded; "
-            "hunting a new depth to redraw from the mother high",
-        )
-
-    def _create_trendline_from_break(self, campaign: Campaign, low_break_candle: Candle) -> None:
-        between = self._candles_between(campaign, low_break_candle.timestamp)
-        anchor2_price, anchor2_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
-        campaign.pending_break = False
-        if anchor2_price is None:
-            self._log_event(campaign, "warn", "Low-break after trendline break, but no valid anchor2 found yet")
-            return
-        tl = Trendline(
-            trendline_id=len(campaign.trendlines) + 1,
-            anchor1_price=campaign.mother_high,
-            anchor1_timestamp=campaign.mother_timestamp,
-            anchor2_price=anchor2_price,
-            anchor2_timestamp=anchor2_ts,
-        )
-        campaign.trendlines.append(tl)
-        campaign.active_trendline_id = tl.trendline_id
-        # The depth low is the running minimum since the previous leg's touch —
-        # drawing a new trendline must not raise it back up to this candle's
-        # low, which would throw away the real depth the next fib is anchored to.
-        if campaign.depth_low is None or low_break_candle.low < campaign.depth_low:
-            campaign.depth_low = low_break_candle.low
-            campaign.depth_low_timestamp = low_break_candle.timestamp
-        self._log_event(
-            campaign,
-            "trendline",
-            f"Trendline {tl.trendline_id} created after break + low-break (anchor2 {anchor2_price:g}); "
-            "waiting for its own touch",
         )
 
     # ── fills / TP ───────────────────────────────────────────────

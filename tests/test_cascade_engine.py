@@ -12,7 +12,6 @@ from engine.cascade import (
     Leg,
     build_fib_ladder_and_pool,
     plan_leg_orders,
-    trendline_price,
 )
 
 _RECENT_TS = (int(time.time()) - 3600) // 300 * 300  # a truthy, in-window mother timestamp
@@ -90,200 +89,110 @@ def _feed(engine, campaign, candle):
     engine._process_candle(campaign, candle)
 
 
-# Candles from the user's scenario_two_trendlines.py, timestamps scaled to 5m (300s) steps.
-def _scenario_candles():
-    raw = [
-        (1, 104, 104.5, 102, 102.5),
-        (2, 103, 103.2, 101.5, 101.8),  # trendline1 anchor2 (open 103)
-        (3, 101.8, 102, 99.5, 100),  # leg1 depth: low 99.5
-        (4, 100, 102, 99.8, 100.8),  # LEG 1 TOUCH
-        (5, 100.8, 102.5, 100.5, 102.2),  # BREAK of trendline1
-        (6, 102.5, 103, 101, 102.0),  # trendline2 anchor2 candidate
-        (7, 102.0, 102.2, 98, 98.3),  # decisive low-break -> trendline2 created
-        (8, 98.3, 98.5, 96.5, 96.8),
-        (9, 96.8, 97, 95, 95.3),
-        (10, 95.3, 96, 94.5, 95.7),  # deepest low 94.5
-        (11, 95.7, 97, 95.5, 96.8),
-        (12, 96.8, 99, 96.5, 98.7),  # still below trendline2
-        (13, 98.7, 101, 98.5, 99.4),  # LEG 2 TOUCH begins
-        (14, 99.4, 102, 99, 101.5),
-        (15, 101.5, 103.5, 101, 103),
-        (16, 103, 104, 102.5, 102.8),  # swing peak 104 (below mother 105)
-        (17, 102.8, 103, 100, 100.3),
-        (18, 100.3, 100.5, 93, 93.5),  # low-break -> fib2 finalized
-    ]
-    return [Candle(step * 300, o, h, low, c) for step, o, h, low, c in raw]
+# Real BTCUSDT 5m candles, 2026-07-20 from the mother candle at 00:15 UTC.
+# The user verified both fibs off these on TradingView.
+_REAL = [
+    # ts_index, open, high, low, close
+    (0, 65020.00, 65107.99, 65002.00, 65051.98),  # 00:15 MOTHER
+    (1, 65051.98, 65051.98, 64804.76, 64919.31),  # 00:20 red: high precedes the dip
+    (2, 64919.31, 64923.67, 64852.01, 64876.01),  # 00:25
+    (3, 64876.01, 64878.01, 64792.00, 64800.01),  # 00:30 cuts 64804.76, no genuine rise
+    (4, 64800.00, 64938.00, 64790.01, 64904.00),  # 00:35 dip 64790.01 then rise 64938.00
+    (5, 64904.00, 64928.00, 64822.24, 64822.24),  # 00:40
+    (6, 64822.24, 64822.24, 64639.00, 64665.99),  # 00:45 cuts 64790.01 -> FIB 1
+    (7, 64666.00, 64671.47, 64416.00, 64588.00),  # 00:50 dip 64416.00 ("ultimate low")
+    (8, 64588.50, 64593.98, 64544.00, 64553.84),  # 00:55
+    (9, 64553.85, 64606.00, 64510.00, 64606.00),  # 01:00
+    (10, 64606.00, 65010.15, 64605.99, 64999.13),  # 01:05 rise begins -> freezes 64416.00
+    (11, 64999.13, 65029.40, 64806.37, 64808.00),  # 01:10 swing high 65029.40
+    (12, 64500.00, 64500.00, 64200.00, 64244.00),  # cuts 64416.00 -> FIB 2
+]
 
 
-class CascadeScenarioTests(unittest.TestCase):
-    """End-to-end replay of the user's two-trendline scenario in paper mode."""
+def _real_campaign(engine):
+    mother = _REAL[0]
+    campaign = Campaign(
+        campaign_id="real",
+        symbol="BTCUSDT",
+        capital_usd=2000.0,
+        mother_high=mother[2],
+        mother_low=mother[3],
+        mother_timestamp=0,
+        mode="paper",
+        min_notional_usd=5.0,
+    )
+    engine.campaigns[campaign.campaign_id] = campaign
+    return campaign
+
+
+class CascadeSwingModelTests(unittest.TestCase):
+    """The swing model: a dip, a rise that freezes it, then a red close below
+    that dip cuts the swing and draws its trendline + fib."""
 
     def setUp(self):
         self.engine = _mk_engine()
-        self.campaign = _mk_campaign(self.engine)
+        self.campaign = _real_campaign(self.engine)
 
-    def _run_scenario(self, upto=18):
-        for candle in _scenario_candles()[:upto]:
-            _feed(self.engine, self.campaign, candle)
+    def _feed_real(self, upto):
+        for idx, o, h, low, c in _REAL[1 : upto + 1]:
+            _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
 
-    def test_first_trendline_forms_after_two_red_candles(self):
-        """RED_CANDLES_TO_CONFIRM red candles confirm the first depth (the rule
-        from cascade_lib), not a fixed fall percentage — a shallow first leg is
-        still a valid leg and a % threshold draws the line too late to catch it."""
-        self._run_scenario(upto=2)  # t=1 and t=2 are both red
-        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
-        self.assertEqual(len(self.campaign.trendlines), 1)
-        tl = self.campaign.trendlines[0]
-        self.assertEqual(tl.anchor1_price, 105.0)
-        self.assertEqual(tl.anchor2_price, 104.0)  # red open at t=1
-        self.assertEqual(tl.anchor2_timestamp, 300)
-        # Same line the scenario file draws through candles[2] (open 103 @ 600):
-        # both anchors sit on slope -1/300 from the mother high.
-        self.assertAlmostEqual(trendline_price(tl, 600), 103.0)
-
-    def test_leg1_touch_builds_fib_and_orders(self):
-        self._run_scenario(upto=4)
+    def test_reproduces_the_users_first_fib_exactly(self):
+        self._feed_real(6)
         self.assertEqual(len(self.campaign.legs), 1)
         leg = self.campaign.legs[0]
-        self.assertEqual(leg.low, 99.5)
-        self.assertEqual(leg.touch_high, 102.0)
-        self.assertTrue(self.campaign.swing_tracking)
-        # 5.238% depth on $2000 => ~$104.76 pool split 20/30/50
-        self.assertAlmostEqual(leg.pool_usd, (105 - 99.5) / 105 * 100 * 20, places=4)
-        self.assertAlmostEqual(leg.pending_orders[2].price, 97.0)
-        self.assertAlmostEqual(leg.pending_orders[4].price, 92.0)
-        self.assertAlmostEqual(leg.pending_orders[8].price, 82.0)
-        for level in (2, 4, 8):
-            self.assertEqual(leg.pending_orders[level].status, "PENDING")
+        self.assertAlmostEqual(leg.touch_high, 64938.00)  # fib 0
+        self.assertAlmostEqual(leg.low, 64790.01)  # fib 1
+        for level, expected in ((2, 64642.02), (4, 64346.04), (8, 63754.08)):
+            self.assertAlmostEqual(leg.fib.level_price(level), expected, places=2)
 
-    def test_swing_high_rises_and_ladder_reprices(self):
-        self._run_scenario(upto=6)
-        leg = self.campaign.legs[0]
-        self.assertEqual(leg.touch_high, 103.0)  # running max over t=4..6
-        self.assertTrue(self.campaign.pending_break)  # break at t=5
-        self.assertAlmostEqual(leg.pending_orders[2].price, 103 - 2 * 3.5)
-        self.assertGreaterEqual(leg.pending_orders[2].rev, 1)
-
-    def test_swing_low_deepens_and_reprices_ladder(self):
-        """A new low during the swing (no decisive red close below the leg low)
-        must pull fib 1 down with it, so the fib spans the full swing. Verified
-        against the user's TradingView reading of 2026-07-19 BTCUSDT."""
-        self._run_scenario(upto=4)  # leg 1 created, low = 99.5
-        leg = self.campaign.legs[0]
-        self.assertEqual(leg.low, 99.5)
-        old_l4_price = leg.pending_orders[4].price
-
-        # Green candle that wicks below the leg low but closes above it:
-        # not a decisive break, so the swing low must deepen instead.
-        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 101.0, 98.0, 100.5))
-
-        self.assertEqual(leg.low, 98.0)
-        self.assertTrue(self.campaign.swing_tracking)
-        self.assertFalse(leg.finalized)
-        # fib rebuilt on the deeper low, so levels sit lower than before
-        self.assertAlmostEqual(leg.fib.low_anchor, 98.0)
-        self.assertAlmostEqual(leg.pending_orders[4].price, leg.fib.level_price(4))
-        self.assertLess(leg.pending_orders[4].price, old_l4_price)
-
-    def test_red_close_below_leg_low_still_finalizes_instead_of_deepening(self):
-        """A decisive low-break must end the swing, not deepen it."""
-        self._run_scenario(upto=4)
-        leg = self.campaign.legs[0]
-        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 100.2, 98.0, 98.5))  # red, closes below 99.5
-        self.assertTrue(leg.finalized)
-        self.assertFalse(self.campaign.swing_tracking)
-        self.assertEqual(leg.low, 99.5)  # unchanged — swing ended here
-
-    def test_deepening_respects_capital_cap(self):
-        self._run_scenario(upto=4)
-        leg = self.campaign.legs[0]
-        self.campaign.capital_usd = 1.0  # no headroom left
-        before = sum(o.usd_notional for o in leg.pending_orders.values() if o.is_open)
-        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 101.0, 97.0, 100.5))
-        after = sum(o.usd_notional for o in leg.pending_orders.values() if o.is_open)
-        self.assertEqual(leg.low, 97.0)  # anchor still moves
-        self.assertAlmostEqual(after, before)  # but no extra capital committed
-
-    def test_low_break_draws_next_trendline_without_a_prior_upward_break(self):
-        """The decisive low-break alone draws the next trendline — it does not
-        also require the line to have been broken upward first."""
-        self._run_scenario(upto=4)  # leg 1 created, low 99.5, no BREAK yet
-        self.assertFalse(self.campaign.pending_break)
-        self.assertEqual(len(self.campaign.trendlines), 1)
-        # Red candle closing below the leg low finalises leg 1 and draws TL2.
-        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 100.2, 98.0, 98.5))
-        self.assertTrue(self.campaign.legs[0].finalized)
-        self.assertEqual(len(self.campaign.trendlines), 2)
-
-    def test_only_one_trendline_is_drawn_per_completed_leg(self):
-        """Later red closes below the finalised leg's low must not each spawn
-        another trendline — that produced a new line on nearly every candle."""
-        self._run_scenario(upto=4)
-        _feed(self.engine, self.campaign, Candle(5 * 300, 100.0, 100.2, 98.0, 98.5))
-        self.assertEqual(len(self.campaign.trendlines), 2)
-        for step in range(6, 12):  # keep closing below the old leg low
-            _feed(self.engine, self.campaign, Candle(step * 300, 98.5, 98.6, 97.0, 97.5))
-        self.assertLessEqual(len(self.campaign.trendlines), 3)
-
-    def test_low_break_finalizes_leg_and_creates_trendline2(self):
-        self._run_scenario(upto=7)
-        leg = self.campaign.legs[0]
-        self.assertTrue(leg.finalized)
-        self.assertFalse(self.campaign.swing_tracking)
-        self.assertEqual(len(self.campaign.trendlines), 2)
-        tl2 = self.campaign.trendlines[1]
-        self.assertEqual(tl2.anchor2_price, 102.5)  # red open at t=6
-        self.assertEqual(self.campaign.active_trendline_id, 2)
-        self.assertEqual(len(self.campaign.legs), 1)  # no leg for trendline2 yet
-
-    def test_paper_fill_happens_when_price_reaches_level(self):
-        self._run_scenario(upto=9)
-        leg = self.campaign.legs[0]
-        # After the t=6 reprice, L2 sits at 96.0; candle t=9 (low 95) crosses it.
-        self.assertEqual(leg.pending_orders[2].status, "FILLED")
-        self.assertAlmostEqual(leg.pending_orders[2].fill_price, 96.0)
-        self.assertEqual(len(self.campaign.all_fills), 1)
-        self.assertAlmostEqual(self.campaign.avg_entry_price, 96.0)
-        # TP = 96 + 0.25 * (105 - 96) = 98.25
-        self.assertAlmostEqual(self.campaign.tp_price, 98.25)
-
-    def test_leg2_touch_carries_forward_unfilled_levels(self):
-        self._run_scenario(upto=13)
+    def test_reproduces_the_users_second_fib_exactly(self):
+        self._feed_real(12)
         self.assertEqual(len(self.campaign.legs), 2)
+        leg = self.campaign.legs[1]
+        self.assertAlmostEqual(leg.touch_high, 65029.40)  # fib 0
+        self.assertAlmostEqual(leg.low, 64416.00)  # fib 1 — the "ultimate low"
+        self.assertAlmostEqual(leg.fib.level_price(2), 63802.60, places=2)
+
+    def test_cut_without_a_genuine_rise_draws_nothing(self):
+        """00:30 closes below 64,804.76, but that dip's only 'high' preceded it
+        inside a red candle — no dip-and-rise, so no fib."""
+        self._feed_real(3)
+        self.assertEqual(len(self.campaign.legs), 0)
+        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
+
+    def test_rise_freezes_the_dip_so_later_lows_start_a_new_swing(self):
+        self._feed_real(11)  # dip 64,416.00 frozen by the rise to 65,029.40
+        self.assertAlmostEqual(self.campaign.swing_low, 64416.00)
+        self.assertTrue(self.campaign.swing_risen)
+        self.assertAlmostEqual(self.campaign.swing_high, 65029.40)
+
+    def test_trendline_is_anchored_mother_high_to_swing_high(self):
+        self._feed_real(6)
+        tl = self.campaign.trendlines[0]
+        self.assertAlmostEqual(tl.anchor1_price, 65107.99)
+        self.assertAlmostEqual(tl.anchor2_price, 64938.00)
+
+    def test_fall_pct_and_pool_follow_the_leg_low(self):
+        self._feed_real(12)
         leg1, leg2 = self.campaign.legs
-        self.assertEqual(leg2.low, 94.5)
-        self.assertEqual(leg2.trendline_id, 2)
-        # L4/L8 of leg1 were never filled -> carried into leg2
-        self.assertEqual(leg1.pending_orders[4].status, "CARRIED")
-        self.assertEqual(leg1.pending_orders[8].status, "CARRIED")
-        self.assertGreater(leg2.carry_forward_qty[4], 0)
-        self.assertGreater(leg2.carry_forward_qty[8], 0)
-        # L2 was filled and must NOT be carried
-        self.assertNotIn(2, leg2.carry_forward_qty)
+        self.assertAlmostEqual(leg1.leg_pct_from_mother, 0.488, places=2)
+        self.assertAlmostEqual(leg2.leg_pct_from_mother, 1.063, places=2)
+        # leg 2 only draws the incremental depth beyond leg 1
+        self.assertAlmostEqual(leg2.pool_usd, (1.063 - 0.488) * 2000 / 100, places=1)
 
-    def test_leg2_swing_finalizes_at_104(self):
-        self._run_scenario(upto=18)
-        leg2 = self.campaign.legs[1]
-        self.assertTrue(leg2.finalized)
-        self.assertEqual(leg2.touch_high, 104.0)
-        # tl2 was closed above during leg2's swing, and t=18's low-break
-        # therefore spawns trendline 3 (anchor2 = red open at t=17).
-        self.assertEqual(len(self.campaign.trendlines), 3)
-        self.assertEqual(self.campaign.active_trendline_id, 3)
-        self.assertEqual(self.campaign.trendlines[2].anchor2_price, 102.8)
+    def test_second_leg_carries_forward_unfilled_levels(self):
+        self._feed_real(12)
+        leg1, leg2 = self.campaign.legs
+        carried = [lv for lv, o in leg1.pending_orders.items() if o.status == "CARRIED"]
+        self.assertTrue(carried)
+        for lv in carried:
+            self.assertGreater(leg2.carry_forward_qty.get(lv, 0), 0)
 
-    def test_mother_break_ends_campaign(self):
-        self._run_scenario(upto=3)  # no legs/fills yet
-        _feed(self.engine, self.campaign, Candle(19 * 300, 103, 105.5, 102, 105.2))
+    def test_mother_break_ends_the_campaign(self):
+        self._feed_real(6)
+        _feed(self.engine, self.campaign, Candle(99 * 300, 65000.0, 65200.0, 64900.0, 65150.0))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
-        self.assertTrue(self.campaign.mother_broken_above)
-
-    def test_paper_mother_break_with_fills_completes_at_tp(self):
-        self._run_scenario(upto=9)  # L2 filled at 96
-        _feed(self.engine, self.campaign, Candle(19 * 300, 103, 105.5, 102, 105.2))
-        # Price above mother high implies TP touched: campaign completes at TP.
-        self.assertEqual(self.campaign.state, "COMPLETED")
-        self.assertAlmostEqual(self.campaign.realized_pnl, (98.25 - 96.0) * self.campaign.filled_base_qty, places=6)
 
 
 class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
@@ -442,97 +351,6 @@ class CascadeEngineApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored, 1)
         self.assertIn(campaign.campaign_id, engine2.campaigns)
         self.assertEqual(engine2.campaigns[campaign.campaign_id].state, "TRENDLINE_ACTIVE")
-
-
-class CascadeUntouchedTrendlineTests(unittest.TestCase):
-    """A trendline broken before it ever produced a leg must be discarded and
-    redrawn. Otherwise the model's recovery path (break + low-break of the last
-    leg's low) can never run — there is no leg — and the campaign is stranded
-    forever with a line far below price that can never be touched again."""
-
-    def setUp(self):
-        self.engine = _mk_engine()
-        self.campaign = _mk_campaign(self.engine)  # mother high 105 / low 99
-
-    def _feed_all(self, rows):
-        for step, o, h, low, cl in rows:
-            _feed(self.engine, self.campaign, Candle(step * 300, o, h, low, cl))
-
-    def test_break_alone_does_not_discard_the_trendline(self):
-        """A break while the line is still above the depth low must be left
-        alone — price often comes back and touches it a candle or two later."""
-        self._feed_all(
-            [
-                (1, 104.8, 104.9, 104.5, 104.6),
-                (2, 104.6, 104.7, 104.0, 104.1),  # depth -> trendline 1
-            ]
-        )
-        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
-        self._feed_all([(3, 104.1, 104.9, 104.1, 104.8)])  # close above the line
-        self.assertTrue(self.campaign.pending_break)
-        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
-        self.assertEqual(self.campaign.active_trendline_id, 1)  # still in play
-
-    def test_trendline_below_depth_low_is_discarded_and_redrawn(self):
-        self._feed_all(
-            [
-                (1, 104.8, 104.9, 104.5, 104.6),
-                (2, 104.6, 104.7, 104.0, 104.1),  # depth 104.0 -> trendline 1
-                (3, 104.1, 104.9, 104.1, 104.8),  # break, line still above depth low
-            ]
-        )
-        self.assertEqual(len(self.campaign.trendlines), 1)
-        self.assertTrue(self.campaign.pending_break)
-
-        # Hold price up so the line keeps sliding until it drops under 104.0
-        self._feed_all(
-            [
-                (4, 104.8, 104.9, 104.6, 104.7),
-                (5, 104.7, 104.8, 104.6, 104.65),
-                (6, 104.7, 104.8, 104.6, 104.75),
-            ]
-        )
-        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
-        self.assertIsNone(self.campaign.active_trendline_id)
-        self.assertFalse(self.campaign.pending_break)
-        self.assertEqual(len(self.campaign.trendlines), 1)  # retired, kept for the chart
-
-        # A fresh depth (two more red candles) redraws from the mother high
-        self._feed_all(
-            [
-                (7, 104.75, 104.8, 104.0, 104.1),
-                (8, 104.1, 104.2, 103.9, 104.0),
-            ]
-        )
-        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
-        self.assertEqual(len(self.campaign.trendlines), 2)
-        self.assertEqual(self.campaign.active_trendline_id, 2)
-
-    def test_break_with_existing_leg_still_awaits_low_break(self):
-        """With a leg on the trendline the original model applies: arm
-        pending_break and wait for a decisive low-break, do not discard."""
-        self._run = None
-        campaign = self.campaign
-        self._feed_all(
-            [
-                (1, 104.8, 104.9, 104.5, 104.6),
-                (2, 104.6, 104.7, 104.0, 104.1),
-            ]
-        )
-        # Force a leg so the break path takes the model's branch.
-        from engine.cascade import Leg, build_fib_ladder_and_pool, plan_leg_orders
-
-        leg = Leg(leg_id=1, trendline_id=campaign.active_trendline_id, low=104.0, touch_high=104.5, touch_timestamp=600)
-        campaign.legs.append(leg)
-        build_fib_ladder_and_pool(campaign, leg)
-        plan_leg_orders(campaign, leg)
-        leg.finalized = True
-        campaign.swing_tracking = False
-
-        self._feed_all([(3, 104.1, 104.9, 104.1, 104.8)])  # close above line
-        self.assertEqual(campaign.state, "TRENDLINE_ACTIVE")
-        self.assertTrue(campaign.pending_break)
-        self.assertEqual(len(campaign.trendlines), 1)
 
 
 class CascadeMotherTimestampTests(unittest.IsolatedAsyncioTestCase):

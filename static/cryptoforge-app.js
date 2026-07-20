@@ -8940,8 +8940,8 @@ function _cfCascadeCampaignCard(campaign) {
   var goLive = mode !== 'LIVE' && fills.length === 0
     ? '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeSetLive(\'' + cid + '\')">Go Live</button>'
     : '';
-  return '<div class="card" style="margin-bottom:12px;padding:14px;">'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">'
+  return '<div class="card cf-cascade-card">'
+    + '<div class="cf-cascade-head">'
     + '<div style="display:flex;align-items:center;gap:8px;">'
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
     + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(campaign.state || '') + '</span>'
@@ -8954,7 +8954,7 @@ function _cfCascadeCampaignCard(campaign) {
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
     + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'
     + '</div></div>'
-    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:12px 0;">'
+    + '<div class="cf-cascade-stats">'
     + '<div class="stat-box"><div class="stat-label">Mother High</div><div class="stat-value">' + _cfCascadeFmt(campaign.mother_high) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label">Last Price</div><div class="stat-value">' + _cfCascadeFmt(campaign.last_price) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label">Down from Mother</div><div class="stat-value">'
