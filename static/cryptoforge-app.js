@@ -9160,16 +9160,20 @@ function _cfCascadeUtc(ts) {
 function _cfCascadeChartSvg(d) {
   var candles = (d.candles || []).slice();
   if (!candles.length) return '';
-  var W = 960, H = 420, padL = 8, padR = 104, padT = 16, padB = 22;
+  var W = 1180, H = 520, padL = 8, padR = 128, padT = 14, padB = 30;
   var plotW = W - padL - padR, plotH = H - padT - padB;
   var n = candles.length, cw = plotW / n;
 
   var lo = candles[0].l, hi = candles[0].h;
   candles.forEach(function (c) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; });
   if (d.mother && d.mother.high) hi = Math.max(hi, d.mother.high);
-  var leg = (d.legs || []).length ? d.legs[d.legs.length - 1] : null;
-  if (leg) { hi = Math.max(hi, leg.touch_high); lo = Math.min(lo, leg.low); }
-  var span = (hi - lo) || 1, padP = span * 0.08;
+  var legs = Array.isArray(d.legs) ? d.legs : [];
+  legs.forEach(function (leg) {
+    if (leg.touch_high) hi = Math.max(hi, leg.touch_high);
+    if (leg.low) lo = Math.min(lo, leg.low);
+  });
+  if (d.tp_price) { hi = Math.max(hi, d.tp_price); lo = Math.min(lo, d.tp_price); }
+  var span = (hi - lo) || 1, padP = span * 0.06;
   var maxP = hi + padP, minP = lo - padP;
 
   function X(i) { return padL + i * cw + cw / 2; }
@@ -9180,12 +9184,31 @@ function _cfCascadeChartSvg(d) {
     return padL + cw / 2 + ((t - t0) / (t1 - t0)) * (plotW - cw);
   }
   function inView(p) { return p >= minP && p <= maxP; }
+  function fmt(v) { return Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
 
   var parts = [];
-  parts.push('<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>');
+
+  // price gridlines + axis labels
+  for (var g = 0; g <= 4; g++) {
+    var gp = minP + (maxP - minP) * (g / 4);
+    var gy = Y(gp).toFixed(1);
+    parts.push('<line x1="' + padL + '" y1="' + gy + '" x2="' + (padL + plotW) + '" y2="' + gy +
+      '" stroke="rgba(148,163,184,0.12)" stroke-width="1"/>');
+    parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (parseFloat(gy) + 3) +
+      '" fill="rgba(148,163,184,0.55)" font-size="9.5" font-family="monospace">' + fmt(gp) + '</text>');
+  }
+
+  // time axis labels
+  var ticks = Math.min(6, n);
+  for (var t = 0; t < ticks; t++) {
+    var ci = Math.round((n - 1) * (t / Math.max(ticks - 1, 1)));
+    var cx = X(ci);
+    parts.push('<text x="' + cx.toFixed(1) + '" y="' + (H - 8) + '" fill="rgba(148,163,184,0.55)" ' +
+      'font-size="9.5" font-family="monospace" text-anchor="middle">' + _escapeHtml(_cfCascadeUtc(candles[ci].t)) + '</text>');
+  }
 
   // candles
-  var bodyW = Math.max(cw * 0.6, 1);
+  var bodyW = Math.max(Math.min(cw * 0.65, 9), 1);
   candles.forEach(function (c, i) {
     var up = c.c >= c.o;
     var col = up ? '#3fae56' : '#d9534f';
@@ -9197,22 +9220,29 @@ function _cfCascadeChartSvg(d) {
       '" height="' + Math.max(yBot - yTop, 1).toFixed(1) + '" fill="' + col + '"/>');
   });
 
-  function hline(price, color, label, dash) {
+  var labelSlots = [];
+  function label(y, text, color) {
+    var ly = y;
+    for (var k = 0; k < labelSlots.length; k++) {
+      if (Math.abs(labelSlots[k] - ly) < 10) { ly = labelSlots[k] + 10; k = -1; }
+    }
+    labelSlots.push(ly);
+    parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (ly + 3).toFixed(1) + '" fill="' + color +
+      '" font-size="10" font-family="monospace">' + _escapeHtml(text) + '</text>');
+  }
+  function hline(price, color, text, dash, width) {
     if (!inView(price)) return;
-    var y = Y(price).toFixed(1);
-    parts.push('<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y +
-      '" stroke="' + color + '" stroke-width="1"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
-    parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (parseFloat(y) + 3.5) +
-      '" fill="' + color + '" font-size="10" font-family="monospace">' + _escapeHtml(label) + '</text>');
+    var y = Y(price);
+    parts.push('<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (padL + plotW) + '" y2="' + y.toFixed(1) +
+      '" stroke="' + color + '" stroke-width="' + (width || 1) + '"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
+    if (text) label(y, text, color);
   }
 
   // mother candle high
-  if (d.mother && d.mother.high) {
-    hline(d.mother.high, '#a855f7', 'mother ' + d.mother.high.toFixed(2), '5,3');
-  }
+  if (d.mother && d.mother.high) hline(d.mother.high, '#a855f7', 'mother ' + fmt(d.mother.high), '5,3', 1.2);
 
-  // trendlines (linear in time -> straight line across the visible window)
-  var tlColors = ['#1f6fd6', '#c2410c', '#0891b2', '#7c3aed'];
+  // every trendline, mother high -> its swing high
+  var tlColors = ['#1f6fd6', '#c2410c', '#0891b2', '#7c3aed', '#be185d', '#0f766e'];
   (d.trendlines || []).forEach(function (tl, idx) {
     var a1 = tl.a1, a2 = tl.a2;
     if (!a1 || !a2 || a2.t === a1.t) return;
@@ -9221,40 +9251,40 @@ function _cfCascadeChartSvg(d) {
     var p0 = a1.p + slope * (t0 - a1.t), p1 = a1.p + slope * (t1 - a1.t);
     var col = tlColors[idx % tlColors.length];
     parts.push('<line x1="' + Xt(t0).toFixed(1) + '" y1="' + Y(p0).toFixed(1) + '" x2="' + Xt(t1).toFixed(1) +
-      '" y2="' + Y(p1).toFixed(1) + '" stroke="' + col + '" stroke-width="' + (tl.active ? 2 : 1.2) +
-      '" opacity="' + (tl.active ? 1 : 0.65) + '"/>');
-    if (inView(p1)) {
-      parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (Y(p1) + 3.5).toFixed(1) + '" fill="' + col +
-        '" font-size="10" font-family="monospace">TL' + tl.id + (tl.active ? ' *' : '') + '</text>');
+      '" y2="' + Y(p1).toFixed(1) + '" stroke="' + col + '" stroke-width="' + (tl.active ? 1.8 : 1.1) +
+      '" opacity="' + (tl.active ? 1 : 0.5) + '"/>');
+    if (inView(p1)) label(Y(p1), 'TL' + tl.id + (tl.active ? ' *' : ''), col);
+  });
+
+  // every fib: 0/1 anchors solid, 2/4/8 buy levels dotted
+  var fibColors = ['#22d3ee', '#f59e0b', '#a3e635', '#f472b6', '#38bdf8', '#fb923c'];
+  legs.forEach(function (leg, idx) {
+    var col = fibColors[idx % fibColors.length];
+    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 1.4);
+    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 1.4);
+    [2, 4, 8].forEach(function (lv) {
+      var p = leg.levels ? leg.levels[String(lv)] : null;
+      if (p == null) return;
+      hline(Number(p), col, 'F' + leg.leg_id + ' ' + lv + ' ' + fmt(p), '2,4', 0.9);
+    });
+    if (leg.touch_timestamp && inView(leg.touch_high)) {
+      parts.push('<circle cx="' + Xt(leg.touch_timestamp).toFixed(1) + '" cy="' + Y(leg.touch_high).toFixed(1) +
+        '" r="3.5" fill="none" stroke="' + col + '" stroke-width="1.5"/>');
     }
   });
 
-  // fib anchors + levels of the current leg
-  if (leg) {
-    hline(leg.touch_high, '#22d3ee', 'fib 0  ' + leg.touch_high.toFixed(2));
-    hline(leg.low, '#f59e0b', 'fib 1  ' + leg.low.toFixed(2));
-    [2, 4, 8].forEach(function (lv) {
-      var p = leg.levels ? leg.levels[String(lv)] : null;
-      if (p != null) hline(p, '#64748b', 'fib ' + lv + '  ' + Number(p).toFixed(2), '3,3');
-    });
-    // mark the touch high candle
-    if (leg.touch_timestamp) {
-      parts.push('<circle cx="' + Xt(leg.touch_timestamp).toFixed(1) + '" cy="' + Y(leg.touch_high).toFixed(1) +
-        '" r="3.5" fill="none" stroke="#22d3ee" stroke-width="1.5"/>');
-    }
-  }
-
-  // take profit
-  if (d.tp_price) hline(d.tp_price, '#10b981', 'TP ' + Number(d.tp_price).toFixed(2), '6,3');
+  // take profit (only exists once an entry has filled)
+  if (d.tp_price) hline(Number(d.tp_price), '#10b981', 'TP ' + fmt(d.tp_price), '6,3', 1.4);
+  if (d.avg_entry_price) hline(Number(d.avg_entry_price), '#e2e8f0', 'avg ' + fmt(d.avg_entry_price), '4,4', 1.2);
 
   // fills
   (d.fills || []).forEach(function (f) {
     if (!f || !f.price || !inView(f.price)) return;
     parts.push('<circle cx="' + Xt(f.timestamp).toFixed(1) + '" cy="' + Y(f.price).toFixed(1) +
-      '" r="3" fill="#22c55e"/>');
+      '" r="3.5" fill="#22c55e" stroke="#0b1220" stroke-width="1"/>');
   });
 
-  return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:760px;display:block;" ' +
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:900px;display:block;" ' +
     'xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
 }
 
@@ -9297,11 +9327,12 @@ function _cfCascadeChartHtml(d) {
   }
   var legend = '<div class="table-meta" style="margin-bottom:8px;">'
     + '<span style="color:#a855f7;">— mother high</span> &nbsp; '
-    + '<span style="color:#1f6fd6;">— trendline</span> &nbsp; '
-    + '<span style="color:#22d3ee;">— fib 0 (swing high)</span> &nbsp; '
-    + '<span style="color:#f59e0b;">— fib 1 (leg low)</span> &nbsp; '
-    + '<span style="color:#64748b;">— fib 2/4/8 buys</span> &nbsp; '
-    + '<span style="color:#10b981;">— take profit</span>'
+    + '<span style="color:#1f6fd6;">— trendlines (TL)</span> &nbsp; '
+    + '<span style="color:#22d3ee;">— fib 0/1 anchors</span> &nbsp; '
+    + '<span style="color:#22d3ee;">┄ fib 2/4/8 buy levels</span> &nbsp; '
+    + '<span style="color:#10b981;">┄ take profit</span> &nbsp; '
+    + '<span style="color:#22c55e;">● fills</span>'
+    + '<br>Each fib is coloured separately (F1, F2, …) and labelled on the right.'
     + '</div>';
   return legend + _cfCascadeChartSvg(d) + _cfCascadeChartTables(d);
 }
@@ -9321,7 +9352,8 @@ async function cfCascadeShowChart(campaignId) {
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta) {
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + (data.candles || []).length
-        + ' candles since mother candle (' + _cfCascadeUtc(data.mother && data.mother.t) + ' UTC)';
+        + ' candles since mother candle (' + _cfCascadeUtc(data.mother && data.mother.t) + ' UTC) · '
+        + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)';
     }
   } catch (error) {
     body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(error.message) + '</div>';

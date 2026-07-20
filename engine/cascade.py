@@ -427,15 +427,13 @@ def compute_tp_price(campaign: Campaign) -> Optional[float]:
 
         tp = avg_entry + 0.25 * (mother_high - avg_entry)
 
-    Before any fill the first leg's low stands in for the average entry as a
-    display estimate.
+    Returns None until an entry actually fills — there is no target before
+    there is a position, and it moves with the average as more levels fill.
     """
-    anchor = None
-    if campaign.avg_entry_price and campaign.avg_entry_price > 0:
-        anchor = campaign.avg_entry_price
-    elif campaign.legs:
-        anchor = campaign.legs[0].low
-    if anchor is None or anchor <= 0:
+    anchor = campaign.avg_entry_price
+    if not anchor or anchor <= 0:
+        # No entry yet — there is no target to speak of. The TP only exists
+        # once the position does, measured from the actual average entry.
         return None
     return anchor + TP_FIB_LEVEL * (campaign.mother_high - anchor)
 
@@ -778,6 +776,32 @@ class CascadeEngine:
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+    async def _chart_candles(self, campaign: Campaign, max_candles: int) -> List[Candle]:
+        """Closed 5m candles from the mother candle forward, for the chart."""
+        try:
+            df = await self.broker.async_get_candles(campaign.symbol, resolution=BASE_TIMEFRAME)
+        except Exception as exc:
+            _log.warning("[CASCADE] chart candle fetch failed for %s: %s", campaign.symbol, exc)
+            return []
+        if df is None or getattr(df, "empty", True):
+            return []
+        now = int(time.time())
+        rows = []
+        for index, row in df.iterrows():
+            ts = int(index.timestamp())
+            if ts < campaign.mother_timestamp or ts + FIVE_MIN_SEC > now:
+                continue
+            rows.append(
+                Candle(
+                    timestamp=ts,
+                    open=_coerce_float(row.get("open")),
+                    high=_coerce_float(row.get("high")),
+                    low=_coerce_float(row.get("low")),
+                    close=_coerce_float(row.get("close")),
+                )
+            )
+        return rows[-max_candles:]
+
     async def get_chart_data(self, campaign_id: str, max_candles: int = 300) -> dict:
         """
         Candles plus the geometry the engine actually used — trendline anchors,
@@ -788,12 +812,13 @@ class CascadeEngine:
         if campaign is None:
             return {"error": f"Campaign {campaign_id} not found"}
 
-        history = self._candles_5m.get(campaign_id) or []
+        # Always pull a full window straight from the broker rather than the
+        # engine's in-memory list: that list is only what this process has
+        # stepped through, so after a restart it can hold a handful of candles
+        # and the chart would render almost empty.
+        history = await self._chart_candles(campaign, max_candles)
         if not history:
-            # Engine restarted (candle history is in-memory only) — refetch.
-            history = await self._fetch_closed_5m(campaign.symbol, campaign.mother_timestamp)
-            if history:
-                self._candles_5m[campaign_id] = history
+            history = self._candles_5m.get(campaign_id) or []
 
         candles = [
             {"t": c.timestamp, "o": c.open, "h": c.high, "l": c.low, "c": c.close} for c in history[-max_candles:]

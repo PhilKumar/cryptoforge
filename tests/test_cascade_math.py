@@ -184,9 +184,14 @@ class AvgEntryAndTpTests(unittest.TestCase):
         # tp = avg + 0.25 * (mother_high - avg) = 85 + 0.25*15 = 88.75
         self.assertAlmostEqual(compute_tp_price(campaign), 88.75)
 
-    def test_tp_display_estimate_before_fills_uses_leg1_low(self):
+    def test_no_tp_until_an_entry_actually_fills(self):
+        """The target only exists once there is a position: it is measured from
+        the real average entry, so there is nothing to show before the first fill."""
         campaign = _campaign(capital=2000.0, mother_high=100.0)
         _leg(campaign, low=92.0, touch_high=98.0)
+        self.assertIsNone(compute_tp_price(campaign))
+        campaign.all_fills = [Fill(price=92.0, quantity=1.0, level=2, leg_id=1, timestamp=1)]
+        recompute_avg_entry_price(campaign)
         # 92 + 0.25 * (100 - 92) = 94
         self.assertAlmostEqual(compute_tp_price(campaign), 94.0)
 
