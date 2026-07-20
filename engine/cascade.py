@@ -3,28 +3,36 @@ engine/cascade.py — autonomous "cascade" campaign engine.
 
 Model (as specified by the user against their TradingView drawings):
 - A campaign anchors on a manually chosen MOTHER CANDLE.
-- A SWING is a dip followed by a rise. The dip is the running low; the first
-  higher high after it is the rise, which FREEZES the dip — later lower lows
-  start a new swing rather than dragging this one down.
-- When a red candle CLOSES BELOW that frozen dip, the swing is cut. At that
-  moment a trendline is drawn from the mother high to the swing high, and the
-  fib is anchored 0 = swing high, 1 = swing low. There is no candle-count
-  logic anywhere in this process — only the rise and the cut.
-- Resting LIMIT BUY orders go on fib levels 2/4/8 with 20/30/50% of the leg's
-  pool. Funding follows the fall percentage from the mother high down to that
-  leg's fib 1: pool = incremental fall % x capital / 100.
-- Take profit: a resting LIMIT SELL for the whole filled position measured
-  from the average entry back toward the mother high —
-  avg_entry + 0.25 x (mother_high - avg_entry) — re-placed whenever a new
-  fill moves the average.
+- A DIP is the running low; a higher high after it is the RISE, which
+  confirms the dip. Any red candle CLOSING BELOW the dip cuts the swing; a
+  cut of a confirmed dip is what draws a trendline and a fib.
+- The TRENDLINE runs from the mother high to a red candle's open, picked by
+  find_valid_anchor2: the tightest descending line no earlier close has
+  crossed. It is the same line you get dragging from the mother candle with
+  TradingView's magnet on.
+- FIB 0 is the highest high that reached that line — touch or break —
+  between the dip and the cut. FIB 1 is the dip.
+- Resting LIMIT BUY orders go on fib levels 2/4/8 with 20/30/50% of the
+  leg's pool. The first fib funds off the fall from the mother high to its
+  own level 1; each later fib funds off the remaining move from the previous
+  fib's level 1 to its own.
+- Take profit is measured FROM the average entry back toward the mother
+  high — avg_entry + 0.25 x (mother_high - avg_entry) — and only exists once
+  an entry has filled.
 - Binance min-notional handling: per-level USD below the minimum merges into
   the next deeper level (2->4->8); if the whole pool is below the minimum it
   carries forward to the next leg.
+
+There is no candle-count logic anywhere — only rises, touches and cuts.
 
 Campaigns default to paper mode (simulated fills at live prices). Live mode
 uses a desired-state sync: the state machine only mutates local order intents
 and _sync_live_orders diffs them against the exchange's open orders, placing,
 cancelling, and ingesting fills idempotently (client ids cf-csc-{...}).
+
+Stored campaigns keep the geometry the rules produced when they ran, so
+MODEL_VERSION stamps them and recalculate_campaign() replays one from its
+mother candle under the current rules.
 """
 
 from __future__ import annotations
@@ -45,7 +53,7 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
-MODEL_VERSION = 4  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 5  # bump when the fib/trendline rules change; older campaigns are flagged stale
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
@@ -111,6 +119,31 @@ def trendline_price(tl: Trendline, at_timestamp: int) -> float:
         return y1
     slope = (y2 - y1) / (x2 - x1)
     return y1 + slope * (at_timestamp - x1)
+
+
+def find_valid_anchor2(anchor1_price, anchor1_ts, candles_between, epsilon=1e-9):
+    """
+    cascade_lib's anchor rule: search backward from the red candle closest to
+    the depth toward the mother candle, and return the first candidate whose
+    connecting line is not crossed by any earlier candle's CLOSE. That is the
+    tightest descending line the price action allows — the same line you get by
+    dragging from the mother candle with TradingView's magnet on.
+    """
+    red_candidates = [c for c in candles_between if c.is_red]
+    for candidate in reversed(red_candidates):
+        if candidate.timestamp == anchor1_ts:
+            continue
+        slope = (candidate.open - anchor1_price) / (candidate.timestamp - anchor1_ts)
+        violated = False
+        for c in candles_between:
+            if c.timestamp < candidate.timestamp:
+                line_price_at_c = anchor1_price + slope * (c.timestamp - anchor1_ts)
+                if c.close > line_price_at_c + epsilon:
+                    violated = True
+                    break
+        if not violated:
+            return candidate.open, candidate.timestamp
+    return None, None
 
 
 def leg_broken(candle: Candle, current_low: float) -> bool:
@@ -1248,11 +1281,15 @@ class CascadeEngine:
         """The confirmed dip has been cut: draw this swing's trendline and fib."""
         dip = campaign.swing_low
         dip_ts = campaign.swing_low_timestamp
-        anchor_price = campaign.anchor_high
-        anchor_ts = campaign.anchor_high_timestamp
-        if dip is None or anchor_price is None or anchor_ts is None or anchor_price >= campaign.mother_high:
+        if dip is None or dip_ts is None:
             return
-        if anchor_ts == campaign.mother_timestamp:
+
+        # The line is the tightest descending line from the mother high that no
+        # close has crossed — cascade_lib's find_valid_anchor2, which is what
+        # dragging from the mother candle with the magnet on gives you.
+        between = [c for c in history if campaign.mother_timestamp < c.timestamp < candle.timestamp]
+        anchor_price, anchor_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
+        if anchor_price is None or anchor_price >= campaign.mother_high:
             return
 
         tl = Trendline(
@@ -1263,15 +1300,13 @@ class CascadeEngine:
             anchor2_timestamp=int(anchor_ts),
         )
 
-        # fib 0: the highest high that reached the line — a touch or a break —
-        # among candles after both the dip and the anchor, up to this cut.
+        # fib 0: the highest high that reached the line — touch or break —
+        # among the candles between the dip and this cut.
         touch_high = None
         touch_ts = None
         for past in history:
-            if past.timestamp <= (dip_ts or 0) or past.timestamp <= anchor_ts:
+            if past.timestamp <= dip_ts or past.timestamp > candle.timestamp:
                 continue
-            if past.timestamp > candle.timestamp:
-                break
             line = trendline_price(tl, past.timestamp)
             if past.high >= line and past.high < campaign.mother_high:
                 if touch_high is None or past.high > touch_high:
@@ -1287,13 +1322,9 @@ class CascadeEngine:
             campaign,
             "trendline",
             f"Trendline {tl.trendline_id} drawn: mother high {campaign.mother_high:g} -> "
-            f"highest high since the last fib {anchor_price:g}",
+            f"red candle open {anchor_price:g}",
         )
         self._draw_leg(campaign, touch_high, dip, touch_ts, tl.trendline_id)
-
-        # The anchor window restarts from this cut.
-        campaign.anchor_high = candle.high
-        campaign.anchor_high_timestamp = candle.timestamp
 
     def _draw_leg(
         self,

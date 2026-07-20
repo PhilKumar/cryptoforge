@@ -223,11 +223,19 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertAlmostEqual(self.campaign.swing_low, 64416.00)
         self.assertTrue(self.campaign.swing_risen)
 
-    def test_trendline_anchors_to_the_latest_high_before_the_depth(self):
+    def test_trendline_anchors_to_a_red_candle_open(self):
+        """The line is the tightest descending line from the mother high that no
+        close has crossed (find_valid_anchor2) — the 6th candle's open here,
+        which is what TradingView's magnet snaps to."""
         self._feed_real(6)
         tl = self.campaign.trendlines[0]
         self.assertAlmostEqual(tl.anchor1_price, 65107.99)  # mother high
-        self.assertAlmostEqual(tl.anchor2_price, 65051.98)  # highest high before the dip
+        self.assertAlmostEqual(tl.anchor2_price, 64904.00)  # 6th candle open
+
+    def test_second_trendline_anchors_to_the_0915_candle_open(self):
+        self._feed_real(59)
+        self.assertEqual(len(self.campaign.trendlines), 2)
+        self.assertAlmostEqual(self.campaign.trendlines[1].anchor2_price, 64902.63)
 
     def test_fall_pct_and_pool_follow_the_leg_low(self):
         self._feed_real(59)
