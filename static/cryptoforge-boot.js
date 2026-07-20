@@ -7,14 +7,16 @@
     };
 
     var APPEARANCE_KEY = 'cf-appearance';
-    var APPEARANCE_DEFAULT = { tint: 'aqua', font: 'terminal' };
-    var APPEARANCE_TINTS = { aqua: true, gold: true, emerald: true, ruby: true, violet: true };
+    var APPEARANCE_DEFAULT = { tint: 'arctic', font: 'swiss' };
+    var APPEARANCE_TINTS = { arctic: true, magenta: true, citrus: true, graphite: true, bronze: true };
+    // 'swiss' is the default and its families ship in the page head, so it needs
+    // no extra stylesheet. The rest are fetched on demand when selected.
     var APPEARANCE_FONTS = {
-      terminal: '',
-      institutional: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap',
-      modern: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap',
-      quant: 'https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700;800&family=Roboto+Mono:wght@400;500;600;700&display=swap',
-      editorial: 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap'
+      swiss: '',
+      grotesk: 'https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Fira+Code:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap',
+      editorial: 'https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600;6..72,700&family=Source+Code+Pro:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap',
+      techno: 'https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Share+Tech+Mono&display=swap',
+      humanist: 'https://fonts.googleapis.com/css2?family=Bitter:wght@500;600;700&family=Martian+Mono:wght@400;500;600&family=Nunito+Sans:wght@400;600;700;800&display=swap'
     };
 
     function normalizeAppearance(value) {

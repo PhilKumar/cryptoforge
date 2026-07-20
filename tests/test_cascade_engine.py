@@ -577,3 +577,88 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         campaign.all_fills.append(Fill(price=64700.0, quantity=0.001, level=2, leg_id=1, timestamp=1))
         result = await engine.recalculate_campaign("stale")
         self.assertIn("error", result)
+
+
+class CascadeLiveTimingTests(unittest.IsolatedAsyncioTestCase):
+    """Regressions for the live-path timing bugs found in the pre-live audit."""
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+
+    def test_sync_timestamps_are_tracked_per_campaign(self):
+        """A single engine-level timestamp meant two live campaigns starved each
+        other: whichever ticked first blocked the other for a whole interval."""
+        a = _mk_campaign(self.engine, mode="live")
+        a.campaign_id = "a"
+        self.engine.campaigns["a"] = a
+        b = Campaign(
+            campaign_id="b",
+            symbol="ETHUSDT",
+            capital_usd=2000.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            mode="live",
+            min_notional_usd=5.0,
+        )
+        self.engine.campaigns["b"] = b
+
+        self.engine._last_sync_ts["a"] = 1234.0
+        self.assertEqual(self.engine._last_sync_ts.get("b", 0.0), 0.0)
+        self.assertIsInstance(self.engine._last_sync_ts, dict)
+
+    def test_sync_interval_is_tight_enough_to_place_a_tp_promptly(self):
+        self.assertLessEqual(self.engine._sync_interval_sec, 10.0)
+
+
+class BinanceSignedRequestTests(unittest.TestCase):
+    """The signed-request path is what stands between the engine and real money."""
+
+    def setUp(self):
+        from broker.binance import BinanceSpotClient
+
+        self.client = BinanceSpotClient()
+
+    def test_binance_error_body_is_surfaced_not_swallowed(self):
+        class FakeResp:
+            status_code = 400
+            text = '{"code":-2010,"msg":"Account has insufficient balance."}'
+
+            def json(self):
+                return {"code": -2010, "msg": "Account has insufficient balance."}
+
+        detail = self.client._binance_error_text(FakeResp())
+        self.assertIn("-2010", detail)
+        self.assertIn("insufficient balance", detail)
+
+    def test_recv_window_and_offset_are_applied_to_signed_params(self):
+        from broker import binance as binance_mod
+
+        captured = {}
+
+        def fake_request(method, url, *, headers=None, params=None, **kwargs):
+            captured.update(params or {})
+
+            class R:
+                status_code = 200
+
+                def json(self):
+                    return {}
+
+            return R()
+
+        self.client.api_key = "k" * 12
+        self.client.api_secret = "s" * 12
+        self.client._time_offset_ms = 4321
+        self.client._time_offset_ts = 9e18  # keep the cached offset, skip the network
+        original = binance_mod._request_with_retry
+        binance_mod._request_with_retry = fake_request
+        try:
+            self.client._signed_request("GET", "/api/v3/account")
+        finally:
+            binance_mod._request_with_retry = original
+
+        self.assertEqual(captured.get("recvWindow"), binance_mod._RECV_WINDOW_MS)
+        self.assertIn("signature", captured)
+        self.assertGreater(captured.get("timestamp", 0), 0)

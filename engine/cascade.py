@@ -701,9 +701,12 @@ class CascadeEngine:
         self._task: Optional[asyncio.Task] = None
         self._candles_5m: Dict[str, List[Candle]] = {}  # per-campaign candle history (rebuilt on restart)
         self._price_cache: Dict[str, tuple] = {}
-        self._last_sync_ts = 0.0
+        self._last_sync_ts: Dict[str, float] = {}  # per campaign — a shared
+        # timestamp meant two live campaigns starved each other of syncs
         self._loop_interval_sec = 5.0
-        self._sync_interval_sec = 30.0
+        # 30s left a fill un-hedged for up to half a minute before the TP
+        # went up. Weight cost at 10s is trivial against Binance's budget.
+        self._sync_interval_sec = 10.0
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -1179,7 +1182,8 @@ class CascadeEngine:
     async def _campaign_tick(self, campaign: Campaign) -> bool:
         changed = False
         # New closed candles drive the state machine.
-        changed |= await self._candle_step(campaign)
+        stepped = await self._candle_step(campaign)
+        changed |= stepped
         # Keep the live price fresh for the UI (Last Price) and paper TP checks.
         had_price = campaign.symbol in self._price_cache
         price = await self._get_price(campaign.symbol)
@@ -1193,8 +1197,12 @@ class CascadeEngine:
                 changed = True
         # Live order sync (throttled).
         now = time.monotonic()
-        if campaign.mode == "live" and now - self._last_sync_ts >= self._sync_interval_sec:
-            self._last_sync_ts = now
+        last_sync = self._last_sync_ts.get(campaign.campaign_id, 0.0)
+        # A candle step may have just built a new ladder — get those orders
+        # resting on the exchange now rather than up to an interval later.
+        due = stepped or (now - last_sync >= self._sync_interval_sec)
+        if campaign.mode == "live" and due:
+            self._last_sync_ts[campaign.campaign_id] = now
             changed |= await self._sync_live_orders(campaign)
         return changed
 

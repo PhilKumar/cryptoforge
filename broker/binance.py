@@ -24,6 +24,9 @@ from .base import BaseBroker
 
 _binance_log = logging.getLogger("cryptoforge.binance")
 _RETRYABLE_STATUSES = {418, 429, 500, 502, 503, 504}
+# Binance default recvWindow is 5s; 10s absorbs normal jitter without
+# letting a stale request execute long after it was meant to.
+_RECV_WINDOW_MS = 10000
 
 _http_session = requests.Session()
 _adapter = HTTPAdapter(pool_connections=4, pool_maxsize=10, max_retries=0)
@@ -91,6 +94,7 @@ def _request_with_retry(
 class BinanceSpotClient(BaseBroker):
     broker_name = "binance"
     display_name = "Binance Spot"
+    supports_funding = False  # spot has no funding rate or open interest
 
     _SYMBOL_ALIASES = {
         **BaseBroker._SYMBOL_ALIASES,
@@ -111,6 +115,12 @@ class BinanceSpotClient(BaseBroker):
         self._products_cache = None
         self._products_ts = 0.0
         self._CACHE_TTL = 3600
+        # Binance rejects a signed request whose timestamp drifts outside
+        # recvWindow of *its* clock (-1021). Track the offset to our own clock
+        # and re-sync periodically so a drifting host doesn't start failing orders.
+        self._time_offset_ms = 0
+        self._time_offset_ts = 0.0
+        self._TIME_SYNC_TTL = 300
 
     def get_market_feed_kind(self) -> str:
         return "polling"
@@ -135,18 +145,59 @@ class BinanceSpotClient(BaseBroker):
         resp.raise_for_status()
         return resp.json()
 
+    def _server_time_offset_ms(self) -> int:
+        """Milliseconds to add to our clock to match Binance's. Cached briefly."""
+        now = _time.monotonic()
+        if self._time_offset_ts and now - self._time_offset_ts < self._TIME_SYNC_TTL:
+            return self._time_offset_ms
+        try:
+            local_before = int(round(_time.time() * 1000))
+            data = self._public_get("/api/v3/time")
+            local_after = int(round(_time.time() * 1000))
+            server = int(data.get("serverTime") or 0)
+            if server > 0:
+                # Compensate for round-trip: compare against the midpoint.
+                self._time_offset_ms = server - (local_before + local_after) // 2
+                self._time_offset_ts = now
+                if abs(self._time_offset_ms) > 1000:
+                    _binance_log.warning(
+                        "[BINANCE SPOT] clock drift %sms vs exchange - compensating",
+                        self._time_offset_ms,
+                    )
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] server time sync failed: %s", exc)
+        return self._time_offset_ms
+
+    @staticmethod
+    def _binance_error_text(resp) -> str:
+        """Binance puts the real reason in the JSON body of a 4xx. raise_for_status
+        throws that away, which turns every failure into an opaque 400."""
+        try:
+            body = resp.json()
+        except Exception:
+            return (resp.text or "")[:300]
+        if isinstance(body, dict) and ("code" in body or "msg" in body):
+            return f"Binance {body.get('code', '?')}: {body.get('msg') or 'unknown error'}"
+        return str(body)[:300]
+
     def _signed_request(self, method: str, path: str, *, params: dict | None = None):
         if not self._is_configured():
             raise Exception("Binance API not configured")
         payload = {key: value for key, value in dict(params or {}).items() if value not in (None, "")}
-        payload.setdefault("timestamp", int(round(_time.time() * 1000)))
+        payload.setdefault("timestamp", int(round(_time.time() * 1000)) + self._server_time_offset_ms())
+        payload.setdefault("recvWindow", _RECV_WINDOW_MS)
         query = urlencode(payload, doseq=True)
         signature = hmac.new(self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
         signed_params = {**payload, "signature": signature}
         url = f"{self.base_url}{path}"
         headers = {"Content-Type": "application/json", "X-MBX-APIKEY": self.api_key}
         resp = _request_with_retry(method, url, headers=headers, params=signed_params, timeout=30)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            detail = self._binance_error_text(resp)
+            # -1021 is timestamp drift: force a re-sync so the next call recovers.
+            if "-1021" in detail:
+                self._time_offset_ts = 0.0
+            raise Exception(detail)
         return resp.json()
 
     @classmethod

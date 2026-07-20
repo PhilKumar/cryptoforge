@@ -200,23 +200,23 @@ _cfBindLegacyAttrBridge();
 
 
 const CF_APPEARANCE_TINT_LABELS = {
-  aqua: 'Aqua Terminal',
-  gold: 'Gold Desk',
-  emerald: 'Emerald Grid',
-  ruby: 'Ruby Risk',
-  violet: 'Violet Pulse'
+  arctic: 'Arctic Steel',
+  magenta: 'Magenta Flux',
+  citrus: 'Citrus Signal',
+  graphite: 'Graphite Mono',
+  bronze: 'Bronze Archive'
 };
 const CF_APPEARANCE_FONT_LABELS = {
-  terminal: 'Terminal Pro',
-  institutional: 'Institutional',
-  modern: 'Modern Desk',
-  quant: 'Quant Lab',
-  editorial: 'Premium Serif'
+  swiss: 'Swiss Precision',
+  grotesk: 'Neo Grotesk',
+  editorial: 'Editorial Sharp',
+  techno: 'Techno Wide',
+  humanist: 'Humanist Warm'
 };
 
 function cfCurrentAppearance() {
   if (typeof window.cfGetAppearance === 'function') return window.cfGetAppearance();
-  return { tint: 'aqua', font: 'terminal' };
+  return { tint: 'arctic', font: 'swiss' };
 }
 
 function cfSyncAppearancePanel() {
@@ -795,7 +795,7 @@ function cfAppBack() {
     window.history.back();
     return;
   }
-  showPage('dashboard-page', document.getElementById('nav-dashboard'), { replaceHistory: true, forceReload: true });
+  showPage('journal-page', document.getElementById('nav-journal'), { replaceHistory: true, forceReload: true });
 }
 
 function cfAppRefresh() {
@@ -803,7 +803,7 @@ function cfAppRefresh() {
 }
 
 function cfPageTabName(pageId) {
-  return String(pageId || 'dashboard-page').replace(/-page$/, '');
+  return String(pageId || 'journal-page').replace(/-page$/, '');
 }
 
 function cfNavButtonForPage(pageId) {
@@ -882,7 +882,7 @@ function showPage(pageId, btn, options) {
 window.addEventListener('popstate', function(event) {
   _cfPageHistoryDepth = Math.max(0, Number(event.state && event.state.cfDepth) || 0);
   cfUpdateAppNavControls();
-  var pageId = (event.state && event.state.pageId) || cfPageIdFromLocation() || 'dashboard-page';
+  var pageId = (event.state && event.state.pageId) || cfPageIdFromLocation() || 'journal-page';
   showPage(pageId, cfNavButtonForPage(pageId), { skipHistory: true });
 });
 
@@ -3207,17 +3207,50 @@ async function refreshTopbarTicker() {
     }
   } catch(e) {}
 
-  // Funding rates from Delta
+  // Funding / market-context bar. Funding and open interest only exist on
+  // perpetual venues — on a spot broker those chips would sit at "--" forever,
+  // so the bar falls back to the 24h range, which spot actually reports.
   try {
     const r2 = await fetch('/api/ticker', { credentials: 'same-origin' });
     const d2 = await r2.json();
     if (d2.status === 'ok' && d2.tickers) {
       const btc = d2.tickers['BTCUSDT'] || {};
       const eth = d2.tickers['ETHUSDT'] || {};
-      if (btc.funding_rate) document.getElementById('fund-btc').textContent = (btc.funding_rate * 100).toFixed(4) + '%';
-      if (eth.funding_rate) document.getElementById('fund-eth').textContent = (eth.funding_rate * 100).toFixed(4) + '%';
+      const supportsFunding = d2.supports_funding !== false;
+      cfSetFundingChip('btc', btc, supportsFunding);
+      cfSetFundingChip('eth', eth, supportsFunding);
+
+      const totalVol = Object.values(d2.tickers)
+        .reduce((sum, t) => sum + (Number(t.volume_24h) || 0), 0);
+      const volEl = document.getElementById('total-vol');
+      if (volEl) volEl.textContent = totalVol > 0 ? fmtNum(totalVol) : '--';
     }
   } catch(e) {}
+}
+
+function cfSetFundingChip(key, ticker, supportsFunding) {
+  const labelEl = document.getElementById('fund-' + key + '-label');
+  const valueEl = document.getElementById('fund-' + key);
+  if (!valueEl) return;
+  const name = key.toUpperCase();
+
+  if (supportsFunding) {
+    if (labelEl) labelEl.textContent = name + ' FUNDING';
+    const rate = Number(ticker.funding_rate);
+    valueEl.textContent = isFinite(rate) && rate !== 0 ? (rate * 100).toFixed(4) + '%' : '--';
+    return;
+  }
+
+  // Spot: show how wide the day has been instead.
+  if (labelEl) labelEl.textContent = name + ' 24H RANGE';
+  const high = Number(ticker.high_24h);
+  const low = Number(ticker.low_24h);
+  if (high > 0 && low > 0 && high >= low) {
+    valueEl.textContent = ((high - low) / low * 100).toFixed(2) + '%';
+    valueEl.title = 'Low ' + fmtUSDPrice(low) + ' → High ' + fmtUSDPrice(high);
+  } else {
+    valueEl.textContent = '--';
+  }
 }
 
 // ── WebSocket ──────────────────────────────────────────────
@@ -5819,7 +5852,9 @@ function renderTradeJournal() {
 }
 
 function cfInitTradeJournal() {
-  // Rendered on demand when the Journal page is shown.
+  // Journal is the landing page, so the showPage hook never fires for it on a
+  // cold load — fetch here as well.
+  cfLoadTradeJournal(false);
 }
 
 
@@ -5877,7 +5912,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!initialPageId && savedTab && document.getElementById(savedTab + '-page')) {
     initialPageId = savedTab + '-page';
   }
-  if (!initialPageId) initialPageId = 'dashboard-page';
+  if (!initialPageId) initialPageId = 'journal-page';
   showPage(initialPageId, cfNavButtonForPage(initialPageId), { replaceHistory: true });
 
   ['b-name', 'b-capital', 'b-possize-mode', 'b-possize', 'b-sl', 'b-tp', 'b-trail', 'b-fee', 'b-spread', 'b-slippage', 'b-funding', 'b-maxtrades', 'b-from', 'b-to', 'b-interval'].forEach(function(id) {

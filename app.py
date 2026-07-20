@@ -658,6 +658,7 @@ def _broker_summary(client=None) -> dict:
         "label": str(getattr(current, "display_name", "Broker") or "Broker"),
         "configured": _broker_is_configured(current),
         "feed_kind": str(getattr(current, "get_market_feed_kind", lambda: "polling")() or "polling"),
+        "supports_funding": bool(getattr(current, "supports_funding", True)),
     }
 
 
@@ -3341,7 +3342,12 @@ async def get_ticker():
             if app_sym and app_sym != sym:
                 ticker_map[app_sym] = t
 
-        result = {"status": "ok", "tickers": {}}
+        result = {
+            "status": "ok",
+            "tickers": {},
+            "supports_funding": bool(getattr(delta, "supports_funding", True)),
+            "broker": _active_broker_name(),
+        }
         for crypto in config.TOP_25_CRYPTOS:
             sym = crypto["symbol"]
             t = ticker_map.get(sym, {})

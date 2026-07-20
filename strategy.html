@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-11">
-<link rel="manifest" href="/manifest.webmanifest?v=20260720-11">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-12">
+<link rel="manifest" href="/manifest.webmanifest?v=20260720-12">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260720-11"></script>
-<link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-11">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-11">
-<script src="/static/error-handler.js?v=20260720-11" defer></script>
-<script src="/static/pwa.js?v=20260720-11" defer></script>
+<script src="/static/cryptoforge-boot.js?v=20260720-12"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-12">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-12">
+<script src="/static/error-handler.js?v=20260720-12" defer></script>
+<script src="/static/pwa.js?v=20260720-12" defer></script>
 </head>
 <body>
 
@@ -143,10 +143,10 @@
 <!-- Funding Rate Strip -->
 <div class="funding-bar" id="funding-bar">
   <div class="funding-chip funding-chip-btc">
-    BTC FUNDING <span id="fund-btc">--</span>
+    <span id="fund-btc-label">BTC FUNDING</span> <span id="fund-btc">--</span>
   </div>
   <div class="funding-chip funding-chip-eth">
-    ETH FUNDING <span id="fund-eth">--</span>
+    <span id="fund-eth-label">ETH FUNDING</span> <span id="fund-eth">--</span>
   </div>
   <div class="funding-chip funding-chip-volume">
     24H VOL <span id="total-vol">--</span>
@@ -156,30 +156,34 @@
 <!-- ═══ NAV TABS ═══ -->
 <div class="nav-bar">
   <div class="nav-tabs">
-    <button id="nav-dashboard" class="nav-tab active" data-cf-click="showPage('dashboard-page', this)">
-      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
-      <span class="tab-label">Dashboard</span>
+    <button id="nav-journal" class="nav-tab active" data-cf-click="showPage('journal-page', this)">
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
+      <span class="tab-label">Journal</span>
     </button>
     <button id="nav-portfolio" class="nav-tab" data-cf-click="showPage('portfolio-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></span>
       <span class="tab-label">Portfolio</span>
     </button>
-    <button id="nav-builder" class="nav-tab" data-cf-click="showPage('builder-page', this)">
-      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
-      <span class="tab-label">Builder</span>
+    <button id="nav-cascade" class="nav-tab" data-cf-click="showPage('cascade-page', this)">
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h6v6"/><path d="M9 10h6v6"/><path d="M15 16h6v4"/><path d="M3 20h18"/></svg></span>
+      <span class="tab-label">Cascade</span>
+    </button>
+    <button id="nav-dashboard" class="nav-tab" data-cf-click="showPage('dashboard-page', this)">
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+      <span class="tab-label">Dashboard</span>
+    </button>
+    <button id="nav-scalp" class="nav-tab" data-cf-click="showPage('scalp-page', this);">
+      <span class="tab-icon" id="cf-scalp-dot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+      <span class="tab-label">Scalp</span>
     </button>
     <button id="nav-live" class="nav-tab" data-cf-click="showPage('live-page', this)">
       <span class="live-dot" id="live-tab-dot"></span>
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></span>
       <span class="tab-label">Live</span>
     </button>
-    <button id="nav-scalp" class="nav-tab" data-cf-click="showPage('scalp-page', this);">
-      <span class="tab-icon" id="cf-scalp-dot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
-      <span class="tab-label">Scalp</span>
-    </button>
-    <button id="nav-cascade" class="nav-tab" data-cf-click="showPage('cascade-page', this)">
-      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h6v6"/><path d="M9 10h6v6"/><path d="M15 16h6v4"/><path d="M3 20h18"/></svg></span>
-      <span class="tab-label">Cascade</span>
+    <button id="nav-builder" class="nav-tab" data-cf-click="showPage('builder-page', this)">
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
+      <span class="tab-label">Builder</span>
     </button>
     <button id="nav-market" class="nav-tab" data-cf-click="showPage('market-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h20"/><path d="m4 20 4-8 4 4 4-6 4 10"/></svg></span>
@@ -189,10 +193,6 @@
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></span>
       <span class="tab-label">Results</span>
     </button>
-    <button id="nav-journal" class="nav-tab" data-cf-click="showPage('journal-page', this)">
-      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
-      <span class="tab-label">Journal</span>
-    </button>
   </div>
 </div>
 </div><!-- /sticky-shell -->
@@ -201,7 +201,7 @@
 <!-- ═══════════════════════════════════════════════════════
      PAGE 1: DASHBOARD
      ═══════════════════════════════════════════════════════ -->
-<div id="dashboard-page" class="page-section active-page">
+<div id="dashboard-page" class="page-section">
   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
     <h2>Dashboard</h2>
     <div class="broker-control-strip">
@@ -889,7 +889,7 @@
 <!-- ═══════════════════════════════════════════════════════
      PAGE 5: TRADE JOURNAL
      ═══════════════════════════════════════════════════════ -->
-<div id="journal-page" class="page-section">
+<div id="journal-page" class="page-section active-page">
   <div class="allocator-header">
     <div>
       <h2>Trade Journal</h2>
@@ -1264,7 +1264,7 @@
     </div>
   </div>
 
-  <div class="allocator-grid">
+  <div class="allocator-grid cf-cascade-grid">
     <section class="card allocator-input-panel">
       <h3>Start Campaign</h3>
       <div class="cf-cascade-form">
@@ -1677,21 +1677,21 @@
     <section class="appearance-section">
       <h3>Color Tint</h3>
       <div class="appearance-options appearance-tint-options">
-        <button class="appearance-option" data-appearance-tint="aqua" data-cf-click="cfSetAppearanceTint('aqua')"><span class="appearance-swatch swatch-aqua"></span><span>Aqua Terminal</span></button>
-        <button class="appearance-option" data-appearance-tint="gold" data-cf-click="cfSetAppearanceTint('gold')"><span class="appearance-swatch swatch-gold"></span><span>Gold Desk</span></button>
-        <button class="appearance-option" data-appearance-tint="emerald" data-cf-click="cfSetAppearanceTint('emerald')"><span class="appearance-swatch swatch-emerald"></span><span>Emerald Grid</span></button>
-        <button class="appearance-option" data-appearance-tint="ruby" data-cf-click="cfSetAppearanceTint('ruby')"><span class="appearance-swatch swatch-ruby"></span><span>Ruby Risk</span></button>
-        <button class="appearance-option" data-appearance-tint="violet" data-cf-click="cfSetAppearanceTint('violet')"><span class="appearance-swatch swatch-violet"></span><span>Violet Pulse</span></button>
+        <button class="appearance-option" data-appearance-tint="arctic" data-cf-click="cfSetAppearanceTint('arctic')"><span class="appearance-swatch swatch-arctic"></span><span>Arctic Steel</span></button>
+        <button class="appearance-option" data-appearance-tint="magenta" data-cf-click="cfSetAppearanceTint('magenta')"><span class="appearance-swatch swatch-magenta"></span><span>Magenta Flux</span></button>
+        <button class="appearance-option" data-appearance-tint="citrus" data-cf-click="cfSetAppearanceTint('citrus')"><span class="appearance-swatch swatch-citrus"></span><span>Citrus Signal</span></button>
+        <button class="appearance-option" data-appearance-tint="graphite" data-cf-click="cfSetAppearanceTint('graphite')"><span class="appearance-swatch swatch-graphite"></span><span>Graphite Mono</span></button>
+        <button class="appearance-option" data-appearance-tint="bronze" data-cf-click="cfSetAppearanceTint('bronze')"><span class="appearance-swatch swatch-bronze"></span><span>Bronze Archive</span></button>
       </div>
     </section>
     <section class="appearance-section">
       <h3>Font Style</h3>
       <div class="appearance-options appearance-font-options">
-        <button class="appearance-option font-terminal" data-appearance-font="terminal" data-cf-click="cfSetAppearanceFont('terminal')"><span class="appearance-font-sample">Aa</span><span>Terminal Pro</span></button>
-        <button class="appearance-option font-institutional" data-appearance-font="institutional" data-cf-click="cfSetAppearanceFont('institutional')"><span class="appearance-font-sample">Aa</span><span>Institutional</span></button>
-        <button class="appearance-option font-modern" data-appearance-font="modern" data-cf-click="cfSetAppearanceFont('modern')"><span class="appearance-font-sample">Aa</span><span>Modern Desk</span></button>
-        <button class="appearance-option font-quant" data-appearance-font="quant" data-cf-click="cfSetAppearanceFont('quant')"><span class="appearance-font-sample">Aa</span><span>Quant Lab</span></button>
-        <button class="appearance-option font-editorial" data-appearance-font="editorial" data-cf-click="cfSetAppearanceFont('editorial')"><span class="appearance-font-sample">Aa</span><span>Premium Serif</span></button>
+        <button class="appearance-option font-swiss" data-appearance-font="swiss" data-cf-click="cfSetAppearanceFont('swiss')"><span class="appearance-font-sample">Aa</span><span>Swiss Precision</span></button>
+        <button class="appearance-option font-grotesk" data-appearance-font="grotesk" data-cf-click="cfSetAppearanceFont('grotesk')"><span class="appearance-font-sample">Aa</span><span>Neo Grotesk</span></button>
+        <button class="appearance-option font-editorial" data-appearance-font="editorial" data-cf-click="cfSetAppearanceFont('editorial')"><span class="appearance-font-sample">Aa</span><span>Editorial Sharp</span></button>
+        <button class="appearance-option font-techno" data-appearance-font="techno" data-cf-click="cfSetAppearanceFont('techno')"><span class="appearance-font-sample">Aa</span><span>Techno Wide</span></button>
+        <button class="appearance-option font-humanist" data-appearance-font="humanist" data-cf-click="cfSetAppearanceFont('humanist')"><span class="appearance-font-sample">Aa</span><span>Humanist Warm</span></button>
       </div>
     </section>
     <div class="appearance-actions">
@@ -1970,7 +1970,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260720-11" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260720-11" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260720-12" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260720-12" defer></script>
 </body>
 </html>

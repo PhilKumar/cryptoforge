@@ -5982,69 +5982,77 @@ h1, h2, h3, h4, h5, h6,
 }
 
 /* ── User Appearance: site tint + font presets ── */
+/* Default is Arctic Steel — cool, clinical, easy on the eyes for long sessions. */
 :root,
-html[data-tint="aqua"] {
-  --tint-primary: #22d3ee;
-  --tint-secondary: #f59e0b;
-  --tint-tertiary: #2dd4bf;
-  --tint-primary-rgb: 34, 211, 238;
-  --tint-secondary-rgb: 245, 158, 11;
-  --tint-tertiary-rgb: 45, 212, 191;
+html[data-tint="arctic"] {
+  --accent: #60a5fa;
+  --accent2: #38bdf8;
+  --border-acc: rgba(96,165,250,0.34);
+  --tint-primary: #60a5fa;
+  --tint-secondary: #38bdf8;
+  --tint-tertiary: #94a3b8;
+  --tint-primary-rgb: 96, 165, 250;
+  --tint-secondary-rgb: 56, 189, 248;
+  --tint-tertiary-rgb: 148, 163, 184;
 }
-html[data-tint="gold"] {
-  --accent: #f59e0b;
-  --accent2: #fb923c;
-  --border-acc: rgba(245,158,11,0.34);
-  --tint-primary: #f59e0b;
-  --tint-secondary: #f97316;
-  --tint-tertiary: #fde047;
-  --tint-primary-rgb: 245, 158, 11;
-  --tint-secondary-rgb: 249, 115, 22;
-  --tint-tertiary-rgb: 253, 224, 71;
+html[data-tint="magenta"] {
+  --accent: #e879f9;
+  --accent2: #c084fc;
+  --border-acc: rgba(232,121,249,0.34);
+  --tint-primary: #e879f9;
+  --tint-secondary: #c084fc;
+  --tint-tertiary: #f0abfc;
+  --tint-primary-rgb: 232, 121, 249;
+  --tint-secondary-rgb: 192, 132, 252;
+  --tint-tertiary-rgb: 240, 171, 252;
 }
-html[data-tint="emerald"] {
-  --accent: #10b981;
-  --accent2: #14b8a6;
-  --border-acc: rgba(16,185,129,0.34);
-  --tint-primary: #10b981;
-  --tint-secondary: #14b8a6;
-  --tint-tertiary: #84cc16;
-  --tint-primary-rgb: 16, 185, 129;
-  --tint-secondary-rgb: 20, 184, 166;
-  --tint-tertiary-rgb: 132, 204, 22;
+html[data-tint="citrus"] {
+  --accent: #a3e635;
+  --accent2: #facc15;
+  --border-acc: rgba(163,230,53,0.34);
+  --tint-primary: #a3e635;
+  --tint-secondary: #facc15;
+  --tint-tertiary: #4ade80;
+  --tint-primary-rgb: 163, 230, 53;
+  --tint-secondary-rgb: 250, 204, 21;
+  --tint-tertiary-rgb: 74, 222, 128;
 }
-html[data-tint="ruby"] {
-  --accent: #fb7185;
-  --accent2: #f97316;
-  --border-acc: rgba(251,113,133,0.34);
-  --tint-primary: #fb7185;
-  --tint-secondary: #f43f5e;
-  --tint-tertiary: #f97316;
-  --tint-primary-rgb: 251, 113, 133;
-  --tint-secondary-rgb: 244, 63, 94;
-  --tint-tertiary-rgb: 249, 115, 22;
+html[data-tint="graphite"] {
+  --accent: #cbd5e1;
+  --accent2: #94a3b8;
+  --border-acc: rgba(203,213,225,0.28);
+  --tint-primary: #cbd5e1;
+  --tint-secondary: #94a3b8;
+  --tint-tertiary: #64748b;
+  --tint-primary-rgb: 203, 213, 225;
+  --tint-secondary-rgb: 148, 163, 184;
+  --tint-tertiary-rgb: 100, 116, 139;
 }
-html[data-tint="violet"] {
-  --accent: #a78bfa;
-  --accent2: #22d3ee;
-  --border-acc: rgba(167,139,250,0.34);
-  --tint-primary: #a78bfa;
-  --tint-secondary: #6366f1;
-  --tint-tertiary: #22d3ee;
-  --tint-primary-rgb: 167, 139, 250;
-  --tint-secondary-rgb: 99, 102, 241;
-  --tint-tertiary-rgb: 34, 211, 238;
+html[data-tint="bronze"] {
+  --accent: #d6a06a;
+  --accent2: #b08968;
+  --border-acc: rgba(214,160,106,0.34);
+  --tint-primary: #d6a06a;
+  --tint-secondary: #b08968;
+  --tint-tertiary: #e7c9a9;
+  --tint-primary-rgb: 214, 160, 106;
+  --tint-secondary-rgb: 176, 137, 104;
+  --tint-tertiary-rgb: 231, 201, 169;
 }
-html[data-theme="light"][data-tint="aqua"] { --accent: #0891b2; --accent2: #d97706; --border-acc: rgba(8,145,178,0.24); }
-html[data-theme="light"][data-tint="gold"] { --accent: #b45309; --accent2: #ea580c; --border-acc: rgba(180,83,9,0.24); }
-html[data-theme="light"][data-tint="emerald"] { --accent: #047857; --accent2: #0f766e; --border-acc: rgba(4,120,87,0.24); }
-html[data-theme="light"][data-tint="ruby"] { --accent: #be123c; --accent2: #ea580c; --border-acc: rgba(190,18,60,0.24); }
-html[data-theme="light"][data-tint="violet"] { --accent: #6d28d9; --accent2: #2563eb; --border-acc: rgba(109,40,217,0.24); }
-html[data-font-theme="terminal"] { --font-body: 'Sora', sans-serif; --font-display: 'Rajdhani', sans-serif; --font-mono: 'Azeret Mono', monospace; }
-html[data-font-theme="institutional"] { --font-body: 'IBM Plex Sans', sans-serif; --font-display: 'IBM Plex Sans', sans-serif; --font-mono: 'IBM Plex Mono', monospace; }
-html[data-font-theme="modern"] { --font-body: 'Plus Jakarta Sans', sans-serif; --font-display: 'Space Grotesk', sans-serif; --font-mono: 'JetBrains Mono', monospace; }
-html[data-font-theme="quant"] { --font-body: 'Exo 2', sans-serif; --font-display: 'Exo 2', sans-serif; --font-mono: 'Roboto Mono', monospace; }
-html[data-font-theme="editorial"] { --font-body: 'DM Sans', sans-serif; --font-display: 'Fraunces', serif; --font-mono: 'IBM Plex Mono', monospace; }
+html[data-theme="light"][data-tint="arctic"]  { --accent: #1d4ed8; --accent2: #0369a1; --border-acc: rgba(29,78,216,0.24); }
+html[data-theme="light"][data-tint="magenta"] { --accent: #a21caf; --accent2: #7e22ce; --border-acc: rgba(162,28,175,0.24); }
+html[data-theme="light"][data-tint="citrus"]  { --accent: #4d7c0f; --accent2: #a16207; --border-acc: rgba(77,124,15,0.24); }
+html[data-theme="light"][data-tint="graphite"]{ --accent: #334155; --accent2: #475569; --border-acc: rgba(51,65,85,0.24); }
+html[data-theme="light"][data-tint="bronze"]  { --accent: #92400e; --accent2: #7c2d12; --border-acc: rgba(146,64,14,0.24); }
+
+/* Font presets. Every family here is loaded in strategy.html — a preset that
+   names an unloaded family silently falls back to the system face and all the
+   options end up looking the same. */
+html[data-font-theme="swiss"]     { --font-body: 'Inter', sans-serif;        --font-display: 'Inter', sans-serif;         --font-mono: 'Fira Code', monospace; }
+html[data-font-theme="grotesk"]   { --font-body: 'Manrope', sans-serif;      --font-display: 'Archivo', sans-serif;       --font-mono: 'Fira Code', monospace; }
+html[data-font-theme="editorial"] { --font-body: 'Source Sans 3', sans-serif;--font-display: 'Newsreader', serif;         --font-mono: 'Source Code Pro', monospace; }
+html[data-font-theme="techno"]    { --font-body: 'Chakra Petch', sans-serif; --font-display: 'Chakra Petch', sans-serif;  --font-mono: 'Share Tech Mono', monospace; }
+html[data-font-theme="humanist"]  { --font-body: 'Nunito Sans', sans-serif;  --font-display: 'Bitter', serif;             --font-mono: 'Martian Mono', monospace; }
 body {
   background-image:
     radial-gradient(ellipse 940px 720px at 10% 18%, rgba(var(--tint-primary-rgb),0.090) 0%, transparent 65%),
@@ -6194,11 +6202,11 @@ body.appearance-open { overflow: hidden; }
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 10px 18px rgba(0,0,0,0.18);
   flex: 0 0 auto;
 }
-.swatch-aqua { background: linear-gradient(135deg, #22d3ee, #2dd4bf 52%, #f59e0b); }
-.swatch-gold { background: linear-gradient(135deg, #fde047, #f59e0b 55%, #f97316); }
-.swatch-emerald { background: linear-gradient(135deg, #84cc16, #10b981 55%, #14b8a6); }
-.swatch-ruby { background: linear-gradient(135deg, #fb7185, #f43f5e 55%, #f97316); }
-.swatch-violet { background: linear-gradient(135deg, #a78bfa, #6366f1 55%, #22d3ee); }
+.swatch-arctic   { background: linear-gradient(135deg, #93c5fd, #60a5fa 52%, #38bdf8); }
+.swatch-magenta  { background: linear-gradient(135deg, #f0abfc, #e879f9 52%, #c084fc); }
+.swatch-citrus   { background: linear-gradient(135deg, #d9f99d, #a3e635 52%, #facc15); }
+.swatch-graphite { background: linear-gradient(135deg, #e2e8f0, #cbd5e1 52%, #64748b); }
+.swatch-bronze   { background: linear-gradient(135deg, #e7c9a9, #d6a06a 52%, #b08968); }
 .appearance-font-sample {
   width: 36px;
   height: 32px;
@@ -6211,11 +6219,11 @@ body.appearance-open { overflow: hidden; }
   border: 1px solid rgba(var(--tint-primary-rgb),0.18);
   font-size: 17px;
 }
-.font-terminal .appearance-font-sample { font-family: 'Rajdhani', sans-serif; }
-.font-institutional .appearance-font-sample { font-family: 'IBM Plex Sans', sans-serif; }
-.font-modern .appearance-font-sample { font-family: 'Space Grotesk', sans-serif; }
-.font-quant .appearance-font-sample { font-family: 'Exo 2', sans-serif; }
-.font-editorial .appearance-font-sample { font-family: 'Fraunces', serif; }
+.font-swiss .appearance-font-sample     { font-family: 'Inter', sans-serif; }
+.font-grotesk .appearance-font-sample   { font-family: 'Archivo', sans-serif; }
+.font-editorial .appearance-font-sample { font-family: 'Newsreader', serif; }
+.font-techno .appearance-font-sample    { font-family: 'Chakra Petch', sans-serif; }
+.font-humanist .appearance-font-sample  { font-family: 'Bitter', serif; }
 .appearance-actions {
   display: flex;
   justify-content: flex-end;
@@ -6702,12 +6710,24 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-cascade-card { padding: 14px 16px; margin-bottom: 12px; }
   .cf-cascade-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
   .cf-cascade-head .admin-pill { font-size: 10px; padding: 2px 8px; }
+  /* One row, always. Seven stats side by side; if the card gets too narrow the
+     row scrolls horizontally rather than wrapping onto a second line. */
   .cf-cascade-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(104px, 1fr);
     gap: 8px;
     margin: 12px 0 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    padding-bottom: 2px;
   }
+  .cf-cascade-stats::-webkit-scrollbar { height: 5px; }
+  .cf-cascade-stats::-webkit-scrollbar-thumb {
+    background: rgba(118,138,176,0.28); border-radius: 999px;
+  }
+  .cf-cascade-stats .stat-box { min-width: 0; }
   .cf-cascade-stats .stat-box { padding: 8px 10px; border-radius: 10px; }
   .cf-cascade-stats .stat-label {
     font-size: 9.5px; letter-spacing: .07em; text-transform: uppercase;
@@ -6741,6 +6761,26 @@ html[data-theme="light"] .journal-entry-notes section {
   }
   @media (max-width: 560px) {
     .cf-cascade-form { grid-template-columns: minmax(0, 1fr); }
+    .cf-cascade-stats { grid-auto-columns: minmax(96px, 1fr); gap: 6px; }
+    .cf-cascade-stats .stat-box { padding: 7px 9px; }
+    .cf-cascade-stats .stat-value { font-size: 13.5px; }
+  }
+
+  /* Campaign cards need the full width so the seven stats fit on one row
+     without scrolling — the start form sits above them instead of beside. */
+  .cf-cascade-grid { grid-template-columns: minmax(0, 1fr); }
+  .cf-cascade-grid .allocator-input-panel .cf-cascade-form {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  @media (max-width: 900px) {
+    .cf-cascade-grid .allocator-input-panel .cf-cascade-form {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 560px) {
+    .cf-cascade-grid .allocator-input-panel .cf-cascade-form {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   /* ── Engine status chip: a quiet inline badge, not a hero number ── */

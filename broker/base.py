@@ -14,6 +14,9 @@ from typing import Iterable, Set
 class BaseBroker:
     broker_name = "broker"
     display_name = "Broker"
+    # Funding and open interest only exist on perpetual/derivatives venues.
+    # Spot clients set this False so the UI can hide meaningless chips.
+    supports_funding = True
 
     _SYMBOL_ALIASES = {
         "GOLD": "PAXGUSD",
