@@ -6535,6 +6535,19 @@ async def cascade_set_mode(campaign_id: str, request: Request):
     return result
 
 
+@app.post("/api/cascade/campaigns/{campaign_id}/recalculate")
+async def cascade_recalculate_campaign(campaign_id: str):
+    check_rate_limit("cascade_recalc", max_calls=4, window_sec=10)
+    eng = _get_cascade_engine()
+    if not eng.campaigns:
+        _restore_cascade_runtime(eng)
+    result = await eng.recalculate_campaign(campaign_id)
+    if result.get("error"):
+        raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
 @app.get("/api/cascade/campaigns/{campaign_id}/chart")
 async def cascade_campaign_chart(campaign_id: str):
     eng = _get_cascade_engine()

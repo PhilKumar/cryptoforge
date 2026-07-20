@@ -8947,10 +8947,12 @@ function _cfCascadeCampaignCard(campaign) {
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
     + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(campaign.state || '') + '</span>'
     + modeBadge
+    + (campaign.stale_model ? '<span class="admin-pill" data-state="warn" title="Built with older fib rules — hit Recalc">STALE RULES</span>' : '')
     + '<span class="table-meta">#' + cid + '</span>'
     + '</div>'
     + '<div style="display:flex;gap:6px;">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
+    + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRecalculate(\'' + cid + '\')">Recalc</button>'
     + goLive
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
     + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'
@@ -9140,6 +9142,22 @@ async function cfCascadeDeleteCampaign(campaignId) {
     { method: 'DELETE' },
     'Campaign deleted'
   );
+}
+
+async function cfCascadeRecalculate(campaignId) {
+  var ok = await cfConfirm(
+    '<p>Rebuild campaign <strong>#' + _escapeHtml(campaignId) + '</strong> from its mother candle?</p>'
+    + '<p>Trendlines and fibs are replayed under the current rules. Stored campaigns keep the geometry '
+    + 'they were built with, so this is how an older campaign picks up rule changes.</p>',
+    'Recalculate Campaign', '\u21bb', true
+  );
+  if (!ok) return;
+  var data = await _cfCascadeAction(
+    '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/recalculate',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    'Campaign recalculated'
+  );
+  if (data && _cfCascadeChartId === campaignId) cfCascadeShowChart(campaignId);
 }
 
 function cfCascadeReconcile() {

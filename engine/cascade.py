@@ -45,6 +45,7 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
+MODEL_VERSION = 4  # bump when the fib/trendline rules change; older campaigns are flagged stale
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
@@ -276,6 +277,7 @@ class Campaign:
     mother_timestamp: int
     mode: str = "paper"  # paper | live
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
+    model_version: int = 0  # rules version the stored legs/trendlines were built with
     created_at: str = ""
     state: str = "WAITING_FIRST_DEPTH"
     cumulative_used_pct: float = 0.0
@@ -346,6 +348,7 @@ class Campaign:
             "mother_timestamp": self.mother_timestamp,
             "mode": self.mode,
             "min_notional_usd": self.min_notional_usd,
+            "model_version": self.model_version,
             "created_at": self.created_at,
             "state": self.state,
             "cumulative_used_pct": self.cumulative_used_pct,
@@ -391,6 +394,7 @@ class Campaign:
         for key in (
             "mode",
             "min_notional_usd",
+            "model_version",
             "created_at",
             "state",
             "cumulative_used_pct",
@@ -721,6 +725,7 @@ class CascadeEngine:
             mother_timestamp=mother_ts,
             mode=mode,
             min_notional_usd=min_notional,
+            model_version=MODEL_VERSION,
             created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             last_processed_ts=mother_ts,
         )
@@ -797,6 +802,8 @@ class CascadeEngine:
                 else None
             )
             payload["allocated_pct"] = round(campaign.cumulative_used_pct, 4)
+            payload["stale_model"] = campaign.model_version != MODEL_VERSION
+            payload["model_version"] = campaign.model_version
             campaigns.append(payload)
         return {
             "status": "ok",
@@ -833,6 +840,73 @@ class CascadeEngine:
                 )
             )
         return rows[-max_candles:]
+
+    async def recalculate_campaign(self, campaign_id: str) -> dict:
+        """
+        Rebuild a campaign's trendlines and fibs from scratch under the current
+        rules, replaying every candle from the mother candle. Stored campaigns
+        keep whatever geometry the rules produced when they ran, so a campaign
+        created under older rules keeps stale fibs until this is run.
+
+        Refused when real money is involved: a live campaign that has filled
+        cannot have its ladder rewritten underneath its resting orders.
+        """
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            return {"error": f"Campaign {campaign_id} not found"}
+        if campaign.mode == "live" and campaign.all_fills:
+            return {"error": "Live campaign with fills cannot be recalculated — stop it and start a fresh one"}
+
+        candles = await self._chart_candles(campaign, max_candles=100000)
+        if not candles:
+            return {"error": "No candles available to replay"}
+
+        # Reset everything derived from the candles, keeping the campaign's
+        # identity and settings.
+        campaign.trendlines = []
+        campaign.legs = []
+        campaign.active_trendline_id = None
+        campaign.all_fills = []
+        campaign.avg_entry_price = None
+        campaign.filled_base_qty = 0.0
+        campaign.tp_price = None
+        campaign.tp_filled = False
+        campaign.realized_pnl = None
+        campaign.cumulative_used_pct = 0.0
+        campaign.carry_forward_usd = 0.0
+        campaign.mother_broken_above = False
+        campaign.closed_at = ""
+        campaign.close_reason = ""
+        campaign.state = "WAITING_FIRST_DEPTH"
+        campaign.swing_low = None
+        campaign.swing_low_timestamp = None
+        campaign.swing_high = None
+        campaign.swing_high_timestamp = None
+        campaign.swing_risen = False
+        campaign.anchor_high = None
+        campaign.anchor_high_timestamp = None
+        campaign.touch_high = None
+        campaign.touch_high_timestamp = None
+        campaign.model_version = MODEL_VERSION
+        self._candles_5m[campaign_id] = []
+
+        for candle in candles:
+            if candle.timestamp <= campaign.mother_timestamp:
+                continue  # the mother candle would trivially break its own high
+            self._candles_5m[campaign_id].append(candle)
+            self._process_candle(campaign, candle)
+            campaign.last_processed_ts = candle.timestamp
+            if campaign.state in FINAL_STATES:
+                break
+
+        self._log_event(
+            campaign,
+            "recalc",
+            f"Recalculated under model v{MODEL_VERSION}: replayed {len(candles)} candles -> "
+            f"{len(campaign.trendlines)} trendline(s), {len(campaign.legs)} fib(s)",
+        )
+        self._emit_update()
+        return {"status": "ok", "campaign": campaign.to_dict(), "candles_replayed": len(candles)}
 
     async def get_chart_data(self, campaign_id: str, max_candles: int = 300) -> dict:
         """

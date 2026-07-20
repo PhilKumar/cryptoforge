@@ -9,6 +9,8 @@ from engine.cascade import (
     Campaign,
     Candle,
     CascadeEngine,
+    FibLadder,
+    Fill,
     Leg,
     build_fib_ladder_and_pool,
     plan_leg_orders,
@@ -467,3 +469,63 @@ class CascadeMotherTimestampTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
+    """Stored campaigns keep the geometry they were built with, so a campaign
+    created under older rules keeps stale fibs until it is recalculated."""
+
+    def _stale_campaign(self, engine):
+        mother = _REAL[0]
+        campaign = Campaign(
+            campaign_id="stale",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+            model_version=0,
+            state="COMPLETED",
+        )
+        leg = Leg(leg_id=1, trendline_id=1, low=64629.18, touch_high=64964.00, touch_timestamp=0)
+        leg.fib = FibLadder(high_anchor=64964.00, low_anchor=64629.18)
+        campaign.legs.append(leg)
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    async def test_stale_campaign_is_flagged_and_recalculates(self):
+        broker = FakeCascadeBroker()
+        broker.candles_df = pd.DataFrame(
+            {
+                "open": [row[1] for row in _REAL],
+                "high": [row[2] for row in _REAL],
+                "low": [row[3] for row in _REAL],
+                "close": [row[4] for row in _REAL],
+            },
+            index=pd.to_datetime([row[0] * 300 for row in _REAL], unit="s", utc=True),
+        )
+        engine = _mk_engine(broker)
+        campaign = self._stale_campaign(engine)
+
+        status = engine.get_status()["campaigns"][0]
+        self.assertTrue(status["stale_model"])
+
+        result = await engine.recalculate_campaign("stale")
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(engine.get_status()["campaigns"][0]["stale_model"])
+        # replayed under the current rules -> both verified fibs
+        self.assertEqual(len(campaign.legs), 2)
+        self.assertAlmostEqual(campaign.legs[0].touch_high, 64928.00)
+        self.assertAlmostEqual(campaign.legs[0].low, 64790.01)
+        self.assertAlmostEqual(campaign.legs[1].touch_high, 64964.00)
+        self.assertAlmostEqual(campaign.legs[1].low, 64416.00)
+
+    async def test_live_campaign_with_fills_refuses_recalculation(self):
+        engine = _mk_engine()
+        campaign = self._stale_campaign(engine)
+        campaign.mode = "live"
+        campaign.all_fills.append(Fill(price=64700.0, quantity=0.001, level=2, leg_id=1, timestamp=1))
+        result = await engine.recalculate_campaign("stale")
+        self.assertIn("error", result)
