@@ -92,20 +92,69 @@ def _feed(engine, campaign, candle):
 # Real BTCUSDT 5m candles, 2026-07-20 from the mother candle at 00:15 UTC.
 # The user verified both fibs off these on TradingView.
 _REAL = [
-    # ts_index, open, high, low, close
-    (0, 65020.00, 65107.99, 65002.00, 65051.98),  # 00:15 MOTHER
-    (1, 65051.98, 65051.98, 64804.76, 64919.31),  # 00:20 red: high precedes the dip
-    (2, 64919.31, 64923.67, 64852.01, 64876.01),  # 00:25
-    (3, 64876.01, 64878.01, 64792.00, 64800.01),  # 00:30 cuts 64804.76, no genuine rise
-    (4, 64800.00, 64938.00, 64790.01, 64904.00),  # 00:35 dip 64790.01 then rise 64938.00
-    (5, 64904.00, 64928.00, 64822.24, 64822.24),  # 00:40
-    (6, 64822.24, 64822.24, 64639.00, 64665.99),  # 00:45 cuts 64790.01 -> FIB 1
-    (7, 64666.00, 64671.47, 64416.00, 64588.00),  # 00:50 dip 64416.00 ("ultimate low")
-    (8, 64588.50, 64593.98, 64544.00, 64553.84),  # 00:55
-    (9, 64553.85, 64606.00, 64510.00, 64606.00),  # 01:00
-    (10, 64606.00, 65010.15, 64605.99, 64999.13),  # 01:05 rise begins -> freezes 64416.00
-    (11, 64999.13, 65029.40, 64806.37, 64808.00),  # 01:10 swing high 65029.40
-    (12, 64500.00, 64500.00, 64200.00, 64244.00),  # cuts 64416.00 -> FIB 2
+    # index (5m offset from the mother candle), open, high, low, close
+    # Real BTCUSDT candles, 2026-07-20 00:15 -> 05:10 UTC. The user verified
+    # both fibs off these on TradingView.
+    (0, 65020.00, 65107.99, 65002.00, 65051.98),
+    (1, 65051.98, 65051.98, 64804.76, 64919.31),
+    (2, 64919.31, 64923.67, 64852.01, 64876.01),
+    (3, 64876.01, 64878.01, 64792.00, 64800.01),
+    (4, 64800.00, 64938.00, 64790.01, 64904.00),
+    (5, 64904.00, 64928.00, 64822.24, 64822.24),
+    (6, 64822.24, 64822.24, 64639.00, 64665.99),
+    (7, 64666.00, 64671.47, 64416.00, 64588.00),
+    (8, 64588.50, 64593.98, 64544.00, 64553.84),
+    (9, 64553.85, 64606.00, 64510.00, 64606.00),
+    (10, 64606.00, 65010.15, 64605.99, 64999.13),
+    (11, 64999.13, 65029.40, 64806.37, 64808.00),
+    (12, 64808.01, 64839.23, 64702.29, 64709.99),
+    (13, 64709.99, 64914.00, 64690.00, 64865.49),
+    (14, 64865.49, 64946.00, 64850.00, 64850.42),
+    (15, 64850.43, 64898.00, 64837.01, 64874.52),
+    (16, 64874.52, 64931.34, 64838.00, 64886.22),
+    (17, 64887.71, 64894.05, 64704.41, 64763.99),
+    (18, 64763.99, 64775.36, 64712.00, 64770.18),
+    (19, 64770.17, 64770.18, 64526.00, 64526.01),
+    (20, 64526.00, 64639.89, 64506.00, 64628.01),
+    (21, 64628.01, 64931.02, 64624.00, 64916.01),
+    (22, 64916.00, 64950.88, 64854.00, 64917.53),
+    (23, 64917.54, 64922.92, 64820.26, 64826.01),
+    (24, 64826.01, 64830.00, 64652.00, 64652.00),
+    (25, 64652.00, 64696.00, 64585.00, 64675.74),
+    (26, 64675.75, 64707.67, 64645.70, 64674.01),
+    (27, 64674.00, 64858.00, 64660.00, 64780.00),
+    (28, 64780.00, 64820.00, 64726.01, 64750.00),
+    (29, 64750.00, 64886.00, 64732.01, 64836.00),
+    (30, 64836.00, 64964.00, 64836.00, 64912.00),
+    (31, 64912.01, 64928.00, 64840.00, 64871.99),
+    (32, 64871.99, 64890.00, 64827.19, 64827.20),
+    (33, 64827.19, 64881.29, 64822.24, 64874.00),
+    (34, 64874.00, 64875.22, 64796.00, 64814.01),
+    (35, 64814.01, 64850.24, 64776.00, 64843.96),
+    (36, 64843.96, 64887.98, 64790.00, 64792.00),
+    (37, 64792.00, 64792.00, 64670.00, 64728.01),
+    (38, 64728.00, 64728.01, 64644.01, 64688.01),
+    (39, 64688.00, 64764.00, 64666.00, 64736.00),
+    (40, 64736.01, 64840.04, 64710.00, 64814.00),
+    (41, 64814.00, 64902.63, 64795.11, 64902.63),
+    (42, 64902.63, 64914.93, 64836.00, 64880.00),
+    (43, 64880.00, 64901.32, 64853.40, 64853.40),
+    (44, 64853.40, 64869.80, 64785.10, 64869.80),
+    (45, 64869.79, 64869.99, 64802.00, 64805.99),
+    (46, 64805.99, 64806.00, 64736.00, 64740.00),
+    (47, 64739.99, 64792.00, 64698.26, 64705.37),
+    (48, 64705.38, 64709.17, 64640.00, 64682.00),
+    (49, 64682.00, 64718.00, 64667.03, 64718.00),
+    (50, 64718.00, 64778.00, 64716.78, 64759.41),
+    (51, 64759.40, 64788.00, 64721.19, 64746.00),
+    (52, 64746.01, 64814.00, 64744.00, 64770.00),
+    (53, 64770.00, 64770.00, 64704.01, 64733.98),
+    (54, 64733.54, 64733.54, 64629.18, 64650.02),
+    (55, 64650.01, 64650.01, 64540.00, 64540.01),
+    (56, 64540.01, 64585.00, 64540.00, 64540.01),
+    (57, 64540.00, 64562.00, 64450.00, 64454.01),
+    (58, 64454.00, 64492.00, 64404.00, 64420.01),
+    (59, 64420.01, 64420.01, 64082.70, 64244.00),
 ]
 
 
@@ -133,8 +182,11 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.engine = _mk_engine()
         self.campaign = _real_campaign(self.engine)
 
-    def _feed_real(self, upto):
-        for idx, o, h, low, c in _REAL[1 : upto + 1]:
+    def _feed_real(self, upto_index):
+        """Feed real candles whose offset index is <= upto_index."""
+        for idx, o, h, low, c in _REAL[1:]:
+            if idx > upto_index:
+                break
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
 
     def test_reproduces_the_users_first_fib_exactly(self):
@@ -149,12 +201,14 @@ class CascadeSwingModelTests(unittest.TestCase):
             self.assertAlmostEqual(leg.fib.level_price(level), expected, places=2)
 
     def test_reproduces_the_users_second_fib_exactly(self):
-        self._feed_real(12)
+        """fib 0 is the highest high that reached the trendline — a touch OR a
+        break — between the dip and the cut (64,964.00 at 02:45)."""
+        self._feed_real(59)
         self.assertEqual(len(self.campaign.legs), 2)
         leg = self.campaign.legs[1]
-        self.assertAlmostEqual(leg.touch_high, 65029.40)  # fib 0
+        self.assertAlmostEqual(leg.touch_high, 64964.00)  # fib 0
         self.assertAlmostEqual(leg.low, 64416.00)  # fib 1 — the "ultimate low"
-        self.assertAlmostEqual(leg.fib.level_price(2), 63802.60, places=2)
+        self.assertAlmostEqual(leg.fib.level_price(2), 63868.00, places=2)
 
     def test_no_fib_before_the_trendline_is_touched(self):
         """Cuts during the initial slide draw nothing: the line has not been
@@ -174,7 +228,7 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertAlmostEqual(tl.anchor2_price, 65051.98)  # highest high before the dip
 
     def test_fall_pct_and_pool_follow_the_leg_low(self):
-        self._feed_real(12)
+        self._feed_real(59)
         leg1, leg2 = self.campaign.legs
         self.assertAlmostEqual(leg1.leg_pct_from_mother, 0.488, places=2)
         self.assertAlmostEqual(leg2.leg_pct_from_mother, 1.063, places=2)
@@ -182,7 +236,7 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertAlmostEqual(leg2.pool_usd, (1.063 - 0.488) * 2000 / 100, places=1)
 
     def test_second_leg_carries_forward_unfilled_levels(self):
-        self._feed_real(12)
+        self._feed_real(59)
         leg1, leg2 = self.campaign.legs
         carried = [lv for lv, o in leg1.pending_orders.items() if o.status == "CARRIED"]
         self.assertTrue(carried)
