@@ -245,13 +245,43 @@ class CascadeSwingModelTests(unittest.TestCase):
         # leg 2 only draws the incremental depth beyond leg 1
         self.assertAlmostEqual(leg2.pool_usd, (1.063 - 0.488) * 2000 / 100, places=1)
 
-    def test_second_leg_carries_forward_unfilled_levels(self):
+    def test_second_leg_carries_forward_the_unspent_first_pool(self):
         self._feed_real(59)
         leg1, leg2 = self.campaign.legs
         carried = [lv for lv, o in leg1.pending_orders.items() if o.status == "CARRIED"]
         self.assertTrue(carried)
-        for lv in carried:
-            self.assertGreater(leg2.carry_forward_qty.get(lv, 0), 0)
+        # Nothing filled on fib 1, so its whole pool lands in fib 2.
+        self.assertAlmostEqual(leg2.carry_in_usd, leg1.pool_total_usd, places=6)
+        self.assertAlmostEqual(leg2.pool_total_usd, leg2.pool_usd + leg1.pool_total_usd, places=6)
+
+    def test_round_closed_at_tp_returns_its_principal_to_the_next_fib(self):
+        """
+        The user's worked example: fib 1 ladders a pool, one level fills and the
+        target hits. When the previous low then breaks, fib 2 must inherit the
+        WHOLE fib 1 pool — the levels that never filled plus the principal the
+        closed round handed back.
+        """
+        self._feed_real(40)  # far enough to have fib 1 laddered
+        leg1 = self.campaign.legs[0]
+        pool1 = leg1.pool_total_usd
+        self.assertGreater(pool1, 0.0)
+
+        # Fill the deepest planned level, then let the target hit.
+        order = next(o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0)
+        self.engine._record_fill(self.campaign, leg1, order, order.price, _RECENT_TS + 3600, order_id="PAPER")
+        self.assertGreater(self.campaign.spent_usd, 0.0)
+        self.engine._close_round(self.campaign, self.campaign.tp_price)
+
+        self.assertEqual(len(self.campaign.rounds), 1)
+        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
+        self.assertAlmostEqual(self.campaign.spent_usd, 0.0)  # principal is back
+
+        # Previous low breaks -> fib 2 opens and inherits everything.
+        self._feed_real(59)
+        self.assertGreaterEqual(len(self.campaign.legs), 2)
+        leg2 = self.campaign.legs[1]
+        self.assertAlmostEqual(leg2.carry_in_usd, pool1, places=6)
+        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
 
     def test_mother_break_ends_the_campaign(self):
         self._feed_real(6)
@@ -316,7 +346,7 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(order.order_id, old_order_id)
         self.assertEqual(order.rev, 1)
 
-    async def test_tp_fill_completes_campaign_and_cancels_entries(self):
+    async def test_tp_fill_closes_the_round_and_keeps_the_campaign_running(self):
         await self.engine._sync_live_orders(self.campaign)
         filled = self.leg.pending_orders[2]
         self.broker.order_lookup[str(filled.order_id)] = {
@@ -325,17 +355,27 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
             "cummulativeQuoteQty": str(filled.quantity * 97.0),
         }
         await self.engine._sync_live_orders(self.campaign)
+        qty_before = self.campaign.filled_base_qty
         tp_id = self.campaign.tp_order_id
         self.broker.order_lookup[str(tp_id)] = {
             "status": "FILLED",
-            "executedQty": str(self.campaign.filled_base_qty),
-            "cummulativeQuoteQty": str(self.campaign.filled_base_qty * 99.0),
+            "executedQty": str(qty_before),
+            "cummulativeQuoteQty": str(qty_before * 99.0),
         }
         await self.engine._sync_live_orders(self.campaign)
-        self.assertEqual(self.campaign.state, "COMPLETED")
-        self.assertAlmostEqual(self.campaign.realized_pnl, (99.0 - 97.0) * self.campaign.filled_base_qty, places=6)
-        # Remaining resting entries were cancelled on completion.
-        self.assertTrue(self.broker.cancelled)
+
+        # The campaign lives on — only a mother-high breach ends it.
+        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+        self.assertEqual(len(self.campaign.rounds), 1)
+        self.assertAlmostEqual(self.campaign.rounds[0].pnl, (99.0 - 97.0) * qty_before, places=6)
+        self.assertAlmostEqual(self.campaign.realized_pnl_total, (99.0 - 97.0) * qty_before, places=6)
+        # Position is flat, so the principal is back in available capital.
+        self.assertEqual(self.campaign.filled_base_qty, 0.0)
+        self.assertAlmostEqual(self.campaign.spent_usd, 0.0)
+        self.assertIsNone(self.campaign.avg_entry_price)
+        # The filled level is spent; untouched levels keep resting.
+        self.assertEqual(self.leg.pending_orders[2].status, "CLOSED")
+        self.assertTrue(self.leg.pending_orders[8].is_open)
 
     async def test_paper_campaign_never_touches_broker(self):
         self.campaign.mode = "paper"

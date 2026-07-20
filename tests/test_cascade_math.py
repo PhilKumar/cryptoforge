@@ -149,22 +149,48 @@ class PlanLegOrdersTests(unittest.TestCase):
         self.assertAlmostEqual(total, leg2.pool_usd + 3.0, places=1)
         self.assertAlmostEqual(campaign.carry_forward_usd, 0.0)
 
-    def test_carry_forward_quantity_is_valued_at_new_level_price(self):
+    def test_untouched_fib1_pool_carries_into_fib2_in_full(self):
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg1 = _leg(campaign, low=95.0, touch_high=98.0)
         build_fib_ladder_and_pool(campaign, leg1)
         plan_leg_orders(campaign, leg1)
-        # L8 never filled; leg 2 begins.
+        pool1 = leg1.pool_total_usd
+        self.assertGreater(pool1, 0.0)
+
+        # Nothing filled on fib 1 — the previous low breaks and fib 2 opens.
         leg2 = _leg(campaign, low=92.0, touch_high=96.0, leg_id=2)
-        cancel_and_carry_forward(leg1, leg2)
+        carried = cancel_and_carry_forward(campaign, leg1)
         self.assertEqual(leg1.pending_orders[8].status, "CARRIED")
-        self.assertAlmostEqual(leg2.carry_forward_qty[8], leg1.pending_orders[8].quantity)
+        self.assertAlmostEqual(carried, pool1)
 
         build_fib_ladder_and_pool(campaign, leg2)
         plan_leg_orders(campaign, leg2)
-        base_l8 = (leg2.pool_usd) * 0.50
-        carried_value = leg2.carry_forward_qty[8] * leg2.fib.level_price(8)
-        self.assertAlmostEqual(leg2.pending_orders[8].usd_notional, round(base_l8 + carried_value, 2), places=2)
+        self.assertAlmostEqual(leg2.carry_in_usd, pool1)
+        self.assertAlmostEqual(leg2.pool_total_usd, leg2.pool_usd + pool1)
+        # The lump is re-split 20/30/50 with fib 2's own allocation.
+        self.assertAlmostEqual(leg2.pending_orders[8].usd_notional, round(leg2.pool_total_usd * 0.50, 2), places=2)
+
+    def test_level_still_held_does_not_carry_but_a_closed_round_does(self):
+        campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
+        leg1 = _leg(campaign, low=95.0, touch_high=98.0)
+        build_fib_ladder_and_pool(campaign, leg1)
+        plan_leg_orders(campaign, leg1)
+        pool1 = leg1.pool_total_usd
+
+        # L4 fills and is STILL HELD — that notional stays out of the carry.
+        held = leg1.pending_orders[4]
+        campaign.all_fills.append(Fill(price=held.price, quantity=held.quantity, level=4, leg_id=1, timestamp=1))
+        held_usd = held.price * held.quantity
+        leg2 = _leg(campaign, low=92.0, touch_high=96.0, leg_id=2)
+        self.assertAlmostEqual(cancel_and_carry_forward(campaign, leg1), pool1 - held_usd, places=6)
+
+        # Now the round closes at TP: principal returns, so the rest carries too.
+        campaign.all_fills = []
+        campaign.carry_forward_usd = 0.0
+        leg3 = _leg(campaign, low=90.0, touch_high=94.0, leg_id=3)
+        self.assertAlmostEqual(cancel_and_carry_forward(campaign, leg1), pool1, places=6)
+        self.assertIsNotNone(leg2)
+        self.assertIsNotNone(leg3)
 
     def test_capital_cap_trims_deepest_level_first(self):
         campaign = _campaign(capital=100.0, mother_high=100.0, min_notional=5.0)

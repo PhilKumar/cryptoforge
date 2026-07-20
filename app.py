@@ -2327,6 +2327,7 @@ def _production_readiness_payload() -> dict:
         "/api/scalp/diagnostics",
         "/api/market/top25",
         "/api/cascade/status",
+        "/api/journal/trades",
         "/api/admin/config",
         "/api/broker/settings",
         "/api/ops/state/backup",
@@ -6475,6 +6476,103 @@ def _get_cascade_engine() -> "CascadeEngine":
     return _cascade_engine
 
 
+_TRADE_JOURNAL_FILE = os.path.join(_HERE, "data", "trade_journal.json")
+
+
+def _load_trade_journal() -> dict:
+    """Seeded from the CRYPTO_Trade_Sheet_fixed workbook; see data/trade_journal.json."""
+    try:
+        with open(_TRADE_JOURNAL_FILE, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return {"trades": [], "capital_base_usd": 0.0, "source": "", "imported_at": ""}
+    except Exception as exc:
+        _logger.warning("[JOURNAL] failed to read %s: %s", _TRADE_JOURNAL_FILE, exc)
+        return {"trades": [], "capital_base_usd": 0.0, "source": "", "imported_at": ""}
+
+
+def _journal_summary(trades: List[dict], capital_base: float) -> dict:
+    invested = sum(_coerce_float_safe(t.get("invested_usd")) for t in trades)
+    pnl = sum(_coerce_float_safe(t.get("pnl_usd")) for t in trades)
+    wins = [t for t in trades if _coerce_float_safe(t.get("pnl_usd")) > 0]
+    losses = [t for t in trades if _coerce_float_safe(t.get("pnl_usd")) < 0]
+    rois = [_coerce_float_safe(t.get("roi_pct")) for t in trades]
+
+    by_coin: Dict[str, dict] = {}
+    for t in trades:
+        row = by_coin.setdefault(
+            str(t.get("coin") or "?"), {"coin": t.get("coin"), "trades": 0, "invested": 0.0, "pnl": 0.0}
+        )
+        row["trades"] += 1
+        row["invested"] += _coerce_float_safe(t.get("invested_usd"))
+        row["pnl"] += _coerce_float_safe(t.get("pnl_usd"))
+    for row in by_coin.values():
+        row["roi_pct"] = (row["pnl"] / row["invested"] * 100) if row["invested"] else 0.0
+        row["invested"] = round(row["invested"], 2)
+        row["pnl"] = round(row["pnl"], 2)
+        row["roi_pct"] = round(row["roi_pct"], 3)
+
+    by_day: Dict[str, dict] = {}
+    for t in trades:
+        day = str(t.get("date") or "")
+        row = by_day.setdefault(day, {"date": day, "trades": 0, "invested": 0.0, "pnl": 0.0})
+        row["trades"] += 1
+        row["invested"] += _coerce_float_safe(t.get("invested_usd"))
+        row["pnl"] += _coerce_float_safe(t.get("pnl_usd"))
+
+    equity = []
+    running = 0.0
+    for day in sorted(by_day):
+        row = by_day[day]
+        row["invested"] = round(row["invested"], 2)
+        row["pnl"] = round(row["pnl"], 2)
+        running += row["pnl"]
+        equity.append({"date": day, "pnl": row["pnl"], "cumulative_pnl": round(running, 4)})
+
+    return {
+        "trade_count": len(trades),
+        "invested_usd": round(invested, 2),
+        "realized_pnl_usd": round(pnl, 2),
+        "roi_pct": round(pnl / invested * 100, 3) if invested else 0.0,
+        "capital_roi_pct": round(pnl / capital_base * 100, 3) if capital_base else 0.0,
+        "win_count": len(wins),
+        "loss_count": len(losses),
+        "win_rate_pct": round(len(wins) / len(trades) * 100, 2) if trades else 0.0,
+        "avg_roi_pct": round(sum(rois) / len(rois), 3) if rois else 0.0,
+        "best_roi_pct": round(max(rois), 3) if rois else 0.0,
+        "worst_roi_pct": round(min(rois), 3) if rois else 0.0,
+        "avg_win_usd": round(sum(_coerce_float_safe(t["pnl_usd"]) for t in wins) / len(wins), 4) if wins else 0.0,
+        "avg_loss_usd": (
+            round(sum(_coerce_float_safe(t["pnl_usd"]) for t in losses) / len(losses), 4) if losses else 0.0
+        ),
+        "by_coin": sorted(by_coin.values(), key=lambda r: r["pnl"], reverse=True),
+        "by_day": [by_day[d] for d in sorted(by_day)],
+        "equity_curve": equity,
+    }
+
+
+def _coerce_float_safe(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+@app.get("/api/journal/trades")
+async def journal_trades():
+    doc = _load_trade_journal()
+    trades = [t for t in (doc.get("trades") or []) if isinstance(t, dict)]
+    capital_base = _coerce_float_safe(doc.get("capital_base_usd"))
+    return {
+        "status": "ok",
+        "source": doc.get("source") or "",
+        "imported_at": doc.get("imported_at") or "",
+        "capital_base_usd": capital_base,
+        "trades": trades,
+        "summary": _journal_summary(trades, capital_base),
+    }
+
+
 @app.get("/api/cascade/status")
 async def cascade_status():
     eng = _get_cascade_engine()
@@ -6549,11 +6647,11 @@ async def cascade_recalculate_campaign(campaign_id: str):
 
 
 @app.get("/api/cascade/campaigns/{campaign_id}/chart")
-async def cascade_campaign_chart(campaign_id: str):
+async def cascade_campaign_chart(campaign_id: str, timeframe: str = "5m"):
     eng = _get_cascade_engine()
     if not eng.campaigns:
         _restore_cascade_runtime(eng)
-    result = await eng.get_chart_data(campaign_id)
+    result = await eng.get_chart_data(campaign_id, timeframe=timeframe)
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
     return result

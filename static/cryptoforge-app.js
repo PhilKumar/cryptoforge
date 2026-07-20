@@ -872,7 +872,6 @@ function showPage(pageId, btn, options) {
   if (pageId === 'results-page' && !_backtestRunning) { loadRuns(); fetchStrategies(); }
   if (pageId === 'live-page') startLiveMonitor();
   if (pageId === 'portfolio-page') { loadBrokerSettings(true); refreshBrokerState(true); loadPortfolioData(); }
-  if (pageId === 'allocator-page') renderBtcAllocationCalculator();
   if (pageId === 'journal-page') renderTradeJournal();
   if (pageId === 'scalp-page') cfInitScalpPage();
   if (pageId === 'cascade-page') cfInitCascadePage();
@@ -2173,7 +2172,7 @@ async function runBacktest() {
     await loadRuns();
   } finally {
     _backtestRunning = false;
-    btn.disabled = false; btn.textContent = '⚡ Run Backtest'; btn.classList.remove('loading');
+    btn.disabled = false; btn.innerHTML = '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M13 2 3 14h9l-1 8 10-12h-9l1-8z\"/></svg> Run Backtest'; btn.classList.remove('loading');
   }
 }
 
@@ -2833,7 +2832,7 @@ function _renderMarketRows(coins) {
     var safeCoinName = _escapeHtml(c.name);
     var tradeable = c.broker_tradeable != null ? !!c.broker_tradeable : !!c.delta_tradeable;
     var btnClass = tradeable ? 'btn-live' : 'btn-bt';
-    var btnLabel = tradeable ? '⚡ Trade' : '📊 Backtest';
+    var btnLabel = tradeable ? '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M13 2 3 14h9l-1 8 10-12h-9l1-8z\"/></svg> Trade' : '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 3v18h18\"/><path d=\"m19 9-5 5-4-4-3 3\"/></svg> Backtest';
     var tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" data-cf-click="selectCryptoFromMarket(\'' + tradeSym + '\',\'' + safeName + '\')">' + btnLabel + '</button>';
     return '<tr style="cursor:pointer;" data-cf-mouseover="this.style.background=\'rgba(139,92,246,0.04)\'" data-cf-mouseout="this.style.background=\'\'">' +
       '<td style="padding-left:16px;"><div class="table-value-stack"><div class="table-value-main">#' + c.rank + '</div><div class="table-value-sub">rank</div></div></td>' +
@@ -3269,7 +3268,7 @@ function connectWS() {
       }
       // Trade events — trigger immediate refresh
       if (data.source === 'live' || data.source === 'paper') {
-        var srcLabel = data.source === 'paper' ? '📄 Paper' : '🔴 Live';
+        var srcLabel = data.source === 'paper' ? '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path d=\"M14 2v6h6\"/></svg> Paper' : '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"currentColor\" stroke=\"none\"/></svg> Live';
         if (data.type === 'entry') {
           sendTradeNotification(srcLabel + ': Entry', (data.trade ? data.trade.side + ' ' + (data.trade.symbol||'') + ' @ ' + fmtINRPrice(parseFloat(data.trade.entry_price)||0) : 'New trade entry'));
         } else if (data.type === 'exit') {
@@ -3620,7 +3619,7 @@ function openDeployModal() {
   document.getElementById('deploy-tab-live').className = 'deploy-type-tab';
   document.getElementById('deploy-live-warning').style.display = 'none';
   document.getElementById('deploy-paper-info').style.display = 'flex';
-  document.getElementById('deploy-confirm-btn').textContent = '🚀 Deploy Paper';
+  document.getElementById('deploy-confirm-btn').innerHTML = '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z\"/><path d=\"m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z\"/></svg> Deploy Paper';
   document.getElementById('deploy-confirm-btn').className = 'btn btn-primary';
   document.getElementById('deploy-overlay').style.display = 'flex';
   resetDeployChecks();
@@ -3640,14 +3639,14 @@ function setDeployType(type) {
     document.getElementById('deploy-tab-live').className = 'deploy-type-tab';
     document.getElementById('deploy-live-warning').style.display = 'none';
     document.getElementById('deploy-paper-info').style.display = 'flex';
-    document.getElementById('deploy-confirm-btn').textContent = '🚀 Deploy Paper';
+    document.getElementById('deploy-confirm-btn').innerHTML = '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z\"/><path d=\"m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z\"/></svg> Deploy Paper';
     document.getElementById('deploy-confirm-btn').className = 'btn btn-primary';
   } else {
     document.getElementById('deploy-tab-paper').className = 'deploy-type-tab';
     document.getElementById('deploy-tab-live').className = 'deploy-type-tab active-live';
     document.getElementById('deploy-live-warning').style.display = 'flex';
     document.getElementById('deploy-paper-info').style.display = 'none';
-    document.getElementById('deploy-confirm-btn').textContent = '🔴 Deploy LIVE';
+    document.getElementById('deploy-confirm-btn').innerHTML = '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"currentColor\" stroke=\"none\"/></svg> Deploy LIVE';
     document.getElementById('deploy-confirm-btn').className = 'btn btn-danger';
   }
   updateDeployModalState();
@@ -3679,14 +3678,14 @@ async function validateStrategy() {
       msgDiv.innerHTML = d.errors.map(function(err) {
         return '<div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.24);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--red);">❌ ' + _escapeHtml(err) + '</div>';
       }).join('') + ((d.warnings && d.warnings.length > 0) ? d.warnings.map(function(w) {
-        return '<div style="background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.22);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);">⚠️ ' + _escapeHtml(w) + '</div>';
+        return '<div style="background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.22);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);"><svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg> ' + _escapeHtml(w) + '</div>';
       }).join('') : '');
     } else if (d.warnings && d.warnings.length > 0) {
       msgDiv.innerHTML = d.warnings.map(function(w) {
-        return '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);">⚠️ ' + _escapeHtml(w) + '</div>';
+        return '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--yellow);"><svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg> ' + _escapeHtml(w) + '</div>';
       }).join('');
     } else {
-      msgDiv.innerHTML = '<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--green);">✅ Strategy validation passed</div>';
+      msgDiv.innerHTML = '<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--green);"><svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M22 11.08V12a10 10 0 1 1-5.93-9.14\"/><path d=\"m9 11 3 3L22 4\"/></svg> Strategy validation passed</div>';
     }
     updateDeployModalState();
   } catch(e) {
@@ -4348,7 +4347,7 @@ async function loadPortfolioData() {
     var pfLiveStatus = document.getElementById('pf-live-status');
     if (pfLiveStatus) {
       if (live.running) {
-        pfLiveStatus.textContent = '🔴 LIVE';
+        pfLiveStatus.innerHTML = '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"currentColor\" stroke=\"none\"/></svg> LIVE';
         pfLiveStatus.style.color = 'var(--red)';
       } else {
         pfLiveStatus.textContent = 'Idle';
@@ -4987,7 +4986,7 @@ function renderLiveTabs() {
   _liveEngines.forEach(function(eng, idx) {
     var active = idx === _liveSelectedTab;
     var name = _escapeHtml(eng.strategy_name || eng.run_name || 'Strategy');
-    var modeIcon = eng.mode === 'paper' ? '📄' : '🔴';
+    var modeIcon = eng.mode === 'paper' ? '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path d=\"M14 2v6h6\"/></svg>' : '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"currentColor\" stroke=\"none\"/></svg>';
     var pnl = parseFloat(eng.total_pnl) || 0;
     var running = eng.running;
     var inTrade = eng.in_trade;
@@ -5060,7 +5059,7 @@ function renderLivePanel(d, idx) {
     statusText = 'Stopped'; statusColor = 'var(--muted)';
   }
 
-  var modeIcon = mode === 'paper' ? '📄' : '🔴';
+  var modeIcon = mode === 'paper' ? '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path d=\"M14 2v6h6\"/></svg>' : '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"currentColor\" stroke=\"none\"/></svg>';
   var modeLabel = mode === 'paper' ? 'Paper' : 'Live';
   var pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
   var dailyPnlColor = dailyPnl >= 0 ? 'var(--green)' : 'var(--red)';
@@ -5506,1525 +5505,323 @@ function showPortfolioMonthDetails(key) {
   cfModal('Monthly P&L Detail', { html: _portfolioPeriodDetailHtml(key, data || {}) }, '₹', [{label:'OK', cls:'btn-primary'}]);
 }
 
-// ── BTC Allocation Calculator ─────────────────────────────
-const BTC_ALLOCATION_STORAGE_KEY = 'cf_btc_allocation_state_v1';
-let _btcAllocationState = {
-  previousTotalAllocation: 0,
-  previousTotalAllocationExact: 0,
-  previousHigh: null,
-  previousByHigh: {},
-  lastResult: null,
-  history: [],
-  buyRows: [],
-  fibLast: null,
-  fibLadders: []
-};
-
-function _btcAllocationDefaultState() {
-  return {
-    previousTotalAllocation: 0,
-    previousTotalAllocationExact: 0,
-    previousHigh: null,
-    previousByHigh: {},
-    lastResult: null,
-    history: [],
-    buyRows: [],
-    fibLast: null,
-    fibLadders: []
-  };
-}
-
-function _btcAllocationHighKey(high) {
-  var num = Number(high);
-  return Number.isFinite(num) && num > 0 ? num.toFixed(8) : '';
-}
-
-function _btcAllocationRowTotalExact(row) {
-  if (!row || typeof row !== 'object') return 0;
-  var totalExact = Number(row.totalAllocationRequiredExact);
-  if (Number.isFinite(totalExact) && totalExact >= 0) return totalExact;
-  var high = Number(row.bitcoinHigh);
-  var low = Number(row.bitcoinLow);
-  if (Number.isFinite(high) && high > 0 && Number.isFinite(low) && low > 0 && low <= high) {
-    return ((high - low) / high) * 100 * 1000;
-  }
-  return Math.max(0, Number(row.totalAllocationRequired) || 0);
-}
-
-function _btcAllocationRowPreviousExact(row) {
-  if (!row || typeof row !== 'object') return 0;
-  var previousExact = Number(row.previousAllocationExact);
-  if (Number.isFinite(previousExact) && previousExact >= 0) return previousExact;
-  return Math.max(0, Number(row.previousAllocation) || 0);
-}
-
-function _btcAllocationRowFreshExact(row) {
-  if (!row || typeof row !== 'object') return 0;
-  var freshExact = Number(row.freshAllocationExact);
-  if (Number.isFinite(freshExact) && freshExact >= 0) return freshExact;
-  return Math.max(0, Number(row.freshAllocation) || 0);
-}
-
-function _btcAllocationRowCanSeedMemory(row) {
-  var totalExact = _btcAllocationRowTotalExact(row);
-  var previousExact = _btcAllocationRowPreviousExact(row);
-  var freshExact = _btcAllocationRowFreshExact(row);
-  var hasSplit = (Number(row && row.split20) || 0) > 0
-    || (Number(row && row.split30) || 0) > 0
-    || (Number(row && row.split50) || 0) > 0;
-  return totalExact > 0 && (totalExact + 0.5 >= previousExact || freshExact > 0 || hasSplit);
-}
-
-function _btcAllocationMemoryFromHistory(history) {
-  var memory = {};
-  (Array.isArray(history) ? history : []).forEach(function(row) {
-    if (!_btcAllocationRowCanSeedMemory(row)) return;
-    var key = _btcAllocationHighKey(row.bitcoinHigh);
-    if (!key) return;
-    memory[key] = Math.max(Number(memory[key]) || 0, _btcAllocationRowTotalExact(row));
-  });
-  return memory;
-}
-
-function _btcAllocationLoadState() {
-  try {
-    var raw = localStorage.getItem(BTC_ALLOCATION_STORAGE_KEY);
-    if (!raw) {
-      _btcAllocationState = _btcAllocationDefaultState();
-      return;
-    }
-    var parsed = JSON.parse(raw);
-    var lastResult = parsed.lastResult && typeof parsed.lastResult === 'object' ? parsed.lastResult : null;
-    var history = (Array.isArray(parsed.history) ? parsed.history.slice(0, 100) : [])
-      .filter(_btcAllocationRowCanSeedMemory);
-    if (lastResult && !_btcAllocationRowCanSeedMemory(lastResult)) lastResult = null;
-    var previousByHigh = _btcAllocationMemoryFromHistory(history);
-    var previousHigh = Number(parsed.previousHigh);
-    var previousKey = _btcAllocationHighKey(previousHigh);
-    var previousTotalAllocationExact = previousKey ? (Number(previousByHigh[previousKey]) || 0) : 0;
-    var fibLadders = Array.isArray(parsed.fibLadders) ? parsed.fibLadders.slice(0, 12) : [];
-    if (!fibLadders.length && parsed.fibLast && typeof parsed.fibLast === 'object') fibLadders = [parsed.fibLast];
-    fibLadders = fibLadders.filter(function(item) { return item && typeof item === 'object'; }).map(function(item, index) {
-      if (!item.id) item.id = 'btc-fib-' + (item.createdAt || Date.now()) + '-' + index;
-      if (item.open === undefined) item.open = index === 0;
-      return item;
-    });
-    fibLadders.sort(function(a, b) {
-      var aTime = Date.parse(a.createdAt || '');
-      var bTime = Date.parse(b.createdAt || '');
-      return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
-    });
-    fibLadders = _btcFibRebuildStoredLadders(fibLadders);
-    _btcAllocationState = {
-      previousTotalAllocation: Math.round(previousTotalAllocationExact),
-      previousTotalAllocationExact: previousTotalAllocationExact,
-      previousHigh: previousKey ? previousHigh : null,
-      previousByHigh: previousByHigh,
-      lastResult: lastResult,
-      history: history,
-      buyRows: Array.isArray(parsed.buyRows) ? parsed.buyRows.slice(0, 250) : [],
-      fibLast: fibLadders.length ? fibLadders[fibLadders.length - 1] : null,
-      fibLadders: fibLadders
-    };
-  } catch (error) {
-    _btcAllocationState = _btcAllocationDefaultState();
-  }
-}
-
-function _btcAllocationSaveState() {
-  try {
-    localStorage.setItem(BTC_ALLOCATION_STORAGE_KEY, JSON.stringify(_btcAllocationState));
-  } catch (error) {
-    console.warn('Unable to save BTC allocation state:', error);
-  }
-}
-
-function _btcAllocationNumber(value) {
-  if (value === null || value === undefined || String(value).trim() === '') return NaN;
-  return Number(String(value).replace(/,/g, '').trim());
-}
-
-function _btcAllocationFormatWhole(value) {
-  var num = Math.round(Number(value) || 0);
-  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(num);
-}
-
-function _btcAllocationFormatRupees(value, maxFractionDigits) {
-  var num = Number(value) || 0;
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: maxFractionDigits === undefined ? 0 : maxFractionDigits
-  }).format(num);
-}
-
-function _btcAllocationFormatRupeesWhole(value) {
-  return _btcAllocationFormatRupees(Math.round(Number(value) || 0), 0);
-}
-
-function _btcAllocationFormatRupeesPrice(value) {
-  var num = Number(value) || 0;
-  return _btcAllocationFormatRupees(num, 2);
-}
-
-function _btcAllocationFormatPercent(value) {
-  return (Number(value) || 0).toFixed(3) + '%';
-}
-
-function _btcAllocationFormatQty(value) {
-  return (Number(value) || 0).toFixed(8);
-}
-
-function _btcAllocationFormatTime(value) {
-  var date = value ? new Date(value) : new Date();
-  if (Number.isNaN(date.getTime())) date = new Date();
-  return date.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-}
-
-function _btcAllocationPreviousForHigh(high) {
-  var key = _btcAllocationHighKey(high);
-  if (!key) return 0;
-  var memory = _btcAllocationState.previousByHigh || {};
-  return Math.max(0, Number(memory[key]) || 0);
-}
-
-function _btcAllocationCurrentMotherHigh() {
-  var highEl = document.getElementById('btc-alloc-high');
-  var inputHigh = _btcAllocationNumber(highEl ? highEl.value : '');
-  if (Number.isFinite(inputHigh) && inputHigh > 0) return inputHigh;
-
-  var resultHigh = Number(_btcAllocationState.lastResult && _btcAllocationState.lastResult.bitcoinHigh);
-  if (Number.isFinite(resultHigh) && resultHigh > 0) return resultHigh;
-
-  var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
-  for (var i = rows.length - 1; i >= 0; i--) {
-    var rowHigh = Number(rows[i].targetHigh || rows[i].btcHigh);
-    if (Number.isFinite(rowHigh) && rowHigh > 0) return rowHigh;
-  }
-  return NaN;
-}
-
-function _btcAllocationTargetQuarter(averageBuyPrice, motherHigh) {
-  var avg = Number(averageBuyPrice);
-  var high = Number(motherHigh);
-  if (!Number.isFinite(avg) || avg <= 0 || !Number.isFinite(high) || high <= avg) return null;
-  return Math.round(avg + ((high - avg) * 0.25));
-}
-
-function _btcAllocationResultCells(row) {
-  return ''
-    + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(row.fallPercent) + '</span></td>'
-    + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.totalAllocationRequired) + '</span></td>'
-    + '<td class="num"><span class="allocator-value-muted">' + _btcAllocationFormatRupeesWhole(row.previousAllocation) + '</span></td>'
-    + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatRupeesWhole(row.freshAllocation) + '</span></td>'
-    + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.split20) + '</td>'
-    + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.split30) + '</td>'
-    + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.split50) + '</td>';
-}
-
-function _btcAllocationSplitConfig(splitKey) {
-  var key = splitKey || 'split20';
-  var configs = {
-    split20: { key: 'split20', pct: '20%', fib: 'Fib 2', source: 'allocation20' },
-    split30: { key: 'split30', pct: '30%', fib: 'Fib 4', source: 'allocation30' },
-    split50: { key: 'split50', pct: '50%', fib: 'Fib 8', source: 'allocation50' }
-  };
-  return configs[key] || configs.split20;
-}
-
-function renderBtcAllocationCalculator() {
-  var memoryEl = document.getElementById('btc-alloc-memory');
-  if (memoryEl) memoryEl.textContent = _btcAllocationFormatRupeesWhole(_btcAllocationState.previousTotalAllocation);
-
-  var resultBody = document.getElementById('btc-alloc-result-body');
-  if (resultBody) {
-    if (_btcAllocationState.lastResult) {
-      resultBody.innerHTML = '<tr>' + _btcAllocationResultCells(_btcAllocationState.lastResult) + '</tr>';
-    } else {
-      resultBody.innerHTML = '<tr><td colspan="7" class="cf-table-empty-cell">No calculation yet</td></tr>';
-    }
-  }
-
-  var trackBtn20 = document.getElementById('btc-alloc-track-latest-20');
-  var trackBtn30 = document.getElementById('btc-alloc-track-latest-30');
-  var trackBtn50 = document.getElementById('btc-alloc-track-latest-50');
-  var trackHint = document.getElementById('btc-alloc-track-hint');
-  var last = _btcAllocationState.lastResult;
-  var canTrack = !!(last && Number(last.split20) > 0);
-  if (trackBtn20) trackBtn20.disabled = !canTrack;
-  if (trackBtn30) trackBtn30.disabled = !(last && Number(last.split30) > 0);
-  if (trackBtn50) trackBtn50.disabled = !(last && Number(last.split50) > 0);
-  if (trackHint) {
-    trackHint.textContent = canTrack
-      ? 'Ready: 20% ' + _btcAllocationFormatRupeesWhole(last.split20)
-        + ' | 30% ' + _btcAllocationFormatRupeesWhole(last.split30)
-        + ' | 50% ' + _btcAllocationFormatRupeesWhole(last.split50)
-        + ' at ' + _btcAllocationFormatRupeesPrice(last.bitcoinLow)
-      : 'Waiting for a valid allocation';
-  }
-
-  var historyBody = document.getElementById('btc-alloc-history-body');
-  if (historyBody) {
-    var rows = Array.isArray(_btcAllocationState.history) ? _btcAllocationState.history : [];
-    if (!rows.length) {
-      historyBody.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">No allocation history yet</td></tr>';
-    } else {
-      historyBody.innerHTML = rows.map(function(row) {
-        return '<tr>'
-          + '<td><div class="table-datetime"><div class="table-datetime-date">' + _escapeHtml(_btcAllocationFormatTime(row.createdAt)) + '</div><div class="table-note">calculation</div></div></td>'
-          + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.bitcoinHigh) + '</td>'
-          + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.bitcoinLow) + '</td>'
-          + _btcAllocationResultCells(row)
-          + '</tr>';
-      }).join('');
-    }
-  }
-
-  renderBtcFibLadder();
-  renderBtcBuyTracker();
-}
-
-function _btcFibError(message) {
-  var errorEl = document.getElementById('btc-fib-error');
-  if (errorEl) errorEl.textContent = message || '';
-}
-
-function _btcFibFormatUsdt(value) {
-  var num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return '-';
-  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
-}
-
-function _btcFibInrToUsdt(amountInr) {
-  var rate = Number(_cfUsdInrRate) || 0;
-  var amount = Number(amountInr) || 0;
-  return rate > 0 && amount > 0 ? amount / rate : null;
-}
-
-async function _btcFibEnsureFxRate() {
-  if ((Number(_cfUsdInrRate) || 0) > 0) return true;
-  try {
-    var response = await fetch('/api/portfolio/summary', { credentials: 'same-origin', cache: 'no-store' });
-    var payload = await response.json();
-    if (payload && payload.currency) cfApplyPortfolioCurrency(payload.currency);
-  } catch (error) {
-    console.warn('Unable to load USD/INR rate for Fib orders:', error);
-  }
-  return (Number(_cfUsdInrRate) || 0) > 0;
-}
-
-function _btcFibLevelConfigs() {
-  return [
-    { level: 2, pct: 0.20, label: 'Fib 2.0 / 20%' },
-    { level: 4, pct: 0.30, label: 'Fib 4.0 / 30%' },
-    { level: 8, pct: 0.50, label: 'Fib 8.0 / 50%' }
-  ];
-}
-
-function _btcFibReadInputs() {
-  var fibHighEl = document.getElementById('btc-fib-high');
-  var fibLowEl = document.getElementById('btc-fib-low');
-  var capitalEl = document.getElementById('btc-fib-capital');
-  var symbolEl = document.getElementById('btc-fib-symbol');
-  var leverageEl = document.getElementById('btc-fib-leverage');
-  return {
-    fibHigh: _btcAllocationNumber(fibHighEl ? fibHighEl.value : ''),
-    fibLow: _btcAllocationNumber(fibLowEl ? fibLowEl.value : ''),
-    motherHigh: _btcAllocationCurrentMotherHigh(),
-    capital: _btcAllocationNumber(capitalEl ? capitalEl.value : ''),
-    symbol: String(symbolEl && symbolEl.value ? symbolEl.value : 'BTCUSDT').trim().toUpperCase(),
-    leverage: Math.max(1, Math.round(_btcAllocationNumber(leverageEl ? leverageEl.value : '1') || 1))
-  };
-}
-
-function _btcFibValidate(input) {
-  if (!Number.isFinite(input.motherHigh)) return 'Enter Mother Candle High in Inputs before calculating the Fib ladder.';
-  if (input.motherHigh <= 0) return 'Mother Candle High must be greater than 0.';
-  if (!Number.isFinite(input.fibHigh)) return 'Fib High must be a valid number.';
-  if (input.fibHigh <= 0) return 'Fib High must be greater than 0.';
-  if (!Number.isFinite(input.fibLow)) return 'Fib Low must be a valid number.';
-  if (input.fibLow <= 0) return 'Fib Low must be greater than 0.';
-  if (input.fibLow >= input.fibHigh) return 'Fib Low must be below Fib High.';
-  if (input.fibLow >= input.motherHigh) return 'Fib Low must be below Mother Candle High to calculate allocation.';
-  if (!Number.isFinite(input.capital)) return 'Total Fund must be a valid number.';
-  if (input.capital <= 0) return 'Total Fund must be greater than 0.';
-  if (!input.symbol) return 'Symbol is required.';
-  if (!Number.isFinite(input.leverage) || input.leverage < 1) return 'Leverage must be at least 1.';
-  return '';
-}
-
-function _btcFibFindRowForLevel(ladder, level) {
-  var rows = ladder && Array.isArray(ladder.rows) ? ladder.rows : [];
-  return rows.find(function(row) { return Number(row.level) === Number(level); }) || null;
-}
-
-function _btcFibFindPreviousInList(input, ladders) {
-  ladders = Array.isArray(ladders) ? ladders : [];
-  var motherKey = _btcAllocationHighKey(input.motherHigh);
-  var inputCapital = Number(input.capital);
-  var previous = null;
-  var previousAllocation = 0;
-  for (var i = ladders.length - 1; i >= 0; i--) {
-    var ladder = ladders[i];
-    if (_btcAllocationHighKey(ladder.motherHigh) !== motherKey) continue;
-    var ladderCapital = Number(ladder.capital);
-    if (Number.isFinite(inputCapital) && Number.isFinite(ladderCapital) && Math.abs(inputCapital - ladderCapital) > 0.000001) continue;
-    var ladderAllocation = _btcFibPreviousTotalAllocation(ladder);
-    if (!previous || ladderAllocation >= previousAllocation) {
-      previous = ladder;
-      previousAllocation = ladderAllocation;
-    }
-  }
-  return previous;
-}
-
-function _btcFibPreviousTotalFall(ladder) {
-  if (!ladder) return 0;
-  var stored = Number(ladder.totalFallPercentExact);
-  if (Number.isFinite(stored) && stored >= 0) return stored;
-  return Math.max(0, Number(ladder.fallPercent) || 0);
-}
-
-function _btcFibPreviousTotalAllocation(ladder) {
-  if (!ladder) return 0;
-  var stored = Number(ladder.totalAllocationRequiredExact);
-  if (Number.isFinite(stored) && stored >= 0) return stored;
-  var rows = Array.isArray(ladder.rows) ? ladder.rows : [];
-  var rowTotal = rows.reduce(function(total, row) {
-    return total + (Number(row.totalAmountInrExact) || Number(row.amountInrExact) || Number(row.amountInr) || 0);
-  }, 0);
-  return Math.max(0, rowTotal || Number(ladder.totalAllocationRequired) || Number(ladder.totalAllocation) || 0);
-}
-
-function _btcFibBuildLadder(input, open, previousLadder) {
-  var range = input.fibHigh - input.fibLow;
-  var fallPercentExact = Math.max(0, ((input.motherHigh - input.fibLow) / input.motherHigh) * 100);
-  var totalAllocationRequiredExact = input.capital * (fallPercentExact / 100);
-  var previousFallPercentExact = _btcFibPreviousTotalFall(previousLadder);
-  var previousAllocationExact = _btcFibPreviousTotalAllocation(previousLadder);
-  var freshFallPercentExact = Math.max(0, fallPercentExact - previousFallPercentExact);
-  var freshAllocationExact = Math.max(0, totalAllocationRequiredExact - previousAllocationExact);
-  var rows = _btcFibLevelConfigs().map(function(config) {
-    var price = input.fibHigh - (range * config.level);
-    var totalAmountInrExact = totalAllocationRequiredExact * config.pct;
-    var previousAmountInrExact = previousAllocationExact * config.pct;
-    var amountInrExact = freshAllocationExact * config.pct;
-    return {
-      level: config.level,
-      pct: config.pct,
-      label: config.label,
-      price: price,
-      totalFallPercentExact: fallPercentExact,
-      previousFallPercentExact: previousFallPercentExact,
-      fallPercent: freshFallPercentExact,
-      totalAmountInrExact: totalAmountInrExact,
-      previousAmountInrExact: previousAmountInrExact,
-      amountInr: Math.round(amountInrExact),
-      amountInrExact: amountInrExact,
-      amountUsdt: _btcFibInrToUsdt(amountInrExact),
-      status: ''
-    };
-  });
-  var totalFallPercentExact = fallPercentExact;
-  return {
-    id: 'btc-fib-' + Date.now() + '-' + Math.round(Math.random() * 100000),
-    createdAt: new Date().toISOString(),
-    motherHigh: input.motherHigh,
-    fibHigh: input.fibHigh,
-    fibLow: input.fibLow,
-    capital: input.capital,
-    symbol: input.symbol,
-    leverage: input.leverage,
-    range: range,
-    totalFallPercentExact: totalFallPercentExact,
-    previousFallPercentExact: previousFallPercentExact,
-    fallPercent: Math.round(freshFallPercentExact * 1000) / 1000,
-    totalAllocationRequiredExact: totalAllocationRequiredExact,
-    totalAllocationRequired: Math.round(totalAllocationRequiredExact),
-    previousAllocationExact: previousAllocationExact,
-    previousAllocation: Math.round(previousAllocationExact),
-    freshAllocationExact: freshAllocationExact,
-    freshAllocation: Math.round(freshAllocationExact),
-    totalAllocation: Math.round(freshAllocationExact),
-    previousFibId: previousLadder ? previousLadder.id : '',
-    open: open !== false,
-    rows: rows
-  };
-}
-
-function _btcFibStoredInput(ladder) {
-  var input = {
-    fibHigh: Number(ladder && ladder.fibHigh),
-    fibLow: Number(ladder && ladder.fibLow),
-    motherHigh: Number(ladder && ladder.motherHigh),
-    capital: Number(ladder && ladder.capital),
-    symbol: String(ladder && ladder.symbol ? ladder.symbol : 'BTCUSDT').trim().toUpperCase(),
-    leverage: Math.max(1, Math.round(Number(ladder && ladder.leverage) || 1))
-  };
-  return _btcFibValidate(input) ? null : input;
-}
-
-function _btcFibRebuildStoredLadders(ladders) {
-  var rebuilt = [];
-  (Array.isArray(ladders) ? ladders : []).forEach(function(ladder) {
-    var input = _btcFibStoredInput(ladder);
-    if (!input) {
-      rebuilt.push(ladder);
-      return;
-    }
-    var previousLadder = _btcFibFindPreviousInList(input, rebuilt);
-    var next = _btcFibBuildLadder(input, ladder.open, previousLadder);
-    next.id = ladder.id || next.id;
-    next.createdAt = ladder.createdAt || next.createdAt;
-    next.open = ladder.open !== false;
-    next.rows.forEach(function(row) {
-      var oldRow = _btcFibFindRowForLevel(ladder, row.level);
-      if (oldRow && oldRow.status) row.status = oldRow.status;
-    });
-    rebuilt.push(next);
-  });
-  return rebuilt;
-}
-
-function calculateBtcFibLadder() {
-  var input = _btcFibReadInputs();
-  var error = _btcFibValidate(input);
-  if (error) {
-    _btcFibError(error);
-    return;
-  }
-  var previousLadder = _btcFibFindPreviousInList(input, _btcAllocationState.fibLadders);
-  var ladder = _btcFibBuildLadder(input, true, previousLadder);
-  var badRow = ladder.rows.find(function(row) { return !Number.isFinite(row.price) || row.price <= 0; });
-  if (badRow) {
-    _btcFibError('Fib ' + badRow.level + '.0 price is below zero. Check the Fib High and Fib Low.');
-    return;
-  }
-  _btcAllocationState.fibLadders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
-  _btcAllocationState.fibLadders.forEach(function(item) { item.open = false; });
-  _btcAllocationState.fibLadders.push(ladder);
-  _btcAllocationState.fibLast = ladder;
-  _btcAllocationSaveState();
-  _btcFibError('');
-  renderBtcFibLadder();
-}
-
-function _btcFibLadderTitle(ladder, index) {
-  return 'Fib ' + (index + 1);
-}
-
-function _btcFibLadderRowsHtml(ladder) {
-  return (Array.isArray(ladder.rows) ? ladder.rows : []).map(function(row) {
-    var amountUsdt = _btcFibInrToUsdt(row.amountInrExact || row.amountInr);
-    row.amountUsdt = amountUsdt;
-    var status = row.status || (amountUsdt ? ('Rate ' + fmtPortfolioRateLabel()) : 'Load live USD/INR rate before placing');
-    return '<tr>'
-      + '<td><div class="table-row-label">' + _escapeHtml(row.label || ('Fib ' + row.level)) + '</div><div class="table-note">Fib High - range x ' + _escapeHtml(row.level) + '</div></td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesPrice(row.price) + '</span></td>'
-      + '<td class="num">' + _btcAllocationFormatPercent(row.fallPercent !== undefined ? row.fallPercent : ladder.fallPercent) + '</td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.amountInr) + '</span></td>'
-      + '<td class="num">' + _escapeHtml(_btcFibFormatUsdt(amountUsdt)) + '</td>'
-      + '<td class="center"><button class="btn btn-outline btn-sm" data-cf-click="placeBtcFibOrder(\'' + _escapeHtml(ladder.id) + '\',' + Number(row.level) + ',\'paper\')">Paper Buy</button></td>'
-      + '<td class="center"><button class="btn btn-danger btn-sm" data-cf-click="placeBtcFibOrder(\'' + _escapeHtml(ladder.id) + '\',' + Number(row.level) + ',\'live\')">Broker Buy</button></td>'
-      + '<td><div class="table-note">' + _escapeHtml(status) + '</div></td>'
-      + '</tr>';
-  }).join('');
-}
-
-function _btcFibLadderTableHtml(ladder) {
-  return ''
-    + '<div class="table-scroll">'
-    + '<table class="trade-table allocator-fib-table">'
-    + '<thead><tr>'
-    + '<th>Level</th>'
-    + '<th class="num">Buy Price ₹</th>'
-    + '<th class="num">Fresh Fall %</th>'
-    + '<th class="num">Fresh Buy Amount ₹</th>'
-    + '<th class="num">Order Size USDT</th>'
-    + '<th class="center">Paper</th>'
-    + '<th class="center">Broker</th>'
-    + '<th>Status</th>'
-    + '</tr></thead>'
-    + '<tbody>' + _btcFibLadderRowsHtml(ladder) + '</tbody>'
-    + '</table>'
-    + '</div>';
-}
-
-function renderBtcFibLadder() {
-  var host = document.getElementById('btc-fib-ladders');
-  if (!host) return;
-  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
-  if (!ladders.length) {
-    host.innerHTML = '<div class="cf-table-empty-cell">No Fib ladder yet</div>';
-    return;
-  }
-  host.innerHTML = ladders.map(function(ladder, index) {
-    if (!ladder.id) ladder.id = 'btc-fib-' + index;
-    var open = !!ladder.open;
-    var title = _btcFibLadderTitle(ladder, index);
-    return '<section class="allocator-fib-card">'
-      + '<div class="allocator-fib-card-head">'
-      + '<button type="button" class="allocator-fib-card-toggle" aria-expanded="' + (open ? 'true' : 'false') + '" data-cf-click="toggleBtcFibLadder(\'' + _escapeHtml(ladder.id) + '\')">'
-      + '<span class="allocator-fib-card-title">' + _escapeHtml(title) + '</span>'
-      + '<span>High ' + _escapeHtml(_btcAllocationFormatRupeesPrice(ladder.fibHigh)) + '</span>'
-      + '<span>Low ' + _escapeHtml(_btcAllocationFormatRupeesPrice(ladder.fibLow)) + '</span>'
-      + '<span>Fresh Fall ' + _escapeHtml(_btcAllocationFormatPercent(ladder.fallPercent)) + '</span>'
-      + '<span>Fresh ' + _escapeHtml(_btcAllocationFormatRupeesWhole(ladder.freshAllocation !== undefined ? ladder.freshAllocation : ladder.totalAllocation)) + '</span>'
-      + '<strong>' + (open ? 'Close' : 'Open') + '</strong>'
-      + '</button>'
-      + '<button type="button" class="btn btn-outline btn-sm allocator-fib-delete" data-cf-click="deleteBtcFibLadder(\'' + _escapeHtml(ladder.id) + '\')">Delete</button>'
-      + '</div>'
-      + '<div class="allocator-fib-card-body"' + (open ? '' : ' hidden') + '>'
-      + _btcFibLadderTableHtml(ladder)
-      + '</div>'
-      + '</section>';
-  }).join('');
-}
-
-function _btcFibFindLadder(ladderId) {
-  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
-  if (!ladderId && ladders.length) return ladders[ladders.length - 1];
-  return ladders.find(function(item) { return String(item.id) === String(ladderId); }) || null;
-}
-
-function toggleBtcFibLadder(ladderId) {
-  var ladder = _btcFibFindLadder(ladderId);
-  if (!ladder) return;
-  ladder.open = !ladder.open;
-  _btcAllocationState.fibLast = ladder;
-  _btcAllocationSaveState();
-  renderBtcFibLadder();
-}
-
-function deleteBtcFibLadder(ladderId) {
-  var ladders = Array.isArray(_btcAllocationState.fibLadders) ? _btcAllocationState.fibLadders : [];
-  _btcAllocationState.fibLadders = _btcFibRebuildStoredLadders(ladders.filter(function(item) { return String(item.id) !== String(ladderId); }));
-  _btcAllocationState.fibLast = _btcAllocationState.fibLadders.length ? _btcAllocationState.fibLadders[_btcAllocationState.fibLadders.length - 1] : null;
-  _btcAllocationSaveState();
-  renderBtcFibLadder();
-}
-
-async function placeBtcFibOrder(ladderId, level, mode) {
-  if (mode === undefined) {
-    mode = level;
-    level = ladderId;
-    ladderId = null;
-  }
-  var last = _btcFibFindLadder(ladderId) || _btcAllocationState.fibLast;
-  var row = last && Array.isArray(last.rows)
-    ? last.rows.find(function(item) { return Number(item.level) === Number(level); })
-    : null;
-  if (!last || !row) {
-    _btcFibError('Calculate the Fib ladder before placing an order.');
-    return;
-  }
-  var rateReady = await _btcFibEnsureFxRate();
-  var amountUsdt = rateReady ? _btcFibInrToUsdt(row.amountInrExact || row.amountInr) : null;
-  if (!amountUsdt) {
-    _btcFibError('Live USD/INR rate is unavailable. Refresh Portfolio once, then calculate the Fib ladder again.');
-    renderBtcFibLadder();
-    return;
-  }
-  var isLive = String(mode || '').toLowerCase() === 'live';
-  if (isLive) {
-    var ok = await cfConfirm(
-      'This will place a REAL broker BUY limit entry.<br><br>'
-        + 'Symbol: <b>' + _escapeHtml(last.symbol || 'BTCUSDT') + '</b><br>'
-        + 'Level: <b>Fib ' + _escapeHtml(row.level) + '.0</b><br>'
-        + 'Limit: <b>' + _escapeHtml(_btcAllocationFormatRupeesPrice(row.price)) + '</b><br>'
-        + 'Amount: <b>' + _escapeHtml(_btcAllocationFormatRupeesWhole(row.amountInr)) + ' / ' + _escapeHtml(_btcFibFormatUsdt(amountUsdt)) + '</b>',
-      'Confirm Broker Buy',
-      '⚠️',
-      true
-    );
-    if (!ok) return;
-  }
-  row.status = 'Submitting ' + (isLive ? 'broker' : 'paper') + ' buy...';
-  _btcAllocationSaveState();
-  renderBtcFibLadder();
-  try {
-    var payload = {
-      symbol: last.symbol || 'BTCUSDT',
-      side: 'BUY',
-      qty_mode: 'usdt',
-      qty_value: amountUsdt,
-      leverage: Math.max(1, Math.round(Number(last.leverage) || 1)),
-      mode: isLive ? 'live' : 'paper',
-      order_type: 'maker_only',
-      entry_limit_price: Number(row.price)
-    };
-    var response = await cfApiFetch('/api/scalp/enter', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    var data = await cfReadApiPayload(response);
-    if (!response.ok || data.status === 'error') {
-      throw new Error(cfApiErrorDetail(data, 'Order failed'));
-    }
-    row.status = data.message || ('Fib ' + row.level + '.0 ' + (isLive ? 'broker' : 'paper') + ' buy armed');
-    _btcAllocationSaveState();
-    renderBtcFibLadder();
-    if (typeof cfToast === 'function') cfToast(row.status, 'success');
-    if (typeof cfRefreshScalpWorkspace === 'function') cfRefreshScalpWorkspace();
-  } catch (error) {
-    row.status = 'Failed: ' + (error && error.message ? error.message : 'Order failed');
-    _btcAllocationSaveState();
-    _btcFibError(row.status);
-    renderBtcFibLadder();
-    if (typeof cfToast === 'function') cfToast(row.status, 'error');
-  }
-}
-
-function _btcAllocationError(message) {
-  var errorEl = document.getElementById('btc-alloc-error');
-  if (errorEl) errorEl.textContent = message || '';
-}
-
-function _btcMinorDifferenceError(message) {
-  var errorEl = document.getElementById('btc-minor-error');
-  if (errorEl) errorEl.textContent = message || '';
-}
-
-function _btcBuyTrackerError(message) {
-  var errorEl = document.getElementById('btc-buy-error');
-  if (errorEl) errorEl.textContent = message || '';
-}
-
-function _btcAllocationValidate(high, low) {
-  if (!Number.isFinite(high)) return 'Major Mother Candle High must be a valid number.';
-  if (!Number.isFinite(low)) return 'Major Mother Candle Low must be a valid number.';
-  if (high <= 0) return 'Major Mother Candle High must be greater than 0.';
-  if (low <= 0) return 'Major Mother Candle Low must be greater than 0.';
-  if (low > high) return 'Major Mother Candle Low cannot be greater than Major Mother Candle High.';
-  return '';
-}
-
-function _btcMinorDifferenceValidate(majorHigh, majorLow, minorHigh, minorLow) {
-  if (!Number.isFinite(majorHigh)) return 'Major High must be a valid number.';
-  if (!Number.isFinite(majorLow)) return 'Major Low must be a valid number.';
-  if (!Number.isFinite(minorHigh)) return 'Minor High must be a valid number.';
-  if (!Number.isFinite(minorLow)) return 'Minor Low must be a valid number.';
-  if (majorHigh <= 0) return 'Major High must be greater than 0.';
-  if (majorLow <= 0) return 'Major Low must be greater than 0.';
-  if (minorHigh <= 0) return 'Minor High must be greater than 0.';
-  if (minorLow <= 0) return 'Minor Low must be greater than 0.';
-  if (majorLow > majorHigh) return 'Major Low cannot be greater than Major High.';
-  if (minorLow > minorHigh) return 'Minor Low cannot be greater than Minor High.';
-  return '';
-}
-
-function _btcMinorHighInsideMajor(majorHigh, majorLow, minorHigh) {
-  return Number(minorHigh) <= Number(majorHigh) && Number(minorHigh) >= Number(majorLow);
-}
-
-function _btcBuyTrackerValidate(buyPrice, buyAmount) {
-  if (!Number.isFinite(buyPrice)) return 'Buy Price must be a valid number.';
-  if (!Number.isFinite(buyAmount)) return 'Buy Amount must be a valid number.';
-  if (buyPrice <= 0) return 'Buy Price must be greater than 0.';
-  if (buyAmount <= 0) return 'Buy Amount must be greater than 0.';
-  return '';
-}
-
-function _btcBuyTrackerReadForm() {
-  var buyPriceEl = document.getElementById('btc-buy-price');
-  var buyAmountEl = document.getElementById('btc-buy-value');
-  return {
-    buyPrice: _btcAllocationNumber(buyPriceEl ? buyPriceEl.value : ''),
-    buyAmount: _btcAllocationNumber(buyAmountEl ? buyAmountEl.value : '')
-  };
-}
-
-function _btcBuyTrackerSetForm(buyPrice, buyAmount, splitKey) {
-  var buyPriceEl = document.getElementById('btc-buy-price');
-  var buyAmountEl = document.getElementById('btc-buy-value');
-  if (buyPriceEl) buyPriceEl.value = Number.isFinite(buyPrice) ? String(buyPrice) : '';
-  if (buyAmountEl) buyAmountEl.value = Number.isFinite(buyAmount) ? String(Math.round(buyAmount)) : '';
-  [buyPriceEl, buyAmountEl].forEach(function(el) {
-    if (!el) return;
-    if (Number.isFinite(buyPrice) && Number.isFinite(buyAmount)) {
-      el.dataset.btcAllocationFill = splitKey || 'manual';
-    } else {
-      delete el.dataset.btcAllocationFill;
-    }
-  });
-}
-
-function _btcBuyTrackerComputedRows() {
-  var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
-  var totalBuyAmount = 0;
-  var weightedPriceAmount = 0;
-  var fallbackHigh = _btcAllocationCurrentMotherHigh();
-  return rows.map(function(row, index) {
-    var buyPrice = Number(row.buyPrice) || 0;
-    var buyAmount = Number(row.buyAmount !== undefined ? row.buyAmount : row.buyingValue) || 0;
-    var targetHigh = Number(row.targetHigh || row.btcHigh);
-    if (!(Number.isFinite(targetHigh) && targetHigh > 0)) targetHigh = fallbackHigh;
-    totalBuyAmount += buyAmount;
-    weightedPriceAmount += buyPrice * buyAmount;
-    var averageBuyPrice = totalBuyAmount > 0 ? (weightedPriceAmount / totalBuyAmount) : 0;
-    var roundedAverageBuyPrice = Math.round(averageBuyPrice);
-    var targetPrice = _btcAllocationTargetQuarter(averageBuyPrice, targetHigh);
-    return {
-      id: row.id,
-      index: index + 1,
-      buyPrice: buyPrice,
-      buyAmount: buyAmount,
-      targetHigh: targetHigh,
-      totalBuyAmount: totalBuyAmount,
-      averageBuyPrice: roundedAverageBuyPrice,
-      targetPrice: targetPrice,
-      averageBuyAmount: Math.round(totalBuyAmount / (index + 1)),
-      source: row.source || 'manual'
-    };
-  });
-}
-
-function renderBtcBuyTracker() {
-  var computedRows = _btcBuyTrackerComputedRows();
-  var latest = computedRows.length ? computedRows[computedRows.length - 1] : null;
-  var rowsEl = document.getElementById('btc-buy-total-rows');
-  var valueEl = document.getElementById('btc-buy-total-value');
-  var avgEl = document.getElementById('btc-buy-average-price');
-  var avgFundEl = document.getElementById('btc-buy-average-fund');
-  if (rowsEl) rowsEl.textContent = _btcAllocationFormatWhole(computedRows.length);
-  if (valueEl) valueEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.totalBuyAmount : 0);
-  if (avgEl) avgEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.averageBuyPrice : 0);
-  if (avgFundEl) avgFundEl.textContent = _btcAllocationFormatRupeesWhole(latest ? latest.averageBuyAmount : 0);
-
-  var body = document.getElementById('btc-buy-tracker-body');
-  if (!body) return;
-  if (!computedRows.length) {
-    body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">No BTC buy rows yet</td></tr>';
-    return;
-  }
-  body.innerHTML = computedRows.map(function(row) {
-    var sourceLabels = {
-      allocation20: 'allocation 20%',
-      allocation30: 'allocation 30%',
-      allocation50: 'allocation 50%'
-    };
-    var sourceNote = sourceLabels[row.source] ? '<div class="table-note">' + sourceLabels[row.source] + '</div>' : '';
-    return '<tr>'
-      + '<td class="num">' + _btcAllocationFormatRupeesPrice(row.buyPrice) + sourceNote + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.buyAmount) + '</td>'
-      + '<td class="num">' + _btcAllocationFormatRupeesWhole(row.averageBuyAmount) + '</td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(row.averageBuyPrice) + '</span></td>'
-      + '<td class="num"><span class="allocator-value-primary">' + (row.targetPrice === null ? '-' : _btcAllocationFormatRupeesWhole(row.targetPrice)) + '</span></td>'
-      + '<td class="center"><button class="btn btn-outline btn-sm allocator-row-delete" data-cf-click="deleteBtcBuyTrackerRow(\'' + _escapeHtml(row.id) + '\')">Delete</button></td>'
-      + '</tr>';
-  }).join('');
-}
-
-function _btcBuyTrackerAddRow(row, options) {
-  var opts = options || {};
-  var buyPrice = Number(row.buyPrice);
-  var buyAmount = Number(row.buyAmount !== undefined ? row.buyAmount : row.buyingValue);
-  var error = _btcBuyTrackerValidate(buyPrice, buyAmount);
-  if (error) {
-    _btcBuyTrackerError(error);
-    return false;
-  }
-  _btcAllocationState.buyRows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
-  if (row.sourceAllocationId && _btcAllocationState.buyRows.some(function(existing) {
-    return existing.sourceAllocationId === row.sourceAllocationId && existing.source === row.source;
-  })) {
-    _btcBuyTrackerError('This latest allocation split is already in the buy tracker.');
-    return false;
-  }
-  _btcAllocationState.buyRows.push({
-    id: 'btc-buy-' + Date.now() + '-' + Math.round(Math.random() * 100000),
-    createdAt: new Date().toISOString(),
-    buyPrice: buyPrice,
-    buyAmount: buyAmount,
-    targetHigh: Number(row.targetHigh) || _btcAllocationCurrentMotherHigh(),
-    source: row.source || 'manual',
-    sourceAllocationId: row.sourceAllocationId || ''
-  });
-  _btcAllocationSaveState();
-  _btcBuyTrackerError('');
-  renderBtcAllocationCalculator();
-  if (opts.toast !== false && typeof cfToast === 'function') cfToast('BTC buy row added', 'success');
-  return true;
-}
-
-function addBtcBuyTrackerRow() {
-  var form = _btcBuyTrackerReadForm();
-  var added = _btcBuyTrackerAddRow({
-    buyPrice: form.buyPrice,
-    buyAmount: form.buyAmount,
-    targetHigh: _btcAllocationCurrentMotherHigh(),
-    source: 'manual'
-  });
-  if (added) _btcBuyTrackerSetForm(NaN, NaN, NaN);
-}
-
-function prefillLatestBtcAllocationBuy(splitKey) {
-  var last = _btcAllocationState.lastResult;
-  var config = _btcAllocationSplitConfig(splitKey);
-  if (!last) {
-    _btcBuyTrackerError('Calculate a BTC allocation before filling the tracker.');
-    return;
-  }
-  var buyAmount = Math.round(Number(last[config.key]) || 0);
-  if (buyAmount <= 0) {
-    _btcBuyTrackerError('Latest ' + config.pct + ' allocation is 0. Calculate a larger fresh allocation before filling the tracker.');
-    return;
-  }
-  _btcBuyTrackerSetForm(Number(last.bitcoinLow), buyAmount, config.key);
-  _btcBuyTrackerError('');
-}
-
-function addLatestBtcAllocationToBuyTracker(splitKey) {
-  var last = _btcAllocationState.lastResult;
-  var config = _btcAllocationSplitConfig(splitKey);
-  if (!last) {
-    _btcBuyTrackerError('Calculate a BTC allocation before tracking the latest split.');
-    return;
-  }
-  var buyAmount = Math.round(Number(last[config.key]) || 0);
-  if (buyAmount <= 0) {
-    _btcBuyTrackerError('Latest ' + config.pct + ' allocation is 0. Nothing was added to the tracker.');
-    return;
-  }
-  _btcBuyTrackerAddRow({
-    buyPrice: Number(last.bitcoinLow),
-    buyAmount: buyAmount,
-    targetHigh: Number(last.bitcoinHigh),
-    source: config.source,
-    sourceAllocationId: last.id || ''
-  });
-}
-
-function deleteBtcBuyTrackerRow(rowId) {
-  var rows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
-  _btcAllocationState.buyRows = rows.filter(function(row) { return row.id !== rowId; });
-  _btcAllocationSaveState();
-  _btcBuyTrackerError('');
-  renderBtcAllocationCalculator();
-}
-
-function resetBtcBuyTracker() {
-  _btcAllocationState.buyRows = [];
-  _btcAllocationSaveState();
-  _btcBuyTrackerSetForm(NaN, NaN, NaN);
-  _btcBuyTrackerError('');
-  renderBtcAllocationCalculator();
-  if (typeof cfToast === 'function') cfToast('BTC buy tracker reset', 'success');
-}
-
-function calculateBtcMinorDifference() {
-  var majorHighEl = document.getElementById('btc-minor-major-high');
-  var majorLowEl = document.getElementById('btc-minor-major-low');
-  var minorHighEl = document.getElementById('btc-minor-high');
-  var minorLowEl = document.getElementById('btc-minor-low');
-  var majorHigh = _btcAllocationNumber(majorHighEl ? majorHighEl.value : '');
-  var majorLow = _btcAllocationNumber(majorLowEl ? majorLowEl.value : '');
-  var minorHigh = _btcAllocationNumber(minorHighEl ? minorHighEl.value : '');
-  var minorLow = _btcAllocationNumber(minorLowEl ? minorLowEl.value : '');
-  var error = _btcMinorDifferenceValidate(majorHigh, majorLow, minorHigh, minorLow);
-  if (error) {
-    _btcMinorDifferenceError(error);
-    return;
-  }
-
-  var isRelatedMinor = _btcMinorHighInsideMajor(majorHigh, majorLow, minorHigh);
-  var majorFallPercent = ((majorHigh - majorLow) / majorHigh) * 100;
-  var baseFallPercent = isRelatedMinor ? majorFallPercent : 0;
-  var totalToMinorLowPercent = isRelatedMinor
-    ? ((majorHigh - minorLow) / majorHigh) * 100
-    : ((minorHigh - minorLow) / minorHigh) * 100;
-  var differencePercent = Math.max(0, totalToMinorLowPercent - baseFallPercent);
-  var allocation = Math.max(0, differencePercent) * 1000;
-  var body = document.getElementById('btc-minor-result-body');
-  if (body) {
-    body.innerHTML = '<tr>'
-      + '<td><div class="table-row-label">' + (isRelatedMinor ? 'Related minor' : 'Separate major') + '</div><div class="table-note">' + (isRelatedMinor ? 'Major allocation is subtracted' : 'Minor high is outside major range') + '</div></td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(baseFallPercent) + '</span></td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatPercent(totalToMinorLowPercent) + '</span></td>'
-      + '<td class="num"><span class="allocator-value-primary allocator-value-fresh">' + _btcAllocationFormatPercent(differencePercent) + '</span></td>'
-      + '<td class="num"><span class="allocator-value-primary">' + _btcAllocationFormatRupeesWhole(allocation) + '</span></td>'
-      + '</tr>';
-  }
-  _btcMinorDifferenceError('');
-}
-
-function resetBtcMinorDifference() {
-  ['btc-minor-major-high', 'btc-minor-major-low', 'btc-minor-high', 'btc-minor-low'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.value = '';
-  });
-  var body = document.getElementById('btc-minor-result-body');
-  if (body) body.innerHTML = '<tr><td colspan="5" class="cf-table-empty-cell">No minor calculation yet</td></tr>';
-  _btcMinorDifferenceError('');
-}
-
-function clearBtcAllocationHistory() {
-  _btcAllocationState.history = [];
-  _btcAllocationState.lastResult = null;
-  _btcAllocationState.previousTotalAllocation = 0;
-  _btcAllocationState.previousTotalAllocationExact = 0;
-  _btcAllocationState.previousHigh = null;
-  _btcAllocationState.previousByHigh = {};
-  _btcAllocationSaveState();
-  _btcAllocationError('');
-  renderBtcAllocationCalculator();
-  if (typeof cfToast === 'function') cfToast('BTC allocation history and memory cleared', 'success');
-}
-
-function calculateBtcAllocation() {
-  var highEl = document.getElementById('btc-alloc-high');
-  var lowEl = document.getElementById('btc-alloc-low');
-  var high = _btcAllocationNumber(highEl ? highEl.value : '');
-  var low = _btcAllocationNumber(lowEl ? lowEl.value : '');
-  var error = _btcAllocationValidate(high, low);
-  if (error) {
-    _btcAllocationError(error);
-    return;
-  }
-
-  var previousAllocationExact = _btcAllocationPreviousForHigh(high);
-  var previousAllocation = Math.round(previousAllocationExact);
-  var fallPercentExact = ((high - low) / high) * 100;
-  var fallPercent = Math.round(fallPercentExact * 1000) / 1000;
-  var totalAllocationRequiredExact = fallPercentExact * 1000;
-  var totalAllocationRequired = Math.round(totalAllocationRequiredExact);
-  var freshAllocationExact = Math.max(0, totalAllocationRequiredExact - previousAllocationExact);
-  var freshAllocation = Math.round(freshAllocationExact);
-  var row = {
-    id: 'btc-alloc-' + Date.now(),
-    createdAt: new Date().toISOString(),
-    bitcoinHigh: high,
-    bitcoinLow: low,
-    fallPercent: fallPercent,
-    fallPercentExact: fallPercentExact,
-    totalAllocationRequiredExact: totalAllocationRequiredExact,
-    totalAllocationRequired: totalAllocationRequired,
-    previousAllocationExact: previousAllocationExact,
-    previousAllocation: previousAllocation,
-    freshAllocationExact: freshAllocationExact,
-    freshAllocation: freshAllocation,
-    split20: Math.round(freshAllocationExact * 0.20),
-    split30: Math.round(freshAllocationExact * 0.30),
-    split50: Math.round(freshAllocationExact * 0.50)
-  };
-
-  var highKey = _btcAllocationHighKey(high);
-  _btcAllocationState.previousByHigh = _btcAllocationState.previousByHigh || {};
-  if (highKey) {
-    _btcAllocationState.previousByHigh[highKey] = Math.max(previousAllocationExact, totalAllocationRequiredExact);
-  }
-  _btcAllocationState.previousTotalAllocationExact = highKey ? Number(_btcAllocationState.previousByHigh[highKey]) || 0 : 0;
-  _btcAllocationState.previousTotalAllocation = Math.round(_btcAllocationState.previousTotalAllocationExact);
-  _btcAllocationState.previousHigh = high;
-  _btcAllocationState.lastResult = row;
-  _btcAllocationState.history = [row].concat(_btcAllocationState.history || []).slice(0, 100);
-  _btcAllocationSaveState();
-  _btcAllocationError('');
-  if (row.split20 > 0) prefillLatestBtcAllocationBuy('split20');
-  renderBtcAllocationCalculator();
-}
-
-function resetBtcAllocation() {
-  var buyRows = Array.isArray(_btcAllocationState.buyRows) ? _btcAllocationState.buyRows : [];
-  _btcAllocationState = _btcAllocationDefaultState();
-  _btcAllocationState.buyRows = buyRows;
-  _btcAllocationSaveState();
-  _btcAllocationError('');
-  renderBtcAllocationCalculator();
-  if (typeof cfToast === 'function') cfToast('BTC allocation memory reset', 'success');
-}
-
 // ── Trade Journal ──────────────────────────────────────────
-const CF_TRADE_JOURNAL_STORAGE_KEY = 'cf_trade_journal_state_v1';
-const CF_TRADE_JOURNAL_FRAMES = ['5m', '15m', '1H', '4H'];
-let _cfTradeJournalState = {
-  entries: [],
-  draft: null,
-  activeTimeframe: '5m',
-  filterTimeframe: 'all',
-  openId: ''
-};
-let _cfTradeJournalBound = false;
+// Closed-trade history sourced from /api/journal/trades (seeded from the
+// CRYPTO trade workbook). Charts are inline SVG — no chart library, same
+// approach as the cascade campaign chart.
 
-function _cfTradeJournalToday() {
-  var date = new Date();
-  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
-  return date.toISOString().slice(0, 10);
-}
+var _cfJournalData = null;
+var _cfJournalCoinFilter = 'ALL';
 
-function _cfTradeJournalDefaultDraft() {
-  return {
-    id: '',
-    date: _cfTradeJournalToday(),
-    timeframe: _cfTradeJournalState.activeTimeframe || '5m',
-    symbol: selectedCrypto || 'BTCUSDT',
-    side: 'Long',
-    result: 'Open',
-    setup: '',
-    pnl: '',
-    entryPrice: '',
-    exitPrice: '',
-    emotion: 'Calm',
-    grade: 7,
-    tags: [],
-    thesis: '',
-    execution: '',
-    lesson: ''
-  };
-}
-
-function _cfTradeJournalLoadState() {
-  try {
-    var raw = localStorage.getItem(CF_TRADE_JOURNAL_STORAGE_KEY);
-    var parsed = raw ? JSON.parse(raw) : {};
-    _cfTradeJournalState = {
-      entries: Array.isArray(parsed.entries) ? parsed.entries.slice(0, 500) : [],
-      draft: parsed.draft && typeof parsed.draft === 'object' ? parsed.draft : null,
-      activeTimeframe: CF_TRADE_JOURNAL_FRAMES.indexOf(parsed.activeTimeframe) >= 0 ? parsed.activeTimeframe : '5m',
-      filterTimeframe: parsed.filterTimeframe || 'all',
-      openId: parsed.openId || ''
-    };
-  } catch (error) {
-    _cfTradeJournalState = { entries: [], draft: null, activeTimeframe: '5m', filterTimeframe: 'all', openId: '' };
-  }
-}
-
-function _cfTradeJournalSaveState() {
-  try {
-    localStorage.setItem(CF_TRADE_JOURNAL_STORAGE_KEY, JSON.stringify(_cfTradeJournalState));
-  } catch (error) {
-    console.warn('Unable to save trade journal:', error);
-  }
-}
-
-function _cfTradeJournalField(id) {
-  return document.getElementById(id);
-}
-
-function _cfTradeJournalReadNumber(id) {
-  var el = _cfTradeJournalField(id);
-  if (!el || String(el.value || '').trim() === '') return '';
-  var value = Number(String(el.value).replace(/,/g, '').trim());
-  return Number.isFinite(value) ? value : '';
-}
-
-function _cfTradeJournalTagsFromField() {
-  var el = _cfTradeJournalField('journal-tags');
-  return String(el && el.value ? el.value : '')
-    .split('|')
-    .map(function(tag) { return tag.trim(); })
-    .filter(Boolean);
-}
-
-function _cfTradeJournalSetTags(tags) {
-  var el = _cfTradeJournalField('journal-tags');
-  if (el) el.value = (Array.isArray(tags) ? tags : []).join('|');
-}
-
-function _cfTradeJournalReadForm() {
-  var timeframe = _cfTradeJournalState.activeTimeframe || '5m';
-  return {
-    id: String((_cfTradeJournalField('journal-edit-id') || {}).value || ''),
-    date: String((_cfTradeJournalField('journal-date') || {}).value || _cfTradeJournalToday()),
-    timeframe: timeframe,
-    symbol: String((_cfTradeJournalField('journal-symbol') || {}).value || 'BTCUSDT').trim().toUpperCase(),
-    side: String((_cfTradeJournalField('journal-side') || {}).value || 'Long'),
-    result: String((_cfTradeJournalField('journal-result') || {}).value || 'Open'),
-    setup: String((_cfTradeJournalField('journal-setup') || {}).value || '').trim(),
-    pnl: _cfTradeJournalReadNumber('journal-pnl'),
-    entryPrice: _cfTradeJournalReadNumber('journal-entry-price'),
-    exitPrice: _cfTradeJournalReadNumber('journal-exit-price'),
-    emotion: String((_cfTradeJournalField('journal-emotion') || {}).value || 'Calm'),
-    grade: Math.max(1, Math.min(10, Math.round(Number((_cfTradeJournalField('journal-grade') || {}).value) || 7))),
-    tags: _cfTradeJournalTagsFromField(),
-    thesis: String((_cfTradeJournalField('journal-thesis') || {}).value || '').trim(),
-    execution: String((_cfTradeJournalField('journal-execution') || {}).value || '').trim(),
-    lesson: String((_cfTradeJournalField('journal-lesson') || {}).value || '').trim()
-  };
-}
-
-function _cfTradeJournalApplyDraft(draft) {
-  var data = Object.assign(_cfTradeJournalDefaultDraft(), draft || {});
-  if (CF_TRADE_JOURNAL_FRAMES.indexOf(data.timeframe) < 0) data.timeframe = '5m';
-  _cfTradeJournalState.activeTimeframe = data.timeframe;
-  [
-    ['journal-edit-id', data.id || ''],
-    ['journal-date', data.date || _cfTradeJournalToday()],
-    ['journal-symbol', data.symbol || 'BTCUSDT'],
-    ['journal-side', data.side || 'Long'],
-    ['journal-result', data.result || 'Open'],
-    ['journal-setup', data.setup || ''],
-    ['journal-pnl', data.pnl === '' || data.pnl === null || data.pnl === undefined ? '' : data.pnl],
-    ['journal-entry-price', data.entryPrice === '' || data.entryPrice === null || data.entryPrice === undefined ? '' : data.entryPrice],
-    ['journal-exit-price', data.exitPrice === '' || data.exitPrice === null || data.exitPrice === undefined ? '' : data.exitPrice],
-    ['journal-emotion', data.emotion || 'Calm'],
-    ['journal-grade', data.grade || 7],
-    ['journal-thesis', data.thesis || ''],
-    ['journal-execution', data.execution || ''],
-    ['journal-lesson', data.lesson || '']
-  ].forEach(function(pair) {
-    var el = _cfTradeJournalField(pair[0]);
-    if (el) el.value = pair[1];
-  });
-  _cfTradeJournalSetTags(Array.isArray(data.tags) ? data.tags : []);
-  _cfTradeJournalUpdateGradeLabel();
-  renderTradeJournal();
-}
-
-function _cfTradeJournalStoreDraftFromForm() {
-  _cfTradeJournalState.draft = _cfTradeJournalReadForm();
-  _cfTradeJournalSaveState();
-  _cfTradeJournalUpdateGradeLabel();
-  _cfTradeJournalRenderTagButtons();
-}
-
-function _cfTradeJournalUpdateGradeLabel() {
-  var label = document.getElementById('journal-grade-label');
-  var grade = Number((_cfTradeJournalField('journal-grade') || {}).value) || 7;
-  if (label) label.textContent = Math.max(1, Math.min(10, Math.round(grade))) + '/10';
-}
-
-function _cfTradeJournalError(message) {
-  var el = document.getElementById('journal-error');
-  if (el) el.textContent = message || '';
-}
-
-function _cfTradeJournalValidate(entry) {
-  if (!entry.date) return 'Choose a journal date.';
-  if (CF_TRADE_JOURNAL_FRAMES.indexOf(entry.timeframe) < 0) return 'Choose 5m, 15m, 1H, or 4H.';
-  if (!entry.symbol) return 'Symbol is required.';
-  if (entry.pnl !== '' && !Number.isFinite(Number(entry.pnl))) return 'P&L must be a valid number.';
-  var hasJournalText = !!(entry.setup || entry.thesis || entry.execution || entry.lesson || (entry.tags && entry.tags.length));
-  if (!hasJournalText) return 'Add a setup, execution note, lesson, or tag before saving.';
-  return '';
-}
-
-function _cfTradeJournalFormatDate(value) {
-  if (!value) return '--';
-  var parts = String(value).split('-').map(Number);
-  if (parts.length !== 3) return value;
-  var date = new Date(parts[0], parts[1] - 1, parts[2]);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-function _cfTradeJournalFormatShortDate(value) {
-  if (!value) return '--';
-  var parts = String(value).split('-').map(Number);
-  if (parts.length !== 3) return value;
-  var date = new Date(parts[0], parts[1] - 1, parts[2]);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-}
-
-function _cfTradeJournalFormatNumber(value) {
-  if (value === '' || value === null || value === undefined) return '-';
-  var num = Number(value);
-  if (!Number.isFinite(num)) return '-';
-  return (num > 0 ? '+' : '') + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(num);
-}
-
-function _cfTradeJournalResultClass(result) {
-  var value = String(result || '').toLowerCase();
-  if (value === 'win') return 'is-win';
-  if (value === 'loss') return 'is-loss';
-  if (value === 'breakeven') return 'is-flat';
-  if (value === 'skipped') return 'is-skipped';
-  return 'is-open';
-}
-
-function _cfTradeJournalRenderTagButtons() {
-  var tags = _cfTradeJournalTagsFromField();
-  document.querySelectorAll('.journal-tag-chip[data-journal-tag]').forEach(function(btn) {
-    btn.classList.toggle('active', tags.indexOf(btn.dataset.journalTag) >= 0);
+function _cfJournalUsd(value, digits) {
+  var n = Number(value);
+  if (!isFinite(n)) return '--';
+  return '$' + n.toLocaleString('en-US', {
+    minimumFractionDigits: digits === undefined ? 2 : digits,
+    maximumFractionDigits: digits === undefined ? 2 : digits
   });
 }
 
-function _cfTradeJournalStats(entries) {
-  var today = _cfTradeJournalToday();
-  var todayRows = entries.filter(function(entry) { return entry.date === today; });
-  var pnl = todayRows.reduce(function(total, entry) {
-    var value = Number(entry.pnl);
-    return total + (Number.isFinite(value) ? value : 0);
-  }, 0);
-  var closed = todayRows.filter(function(entry) { return entry.result === 'Win' || entry.result === 'Loss'; });
-  var wins = closed.filter(function(entry) { return entry.result === 'Win'; }).length;
-  var frameCounts = {};
-  CF_TRADE_JOURNAL_FRAMES.forEach(function(frame) { frameCounts[frame] = 0; });
-  todayRows.forEach(function(entry) {
-    if (frameCounts[entry.timeframe] !== undefined) frameCounts[entry.timeframe] += 1;
-  });
-  var bestFrame = CF_TRADE_JOURNAL_FRAMES.reduce(function(best, frame) {
-    return frameCounts[frame] > frameCounts[best] ? frame : best;
-  }, '5m');
-  return {
-    todayRows: todayRows,
-    todayCount: todayRows.length,
-    pnl: pnl,
-    winRate: closed.length ? Math.round((wins / closed.length) * 100) : 0,
-    bestFrame: frameCounts[bestFrame] ? bestFrame : '--',
-    frameCounts: frameCounts
-  };
+function _cfJournalPct(value, digits) {
+  var n = Number(value);
+  if (!isFinite(n)) return '--';
+  return (n >= 0 ? '' : '-') + Math.abs(n).toFixed(digits === undefined ? 2 : digits) + '%';
 }
 
-function _cfTradeJournalEntryHtml(entry) {
-  var open = _cfTradeJournalState.openId === entry.id;
-  var resultClass = _cfTradeJournalResultClass(entry.result);
-  var tags = (Array.isArray(entry.tags) ? entry.tags : []).map(function(tag) {
-    return '<span>' + _escapeHtml(tag) + '</span>';
+function _cfJournalTone(value) {
+  var n = Number(value) || 0;
+  if (n > 0) return 'var(--green, #3fae56)';
+  if (n < 0) return 'var(--red, #e2574c)';
+  return 'var(--muted, #888)';
+}
+
+function _cfJournalKpiHtml(summary) {
+  var cards = [
+    { label: 'Realised P&L', value: _cfJournalUsd(summary.realized_pnl_usd), tone: summary.realized_pnl_usd,
+      note: _cfJournalPct(summary.roi_pct, 2) + ' on capital deployed' },
+    { label: 'Capital Deployed', value: _cfJournalUsd(summary.invested_usd),
+      note: 'across ' + summary.trade_count + ' closed trades' },
+    { label: 'Win Rate', value: _cfJournalPct(summary.win_rate_pct, 1),
+      note: summary.win_count + 'W / ' + summary.loss_count + 'L' },
+    { label: 'Average ROI', value: _cfJournalPct(summary.avg_roi_pct, 2), tone: summary.avg_roi_pct,
+      note: 'per trade' },
+    { label: 'Best Trade', value: _cfJournalPct(summary.best_roi_pct, 2), tone: 1,
+      note: 'worst ' + _cfJournalPct(summary.worst_roi_pct, 2) },
+    { label: 'Avg Win', value: _cfJournalUsd(summary.avg_win_usd, 2), tone: 1,
+      note: summary.loss_count ? 'avg loss ' + _cfJournalUsd(summary.avg_loss_usd, 2) : 'no losing trades yet' }
+  ];
+  return cards.map(function(c) {
+    var colour = c.tone === undefined ? '' : ' style="color:' + _cfJournalTone(c.tone) + ';"';
+    return '<div class="cf-journal-kpi">'
+      + '<div class="cf-journal-kpi-label">' + _escapeHtml(c.label) + '</div>'
+      + '<div class="cf-journal-kpi-value"' + colour + '>' + _escapeHtml(c.value) + '</div>'
+      + '<div class="cf-journal-kpi-note">' + _escapeHtml(c.note) + '</div>'
+      + '</div>';
   }).join('');
-  var priceBits = [];
-  if (entry.entryPrice !== '' && entry.entryPrice !== undefined) priceBits.push('Entry ' + _cfTradeJournalFormatNumber(entry.entryPrice));
-  if (entry.exitPrice !== '' && entry.exitPrice !== undefined) priceBits.push('Exit ' + _cfTradeJournalFormatNumber(entry.exitPrice));
-  return '<article class="journal-entry-card ' + resultClass + '">'
-    + '<button type="button" class="journal-entry-toggle" aria-expanded="' + (open ? 'true' : 'false') + '" data-cf-click="toggleTradeJournalEntry(\'' + _escapeHtml(entry.id) + '\')">'
-    + '<span class="journal-entry-main"><strong>' + _escapeHtml(entry.symbol || 'BTCUSDT') + '</strong><em>' + _escapeHtml(entry.side || 'Long') + ' • ' + _escapeHtml(entry.timeframe || '5m') + ' • ' + _escapeHtml(_cfTradeJournalFormatShortDate(entry.date)) + '</em></span>'
-    + '<span class="journal-entry-setup">' + _escapeHtml(entry.setup || 'Journal entry') + '</span>'
-    + '<span class="journal-entry-result">' + _escapeHtml(entry.result || 'Open') + '</span>'
-    + '<span class="journal-entry-pnl">' + _escapeHtml(_cfTradeJournalFormatNumber(entry.pnl)) + '</span>'
-    + '<strong class="journal-entry-open-label">' + (open ? 'Close' : 'Open') + '</strong>'
-    + '</button>'
-    + '<div class="journal-entry-body"' + (open ? '' : ' hidden') + '>'
-    + '<div class="journal-entry-meta">'
-    + '<div><span>Date</span><strong>' + _escapeHtml(_cfTradeJournalFormatDate(entry.date)) + '</strong></div>'
-    + '<div><span>Mindset</span><strong>' + _escapeHtml(entry.emotion || 'Calm') + '</strong></div>'
-    + '<div><span>Discipline</span><strong>' + _escapeHtml(String(entry.grade || 7)) + '/10</strong></div>'
-    + '<div><span>Prices</span><strong>' + _escapeHtml(priceBits.join(' • ') || '-') + '</strong></div>'
-    + '</div>'
-    + (tags ? '<div class="journal-entry-tags">' + tags + '</div>' : '')
-    + '<div class="journal-entry-notes">'
-    + '<section><h4>Setup Read</h4><p>' + _escapeHtml(entry.thesis || '-') + '</p></section>'
-    + '<section><h4>Execution</h4><p>' + _escapeHtml(entry.execution || '-') + '</p></section>'
-    + '<section><h4>Lesson</h4><p>' + _escapeHtml(entry.lesson || '-') + '</p></section>'
-    + '</div>'
-    + '<div class="journal-entry-card-actions">'
-    + '<button class="btn btn-outline btn-sm" data-cf-click="editTradeJournalEntry(\'' + _escapeHtml(entry.id) + '\')">Edit</button>'
-    + '<button class="btn btn-danger btn-sm" data-cf-click="deleteTradeJournalEntry(\'' + _escapeHtml(entry.id) + '\')">Delete</button>'
-    + '</div>'
-    + '</div>'
-    + '</article>';
 }
 
-function renderTradeJournal() {
-  var page = document.getElementById('journal-page');
-  if (!page) return;
+function _cfJournalEquitySvg(points) {
+  if (!points.length) return '<div class="cf-table-empty-cell">No closed trades yet.</div>';
+  var W = 640, H = 220, padL = 56, padR = 16, padT = 16, padB = 30;
+  var values = points.map(function(p) { return Number(p.cumulative_pnl) || 0; });
+  var maxV = Math.max.apply(null, values.concat([0]));
+  var minV = Math.min.apply(null, values.concat([0]));
+  var span = (maxV - minV) || 1;
+  maxV += span * 0.12; minV -= span * 0.12; span = maxV - minV;
+  var x = function(i) {
+    return padL + (points.length === 1 ? (W - padL - padR) / 2 : i * (W - padL - padR) / (points.length - 1));
+  };
+  var y = function(v) { return padT + (maxV - v) * (H - padT - padB) / span; };
 
-  var currentDraft = _cfTradeJournalReadForm();
-  _cfTradeJournalState.activeTimeframe = currentDraft.timeframe || _cfTradeJournalState.activeTimeframe || '5m';
+  var grid = '', i;
+  for (i = 0; i <= 4; i++) {
+    var gv = maxV - (span * i / 4);
+    var gy = y(gv);
+    grid += '<line x1="' + padL + '" y1="' + gy + '" x2="' + (W - padR) + '" y2="' + gy
+      + '" stroke="currentColor" stroke-opacity="0.10"/>'
+      + '<text x="' + (padL - 8) + '" y="' + (gy + 3.5) + '" text-anchor="end" font-size="9.5"'
+      + ' fill="currentColor" fill-opacity="0.55">$' + gv.toFixed(2) + '</text>';
+  }
+  var zeroY = y(0);
+  grid += '<line x1="' + padL + '" y1="' + zeroY + '" x2="' + (W - padR) + '" y2="' + zeroY
+    + '" stroke="currentColor" stroke-opacity="0.32" stroke-dasharray="3 3"/>';
 
-  document.querySelectorAll('.journal-tf-btn[data-journal-tf]').forEach(function(btn) {
-    btn.classList.toggle('active', btn.dataset.journalTf === _cfTradeJournalState.activeTimeframe);
-  });
-  _cfTradeJournalRenderTagButtons();
-  _cfTradeJournalUpdateGradeLabel();
+  var path = points.map(function(p, idx) {
+    return (idx ? 'L' : 'M') + x(idx).toFixed(2) + ' ' + y(Number(p.cumulative_pnl) || 0).toFixed(2);
+  }).join(' ');
+  var area = path + ' L' + x(points.length - 1).toFixed(2) + ' ' + zeroY.toFixed(2)
+    + ' L' + x(0).toFixed(2) + ' ' + zeroY.toFixed(2) + ' Z';
 
-  var dateLabel = document.getElementById('journal-date-stamp');
-  if (dateLabel) dateLabel.textContent = _cfTradeJournalFormatDate(currentDraft.date || _cfTradeJournalToday());
-  var formTitle = document.getElementById('journal-form-title');
-  if (formTitle) formTitle.textContent = currentDraft.id ? 'Edit Entry' : 'New Entry';
+  var dots = points.map(function(p, idx) {
+    return '<circle cx="' + x(idx).toFixed(2) + '" cy="' + y(Number(p.cumulative_pnl) || 0).toFixed(2)
+      + '" r="3" fill="var(--green,#3fae56)"><title>' + _escapeHtml(p.date) + ' — cumulative '
+      + _escapeHtml(_cfJournalUsd(p.cumulative_pnl)) + ' (day ' + _escapeHtml(_cfJournalUsd(p.pnl))
+      + ')</title></circle>';
+  }).join('');
 
-  var entries = Array.isArray(_cfTradeJournalState.entries) ? _cfTradeJournalState.entries : [];
-  var stats = _cfTradeJournalStats(entries);
-  var statsHost = document.getElementById('journal-stat-grid');
-  if (statsHost) {
-    statsHost.innerHTML = ''
-      + '<div class="journal-stat-card"><span>Today</span><strong>' + _escapeHtml(String(stats.todayCount)) + '</strong></div>'
-      + '<div class="journal-stat-card"><span>Net P&amp;L</span><strong class="' + (stats.pnl > 0 ? 'positive' : stats.pnl < 0 ? 'negative' : '') + '">' + _escapeHtml(_cfTradeJournalFormatNumber(stats.pnl)) + '</strong></div>'
-      + '<div class="journal-stat-card"><span>Win Rate</span><strong>' + _escapeHtml(String(stats.winRate)) + '%</strong></div>'
-      + '<div class="journal-stat-card"><span>Best Frame</span><strong>' + _escapeHtml(stats.bestFrame) + '</strong></div>';
+  var labels = points.map(function(p, idx) {
+    if (points.length > 8 && idx % 2) return '';
+    return '<text x="' + x(idx).toFixed(2) + '" y="' + (H - 10) + '" text-anchor="middle" font-size="9"'
+      + ' fill="currentColor" fill-opacity="0.55">' + _escapeHtml(String(p.date).slice(5)) + '</text>';
+  }).join('');
+
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Cumulative realised P&L over time">'
+    + '<defs><linearGradient id="cfJournalFill" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0%" stop-color="var(--green,#3fae56)" stop-opacity="0.28"/>'
+    + '<stop offset="100%" stop-color="var(--green,#3fae56)" stop-opacity="0"/>'
+    + '</linearGradient></defs>'
+    + grid
+    + '<path d="' + area + '" fill="url(#cfJournalFill)"/>'
+    + '<path d="' + path + '" fill="none" stroke="var(--green,#3fae56)" stroke-width="2"'
+    + ' stroke-linejoin="round" stroke-linecap="round"/>'
+    + dots + labels
+    + '</svg>';
+}
+
+function _cfJournalRoiSvg(trades) {
+  if (!trades.length) return '<div class="cf-table-empty-cell">No closed trades yet.</div>';
+  var W = 640, H = 220, padL = 44, padR = 16, padT = 16, padB = 56;
+  var rois = trades.map(function(t) { return Number(t.roi_pct) || 0; });
+  var maxV = Math.max.apply(null, rois.concat([0])) * 1.15 || 1;
+  var minV = Math.min.apply(null, rois.concat([0]));
+  if (minV > 0) minV = 0; else minV *= 1.15;
+  var span = (maxV - minV) || 1;
+  var plotW = W - padL - padR;
+  var slot = plotW / trades.length;
+  var barW = Math.max(Math.min(slot * 0.62, 30), 4);
+  var y = function(v) { return padT + (maxV - v) * (H - padT - padB) / span; };
+  var zeroY = y(0);
+
+  var grid = '';
+  for (var i = 0; i <= 3; i++) {
+    var gv = maxV - (span * i / 3);
+    var gy = y(gv);
+    grid += '<line x1="' + padL + '" y1="' + gy + '" x2="' + (W - padR) + '" y2="' + gy
+      + '" stroke="currentColor" stroke-opacity="0.10"/>'
+      + '<text x="' + (padL - 8) + '" y="' + (gy + 3.5) + '" text-anchor="end" font-size="9.5"'
+      + ' fill="currentColor" fill-opacity="0.55">' + gv.toFixed(1) + '%</text>';
   }
 
-  var frameHost = document.getElementById('journal-frame-grid');
-  if (frameHost) {
-    frameHost.innerHTML = CF_TRADE_JOURNAL_FRAMES.map(function(frame) {
-      var count = stats.frameCounts[frame] || 0;
-      return '<div class="journal-frame-card"><span>' + _escapeHtml(frame) + '</span><strong>' + _escapeHtml(String(count)) + '</strong></div>';
+  var bars = trades.map(function(t, idx) {
+    var v = Number(t.roi_pct) || 0;
+    var cx = padL + slot * idx + slot / 2;
+    var top = v >= 0 ? y(v) : zeroY;
+    var h = Math.max(Math.abs(zeroY - y(v)), 1);
+    var colour = v >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+    return '<rect x="' + (cx - barW / 2).toFixed(2) + '" y="' + top.toFixed(2) + '" width="' + barW.toFixed(2)
+      + '" height="' + h.toFixed(2) + '" rx="2" fill="' + colour + '" fill-opacity="0.85">'
+      + '<title>' + _escapeHtml(t.trade_id) + ' — ' + _escapeHtml(_cfJournalPct(v, 2)) + ' ('
+      + _escapeHtml(_cfJournalUsd(t.pnl_usd)) + ')</title></rect>'
+      + '<text x="' + cx.toFixed(2) + '" y="' + (H - padB + 14) + '" text-anchor="end" font-size="8.5"'
+      + ' fill="currentColor" fill-opacity="0.6" transform="rotate(-45 ' + cx.toFixed(2) + ' '
+      + (H - padB + 14) + ')">' + _escapeHtml(t.coin.replace('USDT', '')) + '</text>';
+  }).join('');
+
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="ROI percent by trade">'
+    + grid
+    + '<line x1="' + padL + '" y1="' + zeroY + '" x2="' + (W - padR) + '" y2="' + zeroY
+    + '" stroke="currentColor" stroke-opacity="0.32"/>'
+    + bars + '</svg>';
+}
+
+function _cfJournalCoinsSvg(byCoin) {
+  if (!byCoin.length) return '<div class="cf-table-empty-cell">No closed trades yet.</div>';
+  var maxInv = Math.max.apply(null, byCoin.map(function(c) { return Number(c.invested) || 0; })) || 1;
+  return '<div class="cf-journal-coinbars">' + byCoin.map(function(c) {
+    var inv = Number(c.invested) || 0;
+    var width = Math.max(inv / maxInv * 100, 2);
+    return '<div class="cf-journal-coinrow">'
+      + '<div class="cf-journal-coinname">' + _escapeHtml(String(c.coin).replace('USDT', ''))
+      + '<span>' + c.trades + ' trade' + (c.trades === 1 ? '' : 's') + '</span></div>'
+      + '<div class="cf-journal-coinbar"><span style="width:' + width.toFixed(1) + '%;"></span></div>'
+      + '<div class="cf-journal-coinstat">' + _escapeHtml(_cfJournalUsd(inv))
+      + '<span style="color:' + _cfJournalTone(c.pnl) + ';">' + _escapeHtml(_cfJournalUsd(c.pnl))
+      + ' · ' + _escapeHtml(_cfJournalPct(c.roi_pct, 2)) + '</span></div>'
+      + '</div>';
+  }).join('') + '</div>';
+}
+
+function _cfJournalBuyRows(trade) {
+  return (trade.buys || []).map(function(b) {
+    return '<tr class="cf-journal-buyrow">'
+      + '<td colspan="3" style="padding-left:26px;">Buy #' + b.buy_no
+      + (isFinite(Number(b.market_down_pct))
+        ? ' <span class="table-meta">· ' + Number(b.market_down_pct).toFixed(2) + '% down from high</span>' : '')
+      + '</td>'
+      + '<td class="num"></td>'
+      + '<td class="num">' + _cfJournalUsd(b.buy_price) + '</td>'
+      + '<td class="num">' + Number(b.quantity).toFixed(5) + '</td>'
+      + '<td class="num">' + _cfJournalUsd(b.amount_usd) + '</td>'
+      + '<td class="num"></td><td class="num"></td><td class="num"></td>'
+      + '</tr>';
+  }).join('');
+}
+
+function cfJournalToggleTrade(tradeId) {
+  var rows = document.querySelectorAll('[data-journal-buys="' + tradeId + '"]');
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].classList.toggle('is-open');
+  }
+  var head = document.querySelector('[data-journal-trade="' + tradeId + '"]');
+  if (head) {
+    var open = head.classList.toggle('is-expanded');
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+}
+
+function cfJournalSetCoinFilter(coin) {
+  _cfJournalCoinFilter = coin || 'ALL';
+  if (_cfJournalData) _cfRenderTradeJournal(_cfJournalData);
+}
+
+function _cfJournalFilteredTrades(data) {
+  var trades = Array.isArray(data.trades) ? data.trades : [];
+  if (_cfJournalCoinFilter === 'ALL') return trades;
+  return trades.filter(function(t) { return t.coin === _cfJournalCoinFilter; });
+}
+
+function _cfRenderTradeJournal(data) {
+  var summary = data.summary || {};
+  var kpis = document.getElementById('cf-journal-kpis');
+  if (kpis) kpis.innerHTML = _cfJournalKpiHtml(summary);
+
+  var source = document.getElementById('cf-journal-source');
+  if (source) {
+    source.textContent = summary.trade_count + ' closed trades · capital base '
+      + _cfJournalUsd(data.capital_base_usd, 0)
+      + (data.source ? ' · source: ' + data.source : '')
+      + (data.imported_at ? ' · imported ' + data.imported_at : '');
+  }
+
+  var equity = document.getElementById('cf-journal-equity');
+  if (equity) equity.innerHTML = _cfJournalEquitySvg(summary.equity_curve || []);
+
+  var trades = _cfJournalFilteredTrades(data);
+  var roi = document.getElementById('cf-journal-roi');
+  if (roi) roi.innerHTML = _cfJournalRoiSvg(trades);
+
+  var coins = document.getElementById('cf-journal-coins');
+  if (coins) coins.innerHTML = _cfJournalCoinsSvg(summary.by_coin || []);
+
+  var filters = document.getElementById('cf-journal-filters');
+  if (filters) {
+    var names = ['ALL'].concat((summary.by_coin || []).map(function(c) { return c.coin; }));
+    filters.innerHTML = names.map(function(name) {
+      var on = name === _cfJournalCoinFilter;
+      return '<button type="button" class="cf-tf-option' + (on ? ' is-active' : '') + '"'
+        + ' role="radio" aria-checked="' + (on ? 'true' : 'false') + '"'
+        + ' data-cf-click="cfJournalSetCoinFilter(\'' + name + '\')">'
+        + _escapeHtml(name === 'ALL' ? 'All' : name.replace('USDT', '')) + '</button>';
     }).join('');
   }
 
-  var filterEl = document.getElementById('journal-filter-timeframe');
-  if (filterEl) filterEl.value = _cfTradeJournalState.filterTimeframe || 'all';
-  var filtered = entries.filter(function(entry) {
-    return !_cfTradeJournalState.filterTimeframe || _cfTradeJournalState.filterTimeframe === 'all' || entry.timeframe === _cfTradeJournalState.filterTimeframe;
-  });
-  filtered.sort(function(a, b) {
-    var dateCompare = String(b.date || '').localeCompare(String(a.date || ''));
-    if (dateCompare !== 0) return dateCompare;
-    return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
-  });
-
-  var countEl = document.getElementById('journal-entry-count');
-  if (countEl) countEl.textContent = filtered.length ? (filtered.length + ' saved entries') : 'No entries saved';
-  var list = document.getElementById('journal-entry-list');
-  if (list) {
-    list.innerHTML = filtered.length
-      ? filtered.map(_cfTradeJournalEntryHtml).join('')
-      : '<div class="cf-table-empty-cell">No journal entries yet</div>';
-  }
-}
-
-function setTradeJournalTimeframe(timeframe) {
-  if (CF_TRADE_JOURNAL_FRAMES.indexOf(timeframe) < 0) return;
-  _cfTradeJournalState.activeTimeframe = timeframe;
-  _cfTradeJournalStoreDraftFromForm();
-  renderTradeJournal();
-}
-
-function toggleTradeJournalTag(tag) {
-  var tags = _cfTradeJournalTagsFromField();
-  var index = tags.indexOf(tag);
-  if (index >= 0) tags.splice(index, 1);
-  else tags.push(tag);
-  _cfTradeJournalSetTags(tags);
-  _cfTradeJournalStoreDraftFromForm();
-  renderTradeJournal();
-}
-
-function saveTradeJournalEntry() {
-  var entry = _cfTradeJournalReadForm();
-  var error = _cfTradeJournalValidate(entry);
-  if (error) {
-    _cfTradeJournalError(error);
+  var body = document.getElementById('cf-journal-body');
+  if (!body) return;
+  if (!trades.length) {
+    body.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">No trades for this filter.</td></tr>';
     return;
   }
-  var now = new Date().toISOString();
-  var existingId = entry.id;
-  if (!existingId) entry.id = 'journal-' + Date.now() + '-' + Math.round(Math.random() * 100000);
-  entry.createdAt = existingId ? '' : now;
-  entry.updatedAt = now;
-  _cfTradeJournalState.entries = Array.isArray(_cfTradeJournalState.entries) ? _cfTradeJournalState.entries : [];
-  if (existingId) {
-    _cfTradeJournalState.entries = _cfTradeJournalState.entries.map(function(item) {
-      if (item.id !== existingId) return item;
-      return Object.assign({}, item, entry, { createdAt: item.createdAt || now, updatedAt: now });
-    });
-  } else {
-    _cfTradeJournalState.entries.unshift(entry);
+  body.innerHTML = trades.map(function(t) {
+    var pnlTone = _cfJournalTone(t.pnl_usd);
+    var head = '<tr class="cf-journal-traderow" data-journal-trade="' + _escapeHtml(t.trade_id) + '"'
+      + ' role="button" tabindex="0" aria-expanded="false"'
+      + ' data-cf-click="cfJournalToggleTrade(\'' + t.trade_id + '\')">'
+      + '<td><span class="cf-journal-caret" aria-hidden="true">&#9656;</span>'
+        + _escapeHtml(t.trade_id) + '</td>'
+      + '<td>' + _escapeHtml(t.date) + '</td>'
+      + '<td>' + _escapeHtml(String(t.coin).replace('USDT', '')) + '</td>'
+      + '<td class="num">' + t.buy_count + '</td>'
+      + '<td class="num">' + _cfJournalUsd(t.avg_buy_price) + '</td>'
+      + '<td class="num">' + Number(t.total_qty).toFixed(5) + '</td>'
+      + '<td class="num">' + _cfJournalUsd(t.invested_usd) + '</td>'
+      + '<td class="num">' + _cfJournalUsd(t.sell_price) + '</td>'
+      + '<td class="num" style="color:' + pnlTone + ';">' + _cfJournalUsd(t.pnl_usd) + '</td>'
+      + '<td class="num" style="color:' + pnlTone + ';">' + _cfJournalPct(t.roi_pct, 2) + '</td>'
+      + '</tr>';
+    var buys = (t.buys || []).length > 1
+      ? '<tr class="cf-journal-buys" data-journal-buys="' + _escapeHtml(t.trade_id) + '">'
+        + '<td colspan="10" style="padding:0;"><table class="trade-table cf-journal-subtable">'
+        + '<tbody>' + _cfJournalBuyRows(t) + '</tbody></table></td></tr>'
+      : '';
+    return head + buys;
+  }).join('');
+
+  var meta = document.getElementById('cf-journal-table-meta');
+  if (meta) {
+    meta.textContent = trades.length + ' trade' + (trades.length === 1 ? '' : 's')
+      + ' shown · multi-buy trades expand to show each entry.';
   }
-  _cfTradeJournalState.entries = _cfTradeJournalState.entries.slice(0, 500);
-  _cfTradeJournalState.openId = entry.id;
-  _cfTradeJournalState.draft = Object.assign(_cfTradeJournalDefaultDraft(), {
-    date: entry.date,
-    timeframe: entry.timeframe,
-    symbol: entry.symbol,
-    side: entry.side
-  });
-  _cfTradeJournalSaveState();
-  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
-  _cfTradeJournalError('');
-  if (typeof cfToast === 'function') cfToast(existingId ? 'Journal entry updated' : 'Journal entry saved', 'success');
 }
 
-function newTradeJournalEntry() {
-  _cfTradeJournalState.draft = _cfTradeJournalDefaultDraft();
-  _cfTradeJournalSaveState();
-  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
-  _cfTradeJournalError('');
-}
-
-function clearTradeJournalDraft() {
-  var current = _cfTradeJournalReadForm();
-  _cfTradeJournalState.draft = Object.assign(_cfTradeJournalDefaultDraft(), {
-    date: current.date || _cfTradeJournalToday(),
-    timeframe: _cfTradeJournalState.activeTimeframe || '5m',
-    symbol: current.symbol || selectedCrypto || 'BTCUSDT'
-  });
-  _cfTradeJournalSaveState();
-  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
-  _cfTradeJournalError('');
-}
-
-function editTradeJournalEntry(entryId) {
-  var entry = (_cfTradeJournalState.entries || []).find(function(item) { return item.id === entryId; });
-  if (!entry) return;
-  _cfTradeJournalState.draft = Object.assign({}, entry);
-  _cfTradeJournalSaveState();
-  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
-  var top = document.querySelector('.journal-compose-card');
-  if (top && typeof top.scrollIntoView === 'function') top.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-async function deleteTradeJournalEntry(entryId) {
-  var ok = await cfConfirm('Delete this journal entry?', 'Delete Entry', '🗑️');
-  if (!ok) return;
-  _cfTradeJournalState.entries = (_cfTradeJournalState.entries || []).filter(function(item) { return item.id !== entryId; });
-  if (_cfTradeJournalState.openId === entryId) _cfTradeJournalState.openId = '';
-  _cfTradeJournalSaveState();
-  renderTradeJournal();
-  if (typeof cfToast === 'function') cfToast('Journal entry deleted', 'info');
-}
-
-function toggleTradeJournalEntry(entryId) {
-  _cfTradeJournalState.openId = _cfTradeJournalState.openId === entryId ? '' : entryId;
-  _cfTradeJournalSaveState();
-  renderTradeJournal();
-}
-
-function setTradeJournalFilter(timeframe) {
-  _cfTradeJournalState.filterTimeframe = timeframe || 'all';
-  _cfTradeJournalSaveState();
-  renderTradeJournal();
-}
-
-function _cfTradeJournalCsvCell(value) {
-  var text = String(value === undefined || value === null ? '' : value);
-  return '"' + text.replace(/"/g, '""') + '"';
-}
-
-function exportTradeJournalCsv() {
-  var entries = Array.isArray(_cfTradeJournalState.entries) ? _cfTradeJournalState.entries : [];
-  if (!entries.length) {
-    if (typeof cfToast === 'function') cfToast('No journal entries to export', 'info');
-    return;
+async function cfLoadTradeJournal(showToast) {
+  try {
+    var response = await cfApiFetch('/api/journal/trades', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok || data.status === 'error') {
+      throw new Error(cfApiErrorDetail(data, 'Journal unavailable'));
+    }
+    _cfJournalData = data;
+    _cfRenderTradeJournal(data);
+    if (showToast) cfToast('Journal refreshed', 'success');
+  } catch (error) {
+    var body = document.getElementById('cf-journal-body');
+    if (body) {
+      body.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">'
+        + _escapeHtml(error.message) + '</td></tr>';
+    }
+    if (showToast) cfToast('Journal refresh failed: ' + error.message, 'danger');
   }
-  var headers = ['Date', 'Timeframe', 'Symbol', 'Side', 'Result', 'Setup', 'PnL', 'Entry', 'Exit', 'Mindset', 'Discipline', 'Tags', 'Setup Read', 'Execution', 'Lesson'];
-  var lines = [headers.map(_cfTradeJournalCsvCell).join(',')].concat(entries.map(function(entry) {
-    return [
-      entry.date,
-      entry.timeframe,
-      entry.symbol,
-      entry.side,
-      entry.result,
-      entry.setup,
-      entry.pnl,
-      entry.entryPrice,
-      entry.exitPrice,
-      entry.emotion,
-      entry.grade,
-      (entry.tags || []).join('|'),
-      entry.thesis,
-      entry.execution,
-      entry.lesson
-    ].map(_cfTradeJournalCsvCell).join(',');
-  }));
-  var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-  var url = URL.createObjectURL(blob);
-  var link = document.createElement('a');
-  link.href = url;
-  link.download = 'cryptoforge-trade-journal.csv';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+}
+
+function renderTradeJournal() {
+  if (_cfJournalData) _cfRenderTradeJournal(_cfJournalData);
+  cfLoadTradeJournal(false);
 }
 
 function cfInitTradeJournal() {
-  if (!_cfTradeJournalState.draft) _cfTradeJournalState.draft = _cfTradeJournalDefaultDraft();
-  _cfTradeJournalApplyDraft(_cfTradeJournalState.draft);
-  if (_cfTradeJournalBound) return;
-  _cfTradeJournalBound = true;
-  document.querySelectorAll('[data-journal-field]').forEach(function(el) {
-    el.addEventListener('input', _cfTradeJournalStoreDraftFromForm);
-    el.addEventListener('change', _cfTradeJournalStoreDraftFromForm);
-  });
+  // Rendered on demand when the Journal page is shown.
 }
+
 
 // ── Init ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -7034,9 +5831,6 @@ document.addEventListener('DOMContentLoaded', () => {
   renderLeverage(leverageOptions, selectedLeverage);
   renderBuilderDeck();
   renderTemplates();
-  _btcAllocationLoadState();
-  renderBtcAllocationCalculator();
-  _cfTradeJournalLoadState();
   cfInitTradeJournal();
   loadBrokerSettings(true);
   refreshBrokerState(true);
@@ -8840,9 +7634,13 @@ function cfInitCascadePage() {
 
 var _cfCascadeOrigShowPage = showPage;
 showPage = function(pageId, btn, options) {
-  if (pageId !== 'cascade-page' && _cfCascadePollTimer) {
-    clearInterval(_cfCascadePollTimer);
-    _cfCascadePollTimer = null;
+  if (pageId !== 'cascade-page') {
+    if (_cfCascadePollTimer) {
+      clearInterval(_cfCascadePollTimer);
+      _cfCascadePollTimer = null;
+    }
+    // Never leave a fullscreen chart pinned over another page.
+    if (typeof cfCascadeToggleFullscreen === 'function') cfCascadeToggleFullscreen(false);
   }
   _cfCascadeOrigShowPage(pageId, btn, options);
 };
@@ -8873,10 +7671,12 @@ async function cfLoadCascadeStatus(showToast) {
 
 function cfRenderCascadeStatus(data) {
   var engineState = document.getElementById('cf-cascade-engine-state');
+  var engineChip = document.getElementById('cf-cascade-engine-chip');
   if (engineState) {
     var active = Number(data.active_count || 0);
     engineState.textContent = data.running ? ('Running · ' + active + ' active') : 'Idle';
   }
+  if (engineChip) engineChip.setAttribute('data-state', data.running ? 'running' : 'idle');
   cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
@@ -8905,6 +7705,11 @@ function _cfCascadeLadderRows(campaign) {
       + (leg.finalized ? ' · finalized' : ' · forming')
       + (leg.escalated ? ' · escalated 15m' : '')
       + (leg.pool_usd ? ' · pool $' + _cfCascadeFmt(leg.pool_usd) : '')
+      + (Number(leg.carry_in_usd) > 0
+        ? ' <strong style="color:var(--green,#3fae56);">+ $' + _cfCascadeFmt(leg.carry_in_usd)
+          + ' carried from fib ' + (leg.leg_id - 1) + '</strong>'
+          + ' = $' + _cfCascadeFmt(leg.pool_total_usd)
+        : '')
       + '</span></td></tr>';
     var body = [2, 4, 8].map(function(level) {
       var order = orders[String(level)] || orders[level] || {};
@@ -8965,7 +7770,13 @@ function _cfCascadeCampaignCard(campaign) {
       + '</div><div class="admin-stat-note">allocated ' + (isFinite(Number(campaign.allocated_pct)) ? Number(campaign.allocated_pct).toFixed(3) : '0') + '%</div></div>'
     + '<div class="stat-box"><div class="stat-label">Avg Entry</div><div class="stat-value">' + _cfCascadeFmt(campaign.avg_entry_price) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-value">' + _cfCascadeFmt(tp) + '</div></div>'
-    + '<div class="stat-box"><div class="stat-label">Spent / Capital</div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label">In Position / Capital</div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div>'
+      + (Number(campaign.carry_forward_usd) > 0
+        ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.carry_forward_usd) + ' carried</div>' : '')
+      + '</div>'
+    + '<div class="stat-box"><div class="stat-label">Rounds Closed</div><div class="stat-value">'
+      + _escapeHtml(String(campaign.rounds_closed || 0)) + '</div>'
+      + '<div class="admin-stat-note">realised $' + _cfCascadeFmt(campaign.realized_pnl_total || 0) + '</div></div>'
     + '</div>'
     + _cfCascadeLadderRows(campaign)
     + (fills.length
@@ -9357,6 +8168,52 @@ function _cfCascadeChartHtml(d) {
   return legend + _cfCascadeChartSvg(d) + _cfCascadeChartTables(d);
 }
 
+var _cfCascadeChartTf = '5m';
+
+function cfCascadeSetMode(mode) {
+  var picked = mode === 'live' ? 'live' : 'paper';
+  var field = document.getElementById('cf-cascade-mode');
+  if (field) field.value = picked;
+  var options = document.querySelectorAll('.cf-mode-option');
+  for (var i = 0; i < options.length; i++) {
+    var on = options[i].getAttribute('data-mode') === picked;
+    options[i].classList.toggle('is-active', on);
+    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+}
+
+function cfCascadeSetTimeframe(tf) {
+  var picked = (tf === '15m' || tf === '1h') ? tf : '5m';
+  _cfCascadeChartTf = picked;
+  var options = document.querySelectorAll('.cf-tf-option');
+  for (var i = 0; i < options.length; i++) {
+    var on = options[i].getAttribute('data-tf') === picked;
+    options[i].classList.toggle('is-active', on);
+    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId);
+}
+
+function cfCascadeToggleFullscreen(force) {
+  var panel = document.getElementById('cf-cascade-chart-panel');
+  var button = document.getElementById('cf-cascade-fullscreen-btn');
+  if (!panel) return;
+  var open = typeof force === 'boolean' ? force : !panel.classList.contains('cf-cascade-chart-fs');
+  panel.classList.toggle('cf-cascade-chart-fs', open);
+  document.body.classList.toggle('cf-chart-fs-open', open);
+  if (button) {
+    button.setAttribute('aria-pressed', open ? 'true' : 'false');
+    button.innerHTML = open ? '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 14h6v6\"/><path d=\"M20 10h-6V4\"/><path d=\"M14 10l7-7\"/><path d=\"M3 21l7-7\"/></svg> Exit' : '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M15 3h6v6\"/><path d=\"M9 21H3v-6\"/><path d=\"M21 3l-7 7\"/><path d=\"M3 21l7-7\"/></svg> Expand';
+    button.title = open ? 'Exit fullscreen' : 'Expand chart';
+  }
+}
+
+document.addEventListener('keydown', function(event) {
+  if (event.key !== 'Escape') return;
+  var panel = document.getElementById('cf-cascade-chart-panel');
+  if (panel && panel.classList.contains('cf-cascade-chart-fs')) cfCascadeToggleFullscreen(false);
+});
+
 async function cfCascadeShowChart(campaignId) {
   var panel = document.getElementById('cf-cascade-chart-panel');
   var body = document.getElementById('cf-cascade-chart-body');
@@ -9365,15 +8222,18 @@ async function cfCascadeShowChart(campaignId) {
   panel.style.display = '';
   body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
   try {
-    var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/chart', { cache: 'no-store' });
+    var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId)
+      + '/chart?timeframe=' + encodeURIComponent(_cfCascadeChartTf), { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
     body.innerHTML = _cfCascadeChartHtml(data);
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta) {
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + (data.candles || []).length
-        + ' candles since mother candle (' + _cfCascadeUtc(data.mother && data.mother.t) + ' UTC) · '
-        + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)';
+        + ' ' + (data.timeframe || '5m') + ' candles since mother candle ('
+        + _cfCascadeUtc(data.mother && data.mother.t) + ' UTC) · '
+        + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)'
+        + (data.timeframe && data.timeframe !== '5m' ? ' · geometry is always 5m-derived' : '');
     }
   } catch (error) {
     body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(error.message) + '</div>';
@@ -9385,6 +8245,7 @@ function cfCascadeRefreshChart() {
 }
 
 function cfCascadeHideChart() {
+  cfCascadeToggleFullscreen(false);
   var panel = document.getElementById('cf-cascade-chart-panel');
   if (panel) panel.style.display = 'none';
   _cfCascadeChartId = '';

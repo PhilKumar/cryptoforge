@@ -53,10 +53,13 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
-MODEL_VERSION = 5  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 6  # bump when the fib/trendline rules change; older campaigns are flagged stale
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
+# View-only roll-ups for the campaign chart. The engine always steps in 5m;
+# these just change how the same candles are drawn.
+CHART_TIMEFRAMES = {"5m": FIVE_MIN_SEC, "15m": FIFTEEN_MIN_SEC, "1h": 3600}
 
 ACTIVE_STATES = {"WAITING_FIRST_DEPTH", "TRENDLINE_ACTIVE"}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
@@ -242,6 +245,40 @@ class Fill:
 
 
 @dataclass
+class Round:
+    """
+    One open-to-TP cycle inside a campaign. A TP fill closes the round and
+    returns its principal to the campaign's available capital; the campaign
+    itself only ends when the mother high is breached above.
+    """
+
+    round_id: int
+    leg_id: int
+    avg_entry: float
+    quantity: float
+    invested_usd: float
+    exit_price: float
+    pnl: float
+    closed_at: str = ""
+
+    def to_dict(self) -> dict:
+        return dict(self.__dict__)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Round":
+        return cls(
+            round_id=int(data.get("round_id", 0)),
+            leg_id=int(data.get("leg_id", 0)),
+            avg_entry=_coerce_float(data.get("avg_entry")),
+            quantity=_coerce_float(data.get("quantity")),
+            invested_usd=_coerce_float(data.get("invested_usd")),
+            exit_price=_coerce_float(data.get("exit_price")),
+            pnl=_coerce_float(data.get("pnl")),
+            closed_at=data.get("closed_at") or "",
+        )
+
+
+@dataclass
 class Leg:
     leg_id: int
     trendline_id: int
@@ -252,11 +289,12 @@ class Leg:
     fib: Optional[FibLadder] = None
     leg_pct_from_mother: Optional[float] = None  # total fall from the mother high
     allocation_pct: Optional[float] = None  # percent this leg funds (see build_fib_ladder_and_pool)
-    pool_usd: Optional[float] = None
+    pool_usd: Optional[float] = None  # this leg's own allocation
+    carry_in_usd: float = 0.0  # unspent pool inherited from the previous fib
+    pool_total_usd: float = 0.0  # pool_usd + carry_in_usd — what actually got laddered
     escalated: bool = False
     finalized: bool = False  # swing complete (low broke again)
     pending_orders: Dict[int, PendingOrder] = field(default_factory=dict)
-    carry_forward_qty: Dict[int, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -270,10 +308,11 @@ class Leg:
             "leg_pct_from_mother": self.leg_pct_from_mother,
             "allocation_pct": self.allocation_pct,
             "pool_usd": self.pool_usd,
+            "carry_in_usd": self.carry_in_usd,
+            "pool_total_usd": self.pool_total_usd,
             "escalated": self.escalated,
             "finalized": self.finalized,
             "pending_orders": {str(level): order.to_dict() for level, order in self.pending_orders.items()},
-            "carry_forward_qty": {str(level): qty for level, qty in self.carry_forward_qty.items()},
         }
 
     @classmethod
@@ -291,12 +330,12 @@ class Leg:
         leg.leg_pct_from_mother = data.get("leg_pct_from_mother")
         leg.allocation_pct = data.get("allocation_pct")
         leg.pool_usd = data.get("pool_usd")
+        leg.carry_in_usd = _coerce_float(data.get("carry_in_usd"))
+        leg.pool_total_usd = _coerce_float(data.get("pool_total_usd"))
         leg.escalated = bool(data.get("escalated"))
         leg.finalized = bool(data.get("finalized"))
         for level, order in (data.get("pending_orders") or {}).items():
             leg.pending_orders[int(level)] = PendingOrder.from_dict(order)
-        for level, qty in (data.get("carry_forward_qty") or {}).items():
-            leg.carry_forward_qty[int(level)] = _coerce_float(qty)
         return leg
 
 
@@ -318,7 +357,8 @@ class Campaign:
     trendlines: List[Trendline] = field(default_factory=list)
     legs: List[Leg] = field(default_factory=list)
     active_trendline_id: Optional[int] = None
-    all_fills: List[Fill] = field(default_factory=list)
+    all_fills: List[Fill] = field(default_factory=list)  # fills of the OPEN position only
+    rounds: List[Round] = field(default_factory=list)  # closed open-to-TP cycles
     avg_entry_price: Optional[float] = None
     tp_price: Optional[float] = None  # active TP once fills exist; display estimate before
     tp_order_id: Optional[str] = None
@@ -362,7 +402,17 @@ class Campaign:
 
     @property
     def spent_usd(self) -> float:
+        """Capital currently locked in the OPEN position. A closed round returns
+        its principal here, which is what frees it up for the next fib."""
         return sum(f.price * f.quantity for f in self.all_fills)
+
+    @property
+    def realized_pnl_total(self) -> float:
+        return sum(r.pnl for r in self.rounds)
+
+    def leg_open_usd(self, leg_id: int) -> float:
+        """Notional from this leg that is still held (not yet closed at TP)."""
+        return sum(f.price * f.quantity for f in self.all_fills if f.leg_id == leg_id)
 
     @property
     def resting_usd(self) -> float:
@@ -390,6 +440,7 @@ class Campaign:
             "legs": [leg.to_dict() for leg in self.legs],
             "active_trendline_id": self.active_trendline_id,
             "all_fills": [f.to_dict() for f in self.all_fills],
+            "rounds": [r.to_dict() for r in self.rounds],
             "avg_entry_price": self.avg_entry_price,
             "tp_price": self.tp_price,
             "tp_order_id": self.tp_order_id,
@@ -460,6 +511,7 @@ class Campaign:
         campaign.trendlines = [Trendline.from_dict(tl) for tl in data.get("trendlines") or []]
         campaign.legs = [Leg.from_dict(leg) for leg in data.get("legs") or []]
         campaign.all_fills = [Fill.from_dict(f) for f in data.get("all_fills") or []]
+        campaign.rounds = [Round.from_dict(r) for r in data.get("rounds") or []]
         campaign.event_log = list(data.get("event_log") or [])
         return campaign
 
@@ -525,14 +577,28 @@ def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
     leg.escalated = touch_pct_from_mother > ESCALATION_THRESHOLD_PCT
 
 
-def cancel_and_carry_forward(prior_leg: Leg, next_leg: Leg) -> None:
-    """Mark prior leg's unfilled orders CARRIED; roll their qty into next_leg."""
-    for level, order in prior_leg.pending_orders.items():
+def cancel_and_carry_forward(campaign: Campaign, prior_leg: Leg) -> float:
+    """
+    Retire the prior fib and roll everything it did not consume into the next
+    one, as a USD lump.
+
+    "Unspent" means the whole pool the prior fib was laddered with, minus only
+    the notional it is *still holding*. Levels that never filled, levels that
+    were merged away or trimmed, and levels that filled and have since been
+    closed at TP all come back — a closed round returns its principal, so from
+    the next fib's point of view that money was never spent.
+
+    The lump lands in campaign.carry_forward_usd, which plan_leg_orders adds to
+    the next leg's own allocation before re-splitting 20/30/50.
+    """
+    for order in prior_leg.pending_orders.values():
         if order.is_open:
             order.status = "CARRIED"
-            next_leg.carry_forward_qty[level] = next_leg.carry_forward_qty.get(level, 0.0) + max(
-                order.quantity - order.filled_qty, 0.0
-            )
+
+    still_held = campaign.leg_open_usd(prior_leg.leg_id)
+    unspent = max(_coerce_float(prior_leg.pool_total_usd) - still_held, 0.0)
+    campaign.carry_forward_usd += unspent
+    return unspent
 
 
 def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
@@ -545,15 +611,13 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     if leg.fib is None:
         raise CascadeModelError(f"leg {leg.leg_id}: fib ladder must be built before planning orders")
     min_notional = max(_coerce_float(campaign.min_notional_usd, MIN_NOTIONAL_FLOOR_USD), MIN_NOTIONAL_FLOOR_USD)
-    pool = max(_coerce_float(leg.pool_usd), 0.0) + max(_coerce_float(campaign.carry_forward_usd), 0.0)
+    carry_in = max(_coerce_float(campaign.carry_forward_usd), 0.0)
+    pool = max(_coerce_float(leg.pool_usd), 0.0) + carry_in
     campaign.carry_forward_usd = 0.0
+    leg.carry_in_usd = carry_in
+    leg.pool_total_usd = pool
 
     usd = {level: pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
-    # Value carried-forward quantity from the prior leg at the new level prices.
-    for level in CASCADE_LEVELS:
-        carried_qty = leg.carry_forward_qty.get(level, 0.0)
-        if carried_qty > 0:
-            usd[level] += carried_qty * max(leg.fib.level_price(level), 0.0)
 
     merged = set()
     carried = False
@@ -566,7 +630,10 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
         usd[4] = 0.0
         merged.add(4)
     if usd[8] < min_notional:
+        # The whole pool is too small to place anything — hand it straight back
+        # so the next fib inherits it, and don't count it against this leg.
         campaign.carry_forward_usd = usd[8]
+        leg.pool_total_usd = max(leg.pool_total_usd - usd[8], 0.0)
         usd[8] = 0.0
         carried = True
 
@@ -835,6 +902,9 @@ class CascadeEngine:
                 else None
             )
             payload["allocated_pct"] = round(campaign.cumulative_used_pct, 4)
+            payload["rounds_closed"] = len(campaign.rounds)
+            payload["realized_pnl_total"] = round(campaign.realized_pnl_total, 2)
+            payload["carry_forward_usd"] = round(campaign.carry_forward_usd, 2)
             payload["stale_model"] = campaign.model_version != MODEL_VERSION
             payload["model_version"] = campaign.model_version
             campaigns.append(payload)
@@ -900,6 +970,7 @@ class CascadeEngine:
         campaign.legs = []
         campaign.active_trendline_id = None
         campaign.all_fills = []
+        campaign.rounds = []
         campaign.avg_entry_price = None
         campaign.filled_base_qty = 0.0
         campaign.tp_price = None
@@ -941,7 +1012,34 @@ class CascadeEngine:
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict(), "candles_replayed": len(candles)}
 
-    async def get_chart_data(self, campaign_id: str, max_candles: int = 300) -> dict:
+    @staticmethod
+    def _aggregate_candles(candles: List[Candle], bucket_sec: int) -> List[Candle]:
+        """
+        Roll 5m candles up into larger view buckets. The engine only ever reasons
+        in 5m — this is purely so the chart can be read at 15m or 1H without the
+        geometry (which is 5m-derived) shifting underneath it.
+        """
+        if bucket_sec <= FIVE_MIN_SEC:
+            return candles
+        out: List[Candle] = []
+        current: Optional[Candle] = None
+        current_bucket = None
+        for c in candles:
+            bucket = (c.timestamp // bucket_sec) * bucket_sec
+            if current is None or bucket != current_bucket:
+                if current is not None:
+                    out.append(current)
+                current = Candle(timestamp=bucket, open=c.open, high=c.high, low=c.low, close=c.close)
+                current_bucket = bucket
+            else:
+                current.high = max(current.high, c.high)
+                current.low = min(current.low, c.low)
+                current.close = c.close
+        if current is not None:
+            out.append(current)
+        return out
+
+    async def get_chart_data(self, campaign_id: str, max_candles: int = 300, timeframe: str = "5m") -> dict:
         """
         Candles plus the geometry the engine actually used — trendline anchors,
         each leg's fib anchors/levels, ladder order prices and fills — so the
@@ -955,13 +1053,15 @@ class CascadeEngine:
         # engine's in-memory list: that list is only what this process has
         # stepped through, so after a restart it can hold a handful of candles
         # and the chart would render almost empty.
-        history = await self._chart_candles(campaign, max_candles)
+        bucket_sec = CHART_TIMEFRAMES.get(str(timeframe).lower(), FIVE_MIN_SEC)
+        # Pull enough 5m candles that the rolled-up view still spans the window.
+        raw_needed = max_candles * max(bucket_sec // FIVE_MIN_SEC, 1)
+        history = await self._chart_candles(campaign, raw_needed)
         if not history:
             history = self._candles_5m.get(campaign_id) or []
 
-        candles = [
-            {"t": c.timestamp, "o": c.open, "h": c.high, "l": c.low, "c": c.close} for c in history[-max_candles:]
-        ]
+        view = self._aggregate_candles(history, bucket_sec)
+        candles = [{"t": c.timestamp, "o": c.open, "h": c.high, "l": c.low, "c": c.close} for c in view[-max_candles:]]
         # Always include the mother candle itself as the left anchor of the view.
         mother = {
             "t": campaign.mother_timestamp,
@@ -1015,6 +1115,7 @@ class CascadeEngine:
             "state": campaign.state,
             "mode": campaign.mode,
             "mother": mother,
+            "timeframe": str(timeframe).lower() if str(timeframe).lower() in CHART_TIMEFRAMES else "5m",
             "candles": candles,
             "trendlines": trendlines,
             "legs": legs,
@@ -1088,7 +1189,7 @@ class CascadeEngine:
         if campaign.mode == "paper" and campaign.state in ACTIVE_STATES and campaign.filled_base_qty > 0:
             tp = compute_tp_price(campaign)
             if price and tp and price >= tp:
-                self._complete_campaign(campaign, tp)
+                self._close_round(campaign, tp)
                 changed = True
         # Live order sync (throttled).
         now = time.monotonic()
@@ -1344,8 +1445,12 @@ class CascadeEngine:
         )
         leg.finalized = True
         campaign.legs.append(leg)
+        carried_in = 0.0
         if prior_leg is not None:
-            cancel_and_carry_forward(prior_leg, leg)
+            # The previous low has broken — retire the prior fib and roll its
+            # unspent pool (never-filled levels + principal returned by any
+            # round already closed at TP) into this one.
+            carried_in = cancel_and_carry_forward(campaign, prior_leg)
         try:
             build_fib_ladder_and_pool(campaign, leg)
             plan_leg_orders(campaign, leg)
@@ -1360,7 +1465,8 @@ class CascadeEngine:
             "leg",
             f"Fib {leg.leg_id} drawn on trendline {trendline_id}: 0={touch_high:g} 1={swing_low:g} "
             f"({_coerce_float(leg.allocation_pct):.3f}% allocation, pool ${_coerce_float(leg.pool_usd):,.2f}"
-            f"{', escalated' if leg.escalated else ''}) — "
+            + (f" + ${carried_in:,.2f} carried from fib {prior_leg.leg_id}" if carried_in > 0 and prior_leg else "")
+            + f"{', escalated' if leg.escalated else ''}) — "
             + (
                 ", ".join(f"L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in placed)
                 if placed
@@ -1420,21 +1526,52 @@ class CascadeEngine:
             f"(avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
         )
 
-    def _complete_campaign(self, campaign: Campaign, exit_price: float) -> None:
+    def _close_round(self, campaign: Campaign, exit_price: float) -> None:
+        """
+        A TP fill closes the current open-to-TP round, not the campaign. The
+        principal comes back into available capital and the position resets to
+        flat; the cascade keeps running and the freed money is picked up by the
+        next fib's pool via cancel_and_carry_forward(). Only a mother-high
+        breach (or a manual stop) ends the campaign.
+        """
         qty = campaign.filled_base_qty
         avg = campaign.avg_entry_price or 0.0
-        campaign.realized_pnl = round((exit_price - avg) * qty, 8)
-        campaign.tp_filled = True
-        campaign.state = "COMPLETED"
-        campaign.close_reason = "tp_filled"
-        campaign.closed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        invested = sum(f.price * f.quantity for f in campaign.all_fills)
+        leg = campaign.current_leg
+        rnd = Round(
+            round_id=len(campaign.rounds) + 1,
+            leg_id=leg.leg_id if leg else 0,
+            avg_entry=avg,
+            quantity=qty,
+            invested_usd=round(invested, 8),
+            exit_price=exit_price,
+            pnl=round((exit_price - avg) * qty, 8),
+            closed_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        campaign.rounds.append(rnd)
+
+        # Flatten the position: principal returns to available capital.
+        campaign.all_fills = []
+        campaign.filled_base_qty = 0.0
+        campaign.avg_entry_price = None
+        campaign.tp_price = None
+        campaign.tp_order_id = None
+        campaign.tp_rev += 1
+        campaign.realized_pnl = round(campaign.realized_pnl_total, 8)
+
+        # Filled entries are spent and gone; anything still resting stays live.
+        if leg is not None:
+            for order in leg.pending_orders.values():
+                if order.status == "FILLED":
+                    order.status = "CLOSED"
+
         self._log_event(
             campaign,
-            "complete",
-            f"TP filled at {exit_price:,.2f} — sold {qty:.8f} (avg entry {avg:,.2f}), "
-            f"PnL ${campaign.realized_pnl:,.2f}",
+            "round",
+            f"Round {rnd.round_id} closed at TP {exit_price:,.2f} — sold {qty:.8f} "
+            f"(avg entry {avg:,.2f}), PnL ${rnd.pnl:,.2f}. ${invested:,.2f} principal "
+            f"returned to the pool; campaign continues until the mother high breaks.",
         )
-        self._archive_campaign(campaign)
 
     def _mother_broken(self, campaign: Campaign) -> None:
         campaign.mother_broken_above = True
@@ -1457,7 +1594,7 @@ class CascadeEngine:
             # Paper: price at/above mother high is at/above TP by construction.
             tp = compute_tp_price(campaign)
             if tp:
-                self._complete_campaign(campaign, tp)
+                self._close_round(campaign, tp)
                 return
         self._archive_campaign(campaign)
 
@@ -1597,8 +1734,9 @@ class CascadeEngine:
                 executed = _coerce_float(status_row.get("executedQty"), campaign.filled_base_qty)
                 quote = _coerce_float(status_row.get("cummulativeQuoteQty"))
                 exit_price = quote / executed if executed > 0 and quote > 0 else (campaign.tp_price or 0.0)
-                await self._cancel_all_live_orders(campaign, include_tp=False)
-                self._complete_campaign(campaign, exit_price)
+                # Entry buys that never filled stay resting — the campaign is
+                # still live and price can come back down to them.
+                self._close_round(campaign, exit_price)
                 return True
             campaign.tp_order_id = None
             changed = True

@@ -6742,3 +6742,211 @@ html[data-theme="light"] .journal-entry-notes section {
   @media (max-width: 560px) {
     .cf-cascade-form { grid-template-columns: minmax(0, 1fr); }
   }
+
+  /* ── Engine status chip: a quiet inline badge, not a hero number ── */
+  .cf-engine-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 13px;
+    border: 1px solid rgba(118,138,176,0.20);
+    border-radius: 999px;
+    background: rgba(12,20,36,0.76);
+    white-space: nowrap;
+  }
+  .cf-engine-chip .cf-engine-label {
+    color: var(--muted);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+  .cf-engine-chip strong {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 650;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    color: var(--muted);
+  }
+  .cf-engine-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted);
+    flex: none;
+  }
+  .cf-engine-chip[data-state="running"] strong { color: var(--green); }
+  .cf-engine-chip[data-state="running"] .cf-engine-dot {
+    background: var(--green);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+    animation: cfEnginePulse 2.4s ease-in-out infinite;
+  }
+  .cf-engine-chip[data-state="stopped"] strong,
+  .cf-engine-chip[data-state="stopped"] .cf-engine-dot { color: var(--red); background: var(--red); }
+  .cf-engine-chip[data-state="stopped"] strong { background: none; }
+  @keyframes cfEnginePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cf-engine-chip[data-state="running"] .cf-engine-dot { animation: none; }
+  }
+
+  /* ── Segmented toggles: paper/live mode and chart timeframe ── */
+  .cf-mode-toggle,
+  .cf-tf-toggle {
+    display: inline-flex;
+    padding: 3px;
+    gap: 3px;
+    border: 1px solid rgba(118,138,176,0.20);
+    border-radius: 10px;
+    background: rgba(12,20,36,0.72);
+  }
+  .cf-mode-toggle { width: 100%; }
+  .cf-mode-option,
+  .cf-tf-option {
+    flex: 1;
+    appearance: none;
+    border: 0;
+    cursor: pointer;
+    padding: 7px 12px;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    transition: background .16s ease, color .16s ease;
+  }
+  .cf-tf-option { padding: 6px 11px; font-size: 11.5px; font-family: var(--font-mono); }
+  .cf-mode-option:hover,
+  .cf-tf-option:hover { color: var(--text); }
+  .cf-mode-option.is-active,
+  .cf-tf-option.is-active {
+    background: rgba(118,138,176,0.16);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px rgba(118,138,176,0.22);
+  }
+  .cf-mode-option[data-mode="paper"].is-active { color: var(--green); }
+  .cf-mode-option[data-mode="live"].is-active {
+    color: var(--red);
+    background: color-mix(in srgb, var(--red) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 34%, transparent);
+  }
+  .cf-mode-option:focus-visible,
+  .cf-tf-option:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: 1px; }
+
+  /* ── Chart fullscreen ── */
+  .cf-cascade-chart-fs {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    margin: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel, #0b1220);
+    overflow: hidden;
+  }
+  .cf-cascade-chart-fs #cf-cascade-chart-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .cf-cascade-chart-fs #cf-cascade-chart-body svg { width: 100%; height: auto; max-height: 100%; }
+  body.cf-chart-fs-open { overflow: hidden; }
+
+  /* ── Trade Journal ── */
+  .cf-journal-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .cf-journal-kpi {
+    padding: 13px 15px;
+    border: 1px solid rgba(118,138,176,0.18);
+    border-radius: 13px;
+    background: rgba(12,20,36,0.72);
+    min-width: 0;
+  }
+  .cf-journal-kpi-label {
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 5px;
+  }
+  .cf-journal-kpi-value {
+    font-family: var(--font-mono);
+    font-size: 21px; font-weight: 650; line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .cf-journal-kpi-note { font-size: 10.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+
+  .cf-journal-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+  .cf-journal-chart-card { padding: 15px 17px; }
+  .cf-journal-chart { margin-top: 12px; color: var(--text); }
+  .cf-journal-chart svg { width: 100%; height: auto; display: block; }
+
+  .cf-journal-coinbars { display: flex; flex-direction: column; gap: 11px; }
+  .cf-journal-coinrow {
+    display: grid;
+    grid-template-columns: minmax(72px, auto) 1fr minmax(96px, auto);
+    align-items: center;
+    gap: 11px;
+  }
+  .cf-journal-coinname {
+    font-size: 12.5px; font-weight: 650; line-height: 1.25;
+  }
+  .cf-journal-coinname span { display: block; font-size: 9.5px; font-weight: 400; color: var(--muted); }
+  .cf-journal-coinbar {
+    height: 8px; border-radius: 999px;
+    background: rgba(118,138,176,0.14); overflow: hidden;
+  }
+  .cf-journal-coinbar span {
+    display: block; height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent, #1f6fd6), var(--green, #3fae56));
+  }
+  .cf-journal-coinstat {
+    text-align: right; font-family: var(--font-mono);
+    font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1.3;
+  }
+  .cf-journal-coinstat span { display: block; font-size: 10.5px; }
+
+  .cf-journal-traderow { cursor: pointer; }
+  .cf-journal-traderow:hover { background: rgba(118,138,176,0.07); }
+  .cf-journal-traderow:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: -2px; }
+  .cf-journal-caret {
+    display: inline-block; margin-right: 6px;
+    color: var(--muted); font-size: 10px;
+    transition: transform .16s ease;
+  }
+  .cf-journal-traderow.is-expanded .cf-journal-caret { transform: rotate(90deg); }
+  .cf-journal-buys { display: none; }
+  .cf-journal-buys.is-open { display: table-row; }
+  .cf-journal-subtable { width: 100%; background: rgba(118,138,176,0.05); }
+  .cf-journal-buyrow td { font-size: 11.5px; color: var(--muted); border: 0; }
+
+  @media (max-width: 640px) {
+    .cf-journal-kpis { grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); }
+    .cf-journal-kpi-value { font-size: 18px; }
+    .cf-journal-charts { grid-template-columns: minmax(0, 1fr); }
+    .cf-journal-coinrow { grid-template-columns: minmax(60px, auto) 1fr minmax(84px, auto); gap: 8px; }
+  }
+
+  /* ── Inline icon glyphs: align with adjacent label text ── */
+  .cf-ico {
+    display: inline-block;
+    vertical-align: -0.15em;
+    margin-right: 0.4em;
+    flex: none;
+  }
+  .btn .cf-ico { margin-right: 0.35em; }
+  h2 .cf-ico, h3 .cf-ico { vertical-align: -0.1em; }

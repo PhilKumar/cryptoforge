@@ -1,0 +1,387 @@
+{
+  "source": "CRYPTO_Trade_Sheet_fixed (Google Sheets)",
+  "capital_base_usd": 2000.0,
+  "imported_at": "2026-07-20",
+  "trades": [
+    {
+      "trade_id": "SOLUSDT-260705-1",
+      "date": "2026-07-05",
+      "coin": "SOLUSDT",
+      "avg_buy_price": 80.89,
+      "total_qty": 0.253,
+      "invested_usd": 20.46,
+      "sell_price": 81.65,
+      "pnl_usd": 0.19,
+      "roi_pct": 0.93,
+      "status": "Closed",
+      "buy_count": 2,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 81.45,
+          "quantity": 0.1,
+          "amount_usd": 8.15,
+          "market_down_pct": 2.05
+        },
+        {
+          "buy_no": 2,
+          "buy_price": 80.52,
+          "quantity": 0.153,
+          "amount_usd": 12.32,
+          "market_down_pct": 1.09
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260706-1",
+      "date": "2026-07-06",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 63191.65,
+      "total_qty": 9e-05,
+      "invested_usd": 5.69,
+      "sell_price": 63332.01,
+      "pnl_usd": 0.01,
+      "roi_pct": 0.18,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 63191.65,
+          "quantity": 9e-05,
+          "amount_usd": 5.69,
+          "market_down_pct": 0.58
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260706-2",
+      "date": "2026-07-06",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 62976.0,
+      "total_qty": 0.00013,
+      "invested_usd": 8.19,
+      "sell_price": 63198.01,
+      "pnl_usd": 0.03,
+      "roi_pct": 0.37,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 62976.0,
+          "quantity": 0.00013,
+          "amount_usd": 8.19,
+          "market_down_pct": 0.28
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260706-3",
+      "date": "2026-07-06",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 62713.8,
+      "total_qty": 0.00025,
+      "invested_usd": 15.68,
+      "sell_price": 62964.0,
+      "pnl_usd": 0.06,
+      "roi_pct": 0.38,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 62713.8,
+          "quantity": 0.00025,
+          "amount_usd": 15.68,
+          "market_down_pct": 0.58
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260706-4",
+      "date": "2026-07-06",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 61803.67,
+      "total_qty": 0.00033,
+      "invested_usd": 20.4,
+      "sell_price": 62332.51,
+      "pnl_usd": 0.17,
+      "roi_pct": 0.83,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 61803.67,
+          "quantity": 0.00033,
+          "amount_usd": 20.4,
+          "market_down_pct": 0.41
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260707-5",
+      "date": "2026-07-07",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 63013.88,
+      "total_qty": 0.00017,
+      "invested_usd": 10.71,
+      "sell_price": 63435.41,
+      "pnl_usd": 0.07,
+      "roi_pct": 0.65,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 63013.88,
+          "quantity": 0.00017,
+          "amount_usd": 10.71,
+          "market_down_pct": 0.85
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260708-6",
+      "date": "2026-07-08",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 62085.13,
+      "total_qty": 0.00021,
+      "invested_usd": 13.04,
+      "sell_price": 62738.85,
+      "pnl_usd": 0.14,
+      "roi_pct": 1.07,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 62085.13,
+          "quantity": 0.00021,
+          "amount_usd": 13.04,
+          "market_down_pct": 0.43
+        }
+      ]
+    },
+    {
+      "trade_id": "SOLUSDT-260708-2",
+      "date": "2026-07-08",
+      "coin": "SOLUSDT",
+      "avg_buy_price": 77.04,
+      "total_qty": 0.649,
+      "invested_usd": 50.0,
+      "sell_price": 78.72,
+      "pnl_usd": 1.09,
+      "roi_pct": 2.18,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 77.04,
+          "quantity": 0.649,
+          "amount_usd": 50.0,
+          "market_down_pct": 2.3
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260709-7",
+      "date": "2026-07-09",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 62806.0,
+      "total_qty": 0.00017,
+      "invested_usd": 10.68,
+      "sell_price": 63277.71,
+      "pnl_usd": 0.08,
+      "roi_pct": 0.75,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 62806.0,
+          "quantity": 0.00017,
+          "amount_usd": 10.68,
+          "market_down_pct": 1.13
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260709-8",
+      "date": "2026-07-09",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 62330.66,
+      "total_qty": 0.00021,
+      "invested_usd": 13.09,
+      "sell_price": 62921.2,
+      "pnl_usd": 0.12,
+      "roi_pct": 0.92,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 62330.66,
+          "quantity": 0.00021,
+          "amount_usd": 13.09,
+          "market_down_pct": 1.13
+        }
+      ]
+    },
+    {
+      "trade_id": "PAXGUSDT-260715-1",
+      "date": "2026-07-15",
+      "coin": "PAXGUSDT",
+      "avg_buy_price": 4033.12,
+      "total_qty": 0.0014,
+      "invested_usd": 5.65,
+      "sell_price": 4049.23,
+      "pnl_usd": 0.02,
+      "roi_pct": 0.35,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 4033.12,
+          "quantity": 0.0014,
+          "amount_usd": 5.65,
+          "market_down_pct": 0.64
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260716-10",
+      "date": "2026-07-16",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 64268.34,
+      "total_qty": 0.0002,
+      "invested_usd": 12.85,
+      "sell_price": 64601.26,
+      "pnl_usd": 0.07,
+      "roi_pct": 0.54,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 64268.34,
+          "quantity": 0.0002,
+          "amount_usd": 12.85,
+          "market_down_pct": 0.46
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260716-11",
+      "date": "2026-07-16",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 63641.59,
+      "total_qty": 0.00023,
+      "invested_usd": 14.64,
+      "sell_price": 64110.94,
+      "pnl_usd": 0.11,
+      "roi_pct": 0.75,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 63641.59,
+          "quantity": 0.00023,
+          "amount_usd": 14.64,
+          "market_down_pct": 1.31
+        }
+      ]
+    },
+    {
+      "trade_id": "BTCUSDT-260716-9",
+      "date": "2026-07-16",
+      "coin": "BTCUSDT",
+      "avg_buy_price": 64576.51,
+      "total_qty": 0.00017,
+      "invested_usd": 10.98,
+      "sell_price": 64832.38,
+      "pnl_usd": 0.04,
+      "roi_pct": 0.36,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 64576.51,
+          "quantity": 0.00017,
+          "amount_usd": 10.98,
+          "market_down_pct": 0.35
+        }
+      ]
+    },
+    {
+      "trade_id": "PAXGUSDT-260716-2",
+      "date": "2026-07-16",
+      "coin": "PAXGUSDT",
+      "avg_buy_price": 3982.02,
+      "total_qty": 0.0047,
+      "invested_usd": 18.72,
+      "sell_price": 4010.91,
+      "pnl_usd": 0.14,
+      "roi_pct": 0.75,
+      "status": "Closed",
+      "buy_count": 1,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 3982.02,
+          "quantity": 0.0047,
+          "amount_usd": 18.72,
+          "market_down_pct": 0.64
+        }
+      ]
+    },
+    {
+      "trade_id": "SOLUSDT-260716-3",
+      "date": "2026-07-16",
+      "coin": "SOLUSDT",
+      "avg_buy_price": 75.09,
+      "total_qty": 0.65,
+      "invested_usd": 48.81,
+      "sell_price": 76.08,
+      "pnl_usd": 0.64,
+      "roi_pct": 1.31,
+      "status": "Closed",
+      "buy_count": 4,
+      "buys": [
+        {
+          "buy_no": 1,
+          "buy_price": 76.15,
+          "quantity": 0.261,
+          "amount_usd": 19.88,
+          "market_down_pct": 0.68
+        },
+        {
+          "buy_no": 2,
+          "buy_price": 74.82,
+          "quantity": 0.12,
+          "amount_usd": 8.98,
+          "market_down_pct": 1.0
+        },
+        {
+          "buy_no": 3,
+          "buy_price": 74.62,
+          "quantity": 0.08,
+          "amount_usd": 5.97,
+          "market_down_pct": 0.99
+        },
+        {
+          "buy_no": 4,
+          "buy_price": 74.01,
+          "quantity": 0.189,
+          "amount_usd": 13.99,
+          "market_down_pct": 0.54
+        }
+      ]
+    }
+  ]
+}
