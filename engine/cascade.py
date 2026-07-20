@@ -46,7 +46,7 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
-FIRST_DEPTH_MIN_PCT = 0.5  # first trendline needs at least this fall pct from the mother high
+RED_CANDLES_TO_CONFIRM = 2  # red candles after the mother candle that confirm the first depth
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
@@ -328,6 +328,7 @@ class Campaign:
     swing_tracking: bool = False
     depth_low: Optional[float] = None
     depth_low_timestamp: Optional[int] = None
+    red_candles_seen: int = 0
     last_processed_ts: int = 0  # last processed closed 5m candle open ts
     closed_at: str = ""
     close_reason: str = ""
@@ -389,6 +390,7 @@ class Campaign:
             "swing_tracking": self.swing_tracking,
             "depth_low": self.depth_low,
             "depth_low_timestamp": self.depth_low_timestamp,
+            "red_candles_seen": self.red_candles_seen,
             "last_processed_ts": self.last_processed_ts,
             "closed_at": self.closed_at,
             "close_reason": self.close_reason,
@@ -425,6 +427,7 @@ class Campaign:
             "swing_tracking",
             "depth_low",
             "depth_low_timestamp",
+            "red_candles_seen",
             "last_processed_ts",
             "closed_at",
             "close_reason",
@@ -1158,11 +1161,15 @@ class CascadeEngine:
         if campaign.depth_low is None or candle.low < campaign.depth_low:
             campaign.depth_low = candle.low
             campaign.depth_low_timestamp = candle.timestamp
+        if candle.is_red:
+            campaign.red_candles_seen += 1
 
-        depth_pct = (campaign.mother_high - (campaign.depth_low or campaign.mother_high)) / campaign.mother_high * 100
-        if depth_pct < FIRST_DEPTH_MIN_PCT:
+        # The depth is confirmed by RED_CANDLES_TO_CONFIRM red candles, not by a
+        # price threshold: a shallow first leg is still a valid leg, and waiting
+        # for a fixed fall % draws the trendline too late to catch its touch.
+        if campaign.red_candles_seen < RED_CANDLES_TO_CONFIRM:
             return
-        between = self._candles_between(campaign, campaign.depth_low_timestamp or candle.timestamp)
+        between = self._candles_between(campaign, candle.timestamp)
         anchor2_price, anchor2_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
         if anchor2_price is None:
             return
@@ -1232,17 +1239,11 @@ class CascadeEngine:
             return
 
         # Not swing-tracking: maintain the running depth low for the next leg.
+        # The trendline itself is fixed once drawn — re-anchoring it to each new
+        # depth only steepens it until it breaks before it can ever be touched.
         if campaign.depth_low is None or candle.low < campaign.depth_low:
             campaign.depth_low = candle.low
             campaign.depth_low_timestamp = candle.timestamp
-            # Until a trendline has produced its first leg, its anchor2 tracks
-            # the red candle before the (still deepening) depth.
-            if not campaign.legs:
-                between = self._candles_between(campaign, campaign.depth_low_timestamp)
-                anchor2_price, anchor2_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
-                if anchor2_price is not None and anchor2_ts != tl.anchor2_timestamp:
-                    tl.anchor2_price = anchor2_price
-                    tl.anchor2_timestamp = anchor2_ts
 
         if campaign.pending_break and leg is not None and leg_broken(candle, leg.low):
             self._create_trendline_from_break(campaign, candle)
@@ -1321,6 +1322,7 @@ class CascadeEngine:
         campaign.state = "WAITING_FIRST_DEPTH"
         campaign.depth_low = None
         campaign.depth_low_timestamp = None
+        campaign.red_candles_seen = 0
         self._log_event(
             campaign,
             "trendline",
@@ -1344,8 +1346,12 @@ class CascadeEngine:
         )
         campaign.trendlines.append(tl)
         campaign.active_trendline_id = tl.trendline_id
-        campaign.depth_low = low_break_candle.low
-        campaign.depth_low_timestamp = low_break_candle.timestamp
+        # The depth low is the running minimum since the previous leg's touch —
+        # drawing a new trendline must not raise it back up to this candle's
+        # low, which would throw away the real depth the next fib is anchored to.
+        if campaign.depth_low is None or low_break_candle.low < campaign.depth_low:
+            campaign.depth_low = low_break_candle.low
+            campaign.depth_low_timestamp = low_break_candle.timestamp
         self._log_event(
             campaign,
             "trendline",

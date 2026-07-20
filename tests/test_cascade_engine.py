@@ -12,6 +12,7 @@ from engine.cascade import (
     Leg,
     build_fib_ladder_and_pool,
     plan_leg_orders,
+    trendline_price,
 )
 
 _RECENT_TS = (int(time.time()) - 3600) // 300 * 300  # a truthy, in-window mother timestamp
@@ -125,14 +126,20 @@ class CascadeScenarioTests(unittest.TestCase):
         for candle in _scenario_candles()[:upto]:
             _feed(self.engine, self.campaign, candle)
 
-    def test_first_trendline_forms_after_depth(self):
-        self._run_scenario(upto=3)
+    def test_first_trendline_forms_after_two_red_candles(self):
+        """RED_CANDLES_TO_CONFIRM red candles confirm the first depth (the rule
+        from cascade_lib), not a fixed fall percentage — a shallow first leg is
+        still a valid leg and a % threshold draws the line too late to catch it."""
+        self._run_scenario(upto=2)  # t=1 and t=2 are both red
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
         self.assertEqual(len(self.campaign.trendlines), 1)
         tl = self.campaign.trendlines[0]
         self.assertEqual(tl.anchor1_price, 105.0)
-        self.assertEqual(tl.anchor2_price, 103.0)  # red open at t=2
-        self.assertEqual(tl.anchor2_timestamp, 600)
+        self.assertEqual(tl.anchor2_price, 104.0)  # red open at t=1
+        self.assertEqual(tl.anchor2_timestamp, 300)
+        # Same line the scenario file draws through candles[2] (open 103 @ 600):
+        # both anchors sit on slope -1/300 from the mother high.
+        self.assertAlmostEqual(trendline_price(tl, 600), 103.0)
 
     def test_leg1_touch_builds_fib_and_orders(self):
         self._run_scenario(upto=4)
@@ -469,8 +476,13 @@ class CascadeUntouchedTrendlineTests(unittest.TestCase):
         self.assertFalse(self.campaign.pending_break)
         self.assertEqual(len(self.campaign.trendlines), 1)  # retired, kept for the chart
 
-        # A fresh depth redraws from the mother high
-        self._feed_all([(7, 104.75, 104.8, 104.0, 104.1)])
+        # A fresh depth (two more red candles) redraws from the mother high
+        self._feed_all(
+            [
+                (7, 104.75, 104.8, 104.0, 104.1),
+                (8, 104.1, 104.2, 103.9, 104.0),
+            ]
+        )
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
         self.assertEqual(len(self.campaign.trendlines), 2)
         self.assertEqual(self.campaign.active_trendline_id, 2)

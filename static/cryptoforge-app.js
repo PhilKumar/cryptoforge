@@ -8885,22 +8885,37 @@ function cfRenderCascadeStatus(data) {
 function _cfCascadeLadderRows(campaign) {
   var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
   if (!legs.length) return '<div class="table-meta">No legs yet — waiting for the first trendline touch.</div>';
-  var leg = legs[legs.length - 1];
-  var orders = leg.pending_orders || {};
-  var rows = [2, 4, 8].map(function(level) {
-    var order = orders[String(level)] || orders[level] || {};
-    var status = String(order.status || '--');
-    var tone = status === 'FILLED' ? 'var(--green, #3fae56)'
-      : (status === 'PLACED' || status === 'PENDING') ? 'var(--accent, #1f6fd6)'
-      : 'var(--text-muted, #888)';
-    return '<tr>'
-      + '<td>L' + level + '</td>'
-      + '<td class="num">' + _cfCascadeFmt(order.price) + '</td>'
-      + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
-      + '<td class="num">$' + _cfCascadeFmt(order.usd_notional) + '</td>'
-      + '<td class="num">' + _cfCascadeFmt(order.quantity, 8) + '</td>'
-      + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status) + '</td>'
-      + '</tr>';
+  // Every fib, oldest first, so each leg's levels stay visible as new ones form.
+  var rows = legs.map(function(leg) {
+    var orders = leg.pending_orders || {};
+    var levels = leg.fib
+      ? { 0: leg.fib.high_anchor, 1: leg.fib.low_anchor }
+      : { 0: leg.touch_high, 1: leg.low };
+    var head = '<tr class="cf-cascade-leg-head">'
+      + '<td colspan="6" style="padding-top:10px;">'
+      + '<strong>Fib ' + leg.leg_id + '</strong>'
+      + '<span class="table-meta"> · TL' + (leg.trendline_id || '--')
+      + ' · 0 = ' + _cfCascadeFmt(levels[0]) + ' · 1 = ' + _cfCascadeFmt(levels[1])
+      + (leg.finalized ? ' · finalized' : ' · forming')
+      + (leg.escalated ? ' · escalated 15m' : '')
+      + (leg.pool_usd ? ' · pool $' + _cfCascadeFmt(leg.pool_usd) : '')
+      + '</span></td></tr>';
+    var body = [2, 4, 8].map(function(level) {
+      var order = orders[String(level)] || orders[level] || {};
+      var status = String(order.status || '--');
+      var tone = status === 'FILLED' ? 'var(--green, #3fae56)'
+        : (status === 'PLACED' || status === 'PENDING') ? 'var(--accent, #1f6fd6)'
+        : 'var(--text-muted, #888)';
+      return '<tr>'
+        + '<td>L' + level + '</td>'
+        + '<td class="num">' + _cfCascadeFmt(order.price) + '</td>'
+        + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
+        + '<td class="num">$' + _cfCascadeFmt(order.usd_notional) + '</td>'
+        + '<td class="num">' + _cfCascadeFmt(order.quantity, 8) + '</td>'
+        + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status) + '</td>'
+        + '</tr>';
+    }).join('');
+    return head + body;
   }).join('');
   return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
     + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th><th class="num">Amount</th><th class="num">Qty</th><th>Status</th></tr></thead>'
