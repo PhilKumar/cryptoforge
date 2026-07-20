@@ -53,7 +53,11 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
-MODEL_VERSION = 6  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 7  # bump when the fib/trendline rules change; older campaigns are flagged stale
+# A cut must close below the frozen dip by at least this fraction of price.
+# "Decisive break" (cascade_lib's own term): probes a few dollars under the
+# dip are the fall resuming, not a completed swing being cut.
+DECISIVE_BREAK_PCT = 0.0002
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
@@ -367,18 +371,11 @@ class Campaign:
     filled_base_qty: float = 0.0
     realized_pnl: Optional[float] = None
     mother_broken_above: bool = False
-    # Live swing being tracked: the dip, the rise that confirms it, and the
-    # running high of that rise. Once risen is True the dip is frozen — later
-    # lower lows begin a new swing instead of dragging this one down.
-    swing_low: Optional[float] = None  # the dip being tracked
-    swing_low_timestamp: Optional[int] = None
-    swing_high: Optional[float] = None  # highest high since the last cut (trendline anchor)
-    swing_high_timestamp: Optional[int] = None
-    swing_risen: bool = False  # a rise confirmed the dip, so it is frozen
-    anchor_high: Optional[float] = None  # highest high up to the dip (trendline anchor)
-    anchor_high_timestamp: Optional[int] = None
-    touch_high: Optional[float] = None  # high of the candle that touched the trendline
-    touch_high_timestamp: Optional[int] = None
+    # The structure window: candles since the last cut (the cut candle seeds
+    # the next window). Everything else — dip, touch, fib anchors — is derived
+    # from the candle history inside this window at evaluation time, so there
+    # is no swing state to corrupt or restart.
+    window_start_ts: int = 0
     broken_above: bool = False  # active trendline has been closed above
     last_processed_ts: int = 0  # last processed closed 5m candle open ts
     closed_at: str = ""
@@ -449,15 +446,7 @@ class Campaign:
             "filled_base_qty": self.filled_base_qty,
             "realized_pnl": self.realized_pnl,
             "mother_broken_above": self.mother_broken_above,
-            "swing_low": self.swing_low,
-            "swing_low_timestamp": self.swing_low_timestamp,
-            "swing_high": self.swing_high,
-            "swing_high_timestamp": self.swing_high_timestamp,
-            "swing_risen": self.swing_risen,
-            "anchor_high": self.anchor_high,
-            "anchor_high_timestamp": self.anchor_high_timestamp,
-            "touch_high": self.touch_high,
-            "touch_high_timestamp": self.touch_high_timestamp,
+            "window_start_ts": self.window_start_ts,
             "broken_above": self.broken_above,
             "last_processed_ts": self.last_processed_ts,
             "closed_at": self.closed_at,
@@ -492,15 +481,7 @@ class Campaign:
             "filled_base_qty",
             "realized_pnl",
             "mother_broken_above",
-            "swing_low",
-            "swing_low_timestamp",
-            "swing_high",
-            "swing_high_timestamp",
-            "swing_risen",
-            "anchor_high",
-            "anchor_high_timestamp",
-            "touch_high",
-            "touch_high_timestamp",
+            "window_start_ts",
             "broken_above",
             "last_processed_ts",
             "closed_at",
@@ -612,12 +593,27 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
         raise CascadeModelError(f"leg {leg.leg_id}: fib ladder must be built before planning orders")
     min_notional = max(_coerce_float(campaign.min_notional_usd, MIN_NOTIONAL_FLOOR_USD), MIN_NOTIONAL_FLOOR_USD)
     carry_in = max(_coerce_float(campaign.carry_forward_usd), 0.0)
-    pool = max(_coerce_float(leg.pool_usd), 0.0) + carry_in
+    own_pool = max(_coerce_float(leg.pool_usd), 0.0)
+    pool = own_pool + carry_in
     campaign.carry_forward_usd = 0.0
     leg.carry_in_usd = carry_in
     leg.pool_total_usd = pool
 
-    usd = {level: pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
+    # When this fib's level 2 already sits at or below the PRIOR fib's level 8,
+    # the market has fallen past everything the old ladder covered — the carried
+    # pool re-enters at level 2 rather than being pushed to the deep levels.
+    prior_leg = campaign.legs[-2] if len(campaign.legs) >= 2 else None
+    carry_to_l2 = (
+        carry_in > 0
+        and prior_leg is not None
+        and prior_leg.fib is not None
+        and leg.fib.level_price(2) <= prior_leg.fib.level_price(8)
+    )
+    if carry_to_l2:
+        usd = {level: own_pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
+        usd[2] += carry_in
+    else:
+        usd = {level: pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
 
     merged = set()
     carried = False
@@ -831,6 +827,7 @@ class CascadeEngine:
             model_version=MODEL_VERSION,
             created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             last_processed_ts=mother_ts,
+            window_start_ts=mother_ts,
         )
         self.campaigns[campaign.campaign_id] = campaign
         self._log_event(
@@ -985,15 +982,7 @@ class CascadeEngine:
         campaign.closed_at = ""
         campaign.close_reason = ""
         campaign.state = "WAITING_FIRST_DEPTH"
-        campaign.swing_low = None
-        campaign.swing_low_timestamp = None
-        campaign.swing_high = None
-        campaign.swing_high_timestamp = None
-        campaign.swing_risen = False
-        campaign.anchor_high = None
-        campaign.anchor_high_timestamp = None
-        campaign.touch_high = None
-        campaign.touch_high_timestamp = None
+        campaign.window_start_ts = campaign.mother_timestamp
         campaign.model_version = MODEL_VERSION
         self._candles_5m[campaign_id] = []
 
@@ -1291,10 +1280,16 @@ class CascadeEngine:
         now = int(time.time())
         if campaign.last_processed_ts and now < campaign.last_processed_ts + 2 * FIVE_MIN_SEC:
             return False
+        history = self._candles_5m.setdefault(campaign.campaign_id, [])
+        if not history and campaign.last_processed_ts > campaign.mother_timestamp:
+            # Restored campaign: the structure window is derived from candle
+            # history, so rebuild everything since the mother candle. Candles
+            # already processed are backfilled without re-running the engine.
+            prior = await self._fetch_closed_5m(campaign.symbol, campaign.mother_timestamp)
+            history.extend(c for c in prior if c.timestamp <= campaign.last_processed_ts)
         new_candles = await self._fetch_closed_5m(campaign.symbol, campaign.last_processed_ts)
         if not new_candles:
             return False
-        history = self._candles_5m.setdefault(campaign.campaign_id, [])
         changed = False
         for candle in new_candles:
             history.append(candle)
@@ -1346,61 +1341,51 @@ class CascadeEngine:
         if candle.high >= campaign.mother_high:
             self._mother_broken(campaign)
             return
-
-        if campaign.swing_low is None:
-            campaign.swing_low = campaign.mother_low
-            campaign.swing_low_timestamp = campaign.mother_timestamp
-            campaign.swing_high = campaign.mother_high
-            campaign.swing_high_timestamp = campaign.mother_timestamp
-            campaign.swing_risen = False
-
-        history = self._candles_5m.setdefault(campaign.campaign_id, [])
-
-        # The anchor is the highest high since the previous fib.
-        if campaign.anchor_high is None or candle.high > campaign.anchor_high:
-            campaign.anchor_high = candle.high
-            campaign.anchor_high_timestamp = candle.timestamp
-
-        if leg_broken(candle, campaign.swing_low):
-            if campaign.swing_risen:
-                self._draw_fib_at_cut(campaign, candle, history)
-            self._restart_swing(campaign, candle)
-        else:
-            if not campaign.swing_risen:
-                if candle.low < campaign.swing_low:
-                    campaign.swing_low = candle.low
-                    campaign.swing_low_timestamp = candle.timestamp
-                if campaign.swing_high is not None and candle.high > campaign.swing_high:
-                    campaign.swing_risen = True  # the rise confirms the dip
-            if campaign.swing_high is None or candle.high > campaign.swing_high:
-                campaign.swing_high = candle.high
-                campaign.swing_high_timestamp = candle.timestamp
-
+        if not campaign.window_start_ts:
+            campaign.window_start_ts = campaign.mother_timestamp
+        # Only a red candle can cut a dip; everything else just extends the
+        # window. All structure — dip, touch, fib anchors — is derived from the
+        # candle history at evaluation time, so nothing is ever discarded.
+        if candle.close < candle.open:
+            self._evaluate_cut(campaign, candle)
         if campaign.mode == "paper" and campaign.state in ACTIVE_STATES:
             self._paper_fill_check(campaign, candle)
 
-    def _restart_swing(self, campaign: Campaign, candle: Candle) -> None:
-        campaign.swing_low = candle.low
-        campaign.swing_low_timestamp = candle.timestamp
-        campaign.swing_high = candle.high
-        campaign.swing_high_timestamp = candle.timestamp
-        campaign.swing_risen = False
+    def _evaluate_cut(self, campaign: Campaign, candle: Candle) -> None:
+        """
+        Try to finalize a structure on this red candle. The window is every
+        candle since the last cut (the cut candle seeds the next window).
 
-    def _draw_fib_at_cut(self, campaign: Campaign, candle: Candle, history: List[Candle]) -> None:
-        """The confirmed dip has been cut: draw this swing's trendline and fib."""
-        dip = campaign.swing_low
-        dip_ts = campaign.swing_low_timestamp
-        if dip is None or dip_ts is None:
+        1. Anchor: find_valid_anchor2 over mother -> this candle — the tightest
+           descending line from the mother high no close has crossed (what the
+           magnet tool gives when dragging from the mother candle).
+        2. Crossings: candles in the window that TOUCH that line close-based —
+           high >= line while the close stays below it. A crossing needs at
+           least one earlier window candle, and the candle currently holding
+           the running dip low cannot be its own rise.
+        3. The dip freezes at the first crossing: fib 1 = the lowest low before
+           it. Lows after the touch belong to the next structure.
+        4. Cut: this candle's close DECISIVELY below the frozen dip (>= 0.02%
+           of price). Indecisive probes a few dollars under the dip are the
+           fall resuming, not a completed swing.
+        5. fib 0 = the highest crossing high (running max over the up-swing,
+           per cascade_lib's running_max_high).
+        """
+        history = self._candles_5m.get(campaign.campaign_id, [])
+        window = [
+            c
+            for c in history
+            if c.timestamp >= campaign.window_start_ts
+            and c.timestamp > campaign.mother_timestamp
+            and c.timestamp <= candle.timestamp
+        ]
+        if len(window) < 2:
             return
 
-        # The line is the tightest descending line from the mother high that no
-        # close has crossed — cascade_lib's find_valid_anchor2, which is what
-        # dragging from the mother candle with the magnet on gives you.
         between = [c for c in history if campaign.mother_timestamp < c.timestamp < candle.timestamp]
         anchor_price, anchor_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
         if anchor_price is None or anchor_price >= campaign.mother_high:
             return
-
         tl = Trendline(
             trendline_id=len(campaign.trendlines) + 1,
             anchor1_price=campaign.mother_high,
@@ -1409,19 +1394,34 @@ class CascadeEngine:
             anchor2_timestamp=int(anchor_ts),
         )
 
-        # fib 0: the highest high that reached the line — touch or break —
-        # among the candles between the dip and this cut.
+        frozen_dip = None
+        run_min = None
+        first_cross_ts = None
         touch_high = None
         touch_ts = None
-        for past in history:
-            if past.timestamp <= dip_ts or past.timestamp > candle.timestamp:
-                continue
-            line = trendline_price(tl, past.timestamp)
-            if past.high >= line and past.high < campaign.mother_high:
-                if touch_high is None or past.high > touch_high:
-                    touch_high = past.high
-                    touch_ts = past.timestamp
-        if touch_high is None or touch_high <= dip:
+        for index, c in enumerate(window):
+            line = trendline_price(tl, c.timestamp)
+            crossed = c.high >= line and c.close < line and c.high < campaign.mother_high
+            is_dipper = run_min is None or c.low < run_min
+            if crossed and index > 0 and not (first_cross_ts is None and is_dipper):
+                if first_cross_ts is None:
+                    first_cross_ts = c.timestamp
+                    frozen_dip = run_min
+                if touch_high is None or c.high > touch_high:
+                    touch_high = c.high
+                    touch_ts = c.timestamp
+            if first_cross_ts is None and is_dipper:
+                run_min = c.low
+
+        if first_cross_ts is None or frozen_dip is None or touch_high is None:
+            return
+        if not campaign.legs and frozen_dip >= campaign.mother_low:
+            return  # the first structure needs a real depth below the mother candle
+        if candle.close >= frozen_dip:
+            return
+        if (frozen_dip - candle.close) < candle.close * DECISIVE_BREAK_PCT:
+            return  # not a decisive break of the dip
+        if touch_high <= frozen_dip:
             return
 
         campaign.trendlines.append(tl)
@@ -1433,7 +1433,14 @@ class CascadeEngine:
             f"Trendline {tl.trendline_id} drawn: mother high {campaign.mother_high:g} -> "
             f"red candle open {anchor_price:g}",
         )
-        self._draw_leg(campaign, touch_high, dip, touch_ts, tl.trendline_id)
+        legs_before = len(campaign.legs)
+        self._draw_leg(campaign, touch_high, frozen_dip, touch_ts, tl.trendline_id)
+        if len(campaign.legs) == legs_before:
+            campaign.trendlines.pop()
+            campaign.active_trendline_id = campaign.trendlines[-1].trendline_id if campaign.trendlines else None
+            return
+        # This cut candle opens the next window; its low seeds the next dip.
+        campaign.window_start_ts = candle.timestamp
 
     def _draw_leg(
         self,

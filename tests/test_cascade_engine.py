@@ -218,10 +218,11 @@ class CascadeSwingModelTests(unittest.TestCase):
         self._feed_real(3)
         self.assertEqual(len(self.campaign.legs), 0)
 
-    def test_rise_freezes_the_dip(self):
-        self._feed_real(11)  # dip 64,416.00 frozen by the rise off it
-        self.assertAlmostEqual(self.campaign.swing_low, 64416.00)
-        self.assertTrue(self.campaign.swing_risen)
+    def test_dip_freezes_at_the_touch_so_later_wicks_stay_out(self):
+        """The 05:05 candle wicks to 64,404 — below the 64,416 dip — but the
+        touch at 02:45 already froze the dip, so fib 2's level 1 must ignore it."""
+        self._feed_real(59)
+        self.assertAlmostEqual(self.campaign.legs[1].low, 64416.00)
 
     def test_trendline_anchors_to_a_red_candle_open(self):
         """The line is the tightest descending line from the mother high that no
@@ -288,6 +289,110 @@ class CascadeSwingModelTests(unittest.TestCase):
         _feed(self.engine, self.campaign, Candle(99 * 300, 65000.0, 65200.0, 64900.0, 65150.0))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
         self.assertTrue(self.campaign.mother_broken_above)
+
+
+# Second regression day: BTCUSDT 5m, 2026-07-20 from the mother candle at
+# 11:55 UTC (17:25 IST). The user verified fib 1 and fib 2 on TradingView and
+# stated the third structure is marked on the 19:20 IST candle. This day is the
+# one that exposed the discarded-first-dip bug: the 12:00 monster red candle
+# closes below the mother low immediately, and the old swing logic threw the
+# 64,716.57 dip away.
+_REAL2 = [
+    (0, 64965.03, 65068.00, 64934.00, 65002.01),
+    (1, 65002.00, 65002.83, 64716.57, 64803.99),
+    (2, 64803.99, 64865.79, 64780.34, 64865.79),
+    (3, 64865.78, 64865.79, 64723.89, 64750.00),
+    (4, 64749.99, 64806.00, 64692.00, 64692.91),
+    (5, 64692.92, 64758.24, 64680.00, 64710.00),
+    (6, 64710.01, 64747.98, 64670.01, 64699.81),
+    (7, 64699.82, 64716.82, 64608.00, 64708.26),
+    (8, 64708.26, 64748.30, 64682.00, 64682.00),
+    (9, 64682.00, 64699.89, 64599.95, 64599.97),
+    (10, 64599.97, 64738.93, 64599.89, 64729.35),
+    (11, 64729.34, 64736.00, 64650.65, 64656.00),
+    (12, 64656.00, 64689.89, 64622.21, 64640.00),
+    (13, 64640.00, 64690.20, 64621.79, 64638.00),
+    (14, 64638.00, 64730.00, 64638.00, 64730.00),
+    (15, 64729.99, 64753.77, 64692.37, 64692.38),
+    (16, 64692.38, 64720.21, 64684.00, 64706.00),
+    (17, 64706.00, 64706.00, 64629.28, 64629.28),
+    (18, 64629.29, 64629.29, 64530.00, 64554.75),
+    (19, 64554.75, 64708.00, 64502.00, 64682.01),
+    (20, 64682.00, 64763.67, 64630.01, 64672.87),
+    (21, 64672.87, 64707.56, 64570.72, 64650.66),
+    (22, 64650.67, 64727.40, 64369.87, 64720.81),
+    (23, 64720.82, 64761.62, 64315.56, 64344.45),
+    (24, 64344.44, 64414.00, 64208.00, 64344.01),
+    (25, 64344.01, 64476.38, 64288.00, 64427.90),
+    (26, 64427.90, 64495.99, 64385.17, 64466.01),
+    (27, 64466.01, 64466.01, 64294.11, 64322.00),
+    (28, 64322.00, 64354.00, 64170.28, 64258.00),
+    (29, 64258.01, 64360.00, 64077.76, 64344.00),
+]
+
+
+class CascadeSecondDayRegressionTests(unittest.TestCase):
+    """2026-07-20 11:55 UTC mother candle — verified against the user's chart."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        mother = _REAL2[0]
+        self.campaign = Campaign(
+            campaign_id="real2",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        self.campaign.window_start_ts = 0
+        self.engine.campaigns[self.campaign.campaign_id] = self.campaign
+
+    def _feed(self, upto_index):
+        for idx, o, h, low, c in _REAL2[1:]:
+            if idx > upto_index:
+                break
+            _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
+
+    def test_first_dip_survives_the_opening_monster_candle(self):
+        """12:00 closes below the mother low immediately. That is the fall
+        forming — not a broken leg — and 64,716.57 must remain the dip."""
+        self._feed(4)
+        self.assertEqual(len(self.campaign.legs), 1)
+        leg = self.campaign.legs[0]
+        self.assertAlmostEqual(leg.touch_high, 64865.79)  # fib 0: one-cent touch at 12:10
+        self.assertAlmostEqual(leg.low, 64716.57)  # fib 1: the 12:00 dip, not discarded
+        tl = self.campaign.trendlines[0]
+        self.assertAlmostEqual(tl.anchor2_price, 64865.78)  # 12:10 red candle open
+
+    def test_second_fib_matches_the_user_chart(self):
+        self._feed(18)
+        self.assertEqual(len(self.campaign.legs), 2)
+        leg = self.campaign.legs[1]
+        self.assertAlmostEqual(leg.touch_high, 64753.77)  # 13:10 high
+        self.assertAlmostEqual(leg.low, 64599.89)  # the dip under 64,600
+
+    def test_indecisive_probe_below_the_dip_does_not_draw(self):
+        """12:40 closes 8 dollars below the 64,608 dip — the fall resuming.
+        No structure exists there on the user's chart."""
+        self._feed(14)
+        self.assertEqual(len(self.campaign.legs), 1)
+
+    def test_third_structure_draws_on_the_1920_ist_candle(self):
+        """The user: "it has to happen on the 19:20 IST candle"."""
+        self._feed(23)
+        self.assertEqual(len(self.campaign.legs), 3)
+        leg = self.campaign.legs[2]
+        self.assertEqual(leg.leg_id, 3)
+        self.assertAlmostEqual(leg.touch_high, 64763.67)
+        self.assertAlmostEqual(leg.low, 64502.00)
+
+    def test_no_false_structures_through_the_deep_flush(self):
+        self._feed(29)
+        self.assertEqual(len(self.campaign.legs), 3)
+        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
 
 
 class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
