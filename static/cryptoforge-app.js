@@ -8891,11 +8891,16 @@ function _cfCascadeLadderRows(campaign) {
     var levels = leg.fib
       ? { 0: leg.fib.high_anchor, 1: leg.fib.low_anchor }
       : { 0: leg.touch_high, 1: leg.low };
+    var fallPct = Number(leg.leg_pct_from_mother);
+    var fallTxt = isFinite(fallPct)
+      ? ' · <strong style="color:var(--yellow,#f59e0b);">down ' + fallPct.toFixed(3) + '%</strong> from mother high'
+      : '';
     var head = '<tr class="cf-cascade-leg-head">'
       + '<td colspan="6" style="padding-top:10px;">'
       + '<strong>Fib ' + leg.leg_id + '</strong>'
       + '<span class="table-meta"> · TL' + (leg.trendline_id || '--')
       + ' · 0 = ' + _cfCascadeFmt(levels[0]) + ' · 1 = ' + _cfCascadeFmt(levels[1])
+      + fallTxt
       + (leg.finalized ? ' · finalized' : ' · forming')
       + (leg.escalated ? ' · escalated 15m' : '')
       + (leg.pool_usd ? ' · pool $' + _cfCascadeFmt(leg.pool_usd) : '')
@@ -8952,6 +8957,9 @@ function _cfCascadeCampaignCard(campaign) {
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:12px 0;">'
     + '<div class="stat-box"><div class="stat-label">Mother High</div><div class="stat-value">' + _cfCascadeFmt(campaign.mother_high) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label">Last Price</div><div class="stat-value">' + _cfCascadeFmt(campaign.last_price) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label">Down from Mother</div><div class="stat-value">'
+      + (isFinite(Number(campaign.fall_pct_from_mother)) ? Number(campaign.fall_pct_from_mother).toFixed(3) + '%' : '--')
+      + '</div><div class="admin-stat-note">allocated ' + (isFinite(Number(campaign.allocated_pct)) ? Number(campaign.allocated_pct).toFixed(3) : '0') + '%</div></div>'
     + '<div class="stat-box"><div class="stat-label">Trendline / Leg</div><div class="stat-value">' + (campaign.active_trendline_id || '--') + ' / ' + legs.length + '</div></div>'
     + '<div class="stat-box"><div class="stat-label">Avg Entry</div><div class="stat-value">' + _cfCascadeFmt(campaign.avg_entry_price) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-value">' + _cfCascadeFmt(tp) + '</div></div>'
@@ -9260,7 +9268,13 @@ function _cfCascadeChartTables(d) {
   (d.legs || []).forEach(function (leg) {
     rows.push('<tr><td>Leg ' + leg.leg_id + (leg.finalized ? '' : ' <span class="tag tag-purple">forming</span>') + '</td>'
       + '<td>fib 0 — swing high</td><td class="num">' + _cfCascadeFmt(leg.touch_high) + '</td><td>' + _cfCascadeUtc(leg.touch_timestamp) + ' UTC</td></tr>');
-    rows.push('<tr><td></td><td>fib 1 — leg low</td><td class="num">' + _cfCascadeFmt(leg.low) + '</td><td>—</td></tr>');
+    var fp = Number(leg.fall_pct_from_mother);
+    rows.push('<tr><td></td><td>fib 1 — leg low</td><td class="num">' + _cfCascadeFmt(leg.low) + '</td><td>'
+      + (isFinite(fp) ? 'down ' + fp.toFixed(3) + '% from mother high' : '—') + '</td></tr>');
+    if (leg.pool_usd) {
+      rows.push('<tr><td></td><td>allocation pool</td><td class="num">$' + _cfCascadeFmt(leg.pool_usd)
+        + '</td><td>fall % × capital / 100</td></tr>');
+    }
     [2, 4, 8].forEach(function (lv) {
       var p = leg.levels ? leg.levels[String(lv)] : null;
       if (p == null) return;

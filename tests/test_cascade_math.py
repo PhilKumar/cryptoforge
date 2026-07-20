@@ -241,14 +241,15 @@ class AvgEntryAndTpTests(unittest.TestCase):
         avg = recompute_avg_entry_price(campaign)
         self.assertAlmostEqual(avg, 85.0)
         self.assertAlmostEqual(campaign.filled_base_qty, 2.0)
-        # TP = mother_high - 0.25 * (mother_high - avg) = 100 - 0.25*15 = 96.25
-        self.assertAlmostEqual(compute_tp_price(campaign), 96.25)
+        # TP is measured FROM the average entry back toward the mother high:
+        # tp = avg + 0.25 * (mother_high - avg) = 85 + 0.25*15 = 88.75
+        self.assertAlmostEqual(compute_tp_price(campaign), 88.75)
 
     def test_tp_display_estimate_before_fills_uses_leg1_low(self):
         campaign = _campaign(capital=2000.0, mother_high=100.0)
         _leg(campaign, low=92.0, touch_high=98.0)
-        # 100 - 0.25 * (100 - 92) = 98
-        self.assertAlmostEqual(compute_tp_price(campaign), 98.0)
+        # 92 + 0.25 * (100 - 92) = 94
+        self.assertAlmostEqual(compute_tp_price(campaign), 94.0)
 
     def test_tp_none_without_legs_or_fills(self):
         campaign = _campaign()

@@ -15,9 +15,12 @@ Model (ported from the user's Automation_Trade cascade_lib v2):
 - A BREAK (close above the line) arms pending_break; a later decisive
   low-break (red close below the last leg's low) creates a NEW trendline
   anchored back to the mother high, which needs its own future touch.
-- Take profit: a resting LIMIT SELL for the whole filled position at
-  mother_high − 0.25 × (mother_high − avg_entry), re-placed whenever a new
+- Take profit: a resting LIMIT SELL for the whole filled position measured
+  from the average entry back toward the mother high —
+  avg_entry + 0.25 × (mother_high − avg_entry) — re-placed whenever a new
   fill moves the average.
+- Fund allocation follows the fall percentage from the mother high down to
+  the leg's fib 1 (its low): pool = incremental fall % × capital / 100.
 - Binance min-notional handling: per-level USD below the minimum merges into
   the next deeper level (2→4→8); if the whole pool is below the minimum it
   carries forward to the next leg.
@@ -457,15 +460,22 @@ def recompute_avg_entry_price(campaign: Campaign) -> Optional[float]:
 
 def compute_tp_price(campaign: Campaign) -> Optional[float]:
     """
-    Active TP once fills exist: fib 0.25 anchored mother high → average entry.
-    Before any fill: display estimate anchored mother high → leg1 low.
+    TP is measured FROM the average entry back toward the mother high, taking
+    TP_FIB_LEVEL (0.25) of that move:
+
+        tp = avg_entry + 0.25 * (mother_high - avg_entry)
+
+    Before any fill the first leg's low stands in for the average entry as a
+    display estimate.
     """
+    anchor = None
     if campaign.avg_entry_price and campaign.avg_entry_price > 0:
-        return campaign.mother_high - TP_FIB_LEVEL * (campaign.mother_high - campaign.avg_entry_price)
-    if campaign.legs:
-        first = campaign.legs[0]
-        return campaign.mother_high - TP_FIB_LEVEL * (campaign.mother_high - first.low)
-    return None
+        anchor = campaign.avg_entry_price
+    elif campaign.legs:
+        anchor = campaign.legs[0].low
+    if anchor is None or anchor <= 0:
+        return None
+    return anchor + TP_FIB_LEVEL * (campaign.mother_high - anchor)
 
 
 def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
@@ -851,7 +861,16 @@ class CascadeEngine:
             payload["spent_usd"] = round(campaign.spent_usd, 2)
             payload["resting_usd"] = round(campaign.resting_usd, 2)
             price_meta = self._price_cache.get(campaign.symbol)
-            payload["last_price"] = price_meta[0] if price_meta else None
+            last_price = price_meta[0] if price_meta else None
+            payload["last_price"] = last_price
+            # How far price is down from the mother high right now, and how far
+            # the deepest leg has been — the latter is what sizes the pools.
+            payload["fall_pct_from_mother"] = (
+                round((campaign.mother_high - last_price) / campaign.mother_high * 100, 4)
+                if last_price and campaign.mother_high > 0
+                else None
+            )
+            payload["allocated_pct"] = round(campaign.cumulative_used_pct, 4)
             campaigns.append(payload)
         return {
             "status": "ok",
@@ -913,6 +932,7 @@ class CascadeEngine:
                     "finalized": leg.finalized,
                     "escalated": leg.escalated,
                     "pool_usd": leg.pool_usd,
+                    "fall_pct_from_mother": leg.leg_pct_from_mother,
                     "levels": levels,
                     "orders": [
                         {

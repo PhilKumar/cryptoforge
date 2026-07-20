@@ -223,8 +223,8 @@ class CascadeScenarioTests(unittest.TestCase):
         self.assertAlmostEqual(leg.pending_orders[2].fill_price, 96.0)
         self.assertEqual(len(self.campaign.all_fills), 1)
         self.assertAlmostEqual(self.campaign.avg_entry_price, 96.0)
-        # TP = 105 - 0.25 * (105 - 96) = 102.75
-        self.assertAlmostEqual(self.campaign.tp_price, 102.75)
+        # TP = 96 + 0.25 * (105 - 96) = 98.25
+        self.assertAlmostEqual(self.campaign.tp_price, 98.25)
 
     def test_leg2_touch_carries_forward_unfilled_levels(self):
         self._run_scenario(upto=13)
@@ -262,7 +262,7 @@ class CascadeScenarioTests(unittest.TestCase):
         _feed(self.engine, self.campaign, Candle(19 * 300, 103, 105.5, 102, 105.2))
         # Price above mother high implies TP touched: campaign completes at TP.
         self.assertEqual(self.campaign.state, "COMPLETED")
-        self.assertAlmostEqual(self.campaign.realized_pnl, (102.75 - 96.0) * self.campaign.filled_base_qty, places=6)
+        self.assertAlmostEqual(self.campaign.realized_pnl, (98.25 - 96.0) * self.campaign.filled_base_qty, places=6)
 
 
 class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
@@ -306,8 +306,8 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(self.campaign.avg_entry_price, 97.0)
         sells = [o for o in self.broker.placed_orders if o["side"] == "sell"]
         self.assertEqual(len(sells), 1)
-        # TP = 105 - 0.25*(105-97) = 103
-        self.assertAlmostEqual(sells[0]["limit_price"], 103.0)
+        # TP = 97 + 0.25*(105-97) = 99
+        self.assertAlmostEqual(sells[0]["limit_price"], 99.0)
         self.assertAlmostEqual(sells[0]["base_qty"], self.campaign.filled_base_qty)
         self.assertIsNotNone(self.campaign.tp_order_id)
 
@@ -334,11 +334,11 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.broker.order_lookup[str(tp_id)] = {
             "status": "FILLED",
             "executedQty": str(self.campaign.filled_base_qty),
-            "cummulativeQuoteQty": str(self.campaign.filled_base_qty * 103.0),
+            "cummulativeQuoteQty": str(self.campaign.filled_base_qty * 99.0),
         }
         await self.engine._sync_live_orders(self.campaign)
         self.assertEqual(self.campaign.state, "COMPLETED")
-        self.assertAlmostEqual(self.campaign.realized_pnl, (103.0 - 97.0) * self.campaign.filled_base_qty, places=6)
+        self.assertAlmostEqual(self.campaign.realized_pnl, (99.0 - 97.0) * self.campaign.filled_base_qty, places=6)
         # Remaining resting entries were cancelled on completion.
         self.assertTrue(self.broker.cancelled)
 
