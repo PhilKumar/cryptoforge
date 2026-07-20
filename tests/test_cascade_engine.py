@@ -416,6 +416,92 @@ class CascadeEngineApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine2.campaigns[campaign.campaign_id].state, "TRENDLINE_ACTIVE")
 
 
+class CascadeUntouchedTrendlineTests(unittest.TestCase):
+    """A trendline broken before it ever produced a leg must be discarded and
+    redrawn. Otherwise the model's recovery path (break + low-break of the last
+    leg's low) can never run — there is no leg — and the campaign is stranded
+    forever with a line far below price that can never be touched again."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = _mk_campaign(self.engine)  # mother high 105 / low 99
+
+    def _feed_all(self, rows):
+        for step, o, h, low, cl in rows:
+            _feed(self.engine, self.campaign, Candle(step * 300, o, h, low, cl))
+
+    def test_break_alone_does_not_discard_the_trendline(self):
+        """A break while the line is still above the depth low must be left
+        alone — price often comes back and touches it a candle or two later."""
+        self._feed_all(
+            [
+                (1, 104.8, 104.9, 104.5, 104.6),
+                (2, 104.6, 104.7, 104.0, 104.1),  # depth -> trendline 1
+            ]
+        )
+        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+        self._feed_all([(3, 104.1, 104.9, 104.1, 104.8)])  # close above the line
+        self.assertTrue(self.campaign.pending_break)
+        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+        self.assertEqual(self.campaign.active_trendline_id, 1)  # still in play
+
+    def test_trendline_below_depth_low_is_discarded_and_redrawn(self):
+        self._feed_all(
+            [
+                (1, 104.8, 104.9, 104.5, 104.6),
+                (2, 104.6, 104.7, 104.0, 104.1),  # depth 104.0 -> trendline 1
+                (3, 104.1, 104.9, 104.1, 104.8),  # break, line still above depth low
+            ]
+        )
+        self.assertEqual(len(self.campaign.trendlines), 1)
+        self.assertTrue(self.campaign.pending_break)
+
+        # Hold price up so the line keeps sliding until it drops under 104.0
+        self._feed_all(
+            [
+                (4, 104.8, 104.9, 104.6, 104.7),
+                (5, 104.7, 104.8, 104.6, 104.65),
+                (6, 104.7, 104.8, 104.6, 104.75),
+            ]
+        )
+        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
+        self.assertIsNone(self.campaign.active_trendline_id)
+        self.assertFalse(self.campaign.pending_break)
+        self.assertEqual(len(self.campaign.trendlines), 1)  # retired, kept for the chart
+
+        # A fresh depth redraws from the mother high
+        self._feed_all([(7, 104.75, 104.8, 104.0, 104.1)])
+        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+        self.assertEqual(len(self.campaign.trendlines), 2)
+        self.assertEqual(self.campaign.active_trendline_id, 2)
+
+    def test_break_with_existing_leg_still_awaits_low_break(self):
+        """With a leg on the trendline the original model applies: arm
+        pending_break and wait for a decisive low-break, do not discard."""
+        self._run = None
+        campaign = self.campaign
+        self._feed_all(
+            [
+                (1, 104.8, 104.9, 104.5, 104.6),
+                (2, 104.6, 104.7, 104.0, 104.1),
+            ]
+        )
+        # Force a leg so the break path takes the model's branch.
+        from engine.cascade import Leg, build_fib_ladder_and_pool, plan_leg_orders
+
+        leg = Leg(leg_id=1, trendline_id=campaign.active_trendline_id, low=104.0, touch_high=104.5, touch_timestamp=600)
+        campaign.legs.append(leg)
+        build_fib_ladder_and_pool(campaign, leg)
+        plan_leg_orders(campaign, leg)
+        leg.finalized = True
+        campaign.swing_tracking = False
+
+        self._feed_all([(3, 104.1, 104.9, 104.1, 104.8)])  # close above line
+        self.assertEqual(campaign.state, "TRENDLINE_ACTIVE")
+        self.assertTrue(campaign.pending_break)
+        self.assertEqual(len(campaign.trendlines), 1)
+
+
 class CascadeMotherTimestampTests(unittest.IsolatedAsyncioTestCase):
     """A blank mother timestamp must anchor to the historical mother candle
     (found by matching the mother high), not to 'now' — otherwise the engine

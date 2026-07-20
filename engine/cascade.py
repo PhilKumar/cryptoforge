@@ -1235,9 +1235,9 @@ class CascadeEngine:
         if campaign.depth_low is None or candle.low < campaign.depth_low:
             campaign.depth_low = candle.low
             campaign.depth_low_timestamp = candle.timestamp
-            # Until the first trendline is touched, its anchor2 tracks the red
-            # candle before the (still deepening) first depth.
-            if not campaign.legs and tl.trendline_id == 1:
+            # Until a trendline has produced its first leg, its anchor2 tracks
+            # the red candle before the (still deepening) depth.
+            if not campaign.legs:
                 between = self._candles_between(campaign, campaign.depth_low_timestamp)
                 anchor2_price, anchor2_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
                 if anchor2_price is not None and anchor2_ts != tl.anchor2_timestamp:
@@ -1249,12 +1249,29 @@ class CascadeEngine:
             return
 
         classification = classify_candle(campaign.mother_high, tl, candle)
+        if classification == "BREAK" and not campaign.pending_break:
+            campaign.pending_break = True
+            self._log_event(
+                campaign, "break", f"Trendline {tl.trendline_id} broken (close above line); awaiting low-break"
+            )
+
+        # A broken trendline that has since slid below the running depth low can
+        # never be touched again. With no leg on it the model's recovery path
+        # (break + low-break of the last leg's low) cannot run, which would
+        # strand the campaign forever — so retire it and redraw from the mother
+        # high. The highs that broke it now constrain find_valid_anchor2, so the
+        # replacement comes out shallower. A break while the line is still above
+        # the depth low is left alone: price often returns to touch it.
+        if (
+            campaign.pending_break
+            and leg is None
+            and campaign.depth_low is not None
+            and trendline_price(tl, candle.timestamp) < campaign.depth_low
+        ):
+            self._discard_untouched_trendline(campaign, tl)
+            return
+
         if classification == "BREAK":
-            if not campaign.pending_break:
-                campaign.pending_break = True
-                self._log_event(
-                    campaign, "break", f"Trendline {tl.trendline_id} broken (close above line); awaiting low-break"
-                )
             return
         if classification != "TOUCH":
             return
@@ -1293,6 +1310,22 @@ class CascadeEngine:
                 if placed
                 else f"pool below minimum, ${campaign.carry_forward_usd:,.2f} carried forward"
             ),
+        )
+
+    def _discard_untouched_trendline(self, campaign: Campaign, tl: Trendline) -> None:
+        """Retire a trendline that was broken before producing any leg and go
+        back to depth-hunting so a fresh line is drawn from the mother high.
+        The broken line is kept in history (inactive) for the chart."""
+        campaign.active_trendline_id = None
+        campaign.pending_break = False
+        campaign.state = "WAITING_FIRST_DEPTH"
+        campaign.depth_low = None
+        campaign.depth_low_timestamp = None
+        self._log_event(
+            campaign,
+            "trendline",
+            f"Trendline {tl.trendline_id} broken before any touch — discarded; "
+            "hunting a new depth to redraw from the mother high",
         )
 
     def _create_trendline_from_break(self, campaign: Campaign, low_break_candle: Candle) -> None:
