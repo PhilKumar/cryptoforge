@@ -7806,6 +7806,15 @@ function _cfCascadeFmt(value, digits) {
   return num.toLocaleString('en-US', { maximumFractionDigits: digits == null ? 2 : digits });
 }
 
+// Dollars always carry both decimals: "$1.1" reads like a truncation next to
+// "$1.62" in the same column.
+function _cfCascadeUsd(value) {
+  if (value == null || value === '') return '--';
+  var num = Number(value);
+  if (!isFinite(num)) return '--';
+  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 async function cfLoadCascadeStatus(showToast) {
   try {
     var response = await cfApiFetch('/api/cascade/status', { cache: 'no-store' });
@@ -7842,10 +7851,8 @@ function cfRenderCascadeStatus(data) {
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
 }
 
-// The designed 20/30/50 split, and where a level's money goes when it is under
-// Binance's minimum: deeper levels pool UP into the shallower one.
+// The designed 20/30/50 split across the three buy levels.
 var _CF_CASCADE_SHARE = { 2: 20, 4: 30, 8: 50 };
-var _CF_CASCADE_MERGE_TO = { 4: 2, 8: 4 };
 
 function _cfCascadeLadderRows(campaign) {
   var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
@@ -7878,13 +7885,13 @@ function _cfCascadeLadderRows(campaign) {
         : '')
       + (leg.finalized ? '' : ' · forming')
       + (leg.escalated ? ' · 15m' : '')
-      + ' · pool $' + _cfCascadeFmt(leg.pool_total_usd || leg.pool_usd)
+      + ' · pool $' + _cfCascadeUsd(leg.pool_total_usd || leg.pool_usd)
       + (Number(leg.carry_in_usd) > 0
         ? '<strong style="color:var(--green,#3fae56);"> (incl. $'
-          + _cfCascadeFmt(leg.carry_in_usd) + ' from f' + (leg.leg_id - 1) + ')</strong>'
+          + _cfCascadeUsd(leg.carry_in_usd) + ' from f' + (leg.leg_id - 1) + ')</strong>'
         : '')
       + (legLive > 0
-        ? ' · <strong style="color:var(--accent,#1f6fd6);">$' + _cfCascadeFmt(legLive)
+        ? ' · <strong style="color:var(--accent,#1f6fd6);">$' + _cfCascadeUsd(legLive)
           + ' waiting to buy</strong>'
         : '')
       + '</span></td></tr>';
@@ -7909,28 +7916,38 @@ function _cfCascadeLadderRows(campaign) {
               + ' · fib ' + _cfCascadeFmt(order.price) + '</div>'
             : '<span style="opacity:.6;">below ' + _cfCascadeFmt(order.price) + '</span>')
         : _cfCascadeFmt(order.price);
-      // Every level's designed share of the pool, shown even when the money
-      // ended up somewhere else — that is the question "how much is allocated
-      // here", and the answer is the same whether or not it could be placed.
-      var share = _CF_CASCADE_SHARE[level];
+      // A level that could not be funded says how many DOLLARS left it and
+      // exactly where they went — "$4.06 → F1 L4" — rather than a percentage
+      // and a status word you have to decode.
       var amount = Number(order.usd_notional) || 0;
-      var amountCell = amount > 0
-        ? '$' + _cfCascadeFmt(amount)
-          + '<div class="table-meta">' + share + '% of pool'
-          + (Number(order.quantity) ? ' · ' + _cfCascadeFmt(order.quantity, 4) : '') + '</div>'
-        : '<span style="opacity:.6;">$0</span>'
-          + '<div class="table-meta">' + share + '% &rarr; '
-          // Level 2 is the shallowest, so it has nowhere up to go; its share
-          // rolls into the next fib instead.
-          + (status === 'MERGED' && _CF_CASCADE_MERGE_TO[level] ? 'L' + _CF_CASCADE_MERGE_TO[level]
-             : status === 'MERGED' || status === 'CARRIED' ? 'next fib' : 'unused')
-          + '</div>';
+      var moved = Number(order.moved_usd) || 0;
+      var toLevel = order.moved_to_level;
+      var amountCell;
+      if (amount > 0) {
+        amountCell = '$' + _cfCascadeUsd(amount)
+          + '<div class="table-meta">' + _CF_CASCADE_SHARE[level] + '% of pool'
+          + (Number(order.quantity) ? ' · ' + _cfCascadeFmt(order.quantity, 4) : '') + '</div>';
+      } else if (moved > 0) {
+        amountCell = '<span style="opacity:.6;">$0</span>'
+          + '<div class="table-meta">$' + _cfCascadeUsd(moved) + ' &rarr; '
+          + (toLevel ? 'F' + leg.leg_id + ' L' + toLevel : 'fib ' + (leg.leg_id + 1)) + '</div>';
+      } else {
+        amountCell = '<span style="opacity:.6;">$0</span>'
+          + '<div class="table-meta">not funded</div>';
+      }
       return '<tr>'
         + '<td>L' + level + (stop ? '<div class="table-meta">buy stop</div>' : '') + '</td>'
         + '<td class="num">' + priceCell + '</td>'
         + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
         + '<td class="num">' + amountCell + '</td>'
-        + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status) + '</td>'
+        + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status)
+        + (status === 'MERGED'
+            ? '<div class="table-meta" style="font-weight:400;">into '
+              + (toLevel ? 'F' + leg.leg_id + ' L' + toLevel : 'fib ' + (leg.leg_id + 1)) + '</div>'
+            : status === 'CARRIED'
+              ? '<div class="table-meta" style="font-weight:400;">to fib ' + (leg.leg_id + 1) + '</div>'
+              : '')
+        + '</td>'
         + '</tr>';
     }).join('');
     return head + body;
@@ -7939,7 +7956,7 @@ function _cfCascadeLadderRows(campaign) {
     ? '<tr class="cf-cascade-leg-head"><td colspan="3" style="padding-top:10px;">'
       + '<strong>Waiting to buy, all fibs</strong>'
       + '<span class="table-meta"> · none of this is spent yet</span></td>'
-      + '<td class="num" style="padding-top:10px;"><strong>$' + _cfCascadeFmt(liveTotal) + '</strong></td>'
+      + '<td class="num" style="padding-top:10px;"><strong>$' + _cfCascadeUsd(liveTotal) + '</strong></td>'
       + '<td></td></tr>'
     : '';
   return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
@@ -8011,7 +8028,11 @@ function _cfCascadeCampaignCard(campaign) {
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
     + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(stateLabel) + '</span>'
     + modeBadge
-    + (campaign.stale_model ? '<span class="admin-pill" data-state="warn" title="Built with older fib rules — hit Recalc">STALE RULES</span>' : '')
+    + (campaign.stale_model
+      ? '<span class="admin-pill" data-state="warn" title="The fib and trendline rules have changed since '
+        + 'this campaign drew its structure, so what you see came from the older logic. Nothing is broken '
+        + 'and it keeps trading — press Recalc to redraw it under the current rules.">OLD RULES · RECALC</span>'
+      : '')
     + '<span class="table-meta cf-cascade-gist">' + _escapeHtml(gist) + '</span>'
     + '</div>'
     // Buttons live inside the header but must not toggle it.
@@ -8031,10 +8052,14 @@ function _cfCascadeCampaignCard(campaign) {
       + '</div><div class="admin-stat-note">allocated ' + (isFinite(Number(campaign.allocated_pct)) ? Number(campaign.allocated_pct).toFixed(3) : '0') + '%</div></div>'
     + '<div class="stat-box"><div class="stat-label" title="Avg Entry"><span>Avg Entry</span></div><div class="stat-value">' + _cfCascadeFmt(entryShown) + '</div>' + roundNote + '</div>'
     + '<div class="stat-box"><div class="stat-label" title="' + (flat ? 'Exit' : 'Take Profit') + '"><span>' + (flat ? 'Exit' : 'Take Profit') + '</span></div><div class="stat-value">' + _cfCascadeFmt(tpShown) + '</div>' + roundNote + '</div>'
-    + '<div class="stat-box"><div class="stat-label" title="In Position / Capital"><span>In Position / Capital</span></div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div>'
+    // Capital moved to the note line: "$5.67 / $2,000" was too wide for the box
+    // and got clipped to "$2,…", hiding the number that matters most.
+    + '<div class="stat-box"><div class="stat-label" title="In Position"><span>In Position</span></div>'
+      + '<div class="stat-value">$' + _cfCascadeUsd(campaign.spent_usd) + '</div>'
+      + '<div class="admin-stat-note">of $' + _cfCascadeFmt(campaign.capital_usd, 0) + ' capital</div>'
       + (Number(campaign.resting_usd) > 0
         ? '<div class="admin-stat-note" title="Orders resting on the exchange — not bought yet">$'
-          + _cfCascadeFmt(campaign.resting_usd) + ' waiting to buy</div>' : '')
+          + _cfCascadeUsd(campaign.resting_usd) + ' waiting to buy</div>' : '')
       + (Number(campaign.carry_forward_usd) > 0
         ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.carry_forward_usd) + ' carried</div>' : '')
       + '</div>'
@@ -8631,6 +8656,7 @@ function _cfCascadeChartHtml(d) {
     + '<span style="color:#10b981;">┄ take profit</span> &nbsp; '
     + '<span style="color:#22c55e;">● fills</span>'
     + '<br>Each fib is coloured separately (F1, F2, …) and labelled on the right.'
+    + ' Scroll to move down the dialog; hold Ctrl (or &#8984;) and scroll to zoom, or drag to pan.'
     + '</div>';
   return legend + _cfCascadeChartSvg(d)
     + '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
@@ -8717,8 +8743,11 @@ function _cfChartBindZoom() {
   if (!body || body.dataset.zoomBound === '1') return;
   body.dataset.zoomBound = '1';
 
+  // Plain wheel scrolls the dialog; Ctrl/Cmd + wheel zooms the chart. It used
+  // to swallow every wheel event anywhere in the dialog, which meant the
+  // anchor tables under the chart could not be reached by scrolling at all.
   body.addEventListener('wheel', function(e) {
-    if (!_cfChartSvg()) return;
+    if (!_cfChartSvg() || !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     cfCascadeZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
   }, { passive: false });

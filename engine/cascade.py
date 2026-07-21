@@ -106,7 +106,7 @@ MOTHER_RETEST_PCT = 0.0005
 MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 5
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 13  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 14  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -118,6 +118,9 @@ DECISIVE_BREAK_PCT = 0.0002
 # skipped one by 0.015%.
 MIN_LEG_SEPARATION_PCT = 0.0003
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
+# Where a sub-minimum level's money goes: up into the shallower level, where
+# price can still reach it. Level 2 is the shallowest and has no entry here.
+MERGE_TARGET = {8: 4, 4: 2}
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
 # View-only roll-ups for the campaign chart. The engine always steps in 5m;
@@ -260,6 +263,11 @@ class PendingOrder:
     limit_price: Optional[float] = None  # cap once triggered, a few ticks over the stop
     stop_ts: Optional[int] = None  # candle whose close last moved the stop
     last_red_close: Optional[float] = None  # most recent red close under the line
+    # When a level is too small to place, where its money actually went. Kept so
+    # the ladder can say "$4.06 moved to F1 L4" instead of leaving a bare $0 and
+    # a status word to decode.
+    moved_usd: float = 0.0
+    moved_to_level: Optional[int] = None  # None with moved_usd > 0 means the next fib
 
     @property
     def is_open(self) -> bool:
@@ -310,6 +318,8 @@ class PendingOrder:
             "limit_price",
             "stop_ts",
             "last_red_close",
+            "moved_usd",
+            "moved_to_level",
         ):
             if key in data:
                 setattr(order, key, data[key])
@@ -776,17 +786,21 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     # on. It just stops landing somewhere price never visits.
     merged = set()
     carried = False
+    moved: Dict[int, float] = {}  # level -> dollars that left it
     if usd[8] < min_notional:
+        moved[8] = usd[8]
         usd[4] += usd[8]
         usd[8] = 0.0
         merged.add(8)
     if usd[4] < min_notional:
+        moved[4] = usd[4]
         usd[2] += usd[4]
         usd[4] = 0.0
         merged.add(4)
     if usd[2] < min_notional:
         # Even pooled it cannot be placed — hand it back so the next fib
         # inherits it, and don't count it against this leg.
+        moved[2] = usd[2]
         campaign.carry_forward_usd = usd[2]
         leg.pool_total_usd = max(leg.pool_total_usd - usd[2], 0.0)
         usd[2] = 0.0
@@ -824,6 +838,10 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
                 leg_id=leg.leg_id,
                 timeframe=timeframe_for_level(leg, level),
                 status=status,
+                moved_usd=round(moved.get(level, 0.0), 2),
+                # Level 2 is the shallowest; its money has nowhere up to go and
+                # rolls into the next fib instead, which None records.
+                moved_to_level=MERGE_TARGET.get(level) if level in merged else None,
             )
             continue
         leg.pending_orders[level] = PendingOrder(
@@ -1771,9 +1789,22 @@ class CascadeEngine:
         # shelf. The second one adds nothing but a cancellation of orders that
         # were about to fill, so it is dropped ENTIRELY — no trendline, no fib.
         # The previous structure stays active with its ladder resting.
-        prior = campaign.current_leg
-        if prior is not None and prior.touch_high:
-            separation = abs(touch_high - prior.touch_high) / prior.touch_high
+        # Checked against EVERY fib drawn so far, not just the last one. Price
+        # wanders away from a shelf and comes back to it hours later, so the
+        # duplicate is usually two or three fibs back: one campaign drew fib 1
+        # and fib 3 with the identical touch high of 78.75 because fib 3 was
+        # only ever compared against fib 2. That matters more now that every
+        # fib keeps its ladder resting — a same-shelf fib puts a second set of
+        # orders a few ticks from the first and splits the money between them.
+        prior = None
+        separation = 0.0
+        for leg in campaign.legs:
+            if not leg.touch_high:
+                continue
+            gap = abs(touch_high - leg.touch_high) / leg.touch_high
+            if prior is None or gap < separation:
+                prior, separation = leg, gap
+        if prior is not None:
             if separation < MIN_LEG_SEPARATION_PCT:
                 # Geometry only: the line is real and belongs on the chart, but
                 # it carries no fib and places no orders, so the previous fib

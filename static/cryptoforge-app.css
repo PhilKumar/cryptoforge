@@ -6727,7 +6727,9 @@ html[data-theme="light"] .journal-entry-notes section {
 
   /* ── Cascade campaign cards: compact stat grid ── */
   .cf-cascade-card { padding: 14px 16px; margin-bottom: 12px; }
-  .cf-cascade-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  /* One row, always. Wrapping was letting the buttons drop to a second line on
+     campaigns carrying an extra badge, so no two cards lined up. */
+  .cf-cascade-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: nowrap; }
   .cf-cascade-head .admin-pill { font-size: 10px; padding: 2px 8px; }
   /* One row, always — seven compact stats beside the start form. Labels are
      clipped rather than wrapped; hovering a box marquees the full heading. */
@@ -6924,6 +6926,10 @@ html[data-theme="light"] .journal-entry-notes section {
     flex: 1;
     min-height: 0;
     overflow: auto;
+    /* Keep the wheel inside the dialog once it bottoms out, and hold a lane for
+       the scrollbar so appearing mid-scroll does not reflow the chart. */
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
   .cf-chart-overlay #cf-cascade-chart-body svg { width: 100%; height: auto; }
   body.cf-chart-fs-open { overflow: hidden; }

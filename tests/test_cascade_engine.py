@@ -6,6 +6,7 @@ import unittest
 import pandas as pd
 
 from engine.cascade import (
+    MIN_LEG_SEPARATION_PCT,
     Campaign,
     Candle,
     CascadeEngine,
@@ -412,6 +413,21 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self.assertTrue(self.campaign.trendlines[1].bears_fib)
         self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64753.77)
         self.assertEqual(self.campaign.active_trendline_id, 2)
+
+    def test_the_shelf_check_looks_at_every_fib_not_just_the_last(self):
+        """A live SOL campaign drew fib 1 and fib 3 with the identical touch
+        high of 78.75, because fib 3 was only ever compared against fib 2.
+        Price wanders off a shelf and comes back hours later, so the duplicate
+        is usually a couple of fibs back."""
+        self._feed(29)
+        highs = [leg.touch_high for leg in self.campaign.legs if leg.touch_high]
+        for i, a in enumerate(highs):
+            for b in highs[i + 1 :]:
+                self.assertGreaterEqual(
+                    abs(a - b) / b,
+                    MIN_LEG_SEPARATION_PCT,
+                    f"fibs at {a} and {b} are the same shelf and should not both exist",
+                )
 
     def test_skipping_keeps_the_money_on_one_ladder(self):
         """A same-shelf third fib would split the pool across two sets of levels
