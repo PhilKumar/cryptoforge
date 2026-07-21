@@ -973,6 +973,15 @@ class CascadeEngine:
             return {"error": "Mother candle timestamp cannot be in the future"}
         if mother_ts < now_ts - 90 * 86400:
             return {"error": "Mother candle is more than 90 days old — pick a more recent mother candle"}
+        twin = self._active_duplicate(symbol, mother_ts, mother_high)
+        if twin is not None:
+            return {
+                "error": (
+                    f"Campaign #{twin.seq} is already running on {symbol} from this exact mother "
+                    f"candle ({mother_high:,.2f} / {mother_low:,.2f}). Stop or delete it first, or "
+                    f"pick a different mother candle."
+                )
+            }
 
         campaign = Campaign(
             campaign_id=uuid.uuid4().hex[:10],
@@ -1036,6 +1045,24 @@ class CascadeEngine:
         await self._sync_live_orders(campaign)
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict()}
+
+    def _active_duplicate(self, symbol: str, mother_ts: int, mother_high: float) -> Optional[Campaign]:
+        """
+        A campaign is identified by its symbol and its mother candle. Two live
+        ones on the same anchor would draw the same structure and place the same
+        orders twice, doubling the position without doubling the intent — so
+        starting a second is refused, whether it came from a double submit, a
+        replayed request, or a restore.
+        """
+        for campaign in self.campaigns.values():
+            if (
+                campaign.state in ACTIVE_STATES
+                and campaign.symbol == symbol
+                and campaign.mother_timestamp == mother_ts
+                and abs(campaign.mother_high - mother_high) < 1e-9
+            ):
+                return campaign
+        return None
 
     def _next_seq(self) -> int:
         """Campaign numbers run in start order and are never reused, so a
@@ -2126,6 +2153,8 @@ class CascadeEngine:
             return None
         if candle.high <= candle.low:
             return None
+        if self._active_duplicate(parent.symbol, candle.timestamp, candle.high) is not None:
+            return None  # this candle already anchors a running campaign
 
         child = Campaign(
             campaign_id=uuid.uuid4().hex[:10],

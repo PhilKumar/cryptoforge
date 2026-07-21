@@ -798,6 +798,60 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self.assertEqual(grandchild.barren_chain, 0)
 
 
+class CascadeDuplicateTests(unittest.IsolatedAsyncioTestCase):
+    """Two campaigns on the same symbol and the same mother candle would draw
+    the same structure and place the same orders twice."""
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+        self.args = dict(
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=66411.29,
+            mother_low=66200.00,
+            mother_timestamp=_RECENT_TS,
+        )
+
+    async def test_the_same_mother_candle_cannot_be_started_twice(self):
+        first = await self.engine.start_campaign(**self.args)
+        self.assertNotIn("error", first)
+        second = await self.engine.start_campaign(**self.args)
+        self.assertIn("error", second)
+        self.assertIn("already running", second["error"])
+        self.assertEqual(len(self.engine.campaigns), 1)
+
+    async def test_a_different_mother_candle_is_allowed(self):
+        await self.engine.start_campaign(**self.args)
+        other = dict(self.args, mother_high=66500.00, mother_timestamp=_RECENT_TS - 300)
+        second = await self.engine.start_campaign(**other)
+        self.assertNotIn("error", second)
+        self.assertEqual(len(self.engine.campaigns), 2)
+
+    async def test_the_slot_frees_up_once_the_first_is_stopped(self):
+        first = await self.engine.start_campaign(**self.args)
+        await self.engine.stop_campaign(first["campaign"]["campaign_id"], cancel_orders=False)
+        again = await self.engine.start_campaign(**self.args)
+        self.assertNotIn("error", again)
+
+    def test_auto_restart_will_not_duplicate_a_running_campaign(self):
+        parent = Campaign(
+            campaign_id="p",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            seq=1,
+        )
+        parent.close_reason = "mother_broken"
+        self.engine.campaigns["p"] = parent
+        candle = Candle(3000, 65100.0, 65200.0, 65050.0, 65180.0)
+        self.assertIsNotNone(self.engine._auto_restart(parent, candle))
+        self.assertIsNone(self.engine._auto_restart(parent, candle))  # same candle again
+        self.assertEqual(len(self.engine.campaigns), 2)
+
+
 class CascadeFibSizeTests(unittest.TestCase):
     """A fib may form anywhere relative to the mother candle — above its low is
     fine. What disqualifies a structure is being too small to be one."""
