@@ -29,7 +29,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff bandit pytest
+          # Pinned: an unpinned ruff drifts away from the pre-commit hook
+          # and fails checks that pass locally. Bump both together.
+          pip install ruff==0.15.5 bandit pytest
 
       - name: Ruff lint
         run: ruff check .

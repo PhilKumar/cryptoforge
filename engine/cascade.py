@@ -2046,7 +2046,7 @@ class CascadeEngine:
             (
                 f"Buy stop set for ${campaign.pending_usd:,.2f}: trigger {stop:,.2f} / limit {limit:,.2f}"
                 if first
-                else f"Buy stop walked down to {stop:,.2f} / limit {limit:,.2f} " f"for ${campaign.pending_usd:,.2f}"
+                else f"Buy stop walked down to {stop:,.2f} / limit {limit:,.2f} for ${campaign.pending_usd:,.2f}"
             ),
         )
 

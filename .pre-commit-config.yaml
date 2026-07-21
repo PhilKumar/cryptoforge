@@ -1,7 +1,10 @@
 repos:
   # Fast Python linter + formatter
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.4
+    # Pinned to the SAME version CI installs. When these drifted apart the hook
+    # formatted with old rules, CI checked with new ones, and every push failed
+    # a check that passed locally.
+    rev: v0.15.5
     hooks:
       - id: ruff
         args: [--fix]
