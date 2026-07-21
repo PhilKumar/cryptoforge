@@ -1776,6 +1776,21 @@ class CascadeEngine:
             return
         if (frozen_dip - candle.close) < candle.close * DECISIVE_BREAK_PCT:
             return  # not a decisive break of the dip
+
+        # A new structure needs the PREVIOUS fib's low to break first. Until it
+        # does, the last fib is still the live one and nothing new has happened
+        # — the market is just moving around inside a swing that already has a
+        # line and a ladder on it.
+        #
+        # This is what stopped the engine drawing its lines too early. On the
+        # 07-21 PAXG day fib 1's low was 4,055.67 at 14:20; the engine drew a
+        # second trendline at 14:20 off a shallow dip that had broken nothing,
+        # and anchored it at 14:05. The low did not actually break until the
+        # 16:30 close at 4,053.18 — and a line drawn from there anchors at
+        # 16:10, which is where it belongs.
+        last_fib = campaign.legs[-1] if campaign.legs else None
+        if last_fib is not None and last_fib.low and candle.close >= last_fib.low:
+            return
         if touch_high <= frozen_dip:
             return
 
