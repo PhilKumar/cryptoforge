@@ -984,7 +984,7 @@ class CascadeMotherRetestTests(unittest.TestCase):
         self.assertIsNone(self._child())
 
     def test_a_rise_back_to_the_mother_high_restarts_on_that_candle(self):
-        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66100.0, 66150.0))
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66000.0, 66050.0))
         self.assertTrue(self.campaign.left_mother_range)
         _feed(self.engine, self.campaign, Candle(600, 66200.0, 66340.0, 66190.0, 66330.0))
         self.assertEqual(self.campaign.state, "COMPLETED")
@@ -996,14 +996,33 @@ class CascadeMotherRetestTests(unittest.TestCase):
         self.assertEqual(child.parent_campaign_id, "r1")
 
     def test_a_rise_that_stays_clear_of_the_mother_high_is_left_alone(self):
-        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66100.0, 66150.0))
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66000.0, 66050.0))
         # 66,200 is 0.23% under the mother high — a real trendline still fits.
         _feed(self.engine, self.campaign, Candle(600, 66150.0, 66200.0, 66120.0, 66180.0))
         self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
         self.assertIsNone(self._child())
 
+    def test_a_bar_straddling_the_mother_does_not_arm_the_retest(self):
+        """The killer on fast timeframes. A 1m mother candle is a few ticks
+        tall, so the very next bar dips under its low and the one after wicks
+        back near its high — which used to end the campaign on candle two,
+        before any structure could form. A shallow dip is not a departure."""
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66190.0, 66250.0))
+        self.assertFalse(self.campaign.left_mother_range)
+        _feed(self.engine, self.campaign, Candle(600, 66250.0, 66340.0, 66240.0, 66330.0))
+        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
+        self.assertIsNone(self._child())
+
+    def test_a_double_top_at_the_exact_mother_high_is_not_a_break(self):
+        """Two bars printing the identical high is a double top: the ceiling
+        held. Only a high strictly above it ends the campaign."""
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66354.0, 66280.0, 66300.0))
+        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
+        _feed(self.engine, self.campaign, Candle(600, 66300.0, 66354.01, 66280.0, 66300.0))
+        self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
+
     def test_breaking_above_still_counts_as_a_break_not_a_retest(self):
-        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66100.0, 66150.0))
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66000.0, 66050.0))
         _feed(self.engine, self.campaign, Candle(600, 66200.0, 66400.0, 66190.0, 66380.0))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
         self.assertEqual(self.campaign.close_reason, "mother_broken")

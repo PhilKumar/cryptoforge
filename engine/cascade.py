@@ -96,9 +96,17 @@ MAX_BARREN_AUTO_RESTARTS = 10
 # above or below its low; only the size matters.
 MIN_FIB_RANGE_PCT = 0.0008
 MOTHER_RETEST_PCT = 0.0005
+# Before a rise can count as a RETRACEMENT back to the mother high, price has to
+# have gone somewhere first. Arming on "traded below the mother candle's low"
+# was not enough: on a 1m chart the mother's own body is a few ticks tall, so
+# the very next bar straddles it and the bar after that wicks back to the high —
+# five of the replayed days died on their first or second candle that way,
+# before any structure could form. A real departure is a fall of this much from
+# the mother HIGH, which is an order of magnitude past the retest tolerance.
+MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 5
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 12  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 13  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -1641,7 +1649,11 @@ class CascadeEngine:
     # 3. There is no candle-count logic anywhere — only rises and cuts.
 
     def _process_candle(self, campaign: Campaign, candle: Candle) -> None:
-        if candle.high >= campaign.mother_high:
+        # Strictly ABOVE. A candle that prints the mother's high exactly is a
+        # double top — the ceiling held, and the cascade below it is still
+        # valid. Treating equality as a break killed campaigns on their second
+        # candle whenever the top was two bars wide, which is common.
+        if candle.high > campaign.mother_high:
             self._mother_broken(campaign, candle)
             return
         # A RETRACEMENT that climbs back to just under the mother high leaves no
@@ -1649,10 +1661,12 @@ class CascadeEngine:
         # out nearly flat, and a flat line has no useful touch. Promote that
         # candle to be the new mother candle instead.
         #
-        # Only once price has actually left the mother candle's range, though —
-        # the bar right after the mother is naturally near its high, and without
-        # this every campaign would restart on its second candle.
-        if candle.low < campaign.mother_low:
+        # Only once price has actually fallen away from the mother, though — the
+        # bars right after a top are naturally still near it, and without this
+        # every campaign would restart on its second candle. "Fallen away" is
+        # measured from the mother HIGH, not its low: the low of a single 1m
+        # candle is only a few ticks down, which the very next bar clears.
+        if candle.low <= campaign.mother_high * (1 - MOTHER_DEPART_PCT):
             campaign.left_mother_range = True
         if campaign.left_mother_range and candle.high >= campaign.mother_high * (1 - MOTHER_RETEST_PCT):
             self._mother_retested(campaign, candle)

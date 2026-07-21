@@ -37,6 +37,9 @@ CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".backtest_
 FIVE_MIN = 300
 
 
+INTERVAL_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+
+
 @dataclass
 class Case:
     """One hand-drawn chart: what he anchored on, and roughly when."""
@@ -46,6 +49,20 @@ class Case:
     mother_high: float
     day: str  # YYYY-MM-DD, the date the mother candle sits on (IST)
     run_hours: int = 30  # how far forward to replay
+    # The timeframe the chart was drawn on. It is not decoration: a mother
+    # candle marked on a 1m chart has a high that never prints as a 5m high,
+    # so replaying it on 5m finds no structure at all.
+    interval: str = "5m"
+    # Charts drawn on Coinbase or Kraken quote a different price than the
+    # Binance pair the engine trades — a tenth of a percent or so. For those,
+    # pin the mother candle by its IST clock time (HH:MM) and let the price
+    # match run loose; the local peak at that minute is the candle he marked.
+    mother_hhmm: Optional[str] = None
+    tolerance_pct: float = 0.0002
+
+    @property
+    def step(self) -> int:
+        return INTERVAL_SECONDS[self.interval]
 
 
 # Phil's charts. The mother high is read straight off each screenshot; the day
@@ -53,12 +70,20 @@ class Case:
 # USDT pair, which is where the engine actually trades.
 CASES: List[Case] = [
     Case("82nd/83rd BTC", "BTCUSDT", 64710.00, "2026-06-14"),
-    Case("85th BTC 1m", "BTCUSDT", 65995.00, "2026-06-15"),
+    Case("85th BTC", "BTCUSDT", 65995.00, "2026-06-15", interval="1m"),
     Case("86th BTC", "BTCUSDT", 67288.00, "2026-06-15"),
-    Case("95th BTC 1m", "BTCUSDT", 62982.01, "2026-06-24"),
-    Case("87th BTC 1m", "BTCUSDT", 66992.00, "2026-06-16"),
-    Case("88th/89th BTC", "BTCUSDT", 66200.00, "2026-06-17"),
-    Case("90th BTC 15m", "BTCUSDT", 67292.15, "2026-06-15"),
+    Case("87th BTC", "BTCUSDT", 66992.00, "2026-06-16", interval="1m"),
+    # 88 and 89 are the SAME mother candle, 66,200, worked first on 1m through
+    # the morning and then on 5m for the rest of the day.
+    Case("88th BTC", "BTCUSDT", 66200.00, "2026-06-17", run_hours=4, interval="1m"),
+    Case("89th BTC", "BTCUSDT", 66200.00, "2026-06-17"),
+    Case("90th ETH", "ETHUSDT", 1794.52, "2026-06-17", run_hours=60, interval="15m", mother_hhmm="22:45"),
+    Case("91st BTC", "BTCUSDT", 63840.00, "2026-06-20", run_hours=6, interval="1m", mother_hhmm="10:45"),
+    Case("93rd BTC", "BTCUSDT", 67292.15, "2026-06-15", run_hours=130, interval="15m", mother_hhmm="20:00"),
+    Case("94th ETH", "ETHUSDT", 1757.23, "2026-06-22", run_hours=3, interval="1m", mother_hhmm="06:57"),
+    Case("95th BTC", "BTCUSDT", 62982.01, "2026-06-24", run_hours=8, interval="1m", mother_hhmm="11:00"),
+    Case("96th BTC", "BTCUSDT", 60666.00, "2026-06-26", run_hours=8, mother_hhmm="13:05"),
+    Case("97th ETH", "ETHUSDT", 1848.42, "2026-06-15", run_hours=420, interval="1h", mother_hhmm="20:30"),
     Case("SOL 1st live", "SOLUSDT", 83.98, "2026-07-04"),
     Case("BTC 3rd/4th live", "BTCUSDT", 63920.00, "2026-07-06"),
     Case("BTC 5th live", "BTCUSDT", 64700.00, "2026-07-07"),
@@ -73,25 +98,26 @@ CASES: List[Case] = [
 # ── candle fetching ───────────────────────────────────────────────
 
 
-def _cache_path(symbol: str, day: str) -> str:
-    return os.path.join(CACHE_DIR, f"{symbol}_{day}.json")
+def _cache_path(symbol: str, day: str, interval: str) -> str:
+    return os.path.join(CACHE_DIR, f"{symbol}_{day}_{interval}.json")
 
 
-def fetch_candles(symbol: str, day: str, refetch: bool = False) -> List[tuple]:
-    """5m candles spanning the day before through two days after, cached."""
+def fetch_candles(symbol: str, day: str, interval: str = "5m", refetch: bool = False) -> List[tuple]:
+    """Candles spanning the day before through two days after, cached."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    path = _cache_path(symbol, day)
+    path = _cache_path(symbol, day, interval)
     if os.path.exists(path) and not refetch:
         with open(path, "r", encoding="utf-8") as handle:
             return [tuple(row) for row in json.load(handle)]
 
+    step = INTERVAL_SECONDS[interval]
     start = datetime.fromisoformat(day).replace(tzinfo=IST) - timedelta(hours=18)
     rows: List[tuple] = []
     cursor = int(start.timestamp() * 1000)
-    for _ in range(4):  # 4 x 1000 candles ~= 3.5 days
+    for _ in range(4):  # 4 x 1000 candles
         resp = requests.get(
             "https://api.binance.com/api/v3/klines",
-            params={"symbol": symbol, "interval": "5m", "startTime": cursor, "limit": 1000},
+            params={"symbol": symbol, "interval": interval, "startTime": cursor, "limit": 1000},
             timeout=30,
         )
         resp.raise_for_status()
@@ -99,27 +125,44 @@ def fetch_candles(symbol: str, day: str, refetch: bool = False) -> List[tuple]:
         if not isinstance(batch, list) or not batch:
             break
         rows.extend((int(k[0]) // 1000, float(k[1]), float(k[2]), float(k[3]), float(k[4])) for k in batch)
-        cursor = int(batch[-1][0]) + FIVE_MIN * 1000
+        cursor = int(batch[-1][0]) + step * 1000
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(rows, handle)
     return rows
 
 
-def find_mother(rows: List[tuple], mother_high: float, day: str) -> Optional[int]:
+def find_mother(rows: List[tuple], case: "Case") -> Optional[int]:
     """
     The candle whose high is the level he marked, searched only near the day the
     chart is from. Without that bound the same price prints again days later and
     the replay silently runs on the wrong swing.
+
+    When the case pins a clock time, the window narrows to a couple of hours
+    around it and the pick is simply the highest candle in there — which is what
+    a cross-exchange chart needs, since its printed price will never match.
     """
-    origin = datetime.fromisoformat(day).replace(tzinfo=IST)
+    origin = datetime.fromisoformat(case.day).replace(tzinfo=IST)
+    if case.mother_hhmm:
+        hour, minute = (int(part) for part in case.mother_hhmm.split(":"))
+        centre = origin.replace(hour=hour, minute=minute)
+        # Scaled to the chart's own timeframe: a couple of dozen candles either
+        # side of the marked minute, never less than a quarter hour.
+        span = timedelta(seconds=max(15 * 60, 8 * case.step))
+        lo = (centre - span).timestamp()
+        hi = (centre + span).timestamp()
+        window = [(i, r) for i, r in enumerate(rows) if lo <= r[0] <= hi]
+        if not window:
+            return None
+        return max(window, key=lambda pair: pair[1][2])[0]
+
     lo = (origin - timedelta(hours=8)).timestamp()
     hi = (origin + timedelta(hours=32)).timestamp()
     best = None
     for i, (ts, _, high, _, _) in enumerate(rows):
         if not lo <= ts <= hi:
             continue
-        gap = abs(high - mother_high)
-        if gap <= mother_high * 0.0002 and (best is None or gap < best[1]):
+        gap = abs(high - case.mother_high)
+        if gap <= case.mother_high * case.tolerance_pct and (best is None or gap < best[1]):
             best = (i, gap)
     return best[0] if best else None
 
@@ -157,6 +200,7 @@ class Result:
     label: str
     symbol: str
     ok: bool
+    interval: str = "5m"
     note: str = ""
     fibs: int = 0
     trendlines: int = 0
@@ -171,12 +215,14 @@ class Result:
 
 
 def replay(case: Case, refetch: bool = False, capital: float = 2000.0) -> Result:
-    rows = fetch_candles(case.symbol, case.day, refetch)
+    rows = fetch_candles(case.symbol, case.day, case.interval, refetch)
     if not rows:
-        return Result(case.label, case.symbol, False, "no candles returned")
-    mi = find_mother(rows, case.mother_high, case.day)
+        return Result(case.label, case.symbol, False, case.interval, "no candles returned")
+    mi = find_mother(rows, case)
     if mi is None:
-        return Result(case.label, case.symbol, False, f"mother high {case.mother_high:,.2f} not on {case.day}")
+        return Result(
+            case.label, case.symbol, False, case.interval, f"mother high {case.mother_high:,.2f} not on {case.day}"
+        )
 
     mother = rows[mi]
     engine = CascadeEngine(_OfflineBroker(case.symbol, _tick_for(case.mother_high)))
@@ -196,7 +242,7 @@ def replay(case: Case, refetch: bool = False, capital: float = 2000.0) -> Result
     engine.campaigns["bt"] = campaign
 
     history: List[Candle] = []
-    limit = mi + 1 + (case.run_hours * 12)
+    limit = mi + 1 + (case.run_hours * 3600 // case.step)
     first_fib_at = None
     for ts, o, h, low, c in rows[mi + 1 : limit]:
         candle = Candle(ts, o, h, low, c)
@@ -217,6 +263,7 @@ def replay(case: Case, refetch: bool = False, capital: float = 2000.0) -> Result
         label=case.label,
         symbol=case.symbol,
         ok=True,
+        interval=case.interval,
         fibs=len(campaign.legs),
         trendlines=len(campaign.trendlines),
         entries=len(fills) + sum(1 for _ in campaign.rounds),
@@ -250,22 +297,26 @@ def main() -> int:
         try:
             results.append(replay(case, args.refetch, args.capital))
         except Exception as exc:  # a broken case must not hide the rest
-            results.append(Result(case.label, case.symbol, False, f"{type(exc).__name__}: {exc}"))
+            results.append(Result(case.label, case.symbol, False, case.interval, f"{type(exc).__name__}: {exc}"))
 
-    head = f"{'case':<20} {'sym':<9} {'fibs':>4} {'TL':>3} {'buys':>5} {'deployed':>10} {'deepest':>8} {'rounds':>7} {'P&L':>8}  first fib"
+    head = (
+        f"{'case':<20} {'sym':<9} {'TF':>4} {'fibs':>4} {'TL':>3} {'buys':>5} "
+        f"{'deployed':>10} {'deepest':>8} {'rounds':>7} {'P&L':>8}  first fib"
+    )
     print(head)
     print("-" * len(head))
     drew = traded = 0
     for r in results:
         if not r.ok:
             print(
-                f"{r.label:<20} {r.symbol:<9} {'--':>4}  {'--':>2} {'--':>5} {'':>10} {'':>8} {'':>7} {'':>8}  {r.note}"
+                f"{r.label:<20} {r.symbol:<9} {r.interval:>4} {'--':>4}  {'--':>2} {'--':>5} "
+                f"{'':>10} {'':>8} {'':>7} {'':>8}  {r.note}"
             )
             continue
         drew += 1 if r.fibs else 0
         traded += 1 if r.entries else 0
         print(
-            f"{r.label:<20} {r.symbol:<9} {r.fibs:>4} {r.trendlines:>3} {r.entries:>5} "
+            f"{r.label:<20} {r.symbol:<9} {r.interval:>4} {r.fibs:>4} {r.trendlines:>3} {r.entries:>5} "
             f"${r.deployed:>9,.2f} {r.deepest_pct:>7.2f}% {r.rounds:>7} ${r.realised:>7,.2f}  "
             f"{r.first_fib_at or '—'}"
         )
