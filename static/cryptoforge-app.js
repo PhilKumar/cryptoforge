@@ -8004,23 +8004,58 @@ function cfRenderCascadeClosed(closed) {
   var body = document.getElementById('cf-cascade-closed-body');
   if (!body) return;
   if (!closed.length) {
-    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">No closed campaigns yet</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>';
     return;
   }
+  var REASONS = {
+    tp_filled: ['Target hit', 'ok'],
+    mother_broken: ['Mother broken', 'warn'],
+    deleted: ['Deleted', 'muted'],
+    stopped: ['Stopped', 'muted']
+  };
   body.innerHTML = closed.slice().reverse().map(function(campaign) {
-    var pnl = Number(campaign.realized_pnl);
-    var pnlText = isFinite(pnl) ? (pnl >= 0 ? '+' : '') + _cfCascadeFmt(pnl) : '--';
+    // Realised P&L across every round, not just the last one.
+    var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
+    var pnl = rounds.length
+      ? rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0)
+      : Number(campaign.realized_pnl);
+    var hasPnl = isFinite(pnl) && rounds.length > 0;
+    var pnlText = hasPnl ? (pnl >= 0 ? '+' : '') + '$' + _cfCascadeFmt(pnl) : '--';
+    var tone = !hasPnl ? 'var(--muted)' : (pnl >= 0 ? 'var(--green, #3fae56)' : 'var(--red, #d9534f)');
+    var reason = String(campaign.close_reason || campaign.state || '');
+    var meta = REASONS[reason] || [reason.replace(/_/g, ' ') || '--', 'muted'];
+    var cid = campaign.campaign_id || '';
+    var entry = rounds.length ? rounds[0].avg_entry : campaign.avg_entry_price;
+    var exit = rounds.length ? rounds[rounds.length - 1].exit_price : campaign.tp_price;
     return '<tr>'
-      + '<td>#' + _escapeHtml(campaign.campaign_id || '') + '</td>'
+      + '<td>#' + _escapeHtml(cid) + '</td>'
       + '<td>' + _escapeHtml(campaign.symbol || '') + '</td>'
       + '<td>' + _escapeHtml(String(campaign.mode || '').toUpperCase()) + '</td>'
-      + '<td>' + _escapeHtml(campaign.close_reason || campaign.state || '') + '</td>'
-      + '<td class="num">' + _cfCascadeFmt(campaign.avg_entry_price) + '</td>'
-      + '<td class="num">' + _cfCascadeFmt(campaign.tp_price) + '</td>'
-      + '<td class="num" style="color:' + (pnl >= 0 ? 'var(--green, #3fae56)' : 'var(--red, #d9534f)') + ';">' + pnlText + '</td>'
+      + '<td><span class="admin-pill" data-state="' + meta[1] + '">' + _escapeHtml(meta[0]) + '</span>'
+        + (rounds.length ? ' <span class="table-meta">' + rounds.length + ' round'
+          + (rounds.length === 1 ? '' : 's') + '</span>' : '') + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(entry) + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(exit) + '</td>'
+      + '<td class="num" style="color:' + tone + ';">' + pnlText + '</td>'
       + '<td>' + _escapeHtml(campaign.closed_at || '') + '</td>'
+      + '<td><button class="btn btn-outline btn-sm" title="Remove from history"'
+        + ' data-cf-click="cfCascadePurgeClosed(\'' + cid + '\')">Remove</button></td>'
       + '</tr>';
   }).join('');
+}
+
+async function cfCascadePurgeClosed(campaignId) {
+  var ok = await cfConfirm(
+    '<p>Remove campaign <b>#' + _escapeHtml(campaignId) + '</b> from the closed history?</p>'
+    + '<p>This only clears the record — no orders are affected.</p>',
+    'Remove from History', '\u2716', true
+  );
+  if (!ok) return;
+  _cfCascadeAction(
+    '/api/cascade/closed/' + encodeURIComponent(campaignId),
+    { method: 'DELETE' },
+    'Removed from history'
+  );
 }
 
 async function cfCascadeStartCampaign() {
@@ -8340,7 +8375,7 @@ function _cfCascadeChartHtml(d) {
     return '<div class="cf-table-empty-cell" style="padding:16px;">No candles replayed yet for this campaign. '
       + 'If it was just created, wait for the next 5m candle or hit Broker Sync.</div>';
   }
-  var legend = '<div class="table-meta" style="margin-bottom:8px;">'
+  var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
     + '<span style="color:#a855f7;">— mother high</span> &nbsp; '
     + '<span style="color:#1f6fd6;">— trendlines (TL)</span> &nbsp; '
     + '<span style="color:#22d3ee;">— fib 0/1 anchors</span> &nbsp; '
@@ -8349,7 +8384,8 @@ function _cfCascadeChartHtml(d) {
     + '<span style="color:#22c55e;">● fills</span>'
     + '<br>Each fib is coloured separately (F1, F2, …) and labelled on the right.'
     + '</div>';
-  return legend + _cfCascadeChartSvg(d) + _cfCascadeChartTables(d);
+  return legend + _cfCascadeChartSvg(d)
+    + '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
 }
 
 var _cfCascadeChartTf = '5m';
@@ -8378,6 +8414,98 @@ function cfCascadeSetTimeframe(tf) {
   if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId);
 }
 
+// ── Chart zoom / pan ────────────────────────────────────────
+// The SVG is drawn once at a fixed viewBox; zooming rewrites that viewBox so
+// the vector redraws crisply at any scale instead of pixelating.
+var _cfChartZoom = { k: 1, x: 0, y: 0 };
+
+function _cfChartSvg() {
+  var body = document.getElementById('cf-cascade-chart-body');
+  return body ? body.querySelector('svg') : null;
+}
+
+function _cfChartApplyZoom() {
+  var svg = _cfChartSvg();
+  if (!svg) return;
+  if (!svg.dataset.baseViewbox) {
+    svg.dataset.baseViewbox = svg.getAttribute('viewBox') || '';
+  }
+  var base = (svg.dataset.baseViewbox || '').split(/\s+/).map(Number);
+  if (base.length !== 4 || !isFinite(base[2])) return;
+  var z = _cfChartZoom;
+  var w = base[2] / z.k, h = base[3] / z.k;
+  // Keep the visible window inside the drawing at every zoom level.
+  z.x = Math.max(base[0], Math.min(z.x, base[0] + base[2] - w));
+  z.y = Math.max(base[1], Math.min(z.y, base[1] + base[3] - h));
+  svg.setAttribute('viewBox', z.x + ' ' + z.y + ' ' + w + ' ' + h);
+  svg.style.cursor = z.k > 1 ? 'grab' : '';
+  var label = document.getElementById('cf-cascade-zoom-level');
+  if (label) label.textContent = Math.round(z.k * 100) + '%';
+}
+
+function cfCascadeZoom(factor, resetPan) {
+  var svg = _cfChartSvg();
+  if (!svg) return;
+  if (!svg.dataset.baseViewbox) svg.dataset.baseViewbox = svg.getAttribute('viewBox') || '';
+  var base = (svg.dataset.baseViewbox || '').split(/\s+/).map(Number);
+  var z = _cfChartZoom;
+  var prevK = z.k;
+  z.k = Math.max(1, Math.min(12, factor === 0 ? 1 : z.k * factor));
+  if (factor === 0 || resetPan || z.k === 1) {
+    z.x = base[0]; z.y = base[1];
+  } else if (base.length === 4) {
+    // Zoom about the centre of the current view so it doesn't drift.
+    var cx = z.x + (base[2] / prevK) / 2, cy = z.y + (base[3] / prevK) / 2;
+    z.x = cx - (base[2] / z.k) / 2;
+    z.y = cy - (base[3] / z.k) / 2;
+  }
+  _cfChartApplyZoom();
+}
+
+function cfCascadeZoomReset() { cfCascadeZoom(0); }
+
+function _cfChartBindZoom() {
+  var body = document.getElementById('cf-cascade-chart-body');
+  if (!body || body.dataset.zoomBound === '1') return;
+  body.dataset.zoomBound = '1';
+
+  body.addEventListener('wheel', function(e) {
+    if (!_cfChartSvg()) return;
+    e.preventDefault();
+    cfCascadeZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
+  }, { passive: false });
+
+  var drag = null;
+  body.addEventListener('pointerdown', function(e) {
+    var svg = _cfChartSvg();
+    if (!svg || _cfChartZoom.k <= 1) return;
+    drag = { x: e.clientX, y: e.clientY, vx: _cfChartZoom.x, vy: _cfChartZoom.y,
+             w: svg.clientWidth || 1, h: svg.clientHeight || 1 };
+    svg.style.cursor = 'grabbing';
+    body.setPointerCapture(e.pointerId);
+  });
+  body.addEventListener('pointermove', function(e) {
+    if (!drag) return;
+    var svg = _cfChartSvg();
+    if (!svg) return;
+    var base = (svg.dataset.baseViewbox || '').split(/\s+/).map(Number);
+    if (base.length !== 4) return;
+    // Convert pixel drag into viewBox units so panning tracks the cursor.
+    _cfChartZoom.x = drag.vx - (e.clientX - drag.x) * (base[2] / _cfChartZoom.k) / drag.w;
+    _cfChartZoom.y = drag.vy - (e.clientY - drag.y) * (base[3] / _cfChartZoom.k) / drag.h;
+    _cfChartApplyZoom();
+  });
+  function endDrag(e) {
+    if (!drag) return;
+    drag = null;
+    var svg = _cfChartSvg();
+    if (svg) svg.style.cursor = _cfChartZoom.k > 1 ? 'grab' : '';
+    try { body.releasePointerCapture(e.pointerId); } catch (err) {}
+  }
+  body.addEventListener('pointerup', endDrag);
+  body.addEventListener('pointercancel', endDrag);
+}
+
 function cfCascadeToggleFullscreen(force) {
   var panel = document.getElementById('cf-cascade-chart-panel');
   var button = document.getElementById('cf-cascade-fullscreen-btn');
@@ -8385,6 +8513,10 @@ function cfCascadeToggleFullscreen(force) {
   var open = typeof force === 'boolean' ? force : !panel.classList.contains('cf-cascade-chart-fs');
   panel.classList.toggle('cf-cascade-chart-fs', open);
   document.body.classList.toggle('cf-chart-fs-open', open);
+  // Expanding is for reading the chart, so drop the legend and blurb and hand
+  // the whole panel to the drawing.
+  panel.classList.toggle('cf-chart-chrome-hidden', open);
+  cfCascadeZoomReset();
   if (button) {
     button.setAttribute('aria-pressed', open ? 'true' : 'false');
     button.innerHTML = open ? '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 14h6v6\"/><path d=\"M20 10h-6V4\"/><path d=\"M14 10l7-7\"/><path d=\"M3 21l7-7\"/></svg> Exit' : '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M15 3h6v6\"/><path d=\"M9 21H3v-6\"/><path d=\"M21 3l-7 7\"/><path d=\"M3 21l7-7\"/></svg> Expand';
@@ -8411,6 +8543,8 @@ async function cfCascadeShowChart(campaignId) {
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
     body.innerHTML = _cfCascadeChartHtml(data);
+    _cfChartBindZoom();
+    cfCascadeZoomReset();
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta) {
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + (data.candles || []).length

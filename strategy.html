@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-16">
-<link rel="manifest" href="/manifest.webmanifest?v=20260720-16">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-17">
+<link rel="manifest" href="/manifest.webmanifest?v=20260720-17">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260720-16"></script>
+<script src="/static/cryptoforge-boot.js?v=20260720-17"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-16">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-16">
-<script src="/static/error-handler.js?v=20260720-16" defer></script>
-<script src="/static/pwa.js?v=20260720-16" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-17">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-17">
+<script src="/static/error-handler.js?v=20260720-17" defer></script>
+<script src="/static/pwa.js?v=20260720-17" defer></script>
 </head>
 <body>
 
@@ -1352,6 +1352,11 @@
           <button type="button" class="cf-tf-option" data-tf="1h" role="radio" aria-checked="false"
                   data-cf-click="cfCascadeSetTimeframe('1h')">1H</button>
         </div>
+        <div class="cf-tf-toggle" role="group" aria-label="Chart zoom">
+          <button type="button" class="cf-tf-option" data-cf-click="cfCascadeZoom(1/1.4)" title="Zoom out" aria-label="Zoom out">&minus;</button>
+          <button type="button" class="cf-tf-option" id="cf-cascade-zoom-level" data-cf-click="cfCascadeZoomReset()" title="Reset zoom">100%</button>
+          <button type="button" class="cf-tf-option" data-cf-click="cfCascadeZoom(1.4)" title="Zoom in" aria-label="Zoom in">+</button>
+        </div>
         <button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRefreshChart()"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> Refresh</button>
         <button class="btn btn-outline btn-sm" id="cf-cascade-fullscreen-btn"
                 data-cf-click="cfCascadeToggleFullscreen()" aria-pressed="false" title="Expand chart"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg> Expand</button>
@@ -1377,7 +1382,7 @@
     <div class="table-toolbar">
       <div class="table-title-group">
         <h3 class="table-title">Closed Campaigns</h3>
-        <div class="table-meta">Completed (TP filled), mother-broken, and stopped campaigns.</div>
+        <div class="table-meta">Every campaign that has ended — target hit, mother broken, stopped, or deleted. Kept across restarts; use Remove to clear a row for good.</div>
       </div>
     </div>
     <div class="table-surface">
@@ -1390,9 +1395,10 @@
               <th>Mode</th>
               <th>Result</th>
               <th class="num">Avg Entry</th>
-              <th class="num">TP</th>
+              <th class="num">Exit</th>
               <th class="num">P&amp;L $</th>
               <th>Closed At</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="cf-cascade-closed-body">
@@ -1984,7 +1990,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260720-16" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260720-16" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260720-17" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260720-17" defer></script>
 </body>
 </html>

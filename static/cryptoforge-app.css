@@ -7036,3 +7036,24 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-cascade-position table th,
   .cf-cascade-position table td { padding: 4px 7px; }
   .cf-cascade-position-note { margin-top: 6px; font-size: 11px; color: var(--muted); }
+
+  /* ── Expanded chart: hand the whole panel to the drawing ── */
+  .cf-chart-chrome-hidden .cf-cascade-chart-legend,
+  .cf-chart-chrome-hidden #cf-cascade-chart-meta { display: none; }
+  .cf-cascade-chart-fs .table-toolbar {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--panel, #0b1220);
+    border-bottom: 1px solid rgba(118,138,176,0.18);
+  }
+  .cf-cascade-chart-fs #cf-cascade-chart-body {
+    padding: 0;
+    touch-action: none;   /* let drag-to-pan work on touch */
+    user-select: none;
+  }
+  .cf-cascade-chart-fs #cf-cascade-chart-body svg {
+    width: 100%; height: 100%; max-height: none;
+  }
+  #cf-cascade-zoom-level {
+    font-variant-numeric: tabular-nums; min-width: 46px; cursor: pointer;
+  }
+  .cf-chart-chrome-hidden .cf-cascade-chart-tables { display: none; }

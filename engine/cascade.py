@@ -885,12 +885,40 @@ class CascadeEngine:
         return {"status": "ok", "campaign": campaign.to_dict()}
 
     def delete_campaign(self, campaign_id: str) -> dict:
+        """
+        Remove a campaign from the live set. It is archived rather than
+        discarded — a deleted campaign still happened, and its fills and rounds
+        stay reviewable in history. Purging the record entirely is a separate,
+        explicit action (purge_closed_campaign).
+        """
         campaign = self.campaigns.pop(campaign_id, None)
         if campaign is None:
             return {"error": f"Campaign {campaign_id} not found"}
         self._candles_5m.pop(campaign_id, None)
+        self._last_sync_ts.pop(campaign_id, None)
+        if not any(row.get("campaign_id") == campaign_id for row in self.closed_campaigns):
+            if not campaign.close_reason:
+                campaign.close_reason = "deleted"
+                campaign.closed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._archive_campaign(campaign)
         self._emit_update()
         return {"status": "ok"}
+
+    def purge_closed_campaign(self, campaign_id: str) -> dict:
+        """Drop a campaign from the closed history for good."""
+        before = len(self.closed_campaigns)
+        self.closed_campaigns = [row for row in self.closed_campaigns if row.get("campaign_id") != campaign_id]
+        self._emit_update()
+        return {"status": "ok", "removed": before != len(self.closed_campaigns)}
+
+    def load_closed_campaigns(self, rows: List[dict]) -> None:
+        """Seed history from the store on restart, newest last, without dupes."""
+        merged = {}
+        for row in list(rows or []) + list(self.closed_campaigns):
+            key = row.get("campaign_id")
+            if key:
+                merged[key] = row
+        self.closed_campaigns = sorted(merged.values(), key=lambda r: str(r.get("closed_at") or ""))[-100:]
 
     def get_status(self) -> dict:
         campaigns = []
@@ -920,7 +948,7 @@ class CascadeEngine:
             "status": "ok",
             "running": self._running,
             "campaigns": campaigns,
-            "closed_campaigns": list(self.closed_campaigns[-20:]),
+            "closed_campaigns": list(self.closed_campaigns[-40:]),
             "active_count": len(self.active_campaigns),
             "live_count": len(self.live_campaigns),
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

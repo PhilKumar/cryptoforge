@@ -6408,6 +6408,14 @@ def _cascade_persist_event(event: dict) -> None:
         _logger.error("[CASCADE] Failed to persist event: %s", exc)
 
 
+def _cascade_persist_closed_list(engine: "CascadeEngine") -> None:
+    """Write the engine's closed history back to the store."""
+    try:
+        _get_state_store().put(_BUCKET_CASCADE_CLOSED, "campaigns", list(engine.closed_campaigns)[-100:])
+    except Exception as exc:
+        _logger.error("[CASCADE] Failed to persist closed campaigns: %s", exc)
+
+
 def _cascade_persist_closed(campaign: dict) -> None:
     try:
         store = _get_state_store()
@@ -6454,7 +6462,20 @@ def _broadcast_cascade_update(status: dict) -> None:
         pass  # no running loop (e.g. during tests) — snapshot is already saved
 
 
+def _load_cascade_closed() -> list:
+    try:
+        rows = _get_state_store().get(_BUCKET_CASCADE_CLOSED, "campaigns", default=[])
+        return rows if isinstance(rows, list) else []
+    except Exception as exc:
+        _logger.warning("[CASCADE] Failed to read closed campaigns: %s", exc)
+        return []
+
+
 def _restore_cascade_runtime(engine: "CascadeEngine") -> bool:
+    # History lives in its own bucket and must be reloaded explicitly — the
+    # engine's closed list is in-memory, so without this every restart or
+    # deploy silently emptied the Closed Campaigns table.
+    engine.load_closed_campaigns(_load_cascade_closed())
     runtime_state = _load_cascade_runtime()
     snapshots = runtime_state.get("campaigns") or []
     if not snapshots:
@@ -6699,8 +6720,22 @@ async def cascade_delete_campaign(campaign_id: str):
     result = eng.delete_campaign(campaign_id)
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
+    _cascade_persist_closed_list(eng)
     _persist_cascade_runtime_snapshot(eng)
     return {"status": "ok", "campaign_id": campaign_id}
+
+
+@app.delete("/api/cascade/closed/{campaign_id}")
+async def cascade_purge_closed(campaign_id: str):
+    """Remove a campaign from the closed history for good."""
+    check_rate_limit("cascade_purge", max_calls=10, window_sec=10)
+    eng = _get_cascade_engine()
+    if not eng.closed_campaigns:
+        _restore_cascade_runtime(eng)
+    result = eng.purge_closed_campaign(campaign_id)
+    _cascade_persist_closed_list(eng)
+    _persist_cascade_runtime_snapshot(eng)
+    return {"status": "ok", "campaign_id": campaign_id, "removed": result.get("removed", False)}
 
 
 @app.post("/api/cascade/reconcile")
