@@ -1430,15 +1430,10 @@ class CascadeEngine:
         if touch_high <= frozen_dip:
             return
 
-        campaign.trendlines.append(tl)
-        campaign.active_trendline_id = tl.trendline_id
-        campaign.state = "TRENDLINE_ACTIVE"
-
         # Two structures touched at essentially the same price are the same
-        # shelf: their ladders overlap and the new one adds nothing but a
-        # cancellation of orders that were about to fill. Draw the trendline —
-        # it is real geometry — but keep the previous fib and its resting
-        # orders, and wait for a structure that has genuinely moved down.
+        # shelf. The second one adds nothing but a cancellation of orders that
+        # were about to fill, so it is dropped ENTIRELY — no trendline, no fib.
+        # The previous structure stays active with its ladder resting.
         prior = campaign.current_leg
         if prior is not None and prior.touch_high:
             separation = abs(touch_high - prior.touch_high) / prior.touch_high
@@ -1446,13 +1441,17 @@ class CascadeEngine:
                 self._log_event(
                     campaign,
                     "skip",
-                    f"Trendline {tl.trendline_id} drawn but fib skipped: touch "
-                    f"{touch_high:,.2f} is only {separation * 100:.3f}% from fib "
-                    f"{prior.leg_id}'s {prior.touch_high:,.2f} — same shelf, so fib "
-                    f"{prior.leg_id}'s ladder stays resting.",
+                    f"Structure skipped: touch {touch_high:,.2f} is only "
+                    f"{separation * 100:.3f}% from fib {prior.leg_id}'s "
+                    f"{prior.touch_high:,.2f} — same shelf. No trendline and no fib "
+                    f"drawn; fib {prior.leg_id}'s ladder stays resting.",
                 )
                 campaign.window_start_ts = candle.timestamp
                 return
+
+        campaign.trendlines.append(tl)
+        campaign.active_trendline_id = tl.trendline_id
+        campaign.state = "TRENDLINE_ACTIVE"
         self._log_event(
             campaign,
             "trendline",

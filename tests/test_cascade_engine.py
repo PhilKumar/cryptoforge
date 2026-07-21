@@ -380,14 +380,15 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self._feed(14)
         self.assertEqual(len(self.campaign.legs), 1)
 
-    def test_third_trendline_draws_but_its_fib_is_skipped_as_the_same_shelf(self):
-        """The user's chart has THREE trendlines and TWO fibs. The 19:20 IST
-        structure is touched at 64,763.67 — 0.015% from fib 2's 64,753.77, the
-        same shelf — so its trendline is drawn but no fib is created."""
+    def test_same_shelf_structure_is_dropped_entirely(self):
+        """The 19:20 IST structure is touched at 64,763.67 — 0.015% from fib 2's
+        64,753.77, the same shelf. It is dropped completely: no trendline and no
+        fib, leaving two of each, which is what the user's chart shows."""
         self._feed(23)
-        self.assertEqual(len(self.campaign.trendlines), 3)
+        self.assertEqual(len(self.campaign.trendlines), 2)
         self.assertEqual(len(self.campaign.legs), 2)
         self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64753.77)
+        self.assertEqual(self.campaign.active_trendline_id, 2)
 
     def test_skipping_keeps_the_previous_ladder_resting_so_the_entry_fills(self):
         """This is why the skip matters: fib 2's L4 sits at 64,138.25 and price
