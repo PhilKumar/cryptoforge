@@ -7846,6 +7846,7 @@ function cfRenderCascadeStatus(data) {
     });
     dot.classList.toggle('active', !!data.running && live);
   }
+  cfRenderCascadeTrades(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
@@ -7916,8 +7917,8 @@ function _cfCascadeLadderRows(campaign) {
         var extra = amount - base;
         amountCell = '$' + _cfCascadeUsd(amount)
           + '<div class="table-meta">'
-          + (_CF_LEVEL_SHARE[level] || '') + '% of this fib'
-          + (status === 'COLLECTED' ? ' · in the running total' : '') + '</div>';
+          + (_CF_LEVEL_SHARE[level] || '') + '%'
+          + (status === 'COLLECTED' ? ' · collected' : '') + '</div>';
       } else {
         amountCell = '<span style="opacity:.6;">$0</span>';
       }
@@ -8187,6 +8188,79 @@ function _cfCascadeMarkClippedLabels(root) {
   }
 }
 
+// Every campaign currently holding coin, as one table. The campaign cards below
+// each tell their own story; this answers the only question you have when you
+// open the page — am I up or down, and on what.
+function cfRenderCascadeTrades(campaigns) {
+  var mount = document.getElementById('cf-cascade-trades');
+  var meta = document.getElementById('cf-cascade-trades-meta');
+  if (!mount) return;
+
+  var open = campaigns.filter(function (c) {
+    return Number(c.filled_base_qty) > 0 && (c.all_fills || []).length;
+  });
+  if (!open.length) {
+    mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:14px;">'
+      + 'No open trades — nothing has been bought yet.</div>';
+    if (meta) meta.textContent = 'Every campaign holding coin right now, what it cost, and what it is worth.';
+    return;
+  }
+
+  var totalCost = 0, totalNow = 0;
+  var rows = open.map(function (c) {
+    var fills = c.all_fills || [];
+    var qty = Number(c.filled_base_qty) || 0;
+    var avg = Number(c.avg_entry_price) || 0;
+    var last = Number(c.last_price) || 0;
+    var cost = avg * qty;
+    var now = last * qty;
+    totalCost += cost;
+    if (last) totalNow += now; else totalNow += cost;
+    var pnl = last ? now - cost : 0;
+    var pct = cost > 0 && last ? (pnl / cost) * 100 : 0;
+    var tone = pnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+    // First fill is when the trade opened; the rest are averages into it.
+    var opened = fills.reduce(function (min, f) {
+      var t = Number(f.timestamp) || 0;
+      return min === 0 || (t && t < min) ? t : min;
+    }, 0);
+    var tp = Number(c.tp_price) || 0;
+    var toTp = tp && last ? ((tp - last) / last) * 100 : null;
+    return '<tr>'
+      + '<td><strong>#' + _escapeHtml(String(c.seq || '')) + '</strong>'
+        + '<div class="table-meta">' + _escapeHtml(String(c.mode || 'paper').toUpperCase()) + '</div></td>'
+      + '<td><strong>' + _escapeHtml(c.symbol || '') + '</strong>'
+        + '<div class="table-meta">' + fills.length + ' buy' + (fills.length === 1 ? '' : 's') + '</div></td>'
+      + '<td>' + _escapeHtml(_cfCascadeIst(opened)) + '<div class="table-meta">IST</div></td>'
+      + '<td class="num">' + _cfCascadeFmt(avg) + '<div class="table-meta">' + _cfCascadeFmt(qty, 6) + '</div></td>'
+      + '<td class="num">' + _cfCascadeFmt(last) + '</td>'
+      + '<td class="num">$' + _cfCascadeUsd(cost) + '</td>'
+      + '<td class="num" style="color:' + tone + ';font-weight:700;">'
+        + (pnl >= 0 ? '+' : '\u2212') + '$' + _cfCascadeUsd(Math.abs(pnl))
+        + '<div class="table-meta" style="color:' + tone + ';">'
+        + (pnl >= 0 ? '+' : '\u2212') + Math.abs(pct).toFixed(2) + '%</div></td>'
+      + '<td class="num">' + _cfCascadeFmt(tp)
+        + (toTp !== null ? '<div class="table-meta">' + toTp.toFixed(2) + '% away</div>' : '')
+      + '</td>'
+      + '</tr>';
+  }).join('');
+
+  var totalPnl = totalNow - totalCost;
+  var totalTone = totalPnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+  mount.innerHTML = '<div class="table-surface"><div class="table-scroll">'
+    + '<table class="trade-table"><thead><tr>'
+    + '<th>Campaign</th><th>Symbol</th><th>Opened</th><th class="num">Avg entry</th>'
+    + '<th class="num">Last</th><th class="num">Cost</th><th class="num">Unrealised</th>'
+    + '<th class="num">Target</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  if (meta) {
+    meta.innerHTML = open.length + ' open · $' + _cfCascadeUsd(totalCost) + ' invested · '
+      + '<strong style="color:' + totalTone + ';">'
+      + (totalPnl >= 0 ? '+' : '\u2212') + '$' + _cfCascadeUsd(Math.abs(totalPnl))
+      + '</strong> unrealised. Nothing here is sold yet — each sells itself at its target.';
+  }
+}
+
 function cfRenderCascadeCampaigns(campaigns) {
   var mount = document.getElementById('cf-cascade-campaigns');
   if (!mount) return;
@@ -8194,15 +8268,31 @@ function cfRenderCascadeCampaigns(campaigns) {
     mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">No campaigns yet — start one on the left.</div>';
     return;
   }
-  // The status poll runs every 3s. Rewriting innerHTML on every tick destroys
-  // and rebuilds every table, which throws away the scroll position mid-drag —
-  // the bar snaps back the instant you let go and the right-hand columns are
-  // unreadable. Nothing usually changes between ticks, so only repaint when it
-  // actually did.
-  var html = campaigns.map(_cfCascadeCampaignCard).join('');
-  if (mount.getAttribute('data-cf-html-key') === html) return;
-  mount.setAttribute('data-cf-html-key', html);
-  mount.innerHTML = html;
+  // The status poll runs every 3s and rewrites this whole block, which throws
+  // away wherever you had scrolled to — the bar snaps back the instant you let
+  // go. Skipping the repaint when nothing changed does not help, because the
+  // last price ticks constantly, so the markup is different every single time.
+  //
+  // So instead of trying not to repaint: remember every scroll position, put
+  // them back straight afterwards. Keyed by campaign id and table index, so a
+  // card appearing or closing does not shuffle the others.
+  var scrolls = {};
+  mount.querySelectorAll('.cf-cascade-card').forEach(function (card) {
+    var cid = card.getAttribute('data-campaign') || '';
+    card.querySelectorAll('.table-scroll').forEach(function (box, i) {
+      if (box.scrollLeft || box.scrollTop) scrolls[cid + '|' + i] = [box.scrollLeft, box.scrollTop];
+    });
+  });
+
+  mount.innerHTML = campaigns.map(_cfCascadeCampaignCard).join('');
+
+  mount.querySelectorAll('.cf-cascade-card').forEach(function (card) {
+    var cid = card.getAttribute('data-campaign') || '';
+    card.querySelectorAll('.table-scroll').forEach(function (box, i) {
+      var at = scrolls[cid + '|' + i];
+      if (at) { box.scrollLeft = at[0]; box.scrollTop = at[1]; }
+    });
+  });
   _cfCascadeMarkClippedLabels(mount);
 }
 
