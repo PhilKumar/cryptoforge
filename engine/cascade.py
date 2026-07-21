@@ -1734,6 +1734,14 @@ class CascadeEngine:
             anchor2_timestamp=int(anchor_ts),
         )
 
+        # Level 1 is the ultimate low since the MOTHER candle, not merely the
+        # low of this structure's own window. A later fib sits below an earlier
+        # one, and its level 1 has to reflect everything the fall has managed so
+        # far — otherwise fib 2 measures from a shelf that fib 1 already broke.
+        prior_low = min(
+            (c.low for c in history if campaign.mother_timestamp < c.timestamp <= candle.timestamp),
+            default=None,
+        )
         frozen_dip = None
         run_min = None
         run_min_ts = None

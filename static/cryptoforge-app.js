@@ -7931,7 +7931,8 @@ function _cfCascadeLadderRows(campaign) {
     }).join('');
     return head + body;
   }).join('');
-  // The running total is the only thing that ever becomes an order.
+  // The running total is the only thing that ever becomes an order, so it goes
+  // at the TOP of the table in the site's amber, not buried under the levels.
   var pot = Number(campaign.pending_usd) || 0;
   var rung = Number(campaign.rung_usd) || 5.5;
   var potNote = pot <= 0
@@ -7943,20 +7944,21 @@ function _cfCascadeLadderRows(campaign) {
         ? 'clears the $' + _cfCascadeUsd(rung) + ' minimum — waiting for two reds below '
           + _cfCascadeFmt(campaign.pending_line)
         : 'needs $' + _cfCascadeUsd(rung) + ' before it can be an order';
-  var foot = '<tr class="cf-cascade-leg-head"><td colspan="3" style="padding-top:10px;">'
+  var head = '<tr class="cf-cascade-pot"><td colspan="3">'
       + '<strong>Collected so far</strong>'
       + '<span class="table-meta"> · ' + _escapeHtml(potNote) + '</span></td>'
-      + '<td class="num" style="padding-top:10px;"><strong>$' + _cfCascadeUsd(pot) + '</strong></td>'
+      + '<td class="num"><strong>$' + _cfCascadeUsd(pot) + '</strong></td>'
       + '<td></td></tr>'
     + (liveTotal > 0
-      ? '<tr class="cf-cascade-leg-head"><td colspan="3">'
+      ? '<tr class="cf-cascade-pot is-quiet"><td colspan="3">'
         + '<span class="table-meta">Still marked on levels price has not reached</span></td>'
         + '<td class="num">$' + _cfCascadeUsd(liveTotal) + '</td><td></td></tr>'
       : '');
+
   return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
     + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th>'
     + '<th class="num">Amount</th><th>Status</th></tr></thead>'
-    + '<tbody>' + rows + foot + '</tbody></table></div></div>';
+    + '<tbody>' + head + rows + '</tbody></table></div></div>';
 }
 
 // Why a campaign ended, in words. "COMPLETED" on its own tells you nothing —
