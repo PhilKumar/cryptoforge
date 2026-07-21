@@ -380,19 +380,41 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self._feed(14)
         self.assertEqual(len(self.campaign.legs), 1)
 
-    def test_third_structure_draws_on_the_1920_ist_candle(self):
-        """The user: "it has to happen on the 19:20 IST candle"."""
+    def test_third_trendline_draws_but_its_fib_is_skipped_as_the_same_shelf(self):
+        """The user's chart has THREE trendlines and TWO fibs. The 19:20 IST
+        structure is touched at 64,763.67 — 0.015% from fib 2's 64,753.77, the
+        same shelf — so its trendline is drawn but no fib is created."""
         self._feed(23)
-        self.assertEqual(len(self.campaign.legs), 3)
-        leg = self.campaign.legs[2]
-        self.assertEqual(leg.leg_id, 3)
-        self.assertAlmostEqual(leg.touch_high, 64763.67)
-        self.assertAlmostEqual(leg.low, 64502.00)
+        self.assertEqual(len(self.campaign.trendlines), 3)
+        self.assertEqual(len(self.campaign.legs), 2)
+        self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64753.77)
 
-    def test_no_false_structures_through_the_deep_flush(self):
+    def test_skipping_keeps_the_previous_ladder_resting_so_the_entry_fills(self):
+        """This is why the skip matters: fib 2's L4 sits at 64,138.25 and price
+        reaches 64,077.76 at 19:50. Creating a third fib would have cancelled
+        that order one candle before it filled."""
         self._feed(29)
-        self.assertEqual(len(self.campaign.legs), 3)
-        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+        self.assertEqual(len(self.campaign.legs), 2)
+        self.assertTrue(self.campaign.all_fills, "the resting L4 should have filled")
+        fill = self.campaign.all_fills[0]
+        self.assertEqual(fill.leg_id, 2)
+        self.assertAlmostEqual(fill.price, 64138.25)
+
+    def test_mother_break_realises_the_open_round(self):
+        """Price back above the mother high can only happen after passing the
+        TP, so the round must be closed in profit, never left open."""
+        self._feed(29)
+        for idx, o, h, low, c in [
+            (37, 64416.01, 64608.00, 64398.15, 64604.65),
+            (38, 64604.65, 64800.00, 64540.00, 64800.00),
+            (39, 64800.00, 64988.00, 64784.00, 64968.00),
+            (40, 64967.99, 65100.00, 64898.01, 64994.12),
+        ]:
+            _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
+        self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
+        self.assertEqual(len(self.campaign.rounds), 1)
+        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
+        self.assertAlmostEqual(self.campaign.rounds[0].avg_entry, 64138.25)
 
 
 class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):

@@ -7008,3 +7008,31 @@ html[data-theme="light"] .journal-entry-notes section {
   }
   .btn .cf-ico { margin-right: 0.35em; }
   h2 .cf-ico, h3 .cf-ico { vertical-align: -0.1em; }
+
+  /* ── Cascade position / round history ── */
+  .cf-cascade-position {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(118,138,176,0.18);
+    background: rgba(12,20,36,0.5);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .cf-cascade-position.is-open { border-color: color-mix(in srgb, var(--accent) 38%, transparent); }
+  .cf-cascade-position.is-closed { border-color: color-mix(in srgb, var(--green, #3fae56) 34%, transparent); }
+  .cf-cascade-position.is-waiting { color: var(--muted); }
+  .cf-cascade-position-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 7px;
+  }
+  .cf-cascade-position-head strong { font-size: 12.5px; }
+  .cf-cascade-position-head span { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cf-cascade-position table { width: 100%; font-size: 11.5px; }
+  .cf-cascade-position table th,
+  .cf-cascade-position table td { padding: 4px 7px; }
+  .cf-cascade-position-note { margin-top: 6px; font-size: 11px; color: var(--muted); }

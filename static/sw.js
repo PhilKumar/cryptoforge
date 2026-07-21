@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cryptoforge-shell-v78';
+const CACHE_NAME = 'cryptoforge-shell-v79';
 const APP_SHELL = [
   '/manifest.webmanifest?v=20260720-10',
   '/apple-touch-icon.png?v=20260720-10',

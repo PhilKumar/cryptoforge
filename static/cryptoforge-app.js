@@ -7816,11 +7816,83 @@ function _cfCascadeCampaignCard(campaign) {
       + '<div class="admin-stat-note">realised $' + _cfCascadeFmt(campaign.realized_pnl_total || 0) + '</div></div>'
     + '</div>'
     + _cfCascadeLadderRows(campaign)
-    + (fills.length
-      ? '<div class="table-meta" style="margin-top:8px;">' + fills.length + ' fill(s) — latest: L'
-        + _escapeHtml(String(fills[fills.length - 1].level)) + ' @ ' + _cfCascadeFmt(fills[fills.length - 1].price) + '</div>'
-      : '')
+    + _cfCascadePositionPanel(campaign, fills)
     + '</div>';
+}
+
+// Entries and closed rounds, stated plainly — "has a buy happened, and did the
+// target hit" should never require reading the event log.
+function _cfCascadePositionPanel(campaign, fills) {
+  var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
+  var out = '';
+
+  if (fills.length) {
+    var invested = fills.reduce(function(sum, f) {
+      return sum + (Number(f.price) || 0) * (Number(f.quantity) || 0);
+    }, 0);
+    var tp = Number(campaign.tp_price || campaign.display_tp_price);
+    var last = Number(campaign.last_price);
+    var toTp = (isFinite(tp) && isFinite(last) && last > 0) ? ((tp - last) / last * 100) : null;
+    out += '<div class="cf-cascade-position is-open">'
+      + '<div class="cf-cascade-position-head">'
+        + '<strong>Position open</strong>'
+        + '<span>' + fills.length + ' entr' + (fills.length === 1 ? 'y' : 'ies')
+        + ' · $' + _cfCascadeFmt(invested) + ' invested</span>'
+      + '</div>'
+      + '<table class="trade-table"><thead><tr>'
+        + '<th>Entry</th><th>Fib</th><th>Level</th>'
+        + '<th class="num">Price</th><th class="num">Qty</th><th class="num">Cost</th>'
+      + '</tr></thead><tbody>'
+      + fills.map(function(f, i) {
+        return '<tr><td>#' + (i + 1) + '</td>'
+          + '<td>' + _escapeHtml(String(f.leg_id || '--')) + '</td>'
+          + '<td>L' + _escapeHtml(String(f.level)) + '</td>'
+          + '<td class="num">' + _cfCascadeFmt(f.price) + '</td>'
+          + '<td class="num">' + Number(f.quantity || 0).toFixed(8) + '</td>'
+          + '<td class="num">$' + _cfCascadeFmt((Number(f.price) || 0) * (Number(f.quantity) || 0)) + '</td>'
+          + '</tr>';
+      }).join('')
+      + '</tbody></table>'
+      + '<div class="cf-cascade-position-note">Target ' + _cfCascadeFmt(tp)
+      + (toTp !== null ? ' · ' + toTp.toFixed(2) + '% away' : '')
+      + ' — sells automatically when reached.</div>'
+      + '</div>';
+  } else if (!rounds.length) {
+    out += '<div class="cf-cascade-position is-waiting">'
+      + '<strong>No entry yet.</strong> Orders rest at the PENDING levels above and '
+      + 'fill only if price trades down to them. MERGED levels were below Binance\'s '
+      + '$5 minimum and folded into the next deeper level.'
+      + '</div>';
+  }
+
+  if (rounds.length) {
+    var total = rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0);
+    out += '<div class="cf-cascade-position is-closed">'
+      + '<div class="cf-cascade-position-head">'
+        + '<strong>' + rounds.length + ' round' + (rounds.length === 1 ? '' : 's') + ' closed at target</strong>'
+        + '<span style="color:' + (total >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)') + ';">'
+        + (total >= 0 ? '+' : '') + '$' + _cfCascadeFmt(total) + ' realised</span>'
+      + '</div>'
+      + '<table class="trade-table"><thead><tr>'
+        + '<th>Round</th><th>Fib</th><th class="num">Avg Entry</th><th class="num">Exit</th>'
+        + '<th class="num">Qty</th><th class="num">P&amp;L</th><th class="num">ROI</th>'
+      + '</tr></thead><tbody>'
+      + rounds.slice().reverse().map(function(r) {
+        var pnl = Number(r.pnl) || 0;
+        var inv = Number(r.invested_usd) || 0;
+        var tone = pnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+        return '<tr><td>#' + _escapeHtml(String(r.round_id)) + '</td>'
+          + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'
+          + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
+          + '<td class="num">' + _cfCascadeFmt(r.exit_price) + '</td>'
+          + '<td class="num">' + Number(r.quantity || 0).toFixed(8) + '</td>'
+          + '<td class="num" style="color:' + tone + ';">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeFmt(pnl) + '</td>'
+          + '<td class="num" style="color:' + tone + ';">' + (inv > 0 ? (pnl / inv * 100).toFixed(2) + '%' : '--') + '</td>'
+          + '</tr>';
+      }).join('')
+      + '</tbody></table></div>';
+  }
+  return out;
 }
 
 function _cfCascadeMarkClippedLabels(root) {
