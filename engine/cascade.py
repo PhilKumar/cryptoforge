@@ -1471,12 +1471,15 @@ class CascadeEngine:
         if candle.close < candle.open:
             self._evaluate_cut(campaign, candle)
         if campaign.state in ACTIVE_STATES:
-            # Fill against the price the order rested at while this candle was
-            # forming, THEN let the candle move it. Advancing first would slide
-            # the order under a candle that should have filled it.
+            # Step the stops FIRST, then look for fills. Real candles open where
+            # the last one closed, so a trigger sitting on the last red close is
+            # touched by the very next candle no matter which way it goes. What
+            # separates "the fall continued" from "the market turned" is whether
+            # this candle set a new lower red close: if it did it owns the stop
+            # and cannot also fill it, and _paper_fill_check skips it on stop_ts.
+            self._advance_stop_entries(campaign, candle)
             if campaign.mode == "paper":
                 self._paper_fill_check(campaign, candle)
-            self._advance_stop_entries(campaign, candle)
 
     def _evaluate_cut(self, campaign: Campaign, candle: Candle) -> None:
         """
@@ -1681,8 +1684,8 @@ class CascadeEngine:
             probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
             if probe is None:
                 continue
-            # An order repriced off THIS candle's own close cannot also be
-            # filled by it — it did not exist while the candle was forming.
+            # A candle that just set the stop is the fall continuing, not a
+            # turn — it owns the trigger and cannot also take it.
             if order.stop_ts is not None and probe.timestamp <= order.stop_ts:
                 continue
             if order.entry_style == "stop":
@@ -1696,50 +1699,87 @@ class CascadeEngine:
 
     def _advance_stop_entries(self, campaign: Campaign, closed_5m: Candle) -> None:
         """
-        Levels 2 and 4 go in as BUY STOPS, not resting limits, and the trigger
-        always sits at the PREVIOUS red candle's close — one body back, so it
-        is above where the market currently is.
+        Levels 2 and 4 go in as ONE working BUY STOP, not resting limits, and
+        the trigger sits at the close of the LOWEST red candle so far.
 
         That geometry is the whole idea. While the market keeps falling, each
-        new red close pushes the stop down and nothing fills; the order chases
-        price down without ever buying into it. Only when the market U-turns
-        and trades back up through the last red body does the stop trigger.
+        new red close drags the stop down with it and nothing fills; the order
+        chases price down without ever buying into it. Only when the market
+        U-turns and trades back up through that last red body does it trigger —
+        and because the trigger is the lowest close, that is the cheapest
+        confirmed entry the fall offered.
 
-        Two reds are needed before anything is placed: the first supplies the
-        trigger price, the second confirms the fall and puts the market below
-        it. Greens are ignored entirely — before arming and after it — and a
-        red that closes higher than the last one does not count, because the
-        rule is that price must be lower than the previous candle.
+        Two reds under the line are needed before anything is placed: the first
+        breaks the line, the second confirms the fall and puts the market below
+        the trigger (a buy stop has to sit above the market to be a stop at
+        all). Greens are ignored entirely, and a red closing higher than the
+        last one does not count, because price must be lower than the previous
+        candle.
 
-        The probe is the level's own timeframe, so a leg escalated to 15m
+        The ladder does NOT restart when the fall crosses a deeper level. L4's
+        money folds into the order already working and the sequence carries on
+        undisturbed — see _merge_stop_level.
+
+        The probe is the carrier's own timeframe, so a leg escalated to 15m
         steps off 15m closes with no extra plumbing.
         """
         leg = campaign.current_leg
         if leg is None:
             return
-        candle_15m = self._fifteen_minute_candle(campaign, closed_5m)
-        for order in leg.pending_orders.values():
-            if order.entry_style != "stop" or not order.is_open or not order.price:
-                continue
-            probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
-            if probe is None or probe.timestamp == order.stop_ts:
-                continue
-            if probe.close >= probe.open or probe.close >= order.price:
-                continue  # only red candles that closed under the fib line count
-            if order.last_red_close is None:
-                # First red under the line: nothing behind it to trigger off yet.
-                order.last_red_close = probe.close
-                self._log_event(
-                    campaign,
-                    "order",
-                    f"L{order.level} fib line {order.price:,.2f} broken at {probe.close:,.2f} — "
-                    f"waiting for a second red {order.timeframe} candle to set the stop",
-                )
-                continue
-            if probe.close >= order.last_red_close:
-                continue  # not lower than the previous red — the pair does not confirm
-            self._reprice_stop(campaign, order, order.last_red_close, probe)
-            order.last_red_close = probe.close
+        stops = [order for _, order in sorted(leg.pending_orders.items()) if order.entry_style == "stop"]
+        carrier = next((order for order in stops if order.is_open and order.price), None)
+        if carrier is None:
+            return
+        probe = closed_5m if carrier.timeframe == BASE_TIMEFRAME else self._fifteen_minute_candle(campaign, closed_5m)
+        if probe is None or probe.timestamp == carrier.stop_ts:
+            return
+        if probe.close >= probe.open:
+            return  # only red candles act, before arming and after
+
+        # Deeper levels the fall has now passed hand their money to the order
+        # already working rather than opening a second front.
+        for order in stops:
+            if order is not carrier and order.is_open and order.price and probe.close < order.price:
+                self._merge_stop_level(campaign, carrier, order)
+
+        if probe.close >= carrier.price:
+            return  # the carrier's own line has not broken yet
+        if carrier.last_red_close is None:
+            carrier.last_red_close = probe.close
+            self._log_event(
+                campaign,
+                "order",
+                f"L{carrier.level} fib line {carrier.price:,.2f} broken at {probe.close:,.2f} — "
+                f"waiting for a second red {carrier.timeframe} candle to set the stop",
+            )
+            return
+        if probe.close >= carrier.last_red_close:
+            return  # not lower than the previous red — price must keep falling
+        carrier.last_red_close = probe.close
+        # The trigger is THIS close — the lowest so far — not the one behind it.
+        # Buying a step back up from the low is the whole point.
+        self._reprice_stop(campaign, carrier, probe.close, probe)
+
+    def _merge_stop_level(self, campaign: Campaign, carrier: PendingOrder, donor: PendingOrder) -> None:
+        """Fold a deeper stop level's allocation into the order already working.
+        The cascade keeps running on one trigger instead of restarting."""
+        amount = _coerce_float(donor.usd_notional)
+        donor.usd_notional = 0.0
+        donor.quantity = 0.0
+        donor.status = "MERGED"
+        if amount <= 0:
+            return
+        carrier.usd_notional = round(carrier.usd_notional + amount, 2)
+        if carrier.limit_price:
+            carrier.quantity = carrier.usd_notional / carrier.limit_price
+        if carrier.status == "PLACED":
+            self._release_for_replacement(campaign, carrier)
+        self._log_event(
+            campaign,
+            "order",
+            f"Fell through L{donor.level} ({donor.price:,.2f}) — its ${amount:,.2f} joins the working "
+            f"L{carrier.level} buy stop, now ${carrier.usd_notional:,.2f}; sequence continues",
+        )
 
     def _reprice_stop(self, campaign: Campaign, order: PendingOrder, trigger: float, probe: Candle) -> None:
         first = order.stop_price is None
@@ -1750,19 +1790,46 @@ class CascadeEngine:
         if order.limit_price > 0:
             order.quantity = order.usd_notional / order.limit_price
         if order.status == "PLACED":
-            # Live: release the resting order so _sync_live_orders cancels it
-            # (the id is no longer ours) and re-places it lower.
-            order.status = "PENDING"
-            order.order_id = None
-            order.rev += 1
-            order.client_order_id = f"cf-csc-{campaign.campaign_id}-{order.leg_id}-{order.level}-{order.rev}"
+            self._release_for_replacement(campaign, order)
         self._log_event(
             campaign,
             "order",
             f"L{order.level} buy stop {'armed' if first else 'stepped down'} at {trigger:,.2f} "
-            f"(limit {order.limit_price:,.2f}) — market closed lower at {probe.close:,.2f}, "
-            f"buying only if it turns back up",
+            f"(limit {order.limit_price:,.2f}) — the lowest red close so far; "
+            f"buying only if price turns back up through it",
         )
+
+    def _stop_is_placeable(self, campaign: Campaign, order: PendingOrder) -> bool:
+        """
+        A BUY stop has to sit above the market or Binance rejects it outright
+        (-2010, "order would immediately trigger"). The trigger is the last red
+        candle's close, so right after a close the market can still be sitting
+        on it. Hold the order back until price is genuinely below the trigger —
+        the next sync picks it up, and a market already above the trigger is one
+        that has turned up without us, which the next red close re-arms.
+        """
+        stop = _coerce_float(order.stop_price)
+        meta = self._price_cache.get(campaign.symbol)
+        last = meta[0] if meta else None
+        if stop <= 0 or not last:
+            return True  # no live price to judge by — let the exchange decide
+        if last < stop:
+            return True
+        self._log_event(
+            campaign,
+            "warn",
+            f"L{order.level} buy stop {stop:,.2f} not placed — market is at {last:,.2f}, "
+            f"at or above the trigger; waiting for price to drop back under it",
+        )
+        return False
+
+    def _release_for_replacement(self, campaign: Campaign, order: PendingOrder) -> None:
+        """Drop our claim on a resting order so _sync_live_orders cancels it
+        (the id is no longer one of ours) and re-places it under a fresh id."""
+        order.status = "PENDING"
+        order.order_id = None
+        order.rev += 1
+        order.client_order_id = f"cf-csc-{campaign.campaign_id}-{order.leg_id}-{order.level}-{order.rev}"
 
     def _record_fill(
         self,
@@ -1973,6 +2040,8 @@ class CascadeEngine:
                 if not price:
                     continue  # stop entry not armed yet — nothing to rest on the exchange
                 is_stop = order.entry_style == "stop"
+                if is_stop and not self._stop_is_placeable(campaign, order):
+                    continue
                 try:
                     result = await asyncio.to_thread(
                         lambda o=order, p=price, st=is_stop: self.broker.place_order(

@@ -514,9 +514,10 @@ class CascadeThirdDayRegressionTests(unittest.TestCase):
 
 
 class CascadeStopEntryTests(unittest.TestCase):
-    """L2/L4 go in as BUY STOPS at the previous red candle's close — above a
-    falling market, stepping down with it, filling only on a U-turn back up.
-    L8 stays a plain limit at its line."""
+    """L2/L4 are ONE working buy stop, triggered at the close of the lowest red
+    candle so far — above a falling market, dragged down by it, filling only on
+    a U-turn back up. A deeper level being crossed adds its money to the working
+    order instead of restarting. L8 stays a plain limit at its line."""
 
     def setUp(self):
         self.engine = _mk_engine()
@@ -533,17 +534,21 @@ class CascadeStopEntryTests(unittest.TestCase):
         )
         self.campaign.state = "TRENDLINE_ACTIVE"
         self.engine.campaigns[self.campaign.campaign_id] = self.campaign
-        # A fib whose L2 sits at 64,704.01 — the line in the user's screenshot.
-        leg = Leg(leg_id=1, trendline_id=1, low=64730.01, touch_high=64756.01, touch_timestamp=0)
-        leg.fib = FibLadder(high_anchor=64756.01, low_anchor=64730.01)
+        # Round anchors so the levels are easy to reason about:
+        #   L2 = 64,800   L4 = 64,600   L8 = 64,200
+        leg = Leg(leg_id=1, trendline_id=1, low=64900.0, touch_high=65000.0, touch_timestamp=0)
+        leg.fib = FibLadder(high_anchor=65000.0, low_anchor=64900.0)
         leg.pool_usd = 300.0
         leg.pool_total_usd = 300.0
         self.campaign.legs.append(leg)
         plan_leg_orders(self.campaign, leg)
         self.leg = leg
         self.l2 = leg.pending_orders[2]
+        self.l4 = leg.pending_orders[4]
         self.l8 = leg.pending_orders[8]
-        self.assertAlmostEqual(self.l2.price, 64704.01, places=2)
+        self.assertEqual([self.l2.price, self.l4.price, self.l8.price], [64800.0, 64600.0, 64200.0])
+        self.assertEqual([self.l2.usd_notional, self.l4.usd_notional], [60.0, 90.0])
+        self._last_close = 64810.0  # just above L2's line, where the fall starts
 
     def _candle(self, idx, o, h, low, c):
         """Drive the entry machinery in the order _process_candle does, without
@@ -552,98 +557,124 @@ class CascadeStopEntryTests(unittest.TestCase):
         the real candle path calls this."""
         candle = Candle(idx * 300, o, h, low, c)
         self.engine._candles_5m.setdefault(self.campaign.campaign_id, []).append(candle)
+        self.engine._advance_stop_entries(self.campaign, candle)
         if self.campaign.mode == "paper":
             self.engine._paper_fill_check(self.campaign, candle)
-        self.engine._advance_stop_entries(self.campaign, candle)
 
-    def _l2_fills(self):
-        return [f for f in self.campaign.all_fills if f.level == 2]
+    def _red(self, idx, close, opens=None):
+        """A red candle closing at `close`. Real candles open where the last one
+        closed, so the open defaults to the previous close — that continuity is
+        exactly what makes a trigger sitting on the last close delicate."""
+        prev = self._last_close if opens is None else opens
+        self._last_close = close
+        self._candle(idx, prev, prev + 2, close - 8, close)
 
-    def test_process_candle_drives_the_stop_machinery(self):
-        """The wiring: real candles through _process_candle must arm the stop."""
-        for idx, o, h, low, c in ((1, 64720.0, 64722.0, 64640.0, 64650.29), (2, 64650.0, 64655.0, 64520.0, 64545.00)):
-            _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
-        self.assertTrue(self.l2.armed)
-        self.assertAlmostEqual(self.l2.stop_price, 64650.29)
+    def _fills(self):
+        return [(f.level, round(f.price, 2)) for f in self.campaign.all_fills]
 
     def test_l8_still_rests_on_its_own_line(self):
         self.assertEqual(self.l8.entry_style, "limit")
         self.assertTrue(self.l8.armed)
-        self.assertAlmostEqual(self.l8.working_price, self.l8.price)
+        self.assertAlmostEqual(self.l8.working_price, 64200.0)
 
     def test_one_red_below_the_line_is_not_enough_to_place_anything(self):
         self.assertEqual(self.l2.entry_style, "stop")
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)  # first red under the line
+        self._red(1, 64750.0)
         self.assertFalse(self.l2.armed)
         self.assertIsNone(self.l2.stop_price)
-        self.assertAlmostEqual(self.l2.last_red_close, 64650.29)
+        self.assertAlmostEqual(self.l2.last_red_close, 64750.0)
 
-    def test_second_red_sets_the_stop_at_the_previous_red_close(self):
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64650.0, 64655.0, 64520.0, 64545.00)  # lower red confirms
+    def test_second_red_triggers_at_the_lowest_close_not_the_one_behind_it(self):
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
         self.assertTrue(self.l2.armed)
-        self.assertAlmostEqual(self.l2.stop_price, 64650.29)  # the PREVIOUS red's close
-        self.assertAlmostEqual(self.l2.limit_price, 64650.34)  # + 5 ticks
-        # The trigger must sit ABOVE where the market just closed — that is what
-        # makes it a buy stop rather than a limit that fills into the fall.
-        self.assertGreater(self.l2.stop_price, 64545.00)
-        self.assertEqual(self._l2_fills(), [])
+        self.assertAlmostEqual(self.l2.stop_price, 64700.0)  # the LOWEST close, not 64,750
+        self.assertAlmostEqual(self.l2.limit_price, 64700.05)  # + 5 ticks
+        self.assertEqual(self._fills(), [])
 
-    def test_a_deeper_fall_steps_the_stop_down_and_never_buys(self):
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64650.0, 64655.0, 64520.0, 64545.00)
-        self.assertAlmostEqual(self.l2.stop_price, 64650.29)
-        self._candle(3, 64545.0, 64548.0, 64400.0, 64420.00)  # keeps falling
-        self.assertAlmostEqual(self.l2.stop_price, 64545.00)
-        self._candle(4, 64420.0, 64425.0, 64300.0, 64310.00)
-        self.assertAlmostEqual(self.l2.stop_price, 64420.00)
-        # Straight down the whole way: the stop chased price without ever buying.
-        self.assertEqual(self._l2_fills(), [])
+    def test_the_stop_is_dragged_down_by_the_fall_and_never_buys_it(self):
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
+        self._red(3, 64650.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
+        self._red(4, 64620.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64620.0)
+        # Straight down the whole way: the stop tracked the low and bought none of it.
+        self.assertEqual(self._fills(), [])
 
-    def test_the_u_turn_is_what_fills_it(self):
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64650.0, 64655.0, 64520.0, 64545.00)
-        self.assertEqual(self._l2_fills(), [])
-        self._candle(3, 64545.0, 64700.0, 64540.0, 64690.00)  # U-turn back up through it
-        self.assertEqual(len(self._l2_fills()), 1)
-        self.assertAlmostEqual(self._l2_fills()[0].price, 64650.34)  # the limit cap
+    def test_the_u_turn_buys_at_the_lowest_red_close(self):
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
+        self._red(3, 64650.0)
+        self.assertEqual(self._fills(), [])
+        self._candle(4, 64650.0, 64720.0, 64645.0, 64715.0)  # turns back up through it
+        self.assertEqual(self._fills(), [(2, 64650.05)])
 
     def test_greens_are_ignored_entirely(self):
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64651.0, 64660.0, 64645.0, 64655.00)  # green: not counted
+        self._red(1, 64750.0)
+        self._candle(2, 64740.0, 64760.0, 64735.0, 64755.0)  # green: not counted
         self.assertIsNone(self.l2.stop_price)
-        self.assertAlmostEqual(self.l2.last_red_close, 64650.29)
-        self._candle(3, 64655.0, 64656.0, 64600.0, 64610.00)  # red, lower: pairs with #1
-        self.assertAlmostEqual(self.l2.stop_price, 64650.29)
+        self.assertAlmostEqual(self.l2.last_red_close, 64750.0)
+        self._red(3, 64700.0)  # red, lower: pairs with #1
+        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
 
     def test_a_red_that_closes_higher_does_not_count(self):
-        self._candle(1, 64720.0, 64722.0, 64600.0, 64620.00)
-        self._candle(2, 64700.0, 64701.0, 64615.0, 64680.00)  # red, but a HIGHER close
+        self._red(1, 64700.0)
+        self._red(2, 64740.0)  # red, but a HIGHER close
         self.assertIsNone(self.l2.stop_price)
-        self.assertAlmostEqual(self.l2.last_red_close, 64620.00)
+        self.assertAlmostEqual(self.l2.last_red_close, 64700.0)
 
     def test_the_stop_never_moves_back_up(self):
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64650.0, 64655.0, 64520.0, 64545.00)
-        self._candle(3, 64545.0, 64548.0, 64400.0, 64420.00)
-        self.assertAlmostEqual(self.l2.stop_price, 64545.00)
-        # A red that closes above the last one is ignored, so the stop holds.
-        self._candle(4, 64520.0, 64525.0, 64450.0, 64480.00)
-        self.assertAlmostEqual(self.l2.stop_price, 64545.00)
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
+        self._red(3, 64650.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
+        self._red(4, 64680.0)  # red, but above the last one: ignored
+        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
+
+    def test_crossing_l4_adds_its_money_without_restarting(self):
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
+        self.assertAlmostEqual(self.l2.usd_notional, 60.0)
+        self.assertTrue(self.l4.is_open)
+        self._red(3, 64550.0)  # closes under L4's 64,600 line
+        # L4 folds into the working order; the sequence carries straight on.
+        self.assertEqual(self.l4.status, "MERGED")
+        self.assertAlmostEqual(self.l4.usd_notional, 0.0)
+        self.assertAlmostEqual(self.l2.usd_notional, 150.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64550.0)  # stepped, not reset
+        self.assertAlmostEqual(self.l2.quantity, 150.0 / self.l2.limit_price)
+        self.assertEqual(self._fills(), [])
+
+    def test_the_merged_order_buys_the_whole_amount_on_the_turn(self):
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
+        self._red(3, 64550.0)
+        self._candle(4, 64550.0, 64620.0, 64545.0, 64615.0)  # U-turn
+        self.assertEqual(len(self.campaign.all_fills), 1)
+        fill = self.campaign.all_fills[0]
+        self.assertAlmostEqual(fill.price, 64550.05)
+        self.assertAlmostEqual(fill.price * fill.quantity, 150.0, places=2)
+
+    def test_l8_fills_on_its_own_line_independently(self):
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
+        self._candle(3, 64700.0, 64705.0, 64150.0, 64180.0)  # blows through L8
+        self.assertIn((8, 64200.0), self._fills())
 
     def test_stop_limit_gap_is_five_ticks_of_the_symbol(self):
-        self.campaign.tick_size = 0.01
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64650.0, 64655.0, 64520.0, 64545.00)
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
         self.assertAlmostEqual(self.l2.limit_price - self.l2.stop_price, 0.05, places=6)
 
     def test_live_step_down_recycles_the_order_for_replacement(self):
         self.campaign.mode = "live"
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64650.0, 64655.0, 64520.0, 64545.00)
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
         self.l2.status = "PLACED"
         self.l2.order_id = "9001"
-        self._candle(3, 64545.0, 64548.0, 64400.0, 64420.00)
+        self._red(3, 64650.0)
         # The resting stop must be released so the sync loop cancels it and
         # re-places it lower under a fresh client id.
         self.assertEqual(self.l2.status, "PENDING")
@@ -651,10 +682,22 @@ class CascadeStopEntryTests(unittest.TestCase):
         self.assertEqual(self.l2.rev, 1)
         self.assertTrue(self.l2.client_order_id.endswith("-2-1"))
 
-    def test_quantity_is_sized_off_the_limit_cap(self):
-        self._candle(1, 64720.0, 64722.0, 64640.0, 64650.29)
-        self._candle(2, 64650.0, 64655.0, 64520.0, 64545.00)
-        self.assertAlmostEqual(self.l2.quantity, self.l2.usd_notional / self.l2.limit_price)
+    def test_a_stop_at_or_below_market_is_held_back(self):
+        """Binance rejects a BUY stop that would trigger immediately (-2010)."""
+        self.campaign.mode = "live"
+        self._red(1, 64750.0)
+        self._red(2, 64700.0)
+        self.engine._price_cache["BTCUSDT"] = (64705.0, 0)  # market still above the trigger
+        self.assertFalse(self.engine._stop_is_placeable(self.campaign, self.l2))
+        self.engine._price_cache["BTCUSDT"] = (64690.0, 0)  # dropped back under it
+        self.assertTrue(self.engine._stop_is_placeable(self.campaign, self.l2))
+
+    def test_process_candle_drives_the_stop_machinery(self):
+        """The wiring: real candles through _process_candle must arm the stop."""
+        for idx, close in ((1, 64750.0), (2, 64700.0)):
+            _feed(self.engine, self.campaign, Candle(idx * 300, close + 40, close + 42, close - 8, close))
+        self.assertTrue(self.l2.armed)
+        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
 
 
 class CascadeClosedHistoryTests(unittest.TestCase):
