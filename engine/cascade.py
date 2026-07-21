@@ -106,7 +106,7 @@ MOTHER_RETEST_PCT = 0.0005
 MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 18  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 19  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -483,6 +483,18 @@ class Campaign:
     state: str = "WAITING_FIRST_DEPTH"
     cumulative_used_pct: float = 0.0
     carry_forward_usd: float = 0.0  # legacy: kept so older snapshots still load
+    # The running total. Price falling through a level moves that level's money
+    # in here; once it clears one rung the whole lot becomes a single buy stop,
+    # and the two-red-candle turn buys all of it at once.
+    pending_usd: float = 0.0
+    collected: List[list] = field(default_factory=list)  # [[leg_id, level, usd, price], ...]
+    pending_line: Optional[float] = None  # the level price that completed the total
+    pending_stop_price: Optional[float] = None
+    pending_limit_price: Optional[float] = None
+    pending_stop_ts: Optional[int] = None
+    pending_last_red: Optional[float] = None
+    pending_order_id: Optional[str] = None
+    pending_rev: int = 0
     trendlines: List[Trendline] = field(default_factory=list)
     legs: List[Leg] = field(default_factory=list)
     active_trendline_id: Optional[int] = None
@@ -589,6 +601,15 @@ class Campaign:
             "state": self.state,
             "cumulative_used_pct": self.cumulative_used_pct,
             "carry_forward_usd": self.carry_forward_usd,
+            "pending_rev": self.pending_rev,
+            "pending_order_id": self.pending_order_id,
+            "pending_last_red": self.pending_last_red,
+            "pending_stop_ts": self.pending_stop_ts,
+            "pending_limit_price": self.pending_limit_price,
+            "pending_stop_price": self.pending_stop_price,
+            "pending_line": self.pending_line,
+            "collected": self.collected,
+            "pending_usd": self.pending_usd,
             "trendlines": [tl.to_dict() for tl in self.trendlines],
             "legs": [leg.to_dict() for leg in self.legs],
             "active_trendline_id": self.active_trendline_id,
@@ -634,6 +655,15 @@ class Campaign:
             "state",
             "cumulative_used_pct",
             "carry_forward_usd",
+            "pending_usd",
+            "collected",
+            "pending_line",
+            "pending_stop_price",
+            "pending_limit_price",
+            "pending_stop_ts",
+            "pending_last_red",
+            "pending_order_id",
+            "pending_rev",
             "active_trendline_id",
             "avg_entry_price",
             "tp_price",
@@ -758,99 +788,44 @@ def rung_size_usd(campaign: Campaign) -> float:
 
 def replan_ladder(campaign: Campaign) -> None:
     """
-    Spread the campaign's money across ONE ladder built from every fib's levels,
-    ordered by price rather than by which fib they came from.
+    Give every level of every fib its own share of its own fib's pool: 20% at
+    level 2, 30% at level 4, 50% at level 8. That is all this does.
 
-    Fibs overlap. Fib 2's level 2 can easily sit between fib 1's level 4 and its
-    level 8, and treating each fib as its own private pool ignores that: it
-    piled everything a fib owned onto that fib's deepest rung, well past the
-    minimum it needed, while rungs price would reach first sat empty.
+    No level is ever short-changed for being too small, and no fib hands money
+    to another. A level's share can be sixty cents and that is fine — it is not
+    an order on its own. Orders come from the running total in
+    CascadeEngine._collect_crossed_levels: as price falls through the ladder,
+    each level it touches adds its money to a pot, and the moment the pot clears
+    one rung it becomes a single buy stop covering the lot.
 
-    So instead:
-
-    1. Every unfilled level of every fib becomes a rung on one ladder, ordered
-       by price.
-    2. Funding starts at the DEEPEST rung and works up. Each takes a standard
-       rung, and when the money runs out the shallow rungs are the ones left
-       empty. A rung that cannot be given a full one gets nothing, because a
-       part-rung is not placeable.
-    3. Anything left after every rung is covered is spread over them weighted by
-       level — 20/30/50 — so the deep end carries the most there too.
-
-    Deepest-first is the whole point of the strategy: the money is meant to buy
-    the cheapest prices the fall offers, so a scarce pool belongs at the bottom
-    of the ladder, not on the rung nearest the market.
-
-    There is no carry-forward between fibs any more. There is one pool, and it
-    is re-split from scratch whenever a fill spends part of it or a new fib adds
-    rungs, so the money always sits where the current ladder wants it.
+    That is what makes overlapping fibs work. Fib 2's level 8 at 77.08 and fib
+    3's level 4 at 77.07 are the same price to the market; price crossing that
+    point collects both, and $1.02 + $3.13 becomes one placeable order instead
+    of two that could never be placed.
     """
-    rung = rung_size_usd(campaign)
-    budget = max(campaign.total_allocation_usd - campaign.spent_usd, 0.0)
+    # Safety cap: allocation is a percentage of the fall, so it cannot normally
+    # outrun capital, but a manual pool or a restored snapshot could. Scale the
+    # whole ladder rather than starving one end of it.
+    committed = campaign.spent_usd + campaign.pending_usd
+    allocation = campaign.total_allocation_usd
+    room = max(campaign.capital_usd - committed, 0.0)
+    scale = min(1.0, room / allocation) if allocation > room > 0 else (0.0 if allocation > 0 and room <= 0 else 1.0)
 
-    rungs: List[tuple] = []
     for leg in campaign.legs:
         if leg.fib is None:
             continue
+        pool = max(_coerce_float(leg.pool_usd), 0.0) * scale
+        leg.pool_total_usd = pool
         for level in CASCADE_LEVELS:
             order = leg.pending_orders.get(level)
-            if order is None or order.status in SPENT_ORDER_STATES:
-                continue
+            if order is None or order.status not in {"PENDING", "UNFUNDED"}:
+                continue  # collected, bought or cancelled — its money has moved on
+            amount = round(pool * LEVEL_ALLOCATION[level], 2)
             price = _coerce_float(order.price) or max(leg.fib.level_price(level), 0.0)
-            if price <= 0:
-                continue
-            rungs.append((price, leg, level, order))
-    rungs.sort(key=lambda row: -row[0])
-
-    amounts: Dict[int, float] = {}
-    weights = [LEVEL_ALLOCATION[row[2]] for row in rungs]
-    total_weight = sum(weights) or 1.0
-    shares = [budget * w / total_weight for w in weights]
-
-    if rungs and min(shares) + 1e-9 >= rung:
-        # Plenty to go round: split it purely by weight so the 20/30/50 shape
-        # holds exactly, with no rung needing a top-up.
-        for row, share in zip(rungs, shares):
-            amounts[id(row[3])] = share
-    else:
-        # Short. Start at the DEEPEST rung and work up, handing each a full rung
-        # until the money runs out — the cheapest prices get covered and the
-        # shallow rungs go empty. A part-rung is not placeable, so a rung either
-        # gets the whole thing or nothing. Whatever survives that pass then
-        # shares any surplus, weighted deeper again.
-        funded: List[tuple] = []
-        remaining = budget
-        for row in reversed(rungs):
-            if remaining + 1e-9 < rung:
-                break
-            funded.append(row)
-            remaining -= rung
-        for row in funded:
-            amounts[id(row[3])] = rung
-        if funded and remaining > 0.01:
-            fw = [LEVEL_ALLOCATION[row[2]] for row in funded]
-            fw_total = sum(fw) or 1.0
-            for row, weight in zip(funded, fw):
-                amounts[id(row[3])] += remaining * weight / fw_total
-
-    for price, leg, level, order in rungs:
-        amount = round(amounts.get(id(order), 0.0), 2)
-        if abs(amount - _coerce_float(order.usd_notional)) < 0.01 and order.status != "UNFUNDED":
-            continue
-        if order.status == "PLACED" and order.order_id:
-            # The resting order is the wrong size now. Drop the id so the
-            # exchange sweep cancels it and a fresh one goes out at the new
-            # amount under a new client id.
-            order.order_id = None
-            order.rev += 1
-            order.client_order_id = f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-{order.rev}"
-        order.usd_notional = amount
-        order.quantity = amount / price if amount > 0 and price > 0 else 0.0
-        order.status = "PENDING" if amount > 0 else "UNFUNDED"
-        order.own_usd = min(amount, rung)
-        order.received = []
-        order.moved_usd = 0.0
-        order.moved_to_level = None
+            order.usd_notional = amount
+            order.quantity = amount / price if amount > 0 and price > 0 else 0.0
+            order.own_usd = amount
+            order.status = "PENDING" if amount > 0 else "UNFUNDED"
 
 
 # ── Engine ──────────────────────────────────────────────────────────
@@ -1189,6 +1164,11 @@ class CascadeEngine:
             payload["display_tp_price"] = compute_tp_price(campaign)
             payload["spent_usd"] = round(campaign.spent_usd, 2)
             payload["resting_usd"] = round(campaign.resting_usd, 2)
+            payload["pending_usd"] = round(campaign.pending_usd, 2)
+            payload["pending_line"] = campaign.pending_line
+            payload["pending_stop_price"] = campaign.pending_stop_price
+            payload["pending_limit_price"] = campaign.pending_limit_price
+            payload["rung_usd"] = rung_size_usd(campaign)
             price_meta = self._price_cache.get(campaign.symbol)
             last_price = price_meta[0] if price_meta else None
             payload["last_price"] = last_price
@@ -1703,6 +1683,9 @@ class CascadeEngine:
             # been filled — advancing first would hide that.
             if campaign.mode == "paper":
                 self._paper_fill_check(campaign, candle)
+            # Levels the candle reached hand their money to the running total,
+            # then the total's stop walks down with the fall.
+            self._collect_crossed_levels(campaign, candle)
             self._advance_stop_entries(campaign, candle)
 
     def _evaluate_cut(self, campaign: Campaign, candle: Candle) -> None:
@@ -1937,167 +1920,175 @@ class CascadeEngine:
     # ── fills / TP ───────────────────────────────────────────────
 
     def _paper_fill_check(self, campaign: Campaign, closed_5m: Candle) -> None:
-        candle_15m = self._fifteen_minute_candle(campaign, closed_5m)
-        for leg in campaign.open_legs:
-            for order in leg.pending_orders.values():
-                price = order.working_price
-                if not order.is_open or not price:
+        """A buy stop sits ABOVE the market and triggers on the way up. Fill at
+        the limit cap: the pessimistic end of the band it can execute in."""
+        if campaign.pending_stop_price is None or campaign.pending_usd <= 0:
+            return
+        # A candle that just set the stop is the fall continuing, not a turn —
+        # it owns the trigger and cannot also take it.
+        if campaign.pending_stop_ts is not None and closed_5m.timestamp <= campaign.pending_stop_ts:
+            return
+        if closed_5m.high >= campaign.pending_stop_price:
+            self._fill_pending(
+                campaign,
+                campaign.pending_limit_price or campaign.pending_stop_price,
+                closed_5m.timestamp,
+            )
+
+    def _collect_crossed_levels(self, campaign: Campaign, candle: Candle) -> None:
+        """Price reaching a level adds that level's money to the running total.
+
+        A level is not an order. It is a marker saying "this much belongs to
+        this price", and the market touching it is what puts the money in play.
+        Levels are collected shallowest first so the total builds in the order
+        price actually meets them.
+        """
+        crossed = []
+        for leg in campaign.legs:
+            for level, order in leg.pending_orders.items():
+                if order.status != "PENDING" or not order.price or order.usd_notional <= 0:
                     continue
-                probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
-                if probe is None:
-                    continue
-                # A candle that just set the stop is the fall continuing, not a
-                # turn — it owns the trigger and cannot also take it.
-                if order.stop_ts is not None and probe.timestamp <= order.stop_ts:
-                    continue
-                if order.entry_style == "stop":
-                    # A buy stop sits ABOVE the market and triggers on the way up.
-                    # Fill at the limit cap: the pessimistic end of the band the
-                    # order can actually execute in.
-                    if probe.high >= (order.stop_price or 0.0):
-                        self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
-                elif probe.low <= price:
-                    self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
+                if candle.low <= order.price:
+                    crossed.append((order.price, leg, level, order))
+        if not crossed:
+            return
+        crossed.sort(key=lambda row: -row[0])
+        rung = rung_size_usd(campaign)
+        for price, leg, level, order in crossed:
+            order.status = "COLLECTED"
+            campaign.pending_usd = round(campaign.pending_usd + order.usd_notional, 2)
+            campaign.collected.append([leg.leg_id, level, order.usd_notional, price])
+            if campaign.pending_line is None and campaign.pending_usd + 1e-9 >= rung:
+                # This is the level that made the total placeable. Two reds below
+                # THIS line arm the stop.
+                campaign.pending_line = price
+                self._log_event(
+                    campaign,
+                    "order",
+                    f"F{leg.leg_id} L{level} reached at {price:,.2f} — running total "
+                    f"${campaign.pending_usd:,.2f} clears the ${rung:,.2f} minimum. Waiting for "
+                    f"two red candles below {price:,.2f} to set the buy stop.",
+                )
+            else:
+                self._log_event(
+                    campaign,
+                    "level",
+                    f"F{leg.leg_id} L{level} reached at {price:,.2f} — +${order.usd_notional:,.2f}, "
+                    f"running total ${campaign.pending_usd:,.2f}"
+                    + ("" if campaign.pending_line else f" (needs ${rung:,.2f} to buy)"),
+                )
 
     def _advance_stop_entries(self, campaign: Campaign, closed_5m: Candle) -> None:
         """
-        Levels 2 and 4 go in as ONE working BUY STOP, not resting limits, and
-        the trigger sits at the close of the LOWEST red candle so far.
+        The running total goes in as ONE working BUY STOP, and the trigger sits
+        at the close of the previous red candle.
 
         That geometry is the whole idea. While the market keeps falling, each
         new red close drags the stop down with it and nothing fills; the order
         chases price down without ever buying into it. Only when the market
         U-turns and trades back up through that last red body does it trigger —
-        and because the trigger is the lowest close, that is the cheapest
-        confirmed entry the fall offered.
+        the cheapest confirmed entry the fall offered.
 
         Two reds under the line are needed before anything is placed: the first
         breaks the line, the second confirms the fall and puts the market below
         the trigger (a buy stop has to sit above the market to be a stop at
         all). Greens are ignored entirely, and a red closing higher than the
-        last one does not count, because price must be lower than the previous
-        candle.
+        last one does not count, because price must keep falling.
 
-        The ladder does NOT restart when the fall crosses a deeper level. L4's
-        money folds into the order already working and the sequence carries on
-        undisturbed — see _merge_stop_level.
-
-        The probe is the carrier's own timeframe, so a leg escalated to 15m
-        steps off 15m closes with no extra plumbing.
-
-        Every open fib steps independently. Each keeps its own carrier and its
-        own last-red memory, so fib 1's level 2 chases price down at the same
-        time fib 3's does, and both are live when the turn comes.
+        The fall crossing yet another level does not restart anything. That
+        level's money simply joins the total the working order already covers.
         """
-        for leg in campaign.open_legs:
-            self._advance_leg_stops(campaign, leg, closed_5m)
-
-    def _advance_leg_stops(self, campaign: Campaign, leg: Leg, closed_5m: Candle) -> None:
-        stops = [order for _, order in sorted(leg.pending_orders.items()) if order.entry_style == "stop"]
-        carrier = next((order for order in stops if order.is_open and order.price), None)
-        if carrier is None:
+        if campaign.pending_line is None or campaign.pending_usd <= 0:
             return
-        probe = closed_5m if carrier.timeframe == BASE_TIMEFRAME else self._fifteen_minute_candle(campaign, closed_5m)
-        if probe is None or probe.timestamp == carrier.stop_ts:
+        probe = closed_5m
+        if probe.timestamp == campaign.pending_stop_ts:
             return
         if probe.close >= probe.open:
             return  # only red candles act, before arming and after
-
-        # Deeper levels the fall has now passed hand their money to the order
-        # already working rather than opening a second front.
-        for order in stops:
-            if order is not carrier and order.is_open and order.price and probe.close < order.price:
-                self._merge_stop_level(campaign, carrier, order)
-
-        if probe.close >= carrier.price:
-            return  # the carrier's own line has not broken yet
-        if carrier.last_red_close is None:
-            carrier.last_red_close = probe.close
+        if probe.close >= campaign.pending_line:
+            return  # the line that completed the total has not broken yet
+        if campaign.pending_last_red is None:
+            campaign.pending_last_red = probe.close
             self._log_event(
                 campaign,
                 "order",
-                f"L{carrier.level} fib line {carrier.price:,.2f} broken at {probe.close:,.2f} — "
-                f"waiting for a second red {carrier.timeframe} candle to set the stop",
+                f"Line {campaign.pending_line:,.2f} broken at {probe.close:,.2f} — waiting for a "
+                f"second red candle to set the stop for ${campaign.pending_usd:,.2f}",
             )
             return
-        if probe.close >= carrier.last_red_close:
+        if probe.close >= campaign.pending_last_red:
             return  # not lower than the previous red — price must keep falling
         # The trigger is the PREVIOUS red close, one body back, so it sits ABOVE
         # where the market just closed. That is what makes it a stop rather than
         # a limit: the fall walks it down and only a turn back up takes it.
-        self._reprice_stop(campaign, carrier, carrier.last_red_close, probe)
-        carrier.last_red_close = probe.close
+        self._set_pending_stop(campaign, campaign.pending_last_red, probe)
+        campaign.pending_last_red = probe.close
 
-    def _merge_stop_level(self, campaign: Campaign, carrier: PendingOrder, donor: PendingOrder) -> None:
-        """Fold a deeper stop level's allocation into the order already working.
-        The cascade keeps running on one trigger instead of restarting."""
-        amount = _coerce_float(donor.usd_notional)
-        donor.usd_notional = 0.0
-        donor.quantity = 0.0
-        donor.status = "MERGED"
-        if amount <= 0:
-            return
-        carrier.usd_notional = round(carrier.usd_notional + amount, 2)
-        if carrier.limit_price:
-            carrier.quantity = carrier.usd_notional / carrier.limit_price
-        if carrier.status == "PLACED":
-            self._release_for_replacement(campaign, carrier)
-        self._log_event(
-            campaign,
-            "order",
-            f"Fell through L{donor.level} ({donor.price:,.2f}) — its ${amount:,.2f} joins the working "
-            f"L{carrier.level} buy stop, now ${carrier.usd_notional:,.2f}; sequence continues",
-        )
-
-    def _reprice_stop(self, campaign: Campaign, order: PendingOrder, trigger: float, probe: Candle) -> None:
-        first = order.stop_price is None
+    def _set_pending_stop(self, campaign: Campaign, trigger: float, probe: Candle) -> None:
         tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
-        order.stop_price = trigger
-        order.limit_price = trigger + STOP_LIMIT_OFFSET_TICKS * tick
-        order.stop_ts = probe.timestamp
-        if order.limit_price > 0:
-            order.quantity = order.usd_notional / order.limit_price
-        if order.status == "PLACED":
-            self._release_for_replacement(campaign, order)
+        stop = round(trigger, 8)
+        limit = round(trigger + STOP_LIMIT_OFFSET_TICKS * tick, 8)
+        first = campaign.pending_stop_price is None
+        if campaign.pending_order_id:
+            # The resting order is at the wrong trigger now; drop the id so the
+            # exchange sweep cancels it and a fresh one goes out.
+            campaign.pending_order_id = None
+        campaign.pending_rev += 1
+        campaign.pending_stop_price = stop
+        campaign.pending_limit_price = limit
+        campaign.pending_stop_ts = probe.timestamp
         self._log_event(
             campaign,
             "order",
-            f"L{order.level} buy stop {'armed' if first else 'stepped down'} at {trigger:,.2f} "
-            f"(limit {order.limit_price:,.2f}) — the lowest red close so far; "
-            f"buying only if price turns back up through it",
+            (
+                f"Buy stop set for ${campaign.pending_usd:,.2f}: trigger {stop:,.2f} / limit {limit:,.2f}"
+                if first
+                else f"Buy stop walked down to {stop:,.2f} / limit {limit:,.2f} " f"for ${campaign.pending_usd:,.2f}"
+            ),
         )
 
-    def _stop_is_placeable(self, campaign: Campaign, order: PendingOrder) -> bool:
-        """
-        A BUY stop has to sit above the market or Binance rejects it outright
-        (-2010, "order would immediately trigger"). The trigger is the last red
-        candle's close, so right after a close the market can still be sitting
-        on it. Hold the order back until price is genuinely below the trigger —
-        the next sync picks it up, and a market already above the trigger is one
-        that has turned up without us, which the next red close re-arms.
-        """
-        stop = _coerce_float(order.stop_price)
-        meta = self._price_cache.get(campaign.symbol)
-        last = meta[0] if meta else None
-        if stop <= 0 or not last:
-            return True  # no live price to judge by — let the exchange decide
-        if last < stop:
-            return True
+    def _fill_pending(self, campaign: Campaign, price: float, timestamp: int, order_id: str = "PAPER") -> None:
+        """The turn came: buy everything the fall collected, in one order."""
+        usd = campaign.pending_usd
+        if usd <= 0 or price <= 0:
+            return
+        qty = usd / price
+        levels = list(campaign.collected)
+        for leg_id, level, _usd, _price in levels:
+            leg = next((lg for lg in campaign.legs if lg.leg_id == leg_id), None)
+            order = leg.pending_orders.get(level) if leg else None
+            if order is not None:
+                order.status = "FILLED"
+                order.fill_price = price
+                order.fill_timestamp = timestamp
+                order.filled_qty = order.usd_notional / price if price else 0.0
+        deepest = min((row[3] for row in levels), default=price)
+        campaign.all_fills.append(
+            Fill(
+                price=price,
+                quantity=qty,
+                level=int(levels[-1][1]) if levels else 0,
+                leg_id=int(levels[-1][0]) if levels else 0,
+                timestamp=timestamp,
+                order_id=order_id,
+            )
+        )
+        recompute_avg_entry_price(campaign)
+        campaign.tp_price = compute_tp_price(campaign)
         self._log_event(
             campaign,
-            "warn",
-            f"L{order.level} buy stop {stop:,.2f} not placed — market is at {last:,.2f}, "
-            f"at or above the trigger; waiting for price to drop back under it",
+            "fill",
+            f"Bought ${usd:,.2f} at {price:,.2f} on the turn — {len(levels)} level(s) collected down to "
+            f"{deepest:,.2f} (avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
         )
-        return False
-
-    def _release_for_replacement(self, campaign: Campaign, order: PendingOrder) -> None:
-        """Drop our claim on a resting order so _sync_live_orders cancels it
-        (the id is no longer one of ours) and re-places it under a fresh id."""
-        order.status = "PENDING"
-        order.order_id = None
-        order.rev += 1
-        order.client_order_id = f"cf-csc-{campaign.campaign_id}-{order.leg_id}-{order.level}-{order.rev}"
+        campaign.pending_usd = 0.0
+        campaign.collected = []
+        campaign.pending_line = None
+        campaign.pending_stop_price = None
+        campaign.pending_limit_price = None
+        campaign.pending_stop_ts = None
+        campaign.pending_last_red = None
+        campaign.pending_order_id = None
 
     def _record_fill(
         self,
@@ -2370,56 +2361,32 @@ class CascadeEngine:
             return False
         changed = False
 
-        # 1) Ingest state changes for tracked entry orders, on every fib that
-        #    still has one — older ladders stay live alongside the newest.
-        for leg in campaign.legs:
-            for order in leg.pending_orders.values():
-                if order.order_id is None:
-                    continue
-                row = open_orders.get(str(order.order_id))
-                if row is not None:
-                    executed = _coerce_float(row.get("executedQty"))
-                    if executed > order.filled_qty + 1e-12:
-                        delta_qty = executed - order.filled_qty
-                        avg_price = _coerce_float(row.get("price"), order.working_price or order.price or 0.0)
-                        self._record_fill(
-                            campaign, leg, order, avg_price, int(time.time()), order.order_id, quantity=delta_qty
-                        )
-                        changed = True
-                    continue
-                status_row = await self._safe_get_order(campaign, order.order_id)
+        # 1) Ingest the accumulated buy stop if the exchange has moved it on.
+        if campaign.pending_order_id:
+            row = open_orders.get(str(campaign.pending_order_id))
+            if row is None:
+                status_row = await self._safe_get_order(campaign, campaign.pending_order_id)
                 status = str(status_row.get("status") or "").upper()
                 if status == "FILLED":
-                    executed = _coerce_float(status_row.get("executedQty"), order.quantity)
+                    executed = _coerce_float(status_row.get("executedQty"))
                     quote = _coerce_float(status_row.get("cummulativeQuoteQty"))
-                    avg_price = (
-                        quote / executed if executed > 0 and quote > 0 else (order.working_price or order.price or 0.0)
+                    price = (
+                        quote / executed
+                        if executed > 0 and quote > 0
+                        else (campaign.pending_limit_price or campaign.pending_stop_price or 0.0)
                     )
-                    delta_qty = max(executed - order.filled_qty, 0.0)
-                    if delta_qty > 0:
-                        self._record_fill(
-                            campaign, leg, order, avg_price, int(time.time()), order.order_id, quantity=delta_qty
-                        )
-                    order.status = "FILLED"
+                    self._fill_pending(campaign, price, int(time.time()), campaign.pending_order_id)
                     changed = True
                 elif status in {"CANCELED", "EXPIRED", "REJECTED"}:
-                    if order.status == "PLACED":
-                        order.status = "PENDING"  # externally cancelled: re-place below
-                        order.order_id = None
-                        order.rev += 1
-                        order.client_order_id = (
-                            f"cf-csc-{campaign.campaign_id}-{order.leg_id}-{order.level}-{order.rev}"
-                        )
-                        self._log_event(
-                            campaign, "warn", f"Entry order L{order.level} was cancelled on exchange; re-placing"
-                        )
-                        changed = True
+                    self._log_event(campaign, "warn", "The buy stop was cancelled on the exchange; re-placing")
+                    campaign.pending_order_id = None
+                    changed = True
 
-        # 2) Cancel stale placed orders (repriced) and place PENDING orders.
+        # 2) One accumulated buy stop, repriced as the fall walks it down.
         if campaign.state in ACTIVE_STATES:
-            # Every fib's ids count as known. Without that, an older ladder's
-            # perfectly good resting orders look like strays and get cancelled.
-            known_ids = {str(o.order_id) for lg in campaign.legs for o in lg.pending_orders.values() if o.order_id}
+            known_ids = set()
+            if campaign.pending_order_id:
+                known_ids.add(str(campaign.pending_order_id))
             if campaign.tp_order_id:
                 known_ids.add(str(campaign.tp_order_id))
             for order_id, row in open_orders.items():
@@ -2427,63 +2394,57 @@ class CascadeEngine:
                 if client_id.startswith(f"cf-csc-{campaign.campaign_id}-") and order_id not in known_ids:
                     await self._safe_cancel(campaign, order_id)
                     changed = True
-            for leg in campaign.legs:
-                for order in leg.pending_orders.values():
-                    if await self._place_entry_order(campaign, order):
-                        changed = True
+            if await self._place_pending_stop(campaign):
+                changed = True
 
         # 3) TP management.
         changed |= await self._sync_tp_order(campaign, open_orders)
         return changed
 
-    async def _place_entry_order(self, campaign: Campaign, order: PendingOrder) -> bool:
-        """Rest one PENDING entry on the exchange. Returns True if state moved."""
-        if order.status != "PENDING" or not order.price or order.usd_notional <= 0:
+    async def _place_pending_stop(self, campaign: Campaign) -> bool:
+        """Rest the accumulated buy on the exchange. One order, whatever the
+        fall has collected so far, at the trigger the last red set."""
+        if campaign.pending_order_id or campaign.pending_usd <= 0:
             return False
-        price = order.working_price
-        if not price:
-            return False  # stop entry not armed yet — nothing to rest on the exchange
-        is_stop = order.entry_style == "stop"
-        if is_stop and not self._stop_is_placeable(campaign, order):
-            return False
+        stop = campaign.pending_stop_price
+        limit = campaign.pending_limit_price
+        if not stop or not limit:
+            return False  # not armed: two reds have not printed below the line yet
+        last = self._price_cache.get(campaign.symbol) or {}
+        market = _coerce_float(last.get("price"))
+        if market and market >= stop:
+            return False  # a buy stop must sit above the market or it fires at once
+        client_id = f"cf-csc-{campaign.campaign_id}-buy-{campaign.pending_rev}"
         try:
             result = await asyncio.to_thread(
-                lambda o=order, p=price, st=is_stop: self.broker.place_order(
+                lambda: self.broker.place_order(
                     campaign.symbol,
-                    o.usd_notional,
+                    campaign.pending_usd,
                     "buy",
-                    order_type="stop_limit" if st else "limit_order",
-                    limit_price=p,
-                    stop_price=o.stop_price if st else None,
-                    client_order_id=o.client_order_id,
+                    order_type="stop_limit",
+                    limit_price=limit,
+                    stop_price=stop,
+                    client_order_id=client_id,
                 )
             )
         except Exception as exc:
             result = {"error": str(exc)}
         if isinstance(result, dict) and not result.get("error"):
-            order.order_id = str(result.get("orderId") or result.get("id") or "")
-            order.status = "PLACED"
+            campaign.pending_order_id = str(result.get("orderId") or result.get("id") or "")
             self._log_event(
                 campaign,
                 "order",
-                (
-                    f"Fib {order.leg_id} L{order.level} buy stop placed ${order.usd_notional:g} "
-                    f"trigger {order.stop_price:,.2f} / limit {price:,.2f} (fib line {order.price:,.2f})"
-                    if is_stop
-                    else f"Fib {order.leg_id} L{order.level} limit buy placed ${order.usd_notional:g} @ {price:,.2f}"
-                ),
+                f"Buy stop placed: ${campaign.pending_usd:,.2f}, trigger {stop:,.2f} / limit {limit:,.2f}",
             )
             return True
         error = (result or {}).get("error") if isinstance(result, dict) else "unknown error"
-        if await self._recover_order_by_client_id(campaign, order):
-            return True
-        self._log_event(campaign, "error", f"Failed to place fib {order.leg_id} L{order.level} buy: {error}")
+        self._log_event(campaign, "error", f"Failed to place the buy stop: {error}")
         self._alert(
             "Cascade order FAILED",
             f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
-            f"Fib {order.leg_id} level {order.level}, ${order.usd_notional:,.2f} at {price:,.2f}\n"
+            f"${campaign.pending_usd:,.2f} buy stop at {stop:,.2f}\n"
             f"Binance said: {error}\n\n"
-            f"The level is unarmed until this succeeds.",
+            f"The collected money is unarmed until this succeeds.",
             level="error",
             dedupe_sec=300,
         )

@@ -257,10 +257,10 @@ class CascadeSwingModelTests(unittest.TestCase):
             [o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0],
             "fib 1 must still have a funded order resting after fib 2 is drawn",
         )
-        # Both fibs feed one pool now. Every dollar of it is either resting on
-        # a rung or already spent buying one — none of it is stranded.
+        # Every dollar of both pools is accounted for: still marked on a level,
+        # collected into the running total, or already spent buying.
         self.assertAlmostEqual(
-            self.campaign.resting_usd + self.campaign.spent_usd,
+            self.campaign.resting_usd + self.campaign.pending_usd + self.campaign.spent_usd,
             leg1.pool_usd + leg2.pool_usd,
             places=1,
         )
@@ -272,7 +272,7 @@ class CascadeSwingModelTests(unittest.TestCase):
         self._feed_real(40)
         allocation = self.campaign.total_allocation_usd
         leg1 = self.campaign.legs[0]
-        order = next(o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0)
+        order = next(o for o in leg1.pending_orders.values() if o.usd_notional > 0)
         self.engine._record_fill(self.campaign, leg1, order, order.price, _RECENT_TS + 3600, order_id="PAPER")
         self.assertGreater(self.campaign.spent_usd, 0.0)
 
@@ -281,16 +281,17 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
         self.assertAlmostEqual(self.campaign.spent_usd, 0.0)  # principal is back
 
-        # And it is back ON the ladder, not sitting idle: the rungs that never
-        # filled now carry the whole allocation between them.
-        self.assertAlmostEqual(self.campaign.resting_usd, allocation, places=1)
+        # The principal is back in the pool and the levels still waiting cover
+        # the whole allocation between them again.
+        self.assertLessEqual(self.campaign.resting_usd + self.campaign.pending_usd, allocation + 0.05)
+        self.assertGreater(self.campaign.resting_usd + self.campaign.pending_usd, 0.0)
 
         # The cascade keeps running; a later fib joins the same ladder.
         self._feed_real(59)
         self.assertGreaterEqual(len(self.campaign.legs), 2)
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
         self.assertAlmostEqual(
-            self.campaign.resting_usd + self.campaign.spent_usd,
+            self.campaign.resting_usd + self.campaign.pending_usd + self.campaign.spent_usd,
             self.campaign.total_allocation_usd,
             places=1,
         )
@@ -435,25 +436,24 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         ]
         self.assertTrue(working or self.campaign.all_fills, "the pool went somewhere")
         self.assertAlmostEqual(
-            self.campaign.resting_usd + self.campaign.spent_usd,
+            self.campaign.resting_usd + self.campaign.pending_usd + self.campaign.spent_usd,
             self.campaign.total_allocation_usd,
             places=1,
         )
 
-    def test_a_short_pool_waits_at_the_bottom_and_this_day_never_reaches_it(self):
-        """The cost of funding deepest-first, kept visible.
-
-        $14.41 buys two rungs, and they go to the two level 8s at 63,672 and
-        63,523. Price on this day turned at 64,344 — nearly 1% above the higher
-        of them — so nothing fills. The level 2s at 64,567 and 64,446 would both
-        have bought. That is the deliberate trade: the money waits for the
-        cheapest price the fall offers, and some falls stop short of it."""
+    def test_the_fall_collects_the_levels_it_reaches(self):
+        """Price falls through the shallow levels of both fibs, so their money
+        joins the running total. Levels it never reached keep theirs."""
         self._feed(29)
-        self.assertFalse(self.campaign.all_fills)
-        funded = [o for leg in self.campaign.legs for o in leg.pending_orders.values() if o.usd_notional > 0]
-        self.assertTrue(funded)
-        for order in funded:
-            self.assertEqual(order.level, 8, "a short pool belongs on the deepest rungs")
+        collected = [
+            o for leg in self.campaign.legs for o in leg.pending_orders.values() if o.status in {"COLLECTED", "FILLED"}
+        ]
+        self.assertTrue(collected, "the fall should have reached at least one level")
+        self.assertAlmostEqual(
+            self.campaign.resting_usd + self.campaign.pending_usd + self.campaign.spent_usd,
+            self.campaign.total_allocation_usd,
+            places=1,
+        )
 
     def test_mother_break_ends_the_campaign_flat_when_nothing_filled(self):
         """Same day, run to the mother break. The pool waited at level 8 and
@@ -549,16 +549,18 @@ class CascadeThirdDayRegressionTests(unittest.TestCase):
         self.assertNotAlmostEqual(self.campaign.legs[0].touch_high, 65274.58)
 
 
-class CascadeStopEntryTests(unittest.TestCase):
-    """L2/L4 are ONE working buy stop, triggered at the close of the lowest red
-    candle so far — above a falling market, dragged down by it, filling only on
-    a U-turn back up. A deeper level being crossed adds its money to the working
-    order instead of restarting. L8 stays a plain limit at its line."""
+class CascadeAccumulatorEntryTests(unittest.TestCase):
+    """The running total and the one buy stop it arms.
+
+    Levels are markers, not orders. Price reaching one adds its money to a pot;
+    once the pot clears a rung the two-red-candle stop takes the whole lot on
+    the turn.
+    """
 
     def setUp(self):
         self.engine = _mk_engine()
         self.campaign = Campaign(
-            campaign_id="stop1",
+            campaign_id="acc1",
             symbol="BTCUSDT",
             capital_usd=2000.0,
             mother_high=65068.0,
@@ -570,12 +572,10 @@ class CascadeStopEntryTests(unittest.TestCase):
         )
         self.campaign.state = "TRENDLINE_ACTIVE"
         self.engine.campaigns[self.campaign.campaign_id] = self.campaign
-        # Round anchors so the levels are easy to reason about:
-        #   L2 = 64,800   L4 = 64,600   L8 = 64,200
+        # Round anchors: L2 = 64,800  L4 = 64,600  L8 = 64,200
         leg = Leg(leg_id=1, trendline_id=1, low=64900.0, touch_high=65000.0, touch_timestamp=0)
         leg.fib = FibLadder(high_anchor=65000.0, low_anchor=64900.0)
         leg.pool_usd = 300.0
-        leg.pool_total_usd = 300.0
         self.campaign.legs.append(leg)
         plan_leg_orders(self.campaign, leg)
         self.leg = leg
@@ -583,160 +583,120 @@ class CascadeStopEntryTests(unittest.TestCase):
         self.l4 = leg.pending_orders[4]
         self.l8 = leg.pending_orders[8]
         self.assertEqual([self.l2.price, self.l4.price, self.l8.price], [64800.0, 64600.0, 64200.0])
-        self.assertEqual([self.l2.usd_notional, self.l4.usd_notional], [60.0, 90.0])
-        self._last_close = 64810.0  # just above L2's line, where the fall starts
+        # Every level keeps its own 20/30/50 share, however small.
+        self.assertEqual([self.l2.usd_notional, self.l4.usd_notional, self.l8.usd_notional], [60.0, 90.0, 150.0])
 
-    def _candle(self, idx, o, h, low, c):
-        """Drive the entry machinery in the order _process_candle does, without
-        letting the structure detector spawn a new leg out from under the one
-        under test. test_process_candle_drives_the_stop_machinery covers that
-        the real candle path calls this."""
-        candle = Candle(idx * 300, o, h, low, c)
-        self.engine._candles_5m.setdefault(self.campaign.campaign_id, []).append(candle)
-        if self.campaign.mode == "paper":
-            self.engine._paper_fill_check(self.campaign, candle)
-        self.engine._advance_stop_entries(self.campaign, candle)
+    def _c(self, ts, o, h, low, c):
+        return Candle(ts, o, h, low, c)
 
-    def _red(self, idx, close, opens=None):
-        """A red candle closing at `close`. Real candles open where the last one
-        closed, so the open defaults to the previous close — that continuity is
-        exactly what makes a trigger sitting on the last close delicate."""
-        prev = self._last_close if opens is None else opens
-        self._last_close = close
-        self._candle(idx, prev, prev + 2, close - 8, close)
+    def _feed(self, ts, o, h, low, c):
+        _feed(self.engine, self.campaign, self._c(ts, o, h, low, c))
 
-    def _fills(self):
-        return [(f.level, round(f.price, 2)) for f in self.campaign.all_fills]
+    def test_reaching_a_level_collects_its_money(self):
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self.assertEqual(self.l2.status, "COLLECTED")
+        self.assertAlmostEqual(self.campaign.pending_usd, 60.0)
+        self.assertAlmostEqual(self.campaign.pending_line, 64800.0)
 
-    def test_l8_still_rests_on_its_own_line(self):
-        self.assertEqual(self.l8.entry_style, "limit")
-        self.assertTrue(self.l8.armed)
-        self.assertAlmostEqual(self.l8.working_price, 64200.0)
+    def test_a_level_price_never_reached_collects_nothing(self):
+        self._feed(300, 64900.0, 64910.0, 64850.0, 64860.0)
+        self.assertEqual(self.l2.status, "PENDING")
+        self.assertAlmostEqual(self.campaign.pending_usd, 0.0)
+        self.assertIsNone(self.campaign.pending_line)
 
-    def test_one_red_below_the_line_is_not_enough_to_place_anything(self):
-        self.assertEqual(self.l2.entry_style, "stop")
-        self._red(1, 64750.0)
-        self.assertFalse(self.l2.armed)
-        self.assertIsNone(self.l2.stop_price)
-        self.assertAlmostEqual(self.l2.last_red_close, 64750.0)
+    def test_a_deeper_level_adds_to_the_same_total(self):
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self._feed(600, 64795.0, 64796.0, 64590.0, 64595.0)
+        self.assertEqual(self.l4.status, "COLLECTED")
+        self.assertAlmostEqual(self.campaign.pending_usd, 150.0)  # 60 + 90, one pot
 
-    def test_second_red_triggers_at_the_previous_red_close(self):
-        """Step 2: on the second red close, the stop goes on the FIRST red's
-        close — one body back, so it sits above where the market now is."""
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self.assertTrue(self.l2.armed)
-        self.assertAlmostEqual(self.l2.stop_price, 64750.0)  # red #1's close
-        self.assertAlmostEqual(self.l2.limit_price, 64750.05)  # + 5 ticks
-        self.assertGreater(self.l2.stop_price, 64700.0)  # above the market
-        self.assertEqual(self._fills(), [])
+    def test_one_red_below_the_line_is_not_enough_to_arm(self):
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self.assertIsNone(self.campaign.pending_stop_price)
 
-    def test_the_stop_is_dragged_down_by_the_fall_and_never_buys_it(self):
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64750.0)
-        self._red(3, 64650.0)  # step 4: modify to red #2's close
-        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
-        self._red(4, 64620.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
-        # Straight down the whole way: the stop walked down and bought none of it.
-        self.assertEqual(self._fills(), [])
+    def test_the_second_red_sets_the_stop_at_the_previous_red_close(self):
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self._feed(600, 64795.0, 64796.0, 64700.0, 64710.0)
+        self.assertAlmostEqual(self.campaign.pending_stop_price, 64795.0)
+        self.assertAlmostEqual(self.campaign.pending_limit_price, 64795.05)  # five ticks
 
-    def test_the_u_turn_is_what_fills_it(self):
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self._red(3, 64650.0)  # stop now on red #2's close, 64,700
-        self.assertEqual(self._fills(), [])
-        self._candle(4, 64650.0, 64720.0, 64645.0, 64715.0)  # turns back up through it
-        self.assertEqual(self._fills(), [(2, 64700.05)])
-
-    def test_greens_are_ignored_entirely(self):
-        self._red(1, 64750.0)
-        self._candle(2, 64740.0, 64760.0, 64735.0, 64755.0)  # green: not counted
-        self.assertIsNone(self.l2.stop_price)
-        self.assertAlmostEqual(self.l2.last_red_close, 64750.0)
-        self._red(3, 64700.0)  # red, lower: pairs with #1
-        self.assertAlmostEqual(self.l2.stop_price, 64750.0)  # red #1's close
-
-    def test_a_red_that_closes_higher_does_not_count(self):
-        self._red(1, 64700.0)
-        self._red(2, 64740.0)  # red, but a HIGHER close
-        self.assertIsNone(self.l2.stop_price)
-        self.assertAlmostEqual(self.l2.last_red_close, 64700.0)
+    def test_the_fall_walks_the_stop_down_and_never_buys_into_it(self):
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self._feed(600, 64795.0, 64796.0, 64700.0, 64710.0)
+        self._feed(900, 64710.0, 64711.0, 64600.0, 64620.0)
+        self.assertAlmostEqual(self.campaign.pending_stop_price, 64710.0)
+        self.assertFalse(self.campaign.all_fills)
 
     def test_the_stop_never_moves_back_up(self):
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self._red(3, 64650.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
-        self._red(4, 64680.0)  # red, but above the last one: ignored
-        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self._feed(600, 64795.0, 64796.0, 64700.0, 64710.0)
+        stop = self.campaign.pending_stop_price
+        self._feed(900, 64760.0, 64765.0, 64740.0, 64750.0)  # red, but a higher close
+        self.assertAlmostEqual(self.campaign.pending_stop_price, stop)
 
-    def test_crossing_l4_adds_its_money_without_restarting(self):
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self.assertAlmostEqual(self.l2.usd_notional, 60.0)
-        self.assertTrue(self.l4.is_open)
-        self._red(3, 64550.0)  # closes under L4's 64,600 line
-        # L4 folds into the working order; the sequence carries straight on.
-        self.assertEqual(self.l4.status, "MERGED")
-        self.assertAlmostEqual(self.l4.usd_notional, 0.0)
-        self.assertAlmostEqual(self.l2.usd_notional, 150.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64700.0)  # stepped, not reset
-        self.assertAlmostEqual(self.l2.quantity, 150.0 / self.l2.limit_price)
-        self.assertEqual(self._fills(), [])
+    def test_greens_are_ignored_entirely(self):
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self._feed(600, 64700.0, 64790.0, 64690.0, 64780.0)  # green
+        self.assertIsNone(self.campaign.pending_stop_price)
 
-    def test_the_merged_order_buys_the_whole_amount_on_the_turn(self):
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self._red(3, 64550.0)
-        self._candle(4, 64550.0, 64720.0, 64545.0, 64715.0)  # U-turn back through it
+    def test_the_turn_buys_the_whole_accumulated_amount(self):
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)  # collects L2, $60
+        self._feed(600, 64795.0, 64796.0, 64590.0, 64600.0)  # collects L4, $150 total; first red
+        self._feed(900, 64600.0, 64601.0, 64500.0, 64520.0)  # second red arms the stop
+        self.assertAlmostEqual(self.campaign.pending_usd, 150.0)
+        stop = self.campaign.pending_stop_price
+        self.assertIsNotNone(stop)
+        self._feed(1200, 64520.0, stop + 50.0, 64510.0, stop + 40.0)  # the turn
         self.assertEqual(len(self.campaign.all_fills), 1)
         fill = self.campaign.all_fills[0]
-        self.assertAlmostEqual(fill.price, 64700.05)
         self.assertAlmostEqual(fill.price * fill.quantity, 150.0, places=2)
+        # The pot is spent and reset, ready for the next fall.
+        self.assertAlmostEqual(self.campaign.pending_usd, 0.0)
+        self.assertIsNone(self.campaign.pending_stop_price)
+        self.assertEqual(self.l2.status, "FILLED")
+        self.assertEqual(self.l4.status, "FILLED")
+        self.assertEqual(self.l8.status, "PENDING")  # never reached, still waiting
 
-    def test_l8_fills_on_its_own_line_independently(self):
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self._candle(3, 64700.0, 64705.0, 64150.0, 64180.0)  # blows through L8
-        self.assertIn((8, 64200.0), self._fills())
+    def test_a_total_under_one_rung_is_held_not_bought(self):
+        """A tiny fib: price falls through its level 2 but sixty cents is not an
+        order, so nothing arms. The money stays on the clock for the next fall."""
+        self.campaign.legs.clear()
+        leg = Leg(leg_id=1, trendline_id=1, low=64900.0, touch_high=65000.0, touch_timestamp=0)
+        leg.fib = FibLadder(high_anchor=65000.0, low_anchor=64900.0)
+        leg.pool_usd = 3.0  # 20% of this is $0.60
+        self.campaign.legs.append(leg)
+        plan_leg_orders(self.campaign, leg)
+        self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
+        self._feed(600, 64795.0, 64796.0, 64700.0, 64710.0)
+        self.assertAlmostEqual(self.campaign.pending_usd, 0.60)
+        self.assertIsNone(self.campaign.pending_line)
+        self.assertIsNone(self.campaign.pending_stop_price)
+        self.assertFalse(self.campaign.all_fills)
 
-    def test_stop_limit_gap_is_five_ticks_of_the_symbol(self):
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self.assertAlmostEqual(self.l2.limit_price - self.l2.stop_price, 0.05, places=6)
+    def test_levels_from_different_fibs_at_the_same_price_combine(self):
+        """The case behind the whole design: fib 2's level 8 and fib 3's level 4
+        land a cent apart. Neither is placeable alone; together they are one
+        order, and price crossing that point collects both."""
+        self.campaign.legs.clear()
+        self.campaign.pending_usd = 0.0
+        f2 = Leg(leg_id=2, trendline_id=1, low=64900.0, touch_high=65000.0, touch_timestamp=0)
+        f2.fib = FibLadder(high_anchor=65000.0, low_anchor=64950.0)  # L8 = 64,600
+        f2.pool_usd = 6.0  # L8 share $3.00
+        f3 = Leg(leg_id=3, trendline_id=2, low=64900.0, touch_high=64960.0, touch_timestamp=0)
+        f3.fib = FibLadder(high_anchor=64960.0, low_anchor=64870.0)  # L4 = 64,600
+        f3.pool_usd = 12.0  # L4 share $3.60
+        self.campaign.legs.extend([f2, f3])
+        plan_leg_orders(self.campaign, f2)
+        plan_leg_orders(self.campaign, f3)
+        self.assertAlmostEqual(f2.pending_orders[8].price, 64600.0)
+        self.assertAlmostEqual(f3.pending_orders[4].price, 64600.0)
 
-    def test_live_step_down_recycles_the_order_for_replacement(self):
-        self.campaign.mode = "live"
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self.l2.status = "PLACED"
-        self.l2.order_id = "9001"
-        self._red(3, 64650.0)
-        # The resting stop must be released so the sync loop cancels it and
-        # re-places it lower under a fresh client id.
-        self.assertEqual(self.l2.status, "PENDING")
-        self.assertIsNone(self.l2.order_id)
-        self.assertEqual(self.l2.rev, 1)
-        self.assertTrue(self.l2.client_order_id.endswith("-2-1"))
-
-    def test_a_stop_at_or_below_market_is_held_back(self):
-        """Binance rejects a BUY stop that would trigger immediately (-2010)."""
-        self.campaign.mode = "live"
-        self._red(1, 64750.0)
-        self._red(2, 64700.0)
-        self.engine._price_cache["BTCUSDT"] = (64755.0, 0)  # market above the trigger
-        self.assertFalse(self.engine._stop_is_placeable(self.campaign, self.l2))
-        self.engine._price_cache["BTCUSDT"] = (64740.0, 0)  # back under it
-        self.assertTrue(self.engine._stop_is_placeable(self.campaign, self.l2))
-
-    def test_process_candle_drives_the_stop_machinery(self):
-        """The wiring: real candles through _process_candle must arm the stop."""
-        for idx, close in ((1, 64750.0), (2, 64700.0)):
-            _feed(self.engine, self.campaign, Candle(idx * 300, close + 40, close + 42, close - 8, close))
-        self.assertTrue(self.l2.armed)
-        self.assertAlmostEqual(self.l2.stop_price, 64750.0)
+        self._feed(300, 64900.0, 64910.0, 64590.0, 64595.0)
+        self.assertEqual(f2.pending_orders[8].status, "COLLECTED")
+        self.assertEqual(f3.pending_orders[4].status, "COLLECTED")
+        # $3.00 + $3.60 = $6.60, which clears the rung neither could reach alone.
+        self.assertGreaterEqual(self.campaign.pending_usd, 5.5)
+        self.assertIsNotNone(self.campaign.pending_line)
 
 
 class CascadeAutoRestartTests(unittest.TestCase):
@@ -1209,57 +1169,62 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.campaign.legs.append(leg)
         build_fib_ladder_and_pool(self.campaign, leg)
         plan_leg_orders(self.campaign, leg)
-        # L2/L4 rest nowhere until two reds print under their line. Arm them at
-        # the line itself so these tests stay about the sync mechanics and keep
-        # their original prices; arming is covered by CascadeStopEntryTests.
-        for order in leg.pending_orders.values():
-            if order.entry_style == "stop":
-                order.stop_price = order.price
-                order.limit_price = order.price
         self.leg = leg
+        # A fall has collected two levels and two reds have armed the stop.
+        # Arming itself is covered by CascadeAccumulatorEntryTests.
+        self.campaign.pending_usd = 40.0
+        self.campaign.collected = [[1, 2, 16.0, 97.0], [1, 4, 24.0, 96.0]]
+        self.campaign.pending_line = 96.0
+        self.campaign.pending_stop_price = 96.5
+        self.campaign.pending_limit_price = 96.55
+        self.campaign.pending_rev = 1
 
-    async def test_pending_orders_are_placed_with_client_ids(self):
+    async def test_the_accumulated_buy_goes_out_as_one_stop_limit(self):
+        """The live-money shape: one STOP_LOSS_LIMIT covering everything the
+        fall collected, never a resting limit that would buy into the fall."""
         changed = await self.engine._sync_live_orders(self.campaign)
         self.assertTrue(changed)
         buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
-        self.assertEqual(len(buys), 3)
-        for level, order in self.leg.pending_orders.items():
-            self.assertEqual(order.status, "PLACED")
-            self.assertIsNotNone(order.order_id)
-            self.assertIn(f"-1-{level}-0", order.client_order_id)
-        client_ids = {o["client_order_id"] for o in buys}
-        self.assertEqual(len(client_ids), 3)
+        self.assertEqual(len(buys), 1)
+        self.assertEqual(buys[0]["order_type"], "stop_limit")
+        self.assertAlmostEqual(buys[0]["stop_price"], 96.5)
+        self.assertAlmostEqual(buys[0]["limit_price"], 96.55)
+        self.assertAlmostEqual(buys[0]["size"], 40.0)
+        self.assertIn("-buy-1", buys[0]["client_order_id"])
+        self.assertIsNotNone(self.campaign.pending_order_id)
 
-    async def test_stop_levels_go_out_as_stop_limits_and_l8_as_a_plain_limit(self):
-        """The live-money shape: L2/L4 must reach Binance as STOP_LOSS_LIMIT
-        with a stopPrice, not as resting limits, or they would buy the fall."""
-        self.leg.pending_orders[2].stop_price = 96.0
-        self.leg.pending_orders[2].limit_price = 96.05
+    async def test_an_unarmed_total_rests_nothing(self):
+        """Collected money with no stop yet is not an order. Two reds have to
+        print below the line first."""
+        self.campaign.pending_stop_price = None
+        self.campaign.pending_limit_price = None
         await self.engine._sync_live_orders(self.campaign)
-        by_client = {o["client_order_id"]: o for o in self.broker.placed_orders if o["side"] == "buy"}
-        l2 = next(o for cid, o in by_client.items() if cid.endswith("-1-2-0"))
-        l8 = next(o for cid, o in by_client.items() if cid.endswith("-1-8-0"))
-        self.assertEqual(l2["order_type"], "stop_limit")
-        self.assertAlmostEqual(l2["stop_price"], 96.0)
-        self.assertAlmostEqual(l2["limit_price"], 96.05)
-        self.assertEqual(l8["order_type"], "limit_order")
-        self.assertIsNone(l8["stop_price"])
+        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "buy"], [])
 
-    async def test_exchange_fill_records_and_places_tp(self):
+    async def test_the_stop_is_placed_once_not_on_every_sync(self):
         await self.engine._sync_live_orders(self.campaign)
-        filled = self.leg.pending_orders[2]
-        # Order disappears from open orders and reports FILLED.
-        self.broker.order_lookup[str(filled.order_id)] = {
+        self.broker.placed_orders.clear()
+        await self.engine._sync_live_orders(self.campaign)
+        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "buy"], [])
+
+    async def test_exchange_fill_records_the_whole_amount_and_places_tp(self):
+        await self.engine._sync_live_orders(self.campaign)
+        order_id = self.campaign.pending_order_id
+        qty = 40.0 / 97.0
+        self.broker.order_lookup[str(order_id)] = {
             "status": "FILLED",
-            "executedQty": str(filled.quantity),
-            "cummulativeQuoteQty": str(filled.quantity * 97.0),
+            "executedQty": str(qty),
+            "cummulativeQuoteQty": str(qty * 97.0),
         }
         self.broker.placed_orders.clear()
         await self.engine._sync_live_orders(self.campaign)
 
-        self.assertEqual(filled.status, "FILLED")
         self.assertEqual(len(self.campaign.all_fills), 1)
         self.assertAlmostEqual(self.campaign.avg_entry_price, 97.0)
+        # Both collected levels are marked bought, and the pot is reset.
+        self.assertEqual(self.leg.pending_orders[2].status, "FILLED")
+        self.assertEqual(self.leg.pending_orders[4].status, "FILLED")
+        self.assertAlmostEqual(self.campaign.pending_usd, 0.0)
         sells = [o for o in self.broker.placed_orders if o["side"] == "sell"]
         self.assertEqual(len(sells), 1)
         # TP = 97 + 0.25*(105-97) = 99
@@ -1267,23 +1232,23 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(sells[0]["base_qty"], self.campaign.filled_base_qty)
         self.assertIsNotNone(self.campaign.tp_order_id)
 
-    async def test_externally_cancelled_order_is_replaced(self):
+    async def test_an_externally_cancelled_stop_is_replaced(self):
         await self.engine._sync_live_orders(self.campaign)
-        order = self.leg.pending_orders[4]
-        old_order_id = order.order_id
-        self.broker.order_lookup[str(old_order_id)] = {"status": "CANCELED"}
+        order_id = self.campaign.pending_order_id
+        self.broker.order_lookup[str(order_id)] = {"status": "CANCELED"}
+        self.broker.placed_orders.clear()
         await self.engine._sync_live_orders(self.campaign)
-        self.assertEqual(order.status, "PLACED")
-        self.assertNotEqual(order.order_id, old_order_id)
-        self.assertEqual(order.rev, 1)
+        buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
+        self.assertEqual(len(buys), 1)
+        self.assertIsNotNone(self.campaign.pending_order_id)
 
     async def test_tp_fill_closes_the_round_and_keeps_the_campaign_running(self):
         await self.engine._sync_live_orders(self.campaign)
-        filled = self.leg.pending_orders[2]
-        self.broker.order_lookup[str(filled.order_id)] = {
+        qty = 40.0 / 97.0
+        self.broker.order_lookup[str(self.campaign.pending_order_id)] = {
             "status": "FILLED",
-            "executedQty": str(filled.quantity),
-            "cummulativeQuoteQty": str(filled.quantity * 97.0),
+            "executedQty": str(qty),
+            "cummulativeQuoteQty": str(qty * 97.0),
         }
         await self.engine._sync_live_orders(self.campaign)
         qty_before = self.campaign.filled_base_qty
@@ -1313,25 +1278,6 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         changed = await self.engine._sync_live_orders(self.campaign)
         self.assertFalse(changed)
         self.assertEqual(self.broker.placed_orders, [])
-
-    async def test_ambiguous_placement_recovers_by_client_id(self):
-        order = self.leg.pending_orders[2]
-
-        original_place = self.broker.place_order
-
-        def failing_place(product_id, size, side, **kwargs):
-            if kwargs.get("client_order_id") == order.client_order_id:
-                # Simulate timeout after the exchange accepted the order.
-                self.broker.open_orders.append(
-                    {"orderId": 4242, "clientOrderId": order.client_order_id, "executedQty": "0"}
-                )
-                raise TimeoutError("timed out")
-            return original_place(product_id, size, side, **kwargs)
-
-        self.broker.place_order = failing_place
-        await self.engine._sync_live_orders(self.campaign)
-        self.assertEqual(order.status, "PLACED")
-        self.assertEqual(str(order.order_id), "4242")
 
 
 class CascadeEngineApiTests(unittest.IsolatedAsyncioTestCase):

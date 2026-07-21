@@ -7851,6 +7851,8 @@ function cfRenderCascadeStatus(data) {
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
 }
 
+var _CF_LEVEL_SHARE = { 2: 20, 4: 30, 8: 50 };
+
 function _cfCascadeLadderRows(campaign) {
   var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
   if (!legs.length) return '<div class="table-meta">No legs yet — waiting for the first trendline touch.</div>';
@@ -7893,22 +7895,14 @@ function _cfCascadeLadderRows(campaign) {
       var status = String(order.status || '--');
       var stop = order.entry_style === 'stop';
       var live = status === 'PLACED' || status === 'PENDING';
-      // A stop entry that has not armed yet is resting nowhere — say so rather
-      // than implying an order sits on the fib line.
-      if (stop && live && !order.armed) status = 'WAIT 2 REDS';
+      if (status === 'PENDING') status = 'WAITING';
       var tone = status === 'FILLED' ? 'var(--green, #3fae56)'
-        : status === 'WAIT 2 REDS' ? 'var(--yellow, #f59e0b)'
+        : status === 'COLLECTED' ? 'var(--yellow, #f59e0b)'
         : live ? 'var(--accent, #1f6fd6)'
         : 'var(--muted, #888)';
       // Show the trigger, with the limit cap under it; the fib line is only
       // the level that has to break first, not where the order sits.
-      var priceCell = stop
-        ? (order.armed
-            ? _cfCascadeFmt(order.stop_price)
-              + '<div class="table-meta">lmt ' + _cfCascadeFmt(order.limit_price)
-              + ' · fib ' + _cfCascadeFmt(order.price) + '</div>'
-            : '<span style="opacity:.6;">below ' + _cfCascadeFmt(order.price) + '</span>')
-        : _cfCascadeFmt(order.price);
+      var priceCell = _cfCascadeFmt(order.price);
       // A level that could not be funded says how many DOLLARS left it and
       // exactly where they went — "$4.06 → F1 L4" — rather than a percentage
       // and a status word you have to decode.
@@ -7922,15 +7916,13 @@ function _cfCascadeLadderRows(campaign) {
         var extra = amount - base;
         amountCell = '$' + _cfCascadeUsd(amount)
           + '<div class="table-meta">'
-          + (extra > 0.01 ? 'min $' + _cfCascadeUsd(base) + ' + $' + _cfCascadeUsd(extra) + ' extra'
-                          : 'minimum rung')
-          + (Number(order.quantity) ? ' · ' + _cfCascadeFmt(order.quantity, 4) : '') + '</div>';
+          + (_CF_LEVEL_SHARE[level] || '') + '% of this fib'
+          + (status === 'COLLECTED' ? ' · in the running total' : '') + '</div>';
       } else {
-        amountCell = '<span style="opacity:.6;">$0</span>'
-          + '<div class="table-meta">waiting for the pool to reach it</div>';
+        amountCell = '<span style="opacity:.6;">$0</span>';
       }
       return '<tr>'
-        + '<td>L' + level + (stop ? '<div class="table-meta">buy stop</div>' : '') + '</td>'
+        + '<td>L' + level + '</td>'
         + '<td class="num">' + priceCell + '</td>'
         + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
         + '<td class="num">' + amountCell + '</td>'
@@ -7939,13 +7931,28 @@ function _cfCascadeLadderRows(campaign) {
     }).join('');
     return head + body;
   }).join('');
-  var foot = liveTotal > 0
-    ? '<tr class="cf-cascade-leg-head"><td colspan="3" style="padding-top:10px;">'
-      + '<strong>Waiting to buy, all fibs</strong>'
-      + '<span class="table-meta"> · none of this is spent yet</span></td>'
-      + '<td class="num" style="padding-top:10px;"><strong>$' + _cfCascadeUsd(liveTotal) + '</strong></td>'
+  // The running total is the only thing that ever becomes an order.
+  var pot = Number(campaign.pending_usd) || 0;
+  var rung = Number(campaign.rung_usd) || 5.5;
+  var potNote = pot <= 0
+    ? 'price has not reached a level yet'
+    : campaign.pending_stop_price
+      ? 'buy stop armed at ' + _cfCascadeFmt(campaign.pending_stop_price)
+        + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')'
+      : campaign.pending_line
+        ? 'clears the $' + _cfCascadeUsd(rung) + ' minimum — waiting for two reds below '
+          + _cfCascadeFmt(campaign.pending_line)
+        : 'needs $' + _cfCascadeUsd(rung) + ' before it can be an order';
+  var foot = '<tr class="cf-cascade-leg-head"><td colspan="3" style="padding-top:10px;">'
+      + '<strong>Collected so far</strong>'
+      + '<span class="table-meta"> · ' + _escapeHtml(potNote) + '</span></td>'
+      + '<td class="num" style="padding-top:10px;"><strong>$' + _cfCascadeUsd(pot) + '</strong></td>'
       + '<td></td></tr>'
-    : '';
+    + (liveTotal > 0
+      ? '<tr class="cf-cascade-leg-head"><td colspan="3">'
+        + '<span class="table-meta">Still marked on levels price has not reached</span></td>'
+        + '<td class="num">$' + _cfCascadeUsd(liveTotal) + '</td><td></td></tr>'
+      : '');
   return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
     + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th>'
     + '<th class="num">Amount</th><th>Status</th></tr></thead>'
