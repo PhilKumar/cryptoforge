@@ -7845,9 +7845,17 @@ function cfRenderCascadeStatus(data) {
 function _cfCascadeLadderRows(campaign) {
   var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
   if (!legs.length) return '<div class="table-meta">No legs yet — waiting for the first trendline touch.</div>';
-  // Every fib, oldest first, so each leg's levels stay visible as new ones form.
+  // Every fib, oldest first. They all rest at the same time — a new fib does
+  // not retire the one before it — so the live amounts stack down the table.
+  var liveTotal = 0;
   var rows = legs.map(function(leg) {
     var orders = leg.pending_orders || {};
+    var legLive = [2, 4, 8].reduce(function(sum, level) {
+      var o = orders[String(level)] || orders[level] || {};
+      var st = String(o.status || '');
+      return sum + ((st === 'PENDING' || st === 'PLACED') ? (Number(o.usd_notional) || 0) : 0);
+    }, 0);
+    liveTotal += legLive;
     var levels = leg.fib
       ? { 0: leg.fib.high_anchor, 1: leg.fib.low_anchor }
       : { 0: leg.touch_high, 1: leg.low };
@@ -7869,6 +7877,9 @@ function _cfCascadeLadderRows(campaign) {
         ? ' <strong style="color:var(--green,#3fae56);">+ $' + _cfCascadeFmt(leg.carry_in_usd)
           + ' carried from fib ' + (leg.leg_id - 1) + '</strong>'
           + ' = $' + _cfCascadeFmt(leg.pool_total_usd)
+        : '')
+      + (legLive > 0
+        ? ' · <strong style="color:var(--accent,#1f6fd6);">$' + _cfCascadeFmt(legLive) + ' live</strong>'
         : '')
       + '</span></td></tr>';
     var body = [2, 4, 8].map(function(level) {
@@ -7903,9 +7914,16 @@ function _cfCascadeLadderRows(campaign) {
     }).join('');
     return head + body;
   }).join('');
+  var foot = liveTotal > 0
+    ? '<tr class="cf-cascade-leg-head"><td colspan="3" style="padding-top:10px;">'
+      + '<strong>Waiting across every fib</strong>'
+      + '<span class="table-meta"> · all of these are live at once</span></td>'
+      + '<td class="num" style="padding-top:10px;"><strong>$' + _cfCascadeFmt(liveTotal) + '</strong></td>'
+      + '<td colspan="2"></td></tr>'
+    : '';
   return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
     + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th><th class="num">Amount</th><th class="num">Qty</th><th>Status</th></tr></thead>'
-    + '<tbody>' + rows + '</tbody></table></div></div>';
+    + '<tbody>' + rows + foot + '</tbody></table></div></div>';
 }
 
 // Why a campaign ended, in words. "COMPLETED" on its own tells you nothing —
@@ -7992,6 +8010,8 @@ function _cfCascadeCampaignCard(campaign) {
     + '<div class="stat-box"><div class="stat-label" title="Avg Entry"><span>Avg Entry</span></div><div class="stat-value">' + _cfCascadeFmt(entryShown) + '</div>' + roundNote + '</div>'
     + '<div class="stat-box"><div class="stat-label" title="' + (flat ? 'Exit' : 'Take Profit') + '"><span>' + (flat ? 'Exit' : 'Take Profit') + '</span></div><div class="stat-value">' + _cfCascadeFmt(tpShown) + '</div>' + roundNote + '</div>'
     + '<div class="stat-box"><div class="stat-label" title="In Position / Capital"><span>In Position / Capital</span></div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div>'
+      + (Number(campaign.resting_usd) > 0
+        ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.resting_usd) + ' waiting on the ladders</div>' : '')
       + (Number(campaign.carry_forward_usd) > 0
         ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.carry_forward_usd) + ' carried</div>' : '')
       + '</div>'

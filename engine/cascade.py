@@ -98,7 +98,7 @@ MIN_FIB_RANGE_PCT = 0.0008
 MOTHER_RETEST_PCT = 0.0005
 MAX_ACTIVE_BEFORE_ALERT = 5
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 11  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 12  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -502,11 +502,26 @@ class Campaign:
         return sum(f.price * f.quantity for f in self.all_fills if f.leg_id == leg_id)
 
     @property
+    def open_legs(self) -> List[Leg]:
+        """Every fib that still has an unfilled order on it.
+
+        A new fib does not retire the one before it. The market falling past
+        fib 2's level 1 does not delete fib 1's level 2 — that order is still
+        sitting above, and price coming back up through it is exactly the buy
+        the ladder was drawn to take. All of them rest at once and their
+        amounts stack.
+        """
+        return [leg for leg in self.legs if any(o.is_open for o in leg.pending_orders.values())]
+
+    @property
     def resting_usd(self) -> float:
-        leg = self.current_leg
-        if not leg:
-            return 0.0
-        return sum(o.usd_notional for o in leg.pending_orders.values() if o.is_open)
+        return sum(o.usd_notional for leg in self.legs for o in leg.pending_orders.values() if o.is_open)
+
+    def leg_resting_usd(self, leg_id: int) -> float:
+        for leg in self.legs:
+            if leg.leg_id == leg_id:
+                return sum(o.usd_notional for o in leg.pending_orders.values() if o.is_open)
+        return 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -684,6 +699,25 @@ def cancel_and_carry_forward(campaign: Campaign, prior_leg: Leg) -> float:
     return unspent
 
 
+def carry_unallocated_forward(campaign: Campaign, prior_leg: Leg) -> float:
+    """
+    Roll forward only the money the prior fib could not put to work.
+
+    The prior fib keeps its resting orders — a new fib does not cancel the old
+    ladder — so the only money free to move on is what never reached an order:
+    slices trimmed by the capital cap, and the principal returned by any round
+    of that leg already closed at TP. Held notional and still-resting notional
+    both stay where they are.
+    """
+    still_held = campaign.leg_open_usd(prior_leg.leg_id)
+    still_resting = campaign.leg_resting_usd(prior_leg.leg_id)
+    unspent = max(_coerce_float(prior_leg.pool_total_usd) - still_held - still_resting, 0.0)
+    if unspent < 0.01:
+        return 0.0  # order notionals are rounded to cents; don't carry the crumbs
+    campaign.carry_forward_usd += unspent
+    return unspent
+
+
 def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     """
     Split the leg pool 20/30/50 across levels 2/4/8, then apply the Binance
@@ -750,8 +784,11 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
         usd[2] = 0.0
         carried = True
 
-    # Capital cap: filled + this ladder must never exceed campaign capital.
-    available = max(campaign.capital_usd - campaign.spent_usd, 0.0)
+    # Capital cap: filled + everything already resting on the older fibs + this
+    # ladder must never exceed campaign capital. Older ladders stay live now, so
+    # their notional is committed money and has to be counted here.
+    committed_elsewhere = campaign.spent_usd + max(campaign.resting_usd - campaign.leg_resting_usd(leg.leg_id), 0.0)
+    available = max(campaign.capital_usd - committed_elsewhere, 0.0)
     total = sum(usd.values())
     if total > available:
         overshoot = total - available
@@ -1798,10 +1835,15 @@ class CascadeEngine:
         campaign.legs.append(leg)
         carried_in = 0.0
         if prior_leg is not None:
-            # The previous low has broken — retire the prior fib and roll its
-            # unspent pool (never-filled levels + principal returned by any
-            # round already closed at TP) into this one.
-            carried_in = cancel_and_carry_forward(campaign, prior_leg)
+            # The previous fib KEEPS its resting ladder. Price broke its low, but
+            # the levels it left above are exactly where the market has to pass
+            # on the way back up, and those orders are still the cheapest buys on
+            # offer there. Only money the prior fib never managed to place — cap
+            # trims, and principal a closed round handed back — rolls into this
+            # one. Cancelling the old ladder was costing real fills: on one SOL
+            # day fib 2's level 2 sat at 78.28, price traded to 78.07, and the
+            # order had been retired days-of-candles earlier by fib 3 appearing.
+            carried_in = carry_unallocated_forward(campaign, prior_leg)
         try:
             build_fib_ladder_and_pool(campaign, leg)
             plan_leg_orders(campaign, leg)
@@ -1828,29 +1870,27 @@ class CascadeEngine:
     # ── fills / TP ───────────────────────────────────────────────
 
     def _paper_fill_check(self, campaign: Campaign, closed_5m: Candle) -> None:
-        leg = campaign.current_leg
-        if leg is None:
-            return
         candle_15m = self._fifteen_minute_candle(campaign, closed_5m)
-        for order in leg.pending_orders.values():
-            price = order.working_price
-            if not order.is_open or not price:
-                continue
-            probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
-            if probe is None:
-                continue
-            # A candle that just set the stop is the fall continuing, not a
-            # turn — it owns the trigger and cannot also take it.
-            if order.stop_ts is not None and probe.timestamp <= order.stop_ts:
-                continue
-            if order.entry_style == "stop":
-                # A buy stop sits ABOVE the market and triggers on the way up.
-                # Fill at the limit cap: the pessimistic end of the band the
-                # order can actually execute in.
-                if probe.high >= (order.stop_price or 0.0):
+        for leg in campaign.open_legs:
+            for order in leg.pending_orders.values():
+                price = order.working_price
+                if not order.is_open or not price:
+                    continue
+                probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
+                if probe is None:
+                    continue
+                # A candle that just set the stop is the fall continuing, not a
+                # turn — it owns the trigger and cannot also take it.
+                if order.stop_ts is not None and probe.timestamp <= order.stop_ts:
+                    continue
+                if order.entry_style == "stop":
+                    # A buy stop sits ABOVE the market and triggers on the way up.
+                    # Fill at the limit cap: the pessimistic end of the band the
+                    # order can actually execute in.
+                    if probe.high >= (order.stop_price or 0.0):
+                        self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
+                elif probe.low <= price:
                     self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
-            elif probe.low <= price:
-                self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
 
     def _advance_stop_entries(self, campaign: Campaign, closed_5m: Candle) -> None:
         """
@@ -1877,10 +1917,15 @@ class CascadeEngine:
 
         The probe is the carrier's own timeframe, so a leg escalated to 15m
         steps off 15m closes with no extra plumbing.
+
+        Every open fib steps independently. Each keeps its own carrier and its
+        own last-red memory, so fib 1's level 2 chases price down at the same
+        time fib 3's does, and both are live when the turn comes.
         """
-        leg = campaign.current_leg
-        if leg is None:
-            return
+        for leg in campaign.open_legs:
+            self._advance_leg_stops(campaign, leg, closed_5m)
+
+    def _advance_leg_stops(self, campaign: Campaign, leg: Leg, closed_5m: Candle) -> None:
         stops = [order for _, order in sorted(leg.pending_orders.items()) if order.entry_style == "stop"]
         carrier = next((order for order in stops if order.is_open and order.price), None)
         if carrier is None:
@@ -2056,9 +2101,10 @@ class CascadeEngine:
         campaign.tp_rev += 1
         campaign.realized_pnl = round(campaign.realized_pnl_total, 8)
 
-        # Filled entries are spent and gone; anything still resting stays live.
-        if leg is not None:
-            for order in leg.pending_orders.values():
+        # Filled entries are spent and gone; anything still resting stays live —
+        # on every fib, not just the newest, since they all rest together.
+        for lg in campaign.legs:
+            for order in lg.pending_orders.values():
                 if order.status == "FILLED":
                     order.status = "CLOSED"
 
@@ -2249,10 +2295,10 @@ class CascadeEngine:
             _log.warning("[CASCADE] open-orders fetch failed for %s: %s", campaign.symbol, exc)
             return False
         changed = False
-        leg = campaign.current_leg
 
-        # 1) Ingest state changes for tracked entry orders.
-        if leg is not None:
+        # 1) Ingest state changes for tracked entry orders, on every fib that
+        #    still has one — older ladders stay live alongside the newest.
+        for leg in campaign.legs:
             for order in leg.pending_orders.values():
                 if order.order_id is None:
                     continue
@@ -2296,8 +2342,10 @@ class CascadeEngine:
                         changed = True
 
         # 2) Cancel stale placed orders (repriced) and place PENDING orders.
-        if leg is not None and campaign.state in ACTIVE_STATES:
-            known_ids = {str(o.order_id) for o in leg.pending_orders.values() if o.order_id}
+        if campaign.state in ACTIVE_STATES:
+            # Every fib's ids count as known. Without that, an older ladder's
+            # perfectly good resting orders look like strays and get cancelled.
+            known_ids = {str(o.order_id) for lg in campaign.legs for o in lg.pending_orders.values() if o.order_id}
             if campaign.tp_order_id:
                 known_ids.add(str(campaign.tp_order_id))
             for order_id, row in open_orders.items():
@@ -2305,63 +2353,67 @@ class CascadeEngine:
                 if client_id.startswith(f"cf-csc-{campaign.campaign_id}-") and order_id not in known_ids:
                     await self._safe_cancel(campaign, order_id)
                     changed = True
-            for order in leg.pending_orders.values():
-                if order.status != "PENDING" or not order.price or order.usd_notional <= 0:
-                    continue
-                price = order.working_price
-                if not price:
-                    continue  # stop entry not armed yet — nothing to rest on the exchange
-                is_stop = order.entry_style == "stop"
-                if is_stop and not self._stop_is_placeable(campaign, order):
-                    continue
-                try:
-                    result = await asyncio.to_thread(
-                        lambda o=order, p=price, st=is_stop: self.broker.place_order(
-                            campaign.symbol,
-                            o.usd_notional,
-                            "buy",
-                            order_type="stop_limit" if st else "limit_order",
-                            limit_price=p,
-                            stop_price=o.stop_price if st else None,
-                            client_order_id=o.client_order_id,
-                        )
-                    )
-                except Exception as exc:
-                    result = {"error": str(exc)}
-                if isinstance(result, dict) and not result.get("error"):
-                    order.order_id = str(result.get("orderId") or result.get("id") or "")
-                    order.status = "PLACED"
-                    self._log_event(
-                        campaign,
-                        "order",
-                        (
-                            f"Placed L{order.level} buy stop ${order.usd_notional:g} "
-                            f"trigger {order.stop_price:,.2f} / limit {price:,.2f} (fib {order.price:,.2f})"
-                            if is_stop
-                            else f"Placed L{order.level} limit buy ${order.usd_notional:g} @ {price:,.2f}"
-                        ),
-                    )
-                    changed = True
-                else:
-                    error = (result or {}).get("error") if isinstance(result, dict) else "unknown error"
-                    recovered = await self._recover_order_by_client_id(campaign, order)
-                    if recovered:
+            for leg in campaign.legs:
+                for order in leg.pending_orders.values():
+                    if await self._place_entry_order(campaign, order):
                         changed = True
-                    else:
-                        self._log_event(campaign, "error", f"Failed to place L{order.level} buy: {error}")
-                        self._alert(
-                            "Cascade order FAILED",
-                            f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
-                            f"Level {order.level}, ${order.usd_notional:,.2f} at {price:,.2f}\n"
-                            f"Binance said: {error}\n\n"
-                            f"The level is unarmed until this succeeds.",
-                            level="error",
-                            dedupe_sec=300,
-                        )
 
         # 3) TP management.
         changed |= await self._sync_tp_order(campaign, open_orders)
         return changed
+
+    async def _place_entry_order(self, campaign: Campaign, order: PendingOrder) -> bool:
+        """Rest one PENDING entry on the exchange. Returns True if state moved."""
+        if order.status != "PENDING" or not order.price or order.usd_notional <= 0:
+            return False
+        price = order.working_price
+        if not price:
+            return False  # stop entry not armed yet — nothing to rest on the exchange
+        is_stop = order.entry_style == "stop"
+        if is_stop and not self._stop_is_placeable(campaign, order):
+            return False
+        try:
+            result = await asyncio.to_thread(
+                lambda o=order, p=price, st=is_stop: self.broker.place_order(
+                    campaign.symbol,
+                    o.usd_notional,
+                    "buy",
+                    order_type="stop_limit" if st else "limit_order",
+                    limit_price=p,
+                    stop_price=o.stop_price if st else None,
+                    client_order_id=o.client_order_id,
+                )
+            )
+        except Exception as exc:
+            result = {"error": str(exc)}
+        if isinstance(result, dict) and not result.get("error"):
+            order.order_id = str(result.get("orderId") or result.get("id") or "")
+            order.status = "PLACED"
+            self._log_event(
+                campaign,
+                "order",
+                (
+                    f"Fib {order.leg_id} L{order.level} buy stop placed ${order.usd_notional:g} "
+                    f"trigger {order.stop_price:,.2f} / limit {price:,.2f} (fib line {order.price:,.2f})"
+                    if is_stop
+                    else f"Fib {order.leg_id} L{order.level} limit buy placed ${order.usd_notional:g} @ {price:,.2f}"
+                ),
+            )
+            return True
+        error = (result or {}).get("error") if isinstance(result, dict) else "unknown error"
+        if await self._recover_order_by_client_id(campaign, order):
+            return True
+        self._log_event(campaign, "error", f"Failed to place fib {order.leg_id} L{order.level} buy: {error}")
+        self._alert(
+            "Cascade order FAILED",
+            f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
+            f"Fib {order.leg_id} level {order.level}, ${order.usd_notional:,.2f} at {price:,.2f}\n"
+            f"Binance said: {error}\n\n"
+            f"The level is unarmed until this succeeds.",
+            level="error",
+            dedupe_sec=300,
+        )
+        return False
 
     async def _sync_tp_order(self, campaign: Campaign, open_orders: Dict[str, dict]) -> bool:
         changed = False
@@ -2446,8 +2498,7 @@ class CascadeEngine:
             _log.warning("[CASCADE] cancel failed for %s: %s", order_id, exc)
 
     async def _cancel_all_live_orders(self, campaign: Campaign, include_tp: bool) -> None:
-        leg = campaign.current_leg
-        if leg is not None:
+        for leg in campaign.legs:
             for order in leg.pending_orders.values():
                 if order.status == "PLACED" and order.order_id:
                     await self._safe_cancel(campaign, order.order_id)

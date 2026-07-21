@@ -246,21 +246,26 @@ class CascadeSwingModelTests(unittest.TestCase):
         # leg 2 only draws the incremental depth beyond leg 1
         self.assertAlmostEqual(leg2.pool_usd, (1.063 - 0.488) * 2000 / 100, places=1)
 
-    def test_second_leg_carries_forward_the_unspent_first_pool(self):
+    def test_a_second_fib_leaves_the_first_ladder_resting(self):
+        """Fib 2 forming does not retire fib 1. Fib 1's levels sit above the
+        market and are exactly where price has to pass on the way back up, so
+        they stay live and only the money fib 1 could never place moves on."""
         self._feed_real(59)
         leg1, leg2 = self.campaign.legs
-        carried = [lv for lv, o in leg1.pending_orders.items() if o.status == "CARRIED"]
-        self.assertTrue(carried)
-        # Nothing filled on fib 1, so its whole allocation lands in fib 2 — both
-        # the slice too small to place at all and the rest that simply never got
-        # hit. pool_total_usd is net of the first, so compare against pool_usd.
-        self.assertAlmostEqual(leg2.carry_in_usd, leg1.pool_usd, places=6)
-        # fib 2 laddered what it could and handed its own too-small slice on, so
-        # the two together still account for every dollar of both allocations.
+        self.assertTrue(
+            [o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0],
+            "fib 1 must still have a funded order resting after fib 2 is drawn",
+        )
+        self.assertFalse([o for o in leg1.pending_orders.values() if o.status == "CARRIED" and o.usd_notional > 0])
+        # Nothing was carried out of fib 1 beyond the slice it could not place,
+        # so its resting notional accounts for its whole pool.
+        self.assertAlmostEqual(self.campaign.leg_resting_usd(leg1.leg_id), leg1.pool_total_usd, places=2)
+        # Every dollar of both allocations is still accounted for: resting on
+        # fib 1, laddered on fib 2, or waiting in the carry bucket.
         self.assertAlmostEqual(
-            leg2.pool_total_usd + self.campaign.carry_forward_usd,
-            leg2.pool_usd + leg1.pool_usd,
-            places=6,
+            self.campaign.resting_usd + self.campaign.carry_forward_usd,
+            leg1.pool_usd + leg2.pool_usd,
+            places=1,
         )
 
     def test_round_closed_at_tp_returns_its_principal_to_the_next_fib(self):
@@ -408,12 +413,15 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64753.77)
         self.assertEqual(self.campaign.active_trendline_id, 2)
 
-    def test_skipping_keeps_the_previous_ladder_resting(self):
-        """This is why the skip matters: fib 2 has a working ladder. Creating a
-        third fib would have retired it while it was still live."""
+    def test_skipping_keeps_the_money_on_one_ladder(self):
+        """A same-shelf third fib would split the pool across two sets of levels
+        a few ticks apart, and each slice is then small enough that Binance's
+        minimum eats it. Skipping keeps the campaign with funded orders."""
         self._feed(29)
         self.assertEqual(len(self.campaign.legs), 2)
-        working = [o for o in self.campaign.legs[1].pending_orders.values() if o.is_open and o.usd_notional > 0]
+        working = [
+            o for leg in self.campaign.legs for o in leg.pending_orders.values() if o.is_open and o.usd_notional > 0
+        ]
         self.assertTrue(working)
 
     def test_the_day_now_trades_because_the_pool_lands_where_price_goes(self):
