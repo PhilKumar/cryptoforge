@@ -106,7 +106,7 @@ MOTHER_RETEST_PCT = 0.0005
 MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 17  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 18  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -768,13 +768,18 @@ def replan_ladder(campaign: Campaign) -> None:
 
     So instead:
 
-    1. Every unfilled level of every fib becomes a rung, sorted shallowest
-       first — the order price will actually meet them in.
-    2. Walking down from the top, each rung takes the standard rung size until
-       the money runs out. A rung that cannot be given a full one gets nothing,
-       because a part-rung is not placeable.
+    1. Every unfilled level of every fib becomes a rung on one ladder, ordered
+       by price.
+    2. Funding starts at the DEEPEST rung and works up. Each takes a standard
+       rung, and when the money runs out the shallow rungs are the ones left
+       empty. A rung that cannot be given a full one gets nothing, because a
+       part-rung is not placeable.
     3. Anything left after every rung is covered is spread over them weighted by
-       level — 20/30/50 — so the deep end still carries the most.
+       level — 20/30/50 — so the deep end carries the most there too.
+
+    Deepest-first is the whole point of the strategy: the money is meant to buy
+    the cheapest prices the fall offers, so a scarce pool belongs at the bottom
+    of the ladder, not on the rung nearest the market.
 
     There is no carry-forward between fibs any more. There is one pool, and it
     is re-split from scratch whenever a fill spends part of it or a new fib adds
@@ -808,13 +813,14 @@ def replan_ladder(campaign: Campaign) -> None:
         for row, share in zip(rungs, shares):
             amounts[id(row[3])] = share
     else:
-        # Short. Walk from the rung nearest the market downward handing each a
-        # full rung, and stop when the money does. A part-rung is not placeable,
-        # so a rung either gets the whole thing or nothing. Whatever survives
-        # that pass then shares any surplus, weighted deeper.
+        # Short. Start at the DEEPEST rung and work up, handing each a full rung
+        # until the money runs out — the cheapest prices get covered and the
+        # shallow rungs go empty. A part-rung is not placeable, so a rung either
+        # gets the whole thing or nothing. Whatever survives that pass then
+        # shares any surplus, weighted deeper again.
         funded: List[tuple] = []
         remaining = budget
-        for row in rungs:
+        for row in reversed(rungs):
             if remaining + 1e-9 < rung:
                 break
             funded.append(row)

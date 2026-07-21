@@ -98,20 +98,21 @@ class FibLadderPoolTests(unittest.TestCase):
 
 
 class PlanLegOrdersTests(unittest.TestCase):
-    def test_a_short_pool_funds_the_shallowest_rungs_first(self):
+    def test_a_short_pool_funds_the_deepest_rungs_first(self):
         """$2000 capital, 0.5% dip: a $10 pool against a $5.50 rung. That is one
-        full rung and change, so the rung nearest the market takes it and the
-        deeper two get nothing — a part-rung cannot be placed at all."""
+        full rung and change, and it goes to the DEEPEST rung — the cheapest
+        price the fall offers. The shallow two get nothing; a part-rung cannot
+        be placed at all."""
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg = _leg(campaign, low=99.5, touch_high=99.8)
         build_fib_ladder_and_pool(campaign, leg)
         self.assertAlmostEqual(leg.pool_usd, 10.0)
         plan_leg_orders(campaign, leg)
 
-        self.assertEqual(leg.pending_orders[2].status, "PENDING")
-        self.assertAlmostEqual(leg.pending_orders[2].usd_notional, 10.0)  # rung + all the surplus
+        self.assertEqual(leg.pending_orders[8].status, "PENDING")
+        self.assertAlmostEqual(leg.pending_orders[8].usd_notional, 10.0)  # rung + all the surplus
+        self.assertEqual(leg.pending_orders[2].status, "UNFUNDED")
         self.assertEqual(leg.pending_orders[4].status, "UNFUNDED")
-        self.assertEqual(leg.pending_orders[8].status, "UNFUNDED")
 
     def test_every_funded_rung_clears_the_exchange_minimum(self):
         """No rung is ever left holding an amount Binance would reject."""

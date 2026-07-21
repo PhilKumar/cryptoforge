@@ -270,9 +270,11 @@ class CascadeSwingModelTests(unittest.TestCase):
         particular fib — it goes back into the one pool, and the ladder is
         re-split so the rungs still waiting get their share of it."""
         self._feed_real(40)
-        self.assertTrue(self.campaign.all_fills, "a rung should have filled by here")
         allocation = self.campaign.total_allocation_usd
-        self.assertAlmostEqual(self.campaign.spent_usd, allocation, places=1)
+        leg1 = self.campaign.legs[0]
+        order = next(o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0)
+        self.engine._record_fill(self.campaign, leg1, order, order.price, _RECENT_TS + 3600, order_id="PAPER")
+        self.assertGreater(self.campaign.spent_usd, 0.0)
 
         self.engine._close_round(self.campaign, self.campaign.tp_price)
         self.assertEqual(len(self.campaign.rounds), 1)
@@ -438,21 +440,24 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
             places=1,
         )
 
-    def test_the_shallow_rungs_get_funded_so_the_day_trades(self):
-        """Both fibs' level 2 rungs sit nearest the market, so the price-ordered
-        ladder funds those first and the turn at 64,344 buys them. Under the old
-        per-fib pools this day bought nothing: everything a fib owned was piled
-        onto that fib's own deepest rung, far below where price turned."""
-        self._feed(29)
-        self.assertTrue(self.campaign.all_fills)
-        for fill in self.campaign.all_fills:
-            self.assertEqual(fill.level, 2)
-        for order in self.campaign.legs[0].pending_orders.values():
-            self.assertNotEqual(order.status, "MERGED")
+    def test_a_short_pool_waits_at_the_bottom_and_this_day_never_reaches_it(self):
+        """The cost of funding deepest-first, kept visible.
 
-    def test_mother_break_realises_the_round_it_opened(self):
-        """Same day, run to the mother break. Price cannot reach the mother high
-        without passing the target first, so the round closes in profit."""
+        $14.41 buys two rungs, and they go to the two level 8s at 63,672 and
+        63,523. Price on this day turned at 64,344 — nearly 1% above the higher
+        of them — so nothing fills. The level 2s at 64,567 and 64,446 would both
+        have bought. That is the deliberate trade: the money waits for the
+        cheapest price the fall offers, and some falls stop short of it."""
+        self._feed(29)
+        self.assertFalse(self.campaign.all_fills)
+        funded = [o for leg in self.campaign.legs for o in leg.pending_orders.values() if o.usd_notional > 0]
+        self.assertTrue(funded)
+        for order in funded:
+            self.assertEqual(order.level, 8, "a short pool belongs on the deepest rungs")
+
+    def test_mother_break_ends_the_campaign_flat_when_nothing_filled(self):
+        """Same day, run to the mother break. The pool waited at level 8 and
+        price never got there, so the campaign ends holding nothing."""
         self._feed(29)
         for idx, o, h, low, c in [
             (37, 64416.01, 64608.00, 64398.15, 64604.65),
@@ -462,9 +467,8 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         ]:
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
-        self.assertEqual(len(self.campaign.rounds), 1)
-        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
-        self.assertEqual(self.campaign.filled_base_qty, 0.0)  # closed out, flat
+        self.assertEqual(self.campaign.filled_base_qty, 0.0)
+        self.assertEqual(self.campaign.realized_pnl_total, 0.0)
 
 
 # Third regression day: BTCUSDT 5m from the mother candle at 2026-07-20 18:10
