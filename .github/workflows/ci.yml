@@ -18,6 +18,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # gitleaks diffs the whole pushed range, so it needs the parent of the
+          # first commit in that range. The default shallow clone only has the
+          # tip, and git then fails with "unknown revision" — which the action
+          # reports as an error even though it found no leaks.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
