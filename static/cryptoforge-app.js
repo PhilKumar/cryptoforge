@@ -5904,7 +5904,74 @@ function cfInitTradeJournal() {
 
 
 // ── Init ───────────────────────────────────────────────────
+// ── Brand mark motion ────────────────────────────────────────────
+// The logo is three depth columns and a spark. On load the columns quote up
+// from the baseline in sequence and the spark strikes; after that the only
+// resting movement is a slow pulse on the spark, because this mark sits in the
+// topbar of every page and anything busier becomes noise. Hovering re-quotes
+// the columns, which is the one place a livelier flourish is welcome.
+//
+// Built on the Web Animations API — the same compositor-driven engine the
+// Motion library drives — so it stays off the main thread and needs no
+// dependency under the site's `script-src 'self'` policy.
+var _cfBrandLastTick = 0;
+
+function cfInitBrandMotion() {
+  var icon = document.querySelector('.topbar-brand-icon');
+  if (!icon || icon.dataset.cfMotion === 'on' || typeof icon.animate !== 'function') return;
+  // Honour the OS setting: for anyone who asked for less motion, the mark
+  // stays exactly as CSS painted it.
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  icon.dataset.cfMotion = 'on';
+
+  var columns = Array.prototype.slice.call(icon.querySelectorAll('.brand-column'));
+  var spark = icon.querySelector('.brand-spark');
+  var RISE = 'cubic-bezier(.22,1,.36,1)';   // decelerate hard, settle soft
+  var POP = 'cubic-bezier(.34,1.56,.64,1)'; // slight overshoot, like a spring
+
+  columns.forEach(function(col, i) {
+    col.animate([
+      { transform: 'scaleY(0.04)', opacity: 0 },
+      { transform: 'scaleY(1.16)', opacity: 1, offset: 0.62 },
+      { transform: 'scaleY(1)', opacity: 1 }
+    ], { duration: 880, delay: 120 + i * 95, easing: RISE, fill: 'backwards' });
+  });
+
+  if (spark) {
+    var strike = spark.animate([
+      { transform: 'scale(0)', opacity: 0 },
+      { transform: 'scale(1.55)', opacity: 1, offset: 0.62 },
+      { transform: 'scale(1)', opacity: 1 }
+    ], { duration: 620, delay: 430, easing: POP, fill: 'backwards' });
+    // Hand over to the resting pulse only once the strike has landed, so the
+    // two never fight over transform.
+    strike.finished.then(function() {
+      spark.animate([
+        { opacity: 0.55, transform: 'scale(0.88)' },
+        { opacity: 1, transform: 'scale(1.14)' },
+        { opacity: 0.55, transform: 'scale(0.88)' }
+      ], { duration: 3400, iterations: Infinity, easing: 'ease-in-out' });
+    }).catch(function() { /* cancelled by a theme swap or teardown */ });
+  }
+
+  var brand = icon.closest('.topbar-brand') || icon;
+  brand.addEventListener('pointerenter', function() {
+    var now = Date.now();
+    if (now - _cfBrandLastTick < 900) return;  // one re-quote per pass, not a strobe
+    _cfBrandLastTick = now;
+    columns.forEach(function(col, i) {
+      var peak = 0.62 + Math.random() * 0.7;
+      col.animate([
+        { transform: 'scaleY(1)' },
+        { transform: 'scaleY(' + peak.toFixed(3) + ')', offset: 0.44 },
+        { transform: 'scaleY(1)' }
+      ], { duration: 780, delay: i * 65, easing: RISE });
+    });
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  cfInitBrandMotion();
   _cfPageHistoryDepth = Math.max(0, Number(window.history && window.history.state && window.history.state.cfDepth) || 0);
   cfUpdateAppNavControls();
   initCryptoSelector();
@@ -7807,12 +7874,26 @@ function _cfCascadeLadderRows(campaign) {
     var body = [2, 4, 8].map(function(level) {
       var order = orders[String(level)] || orders[level] || {};
       var status = String(order.status || '--');
+      var trail = order.entry_style === 'trail';
+      var live = status === 'PLACED' || status === 'PENDING';
+      // A trail order that has not armed yet is resting nowhere — say so
+      // rather than implying an order sits on the fib line.
+      if (trail && live && !order.armed) status = 'WAIT BREAK';
       var tone = status === 'FILLED' ? 'var(--green, #3fae56)'
-        : (status === 'PLACED' || status === 'PENDING') ? 'var(--accent, #1f6fd6)'
+        : status === 'WAIT BREAK' ? 'var(--yellow, #f59e0b)'
+        : live ? 'var(--accent, #1f6fd6)'
         : 'var(--text-muted, #888)';
+      // Price shown is where the order actually is; the fib line follows as
+      // context once the two differ.
+      var priceCell = trail
+        ? (order.armed
+            ? _cfCascadeFmt(order.working_price)
+              + '<div class="table-meta">fib ' + _cfCascadeFmt(order.price) + '</div>'
+            : '<span style="opacity:.6;">under ' + _cfCascadeFmt(order.price) + '</span>')
+        : _cfCascadeFmt(order.price);
       return '<tr>'
-        + '<td>L' + level + '</td>'
-        + '<td class="num">' + _cfCascadeFmt(order.price) + '</td>'
+        + '<td>L' + level + (trail ? '<div class="table-meta">trail</div>' : '') + '</td>'
+        + '<td class="num">' + priceCell + '</td>'
         + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
         + '<td class="num">$' + _cfCascadeFmt(order.usd_notional) + '</td>'
         + '<td class="num">' + _cfCascadeFmt(order.quantity, 8) + '</td>'

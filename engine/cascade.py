@@ -12,10 +12,14 @@ Model (as specified by the user against their TradingView drawings):
   TradingView's magnet on.
 - FIB 0 is the highest high that reached that line — touch or break —
   between the dip and the cut. FIB 1 is the dip.
-- Resting LIMIT BUY orders go on fib levels 2/4/8 with 20/30/50% of the
-  leg's pool. The first fib funds off the fall from the mother high to its
-  own level 1; each later fib funds off the remaining move from the previous
-  fib's level 1 to its own.
+- BUY orders go on fib levels 2/4/8 with 20/30/50% of the leg's pool. The
+  first fib funds off the fall from the mother high to its own level 1; each
+  later fib funds off the remaining move from the previous fib's level 1 to
+  its own.
+- Levels 2 and 4 do NOT rest on their line. They arm when a candle closes
+  below it, then trail the close of each further red candle down, so the buy
+  always sits under the last body. Level 8 rests as a plain limit on its
+  line. See TRAIL_ENTRY_LEVELS and _advance_trail_entries.
 - Take profit is measured FROM the average entry back toward the mother
   high — avg_entry + 0.25 x (mother_high - avg_entry) — and only exists once
   an entry has filled.
@@ -53,7 +57,12 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
-MODEL_VERSION = 7  # bump when the fib/trendline rules change; older campaigns are flagged stale
+# Levels 2 and 4 are shallow: resting there blindly buys the first touch of a
+# line price is still falling through. They instead wait for the line to break
+# and then follow red closes down. Level 8 is the level worth owning at the
+# line itself, so it stays a plain resting limit.
+TRAIL_ENTRY_LEVELS = (2, 4)
+MODEL_VERSION = 8  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -200,13 +209,35 @@ class PendingOrder:
     filled_qty: float = 0.0
     fill_price: Optional[float] = None
     fill_timestamp: Optional[int] = None
+    entry_style: str = "limit"  # limit = rest at the fib line | trail = follow red closes
+    trail_price: Optional[float] = None  # working price once a trail order arms
+    trail_ts: Optional[int] = None  # candle whose close set trail_price
 
     @property
     def is_open(self) -> bool:
         return self.status in {"PENDING", "PLACED"}
 
+    @property
+    def armed(self) -> bool:
+        """A trail order is only live once the fib line has broken down."""
+        return self.entry_style != "trail" or self.trail_price is not None
+
+    @property
+    def working_price(self) -> Optional[float]:
+        """
+        Where the order actually rests. A plain limit sits on its fib line; a
+        trail order sits at the last red close under that line, and is nowhere
+        at all until the line breaks.
+        """
+        if self.entry_style == "trail":
+            return self.trail_price
+        return self.price
+
     def to_dict(self) -> dict:
-        return dict(self.__dict__)
+        payload = dict(self.__dict__)
+        payload["armed"] = self.armed
+        payload["working_price"] = self.working_price
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict) -> "PendingOrder":
@@ -226,6 +257,9 @@ class PendingOrder:
             "filled_qty",
             "fill_price",
             "fill_timestamp",
+            "entry_style",
+            "trail_price",
+            "trail_ts",
         ):
             if key in data:
                 setattr(order, key, data[key])
@@ -683,6 +717,7 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
             leg_id=leg.leg_id,
             timeframe=timeframe_for_level(leg, level),
             status="PENDING",
+            entry_style="trail" if level in TRAIL_ENTRY_LEVELS else "limit",
             client_order_id=f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-0",
         )
 
@@ -1420,8 +1455,13 @@ class CascadeEngine:
         # candle history at evaluation time, so nothing is ever discarded.
         if candle.close < candle.open:
             self._evaluate_cut(campaign, candle)
-        if campaign.mode == "paper" and campaign.state in ACTIVE_STATES:
-            self._paper_fill_check(campaign, candle)
+        if campaign.state in ACTIVE_STATES:
+            # Fill against the price the order rested at while this candle was
+            # forming, THEN let the candle move it. Advancing first would slide
+            # the order under a candle that should have filled it.
+            if campaign.mode == "paper":
+                self._paper_fill_check(campaign, candle)
+            self._advance_trail_entries(campaign, candle)
 
     def _evaluate_cut(self, campaign: Campaign, candle: Candle) -> None:
         """
@@ -1620,13 +1660,67 @@ class CascadeEngine:
             return
         candle_15m = self._fifteen_minute_candle(campaign, closed_5m)
         for order in leg.pending_orders.values():
-            if not order.is_open or not order.price:
+            price = order.working_price
+            if not order.is_open or not price:
                 continue
             probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
             if probe is None:
                 continue
-            if probe.low <= order.price:
-                self._record_fill(campaign, leg, order, order.price, probe.timestamp, order_id="PAPER")
+            # A trail order placed off THIS candle's own close cannot also be
+            # filled by it — the order did not exist while it was forming.
+            if order.trail_ts is not None and probe.timestamp <= order.trail_ts:
+                continue
+            if probe.low <= price:
+                self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
+
+    def _advance_trail_entries(self, campaign: Campaign, closed_5m: Candle) -> None:
+        """
+        Levels 2 and 4 do not sit blindly on the fib line. They arm only once a
+        candle CLOSES below the line, and then follow the close of each further
+        red candle down, so the buy is always under the last body rather than
+        at the line price. Green candles leave the order where it is, and the
+        order never moves back up — it only ever gets cheaper.
+
+        The probe is the level's own timeframe, so a leg that has escalated to
+        15m trails off 15m closes without any extra plumbing.
+        """
+        leg = campaign.current_leg
+        if leg is None:
+            return
+        candle_15m = self._fifteen_minute_candle(campaign, closed_5m)
+        for order in leg.pending_orders.values():
+            if order.entry_style != "trail" or not order.is_open or not order.price:
+                continue
+            probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
+            if probe is None or probe.timestamp == order.trail_ts:
+                continue
+            if probe.close >= order.price:
+                continue  # the fib line has not broken down yet
+            if probe.close >= probe.open:
+                continue  # only red candles set the entry
+            if order.trail_price is not None and probe.close >= order.trail_price:
+                continue  # never chase the order back up
+            self._reprice_trail(campaign, order, probe)
+
+    def _reprice_trail(self, campaign: Campaign, order: PendingOrder, probe: Candle) -> None:
+        first = order.trail_price is None
+        order.trail_price = probe.close
+        order.trail_ts = probe.timestamp
+        if probe.close > 0:
+            order.quantity = order.usd_notional / probe.close
+        if order.status == "PLACED":
+            # Live: drop the old resting order and let _sync_live_orders cancel
+            # it (its id is no longer ours) and place the new one a tick lower.
+            order.status = "PENDING"
+            order.order_id = None
+            order.rev += 1
+            order.client_order_id = f"cf-csc-{campaign.campaign_id}-{order.leg_id}-{order.level}-{order.rev}"
+        self._log_event(
+            campaign,
+            "order",
+            f"L{order.level} {'armed' if first else 'trailed down'} at {probe.close:,.2f} — "
+            f"under the {order.timeframe} red close, fib line {order.price:,.2f} already broken",
+        )
 
     def _record_fill(
         self,
@@ -1786,7 +1880,7 @@ class CascadeEngine:
                     executed = _coerce_float(row.get("executedQty"))
                     if executed > order.filled_qty + 1e-12:
                         delta_qty = executed - order.filled_qty
-                        avg_price = _coerce_float(row.get("price"), order.price or 0.0)
+                        avg_price = _coerce_float(row.get("price"), order.working_price or order.price or 0.0)
                         self._record_fill(
                             campaign, leg, order, avg_price, int(time.time()), order.order_id, quantity=delta_qty
                         )
@@ -1797,7 +1891,9 @@ class CascadeEngine:
                 if status == "FILLED":
                     executed = _coerce_float(status_row.get("executedQty"), order.quantity)
                     quote = _coerce_float(status_row.get("cummulativeQuoteQty"))
-                    avg_price = quote / executed if executed > 0 and quote > 0 else (order.price or 0.0)
+                    avg_price = (
+                        quote / executed if executed > 0 and quote > 0 else (order.working_price or order.price or 0.0)
+                    )
                     delta_qty = max(executed - order.filled_qty, 0.0)
                     if delta_qty > 0:
                         self._record_fill(
@@ -1831,14 +1927,17 @@ class CascadeEngine:
             for order in leg.pending_orders.values():
                 if order.status != "PENDING" or not order.price or order.usd_notional <= 0:
                     continue
+                price = order.working_price
+                if not price:
+                    continue  # trail order waiting for the line to break — nothing to rest yet
                 try:
                     result = await asyncio.to_thread(
-                        lambda o=order: self.broker.place_order(
+                        lambda o=order, p=price: self.broker.place_order(
                             campaign.symbol,
                             o.usd_notional,
                             "buy",
                             order_type="limit_order",
-                            limit_price=o.price,
+                            limit_price=p,
                             client_order_id=o.client_order_id,
                         )
                     )
@@ -1850,7 +1949,8 @@ class CascadeEngine:
                     self._log_event(
                         campaign,
                         "order",
-                        f"Placed L{order.level} limit buy ${order.usd_notional:g} @ {order.price:,.2f}",
+                        f"Placed L{order.level} limit buy ${order.usd_notional:g} @ {price:,.2f}"
+                        + (f" (trailing under fib {order.price:,.2f})" if order.entry_style == "trail" else ""),
                     )
                     changed = True
                 else:

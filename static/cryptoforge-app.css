@@ -388,6 +388,10 @@
     width: 6px;
     border-radius: 999px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.20);
+    /* cfInitBrandMotion() scales these on scaleY; growing from the baseline is
+       what makes them read as depth columns rather than stretching bars. */
+    transform-origin: 50% 100%;
+    will-change: transform;
   }
   .brand-column.col-a {
     left: 9px;

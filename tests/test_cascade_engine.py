@@ -398,20 +398,30 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64753.77)
         self.assertEqual(self.campaign.active_trendline_id, 2)
 
-    def test_skipping_keeps_the_previous_ladder_resting_so_the_entry_fills(self):
-        """This is why the skip matters: fib 2's L4 sits at 64,138.25 and price
-        reaches 64,077.76 at 19:50. Creating a third fib would have cancelled
-        that order one candle before it filled."""
+    def test_skipping_keeps_the_previous_ladder_resting(self):
+        """This is why the skip matters: fib 2's L4 sits at 64,138.25. Creating
+        a third fib would have retired that order while it was still working."""
         self._feed(29)
         self.assertEqual(len(self.campaign.legs), 2)
-        self.assertTrue(self.campaign.all_fills, "the resting L4 should have filled")
-        fill = self.campaign.all_fills[0]
-        self.assertEqual(fill.leg_id, 2)
-        self.assertAlmostEqual(fill.price, 64138.25)
+        l4 = self.campaign.legs[1].pending_orders[4]
+        self.assertTrue(l4.is_open)
+        self.assertAlmostEqual(l4.price, 64138.25)
 
-    def test_mother_break_realises_the_open_round(self):
-        """Price back above the mother high can only happen after passing the
-        TP, so the round must be closed in profit, never left open."""
+    def test_a_wick_under_the_line_no_longer_buys(self):
+        """The trail rule's real cost, on a real day. Price reached 64,077.76 at
+        19:50 — under L4's 64,138.25 line — but that was a WICK on a green
+        candle; no candle ever closed below the line. The old rule filled at
+        64,138.25 on that wick; the trail rule sits it out entirely."""
+        self._feed(29)
+        self.assertEqual(self.campaign.all_fills, [])
+        l4 = self.campaign.legs[1].pending_orders[4]
+        self.assertFalse(l4.armed)
+        self.assertIsNone(l4.working_price)
+
+    def test_mother_break_with_nothing_filled_ends_flat(self):
+        """Same day, run to the mother break. With no entry taken there is no
+        round to realise — the campaign simply ends flat rather than closing a
+        position it never opened."""
         self._feed(29)
         for idx, o, h, low, c in [
             (37, 64416.01, 64608.00, 64398.15, 64604.65),
@@ -421,9 +431,8 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         ]:
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
-        self.assertEqual(len(self.campaign.rounds), 1)
-        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
-        self.assertAlmostEqual(self.campaign.rounds[0].avg_entry, 64138.25)
+        self.assertEqual(self.campaign.rounds, [])
+        self.assertEqual(self.campaign.filled_base_qty, 0.0)
 
 
 # Third regression day: BTCUSDT 5m from the mother candle at 2026-07-20 18:10
@@ -502,6 +511,116 @@ class CascadeThirdDayRegressionTests(unittest.TestCase):
         after the dip, which is why fib 0 is the later 65,246."""
         self._feed(16)
         self.assertNotAlmostEqual(self.campaign.legs[0].touch_high, 65274.58)
+
+
+class CascadeTrailEntryTests(unittest.TestCase):
+    """L2/L4 do not rest on the fib line. They arm on a close below it and then
+    follow red closes down; L8 stays a plain limit at its line."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = Campaign(
+            campaign_id="trail1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        self.campaign.state = "TRENDLINE_ACTIVE"
+        self.engine.campaigns[self.campaign.campaign_id] = self.campaign
+        # A fib whose L2 sits at 64,704.01 — the line in the user's screenshot.
+        leg = Leg(leg_id=1, trendline_id=1, low=64730.01, touch_high=64756.01, touch_timestamp=0)
+        leg.fib = FibLadder(high_anchor=64756.01, low_anchor=64730.01)
+        leg.pool_usd = 300.0
+        leg.pool_total_usd = 300.0
+        self.campaign.legs.append(leg)
+        plan_leg_orders(self.campaign, leg)
+        self.leg = leg
+        self.l2 = leg.pending_orders[2]
+        self.l8 = leg.pending_orders[8]
+        self.assertAlmostEqual(self.l2.price, 64704.01, places=2)
+
+    def _candle(self, idx, o, h, low, c):
+        _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
+        # Guard: these tests are about the entry, not about structure — the fed
+        # candles must not spawn a new leg out from under the one under test.
+        self.assertIs(self.campaign.current_leg, self.leg)
+
+    def test_l8_still_rests_on_its_own_line(self):
+        self.assertEqual(self.l8.entry_style, "limit")
+        self.assertTrue(self.l8.armed)
+        self.assertAlmostEqual(self.l8.working_price, self.l8.price)
+
+    def test_l2_rests_nowhere_until_its_line_breaks(self):
+        self.assertEqual(self.l2.entry_style, "trail")
+        self.assertFalse(self.l2.armed)
+        self.assertIsNone(self.l2.working_price)
+        # A candle that only wicks under the line does not arm it.
+        self._candle(1, 64740.0, 64745.0, 64690.0, 64730.0)
+        self.assertFalse(self.l2.armed)
+        self.assertEqual(self.campaign.all_fills, [])
+
+    def _l2_fills(self):
+        return [f for f in self.campaign.all_fills if f.level == 2]
+
+    def test_arms_on_the_red_close_below_the_line_and_fills_lower(self):
+        self._candle(1, 64720.0, 64722.0, 64545.0, 64650.29)  # crosses and closes below
+        self.assertTrue(self.l2.armed)
+        self.assertAlmostEqual(self.l2.working_price, 64650.29)
+        # L2 cannot be filled by the candle that set it, even though that candle
+        # traded far below the close. L8 is a plain limit at 64,548.01, so the
+        # same candle does fill that one — the two levels behave differently.
+        self.assertEqual(self._l2_fills(), [])
+        self.assertEqual([f.level for f in self.campaign.all_fills], [8])
+        self._candle(2, 64650.0, 64655.0, 64560.0, 64570.0)
+        self.assertEqual(len(self._l2_fills()), 1)
+        self.assertAlmostEqual(self._l2_fills()[0].price, 64650.29)
+
+    def test_entry_is_cheaper_than_resting_on_the_line(self):
+        self._candle(1, 64720.0, 64722.0, 64545.0, 64650.29)
+        self._candle(2, 64650.0, 64655.0, 64560.0, 64570.0)
+        self.assertLess(self._l2_fills()[0].price, self.l2.price)
+
+    def test_trails_down_on_red_and_ignores_green(self):
+        # Live mode, so nothing fills locally and the trail itself is visible.
+        # In paper the first candle to trade under the armed price takes it,
+        # which is the point of the entry — see the fill test above.
+        self.campaign.mode = "live"
+        self._candle(1, 64720.0, 64722.0, 64700.0, 64700.0)  # arm at 64,700
+        self.assertAlmostEqual(self.l2.working_price, 64700.0)
+        self._candle(2, 64700.0, 64760.0, 64699.0, 64750.0)  # green: no move
+        self.assertAlmostEqual(self.l2.working_price, 64700.0)
+        self._candle(3, 64750.0, 64752.0, 64740.0, 64745.0)  # red but ABOVE the line
+        self.assertAlmostEqual(self.l2.working_price, 64700.0)
+        self._candle(4, 64699.0, 64699.0, 64650.0, 64660.0)  # red, lower: trails down
+        self.assertAlmostEqual(self.l2.working_price, 64660.0)
+
+    def test_never_chases_the_order_back_up(self):
+        self.campaign.mode = "live"
+        self._candle(1, 64720.0, 64722.0, 64600.0, 64620.0)
+        self.assertAlmostEqual(self.l2.working_price, 64620.0)
+        self._candle(2, 64700.0, 64701.0, 64640.0, 64680.0)  # red, but higher close
+        self.assertAlmostEqual(self.l2.working_price, 64620.0)
+
+    def test_live_trail_move_recycles_the_order_for_replacement(self):
+        self.campaign.mode = "live"
+        self._candle(1, 64720.0, 64722.0, 64700.0, 64700.0)
+        self.l2.status = "PLACED"
+        self.l2.order_id = "9001"
+        self._candle(2, 64699.0, 64699.0, 64650.0, 64660.0)
+        # The resting order must be released so the sync loop cancels it and
+        # re-places a tick lower under a fresh client id.
+        self.assertEqual(self.l2.status, "PENDING")
+        self.assertIsNone(self.l2.order_id)
+        self.assertEqual(self.l2.rev, 1)
+        self.assertTrue(self.l2.client_order_id.endswith("-2-1"))
+
+    def test_quantity_follows_the_trail_price(self):
+        self._candle(1, 64720.0, 64722.0, 64600.0, 64620.0)
+        self.assertAlmostEqual(self.l2.quantity, self.l2.usd_notional / 64620.0)
 
 
 class CascadeClosedHistoryTests(unittest.TestCase):
@@ -592,6 +711,12 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.campaign.legs.append(leg)
         build_fib_ladder_and_pool(self.campaign, leg)
         plan_leg_orders(self.campaign, leg)
+        # L2/L4 rest nowhere until their line breaks. Arm them at the line
+        # itself so these tests stay about the sync mechanics and keep their
+        # original prices; the arming rule is covered by CascadeTrailEntryTests.
+        for order in leg.pending_orders.values():
+            if order.entry_style == "trail":
+                order.trail_price = order.price
         self.leg = leg
 
     async def test_pending_orders_are_placed_with_client_ids(self):
