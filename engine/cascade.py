@@ -106,7 +106,7 @@ MOTHER_RETEST_PCT = 0.0005
 MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 15  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 16  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -125,9 +125,10 @@ MIN_LEG_SEPARATION_PCT = 0.0003
 # candle that created it, or it reuses the line already there.
 MIN_TRENDLINE_SEPARATION_PCT = 0.0015
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
-# Where a sub-minimum level's money goes: up into the shallower level, where
-# price can still reach it. Level 2 is the shallowest and has no entry here.
-MERGE_TARGET = {8: 4, 4: 2}
+# Where a sub-minimum level's money goes: down into the next deeper level, so
+# it is only ever spent at a better price. Level 8 is the deepest and has no
+# entry here — its leftovers carry to the next fib instead.
+MERGE_TARGET = {2: 4, 4: 8}
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
 # View-only roll-ups for the campaign chart. The engine always steps in 5m;
@@ -784,44 +785,43 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     else:
         usd = {level: pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
 
-    # Slices under Binance's minimum have to go somewhere. They roll UP into the
-    # shallower level, not down into the deeper one.
+    # Slices under Binance's minimum roll DOWN into the next deeper level:
+    # 2 -> 4 -> 8. Level 2's 20% joins level 4's 30% and rests at level 4 as
+    # 50%; level 4's 30% joins level 8's 50% and rests at level 8. Money never
+    # travels back up — a share earmarked for the deep end is not allowed to be
+    # spent at the shallow end, because paying the shallow price for it is
+    # exactly the overpaying the ladder exists to avoid.
     #
-    # Downward was the obvious reading of "put more money deeper", and it was
-    # wrong in practice: on a small pool every shallow slice got swallowed and
-    # the entire allocation ended up on level 8, below anything the market
-    # reached. Replaying fifteen of the user's own days, that cost a third of
-    # them any entry at all — one drew seven fibs and bought nothing while price
-    # traded straight through four levels that had no order on them.
-    #
-    # The deep bias is not lost. Within a fib the split is still 20/30/50
-    # whenever the pool can carry it, and across fibs each new one sits lower
-    # than the last, so money still lands progressively deeper as the fall goes
-    # on. It just stops landing somewhere price never visits.
+    # This only works because every fib now keeps its ladder resting. When a new
+    # fib used to cancel the one before it, merging downward buried the whole
+    # allocation at level 8 below anything price reached and cost a third of the
+    # replayed days any entry at all. With the old fibs still live, their
+    # shallow levels are already sitting where price is, so the deep bias costs
+    # nothing and puts more money in at the better prices.
     merged = set()
     carried = False
     moved: Dict[int, float] = {}  # level -> dollars that left it
     received: Dict[int, List[list]] = {}  # level -> [[from_level, usd], ...]
     own = dict(usd)  # each level's own share, before anything arrives
-    if usd[8] < min_notional:
-        moved[8] = usd[8]
-        received.setdefault(4, []).append([8, round(usd[8], 2)])
-        usd[4] += usd[8]
-        usd[8] = 0.0
-        merged.add(8)
+    if usd[2] < min_notional:
+        moved[2] = usd[2]
+        received.setdefault(4, []).append([2, round(usd[2], 2)])
+        usd[4] += usd[2]
+        usd[2] = 0.0
+        merged.add(2)
     if usd[4] < min_notional:
         moved[4] = usd[4]
-        received.setdefault(2, []).append([4, round(usd[4], 2)])
-        usd[2] += usd[4]
+        received.setdefault(8, []).append([4, round(usd[4], 2)])
+        usd[8] += usd[4]
         usd[4] = 0.0
         merged.add(4)
-    if usd[2] < min_notional:
-        # Even pooled it cannot be placed — hand it back so the next fib
-        # inherits it, and don't count it against this leg.
-        moved[2] = usd[2]
-        campaign.carry_forward_usd = usd[2]
-        leg.pool_total_usd = max(leg.pool_total_usd - usd[2], 0.0)
-        usd[2] = 0.0
+    if usd[8] < min_notional:
+        # Even the whole pool at the deepest level cannot be placed — hand it
+        # back so the next fib inherits it, and don't count it against this leg.
+        moved[8] = usd[8]
+        campaign.carry_forward_usd = usd[8]
+        leg.pool_total_usd = max(leg.pool_total_usd - usd[8], 0.0)
+        usd[8] = 0.0
         carried = True
 
     # Capital cap: filled + everything already resting on the older fibs + this
@@ -847,7 +847,7 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
         price = max(leg.fib.level_price(level), 0.0)
         amount = usd[level]
         if amount <= 0 or price <= 0:
-            status = "MERGED" if level in merged else ("CARRIED" if carried and level == 2 else "CANCELLED")
+            status = "MERGED" if level in merged else ("CARRIED" if carried and level == 8 else "CANCELLED")
             leg.pending_orders[level] = PendingOrder(
                 level=level,
                 price=price or None,

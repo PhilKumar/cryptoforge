@@ -7049,9 +7049,31 @@ html[data-theme="light"] .journal-entry-notes section {
     padding: 10px 12px;
     border-radius: 10px;
     border: 1px solid rgba(118,138,176,0.18);
-    background: rgba(12,20,36,0.5);
+    /* A near-black wash reads as a panel on the dark theme and as dirty grey on
+       the light one, where it also drags the text below contrast. Tinted from
+       the theme's own surface instead. */
+    background: color-mix(in srgb, var(--card) 70%, transparent);
     font-size: 12px;
     line-height: 1.5;
+  }
+  [data-theme="light"] .cf-cascade-position {
+    background: rgba(15,23,42,0.035);
+    border-color: rgba(15,23,42,0.10);
+  }
+  /* Cascade chrome built before light mode existed: these carried a near-black
+     wash that stayed dark on a white page. */
+  [data-theme="light"] .cf-mode-toggle,
+  [data-theme="light"] .cf-tf-toggle,
+  [data-theme="light"] .cf-engine-chip,
+  [data-theme="light"] .cf-journal-kpi {
+    background: rgba(255,255,255,0.96);
+    border-color: rgba(15,23,42,0.10);
+  }
+  [data-theme="light"] .cf-cascade-card .cf-cascade-head:hover { background: rgba(15,23,42,0.04); }
+  [data-theme="light"] .cf-chart-overlay { background: rgba(15,23,42,0.42); }
+  [data-theme="light"] .cf-cascade-card.is-ended .cf-cascade-num {
+    color: #64748b;
+    background: rgba(15,23,42,0.07);
   }
   .cf-cascade-position.is-open { border-color: color-mix(in srgb, var(--accent) 38%, transparent); }
   .cf-cascade-position.is-closed { border-color: color-mix(in srgb, var(--green, #3fae56) 34%, transparent); }

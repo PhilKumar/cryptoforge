@@ -440,20 +440,25 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         ]
         self.assertTrue(working)
 
-    def test_the_day_now_trades_because_the_pool_lands_where_price_goes(self):
-        """This day used to buy nothing: every shallow slice was under Binance's
-        minimum and merged DOWN onto level 8, below anything price reached.
-        Pooling up into level 2 instead puts the money in reach, and the buy
-        stop fills."""
-        self._feed(29)
-        self.assertTrue(self.campaign.all_fills, "the pooled level 2 should have filled")
-        fill = self.campaign.all_fills[0]
-        self.assertEqual(fill.level, 2)
-        self.assertLess(fill.price, self.campaign.mother_high)
+    def test_this_day_is_the_price_of_pooling_downward(self):
+        """The cost of the top-to-bottom rule, kept visible rather than hidden.
 
-    def test_mother_break_realises_the_round_it_opened(self):
-        """Same day, run to the mother break. Price cannot reach the mother high
-        without passing the target first, so the round must close in profit."""
+        Level 2's slice is under the minimum, so it joins level 4 and rests at
+        64,268.91. Price on this day turned at 64,344 — above that line — so
+        nothing fills. Pooling upward instead would have put the money on level
+        2 at 64,567.35 and bought. The rule is deliberate: a share earmarked for
+        the deep end must not be spent at the shallow price, and money not spent
+        here rolls on to the next fib rather than being lost."""
+        self._feed(29)
+        self.assertFalse(self.campaign.all_fills)
+        pooled = self.campaign.legs[0].pending_orders[4]
+        self.assertEqual(pooled.status, "PENDING")
+        self.assertAlmostEqual(pooled.usd_notional, 5.4, places=2)  # 20% + 30%
+        self.assertEqual(self.campaign.legs[0].pending_orders[2].status, "MERGED")
+
+    def test_mother_break_ends_the_campaign_flat_when_nothing_filled(self):
+        """Same day, run to the mother break. With the ladder pooled down, price
+        never reached a funded level, so the campaign ends holding nothing."""
         self._feed(29)
         for idx, o, h, low, c in [
             (37, 64416.01, 64608.00, 64398.15, 64604.65),
@@ -463,9 +468,8 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         ]:
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
-        self.assertEqual(len(self.campaign.rounds), 1)
-        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
-        self.assertEqual(self.campaign.filled_base_qty, 0.0)  # closed out, flat
+        self.assertEqual(self.campaign.filled_base_qty, 0.0)
+        self.assertEqual(self.campaign.realized_pnl_total, 0.0)
 
 
 # Third regression day: BTCUSDT 5m from the mother candle at 2026-07-20 18:10

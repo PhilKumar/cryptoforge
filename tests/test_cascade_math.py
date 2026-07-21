@@ -98,22 +98,34 @@ class FibLadderPoolTests(unittest.TestCase):
 
 
 class PlanLegOrdersTests(unittest.TestCase):
-    def test_users_example_l4_merges_up_into_l2(self):
-        """$2000 capital, 0.5% dip: $2/$3/$5. L4's $3 is under the minimum, so it
-        rolls UP into L2, which price can still reach. L8's $5 stands on its own."""
+    def test_users_example_small_slices_merge_down_not_up(self):
+        """$2000 capital, 0.5% dip: $2/$3/$5. L2's 20% is under the minimum, so
+        it joins L4's 30% and rests at level 4 as 50%. Money only ever travels
+        DOWN — a share earmarked for the deep end must never be spent at the
+        shallow price."""
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg = _leg(campaign, low=99.5, touch_high=99.8)
         build_fib_ladder_and_pool(campaign, leg)
         self.assertAlmostEqual(leg.pool_usd, 10.0)
         plan_leg_orders(campaign, leg)
 
-        self.assertEqual(leg.pending_orders[4].status, "MERGED")
-        self.assertAlmostEqual(leg.pending_orders[4].usd_notional, 0.0)
-        self.assertAlmostEqual(leg.pending_orders[2].usd_notional, 5.0)
-        self.assertEqual(leg.pending_orders[2].status, "PENDING")
+        self.assertEqual(leg.pending_orders[2].status, "MERGED")
+        self.assertAlmostEqual(leg.pending_orders[2].usd_notional, 0.0)
+        self.assertAlmostEqual(leg.pending_orders[4].usd_notional, 5.0)  # 20% + 30%
+        self.assertEqual(leg.pending_orders[4].status, "PENDING")
         self.assertAlmostEqual(leg.pending_orders[8].usd_notional, 5.0)
         self.assertEqual(leg.pending_orders[8].status, "PENDING")
         self.assertAlmostEqual(campaign.carry_forward_usd, 0.0)
+
+    def test_deep_money_is_never_pulled_up_to_a_shallow_level(self):
+        """The rule stated the other way round: L4's 30% and L8's 50% must not
+        end up resting at level 2, however small the pool gets."""
+        campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
+        leg = _leg(campaign, low=99.6, touch_high=99.95)
+        build_fib_ladder_and_pool(campaign, leg)
+        plan_leg_orders(campaign, leg)
+        funded = {lv: o.usd_notional for lv, o in leg.pending_orders.items() if o.usd_notional > 0}
+        self.assertNotIn(2, funded, "level 2 must never be topped up from below")
 
     def test_all_levels_meet_minimum_on_deep_pool(self):
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
@@ -138,8 +150,8 @@ class PlanLegOrdersTests(unittest.TestCase):
         for level in (2, 4, 8):
             self.assertEqual(leg.pending_orders[level].usd_notional, 0.0)
             self.assertNotEqual(leg.pending_orders[level].status, "PENDING")
-        # Everything pooled up into L2, and even that could not be placed.
-        self.assertEqual(leg.pending_orders[2].status, "CARRIED")
+        # Everything pooled down into L8, and even that could not be placed.
+        self.assertEqual(leg.pending_orders[8].status, "CARRIED")
 
         # The carried pool joins the next leg's pool.
         leg2 = _leg(campaign, low=99.0, touch_high=99.5, leg_id=2)

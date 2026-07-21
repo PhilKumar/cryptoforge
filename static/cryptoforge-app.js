@@ -7906,7 +7906,7 @@ function _cfCascadeLadderRows(campaign) {
       var tone = status === 'FILLED' ? 'var(--green, #3fae56)'
         : status === 'WAIT 2 REDS' ? 'var(--yellow, #f59e0b)'
         : live ? 'var(--accent, #1f6fd6)'
-        : 'var(--text-muted, #888)';
+        : 'var(--muted, #888)';
       // Show the trigger, with the limit cap under it; the fib line is only
       // the level that has to break first, not where the order sits.
       var priceCell = stop
@@ -8234,7 +8234,7 @@ function cfRenderCascadeEvents(campaigns) {
   mount.innerHTML = events.slice(-80).reverse().map(function(event) {
     var tone = event.level === 'error' || event.level === 'warn' ? 'var(--red, #d9534f)'
       : event.level === 'fill' || event.level === 'complete' ? 'var(--green, #3fae56)'
-      : 'var(--text-muted, #888)';
+      : 'var(--muted, #888)';
     return '<div style="padding:3px 0;font-size:12.5px;border-bottom:1px solid var(--border, rgba(128,128,128,.15));">'
       + '<span style="color:' + tone + ';font-weight:600;">[' + _escapeHtml(event.level || 'info') + ']</span> '
       + '<span class="table-meta">' + _escapeHtml(event.timestamp || '') + '</span> '
@@ -8477,7 +8477,33 @@ function _cfCascadeIst(ts) {
   return d.toISOString().slice(5, 16).replace('T', ' ');
 }
 
+// The chart is hand-drawn SVG, so it cannot inherit the theme through CSS
+// variables the way the rest of the page does. These two palettes are the same
+// hues at the two lightnesses each background needs: on white the pastels
+// vanish, and the near-white "avg entry" line disappears completely.
+var _CF_CHART_DARK = {
+  grid: 'rgba(148,163,184,0.12)', axis: 'rgba(148,163,184,0.55)',
+  up: '#3fae56', down: '#d9534f', mother: '#a855f7', tp: '#10b981',
+  avg: '#e2e8f0', fill: '#22c55e', fillRing: '#0b1220',
+  fibs: ['#3b82f6', '#22c55e', '#ef4444', '#a855f7']
+};
+var _CF_CHART_LIGHT = {
+  grid: 'rgba(15,23,42,0.10)', axis: 'rgba(51,65,85,0.75)',
+  up: '#0f766e', down: '#be123c', mother: '#7c3aed', tp: '#047857',
+  avg: '#334155', fill: '#15803d', fillRing: '#ffffff',
+  fibs: ['#1d4ed8', '#15803d', '#be123c', '#7c3aed']
+};
+
+function _cfChartPalette() {
+  var theme = document.documentElement.getAttribute('data-theme');
+  if (!theme || theme === 'auto') {
+    theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  return theme === 'light' ? _CF_CHART_LIGHT : _CF_CHART_DARK;
+}
+
 function _cfCascadeChartSvg(d) {
+  var PAL = _cfChartPalette();
   var candles = (d.candles || []).slice();
   if (!candles.length) return '';
   // Labels sit in a gutter on the LEFT, the way they do on a TradingView
@@ -8516,9 +8542,9 @@ function _cfCascadeChartSvg(d) {
     var gp = minP + (maxP - minP) * (g / 4);
     var gy = Y(gp).toFixed(1);
     parts.push('<line x1="' + padL + '" y1="' + gy + '" x2="' + (padL + plotW) + '" y2="' + gy +
-      '" stroke="rgba(148,163,184,0.12)" stroke-width="1"/>');
+      '" stroke="' + PAL.grid + '" stroke-width="1"/>');
     parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (parseFloat(gy) + 3) +
-      '" fill="rgba(148,163,184,0.55)" font-size="9.5" font-family="monospace">' + fmt(gp) + '</text>');
+      '" fill="' + PAL.axis + '" font-size="9.5" font-family="monospace">' + fmt(gp) + '</text>');
   }
 
   // time axis labels
@@ -8526,7 +8552,7 @@ function _cfCascadeChartSvg(d) {
   for (var t = 0; t < ticks; t++) {
     var ci = Math.round((n - 1) * (t / Math.max(ticks - 1, 1)));
     var cx = X(ci);
-    parts.push('<text x="' + cx.toFixed(1) + '" y="' + (H - 8) + '" fill="rgba(148,163,184,0.55)" ' +
+    parts.push('<text x="' + cx.toFixed(1) + '" y="' + (H - 8) + '" fill="' + PAL.axis + '" ' +
       'font-size="9.5" font-family="monospace" text-anchor="middle">' + _escapeHtml(_cfCascadeIst(candles[ci].t)) + '</text>');
   }
 
@@ -8534,7 +8560,7 @@ function _cfCascadeChartSvg(d) {
   var bodyW = Math.max(Math.min(cw * 0.65, 9), 1);
   candles.forEach(function (c, i) {
     var up = c.c >= c.o;
-    var col = up ? '#3fae56' : '#d9534f';
+    var col = up ? PAL.up : PAL.down;
     var x = X(i);
     parts.push('<line x1="' + x.toFixed(1) + '" y1="' + Y(c.h).toFixed(1) + '" x2="' + x.toFixed(1) +
       '" y2="' + Y(c.l).toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
@@ -8565,10 +8591,10 @@ function _cfCascadeChartSvg(d) {
   }
 
   // mother candle high
-  if (d.mother && d.mother.high) hline(d.mother.high, '#a855f7', 'MOTHER ' + fmt(d.mother.high), '5,3', 1.1);
+  if (d.mother && d.mother.high) hline(d.mother.high, PAL.mother, 'MOTHER ' + fmt(d.mother.high), '5,3', 1.1);
 
   // every trendline, mother high -> its swing high
-  var tlColors = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7'];
+  var tlColors = PAL.fibs;
   // Only the four most recent lines stay on the chart: TL5 retires TL1, TL6
   // retires TL2. Beyond four the older ones are noise over the price action.
   (d.trendlines || []).slice(-4).forEach(function (tl) {
@@ -8598,7 +8624,7 @@ function _cfCascadeChartSvg(d) {
   // every fib: 0/1 anchors solid, 2/4/8 buy levels dotted
   // Fixed four-colour cycle: fib 1 blue, 2 green, 3 red, 4 purple, then repeat.
   // Keyed off leg_id, not position, so a fib keeps its colour as others retire.
-  var fibColors = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7'];
+  var fibColors = PAL.fibs;
   legs.forEach(function (leg) {
     var col = fibColors[(Math.max(1, Number(leg.leg_id) || 1) - 1) % fibColors.length];
     // 0 and 1 are the fib's own boundaries: solid, but thin and half-lit so
@@ -8624,14 +8650,14 @@ function _cfCascadeChartSvg(d) {
   });
 
   // take profit (only exists once an entry has filled)
-  if (d.tp_price) hline(Number(d.tp_price), '#10b981', 'TARGET ' + fmt(d.tp_price), '6,3', 1.2);
-  if (d.avg_entry_price) hline(Number(d.avg_entry_price), '#e2e8f0', 'AVG ENTRY ' + fmt(d.avg_entry_price), '4,4', 1.1);
+  if (d.tp_price) hline(Number(d.tp_price), PAL.tp, 'TARGET ' + fmt(d.tp_price), '6,3', 1.2);
+  if (d.avg_entry_price) hline(Number(d.avg_entry_price), PAL.avg, 'AVG ENTRY ' + fmt(d.avg_entry_price), '4,4', 1.1);
 
   // fills
   (d.fills || []).forEach(function (f) {
     if (!f || !f.price || !inView(f.price)) return;
     parts.push('<circle cx="' + Xt(f.timestamp).toFixed(1) + '" cy="' + Y(f.price).toFixed(1) +
-      '" r="3.5" fill="#22c55e" stroke="#0b1220" stroke-width="1"/>');
+      '" r="3.5" fill="' + PAL.fill + '" stroke="' + PAL.fillRing + '" stroke-width="1"/>');
   });
 
   return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:900px;display:block;" ' +
@@ -8677,14 +8703,15 @@ function _cfCascadeChartHtml(d) {
     return '<div class="cf-table-empty-cell" style="padding:16px;">No candles replayed yet for this campaign. '
       + 'If it was just created, wait for the next 5m candle or hit Broker Sync.</div>';
   }
+  var P = _cfChartPalette();
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
-    + '<span style="color:#a855f7;">┄ mother high</span> &nbsp; '
-    + '<span style="color:#3b82f6;">— trendlines (TL)</span> &nbsp; '
-    + '<span style="color:#3b82f6;">— fib 0 / 1 (the swing)</span> &nbsp; '
-    + '<strong style="color:#3b82f6;">┅ buy levels with money on them</strong> &nbsp; '
-    + '<span style="color:#3b82f6;opacity:.5;">┈ buy levels left empty</span> &nbsp; '
-    + '<span style="color:#10b981;">┄ target</span> &nbsp; '
-    + '<span style="color:#22c55e;">● fills</span>'
+    + '<span style="color:' + P.mother + ';">┄ mother high</span> &nbsp; '
+    + '<span style="color:' + P.fibs[0] + ';">— trendlines (TL)</span> &nbsp; '
+    + '<span style="color:' + P.fibs[0] + ';">— fib 0 / 1 (the swing)</span> &nbsp; '
+    + '<strong style="color:' + P.fibs[0] + ';">┅ buy levels with money on them</strong> &nbsp; '
+    + '<span style="color:' + P.fibs[0] + ';opacity:.5;">┈ buy levels left empty</span> &nbsp; '
+    + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
+    + '<span style="color:' + P.fill + ';">● fills</span>'
     + '<br>Fib 1 is blue, 2 green, 3 red, 4 purple, then the cycle repeats. Labels are on the left,'
     + ' and each funded buy level carries the dollars resting on it.'
     + ' Scroll to move down the dialog; hold Ctrl (or &#8984;) and scroll to zoom, or drag to pan.'
