@@ -10,11 +10,11 @@ from engine.cascade import (
     Leg,
     Trendline,
     build_fib_ladder_and_pool,
-    cancel_and_carry_forward,
     compute_tp_price,
     leg_broken,
     plan_leg_orders,
     recompute_avg_entry_price,
+    replan_ladder,
     timeframe_for_level,
     trendline_price,
 )
@@ -98,40 +98,38 @@ class FibLadderPoolTests(unittest.TestCase):
 
 
 class PlanLegOrdersTests(unittest.TestCase):
-    def test_users_example_small_slices_merge_down_not_up(self):
-        """$2000 capital, 0.5% dip: $2/$3/$5. L2's 20% is under the minimum, so
-        it joins L4's 30% and rests at level 4 as 50%. Money only ever travels
-        DOWN — a share earmarked for the deep end must never be spent at the
-        shallow price."""
+    def test_a_short_pool_funds_the_shallowest_rungs_first(self):
+        """$2000 capital, 0.5% dip: a $10 pool against a $5.50 rung. That is one
+        full rung and change, so the rung nearest the market takes it and the
+        deeper two get nothing — a part-rung cannot be placed at all."""
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg = _leg(campaign, low=99.5, touch_high=99.8)
         build_fib_ladder_and_pool(campaign, leg)
         self.assertAlmostEqual(leg.pool_usd, 10.0)
         plan_leg_orders(campaign, leg)
 
-        self.assertEqual(leg.pending_orders[2].status, "MERGED")
-        self.assertAlmostEqual(leg.pending_orders[2].usd_notional, 0.0)
-        self.assertAlmostEqual(leg.pending_orders[4].usd_notional, 5.0)  # 20% + 30%
-        self.assertEqual(leg.pending_orders[4].status, "PENDING")
-        self.assertAlmostEqual(leg.pending_orders[8].usd_notional, 5.0)
-        self.assertEqual(leg.pending_orders[8].status, "PENDING")
-        self.assertAlmostEqual(campaign.carry_forward_usd, 0.0)
+        self.assertEqual(leg.pending_orders[2].status, "PENDING")
+        self.assertAlmostEqual(leg.pending_orders[2].usd_notional, 10.0)  # rung + all the surplus
+        self.assertEqual(leg.pending_orders[4].status, "UNFUNDED")
+        self.assertEqual(leg.pending_orders[8].status, "UNFUNDED")
 
-    def test_deep_money_is_never_pulled_up_to_a_shallow_level(self):
-        """The rule stated the other way round: L4's 30% and L8's 50% must not
-        end up resting at level 2, however small the pool gets."""
+    def test_every_funded_rung_clears_the_exchange_minimum(self):
+        """No rung is ever left holding an amount Binance would reject."""
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg = _leg(campaign, low=99.6, touch_high=99.95)
         build_fib_ladder_and_pool(campaign, leg)
         plan_leg_orders(campaign, leg)
-        funded = {lv: o.usd_notional for lv, o in leg.pending_orders.items() if o.usd_notional > 0}
-        self.assertNotIn(2, funded, "level 2 must never be topped up from below")
+        for order in leg.pending_orders.values():
+            if order.usd_notional > 0:
+                self.assertGreaterEqual(order.usd_notional, 5.5)
 
     def test_all_levels_meet_minimum_on_deep_pool(self):
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg = _leg(campaign, low=95.0, touch_high=98.0)
         build_fib_ladder_and_pool(campaign, leg)  # $100 pool
         plan_leg_orders(campaign, leg)
+        # Every rung clears the minimum on its own, so the split is exactly
+        # 20/30/50 with no top-ups.
         self.assertAlmostEqual(leg.pending_orders[2].usd_notional, 20.0)
         self.assertAlmostEqual(leg.pending_orders[4].usd_notional, 30.0)
         self.assertAlmostEqual(leg.pending_orders[8].usd_notional, 50.0)
@@ -141,71 +139,72 @@ class PlanLegOrdersTests(unittest.TestCase):
             self.assertAlmostEqual(order.price, leg.fib.level_price(level))
             self.assertAlmostEqual(order.quantity, order.usd_notional / order.price)
 
-    def test_whole_pool_below_minimum_carries_forward(self):
+    def test_a_pool_under_one_rung_places_nothing_at_all(self):
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg = _leg(campaign, low=99.85, touch_high=99.95)  # 0.15% depth => $3 pool
         build_fib_ladder_and_pool(campaign, leg)
         plan_leg_orders(campaign, leg)
-        self.assertAlmostEqual(campaign.carry_forward_usd, 3.0)
         for level in (2, 4, 8):
             self.assertEqual(leg.pending_orders[level].usd_notional, 0.0)
-            self.assertNotEqual(leg.pending_orders[level].status, "PENDING")
-        # Everything pooled down into L8, and even that could not be placed.
-        self.assertEqual(leg.pending_orders[8].status, "CARRIED")
+            self.assertEqual(leg.pending_orders[level].status, "UNFUNDED")
 
-        # The carried pool joins the next leg's pool.
+        # The money is not lost — it is still in the pool, and the next fib's
+        # rungs join the same ladder, so together they can now place.
         leg2 = _leg(campaign, low=99.0, touch_high=99.5, leg_id=2)
         build_fib_ladder_and_pool(campaign, leg2)
-        # funded off fib 1's level 1 (99.85), not the mother high
-        self.assertAlmostEqual(leg2.pool_usd, (99.85 - 99.0) / 99.85 * 100 * 20.0, places=6)
         plan_leg_orders(campaign, leg2)
-        total = sum(o.usd_notional for o in leg2.pending_orders.values())
-        # per-level notionals round to cents, so allow a sub-cent difference
-        self.assertAlmostEqual(total, leg2.pool_usd + 3.0, places=1)
-        self.assertAlmostEqual(campaign.carry_forward_usd, 0.0)
+        funded = [o for lg in campaign.legs for o in lg.pending_orders.values() if o.usd_notional > 0]
+        self.assertTrue(funded, "the two pools together clear a rung")
+        self.assertAlmostEqual(sum(o.usd_notional for o in funded), campaign.total_allocation_usd, places=1)
 
-    def test_untouched_fib1_pool_carries_into_fib2_in_full(self):
+    def test_the_ladder_is_ordered_by_price_across_every_fib(self):
+        """Fibs overlap, so the rungs interleave. Funding follows price, not
+        which fib a level happened to belong to."""
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg1 = _leg(campaign, low=95.0, touch_high=98.0)
         build_fib_ladder_and_pool(campaign, leg1)
         plan_leg_orders(campaign, leg1)
-        pool1 = leg1.pool_total_usd
-        self.assertGreater(pool1, 0.0)
-
-        # Nothing filled on fib 1 — the previous low breaks and fib 2 opens.
-        leg2 = _leg(campaign, low=92.0, touch_high=96.0, leg_id=2)
-        carried = cancel_and_carry_forward(campaign, leg1)
-        self.assertEqual(leg1.pending_orders[8].status, "CARRIED")
-        self.assertAlmostEqual(carried, pool1)
-
+        leg2 = _leg(campaign, low=94.0, touch_high=97.0, leg_id=2)
         build_fib_ladder_and_pool(campaign, leg2)
         plan_leg_orders(campaign, leg2)
-        self.assertAlmostEqual(leg2.carry_in_usd, pool1)
-        self.assertAlmostEqual(leg2.pool_total_usd, leg2.pool_usd + pool1)
-        # The lump is re-split 20/30/50 with fib 2's own allocation.
-        self.assertAlmostEqual(leg2.pending_orders[8].usd_notional, round(leg2.pool_total_usd * 0.50, 2), places=2)
 
-    def test_level_still_held_does_not_carry_but_a_closed_round_does(self):
+        rungs = sorted(
+            (o for lg in campaign.legs for o in lg.pending_orders.values() if o.usd_notional > 0),
+            key=lambda o: -o.price,
+        )
+        # At least one of fib 2's rungs sits above one of fib 1's, which is the
+        # interleaving the old per-fib pools could not see.
+        self.assertTrue(any(o.leg_id == 2 for o in rungs[: len(rungs) // 2]))
+        self.assertAlmostEqual(sum(o.usd_notional for o in rungs), campaign.total_allocation_usd, places=1)
+
+    def test_money_in_an_open_position_is_not_re_offered_on_the_ladder(self):
+        """A rung that filled is spent. Its money is in the position, not on the
+        ladder, so what is left to place is the allocation minus the fill."""
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg1 = _leg(campaign, low=95.0, touch_high=98.0)
         build_fib_ladder_and_pool(campaign, leg1)
         plan_leg_orders(campaign, leg1)
-        pool1 = leg1.pool_total_usd
+        allocation = campaign.total_allocation_usd
 
-        # L4 fills and is STILL HELD — that notional stays out of the carry.
         held = leg1.pending_orders[4]
-        campaign.all_fills.append(Fill(price=held.price, quantity=held.quantity, level=4, leg_id=1, timestamp=1))
         held_usd = held.price * held.quantity
-        leg2 = _leg(campaign, low=92.0, touch_high=96.0, leg_id=2)
-        self.assertAlmostEqual(cancel_and_carry_forward(campaign, leg1), pool1 - held_usd, places=6)
+        campaign.all_fills.append(Fill(price=held.price, quantity=held.quantity, level=4, leg_id=1, timestamp=1))
+        held.status = "FILLED"
+        replan_ladder(campaign)
 
-        # Now the round closes at TP: principal returns, so the rest carries too.
+        resting = sum(o.usd_notional for o in leg1.pending_orders.values() if o.is_open)
+        self.assertAlmostEqual(resting, allocation - held_usd, places=1)
+
+        # The target hits: principal returns and goes straight back on the ladder.
         campaign.all_fills = []
-        campaign.carry_forward_usd = 0.0
-        leg3 = _leg(campaign, low=90.0, touch_high=94.0, leg_id=3)
-        self.assertAlmostEqual(cancel_and_carry_forward(campaign, leg1), pool1, places=6)
-        self.assertIsNotNone(leg2)
-        self.assertIsNotNone(leg3)
+        held.status = "CLOSED"
+        replan_ladder(campaign)
+        reoffered = sum(o.usd_notional for o in leg1.pending_orders.values() if o.is_open)
+        self.assertAlmostEqual(reoffered, allocation, places=1)
+        # ...but never back onto the rung that already bought — it keeps the
+        # amount it spent as history and is no longer offerable.
+        self.assertFalse(held.is_open)
+        self.assertNotIn(held, [o for o in leg1.pending_orders.values() if o.is_open])
 
     def test_capital_cap_trims_deepest_level_first(self):
         campaign = _campaign(capital=100.0, mother_high=100.0, min_notional=5.0)

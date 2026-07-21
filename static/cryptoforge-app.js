@@ -7851,9 +7851,6 @@ function cfRenderCascadeStatus(data) {
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
 }
 
-// The designed 20/30/50 split across the three buy levels.
-var _CF_CASCADE_SHARE = { 2: 20, 4: 30, 8: 50 };
-
 function _cfCascadeLadderRows(campaign) {
   var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
   if (!legs.length) return '<div class="table-meta">No legs yet — waiting for the first trendline touch.</div>';
@@ -7885,11 +7882,7 @@ function _cfCascadeLadderRows(campaign) {
         : '')
       + (leg.finalized ? '' : ' · forming')
       + (leg.escalated ? ' · 15m' : '')
-      + ' · pool $' + _cfCascadeUsd(leg.pool_total_usd || leg.pool_usd)
-      + (Number(leg.carry_in_usd) > 0
-        ? '<strong style="color:var(--green,#3fae56);"> (incl. $'
-          + _cfCascadeUsd(leg.carry_in_usd) + ' from f' + (leg.leg_id - 1) + ')</strong>'
-        : '')
+      + ' · adds $' + _cfCascadeUsd(leg.pool_usd) + ' to the pool'
       + (legLive > 0
         ? ' · <strong style="color:var(--accent,#1f6fd6);">$' + _cfCascadeUsd(legLive)
           + ' waiting to buy</strong>'
@@ -7920,41 +7913,28 @@ function _cfCascadeLadderRows(campaign) {
       // exactly where they went — "$4.06 → F1 L4" — rather than a percentage
       // and a status word you have to decode.
       var amount = Number(order.usd_notional) || 0;
-      var moved = Number(order.moved_usd) || 0;
-      var toLevel = order.moved_to_level;
       var amountCell;
       if (amount > 0) {
-        // When money arrived from a deeper level, show the sum rather than the
-        // total alone: "$1.38 + $2.04 from L4" is the arithmetic behind $3.42.
-        var got = Array.isArray(order.received) ? order.received : [];
-        var breakdown = got.length && Number(order.own_usd)
-          ? '$' + _cfCascadeUsd(order.own_usd) + ' own'
-            + got.map(function (r) { return ' + $' + _cfCascadeUsd(r[1]) + ' from L' + r[0]; }).join('')
-          : _CF_CASCADE_SHARE[level] + '% of pool';
+        // Every rung carries at least the exchange minimum plus a cushion; the
+        // note says how much of this rung is that base and how much is surplus
+        // the ladder had left over to weight deeper.
+        var base = Number(order.own_usd) || 0;
+        var extra = amount - base;
         amountCell = '$' + _cfCascadeUsd(amount)
-          + '<div class="table-meta">' + breakdown
+          + '<div class="table-meta">'
+          + (extra > 0.01 ? 'min $' + _cfCascadeUsd(base) + ' + $' + _cfCascadeUsd(extra) + ' extra'
+                          : 'minimum rung')
           + (Number(order.quantity) ? ' · ' + _cfCascadeFmt(order.quantity, 4) : '') + '</div>';
-      } else if (moved > 0) {
-        amountCell = '<span style="opacity:.6;">$0</span>'
-          + '<div class="table-meta">$' + _cfCascadeUsd(moved) + ' &rarr; '
-          + (toLevel ? 'F' + leg.leg_id + ' L' + toLevel : 'fib ' + (leg.leg_id + 1)) + '</div>';
       } else {
         amountCell = '<span style="opacity:.6;">$0</span>'
-          + '<div class="table-meta">not funded</div>';
+          + '<div class="table-meta">waiting for the pool to reach it</div>';
       }
       return '<tr>'
         + '<td>L' + level + (stop ? '<div class="table-meta">buy stop</div>' : '') + '</td>'
         + '<td class="num">' + priceCell + '</td>'
         + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
         + '<td class="num">' + amountCell + '</td>'
-        + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status)
-        + (status === 'MERGED'
-            ? '<div class="table-meta" style="font-weight:400;">into '
-              + (toLevel ? 'F' + leg.leg_id + ' L' + toLevel : 'fib ' + (leg.leg_id + 1)) + '</div>'
-            : status === 'CARRIED'
-              ? '<div class="table-meta" style="font-weight:400;">to fib ' + (leg.leg_id + 1) + '</div>'
-              : '')
-        + '</td>'
+        + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status) + '</td>'
         + '</tr>';
     }).join('');
     return head + body;
@@ -8067,8 +8047,6 @@ function _cfCascadeCampaignCard(campaign) {
       + (Number(campaign.resting_usd) > 0
         ? '<div class="admin-stat-note" title="Orders resting on the exchange — not bought yet">$'
           + _cfCascadeUsd(campaign.resting_usd) + ' waiting to buy</div>' : '')
-      + (Number(campaign.carry_forward_usd) > 0
-        ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.carry_forward_usd) + ' carried</div>' : '')
       + '</div>'
     + '<div class="stat-box"><div class="stat-label" title="Rounds Closed"><span>Rounds Closed</span></div><div class="stat-value">'
       + _escapeHtml(String(campaign.rounds_closed || 0)) + '</div>'
@@ -8147,8 +8125,8 @@ function _cfCascadePositionPanel(campaign, fills) {
       + '<strong>Nothing bought yet — no money has left the account.</strong> '
       + 'Every "waiting to buy" amount above is an order sitting on the exchange, '
       + 'not a position. It only becomes a real buy when price reaches it. '
-      + 'MERGED levels were under Binance\'s $5 minimum, so their share moved up '
-      + 'into the next shallower level where price can still reach it.'
+      + 'UNFUNDED rungs are ones the pool has not reached yet: every fib\'s levels '
+      + 'share one pool, and it fills from the price nearest the market downward.'
       + '</div>';
   }
 

@@ -257,48 +257,41 @@ class CascadeSwingModelTests(unittest.TestCase):
             [o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0],
             "fib 1 must still have a funded order resting after fib 2 is drawn",
         )
-        self.assertFalse([o for o in leg1.pending_orders.values() if o.status == "CARRIED" and o.usd_notional > 0])
-        # Nothing was carried out of fib 1 beyond the slice it could not place,
-        # so its resting notional accounts for its whole pool.
-        self.assertAlmostEqual(self.campaign.leg_resting_usd(leg1.leg_id), leg1.pool_total_usd, places=2)
-        # Every dollar of both allocations is still accounted for: resting on
-        # fib 1, laddered on fib 2, or waiting in the carry bucket.
+        # Both fibs feed one pool now. Every dollar of it is either resting on
+        # a rung or already spent buying one — none of it is stranded.
         self.assertAlmostEqual(
-            self.campaign.resting_usd + self.campaign.carry_forward_usd,
+            self.campaign.resting_usd + self.campaign.spent_usd,
             leg1.pool_usd + leg2.pool_usd,
             places=1,
         )
 
-    def test_round_closed_at_tp_returns_its_principal_to_the_next_fib(self):
-        """
-        The user's worked example: fib 1 ladders a pool, one level fills and the
-        target hits. When the previous low then breaks, fib 2 must inherit the
-        WHOLE fib 1 pool — the levels that never filled plus the principal the
-        closed round handed back.
-        """
-        self._feed_real(40)  # far enough to have fib 1 laddered
-        leg1 = self.campaign.legs[0]
-        # The leg's own allocation, before any slice too small to place was
-        # handed straight back — all of it must reach fib 2 either way.
-        pool1 = leg1.pool_usd
-        self.assertGreater(pool1, 0.0)
+    def test_a_closed_round_puts_its_principal_back_on_the_ladder(self):
+        """A rung fills and the target hits. The principal is not handed to any
+        particular fib — it goes back into the one pool, and the ladder is
+        re-split so the rungs still waiting get their share of it."""
+        self._feed_real(40)
+        self.assertTrue(self.campaign.all_fills, "a rung should have filled by here")
+        allocation = self.campaign.total_allocation_usd
+        self.assertAlmostEqual(self.campaign.spent_usd, allocation, places=1)
 
-        # Fill the deepest planned level, then let the target hit.
-        order = next(o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0)
-        self.engine._record_fill(self.campaign, leg1, order, order.price, _RECENT_TS + 3600, order_id="PAPER")
-        self.assertGreater(self.campaign.spent_usd, 0.0)
         self.engine._close_round(self.campaign, self.campaign.tp_price)
-
         self.assertEqual(len(self.campaign.rounds), 1)
         self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
         self.assertAlmostEqual(self.campaign.spent_usd, 0.0)  # principal is back
 
-        # Previous low breaks -> fib 2 opens and inherits everything.
+        # And it is back ON the ladder, not sitting idle: the rungs that never
+        # filled now carry the whole allocation between them.
+        self.assertAlmostEqual(self.campaign.resting_usd, allocation, places=1)
+
+        # The cascade keeps running; a later fib joins the same ladder.
         self._feed_real(59)
         self.assertGreaterEqual(len(self.campaign.legs), 2)
-        leg2 = self.campaign.legs[1]
-        self.assertAlmostEqual(leg2.carry_in_usd, pool1, places=6)
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+        self.assertAlmostEqual(
+            self.campaign.resting_usd + self.campaign.spent_usd,
+            self.campaign.total_allocation_usd,
+            places=1,
+        )
 
     def test_mother_break_ends_the_campaign(self):
         self._feed_real(6)
@@ -430,35 +423,36 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
                 )
 
     def test_skipping_keeps_the_money_on_one_ladder(self):
-        """A same-shelf third fib would split the pool across two sets of levels
-        a few ticks apart, and each slice is then small enough that Binance's
-        minimum eats it. Skipping keeps the campaign with funded orders."""
+        """A same-shelf third fib adds rungs a few ticks from ones already on
+        the ladder, thinning the pool across near-duplicates instead of putting
+        it to work. Skipping keeps the money on the rungs that matter."""
         self._feed(29)
         self.assertEqual(len(self.campaign.legs), 2)
         working = [
             o for leg in self.campaign.legs for o in leg.pending_orders.values() if o.is_open and o.usd_notional > 0
         ]
-        self.assertTrue(working)
+        self.assertTrue(working or self.campaign.all_fills, "the pool went somewhere")
+        self.assertAlmostEqual(
+            self.campaign.resting_usd + self.campaign.spent_usd,
+            self.campaign.total_allocation_usd,
+            places=1,
+        )
 
-    def test_this_day_is_the_price_of_pooling_downward(self):
-        """The cost of the top-to-bottom rule, kept visible rather than hidden.
-
-        Level 2's slice is under the minimum, so it joins level 4 and rests at
-        64,268.91. Price on this day turned at 64,344 — above that line — so
-        nothing fills. Pooling upward instead would have put the money on level
-        2 at 64,567.35 and bought. The rule is deliberate: a share earmarked for
-        the deep end must not be spent at the shallow price, and money not spent
-        here rolls on to the next fib rather than being lost."""
+    def test_the_shallow_rungs_get_funded_so_the_day_trades(self):
+        """Both fibs' level 2 rungs sit nearest the market, so the price-ordered
+        ladder funds those first and the turn at 64,344 buys them. Under the old
+        per-fib pools this day bought nothing: everything a fib owned was piled
+        onto that fib's own deepest rung, far below where price turned."""
         self._feed(29)
-        self.assertFalse(self.campaign.all_fills)
-        pooled = self.campaign.legs[0].pending_orders[4]
-        self.assertEqual(pooled.status, "PENDING")
-        self.assertAlmostEqual(pooled.usd_notional, 5.4, places=2)  # 20% + 30%
-        self.assertEqual(self.campaign.legs[0].pending_orders[2].status, "MERGED")
+        self.assertTrue(self.campaign.all_fills)
+        for fill in self.campaign.all_fills:
+            self.assertEqual(fill.level, 2)
+        for order in self.campaign.legs[0].pending_orders.values():
+            self.assertNotEqual(order.status, "MERGED")
 
-    def test_mother_break_ends_the_campaign_flat_when_nothing_filled(self):
-        """Same day, run to the mother break. With the ladder pooled down, price
-        never reached a funded level, so the campaign ends holding nothing."""
+    def test_mother_break_realises_the_round_it_opened(self):
+        """Same day, run to the mother break. Price cannot reach the mother high
+        without passing the target first, so the round closes in profit."""
         self._feed(29)
         for idx, o, h, low, c in [
             (37, 64416.01, 64608.00, 64398.15, 64604.65),
@@ -468,8 +462,9 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         ]:
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
-        self.assertEqual(self.campaign.filled_base_qty, 0.0)
-        self.assertEqual(self.campaign.realized_pnl_total, 0.0)
+        self.assertEqual(len(self.campaign.rounds), 1)
+        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
+        self.assertEqual(self.campaign.filled_base_qty, 0.0)  # closed out, flat
 
 
 # Third regression day: BTCUSDT 5m from the mother candle at 2026-07-20 18:10

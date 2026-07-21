@@ -106,7 +106,7 @@ MOTHER_RETEST_PCT = 0.0005
 MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 16  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 17  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -125,10 +125,12 @@ MIN_LEG_SEPARATION_PCT = 0.0003
 # candle that created it, or it reuses the line already there.
 MIN_TRENDLINE_SEPARATION_PCT = 0.0015
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
-# Where a sub-minimum level's money goes: down into the next deeper level, so
-# it is only ever spent at a better price. Level 8 is the deepest and has no
-# entry here — its leftovers carry to the next fib instead.
-MERGE_TARGET = {2: 4, 4: 8}
+# Cushion over the exchange minimum on every rung. An order sized exactly at
+# MIN_NOTIONAL is one tick of adverse quote movement from being rejected, so
+# each rung carries 10% more: $5.50 against a $5 minimum.
+RUNG_BUFFER_PCT = 0.10
+# Order states whose money is gone or committed elsewhere — never re-rung.
+SPENT_ORDER_STATES = frozenset({"FILLED", "CLOSED", "CANCELLED"})
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
 # View-only roll-ups for the campaign chart. The engine always steps in 5m;
@@ -259,7 +261,7 @@ class PendingOrder:
     quantity: float
     leg_id: int
     timeframe: str = BASE_TIMEFRAME
-    status: str = "PENDING"  # PENDING | PLACED | FILLED | CANCELLED | MERGED | CARRIED
+    status: str = "PENDING"  # UNFUNDED | PENDING | PLACED | FILLED | CLOSED | CANCELLED | MERGED
     rev: int = 0
     order_id: Optional[str] = None
     client_order_id: str = ""
@@ -411,8 +413,8 @@ class Leg:
     leg_pct_from_mother: Optional[float] = None  # total fall from the mother high
     allocation_pct: Optional[float] = None  # percent this leg funds (see build_fib_ladder_and_pool)
     pool_usd: Optional[float] = None  # this leg's own allocation
-    carry_in_usd: float = 0.0  # unspent pool inherited from the previous fib
-    pool_total_usd: float = 0.0  # pool_usd + carry_in_usd — what actually got laddered
+    carry_in_usd: float = 0.0  # legacy: kept so older snapshots still load
+    pool_total_usd: float = 0.0  # this fib's own contribution to the shared pool
     escalated: bool = False
     finalized: bool = False  # swing complete (low broke again)
     pending_orders: Dict[int, PendingOrder] = field(default_factory=dict)
@@ -480,7 +482,7 @@ class Campaign:
     created_at: str = ""
     state: str = "WAITING_FIRST_DEPTH"
     cumulative_used_pct: float = 0.0
-    carry_forward_usd: float = 0.0
+    carry_forward_usd: float = 0.0  # legacy: kept so older snapshots still load
     trendlines: List[Trendline] = field(default_factory=list)
     legs: List[Leg] = field(default_factory=list)
     active_trendline_id: Optional[int] = None
@@ -533,6 +535,16 @@ class Campaign:
     def leg_open_usd(self, leg_id: int) -> float:
         """Notional from this leg that is still held (not yet closed at TP)."""
         return sum(f.price * f.quantity for f in self.all_fills if f.leg_id == leg_id)
+
+    @property
+    def total_allocation_usd(self) -> float:
+        """Everything the fall so far has earned the right to deploy.
+
+        Each fib contributes its own slice of new ground — the depth it added
+        below the previous one — so this grows as the market falls and is the
+        single pool the whole price-ordered ladder is split from.
+        """
+        return sum(max(_coerce_float(leg.pool_usd), 0.0) for leg in self.legs)
 
     @property
     def open_legs(self) -> List[Leg]:
@@ -708,173 +720,131 @@ def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
     leg.escalated = touch_pct_from_mother > ESCALATION_THRESHOLD_PCT
 
 
-def cancel_and_carry_forward(campaign: Campaign, prior_leg: Leg) -> float:
-    """
-    Retire the prior fib and roll everything it did not consume into the next
-    one, as a USD lump.
-
-    "Unspent" means the whole pool the prior fib was laddered with, minus only
-    the notional it is *still holding*. Levels that never filled, levels that
-    were merged away or trimmed, and levels that filled and have since been
-    closed at TP all come back — a closed round returns its principal, so from
-    the next fib's point of view that money was never spent.
-
-    The lump lands in campaign.carry_forward_usd, which plan_leg_orders adds to
-    the next leg's own allocation before re-splitting 20/30/50.
-    """
-    for order in prior_leg.pending_orders.values():
-        if order.is_open:
-            order.status = "CARRIED"
-
-    still_held = campaign.leg_open_usd(prior_leg.leg_id)
-    unspent = max(_coerce_float(prior_leg.pool_total_usd) - still_held, 0.0)
-    campaign.carry_forward_usd += unspent
-    return unspent
-
-
-def carry_unallocated_forward(campaign: Campaign, prior_leg: Leg) -> float:
-    """
-    Roll forward only the money the prior fib could not put to work.
-
-    The prior fib keeps its resting orders — a new fib does not cancel the old
-    ladder — so the only money free to move on is what never reached an order:
-    slices trimmed by the capital cap, and the principal returned by any round
-    of that leg already closed at TP. Held notional and still-resting notional
-    both stay where they are.
-    """
-    still_held = campaign.leg_open_usd(prior_leg.leg_id)
-    still_resting = campaign.leg_resting_usd(prior_leg.leg_id)
-    unspent = max(_coerce_float(prior_leg.pool_total_usd) - still_held - still_resting, 0.0)
-    if unspent < 0.01:
-        return 0.0  # order notionals are rounded to cents; don't carry the crumbs
-    campaign.carry_forward_usd += unspent
-    return unspent
-
-
 def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
-    """
-    Split the leg pool 20/30/50 across levels 2/4/8, then apply the Binance
-    min-notional merge: sub-minimum amounts roll into the next SHALLOWER level
-    (8 -> 4 -> 2) so they land where price can still reach them; a whole pool
-    below minimum carries forward to the next leg. Spend is capped so filled +
-    resting notional never exceeds campaign capital.
-    """
+    """Give a new fib its (empty) rungs, then replan the whole ladder."""
     if leg.fib is None:
         raise CascadeModelError(f"leg {leg.leg_id}: fib ladder must be built before planning orders")
-    min_notional = max(_coerce_float(campaign.min_notional_usd, MIN_NOTIONAL_FLOOR_USD), MIN_NOTIONAL_FLOOR_USD)
-    carry_in = max(_coerce_float(campaign.carry_forward_usd), 0.0)
-    own_pool = max(_coerce_float(leg.pool_usd), 0.0)
-    pool = own_pool + carry_in
-    campaign.carry_forward_usd = 0.0
-    leg.carry_in_usd = carry_in
-    leg.pool_total_usd = pool
-
-    # When this fib's level 2 already sits at or below the PRIOR fib's level 8,
-    # the market has fallen past everything the old ladder covered — the carried
-    # pool re-enters at level 2 rather than being pushed to the deep levels.
-    prior_leg = campaign.legs[-2] if len(campaign.legs) >= 2 else None
-    carry_to_l2 = (
-        carry_in > 0
-        and prior_leg is not None
-        and prior_leg.fib is not None
-        and leg.fib.level_price(2) <= prior_leg.fib.level_price(8)
-    )
-    if carry_to_l2:
-        usd = {level: own_pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
-        usd[2] += carry_in
-    else:
-        usd = {level: pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
-
-    # Slices under Binance's minimum roll DOWN into the next deeper level:
-    # 2 -> 4 -> 8. Level 2's 20% joins level 4's 30% and rests at level 4 as
-    # 50%; level 4's 30% joins level 8's 50% and rests at level 8. Money never
-    # travels back up — a share earmarked for the deep end is not allowed to be
-    # spent at the shallow end, because paying the shallow price for it is
-    # exactly the overpaying the ladder exists to avoid.
-    #
-    # This only works because every fib now keeps its ladder resting. When a new
-    # fib used to cancel the one before it, merging downward buried the whole
-    # allocation at level 8 below anything price reached and cost a third of the
-    # replayed days any entry at all. With the old fibs still live, their
-    # shallow levels are already sitting where price is, so the deep bias costs
-    # nothing and puts more money in at the better prices.
-    merged = set()
-    carried = False
-    moved: Dict[int, float] = {}  # level -> dollars that left it
-    received: Dict[int, List[list]] = {}  # level -> [[from_level, usd], ...]
-    own = dict(usd)  # each level's own share, before anything arrives
-    if usd[2] < min_notional:
-        moved[2] = usd[2]
-        received.setdefault(4, []).append([2, round(usd[2], 2)])
-        usd[4] += usd[2]
-        usd[2] = 0.0
-        merged.add(2)
-    if usd[4] < min_notional:
-        moved[4] = usd[4]
-        received.setdefault(8, []).append([4, round(usd[4], 2)])
-        usd[8] += usd[4]
-        usd[4] = 0.0
-        merged.add(4)
-    if usd[8] < min_notional:
-        # Even the whole pool at the deepest level cannot be placed — hand it
-        # back so the next fib inherits it, and don't count it against this leg.
-        moved[8] = usd[8]
-        campaign.carry_forward_usd = usd[8]
-        leg.pool_total_usd = max(leg.pool_total_usd - usd[8], 0.0)
-        usd[8] = 0.0
-        carried = True
-
-    # Capital cap: filled + everything already resting on the older fibs + this
-    # ladder must never exceed campaign capital. Older ladders stay live now, so
-    # their notional is committed money and has to be counted here.
-    committed_elsewhere = campaign.spent_usd + max(campaign.resting_usd - campaign.leg_resting_usd(leg.leg_id), 0.0)
-    available = max(campaign.capital_usd - committed_elsewhere, 0.0)
-    total = sum(usd.values())
-    if total > available:
-        overshoot = total - available
-        for level in reversed(CASCADE_LEVELS):  # trim deepest first
-            if overshoot <= 0:
-                break
-            trim = min(usd[level], overshoot)
-            usd[level] -= trim
-            overshoot -= trim
-        for level in CASCADE_LEVELS:
-            if 0 < usd[level] < min_notional:
-                usd[level] = 0.0
-
-    leg.pending_orders = {}
+    leg.carry_in_usd = 0.0
+    leg.pool_total_usd = max(_coerce_float(leg.pool_usd), 0.0)
     for level in CASCADE_LEVELS:
-        price = max(leg.fib.level_price(level), 0.0)
-        amount = usd[level]
-        if amount <= 0 or price <= 0:
-            status = "MERGED" if level in merged else ("CARRIED" if carried and level == 8 else "CANCELLED")
-            leg.pending_orders[level] = PendingOrder(
-                level=level,
-                price=price or None,
-                usd_notional=0.0,
-                quantity=0.0,
-                leg_id=leg.leg_id,
-                timeframe=timeframe_for_level(leg, level),
-                status=status,
-                moved_usd=round(moved.get(level, 0.0), 2),
-                # Level 2 is the shallowest; its money has nowhere up to go and
-                # rolls into the next fib instead, which None records.
-                moved_to_level=MERGE_TARGET.get(level) if level in merged else None,
-            )
+        if level in leg.pending_orders:
             continue
+        price = max(leg.fib.level_price(level), 0.0)
         leg.pending_orders[level] = PendingOrder(
             level=level,
-            price=price,
-            usd_notional=round(amount, 2),
-            quantity=amount / price,
+            price=price or None,
+            usd_notional=0.0,
+            quantity=0.0,
             leg_id=leg.leg_id,
             timeframe=timeframe_for_level(leg, level),
-            status="PENDING",
+            status="UNFUNDED",
             entry_style="stop" if level in STOP_ENTRY_LEVELS else "limit",
             client_order_id=f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-0",
-            own_usd=round(own.get(level, 0.0), 2),
-            received=received.get(level, []),
         )
+    replan_ladder(campaign)
+
+
+def rung_size_usd(campaign: Campaign) -> float:
+    """The standard amount on one rung.
+
+    Binance rejects anything under its MIN_NOTIONAL, so an order sized exactly
+    at the minimum is one tick of adverse quote movement away from being
+    rejected. Every rung therefore carries a 10% cushion — $5.50 against a $5
+    minimum — which is also the smallest amount worth the round trip.
+    """
+    floor = max(_coerce_float(campaign.min_notional_usd, MIN_NOTIONAL_FLOOR_USD), MIN_NOTIONAL_FLOOR_USD)
+    return round(floor * (1.0 + RUNG_BUFFER_PCT), 2)
+
+
+def replan_ladder(campaign: Campaign) -> None:
+    """
+    Spread the campaign's money across ONE ladder built from every fib's levels,
+    ordered by price rather than by which fib they came from.
+
+    Fibs overlap. Fib 2's level 2 can easily sit between fib 1's level 4 and its
+    level 8, and treating each fib as its own private pool ignores that: it
+    piled everything a fib owned onto that fib's deepest rung, well past the
+    minimum it needed, while rungs price would reach first sat empty.
+
+    So instead:
+
+    1. Every unfilled level of every fib becomes a rung, sorted shallowest
+       first — the order price will actually meet them in.
+    2. Walking down from the top, each rung takes the standard rung size until
+       the money runs out. A rung that cannot be given a full one gets nothing,
+       because a part-rung is not placeable.
+    3. Anything left after every rung is covered is spread over them weighted by
+       level — 20/30/50 — so the deep end still carries the most.
+
+    There is no carry-forward between fibs any more. There is one pool, and it
+    is re-split from scratch whenever a fill spends part of it or a new fib adds
+    rungs, so the money always sits where the current ladder wants it.
+    """
+    rung = rung_size_usd(campaign)
+    budget = max(campaign.total_allocation_usd - campaign.spent_usd, 0.0)
+
+    rungs: List[tuple] = []
+    for leg in campaign.legs:
+        if leg.fib is None:
+            continue
+        for level in CASCADE_LEVELS:
+            order = leg.pending_orders.get(level)
+            if order is None or order.status in SPENT_ORDER_STATES:
+                continue
+            price = _coerce_float(order.price) or max(leg.fib.level_price(level), 0.0)
+            if price <= 0:
+                continue
+            rungs.append((price, leg, level, order))
+    rungs.sort(key=lambda row: -row[0])
+
+    amounts: Dict[int, float] = {}
+    weights = [LEVEL_ALLOCATION[row[2]] for row in rungs]
+    total_weight = sum(weights) or 1.0
+    shares = [budget * w / total_weight for w in weights]
+
+    if rungs and min(shares) + 1e-9 >= rung:
+        # Plenty to go round: split it purely by weight so the 20/30/50 shape
+        # holds exactly, with no rung needing a top-up.
+        for row, share in zip(rungs, shares):
+            amounts[id(row[3])] = share
+    else:
+        # Short. Walk from the rung nearest the market downward handing each a
+        # full rung, and stop when the money does. A part-rung is not placeable,
+        # so a rung either gets the whole thing or nothing. Whatever survives
+        # that pass then shares any surplus, weighted deeper.
+        funded: List[tuple] = []
+        remaining = budget
+        for row in rungs:
+            if remaining + 1e-9 < rung:
+                break
+            funded.append(row)
+            remaining -= rung
+        for row in funded:
+            amounts[id(row[3])] = rung
+        if funded and remaining > 0.01:
+            fw = [LEVEL_ALLOCATION[row[2]] for row in funded]
+            fw_total = sum(fw) or 1.0
+            for row, weight in zip(funded, fw):
+                amounts[id(row[3])] += remaining * weight / fw_total
+
+    for price, leg, level, order in rungs:
+        amount = round(amounts.get(id(order), 0.0), 2)
+        if abs(amount - _coerce_float(order.usd_notional)) < 0.01 and order.status != "UNFUNDED":
+            continue
+        if order.status == "PLACED" and order.order_id:
+            # The resting order is the wrong size now. Drop the id so the
+            # exchange sweep cancels it and a fresh one goes out at the new
+            # amount under a new client id.
+            order.order_id = None
+            order.rev += 1
+            order.client_order_id = f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-{order.rev}"
+        order.usd_notional = amount
+        order.quantity = amount / price if amount > 0 and price > 0 else 0.0
+        order.status = "PENDING" if amount > 0 else "UNFUNDED"
+        order.own_usd = min(amount, rung)
+        order.received = []
+        order.moved_usd = 0.0
+        order.moved_to_level = None
 
 
 # ── Engine ──────────────────────────────────────────────────────────
@@ -1928,17 +1898,8 @@ class CascadeEngine:
         )
         leg.finalized = True
         campaign.legs.append(leg)
-        carried_in = 0.0
-        if prior_leg is not None:
-            # The previous fib KEEPS its resting ladder. Price broke its low, but
-            # the levels it left above are exactly where the market has to pass
-            # on the way back up, and those orders are still the cheapest buys on
-            # offer there. Only money the prior fib never managed to place — cap
-            # trims, and principal a closed round handed back — rolls into this
-            # one. Cancelling the old ladder was costing real fills: on one SOL
-            # day fib 2's level 2 sat at 78.28, price traded to 78.07, and the
-            # order had been retired days-of-candles earlier by fib 3 appearing.
-            carried_in = carry_unallocated_forward(campaign, prior_leg)
+        # The previous fib keeps every rung it has. This one adds its own to the
+        # pool and to the ladder, and the whole ladder is re-split by price.
         try:
             build_fib_ladder_and_pool(campaign, leg)
             plan_leg_orders(campaign, leg)
@@ -1947,18 +1908,23 @@ class CascadeEngine:
             self._log_event(campaign, "error", f"Fib rejected: {exc}")
             return
 
-        placed = [order for order in leg.pending_orders.values() if order.status == "PENDING"]
+        funded = [
+            order
+            for lg in campaign.legs
+            for order in lg.pending_orders.values()
+            if order.status in {"PENDING", "PLACED"} and order.usd_notional > 0
+        ]
+        funded.sort(key=lambda o: -(o.price or 0.0))
         self._log_event(
             campaign,
             "leg",
             f"Fib {leg.leg_id} drawn on trendline {trendline_id}: 0={touch_high:g} 1={swing_low:g} "
-            f"({_coerce_float(leg.allocation_pct):.3f}% allocation, pool ${_coerce_float(leg.pool_usd):,.2f}"
-            + (f" + ${carried_in:,.2f} carried from fib {prior_leg.leg_id}" if carried_in > 0 and prior_leg else "")
-            + f"{', escalated' if leg.escalated else ''}) — "
+            f"(adds {_coerce_float(leg.allocation_pct):.3f}% = ${_coerce_float(leg.pool_usd):,.2f} to the pool"
+            f"{', escalated' if leg.escalated else ''}). Ladder re-split by price — "
             + (
-                ", ".join(f"L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in placed)
-                if placed
-                else f"pool below minimum, ${campaign.carry_forward_usd:,.2f} carried forward"
+                ", ".join(f"F{o.leg_id} L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in funded)
+                if funded
+                else f"pool ${campaign.total_allocation_usd:,.2f} still under one rung, nothing placeable yet"
             ),
         )
 
@@ -2162,14 +2128,17 @@ class CascadeEngine:
             f"Leg {leg.leg_id} L{order.level} filled: {qty:.8f} @ {price:,.2f} "
             f"(avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
         )
+        # That rung is spent. Re-split what is left over the rungs that remain,
+        # so the next buy is planned from the money actually still available.
+        replan_ladder(campaign)
 
     def _close_round(self, campaign: Campaign, exit_price: float) -> None:
         """
         A TP fill closes the current open-to-TP round, not the campaign. The
         principal comes back into available capital and the position resets to
-        flat; the cascade keeps running and the freed money is picked up by the
-        next fib's pool via cancel_and_carry_forward(). Only a mother-high
-        breach (or a manual stop) ends the campaign.
+        flat; the cascade keeps running and the freed money is re-split across
+        the rungs still waiting. Only a mother-high breach (or a manual stop)
+        ends the campaign.
         """
         qty = campaign.filled_base_qty
         avg = campaign.avg_entry_price or 0.0
@@ -2202,6 +2171,10 @@ class CascadeEngine:
             for order in lg.pending_orders.values():
                 if order.status == "FILLED":
                     order.status = "CLOSED"
+
+        # The principal is back in the pool, so the rungs still waiting get a
+        # bigger share of it.
+        replan_ladder(campaign)
 
         self._log_event(
             campaign,
