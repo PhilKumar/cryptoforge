@@ -426,6 +426,84 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(self.campaign.rounds[0].avg_entry, 64138.25)
 
 
+# Third regression day: BTCUSDT 5m from the mother candle at 2026-07-20 18:10
+# UTC (23:40 IST), high 65,799. This is the case that exposed the "no structure
+# ever forms" bug: price fell steadily, so every candle that reached the falling
+# trendline was ALSO printing a lower low, and the old guard rejected all of
+# them. The engine sat in WAITING_FIRST_DEPTH for 99 candles while the user drew
+# the structure by hand in seconds.
+_REAL3 = [
+    (0, 65593.64, 65799.00, 65566.30, 65753.05),
+    (1, 65753.04, 65770.00, 65656.98, 65671.98),
+    (2, 65671.98, 65671.98, 65582.00, 65589.13),
+    (3, 65589.14, 65629.98, 65577.05, 65592.00),
+    (4, 65592.01, 65592.01, 65479.27, 65496.00),
+    (5, 65496.00, 65541.94, 65460.56, 65487.17),
+    (6, 65487.18, 65487.18, 65348.73, 65348.74),
+    (7, 65348.74, 65348.74, 65254.00, 65288.53),
+    (8, 65288.54, 65310.00, 65225.51, 65225.51),
+    (9, 65225.52, 65258.67, 65204.00, 65240.01),
+    (10, 65240.01, 65274.58, 65160.00, 65186.57),
+    (11, 65186.57, 65236.00, 65165.48, 65224.00),
+    (12, 65224.00, 65246.00, 65102.00, 65104.00),
+    (13, 65103.99, 65196.00, 65082.81, 65164.08),
+    (14, 65164.08, 65169.23, 65118.04, 65136.00),
+    (15, 65136.01, 65186.98, 65072.20, 65156.24),
+    (16, 65156.24, 65158.73, 65061.99, 65078.00),
+]
+
+
+class CascadeThirdDayRegressionTests(unittest.TestCase):
+    """2026-07-20 18:10 UTC mother candle — a steady fall, verified by the user
+    against TradingView: fib 0 = 65,246.00, fib 1 = 65,160.00, and the buy
+    ladder at 65,074 / 64,902 / 64,558."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        mother = _REAL3[0]
+        self.campaign = Campaign(
+            campaign_id="real3",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        self.campaign.window_start_ts = 0
+        self.engine.campaigns[self.campaign.campaign_id] = self.campaign
+
+    def _feed(self, upto_index):
+        for idx, o, h, low, c in _REAL3[1:]:
+            if idx > upto_index:
+                break
+            _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
+
+    def test_a_steady_fall_still_forms_a_structure(self):
+        """Regression: every touching candle here also prints a lower low. The
+        engine must still draw, not stall."""
+        self._feed(16)
+        self.assertTrue(self.campaign.legs, "a steady fall must still form a structure")
+        self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+
+    def test_matches_the_user_chart_exactly(self):
+        self._feed(16)
+        leg = self.campaign.legs[0]
+        self.assertAlmostEqual(leg.touch_high, 65246.00)  # 00:45 IST high
+        self.assertAlmostEqual(leg.low, 65160.00)  # 00:30 IST low
+        self.assertAlmostEqual(leg.fib.level_price(2), 65074.00)
+        self.assertAlmostEqual(leg.fib.level_price(4), 64902.00)
+        self.assertAlmostEqual(leg.fib.level_price(8), 64558.00)
+
+    def test_the_dip_candle_high_is_not_its_own_touch(self):
+        """The 00:30 candle both set the dip (65,160) and reached the line with a
+        65,274.58 high. Its own high must not become fib 0 — the rise has to come
+        after the dip, which is why fib 0 is the later 65,246."""
+        self._feed(16)
+        self.assertNotAlmostEqual(self.campaign.legs[0].touch_high, 65274.58)
+
+
 class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.broker = FakeCascadeBroker()

@@ -1405,22 +1405,29 @@ class CascadeEngine:
 
         frozen_dip = None
         run_min = None
+        run_min_ts = None
         first_cross_ts = None
         touch_high = None
         touch_ts = None
-        for index, c in enumerate(window):
+        for c in window:
             line = trendline_price(tl, c.timestamp)
             crossed = c.high >= line and c.close < line and c.high < campaign.mother_high
-            is_dipper = run_min is None or c.low < run_min
-            if crossed and index > 0 and not (first_cross_ts is None and is_dipper):
+            # A touch only counts if it comes AFTER the candle that made the
+            # dip: one candle cannot be both the low of the swing and the rise
+            # off it. Note this is about ORDER, not about whether the touching
+            # candle also made a new low — in a steady fall almost every candle
+            # that reaches a falling line is also printing a lower low, so
+            # excluding those outright would mean no structure ever forms.
+            if crossed and run_min_ts is not None and c.timestamp > run_min_ts:
                 if first_cross_ts is None:
                     first_cross_ts = c.timestamp
                     frozen_dip = run_min
                 if touch_high is None or c.high > touch_high:
                     touch_high = c.high
                     touch_ts = c.timestamp
-            if first_cross_ts is None and is_dipper:
+            if first_cross_ts is None and (run_min is None or c.low < run_min):
                 run_min = c.low
+                run_min_ts = c.timestamp
 
         if first_cross_ts is None or frozen_dip is None or touch_high is None:
             return
