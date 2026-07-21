@@ -7924,8 +7924,15 @@ function _cfCascadeLadderRows(campaign) {
       var toLevel = order.moved_to_level;
       var amountCell;
       if (amount > 0) {
+        // When money arrived from a deeper level, show the sum rather than the
+        // total alone: "$1.38 + $2.04 from L4" is the arithmetic behind $3.42.
+        var got = Array.isArray(order.received) ? order.received : [];
+        var breakdown = got.length && Number(order.own_usd)
+          ? '$' + _cfCascadeUsd(order.own_usd) + ' own'
+            + got.map(function (r) { return ' + $' + _cfCascadeUsd(r[1]) + ' from L' + r[0]; }).join('')
+          : _CF_CASCADE_SHARE[level] + '% of pool';
         amountCell = '$' + _cfCascadeUsd(amount)
-          + '<div class="table-meta">' + _CF_CASCADE_SHARE[level] + '% of pool'
+          + '<div class="table-meta">' + breakdown
           + (Number(order.quantity) ? ' · ' + _cfCascadeFmt(order.quantity, 4) : '') + '</div>';
       } else if (moved > 0) {
         amountCell = '<span style="opacity:.6;">$0</span>'
@@ -8473,7 +8480,10 @@ function _cfCascadeIst(ts) {
 function _cfCascadeChartSvg(d) {
   var candles = (d.candles || []).slice();
   if (!candles.length) return '';
-  var W = 1180, H = 520, padL = 8, padR = 128, padT = 14, padB = 30;
+  // Labels sit in a gutter on the LEFT, the way they do on a TradingView
+  // chart, so the eye reads level-then-price instead of hunting to the right
+  // edge past all the candles. The narrow right margin is the price axis only.
+  var W = 1180, H = 520, padL = 168, padR = 58, padT = 14, padB = 30;
   var plotW = W - padL - padR, plotH = H - padT - padB;
   var n = candles.length, cw = plotW / n;
 
@@ -8533,6 +8543,7 @@ function _cfCascadeChartSvg(d) {
       '" height="' + Math.max(yBot - yTop, 1).toFixed(1) + '" fill="' + col + '"/>');
   });
 
+  // Left-hand labels, nudged apart so two levels a few ticks apart stay legible.
   var labelSlots = [];
   function label(y, text, color) {
     var ly = y;
@@ -8540,19 +8551,21 @@ function _cfCascadeChartSvg(d) {
       if (Math.abs(labelSlots[k] - ly) < 10) { ly = labelSlots[k] + 10; k = -1; }
     }
     labelSlots.push(ly);
-    parts.push('<text x="' + (padL + plotW + 6) + '" y="' + (ly + 3).toFixed(1) + '" fill="' + color +
-      '" font-size="10" font-family="monospace">' + _escapeHtml(text) + '</text>');
+    parts.push('<text x="' + (padL - 6) + '" y="' + (ly + 3).toFixed(1) + '" fill="' + color +
+      '" font-size="10" font-family="monospace" text-anchor="end">' + _escapeHtml(text) + '</text>');
   }
-  function hline(price, color, text, dash, width) {
+  function hline(price, color, text, dash, width, opacity) {
     if (!inView(price)) return;
     var y = Y(price);
     parts.push('<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (padL + plotW) + '" y2="' + y.toFixed(1) +
-      '" stroke="' + color + '" stroke-width="' + (width || 1) + '"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
+      '" stroke="' + color + '" stroke-width="' + (width || 0.9) + '"'
+      + (opacity ? ' opacity="' + opacity + '"' : '')
+      + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
     if (text) label(y, text, color);
   }
 
   // mother candle high
-  if (d.mother && d.mother.high) hline(d.mother.high, '#a855f7', 'mother ' + fmt(d.mother.high), '5,3', 1.2);
+  if (d.mother && d.mother.high) hline(d.mother.high, '#a855f7', 'MOTHER ' + fmt(d.mother.high), '5,3', 1.1);
 
   // every trendline, mother high -> its swing high
   var tlColors = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7'];
@@ -8569,10 +8582,17 @@ function _cfCascadeChartSvg(d) {
     // orders — dashed and dimmed so it never reads as a tradeable structure.
     var noFib = tl.bears_fib === false;
     parts.push('<line x1="' + Xt(t0).toFixed(1) + '" y1="' + Y(p0).toFixed(1) + '" x2="' + Xt(t1).toFixed(1) +
-      '" y2="' + Y(p1).toFixed(1) + '" stroke="' + col + '" stroke-width="' + (tl.active ? 1.8 : 1.1) +
-      '" opacity="' + (noFib ? 0.38 : (tl.active ? 1 : 0.5)) + '"' +
+      '" y2="' + Y(p1).toFixed(1) + '" stroke="' + col + '" stroke-width="' + (tl.active ? 1.3 : 0.9) +
+      '" opacity="' + (noFib ? 0.35 : (tl.active ? 0.95 : 0.5)) + '"' +
       (noFib ? ' stroke-dasharray="6 4"' : '') + '/>');
-    if (inView(p1)) label(Y(p1), 'TL' + tl.id + (noFib ? ' (no fib)' : (tl.active ? ' *' : '')), col);
+    // The label rides the line at its RIGHT end. Every trendline starts at the
+    // same point, so labelling the left end stacks them all on top of each
+    // other; by the right edge they have fanned out and each one is legible.
+    if (inView(p1)) {
+      parts.push('<text x="' + (Xt(t1) - 4).toFixed(1) + '" y="' + (Y(p1) - 5).toFixed(1) + '" fill="' + col +
+        '" font-size="9.5" font-family="monospace" text-anchor="end" opacity="0.9">TL' + tl.id
+        + (noFib ? ' (no fib)' : (tl.active ? ' ★' : '')) + '</text>');
+    }
   });
 
   // every fib: 0/1 anchors solid, 2/4/8 buy levels dotted
@@ -8581,12 +8601,21 @@ function _cfCascadeChartSvg(d) {
   var fibColors = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7'];
   legs.forEach(function (leg) {
     var col = fibColors[(Math.max(1, Number(leg.leg_id) || 1) - 1) % fibColors.length];
-    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 1.4);
-    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 1.4);
+    // 0 and 1 are the fib's own boundaries: solid, but thin and half-lit so
+    // they frame the buy levels rather than competing with them.
+    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 0.9, 0.75);
+    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 0.9, 0.75);
     [2, 4, 8].forEach(function (lv) {
       var p = leg.levels ? leg.levels[String(lv)] : null;
       if (p == null) return;
-      hline(Number(p), col, 'F' + leg.leg_id + ' ' + lv + ' ' + fmt(p), '2,4', 0.9);
+      // A buy level is only worth a line if money is actually sitting on it.
+      // The amount goes in the label — that is the whole point of the level.
+      var order = (leg.orders || []).find(function (o) { return o.level === lv; }) || {};
+      var usd = Number(order.usd_notional) || 0;
+      var funded = usd > 0;
+      hline(Number(p), col,
+        'F' + leg.leg_id + ' L' + lv + ' ' + fmt(p) + (funded ? '  $' + _cfCascadeUsd(usd) : ''),
+        funded ? '5,3' : '1,5', funded ? 1.1 : 0.7, funded ? 0.95 : 0.35);
     });
     if (leg.touch_timestamp && inView(leg.touch_high)) {
       parts.push('<circle cx="' + Xt(leg.touch_timestamp).toFixed(1) + '" cy="' + Y(leg.touch_high).toFixed(1) +
@@ -8595,8 +8624,8 @@ function _cfCascadeChartSvg(d) {
   });
 
   // take profit (only exists once an entry has filled)
-  if (d.tp_price) hline(Number(d.tp_price), '#10b981', 'TP ' + fmt(d.tp_price), '6,3', 1.4);
-  if (d.avg_entry_price) hline(Number(d.avg_entry_price), '#e2e8f0', 'avg ' + fmt(d.avg_entry_price), '4,4', 1.2);
+  if (d.tp_price) hline(Number(d.tp_price), '#10b981', 'TARGET ' + fmt(d.tp_price), '6,3', 1.2);
+  if (d.avg_entry_price) hline(Number(d.avg_entry_price), '#e2e8f0', 'AVG ENTRY ' + fmt(d.avg_entry_price), '4,4', 1.1);
 
   // fills
   (d.fills || []).forEach(function (f) {
@@ -8649,13 +8678,15 @@ function _cfCascadeChartHtml(d) {
       + 'If it was just created, wait for the next 5m candle or hit Broker Sync.</div>';
   }
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
-    + '<span style="color:#a855f7;">— mother high</span> &nbsp; '
-    + '<span style="color:#1f6fd6;">— trendlines (TL)</span> &nbsp; '
-    + '<span style="color:#22d3ee;">— fib 0/1 anchors</span> &nbsp; '
-    + '<span style="color:#22d3ee;">┄ fib 2/4/8 buy levels</span> &nbsp; '
-    + '<span style="color:#10b981;">┄ take profit</span> &nbsp; '
+    + '<span style="color:#a855f7;">┄ mother high</span> &nbsp; '
+    + '<span style="color:#3b82f6;">— trendlines (TL)</span> &nbsp; '
+    + '<span style="color:#3b82f6;">— fib 0 / 1 (the swing)</span> &nbsp; '
+    + '<strong style="color:#3b82f6;">┅ buy levels with money on them</strong> &nbsp; '
+    + '<span style="color:#3b82f6;opacity:.5;">┈ buy levels left empty</span> &nbsp; '
+    + '<span style="color:#10b981;">┄ target</span> &nbsp; '
     + '<span style="color:#22c55e;">● fills</span>'
-    + '<br>Each fib is coloured separately (F1, F2, …) and labelled on the right.'
+    + '<br>Fib 1 is blue, 2 green, 3 red, 4 purple, then the cycle repeats. Labels are on the left,'
+    + ' and each funded buy level carries the dollars resting on it.'
     + ' Scroll to move down the dialog; hold Ctrl (or &#8984;) and scroll to zoom, or drag to pan.'
     + '</div>';
   return legend + _cfCascadeChartSvg(d)

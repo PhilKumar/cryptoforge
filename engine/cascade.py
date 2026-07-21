@@ -104,9 +104,9 @@ MOTHER_RETEST_PCT = 0.0005
 # before any structure could form. A real departure is a fall of this much from
 # the mother HIGH, which is an order of magnitude past the retest tolerance.
 MOTHER_DEPART_PCT = 0.005
-MAX_ACTIVE_BEFORE_ALERT = 5
+MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 14  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 15  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -117,6 +117,13 @@ DECISIVE_BREAK_PCT = 0.0002
 # against both verified days: keepers separate by 0.055% and 0.173%, the
 # skipped one by 0.015%.
 MIN_LEG_SEPARATION_PCT = 0.0003
+# Every trendline starts at the same point — the mother high — so two of them
+# are the same line whenever their second anchors are close. Drawn on the chart
+# they overlap into one thick smear, which is not what gets drawn by hand: the
+# charts show two or three clearly separated lines, never four near-parallel
+# ones. A new line has to sit this far from each existing line, measured at the
+# candle that created it, or it reuses the line already there.
+MIN_TRENDLINE_SEPARATION_PCT = 0.0015
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 # Where a sub-minimum level's money goes: up into the shallower level, where
 # price can still reach it. Level 2 is the shallowest and has no entry here.
@@ -268,6 +275,11 @@ class PendingOrder:
     # a status word to decode.
     moved_usd: float = 0.0
     moved_to_level: Optional[int] = None  # None with moved_usd > 0 means the next fib
+    # The other side of the same story: what this level's own share was before
+    # anything arrived, and which levels topped it up. Kept so a $5.50 order can
+    # show itself as "$2.04 own + $3.46 from L8" instead of one opaque figure.
+    own_usd: float = 0.0
+    received: List[list] = field(default_factory=list)  # [[from_level, usd], ...]
 
     @property
     def is_open(self) -> bool:
@@ -320,6 +332,8 @@ class PendingOrder:
             "last_red_close",
             "moved_usd",
             "moved_to_level",
+            "own_usd",
+            "received",
         ):
             if key in data:
                 setattr(order, key, data[key])
@@ -787,13 +801,17 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     merged = set()
     carried = False
     moved: Dict[int, float] = {}  # level -> dollars that left it
+    received: Dict[int, List[list]] = {}  # level -> [[from_level, usd], ...]
+    own = dict(usd)  # each level's own share, before anything arrives
     if usd[8] < min_notional:
         moved[8] = usd[8]
+        received.setdefault(4, []).append([8, round(usd[8], 2)])
         usd[4] += usd[8]
         usd[8] = 0.0
         merged.add(8)
     if usd[4] < min_notional:
         moved[4] = usd[4]
+        received.setdefault(2, []).append([4, round(usd[4], 2)])
         usd[2] += usd[4]
         usd[4] = 0.0
         merged.add(4)
@@ -854,6 +872,8 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
             status="PENDING",
             entry_style="stop" if level in STOP_ENTRY_LEVELS else "limit",
             client_order_id=f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-0",
+            own_usd=round(own.get(level, 0.0), 2),
+            received=received.get(level, []),
         )
 
 
@@ -1397,6 +1417,10 @@ class CascadeEngine:
                             "usd_notional": order.usd_notional,
                             "status": order.status,
                             "fill_price": order.fill_price,
+                            "own_usd": order.own_usd,
+                            "received": order.received,
+                            "moved_usd": order.moved_usd,
+                            "moved_to_level": order.moved_to_level,
                         }
                         for order in sorted(leg.pending_orders.values(), key=lambda o: o.level)
                     ],
@@ -1820,16 +1844,16 @@ class CascadeEngine:
                 d_price, d_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, display)
                 if d_price is None or d_price >= campaign.mother_high:
                     d_price, d_ts = anchor_price, anchor_ts
-                campaign.trendlines.append(
-                    Trendline(
-                        trendline_id=len(campaign.trendlines) + 1,
-                        anchor1_price=campaign.mother_high,
-                        anchor1_timestamp=campaign.mother_timestamp,
-                        anchor2_price=d_price,
-                        anchor2_timestamp=int(d_ts),
-                        bears_fib=False,
-                    )
+                ghost = Trendline(
+                    trendline_id=len(campaign.trendlines) + 1,
+                    anchor1_price=campaign.mother_high,
+                    anchor1_timestamp=campaign.mother_timestamp,
+                    anchor2_price=d_price,
+                    anchor2_timestamp=int(d_ts),
+                    bears_fib=False,
                 )
+                if self._duplicate_trendline(campaign, ghost, candle.timestamp) is None:
+                    campaign.trendlines.append(ghost)
                 self._log_event(
                     campaign,
                     "skip",
@@ -1842,23 +1866,49 @@ class CascadeEngine:
                 campaign.window_start_ts = candle.timestamp
                 return
 
-        campaign.trendlines.append(tl)
+        # A line that runs where one already runs is not a new line. The fib it
+        # carries is real and gets drawn; it just hangs off the existing line
+        # rather than adding a near-identical twin to the chart.
+        twin = self._duplicate_trendline(campaign, tl, candle.timestamp)
+        added_trendline = twin is None
+        if twin is not None:
+            tl = twin
+        else:
+            campaign.trendlines.append(tl)
+            self._log_event(
+                campaign,
+                "trendline",
+                f"Trendline {tl.trendline_id} drawn: mother high {campaign.mother_high:g} -> "
+                f"red candle open {anchor_price:g}",
+            )
         campaign.active_trendline_id = tl.trendline_id
         campaign.state = "TRENDLINE_ACTIVE"
-        self._log_event(
-            campaign,
-            "trendline",
-            f"Trendline {tl.trendline_id} drawn: mother high {campaign.mother_high:g} -> "
-            f"red candle open {anchor_price:g}",
-        )
         legs_before = len(campaign.legs)
         self._draw_leg(campaign, touch_high, frozen_dip, touch_ts, tl.trendline_id)
         if len(campaign.legs) == legs_before:
-            campaign.trendlines.pop()
+            if added_trendline:
+                campaign.trendlines.pop()
             campaign.active_trendline_id = campaign.trendlines[-1].trendline_id if campaign.trendlines else None
             return
         # This cut candle opens the next window; its low seeds the next dip.
         campaign.window_start_ts = candle.timestamp
+
+    def _duplicate_trendline(self, campaign: Campaign, candidate: Trendline, at_ts: int) -> Optional[Trendline]:
+        """The existing line this one would sit on top of, if there is one.
+
+        Every trendline shares anchor1 — the mother high — so two of them can
+        only differ by slope, and comparing where they land at the candle that
+        created the new one is the same thing the eye does. Lines closer than
+        MIN_TRENDLINE_SEPARATION_PCT there are one line drawn twice.
+        """
+        mine = trendline_price(candidate, at_ts)
+        if mine <= 0:
+            return None
+        for tl in campaign.trendlines:
+            theirs = trendline_price(tl, at_ts)
+            if theirs > 0 and abs(mine - theirs) / theirs < MIN_TRENDLINE_SEPARATION_PCT:
+                return tl
+        return None
 
     def _draw_leg(
         self,
