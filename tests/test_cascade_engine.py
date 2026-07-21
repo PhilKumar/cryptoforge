@@ -557,9 +557,9 @@ class CascadeStopEntryTests(unittest.TestCase):
         the real candle path calls this."""
         candle = Candle(idx * 300, o, h, low, c)
         self.engine._candles_5m.setdefault(self.campaign.campaign_id, []).append(candle)
-        self.engine._advance_stop_entries(self.campaign, candle)
         if self.campaign.mode == "paper":
             self.engine._paper_fill_check(self.campaign, candle)
+        self.engine._advance_stop_entries(self.campaign, candle)
 
     def _red(self, idx, close, opens=None):
         """A red candle closing at `close`. Real candles open where the last one
@@ -584,32 +584,35 @@ class CascadeStopEntryTests(unittest.TestCase):
         self.assertIsNone(self.l2.stop_price)
         self.assertAlmostEqual(self.l2.last_red_close, 64750.0)
 
-    def test_second_red_triggers_at_the_lowest_close_not_the_one_behind_it(self):
+    def test_second_red_triggers_at_the_previous_red_close(self):
+        """Step 2: on the second red close, the stop goes on the FIRST red's
+        close — one body back, so it sits above where the market now is."""
         self._red(1, 64750.0)
         self._red(2, 64700.0)
         self.assertTrue(self.l2.armed)
-        self.assertAlmostEqual(self.l2.stop_price, 64700.0)  # the LOWEST close, not 64,750
-        self.assertAlmostEqual(self.l2.limit_price, 64700.05)  # + 5 ticks
+        self.assertAlmostEqual(self.l2.stop_price, 64750.0)  # red #1's close
+        self.assertAlmostEqual(self.l2.limit_price, 64750.05)  # + 5 ticks
+        self.assertGreater(self.l2.stop_price, 64700.0)  # above the market
         self.assertEqual(self._fills(), [])
 
     def test_the_stop_is_dragged_down_by_the_fall_and_never_buys_it(self):
         self._red(1, 64750.0)
         self._red(2, 64700.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64750.0)
+        self._red(3, 64650.0)  # step 4: modify to red #2's close
         self.assertAlmostEqual(self.l2.stop_price, 64700.0)
-        self._red(3, 64650.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
         self._red(4, 64620.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64620.0)
-        # Straight down the whole way: the stop tracked the low and bought none of it.
+        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
+        # Straight down the whole way: the stop walked down and bought none of it.
         self.assertEqual(self._fills(), [])
 
-    def test_the_u_turn_buys_at_the_lowest_red_close(self):
+    def test_the_u_turn_is_what_fills_it(self):
         self._red(1, 64750.0)
         self._red(2, 64700.0)
-        self._red(3, 64650.0)
+        self._red(3, 64650.0)  # stop now on red #2's close, 64,700
         self.assertEqual(self._fills(), [])
         self._candle(4, 64650.0, 64720.0, 64645.0, 64715.0)  # turns back up through it
-        self.assertEqual(self._fills(), [(2, 64650.05)])
+        self.assertEqual(self._fills(), [(2, 64700.05)])
 
     def test_greens_are_ignored_entirely(self):
         self._red(1, 64750.0)
@@ -617,7 +620,7 @@ class CascadeStopEntryTests(unittest.TestCase):
         self.assertIsNone(self.l2.stop_price)
         self.assertAlmostEqual(self.l2.last_red_close, 64750.0)
         self._red(3, 64700.0)  # red, lower: pairs with #1
-        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64750.0)  # red #1's close
 
     def test_a_red_that_closes_higher_does_not_count(self):
         self._red(1, 64700.0)
@@ -629,9 +632,9 @@ class CascadeStopEntryTests(unittest.TestCase):
         self._red(1, 64750.0)
         self._red(2, 64700.0)
         self._red(3, 64650.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
         self._red(4, 64680.0)  # red, but above the last one: ignored
-        self.assertAlmostEqual(self.l2.stop_price, 64650.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
 
     def test_crossing_l4_adds_its_money_without_restarting(self):
         self._red(1, 64750.0)
@@ -643,7 +646,7 @@ class CascadeStopEntryTests(unittest.TestCase):
         self.assertEqual(self.l4.status, "MERGED")
         self.assertAlmostEqual(self.l4.usd_notional, 0.0)
         self.assertAlmostEqual(self.l2.usd_notional, 150.0)
-        self.assertAlmostEqual(self.l2.stop_price, 64550.0)  # stepped, not reset
+        self.assertAlmostEqual(self.l2.stop_price, 64700.0)  # stepped, not reset
         self.assertAlmostEqual(self.l2.quantity, 150.0 / self.l2.limit_price)
         self.assertEqual(self._fills(), [])
 
@@ -651,10 +654,10 @@ class CascadeStopEntryTests(unittest.TestCase):
         self._red(1, 64750.0)
         self._red(2, 64700.0)
         self._red(3, 64550.0)
-        self._candle(4, 64550.0, 64620.0, 64545.0, 64615.0)  # U-turn
+        self._candle(4, 64550.0, 64720.0, 64545.0, 64715.0)  # U-turn back through it
         self.assertEqual(len(self.campaign.all_fills), 1)
         fill = self.campaign.all_fills[0]
-        self.assertAlmostEqual(fill.price, 64550.05)
+        self.assertAlmostEqual(fill.price, 64700.05)
         self.assertAlmostEqual(fill.price * fill.quantity, 150.0, places=2)
 
     def test_l8_fills_on_its_own_line_independently(self):
@@ -687,9 +690,9 @@ class CascadeStopEntryTests(unittest.TestCase):
         self.campaign.mode = "live"
         self._red(1, 64750.0)
         self._red(2, 64700.0)
-        self.engine._price_cache["BTCUSDT"] = (64705.0, 0)  # market still above the trigger
+        self.engine._price_cache["BTCUSDT"] = (64755.0, 0)  # market above the trigger
         self.assertFalse(self.engine._stop_is_placeable(self.campaign, self.l2))
-        self.engine._price_cache["BTCUSDT"] = (64690.0, 0)  # dropped back under it
+        self.engine._price_cache["BTCUSDT"] = (64740.0, 0)  # back under it
         self.assertTrue(self.engine._stop_is_placeable(self.campaign, self.l2))
 
     def test_process_candle_drives_the_stop_machinery(self):
@@ -697,7 +700,102 @@ class CascadeStopEntryTests(unittest.TestCase):
         for idx, close in ((1, 64750.0), (2, 64700.0)):
             _feed(self.engine, self.campaign, Candle(idx * 300, close + 40, close + 42, close - 8, close))
         self.assertTrue(self.l2.armed)
-        self.assertAlmostEqual(self.l2.stop_price, 64700.0)
+        self.assertAlmostEqual(self.l2.stop_price, 64750.0)
+
+
+class CascadeAutoRestartTests(unittest.TestCase):
+    """A mother break rolls into a fresh campaign anchored on the breaking
+    candle — nothing carried over, same rules, no manual step."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.parent = Campaign(
+            campaign_id="p1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            seq=1,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        self.engine.campaigns["p1"] = self.parent
+
+    def _break(self, high=65200.0, low=65050.0, ts=3000):
+        _feed(self.engine, self.parent, Candle(ts, 65100.0, high, low, 65180.0))
+
+    def _child(self):
+        return next((c for c in self.engine.campaigns.values() if c.campaign_id != "p1"), None)
+
+    def test_break_starts_a_new_campaign_on_the_breaking_candle(self):
+        self._break(high=65200.0, low=65050.0)
+        self.assertEqual(self.parent.state, "MOTHER_BROKEN")
+        child = self._child()
+        self.assertIsNotNone(child)
+        self.assertAlmostEqual(child.mother_high, 65200.0)  # the breaking candle's own high
+        self.assertAlmostEqual(child.mother_low, 65050.0)  # and its low
+        self.assertEqual(child.mother_timestamp, 3000)
+        self.assertEqual(child.state, "WAITING_FIRST_DEPTH")
+
+    def test_nothing_is_carried_over(self):
+        self.parent.legs.append(Leg(leg_id=1, trendline_id=1, low=1.0, touch_high=2.0, touch_timestamp=0))
+        self.parent.carry_forward_usd = 123.0
+        self.parent.cumulative_used_pct = 0.9
+        self._break()
+        child = self._child()
+        self.assertEqual(child.legs, [])
+        self.assertEqual(child.trendlines, [])
+        self.assertEqual(child.all_fills, [])
+        self.assertEqual(child.rounds, [])
+        self.assertAlmostEqual(child.carry_forward_usd, 0.0)
+        self.assertAlmostEqual(child.cumulative_used_pct, 0.0)
+        self.assertIsNone(child.avg_entry_price)
+
+    def test_the_child_keeps_symbol_capital_and_mode_and_links_back(self):
+        self.parent.mode = "live"
+        self._break()
+        child = self._child()
+        self.assertEqual(child.symbol, "BTCUSDT")
+        self.assertAlmostEqual(child.capital_usd, 2000.0)
+        self.assertEqual(child.mode, "live")  # a live cascade keeps running live
+        self.assertEqual(child.parent_campaign_id, "p1")
+        self.assertEqual(child.generation, 2)
+        self.assertGreater(child.seq, self.parent.seq)
+
+    def test_the_parent_still_reaches_closed_history(self):
+        self._break()
+        self.assertEqual([r["campaign_id"] for r in self.engine.closed_campaigns], ["p1"])
+
+    def test_a_deliberate_stop_does_not_auto_restart(self):
+        self.parent.close_reason = "stopped"
+        self.engine._auto_restart(self.parent, Candle(3000, 1.0, 2.0, 0.5, 1.5))
+        self.assertIsNone(self._child())
+
+    def test_a_barren_chain_is_cut_off(self):
+        """A straight rip upward breaks a mother candle every bar. Restarts that
+        never draw a fib must not multiply without end."""
+        from engine.cascade import MAX_BARREN_AUTO_RESTARTS
+
+        parent = self.parent
+        for _ in range(MAX_BARREN_AUTO_RESTARTS + 5):
+            parent.close_reason = "mother_broken"
+            child = self.engine._auto_restart(parent, Candle(3000, 1.0, 2.0, 0.5, 1.5))
+            if child is None:
+                break
+            parent = child
+        self.assertIsNone(child)
+        self.assertLessEqual(parent.generation, MAX_BARREN_AUTO_RESTARTS + 2)
+
+    def test_a_chain_that_traded_resets_the_barren_counter(self):
+        self._break()
+        child = self._child()
+        self.assertEqual(child.barren_chain, 1)
+        child.legs.append(Leg(leg_id=1, trendline_id=1, low=1.0, touch_high=2.0, touch_timestamp=0))
+        child.close_reason = "mother_broken"
+        grandchild = self.engine._auto_restart(child, Candle(6000, 1.0, 2.0, 0.5, 1.5))
+        self.assertEqual(grandchild.barren_chain, 0)
 
 
 class CascadeClosedHistoryTests(unittest.TestCase):

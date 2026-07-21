@@ -68,6 +68,10 @@ STOP_ENTRY_LEVELS = (2, 4)
 # (tick 0.01) that is 0.05 — a stop at 66,067.78 caps at 66,067.83.
 STOP_LIMIT_OFFSET_TICKS = 5
 DEFAULT_TICK_SIZE = 0.01
+# A mother break rolls straight into a fresh campaign on the breaking candle.
+# If price simply rips upward, every candle would break its predecessor, so a
+# run of restarts that never draws a fib is capped rather than left unbounded.
+MAX_BARREN_AUTO_RESTARTS = 10
 MODEL_VERSION = 9  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
@@ -407,6 +411,9 @@ class Campaign:
     mode: str = "paper"  # paper | live
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
     tick_size: float = DEFAULT_TICK_SIZE  # exchange price increment, for the stop/limit gap
+    parent_campaign_id: Optional[str] = None  # set when a mother break auto-started this one
+    generation: int = 1  # 1 = manually started; each auto-restart increments
+    barren_chain: int = 0  # consecutive auto-restarts that ended without drawing a fib
     model_version: int = 0  # rules version the stored legs/trendlines were built with
     created_at: str = ""
     state: str = "WAITING_FIRST_DEPTH"
@@ -484,6 +491,9 @@ class Campaign:
             "mode": self.mode,
             "min_notional_usd": self.min_notional_usd,
             "tick_size": self.tick_size,
+            "parent_campaign_id": self.parent_campaign_id,
+            "generation": self.generation,
+            "barren_chain": self.barren_chain,
             "model_version": self.model_version,
             "created_at": self.created_at,
             "state": self.state,
@@ -525,6 +535,9 @@ class Campaign:
             "mode",
             "min_notional_usd",
             "tick_size",
+            "parent_campaign_id",
+            "generation",
+            "barren_chain",
             "model_version",
             "created_at",
             "state",
@@ -1461,7 +1474,7 @@ class CascadeEngine:
 
     def _process_candle(self, campaign: Campaign, candle: Candle) -> None:
         if candle.high >= campaign.mother_high:
-            self._mother_broken(campaign)
+            self._mother_broken(campaign, candle)
             return
         if not campaign.window_start_ts:
             campaign.window_start_ts = campaign.mother_timestamp
@@ -1471,15 +1484,13 @@ class CascadeEngine:
         if candle.close < candle.open:
             self._evaluate_cut(campaign, candle)
         if campaign.state in ACTIVE_STATES:
-            # Step the stops FIRST, then look for fills. Real candles open where
-            # the last one closed, so a trigger sitting on the last red close is
-            # touched by the very next candle no matter which way it goes. What
-            # separates "the fall continued" from "the market turned" is whether
-            # this candle set a new lower red close: if it did it owns the stop
-            # and cannot also fill it, and _paper_fill_check skips it on stop_ts.
-            self._advance_stop_entries(campaign, candle)
+            # Fill against the trigger that was resting while this candle formed,
+            # THEN let the candle walk it down. The trigger sits a body above the
+            # last close, so a candle that wicks up through it really would have
+            # been filled — advancing first would hide that.
             if campaign.mode == "paper":
                 self._paper_fill_check(campaign, candle)
+            self._advance_stop_entries(campaign, candle)
 
     def _evaluate_cut(self, campaign: Campaign, candle: Candle) -> None:
         """
@@ -1755,10 +1766,11 @@ class CascadeEngine:
             return
         if probe.close >= carrier.last_red_close:
             return  # not lower than the previous red — price must keep falling
+        # The trigger is the PREVIOUS red close, one body back, so it sits ABOVE
+        # where the market just closed. That is what makes it a stop rather than
+        # a limit: the fall walks it down and only a turn back up takes it.
+        self._reprice_stop(campaign, carrier, carrier.last_red_close, probe)
         carrier.last_red_close = probe.close
-        # The trigger is THIS close — the lowest so far — not the one behind it.
-        # Buying a step back up from the low is the whole point.
-        self._reprice_stop(campaign, carrier, probe.close, probe)
 
     def _merge_stop_level(self, campaign: Campaign, carrier: PendingOrder, donor: PendingOrder) -> None:
         """Fold a deeper stop level's allocation into the order already working.
@@ -1914,7 +1926,7 @@ class CascadeEngine:
             f"returned to the pool; campaign continues until the mother high breaks.",
         )
 
-    def _mother_broken(self, campaign: Campaign) -> None:
+    def _mother_broken(self, campaign: Campaign, candle: Optional[Candle] = None) -> None:
         campaign.mother_broken_above = True
         campaign.state = "MOTHER_BROKEN"
         campaign.close_reason = "mother_broken"
@@ -1930,7 +1942,7 @@ class CascadeEngine:
             ),
         )
         if campaign.mode == "live":
-            asyncio.ensure_future(self._cancel_all_live_orders(campaign, include_tp=False))
+            self._schedule(self._cancel_all_live_orders(campaign, include_tp=False))
         elif campaign.filled_base_qty > 0:
             # Paper: price at/above mother high is at/above TP by construction.
             tp = compute_tp_price(campaign)
@@ -1940,6 +1952,82 @@ class CascadeEngine:
                 # reached the closed list at all.
                 self._close_round(campaign, tp)
         self._archive_campaign(campaign)
+        if candle is not None:
+            self._auto_restart(campaign, candle)
+
+    def _schedule(self, coro) -> None:
+        """
+        Fire a coroutine from the synchronous state machine. That machine also
+        runs during restore and replay, where no event loop exists — a bare
+        ensure_future raises RuntimeError there and would abort the caller
+        half-way through handling a mother break, leaving orders untouched and
+        the successor campaign unstarted.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            coro.close()
+            _log.warning("[CASCADE] no running event loop; skipped a scheduled order task")
+            return
+        asyncio.ensure_future(coro)
+
+    def _auto_restart(self, parent: Campaign, candle: Candle) -> Optional[Campaign]:
+        """
+        A break does not end the cascade, it moves it. The candle that broke
+        above becomes the new mother candle — its own high and low — and a fresh
+        campaign starts there with nothing carried over: no trendlines, no fibs,
+        no orders, no fills. Everything is rebuilt from the new mother candle
+        under the same rules.
+
+        Manual start is untouched; this only covers the break case, so a
+        campaign stopped or deleted on purpose stays stopped.
+        """
+        if parent.close_reason != "mother_broken":
+            return None
+        # A straight rip upward breaks a mother candle every bar. Chains that
+        # never manage to draw a fib are cut off rather than multiplying forever.
+        barren = 0 if parent.legs else parent.barren_chain + 1
+        if barren > MAX_BARREN_AUTO_RESTARTS:
+            self._log_event(
+                parent,
+                "warn",
+                f"{barren - 1} auto-restarts in a row drew no fib — chain stopped. "
+                f"Start a new campaign by hand when the move settles.",
+            )
+            return None
+        if candle.high <= candle.low:
+            return None
+
+        child = Campaign(
+            campaign_id=uuid.uuid4().hex[:10],
+            seq=self._next_seq(),
+            symbol=parent.symbol,
+            capital_usd=parent.capital_usd,
+            mother_high=candle.high,
+            mother_low=candle.low,
+            mother_timestamp=candle.timestamp,
+            mode=parent.mode,
+            min_notional_usd=parent.min_notional_usd,
+            tick_size=parent.tick_size,
+            parent_campaign_id=parent.campaign_id,
+            generation=parent.generation + 1,
+            barren_chain=barren,
+            model_version=MODEL_VERSION,
+            created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            last_processed_ts=candle.timestamp,
+            window_start_ts=candle.timestamp,
+        )
+        self.campaigns[child.campaign_id] = child
+        # The breaking candle is the mother, so history starts clean from it.
+        self._candles_5m[child.campaign_id] = [candle]
+        self._log_event(
+            child,
+            "start",
+            f"Auto-started from the break of campaign #{parent.seq} — new mother candle "
+            f"high {candle.high:,.2f} / low {candle.low:,.2f} ({child.mode.upper()}, "
+            f"generation {child.generation}). Nothing carried over.",
+        )
+        return child
 
     def _archive_campaign(self, campaign: Campaign) -> None:
         payload = campaign.to_dict()

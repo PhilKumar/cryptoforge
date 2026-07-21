@@ -8374,9 +8374,12 @@ function cfCascadeReconcile() {
 // ═══ CASCADE CHART ══════════════════════════════════════════════
 var _cfCascadeChartId = '';
 
-function _cfCascadeUtc(ts) {
+// Every candle time on this site reads in IST. Binance hands us epoch seconds;
+// shift by +5:30 and format off the UTC getters so the result is IST no matter
+// what timezone the browser is in.
+function _cfCascadeIst(ts) {
   if (!ts) return '--';
-  var d = new Date(Number(ts) * 1000);
+  var d = new Date((Number(ts) + 19800) * 1000);
   if (isNaN(d.getTime())) return '--';
   return d.toISOString().slice(5, 16).replace('T', ' ');
 }
@@ -8428,7 +8431,7 @@ function _cfCascadeChartSvg(d) {
     var ci = Math.round((n - 1) * (t / Math.max(ticks - 1, 1)));
     var cx = X(ci);
     parts.push('<text x="' + cx.toFixed(1) + '" y="' + (H - 8) + '" fill="rgba(148,163,184,0.55)" ' +
-      'font-size="9.5" font-family="monospace" text-anchor="middle">' + _escapeHtml(_cfCascadeUtc(candles[ci].t)) + '</text>');
+      'font-size="9.5" font-family="monospace" text-anchor="middle">' + _escapeHtml(_cfCascadeIst(candles[ci].t)) + '</text>');
   }
 
   // candles
@@ -8520,12 +8523,12 @@ function _cfCascadeChartTables(d) {
   var rows = [];
   (d.trendlines || []).forEach(function (tl) {
     rows.push('<tr><td>Trendline ' + tl.id + (tl.active ? ' <span class="tag tag-green">active</span>' : '') + '</td>'
-      + '<td>anchor1 (mother high)</td><td class="num">' + _cfCascadeFmt(tl.a1.p) + '</td><td>' + _cfCascadeUtc(tl.a1.t) + ' UTC</td></tr>');
-    rows.push('<tr><td></td><td>anchor2 (red candle open)</td><td class="num">' + _cfCascadeFmt(tl.a2.p) + '</td><td>' + _cfCascadeUtc(tl.a2.t) + ' UTC</td></tr>');
+      + '<td>anchor1 (mother high)</td><td class="num">' + _cfCascadeFmt(tl.a1.p) + '</td><td>' + _cfCascadeIst(tl.a1.t) + ' IST</td></tr>');
+    rows.push('<tr><td></td><td>anchor2 (red candle open)</td><td class="num">' + _cfCascadeFmt(tl.a2.p) + '</td><td>' + _cfCascadeIst(tl.a2.t) + ' IST</td></tr>');
   });
   (d.legs || []).forEach(function (leg) {
     rows.push('<tr><td>Leg ' + leg.leg_id + (leg.finalized ? '' : ' <span class="tag tag-purple">forming</span>') + '</td>'
-      + '<td>fib 0 — swing high</td><td class="num">' + _cfCascadeFmt(leg.touch_high) + '</td><td>' + _cfCascadeUtc(leg.touch_timestamp) + ' UTC</td></tr>');
+      + '<td>fib 0 — swing high</td><td class="num">' + _cfCascadeFmt(leg.touch_high) + '</td><td>' + _cfCascadeIst(leg.touch_timestamp) + ' IST</td></tr>');
     var fp = Number(leg.fall_pct_from_mother);
     rows.push('<tr><td></td><td>fib 1 — leg low</td><td class="num">' + _cfCascadeFmt(leg.low) + '</td><td>'
       + (isFinite(fp) ? fp.toFixed(3) + '% below mother high' : '—') + '</td></tr>');
@@ -8735,7 +8738,7 @@ async function cfCascadeShowChart(campaignId) {
     if (meta) {
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + (data.candles || []).length
         + ' ' + (data.timeframe || '5m') + ' candles since mother candle ('
-        + _cfCascadeUtc(data.mother && data.mother.t) + ' UTC) · '
+        + _cfCascadeIst(data.mother && data.mother.t) + ' IST) · '
         + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)'
         + (data.timeframe && data.timeframe !== '5m' ? ' · geometry is always 5m-derived' : '');
     }
