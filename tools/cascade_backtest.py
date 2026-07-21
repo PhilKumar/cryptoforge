@@ -210,7 +210,7 @@ def replay(case: Case, refetch: bool = False, capital: float = 2000.0) -> Result
 
     fills = campaign.all_fills
     deployed = sum(f.price * f.quantity for f in fills) + sum(
-        r.avg_entry * r.qty for r in campaign.rounds if r.avg_entry and r.qty
+        r.avg_entry * r.quantity for r in campaign.rounds if r.avg_entry and r.quantity
     )
     deepest = min((f.price for f in fills), default=None)
     return Result(
