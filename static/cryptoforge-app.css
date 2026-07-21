@@ -6727,12 +6727,6 @@ html[data-theme="light"] .journal-entry-notes section {
 
   /* ── Cascade campaign cards: compact stat grid ── */
   .cf-cascade-card { padding: 14px 16px; margin-bottom: 12px; }
-  /* Active Campaigns is the whole point of this page, so it gets the full page
-     width. Sharing a grid row with the start form squeezed it to about 60%,
-     which is what forced the ladder table to scroll sideways in the first
-     place — the columns simply did not fit. */
-  #cf-cascade-campaigns-panel { margin-top: 14px; }
-  #cf-cascade-campaigns-panel > .table-toolbar { margin-bottom: 10px; }
   /* One row, always. Wrapping was letting the buttons drop to a second line on
      campaigns carrying an extra badge, so no two cards lined up. */
   .cf-cascade-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: nowrap; }

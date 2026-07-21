@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260722-25">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260721-24">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
 <script src="/static/pwa.js?v=20260720-18" defer></script>
@@ -1340,19 +1340,14 @@
       <div class="allocator-error" id="cf-cascade-error" role="alert" aria-live="polite"></div>
       <div class="table-meta" style="margin-top:8px;">New campaigns start in paper mode by default. Flip to LIVE per campaign once you trust the behaviour — live entries rest on Binance as limit buys and the TP rests as a limit sell, so exits survive app downtime.</div>
     </section>
-  </div>
 
-  <section class="card table-panel" id="cf-cascade-campaigns-panel">
-    <div class="table-toolbar">
-      <div class="table-title-group">
-        <h3 class="table-title">Active Campaigns</h3>
-        <div class="table-meta">Click a card to collapse it. Each shows its ladder, what the fall has collected, and what it holds.</div>
+    <section class="card allocator-result-panel">
+      <h3>Active Campaigns</h3>
+      <div id="cf-cascade-campaigns">
+        <div class="cf-table-empty-cell" style="padding:16px;">No campaigns yet — start one on the left.</div>
       </div>
-    </div>
-    <div id="cf-cascade-campaigns">
-      <div class="cf-table-empty-cell" style="padding:16px;">No campaigns yet — start one above.</div>
-    </div>
-  </section>
+    </section>
+  </div>
 
   <div class="cf-chart-overlay" id="cf-cascade-chart-overlay" style="display:none;"
        role="dialog" aria-modal="true" aria-label="Campaign chart"
@@ -2014,7 +2009,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260722-35" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260722-34" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 </body>
 </html>
