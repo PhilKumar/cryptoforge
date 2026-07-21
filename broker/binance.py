@@ -469,6 +469,8 @@ class BinanceSpotClient(BaseBroker):
         raw = str(order_type or "").lower()
         if raw in {"limit", "limit_order"}:
             return "LIMIT"
+        if raw in {"stop_limit", "stop_limit_order", "stop_loss_limit"}:
+            return "STOP_LOSS_LIMIT"
         return "MARKET"
 
     @staticmethod
@@ -549,6 +551,7 @@ class BinanceSpotClient(BaseBroker):
         reduce_only: bool = False,
         client_order_id: str = None,
         base_qty: float = None,
+        stop_price: float = None,
     ) -> dict:
         if not self._is_configured():
             return {"error": "API not configured"}
@@ -582,13 +585,20 @@ class BinanceSpotClient(BaseBroker):
         }
         if client_order_id:
             payload["newClientOrderId"] = str(client_order_id)
-        if order_type_upper == "LIMIT":
+        if order_type_upper in {"LIMIT", "STOP_LOSS_LIMIT"}:
             if not limit_price:
                 return {"error": "Limit price is required for Binance Spot limit orders"}
             tick_price = self._round_price_to_tick(pair, self.coerce_float(limit_price, 0.0))
             if self.coerce_float(tick_price, 0.0) <= 0:
                 return {"error": f"Unable to resolve a valid limit price for {pair}"}
             payload.update({"price": tick_price, "timeInForce": "GTC"})
+        if order_type_upper == "STOP_LOSS_LIMIT":
+            if not stop_price:
+                return {"error": "Stop price is required for Binance Spot stop-limit orders"}
+            tick_stop = self._round_price_to_tick(pair, self.coerce_float(stop_price, 0.0))
+            if self.coerce_float(tick_stop, 0.0) <= 0:
+                return {"error": f"Unable to resolve a valid stop price for {pair}"}
+            payload["stopPrice"] = tick_stop
         try:
             result = self._signed_request("POST", "/api/v3/order", params=payload)
             if isinstance(result, dict):
@@ -613,6 +623,7 @@ class BinanceSpotClient(BaseBroker):
         max_verify_attempts: int = 3,
         client_order_id: str = None,
         base_qty: float = None,
+        stop_price: float = None,
     ) -> dict:
         started_at = _time.perf_counter()
         result = self.place_order(
@@ -625,6 +636,7 @@ class BinanceSpotClient(BaseBroker):
             reduce_only=reduce_only,
             client_order_id=client_order_id,
             base_qty=base_qty,
+            stop_price=stop_price,
         )
         order_ack_ms = round((_time.perf_counter() - started_at) * 1000, 1)
         if isinstance(result, dict) and result.get("error"):

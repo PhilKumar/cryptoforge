@@ -7874,25 +7874,26 @@ function _cfCascadeLadderRows(campaign) {
     var body = [2, 4, 8].map(function(level) {
       var order = orders[String(level)] || orders[level] || {};
       var status = String(order.status || '--');
-      var trail = order.entry_style === 'trail';
+      var stop = order.entry_style === 'stop';
       var live = status === 'PLACED' || status === 'PENDING';
-      // A trail order that has not armed yet is resting nowhere — say so
-      // rather than implying an order sits on the fib line.
-      if (trail && live && !order.armed) status = 'WAIT BREAK';
+      // A stop entry that has not armed yet is resting nowhere — say so rather
+      // than implying an order sits on the fib line.
+      if (stop && live && !order.armed) status = 'WAIT 2 REDS';
       var tone = status === 'FILLED' ? 'var(--green, #3fae56)'
-        : status === 'WAIT BREAK' ? 'var(--yellow, #f59e0b)'
+        : status === 'WAIT 2 REDS' ? 'var(--yellow, #f59e0b)'
         : live ? 'var(--accent, #1f6fd6)'
         : 'var(--text-muted, #888)';
-      // Price shown is where the order actually is; the fib line follows as
-      // context once the two differ.
-      var priceCell = trail
+      // Show the trigger, with the limit cap under it; the fib line is only
+      // the level that has to break first, not where the order sits.
+      var priceCell = stop
         ? (order.armed
-            ? _cfCascadeFmt(order.working_price)
-              + '<div class="table-meta">fib ' + _cfCascadeFmt(order.price) + '</div>'
-            : '<span style="opacity:.6;">under ' + _cfCascadeFmt(order.price) + '</span>')
+            ? _cfCascadeFmt(order.stop_price)
+              + '<div class="table-meta">lmt ' + _cfCascadeFmt(order.limit_price)
+              + ' · fib ' + _cfCascadeFmt(order.price) + '</div>'
+            : '<span style="opacity:.6;">below ' + _cfCascadeFmt(order.price) + '</span>')
         : _cfCascadeFmt(order.price);
       return '<tr>'
-        + '<td>L' + level + (trail ? '<div class="table-meta">trail</div>' : '') + '</td>'
+        + '<td>L' + level + (stop ? '<div class="table-meta">buy stop</div>' : '') + '</td>'
         + '<td class="num">' + priceCell + '</td>'
         + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
         + '<td class="num">$' + _cfCascadeFmt(order.usd_notional) + '</td>'

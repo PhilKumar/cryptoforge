@@ -16,10 +16,12 @@ Model (as specified by the user against their TradingView drawings):
   first fib funds off the fall from the mother high to its own level 1; each
   later fib funds off the remaining move from the previous fib's level 1 to
   its own.
-- Levels 2 and 4 do NOT rest on their line. They arm when a candle closes
-  below it, then trail the close of each further red candle down, so the buy
-  always sits under the last body. Level 8 rests as a plain limit on its
-  line. See TRAIL_ENTRY_LEVELS and _advance_trail_entries.
+- Levels 2 and 4 do NOT rest on their line. They go in as BUY STOPS whose
+  trigger is the PREVIOUS red candle's close, so the order sits above a
+  falling market and steps down with it, filling only when price U-turns
+  back up through the last red body. Two reds under the line are needed
+  before one is placed. Level 8 rests as a plain limit on its line.
+  See STOP_ENTRY_LEVELS and _advance_stop_entries.
 - Take profit is measured FROM the average entry back toward the mother
   high — avg_entry + 0.25 x (mother_high - avg_entry) — and only exists once
   an entry has filled.
@@ -57,12 +59,16 @@ BASE_TIMEFRAME = "5m"
 ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
-# Levels 2 and 4 are shallow: resting there blindly buys the first touch of a
-# line price is still falling through. They instead wait for the line to break
-# and then follow red closes down. Level 8 is the level worth owning at the
-# line itself, so it stays a plain resting limit.
-TRAIL_ENTRY_LEVELS = (2, 4)
-MODEL_VERSION = 8  # bump when the fib/trendline rules change; older campaigns are flagged stale
+# Levels 2 and 4 are shallow: resting a limit there buys a knife price is still
+# falling through. They instead go in as BUY STOPS above a falling market, which
+# only fill once the market turns back up. Level 8 is the level worth owning at
+# the line itself, so it stays a plain resting limit.
+STOP_ENTRY_LEVELS = (2, 4)
+# Gap between the stop trigger and the limit cap, in exchange ticks. On BTCUSDT
+# (tick 0.01) that is 0.05 — a stop at 66,067.78 caps at 66,067.83.
+STOP_LIMIT_OFFSET_TICKS = 5
+DEFAULT_TICK_SIZE = 0.01
+MODEL_VERSION = 9  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -209,9 +215,11 @@ class PendingOrder:
     filled_qty: float = 0.0
     fill_price: Optional[float] = None
     fill_timestamp: Optional[int] = None
-    entry_style: str = "limit"  # limit = rest at the fib line | trail = follow red closes
-    trail_price: Optional[float] = None  # working price once a trail order arms
-    trail_ts: Optional[int] = None  # candle whose close set trail_price
+    entry_style: str = "limit"  # limit = rest at the fib line | stop = buy-stop above a falling market
+    stop_price: Optional[float] = None  # trigger: the PREVIOUS red candle's close
+    limit_price: Optional[float] = None  # cap once triggered, a few ticks over the stop
+    stop_ts: Optional[int] = None  # candle whose close last moved the stop
+    last_red_close: Optional[float] = None  # most recent red close under the line
 
     @property
     def is_open(self) -> bool:
@@ -219,18 +227,18 @@ class PendingOrder:
 
     @property
     def armed(self) -> bool:
-        """A trail order is only live once the fib line has broken down."""
-        return self.entry_style != "trail" or self.trail_price is not None
+        """A stop order is only live once two red candles have printed below
+        the fib line — the first supplies the trigger, the second confirms."""
+        return self.entry_style != "stop" or self.stop_price is not None
 
     @property
     def working_price(self) -> Optional[float]:
         """
-        Where the order actually rests. A plain limit sits on its fib line; a
-        trail order sits at the last red close under that line, and is nowhere
-        at all until the line breaks.
+        The worst price this order can pay. A plain limit pays its fib line; a
+        stop pays its limit cap, and is nowhere at all until it arms.
         """
-        if self.entry_style == "trail":
-            return self.trail_price
+        if self.entry_style == "stop":
+            return self.limit_price
         return self.price
 
     def to_dict(self) -> dict:
@@ -258,8 +266,10 @@ class PendingOrder:
             "fill_price",
             "fill_timestamp",
             "entry_style",
-            "trail_price",
-            "trail_ts",
+            "stop_price",
+            "limit_price",
+            "stop_ts",
+            "last_red_close",
         ):
             if key in data:
                 setattr(order, key, data[key])
@@ -396,6 +406,7 @@ class Campaign:
     seq: int = 0  # human-facing number, assigned in start order
     mode: str = "paper"  # paper | live
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
+    tick_size: float = DEFAULT_TICK_SIZE  # exchange price increment, for the stop/limit gap
     model_version: int = 0  # rules version the stored legs/trendlines were built with
     created_at: str = ""
     state: str = "WAITING_FIRST_DEPTH"
@@ -472,6 +483,7 @@ class Campaign:
             "mother_timestamp": self.mother_timestamp,
             "mode": self.mode,
             "min_notional_usd": self.min_notional_usd,
+            "tick_size": self.tick_size,
             "model_version": self.model_version,
             "created_at": self.created_at,
             "state": self.state,
@@ -512,6 +524,7 @@ class Campaign:
         for key in (
             "mode",
             "min_notional_usd",
+            "tick_size",
             "model_version",
             "created_at",
             "state",
@@ -717,7 +730,7 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
             leg_id=leg.leg_id,
             timeframe=timeframe_for_level(leg, level),
             status="PENDING",
-            entry_style="trail" if level in TRAIL_ENTRY_LEVELS else "limit",
+            entry_style="stop" if level in STOP_ENTRY_LEVELS else "limit",
             client_order_id=f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-0",
         )
 
@@ -834,6 +847,7 @@ class CascadeEngine:
         if product is None:
             return {"error": f"Symbol {symbol} not found on {getattr(self.broker, 'display_name', 'broker')}"}
         min_notional = max(_coerce_float(product.get("min_notional"), min_notional), MIN_NOTIONAL_FLOOR_USD)
+        tick_size = _coerce_float(product.get("tick_size"), DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
         if capital_usd < min_notional * 2:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
 
@@ -871,6 +885,7 @@ class CascadeEngine:
             mother_timestamp=mother_ts,
             mode=mode,
             min_notional_usd=min_notional,
+            tick_size=tick_size,
             model_version=MODEL_VERSION,
             created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             last_processed_ts=mother_ts,
@@ -1461,7 +1476,7 @@ class CascadeEngine:
             # the order under a candle that should have filled it.
             if campaign.mode == "paper":
                 self._paper_fill_check(campaign, candle)
-            self._advance_trail_entries(campaign, candle)
+            self._advance_stop_entries(campaign, candle)
 
     def _evaluate_cut(self, campaign: Campaign, candle: Candle) -> None:
         """
@@ -1666,51 +1681,77 @@ class CascadeEngine:
             probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
             if probe is None:
                 continue
-            # A trail order placed off THIS candle's own close cannot also be
-            # filled by it — the order did not exist while it was forming.
-            if order.trail_ts is not None and probe.timestamp <= order.trail_ts:
+            # An order repriced off THIS candle's own close cannot also be
+            # filled by it — it did not exist while the candle was forming.
+            if order.stop_ts is not None and probe.timestamp <= order.stop_ts:
                 continue
-            if probe.low <= price:
+            if order.entry_style == "stop":
+                # A buy stop sits ABOVE the market and triggers on the way up.
+                # Fill at the limit cap: the pessimistic end of the band the
+                # order can actually execute in.
+                if probe.high >= (order.stop_price or 0.0):
+                    self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
+            elif probe.low <= price:
                 self._record_fill(campaign, leg, order, price, probe.timestamp, order_id="PAPER")
 
-    def _advance_trail_entries(self, campaign: Campaign, closed_5m: Candle) -> None:
+    def _advance_stop_entries(self, campaign: Campaign, closed_5m: Candle) -> None:
         """
-        Levels 2 and 4 do not sit blindly on the fib line. They arm only once a
-        candle CLOSES below the line, and then follow the close of each further
-        red candle down, so the buy is always under the last body rather than
-        at the line price. Green candles leave the order where it is, and the
-        order never moves back up — it only ever gets cheaper.
+        Levels 2 and 4 go in as BUY STOPS, not resting limits, and the trigger
+        always sits at the PREVIOUS red candle's close — one body back, so it
+        is above where the market currently is.
 
-        The probe is the level's own timeframe, so a leg that has escalated to
-        15m trails off 15m closes without any extra plumbing.
+        That geometry is the whole idea. While the market keeps falling, each
+        new red close pushes the stop down and nothing fills; the order chases
+        price down without ever buying into it. Only when the market U-turns
+        and trades back up through the last red body does the stop trigger.
+
+        Two reds are needed before anything is placed: the first supplies the
+        trigger price, the second confirms the fall and puts the market below
+        it. Greens are ignored entirely — before arming and after it — and a
+        red that closes higher than the last one does not count, because the
+        rule is that price must be lower than the previous candle.
+
+        The probe is the level's own timeframe, so a leg escalated to 15m
+        steps off 15m closes with no extra plumbing.
         """
         leg = campaign.current_leg
         if leg is None:
             return
         candle_15m = self._fifteen_minute_candle(campaign, closed_5m)
         for order in leg.pending_orders.values():
-            if order.entry_style != "trail" or not order.is_open or not order.price:
+            if order.entry_style != "stop" or not order.is_open or not order.price:
                 continue
             probe = closed_5m if order.timeframe == BASE_TIMEFRAME else candle_15m
-            if probe is None or probe.timestamp == order.trail_ts:
+            if probe is None or probe.timestamp == order.stop_ts:
                 continue
-            if probe.close >= order.price:
-                continue  # the fib line has not broken down yet
-            if probe.close >= probe.open:
-                continue  # only red candles set the entry
-            if order.trail_price is not None and probe.close >= order.trail_price:
-                continue  # never chase the order back up
-            self._reprice_trail(campaign, order, probe)
+            if probe.close >= probe.open or probe.close >= order.price:
+                continue  # only red candles that closed under the fib line count
+            if order.last_red_close is None:
+                # First red under the line: nothing behind it to trigger off yet.
+                order.last_red_close = probe.close
+                self._log_event(
+                    campaign,
+                    "order",
+                    f"L{order.level} fib line {order.price:,.2f} broken at {probe.close:,.2f} — "
+                    f"waiting for a second red {order.timeframe} candle to set the stop",
+                )
+                continue
+            if probe.close >= order.last_red_close:
+                continue  # not lower than the previous red — the pair does not confirm
+            self._reprice_stop(campaign, order, order.last_red_close, probe)
+            order.last_red_close = probe.close
 
-    def _reprice_trail(self, campaign: Campaign, order: PendingOrder, probe: Candle) -> None:
-        first = order.trail_price is None
-        order.trail_price = probe.close
-        order.trail_ts = probe.timestamp
-        if probe.close > 0:
-            order.quantity = order.usd_notional / probe.close
+    def _reprice_stop(self, campaign: Campaign, order: PendingOrder, trigger: float, probe: Candle) -> None:
+        first = order.stop_price is None
+        tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
+        order.stop_price = trigger
+        order.limit_price = trigger + STOP_LIMIT_OFFSET_TICKS * tick
+        order.stop_ts = probe.timestamp
+        if order.limit_price > 0:
+            order.quantity = order.usd_notional / order.limit_price
         if order.status == "PLACED":
-            # Live: drop the old resting order and let _sync_live_orders cancel
-            # it (its id is no longer ours) and place the new one a tick lower.
+            # Live: release the resting order so _sync_live_orders cancels it
+            # (the id is no longer ours) and re-places it lower.
             order.status = "PENDING"
             order.order_id = None
             order.rev += 1
@@ -1718,8 +1759,9 @@ class CascadeEngine:
         self._log_event(
             campaign,
             "order",
-            f"L{order.level} {'armed' if first else 'trailed down'} at {probe.close:,.2f} — "
-            f"under the {order.timeframe} red close, fib line {order.price:,.2f} already broken",
+            f"L{order.level} buy stop {'armed' if first else 'stepped down'} at {trigger:,.2f} "
+            f"(limit {order.limit_price:,.2f}) — market closed lower at {probe.close:,.2f}, "
+            f"buying only if it turns back up",
         )
 
     def _record_fill(
@@ -1929,15 +1971,17 @@ class CascadeEngine:
                     continue
                 price = order.working_price
                 if not price:
-                    continue  # trail order waiting for the line to break — nothing to rest yet
+                    continue  # stop entry not armed yet — nothing to rest on the exchange
+                is_stop = order.entry_style == "stop"
                 try:
                     result = await asyncio.to_thread(
-                        lambda o=order, p=price: self.broker.place_order(
+                        lambda o=order, p=price, st=is_stop: self.broker.place_order(
                             campaign.symbol,
                             o.usd_notional,
                             "buy",
-                            order_type="limit_order",
+                            order_type="stop_limit" if st else "limit_order",
                             limit_price=p,
+                            stop_price=o.stop_price if st else None,
                             client_order_id=o.client_order_id,
                         )
                     )
@@ -1949,8 +1993,12 @@ class CascadeEngine:
                     self._log_event(
                         campaign,
                         "order",
-                        f"Placed L{order.level} limit buy ${order.usd_notional:g} @ {price:,.2f}"
-                        + (f" (trailing under fib {order.price:,.2f})" if order.entry_style == "trail" else ""),
+                        (
+                            f"Placed L{order.level} buy stop ${order.usd_notional:g} "
+                            f"trigger {order.stop_price:,.2f} / limit {price:,.2f} (fib {order.price:,.2f})"
+                            if is_stop
+                            else f"Placed L{order.level} limit buy ${order.usd_notional:g} @ {price:,.2f}"
+                        ),
                     )
                     changed = True
                 else:
