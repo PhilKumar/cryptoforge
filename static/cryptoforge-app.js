@@ -8627,21 +8627,21 @@ function _cfCascadeChartSvg(d) {
   var fibColors = PAL.fibs;
   legs.forEach(function (leg) {
     var col = fibColors[(Math.max(1, Number(leg.leg_id) || 1) - 1) % fibColors.length];
-    // 0 and 1 are the fib's own boundaries: solid, but thin and half-lit so
-    // they frame the buy levels rather than competing with them.
-    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 0.9, 0.75);
-    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 0.9, 0.75);
+    // Every level of every fib is drawn identically — same weight, same solid
+    // stroke, same opacity. Only the colour says which fib it belongs to.
+    // Varying the style per level made the deep ones (L8 especially) fade out
+    // of the chart altogether, and a level you cannot see is a level you cannot
+    // check. The money on the level goes in its label, not into its styling.
+    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 1.1, 0.9);
+    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 1.1, 0.9);
     [2, 4, 8].forEach(function (lv) {
       var p = leg.levels ? leg.levels[String(lv)] : null;
       if (p == null) return;
-      // A buy level is only worth a line if money is actually sitting on it.
-      // The amount goes in the label — that is the whole point of the level.
       var order = (leg.orders || []).find(function (o) { return o.level === lv; }) || {};
       var usd = Number(order.usd_notional) || 0;
-      var funded = usd > 0;
       hline(Number(p), col,
-        'F' + leg.leg_id + ' L' + lv + ' ' + fmt(p) + (funded ? '  $' + _cfCascadeUsd(usd) : ''),
-        funded ? '5,3' : '1,5', funded ? 1.1 : 0.7, funded ? 0.95 : 0.35);
+        'F' + leg.leg_id + ' L' + lv + ' ' + fmt(p) + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
+        null, 1.1, 0.9);
     });
     if (leg.touch_timestamp && inView(leg.touch_high)) {
       parts.push('<circle cx="' + Xt(leg.touch_timestamp).toFixed(1) + '" cy="' + Y(leg.touch_high).toFixed(1) +
@@ -8707,9 +8707,7 @@ function _cfCascadeChartHtml(d) {
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
     + '<span style="color:' + P.mother + ';">┄ mother high</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— trendlines (TL)</span> &nbsp; '
-    + '<span style="color:' + P.fibs[0] + ';">— fib 0 / 1 (the swing)</span> &nbsp; '
-    + '<strong style="color:' + P.fibs[0] + ';">┅ buy levels with money on them</strong> &nbsp; '
-    + '<span style="color:' + P.fibs[0] + ';opacity:.5;">┈ buy levels left empty</span> &nbsp; '
+    + '<span style="color:' + P.fibs[0] + ';">— fib levels 0, 1, 2, 4 and 8 (all drawn alike)</span> &nbsp; '
     + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
     + '<span style="color:' + P.fill + ';">● fills</span>'
     + '<br>Fib 1 is blue, 2 green, 3 red, 4 purple, then the cycle repeats. Labels are on the left,'
