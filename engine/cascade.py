@@ -72,6 +72,17 @@ DEFAULT_TICK_SIZE = 0.01
 # If price simply rips upward, every candle would break its predecessor, so a
 # run of restarts that never draws a fib is capped rather than left unbounded.
 MAX_BARREN_AUTO_RESTARTS = 10
+# Watchdogs. The engine can look healthy on screen while quietly not stepping
+# candles at all, and auto-restart can pile up more campaigns than a person can
+# hold in their head — both are worth a push notification.
+# A rise that gets within this much of the mother high is treated as a retest:
+# the trendline it would produce is too flat to be worth drawing, so that candle
+# becomes the new mother candle. 0.05% is ~$33 on BTC at 66,354. It has to stay
+# well under 0.121%, which is how close a rise came on 2026-07-20 without the
+# structure being spent — that day went on to draw a second fib.
+MOTHER_RETEST_PCT = 0.0005
+MAX_ACTIVE_BEFORE_ALERT = 5
+STALL_ALERT_SEC = 15 * 60
 MODEL_VERSION = 9  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
@@ -92,6 +103,8 @@ CHART_TIMEFRAMES = {"5m": FIVE_MIN_SEC, "15m": FIFTEEN_MIN_SEC, "1h": 3600}
 
 ACTIVE_STATES = {"WAITING_FIRST_DEPTH", "TRENDLINE_ACTIVE"}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
+# Endings that roll straight into a fresh campaign. A deliberate stop does not.
+RESTART_REASONS = {"mother_broken", "mother_retested"}
 
 
 class CascadeModelError(Exception):
@@ -414,6 +427,7 @@ class Campaign:
     parent_campaign_id: Optional[str] = None  # set when a mother break auto-started this one
     generation: int = 1  # 1 = manually started; each auto-restart increments
     barren_chain: int = 0  # consecutive auto-restarts that ended without drawing a fib
+    left_mother_range: bool = False  # price has traded below the mother low, arming the retest rule
     model_version: int = 0  # rules version the stored legs/trendlines were built with
     created_at: str = ""
     state: str = "WAITING_FIRST_DEPTH"
@@ -494,6 +508,7 @@ class Campaign:
             "parent_campaign_id": self.parent_campaign_id,
             "generation": self.generation,
             "barren_chain": self.barren_chain,
+            "left_mother_range": self.left_mother_range,
             "model_version": self.model_version,
             "created_at": self.created_at,
             "state": self.state,
@@ -538,6 +553,7 @@ class Campaign:
             "parent_campaign_id",
             "generation",
             "barren_chain",
+            "left_mother_range",
             "model_version",
             "created_at",
             "state",
@@ -758,11 +774,14 @@ class CascadeEngine:
         on_campaign_closed: Optional[Callable] = None,
         on_event: Optional[Callable] = None,
         on_update: Optional[Callable] = None,
+        on_alert: Optional[Callable] = None,
     ):
         self.broker = broker
         self.on_campaign_closed = on_campaign_closed
         self.on_event = on_event
         self.on_update = on_update
+        self.on_alert = on_alert
+        self._alert_state: Dict[str, float] = {}  # de-dupe key -> last sent monotonic time
         self.campaigns: Dict[str, Campaign] = {}
         self.closed_campaigns: List[dict] = []
         self._running = False
@@ -775,6 +794,8 @@ class CascadeEngine:
         # 30s left a fill un-hedged for up to half a minute before the TP
         # went up. Weight cost at 10s is trivial against Binance's budget.
         self._sync_interval_sec = 10.0
+        self._last_candle_ts = 0.0  # monotonic time of the last processed candle, for stall detection
+        self._stall_alerted = False
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -823,6 +844,57 @@ class CascadeEngine:
                 self.on_event(event)
             except Exception as exc:
                 _log.warning("[CASCADE] on_event callback failed: %s", exc)
+
+    def _check_watchdogs(self) -> None:
+        """
+        Two things that are invisible on screen: an engine that has quietly
+        stopped stepping candles, and a campaign list that has grown past what
+        one person can keep track of.
+        """
+        active = self.active_campaigns
+        if len(active) > MAX_ACTIVE_BEFORE_ALERT:
+            live = sum(1 for c in active if c.mode == "live")
+            deployed = sum(c.spent_usd for c in active)
+            self._alert(
+                "Cascade campaign count high",
+                f"{len(active)} campaigns are active ({live} live).\n"
+                f"Capital committed right now: ${deployed:,.2f}\n\n"
+                f"Auto-restart keeps opening a new one on every mother break.",
+                level="warn",
+                dedupe_sec=3600,
+            )
+        if not active or not self._last_candle_ts:
+            return
+        stalled_for = time.monotonic() - self._last_candle_ts
+        if stalled_for > STALL_ALERT_SEC:
+            self._alert(
+                "Cascade engine STALLED",
+                f"No 5m candle has been processed for {stalled_for / 60:.0f} minutes "
+                f"while {len(active)} campaign(s) are active.\n\n"
+                f"Orders already on Binance still stand, but nothing is being "
+                f"armed, stepped or filled. Check the server.",
+                level="error",
+                dedupe_sec=1800,
+            )
+
+    def _alert(self, title: str, body: str, level: str = "warn", dedupe_sec: float = 0.0) -> None:
+        """
+        Push something worth waking up for. `dedupe_sec` suppresses a repeat of
+        the same title within that window, so a condition that stays true (five
+        campaigns open, the engine stalled) does not fire every loop tick.
+        """
+        if not self.on_alert:
+            return
+        if dedupe_sec > 0:
+            now = time.monotonic()
+            last = self._alert_state.get(title, 0.0)
+            if now - last < dedupe_sec:
+                return
+            self._alert_state[title] = now
+        try:
+            self.on_alert(title, body, level)
+        except Exception as exc:
+            _log.warning("[CASCADE] alert hook failed: %s", exc)
 
     def _emit_update(self):
         if self.on_update:
@@ -1297,6 +1369,7 @@ class CascadeEngine:
                         _log.warning("[CASCADE] tick failed for %s: %s", campaign.campaign_id, exc)
                 if changed:
                     self._emit_update()
+                self._check_watchdogs()
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -1432,6 +1505,7 @@ class CascadeEngine:
                 del history[: len(history) - 20000]
             self._process_candle(campaign, candle)
             campaign.last_processed_ts = candle.timestamp
+            self._last_candle_ts = time.monotonic()  # proof of life for the stall watchdog
             changed = True
             if campaign.state not in ACTIVE_STATES:
                 break
@@ -1475,6 +1549,19 @@ class CascadeEngine:
     def _process_candle(self, campaign: Campaign, candle: Candle) -> None:
         if candle.high >= campaign.mother_high:
             self._mother_broken(campaign, candle)
+            return
+        # A RETRACEMENT that climbs back to just under the mother high leaves no
+        # room for a trendline: the line from the mother high to that point comes
+        # out nearly flat, and a flat line has no useful touch. Promote that
+        # candle to be the new mother candle instead.
+        #
+        # Only once price has actually left the mother candle's range, though —
+        # the bar right after the mother is naturally near its high, and without
+        # this every campaign would restart on its second candle.
+        if candle.low < campaign.mother_low:
+            campaign.left_mother_range = True
+        if campaign.left_mother_range and candle.high >= campaign.mother_high * (1 - MOTHER_RETEST_PCT):
+            self._mother_retested(campaign, candle)
             return
         if not campaign.window_start_ts:
             campaign.window_start_ts = campaign.mother_timestamp
@@ -1926,6 +2013,34 @@ class CascadeEngine:
             f"returned to the pool; campaign continues until the mother high breaks.",
         )
 
+    def _mother_retested(self, campaign: Campaign, candle: Candle) -> None:
+        """
+        Price rose back to within MOTHER_RETEST_PCT of the mother high without
+        breaking it. The old mother candle is spent — any line drawn from it to
+        here would run almost horizontal — so this candle takes over as the
+        mother and the cascade restarts on it.
+        """
+        gap = campaign.mother_high - candle.high
+        campaign.state = "COMPLETED"
+        campaign.close_reason = "mother_retested"
+        campaign.closed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._log_event(
+            campaign,
+            "warn",
+            f"Rise to {candle.high:,.2f} came within {gap:,.2f} "
+            f"({gap / campaign.mother_high * 100:.3f}%) of the mother high "
+            f"{campaign.mother_high:,.2f} — too flat to draw a trendline. "
+            f"Restarting on this candle.",
+        )
+        if campaign.mode == "live":
+            self._schedule(self._cancel_all_live_orders(campaign, include_tp=False))
+        elif campaign.filled_base_qty > 0:
+            tp = compute_tp_price(campaign)
+            if tp and candle.high >= tp:
+                self._close_round(campaign, tp)
+        self._archive_campaign(campaign)
+        self._auto_restart(campaign, candle)
+
     def _mother_broken(self, campaign: Campaign, candle: Optional[Candle] = None) -> None:
         campaign.mother_broken_above = True
         campaign.state = "MOTHER_BROKEN"
@@ -1982,7 +2097,7 @@ class CascadeEngine:
         Manual start is untouched; this only covers the break case, so a
         campaign stopped or deleted on purpose stays stopped.
         """
-        if parent.close_reason != "mother_broken":
+        if parent.close_reason not in RESTART_REASONS:
             return None
         # A straight rip upward breaks a mother candle every bar. Chains that
         # never manage to draw a fib are cut off rather than multiplying forever.
@@ -2026,6 +2141,16 @@ class CascadeEngine:
             f"Auto-started from the break of campaign #{parent.seq} — new mother candle "
             f"high {candle.high:,.2f} / low {candle.low:,.2f} ({child.mode.upper()}, "
             f"generation {child.generation}). Nothing carried over.",
+        )
+        why = "broke above" if parent.close_reason == "mother_broken" else "was retested from below"
+        self._alert(
+            "Cascade auto-restarted",
+            f"{child.symbol} — campaign #{parent.seq}'s mother candle {why}.\n\n"
+            f"New campaign #{child.seq} ({child.mode.upper()}, generation {child.generation})\n"
+            f"New mother candle: high {candle.high:,.2f} / low {candle.low:,.2f}\n"
+            f"Capital: ${child.capital_usd:,.2f}\n\n"
+            f"Nothing was carried over — it starts from scratch.",
+            level="warn" if child.mode == "live" else "info",
         )
         return child
 
@@ -2165,6 +2290,15 @@ class CascadeEngine:
                         changed = True
                     else:
                         self._log_event(campaign, "error", f"Failed to place L{order.level} buy: {error}")
+                        self._alert(
+                            "Cascade order FAILED",
+                            f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
+                            f"Level {order.level}, ${order.usd_notional:,.2f} at {price:,.2f}\n"
+                            f"Binance said: {error}\n\n"
+                            f"The level is unarmed until this succeeds.",
+                            level="error",
+                            dedupe_sec=300,
+                        )
 
         # 3) TP management.
         changed |= await self._sync_tp_order(campaign, open_orders)

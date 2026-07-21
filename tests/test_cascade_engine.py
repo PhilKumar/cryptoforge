@@ -798,6 +798,136 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self.assertEqual(grandchild.barren_chain, 0)
 
 
+class CascadeMotherRetestTests(unittest.TestCase):
+    """A rise back to just under the mother high leaves no room for a trendline,
+    so that candle takes over as the mother candle."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = Campaign(
+            campaign_id="r1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=66354.0,
+            mother_low=66200.0,
+            mother_timestamp=0,
+            seq=1,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        self.engine.campaigns["r1"] = self.campaign
+
+    def _child(self):
+        return next((c for c in self.engine.campaigns.values() if c.campaign_id != "r1"), None)
+
+    def test_the_bar_after_the_mother_does_not_count_as_a_retest(self):
+        """Price has not left the mother candle's range yet, so a high right
+        under the mother high is just the mother candle's own pullback."""
+        _feed(self.engine, self.campaign, Candle(300, 66340.0, 66350.0, 66280.0, 66300.0))
+        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
+        self.assertIsNone(self._child())
+
+    def test_a_rise_back_to_the_mother_high_restarts_on_that_candle(self):
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66100.0, 66150.0))
+        self.assertTrue(self.campaign.left_mother_range)
+        _feed(self.engine, self.campaign, Candle(600, 66200.0, 66340.0, 66190.0, 66330.0))
+        self.assertEqual(self.campaign.state, "COMPLETED")
+        self.assertEqual(self.campaign.close_reason, "mother_retested")
+        child = self._child()
+        self.assertIsNotNone(child)
+        self.assertAlmostEqual(child.mother_high, 66340.0)
+        self.assertAlmostEqual(child.mother_low, 66190.0)
+        self.assertEqual(child.parent_campaign_id, "r1")
+
+    def test_a_rise_that_stays_clear_of_the_mother_high_is_left_alone(self):
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66100.0, 66150.0))
+        # 66,200 is 0.23% under the mother high — a real trendline still fits.
+        _feed(self.engine, self.campaign, Candle(600, 66150.0, 66200.0, 66120.0, 66180.0))
+        self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
+        self.assertIsNone(self._child())
+
+    def test_breaking_above_still_counts_as_a_break_not_a_retest(self):
+        _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66100.0, 66150.0))
+        _feed(self.engine, self.campaign, Candle(600, 66200.0, 66400.0, 66190.0, 66380.0))
+        self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
+        self.assertEqual(self.campaign.close_reason, "mother_broken")
+
+
+class CascadeAlertTests(unittest.TestCase):
+    """The watchdogs exist to fire while nobody is watching the screen."""
+
+    def setUp(self):
+        self.sent = []
+        self.engine = _mk_engine()
+        self.engine.on_alert = lambda t, b, lvl: self.sent.append((t, lvl))
+
+    def _campaign(self, cid, mode="paper"):
+        c = Campaign(
+            campaign_id=cid,
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            mode=mode,
+        )
+        self.engine.campaigns[cid] = c
+        return c
+
+    def test_alerts_once_the_campaign_count_passes_the_cap(self):
+        from engine.cascade import MAX_ACTIVE_BEFORE_ALERT
+
+        for i in range(MAX_ACTIVE_BEFORE_ALERT):
+            self._campaign(f"c{i}")
+        self.engine._check_watchdogs()
+        self.assertEqual(self.sent, [])
+        self._campaign("one-too-many")
+        self.engine._check_watchdogs()
+        self.assertEqual([t for t, _ in self.sent], ["Cascade campaign count high"])
+
+    def test_the_count_alert_does_not_repeat_every_tick(self):
+        from engine.cascade import MAX_ACTIVE_BEFORE_ALERT
+
+        for i in range(MAX_ACTIVE_BEFORE_ALERT + 1):
+            self._campaign(f"c{i}")
+        for _ in range(5):
+            self.engine._check_watchdogs()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_alerts_when_candles_stop_being_processed(self):
+        import time as _t
+
+        from engine.cascade import STALL_ALERT_SEC
+
+        self._campaign("c1")
+        self.engine._last_candle_ts = _t.monotonic() - (STALL_ALERT_SEC + 60)
+        self.engine._check_watchdogs()
+        self.assertIn("Cascade engine STALLED", [t for t, _ in self.sent])
+
+    def test_no_stall_alert_when_nothing_is_running(self):
+        import time as _t
+
+        from engine.cascade import STALL_ALERT_SEC
+
+        self.engine._last_candle_ts = _t.monotonic() - (STALL_ALERT_SEC + 60)
+        self.engine._check_watchdogs()
+        self.assertEqual(self.sent, [])
+
+    def test_an_auto_restart_raises_an_alert(self):
+        parent = self._campaign("p", mode="live")
+        parent.close_reason = "mother_broken"
+        self.engine._auto_restart(parent, Candle(3000, 1.0, 2.0, 0.5, 1.5))
+        titles = [t for t, _ in self.sent]
+        self.assertIn("Cascade auto-restarted", titles)
+        self.assertEqual(dict((t, lvl) for t, lvl in self.sent)["Cascade auto-restarted"], "warn")
+
+    def test_a_missing_alert_hook_is_harmless(self):
+        self.engine.on_alert = None
+        self._campaign("c1")
+        self.engine._check_watchdogs()  # must not raise
+
+
 class CascadeClosedHistoryTests(unittest.TestCase):
     """A campaign that ended holding a position used to skip archiving, so it
     stayed in the live set and never reached history — which is why Avg Entry

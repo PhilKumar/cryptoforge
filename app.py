@@ -6490,6 +6490,15 @@ def _restore_cascade_runtime(engine: "CascadeEngine") -> bool:
     return bool(restored)
 
 
+def _cascade_alert(title: str, body: str, level: str = "warn") -> None:
+    """Cascade watchdogs and failures go to Telegram, not just the event log —
+    the whole point is that they fire while nobody is looking at the screen."""
+    try:
+        alerter.alert(title, body, level=level)
+    except Exception as exc:
+        _logger.warning("[CASCADE] alert dispatch failed: %s", exc)
+
+
 def _get_cascade_engine() -> "CascadeEngine":
     global _cascade_engine
     if _cascade_engine is None:
@@ -6498,6 +6507,7 @@ def _get_cascade_engine() -> "CascadeEngine":
             on_campaign_closed=_cascade_persist_closed,
             on_event=_cascade_persist_event,
             on_update=_broadcast_cascade_update,
+            on_alert=_cascade_alert,
         )
         _restore_cascade_runtime(_cascade_engine)
     return _cascade_engine
