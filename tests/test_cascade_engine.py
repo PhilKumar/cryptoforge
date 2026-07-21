@@ -798,6 +798,90 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self.assertEqual(grandchild.barren_chain, 0)
 
 
+class CascadeFibSizeTests(unittest.TestCase):
+    """A fib may form anywhere relative to the mother candle — above its low is
+    fine. What disqualifies a structure is being too small to be one."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = _real_campaign(self.engine)
+
+    def _first_fib_with_mother_low(self, mother_low):
+        """Replay 2026-07-20 00:15 with the mother candle's low moved, and
+        return the first fib drawn."""
+        engine = _mk_engine()
+        campaign = Campaign(
+            campaign_id="ml",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=_REAL[0][2],
+            mother_low=mother_low,
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        engine.campaigns["ml"] = campaign
+        for idx, o, h, low, c in _REAL[1:]:
+            if idx > 6:
+                break
+            _feed(engine, campaign, Candle(idx * 300, o, h, low, c))
+        return campaign.legs[0] if campaign.legs else None
+
+    def test_the_mother_candle_low_does_not_gate_a_structure(self):
+        """The dip is 64,790.01. Move the mother low ABOVE it and the same fib
+        must still be drawn — a structure may sit anywhere relative to the
+        mother candle's range."""
+        real = self._first_fib_with_mother_low(65002.00)  # the true low, dip below it
+        raised = self._first_fib_with_mother_low(64700.00)  # dip now ABOVE the low
+        self.assertIsNotNone(raised)
+        self.assertAlmostEqual(raised.touch_high, 64928.00)
+        self.assertAlmostEqual(raised.low, 64790.01)
+        self.assertAlmostEqual(raised.touch_high, real.touch_high)
+        self.assertAlmostEqual(raised.low, real.low)
+
+    def test_a_few_ticks_of_chop_is_not_a_structure(self):
+        """2026-07-20 18:10 opens with two bars 15 points apart. That is 0.023%
+        — its level 2 would sit 30 points down, which is noise, not a fib."""
+        engine = _mk_engine()
+        mother = _REAL3[0]
+        campaign = Campaign(
+            campaign_id="chop",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        engine.campaigns["chop"] = campaign
+        for idx, o, h, low, c in _REAL3[1:]:
+            if idx > 3:
+                break
+            _feed(engine, campaign, Candle(idx * 300, o, h, low, c))
+        self.assertEqual(campaign.legs, [])
+
+    def test_the_real_structure_that_day_still_forms(self):
+        engine = _mk_engine()
+        mother = _REAL3[0]
+        campaign = Campaign(
+            campaign_id="real3",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        engine.campaigns["real3"] = campaign
+        for idx, o, h, low, c in _REAL3[1:]:
+            _feed(engine, campaign, Candle(idx * 300, o, h, low, c))
+        self.assertEqual(len(campaign.legs), 1)
+        self.assertAlmostEqual(campaign.legs[0].touch_high, 65246.00)
+        self.assertAlmostEqual(campaign.legs[0].low, 65160.00)
+
+
 class CascadeMotherRetestTests(unittest.TestCase):
     """A rise back to just under the mother high leaves no room for a trendline,
     so that candle takes over as the mother candle."""

@@ -80,6 +80,12 @@ MAX_BARREN_AUTO_RESTARTS = 10
 # becomes the new mother candle. 0.05% is ~$33 on BTC at 66,354. It has to stay
 # well under 0.121%, which is how close a rise came on 2026-07-20 without the
 # structure being spent — that day went on to draw a second fib.
+# A fib needs a real swing behind it. Two bars of chop 15 points apart would
+# put level 2 thirty points down — noise dressed as structure. The smallest fib
+# verified against TradingView is 0.132% (2026-07-20 18:10), so 0.08% clears the
+# junk with room to spare. A fib may sit anywhere relative to the mother candle,
+# above or below its low; only the size matters.
+MIN_FIB_RANGE_PCT = 0.0008
 MOTHER_RETEST_PCT = 0.0005
 MAX_ACTIVE_BEFORE_ALERT = 5
 STALL_ALERT_SEC = 15 * 60
@@ -1650,8 +1656,8 @@ class CascadeEngine:
 
         if first_cross_ts is None or frozen_dip is None or touch_high is None:
             return
-        if not campaign.legs and frozen_dip >= campaign.mother_low:
-            return  # the first structure needs a real depth below the mother candle
+        if (touch_high - frozen_dip) < touch_high * MIN_FIB_RANGE_PCT:
+            return  # a few ticks of chop, not a swing — its levels would be noise
         if candle.close >= frozen_dip:
             return
         if (frozen_dip - candle.close) < candle.close * DECISIVE_BREAK_PCT:
