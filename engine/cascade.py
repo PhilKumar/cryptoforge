@@ -495,6 +495,7 @@ class Campaign:
     pending_last_red: Optional[float] = None
     pending_order_id: Optional[str] = None
     pending_rev: int = 0
+    pending_filled_qty: float = 0.0
     trendlines: List[Trendline] = field(default_factory=list)
     legs: List[Leg] = field(default_factory=list)
     active_trendline_id: Optional[int] = None
@@ -602,6 +603,7 @@ class Campaign:
             "cumulative_used_pct": self.cumulative_used_pct,
             "carry_forward_usd": self.carry_forward_usd,
             "pending_rev": self.pending_rev,
+            "pending_filled_qty": self.pending_filled_qty,
             "pending_order_id": self.pending_order_id,
             "pending_last_red": self.pending_last_red,
             "pending_stop_ts": self.pending_stop_ts,
@@ -664,6 +666,7 @@ class Campaign:
             "pending_last_red",
             "pending_order_id",
             "pending_rev",
+            "pending_filled_qty",
             "active_trendline_id",
             "avg_entry_price",
             "tp_price",
@@ -2047,40 +2050,44 @@ class CascadeEngine:
             ),
         )
 
-    def _fill_pending(self, campaign: Campaign, price: float, timestamp: int, order_id: str = "PAPER") -> None:
-        """The turn came: buy everything the fall collected, in one order."""
-        usd = campaign.pending_usd
-        if usd <= 0 or price <= 0:
+    def _fill_pending_part(self, campaign: Campaign, price: float, qty: float, timestamp: int) -> None:
+        """A stop-limit can execute in pieces. Book the part that traded and
+        leave the rest of the total working — the levels stay collected until
+        the whole thing is bought."""
+        if qty <= 0 or price <= 0:
             return
-        qty = usd / price
-        levels = list(campaign.collected)
-        for leg_id, level, _usd, _price in levels:
+        spent = min(qty * price, campaign.pending_usd)
+        campaign.all_fills.append(
+            Fill(
+                price=price,
+                quantity=qty,
+                level=int(campaign.collected[-1][1]) if campaign.collected else 0,
+                leg_id=int(campaign.collected[-1][0]) if campaign.collected else 0,
+                timestamp=timestamp,
+                order_id=str(campaign.pending_order_id or ""),
+            )
+        )
+        campaign.pending_usd = round(max(campaign.pending_usd - spent, 0.0), 2)
+        recompute_avg_entry_price(campaign)
+        campaign.tp_price = compute_tp_price(campaign)
+        self._log_event(
+            campaign,
+            "fill",
+            f"Partial buy: ${spent:,.2f} of the collected total at {price:,.2f} — "
+            f"${campaign.pending_usd:,.2f} still working",
+        )
+        if campaign.pending_usd <= 0.01:
+            self._settle_pending(campaign, price, timestamp)
+
+    def _settle_pending(self, campaign: Campaign, price: float, timestamp: int) -> None:
+        """Mark every collected level bought and clear the pot."""
+        for leg_id, level, _usd, _price in campaign.collected:
             leg = next((lg for lg in campaign.legs if lg.leg_id == leg_id), None)
             order = leg.pending_orders.get(level) if leg else None
             if order is not None:
                 order.status = "FILLED"
                 order.fill_price = price
                 order.fill_timestamp = timestamp
-                order.filled_qty = order.usd_notional / price if price else 0.0
-        deepest = min((row[3] for row in levels), default=price)
-        campaign.all_fills.append(
-            Fill(
-                price=price,
-                quantity=qty,
-                level=int(levels[-1][1]) if levels else 0,
-                leg_id=int(levels[-1][0]) if levels else 0,
-                timestamp=timestamp,
-                order_id=order_id,
-            )
-        )
-        recompute_avg_entry_price(campaign)
-        campaign.tp_price = compute_tp_price(campaign)
-        self._log_event(
-            campaign,
-            "fill",
-            f"Bought ${usd:,.2f} at {price:,.2f} on the turn — {len(levels)} level(s) collected down to "
-            f"{deepest:,.2f} (avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
-        )
         campaign.pending_usd = 0.0
         campaign.collected = []
         campaign.pending_line = None
@@ -2089,6 +2096,34 @@ class CascadeEngine:
         campaign.pending_stop_ts = None
         campaign.pending_last_red = None
         campaign.pending_order_id = None
+        campaign.pending_filled_qty = 0.0
+
+    def _fill_pending(self, campaign: Campaign, price: float, timestamp: int, order_id: str = "PAPER") -> None:
+        """The turn came: buy everything the fall collected, in one order."""
+        usd = campaign.pending_usd
+        if usd <= 0 or price <= 0:
+            return
+        levels = list(campaign.collected)
+        deepest = min((row[3] for row in levels), default=price)
+        campaign.all_fills.append(
+            Fill(
+                price=price,
+                quantity=usd / price,
+                level=int(levels[-1][1]) if levels else 0,
+                leg_id=int(levels[-1][0]) if levels else 0,
+                timestamp=timestamp,
+                order_id=order_id,
+            )
+        )
+        self._settle_pending(campaign, price, timestamp)
+        recompute_avg_entry_price(campaign)
+        campaign.tp_price = compute_tp_price(campaign)
+        self._log_event(
+            campaign,
+            "fill",
+            f"Bought ${usd:,.2f} at {price:,.2f} on the turn — {len(levels)} level(s) collected down to "
+            f"{deepest:,.2f} (avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
+        )
 
     def _record_fill(
         self,
@@ -2364,6 +2399,21 @@ class CascadeEngine:
         # 1) Ingest the accumulated buy stop if the exchange has moved it on.
         if campaign.pending_order_id:
             row = open_orders.get(str(campaign.pending_order_id))
+            if row is not None:
+                # Still resting, but a stop-limit can fill in pieces. Take what
+                # has executed and leave the rest working.
+                executed = _coerce_float(row.get("executedQty"))
+                quote = _coerce_float(row.get("cummulativeQuoteQty"))
+                if executed > campaign.pending_filled_qty + 1e-12:
+                    delta_qty = executed - campaign.pending_filled_qty
+                    price = (
+                        quote / executed
+                        if executed > 0 and quote > 0
+                        else (campaign.pending_limit_price or campaign.pending_stop_price or 0.0)
+                    )
+                    campaign.pending_filled_qty = executed
+                    self._fill_pending_part(campaign, price, delta_qty, int(time.time()))
+                    changed = True
             if row is None:
                 status_row = await self._safe_get_order(campaign, campaign.pending_order_id)
                 status = str(status_row.get("status") or "").upper()

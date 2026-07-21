@@ -1174,6 +1174,8 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         # Arming itself is covered by CascadeAccumulatorEntryTests.
         self.campaign.pending_usd = 40.0
         self.campaign.collected = [[1, 2, 16.0, 97.0], [1, 4, 24.0, 96.0]]
+        leg.pending_orders[2].status = "COLLECTED"
+        leg.pending_orders[4].status = "COLLECTED"
         self.campaign.pending_line = 96.0
         self.campaign.pending_stop_price = 96.5
         self.campaign.pending_limit_price = 96.55
@@ -1231,6 +1233,40 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(sells[0]["limit_price"], 99.0)
         self.assertAlmostEqual(sells[0]["base_qty"], self.campaign.filled_base_qty)
         self.assertIsNotNone(self.campaign.tp_order_id)
+
+    async def test_a_partial_fill_is_booked_and_the_rest_keeps_working(self):
+        """A stop-limit can execute in pieces. The part that traded is booked
+        immediately — waiting for FILLED would leave real coins unaccounted and
+        the target unplaced."""
+        await self.engine._sync_live_orders(self.campaign)
+        order_id = str(self.campaign.pending_order_id)
+        half_qty = 20.0 / 97.0
+        self.broker.open_orders = [
+            {
+                "orderId": int(order_id),
+                "clientOrderId": f"cf-csc-{self.campaign.campaign_id}-buy-1",
+                "executedQty": str(half_qty),
+                "cummulativeQuoteQty": str(half_qty * 97.0),
+            }
+        ]
+        await self.engine._sync_live_orders(self.campaign)
+
+        self.assertEqual(len(self.campaign.all_fills), 1)
+        self.assertAlmostEqual(self.campaign.pending_usd, 20.0, places=1)
+        # The levels are not marked bought yet — half the money is still working.
+        self.assertEqual(self.leg.pending_orders[2].status, "COLLECTED")
+        self.assertIsNotNone(self.campaign.tp_price)
+
+        # The rest executes; now everything settles.
+        self.broker.open_orders = []
+        self.broker.order_lookup[order_id] = {
+            "status": "FILLED",
+            "executedQty": str(40.0 / 97.0),
+            "cummulativeQuoteQty": str(40.0),
+        }
+        await self.engine._sync_live_orders(self.campaign)
+        self.assertAlmostEqual(self.campaign.pending_usd, 0.0)
+        self.assertEqual(self.leg.pending_orders[2].status, "FILLED")
 
     async def test_an_externally_cancelled_stop_is_replaced(self):
         await self.engine._sync_live_orders(self.campaign)
