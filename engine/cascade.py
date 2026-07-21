@@ -359,6 +359,7 @@ class Campaign:
     mother_high: float
     mother_low: float
     mother_timestamp: int
+    seq: int = 0  # human-facing number, assigned in start order
     mode: str = "paper"  # paper | live
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
     model_version: int = 0  # rules version the stored legs/trendlines were built with
@@ -429,6 +430,7 @@ class Campaign:
     def to_dict(self) -> dict:
         return {
             "campaign_id": self.campaign_id,
+            "seq": self.seq,
             "symbol": self.symbol,
             "capital_usd": self.capital_usd,
             "mother_high": self.mother_high,
@@ -466,6 +468,7 @@ class Campaign:
     def from_dict(cls, data: dict) -> "Campaign":
         campaign = cls(
             campaign_id=str(data.get("campaign_id") or uuid.uuid4().hex[:10]),
+            seq=int(data.get("seq") or 0),
             symbol=str(data.get("symbol") or "BTCUSDT"),
             capital_usd=_coerce_float(data.get("capital_usd"), 2000.0),
             mother_high=_coerce_float(data.get("mother_high")),
@@ -825,6 +828,7 @@ class CascadeEngine:
 
         campaign = Campaign(
             campaign_id=uuid.uuid4().hex[:10],
+            seq=self._next_seq(),
             symbol=symbol,
             capital_usd=capital_usd,
             mother_high=mother_high,
@@ -883,6 +887,13 @@ class CascadeEngine:
         await self._sync_live_orders(campaign)
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict()}
+
+    def _next_seq(self) -> int:
+        """Campaign numbers run in start order and are never reused, so a
+        deleted campaign does not renumber the ones around it."""
+        seen = [c.seq for c in self.campaigns.values()]
+        seen += [int(row.get("seq") or 0) for row in self.closed_campaigns]
+        return (max(seen) if seen else 0) + 1
 
     def delete_campaign(self, campaign_id: str) -> dict:
         """
@@ -1697,8 +1708,10 @@ class CascadeEngine:
             # Paper: price at/above mother high is at/above TP by construction.
             tp = compute_tp_price(campaign)
             if tp:
+                # Closing the round must NOT skip archiving — it used to return
+                # here, so any campaign that ended holding a position never
+                # reached the closed list at all.
                 self._close_round(campaign, tp)
-                return
         self._archive_campaign(campaign)
 
     def _archive_campaign(self, campaign: Campaign) -> None:

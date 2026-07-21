@@ -3186,9 +3186,6 @@ async function pollLiveStatus() {
     var killBtn = document.getElementById('kill-switch-btn');
     if (killBtn) killBtn.classList.toggle('hidden', !paper.running && !live.running);
 
-    // Live tab dot
-    var dot = document.getElementById('live-tab-dot');
-    if (dot) dot.classList.toggle('active', paper.running || live.running);
 
   } catch(e) { console.error('pollLiveStatus error:', e); }
 }
@@ -3284,8 +3281,6 @@ function connectWS() {
         }
         var killBtn = document.getElementById('kill-switch-btn');
         if (killBtn) killBtn.classList.toggle('hidden', !data.paper_running && !data.live_running);
-        var dot = document.getElementById('live-tab-dot');
-        if (dot) dot.classList.toggle('active', data.paper_running || data.live_running);
         return;
       }
       if (data.source === 'scalp' && data.type === 'scalp_status') {
@@ -4974,10 +4969,6 @@ async function loadLiveMonitor() {
     var data = await r.json();
     _liveEngines = data.engines || [];
 
-    // Update live dot in nav
-    var liveDot = document.getElementById('live-tab-dot');
-    var anyRunning = _liveEngines.some(function(e) { return e.running; });
-    if (liveDot) { if (anyRunning) liveDot.classList.add('active'); else liveDot.classList.remove('active'); }
 
     // Clamp selected tab
     if (_liveSelectedTab >= _liveEngines.length) _liveSelectedTab = Math.max(0, _liveEngines.length - 1);
@@ -7728,8 +7719,8 @@ showPage = function(pageId, btn, options) {
       clearInterval(_cfCascadePollTimer);
       _cfCascadePollTimer = null;
     }
-    // Never leave a fullscreen chart pinned over another page.
-    if (typeof cfCascadeToggleFullscreen === 'function') cfCascadeToggleFullscreen(false);
+    // Never leave the chart dialog pinned over another page.
+    if (typeof cfCascadeHideChart === 'function') cfCascadeHideChart();
   }
   _cfCascadeOrigShowPage(pageId, btn, options);
 };
@@ -7766,6 +7757,16 @@ function cfRenderCascadeStatus(data) {
     engineState.textContent = data.running ? ('Running · ' + active + ' active') : 'Idle';
   }
   if (engineChip) engineChip.setAttribute('data-state', data.running ? 'running' : 'idle');
+
+  // The nav indicator follows the cascade engine: lit whenever it is running
+  // with at least one campaign that has not ended.
+  var dot = document.getElementById('cascade-tab-dot');
+  if (dot) {
+    var live = (Array.isArray(data.campaigns) ? data.campaigns : []).some(function(c) {
+      return c.state === 'WAITING_FIRST_DEPTH' || c.state === 'TRENDLINE_ACTIVE';
+    });
+    dot.classList.toggle('active', !!data.running && live);
+  }
   cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
@@ -7835,22 +7836,45 @@ function _cfCascadeCampaignCard(campaign) {
   var goLive = mode !== 'LIVE' && fills.length === 0
     ? '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeSetLive(\'' + cid + '\')">Go Live</button>'
     : '';
-  return '<div class="card cf-cascade-card">'
-    + '<div class="cf-cascade-head">'
-    + '<div style="display:flex;align-items:center;gap:8px;">'
+  // A campaign that has ended is history: dimmed, and collapsed unless opened.
+  var ended = campaign.state === 'MOTHER_BROKEN' || campaign.state === 'COMPLETED'
+    || campaign.state === 'STOPPED';
+  var open = _cfCascadeIsOpen(campaign.campaign_id, ended);
+  var num = Number(campaign.seq) > 0 ? '#' + campaign.seq : '#' + cid;
+  var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
+  var realised = rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0);
+  // A one-line summary so a collapsed card still says how it is doing.
+  var gist = fills.length
+    ? fills.length + ' open entr' + (fills.length === 1 ? 'y' : 'ies')
+    : (rounds.length ? rounds.length + ' round' + (rounds.length === 1 ? '' : 's') : 'no entry yet');
+  if (rounds.length) {
+    gist += ' · ' + (realised >= 0 ? '+' : '') + '$' + _cfCascadeFmt(realised);
+  }
+
+  return '<div class="card cf-cascade-card' + (ended ? ' is-ended' : '') + (open ? ' is-open' : '') + '"'
+      + ' data-campaign="' + cid + '">'
+    + '<div class="cf-cascade-head" role="button" tabindex="0"'
+      + ' aria-expanded="' + (open ? 'true' : 'false') + '"'
+      + ' title="Click to ' + (open ? 'collapse' : 'expand') + '"'
+      + ' data-cf-click="cfCascadeToggleCard(\'' + cid + '\')">'
+    + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;">'
+    + '<span class="cf-cascade-caret" aria-hidden="true">&#9656;</span>'
+    + '<span class="cf-cascade-num">' + _escapeHtml(num) + '</span>'
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
     + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(campaign.state || '') + '</span>'
     + modeBadge
     + (campaign.stale_model ? '<span class="admin-pill" data-state="warn" title="Built with older fib rules — hit Recalc">STALE RULES</span>' : '')
-    + '<span class="table-meta">#' + cid + '</span>'
+    + '<span class="table-meta cf-cascade-gist">' + _escapeHtml(gist) + '</span>'
     + '</div>'
-    + '<div style="display:flex;gap:6px;">'
+    // Buttons live inside the header but must not toggle it.
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRecalculate(\'' + cid + '\')">Recalc</button>'
     + goLive
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
     + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'
     + '</div></div>'
+    + '<div class="cf-cascade-body">'
     + '<div class="cf-cascade-stats">'
     + '<div class="stat-box"><div class="stat-label" title="Mother High"><span>Mother High</span></div><div class="stat-value">' + _cfCascadeFmt(campaign.mother_high) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label" title="Last Price"><span>Last Price</span></div><div class="stat-value">' + _cfCascadeFmt(campaign.last_price) + '</div></div>'
@@ -7869,7 +7893,33 @@ function _cfCascadeCampaignCard(campaign) {
     + '</div>'
     + _cfCascadeLadderRows(campaign)
     + _cfCascadePositionPanel(campaign, fills)
+    + '</div>'
     + '</div>';
+}
+
+// Which cards are expanded. Live campaigns default open, ended ones closed;
+// an explicit click is remembered for the session either way.
+var _cfCascadeOpenCards = {};
+
+function _cfCascadeIsOpen(cid, ended) {
+  if (Object.prototype.hasOwnProperty.call(_cfCascadeOpenCards, cid)) {
+    return _cfCascadeOpenCards[cid];
+  }
+  return !ended;
+}
+
+function cfCascadeToggleCard(cid) {
+  var card = document.querySelector('.cf-cascade-card[data-campaign="' + cid + '"]');
+  if (!card) return;
+  var open = !card.classList.contains('is-open');
+  _cfCascadeOpenCards[cid] = open;
+  card.classList.toggle('is-open', open);
+  var head = card.querySelector('.cf-cascade-head');
+  if (head) {
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    head.title = 'Click to ' + (open ? 'collapse' : 'expand');
+  }
+  if (open) _cfCascadeMarkClippedLabels(card);
 }
 
 // Entries and closed rounds, stated plainly — "has a buy happened, and did the
@@ -8000,9 +8050,43 @@ function cfRenderCascadeEvents(campaigns) {
   }).join('');
 }
 
+var _cfCascadeClosedCoin = 'ALL';
+var _cfCascadeClosedAll = [];
+
+function cfCascadeSetClosedFilter(coin) {
+  _cfCascadeClosedCoin = coin || 'ALL';
+  cfRenderCascadeClosed(_cfCascadeClosedAll);
+}
+
+function _cfRenderClosedFilters(rows) {
+  var mount = document.getElementById('cf-cascade-closed-filters');
+  if (!mount) return;
+  var coins = [];
+  rows.forEach(function(r) {
+    var sym = String(r.symbol || '');
+    if (sym && coins.indexOf(sym) === -1) coins.push(sym);
+  });
+  coins.sort();
+  if (coins.length < 2) { mount.innerHTML = ''; return; }
+  mount.innerHTML = ['ALL'].concat(coins).map(function(name) {
+    var on = name === _cfCascadeClosedCoin;
+    return '<button type="button" class="cf-tf-option' + (on ? ' is-active' : '') + '"'
+      + ' role="radio" aria-checked="' + (on ? 'true' : 'false') + '"'
+      + ' data-cf-click="cfCascadeSetClosedFilter(\'' + name + '\')">'
+      + _escapeHtml(name === 'ALL' ? 'All' : name.replace('USDT', '')) + '</button>';
+  }).join('');
+}
+
 function cfRenderCascadeClosed(closed) {
   var body = document.getElementById('cf-cascade-closed-body');
   if (!body) return;
+  _cfCascadeClosedAll = Array.isArray(closed) ? closed : [];
+  _cfRenderClosedFilters(_cfCascadeClosedAll);
+  if (_cfCascadeClosedCoin !== 'ALL') {
+    closed = _cfCascadeClosedAll.filter(function(r) { return r.symbol === _cfCascadeClosedCoin; });
+  } else {
+    closed = _cfCascadeClosedAll;
+  }
   if (!closed.length) {
     body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>';
     return;
@@ -8027,8 +8111,9 @@ function cfRenderCascadeClosed(closed) {
     var cid = campaign.campaign_id || '';
     var entry = rounds.length ? rounds[0].avg_entry : campaign.avg_entry_price;
     var exit = rounds.length ? rounds[rounds.length - 1].exit_price : campaign.tp_price;
+    var num = Number(campaign.seq) > 0 ? '#' + campaign.seq : '#' + cid;
     return '<tr>'
-      + '<td>#' + _escapeHtml(cid) + '</td>'
+      + '<td>' + _escapeHtml(num) + '</td>'
       + '<td>' + _escapeHtml(campaign.symbol || '') + '</td>'
       + '<td>' + _escapeHtml(String(campaign.mode || '').toUpperCase()) + '</td>'
       + '<td><span class="admin-pill" data-state="' + meta[1] + '">' + _escapeHtml(meta[0]) + '</span>'
@@ -8527,15 +8612,21 @@ function cfCascadeToggleFullscreen(force) {
 document.addEventListener('keydown', function(event) {
   if (event.key !== 'Escape') return;
   var panel = document.getElementById('cf-cascade-chart-panel');
-  if (panel && panel.classList.contains('cf-cascade-chart-fs')) cfCascadeToggleFullscreen(false);
+  var overlay = document.getElementById('cf-cascade-chart-overlay');
+  if (panel && panel.classList.contains('cf-cascade-chart-fs')) {
+    cfCascadeToggleFullscreen(false);
+  } else if (overlay && overlay.style.display !== 'none') {
+    cfCascadeHideChart();
+  }
 });
 
 async function cfCascadeShowChart(campaignId) {
-  var panel = document.getElementById('cf-cascade-chart-panel');
+  var overlay = document.getElementById('cf-cascade-chart-overlay');
   var body = document.getElementById('cf-cascade-chart-body');
-  if (!panel || !body) return;
+  if (!overlay || !body) return;
   _cfCascadeChartId = campaignId;
-  panel.style.display = '';
+  overlay.style.display = '';
+  document.body.classList.add('cf-chart-fs-open');
   body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
   try {
     var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId)
@@ -8564,7 +8655,15 @@ function cfCascadeRefreshChart() {
 
 function cfCascadeHideChart() {
   cfCascadeToggleFullscreen(false);
-  var panel = document.getElementById('cf-cascade-chart-panel');
-  if (panel) panel.style.display = 'none';
+  var overlay = document.getElementById('cf-cascade-chart-overlay');
+  if (overlay) overlay.style.display = 'none';
+  document.body.classList.remove('cf-chart-fs-open');
   _cfCascadeChartId = '';
+}
+
+// Clicking the dim area behind the dialog closes it; clicks inside do not.
+function cfCascadeChartBackdrop(event) {
+  if (event && event.target && event.target.id === 'cf-cascade-chart-overlay') {
+    cfCascadeHideChart();
+  }
 }

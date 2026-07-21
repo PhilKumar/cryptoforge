@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-17">
-<link rel="manifest" href="/manifest.webmanifest?v=20260720-17">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-18">
+<link rel="manifest" href="/manifest.webmanifest?v=20260720-18">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260720-17"></script>
+<script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-17">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-17">
-<script src="/static/error-handler.js?v=20260720-17" defer></script>
-<script src="/static/pwa.js?v=20260720-17" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-18">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-18">
+<script src="/static/error-handler.js?v=20260720-18" defer></script>
+<script src="/static/pwa.js?v=20260720-18" defer></script>
 </head>
 <body>
 
@@ -165,6 +165,7 @@
       <span class="tab-label">Portfolio</span>
     </button>
     <button id="nav-cascade" class="nav-tab" data-cf-click="showPage('cascade-page', this)">
+      <span class="live-dot" id="cascade-tab-dot"></span>
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h6v6"/><path d="M9 10h6v6"/><path d="M15 16h6v4"/><path d="M3 20h18"/></svg></span>
       <span class="tab-label">Cascade</span>
     </button>
@@ -177,7 +178,6 @@
       <span class="tab-label">Scalp</span>
     </button>
     <button id="nav-live" class="nav-tab" data-cf-click="showPage('live-page', this)">
-      <span class="live-dot" id="live-tab-dot"></span>
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></span>
       <span class="tab-label">Live</span>
     </button>
@@ -1337,7 +1337,10 @@
     </section>
   </div>
 
-  <section class="card table-panel" id="cf-cascade-chart-panel" style="display:none;">
+  <div class="cf-chart-overlay" id="cf-cascade-chart-overlay" style="display:none;"
+       role="dialog" aria-modal="true" aria-label="Campaign chart"
+       data-cf-click="cfCascadeChartBackdrop(event)">
+  <section class="card table-panel" id="cf-cascade-chart-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
         <h3 class="table-title">Campaign Chart</h3>
@@ -1365,6 +1368,7 @@
     </div>
     <div id="cf-cascade-chart-body" style="padding:10px 14px;overflow-x:auto;"></div>
   </section>
+  </div>
 
   <section class="card table-panel">
     <div class="table-toolbar">
@@ -1383,6 +1387,9 @@
       <div class="table-title-group">
         <h3 class="table-title">Closed Campaigns</h3>
         <div class="table-meta">Every campaign that has ended — target hit, mother broken, stopped, or deleted. Kept across restarts; use Remove to clear a row for good.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Filter closed campaigns by coin" id="cf-cascade-closed-filters"></div>
       </div>
     </div>
     <div class="table-surface">
@@ -1990,7 +1997,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260720-17" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260720-17" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260720-18" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 </body>
 </html>
