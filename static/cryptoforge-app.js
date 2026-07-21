@@ -8259,10 +8259,14 @@ function _cfCascadeChartSvg(d) {
     var t0 = candles[0].t, t1 = candles[n - 1].t;
     var p0 = a1.p + slope * (t0 - a1.t), p1 = a1.p + slope * (t1 - a1.t);
     var col = tlColors[idx % tlColors.length];
+    // A same-shelf line is real geometry but carries no fib and places no
+    // orders — dashed and dimmed so it never reads as a tradeable structure.
+    var noFib = tl.bears_fib === false;
     parts.push('<line x1="' + Xt(t0).toFixed(1) + '" y1="' + Y(p0).toFixed(1) + '" x2="' + Xt(t1).toFixed(1) +
       '" y2="' + Y(p1).toFixed(1) + '" stroke="' + col + '" stroke-width="' + (tl.active ? 1.8 : 1.1) +
-      '" opacity="' + (tl.active ? 1 : 0.5) + '"/>');
-    if (inView(p1)) label(Y(p1), 'TL' + tl.id + (tl.active ? ' *' : ''), col);
+      '" opacity="' + (noFib ? 0.38 : (tl.active ? 1 : 0.5)) + '"' +
+      (noFib ? ' stroke-dasharray="6 4"' : '') + '/>');
+    if (inView(p1)) label(Y(p1), 'TL' + tl.id + (noFib ? ' (no fib)' : (tl.active ? ' *' : '')), col);
   });
 
   // every fib: 0/1 anchors solid, 2/4/8 buy levels dotted

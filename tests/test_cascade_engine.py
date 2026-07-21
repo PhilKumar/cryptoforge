@@ -380,13 +380,21 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self._feed(14)
         self.assertEqual(len(self.campaign.legs), 1)
 
-    def test_same_shelf_structure_is_dropped_entirely(self):
-        """The 19:20 IST structure is touched at 64,763.67 — 0.015% from fib 2's
-        64,753.77, the same shelf. It is dropped completely: no trendline and no
-        fib, leaving two of each, which is what the user's chart shows."""
+    def test_same_shelf_structure_draws_geometry_only(self):
+        """The user's chart: three trendlines, two fibs. The 19:20 IST structure
+        is touched 0.015% from fib 2's — same shelf — so its line is drawn but
+        carries no fib. Its anchor is the 19:20 open (64,720.82), which is what
+        the magnet snaps to; fib-bearing anchors still exclude the cut candle."""
         self._feed(23)
-        self.assertEqual(len(self.campaign.trendlines), 2)
+        self.assertEqual(len(self.campaign.trendlines), 3)
         self.assertEqual(len(self.campaign.legs), 2)
+        third = self.campaign.trendlines[2]
+        self.assertFalse(third.bears_fib)
+        self.assertAlmostEqual(third.anchor2_price, 64720.82)
+        self.assertEqual(third.anchor2_timestamp, 23 * 300)
+        # The fib-bearing lines and their fibs are untouched.
+        self.assertTrue(self.campaign.trendlines[0].bears_fib)
+        self.assertTrue(self.campaign.trendlines[1].bears_fib)
         self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64753.77)
         self.assertEqual(self.campaign.active_trendline_id, 2)
 

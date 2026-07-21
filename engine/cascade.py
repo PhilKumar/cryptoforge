@@ -110,6 +110,7 @@ class Trendline:
     anchor1_timestamp: int
     anchor2_price: float  # valid red candle open before the depth low
     anchor2_timestamp: int
+    bears_fib: bool = True  # False for a same-shelf structure: geometry only
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -122,6 +123,7 @@ class Trendline:
             anchor1_timestamp=int(data.get("anchor1_timestamp", 0)),
             anchor2_price=_coerce_float(data.get("anchor2_price")),
             anchor2_timestamp=int(data.get("anchor2_timestamp", 0)),
+            bears_fib=bool(data.get("bears_fib", True)),
         )
 
 
@@ -1072,6 +1074,7 @@ class CascadeEngine:
                 "a1": {"t": tl.anchor1_timestamp, "p": tl.anchor1_price},
                 "a2": {"t": tl.anchor2_timestamp, "p": tl.anchor2_price},
                 "active": tl.trendline_id == campaign.active_trendline_id,
+                "bears_fib": tl.bears_fib,
             }
             for tl in campaign.trendlines
         ]
@@ -1438,13 +1441,38 @@ class CascadeEngine:
         if prior is not None and prior.touch_high:
             separation = abs(touch_high - prior.touch_high) / prior.touch_high
             if separation < MIN_LEG_SEPARATION_PCT:
+                # Geometry only: the line is real and belongs on the chart, but
+                # it carries no fib and places no orders, so the previous fib
+                # keeps its resting ladder.
+                #
+                # Because nothing downstream depends on this anchor, it is found
+                # the way the line gets drawn by hand — dragging from the mother
+                # candle with the magnet on, which snaps to the open of the very
+                # candle that made the break. Fib-bearing anchors must keep
+                # excluding that candle: including it moves fib 0 on both
+                # verified days.
+                display = [c for c in history if campaign.mother_timestamp < c.timestamp <= candle.timestamp]
+                d_price, d_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, display)
+                if d_price is None or d_price >= campaign.mother_high:
+                    d_price, d_ts = anchor_price, anchor_ts
+                campaign.trendlines.append(
+                    Trendline(
+                        trendline_id=len(campaign.trendlines) + 1,
+                        anchor1_price=campaign.mother_high,
+                        anchor1_timestamp=campaign.mother_timestamp,
+                        anchor2_price=d_price,
+                        anchor2_timestamp=int(d_ts),
+                        bears_fib=False,
+                    )
+                )
                 self._log_event(
                     campaign,
                     "skip",
-                    f"Structure skipped: touch {touch_high:,.2f} is only "
+                    f"Trendline {len(campaign.trendlines)} drawn (geometry only) to red "
+                    f"candle open {d_price:,.2f}. Its touch {touch_high:,.2f} is just "
                     f"{separation * 100:.3f}% from fib {prior.leg_id}'s "
-                    f"{prior.touch_high:,.2f} — same shelf. No trendline and no fib "
-                    f"drawn; fib {prior.leg_id}'s ladder stays resting.",
+                    f"{prior.touch_high:,.2f} — same shelf, so no fib is drawn and fib "
+                    f"{prior.leg_id}'s ladder stays resting.",
                 )
                 campaign.window_start_ts = candle.timestamp
                 return
