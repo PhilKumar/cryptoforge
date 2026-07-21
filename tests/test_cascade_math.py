@@ -98,17 +98,19 @@ class FibLadderPoolTests(unittest.TestCase):
 
 
 class PlanLegOrdersTests(unittest.TestCase):
-    def test_users_example_l2_merges_into_l4(self):
-        """$2000 capital, 0.5% dip: $2/$3/$5 -> L4 gets $5 (L2 merged), L8 keeps $5."""
+    def test_users_example_l4_merges_up_into_l2(self):
+        """$2000 capital, 0.5% dip: $2/$3/$5. L4's $3 is under the minimum, so it
+        rolls UP into L2, which price can still reach. L8's $5 stands on its own."""
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)
         leg = _leg(campaign, low=99.5, touch_high=99.8)
         build_fib_ladder_and_pool(campaign, leg)
         self.assertAlmostEqual(leg.pool_usd, 10.0)
         plan_leg_orders(campaign, leg)
 
-        self.assertEqual(leg.pending_orders[2].status, "MERGED")
-        self.assertAlmostEqual(leg.pending_orders[4].usd_notional, 5.0)
-        self.assertEqual(leg.pending_orders[4].status, "PENDING")
+        self.assertEqual(leg.pending_orders[4].status, "MERGED")
+        self.assertAlmostEqual(leg.pending_orders[4].usd_notional, 0.0)
+        self.assertAlmostEqual(leg.pending_orders[2].usd_notional, 5.0)
+        self.assertEqual(leg.pending_orders[2].status, "PENDING")
         self.assertAlmostEqual(leg.pending_orders[8].usd_notional, 5.0)
         self.assertEqual(leg.pending_orders[8].status, "PENDING")
         self.assertAlmostEqual(campaign.carry_forward_usd, 0.0)
@@ -136,7 +138,8 @@ class PlanLegOrdersTests(unittest.TestCase):
         for level in (2, 4, 8):
             self.assertEqual(leg.pending_orders[level].usd_notional, 0.0)
             self.assertNotEqual(leg.pending_orders[level].status, "PENDING")
-        self.assertEqual(leg.pending_orders[8].status, "CARRIED")
+        # Everything pooled up into L2, and even that could not be placed.
+        self.assertEqual(leg.pending_orders[2].status, "CARRIED")
 
         # The carried pool joins the next leg's pool.
         leg2 = _leg(campaign, low=99.0, touch_high=99.5, leg_id=2)

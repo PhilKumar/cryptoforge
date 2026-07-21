@@ -26,8 +26,9 @@ Model (as specified by the user against their TradingView drawings):
   high — avg_entry + 0.25 x (mother_high - avg_entry) — and only exists once
   an entry has filled.
 - Binance min-notional handling: per-level USD below the minimum merges into
-  the next deeper level (2->4->8); if the whole pool is below the minimum it
-  carries forward to the next leg.
+  the next SHALLOWER level (8->4->2), so a pool too small to fill the ladder
+  buys where price actually trades instead of parking below it; if even the
+  pooled amount is below the minimum it carries forward to the next leg.
 
 There is no candle-count logic anywhere — only rises, touches and cuts.
 
@@ -97,7 +98,7 @@ MIN_FIB_RANGE_PCT = 0.0008
 MOTHER_RETEST_PCT = 0.0005
 MAX_ACTIVE_BEFORE_ALERT = 5
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 10  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 11  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -686,9 +687,10 @@ def cancel_and_carry_forward(campaign: Campaign, prior_leg: Leg) -> float:
 def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     """
     Split the leg pool 20/30/50 across levels 2/4/8, then apply the Binance
-    min-notional merge: sub-minimum amounts roll into the next deeper level;
-    a whole pool below minimum carries forward to the next leg. Spend is
-    capped so filled + resting notional never exceeds campaign capital.
+    min-notional merge: sub-minimum amounts roll into the next SHALLOWER level
+    (8 -> 4 -> 2) so they land where price can still reach them; a whole pool
+    below minimum carries forward to the next leg. Spend is capped so filled +
+    resting notional never exceeds campaign capital.
     """
     if leg.fib is None:
         raise CascadeModelError(f"leg {leg.leg_id}: fib ladder must be built before planning orders")
@@ -716,22 +718,36 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     else:
         usd = {level: pool * LEVEL_ALLOCATION[level] for level in CASCADE_LEVELS}
 
+    # Slices under Binance's minimum have to go somewhere. They roll UP into the
+    # shallower level, not down into the deeper one.
+    #
+    # Downward was the obvious reading of "put more money deeper", and it was
+    # wrong in practice: on a small pool every shallow slice got swallowed and
+    # the entire allocation ended up on level 8, below anything the market
+    # reached. Replaying fifteen of the user's own days, that cost a third of
+    # them any entry at all — one drew seven fibs and bought nothing while price
+    # traded straight through four levels that had no order on them.
+    #
+    # The deep bias is not lost. Within a fib the split is still 20/30/50
+    # whenever the pool can carry it, and across fibs each new one sits lower
+    # than the last, so money still lands progressively deeper as the fall goes
+    # on. It just stops landing somewhere price never visits.
     merged = set()
     carried = False
-    if usd[2] < min_notional:
-        usd[4] += usd[2]
-        usd[2] = 0.0
-        merged.add(2)
+    if usd[8] < min_notional:
+        usd[4] += usd[8]
+        usd[8] = 0.0
+        merged.add(8)
     if usd[4] < min_notional:
-        usd[8] += usd[4]
+        usd[2] += usd[4]
         usd[4] = 0.0
         merged.add(4)
-    if usd[8] < min_notional:
-        # The whole pool is too small to place anything — hand it straight back
-        # so the next fib inherits it, and don't count it against this leg.
-        campaign.carry_forward_usd = usd[8]
-        leg.pool_total_usd = max(leg.pool_total_usd - usd[8], 0.0)
-        usd[8] = 0.0
+    if usd[2] < min_notional:
+        # Even pooled it cannot be placed — hand it back so the next fib
+        # inherits it, and don't count it against this leg.
+        campaign.carry_forward_usd = usd[2]
+        leg.pool_total_usd = max(leg.pool_total_usd - usd[2], 0.0)
+        usd[2] = 0.0
         carried = True
 
     # Capital cap: filled + this ladder must never exceed campaign capital.
@@ -754,7 +770,7 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
         price = max(leg.fib.level_price(level), 0.0)
         amount = usd[level]
         if amount <= 0 or price <= 0:
-            status = "MERGED" if level in merged else ("CARRIED" if carried and level == 8 else "CANCELLED")
+            status = "MERGED" if level in merged else ("CARRIED" if carried and level == 2 else "CANCELLED")
             leg.pending_orders[level] = PendingOrder(
                 level=level,
                 price=price or None,

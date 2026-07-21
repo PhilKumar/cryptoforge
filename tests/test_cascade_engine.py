@@ -251,9 +251,17 @@ class CascadeSwingModelTests(unittest.TestCase):
         leg1, leg2 = self.campaign.legs
         carried = [lv for lv, o in leg1.pending_orders.items() if o.status == "CARRIED"]
         self.assertTrue(carried)
-        # Nothing filled on fib 1, so its whole pool lands in fib 2.
-        self.assertAlmostEqual(leg2.carry_in_usd, leg1.pool_total_usd, places=6)
-        self.assertAlmostEqual(leg2.pool_total_usd, leg2.pool_usd + leg1.pool_total_usd, places=6)
+        # Nothing filled on fib 1, so its whole allocation lands in fib 2 — both
+        # the slice too small to place at all and the rest that simply never got
+        # hit. pool_total_usd is net of the first, so compare against pool_usd.
+        self.assertAlmostEqual(leg2.carry_in_usd, leg1.pool_usd, places=6)
+        # fib 2 laddered what it could and handed its own too-small slice on, so
+        # the two together still account for every dollar of both allocations.
+        self.assertAlmostEqual(
+            leg2.pool_total_usd + self.campaign.carry_forward_usd,
+            leg2.pool_usd + leg1.pool_usd,
+            places=6,
+        )
 
     def test_round_closed_at_tp_returns_its_principal_to_the_next_fib(self):
         """
@@ -264,7 +272,9 @@ class CascadeSwingModelTests(unittest.TestCase):
         """
         self._feed_real(40)  # far enough to have fib 1 laddered
         leg1 = self.campaign.legs[0]
-        pool1 = leg1.pool_total_usd
+        # The leg's own allocation, before any slice too small to place was
+        # handed straight back — all of it must reach fib 2 either way.
+        pool1 = leg1.pool_usd
         self.assertGreater(pool1, 0.0)
 
         # Fill the deepest planned level, then let the target hit.
@@ -399,29 +409,27 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self.assertEqual(self.campaign.active_trendline_id, 2)
 
     def test_skipping_keeps_the_previous_ladder_resting(self):
-        """This is why the skip matters: fib 2's L4 sits at 64,138.25. Creating
-        a third fib would have retired that order while it was still working."""
+        """This is why the skip matters: fib 2 has a working ladder. Creating a
+        third fib would have retired it while it was still live."""
         self._feed(29)
         self.assertEqual(len(self.campaign.legs), 2)
-        l4 = self.campaign.legs[1].pending_orders[4]
-        self.assertTrue(l4.is_open)
-        self.assertAlmostEqual(l4.price, 64138.25)
+        working = [o for o in self.campaign.legs[1].pending_orders.values() if o.is_open and o.usd_notional > 0]
+        self.assertTrue(working)
 
-    def test_a_wick_under_the_line_no_longer_buys(self):
-        """The trail rule's real cost, on a real day. Price reached 64,077.76 at
-        19:50 — under L4's 64,138.25 line — but that was a WICK on a green
-        candle; no candle ever closed below the line. The old rule filled at
-        64,138.25 on that wick; the trail rule sits it out entirely."""
+    def test_the_day_now_trades_because_the_pool_lands_where_price_goes(self):
+        """This day used to buy nothing: every shallow slice was under Binance's
+        minimum and merged DOWN onto level 8, below anything price reached.
+        Pooling up into level 2 instead puts the money in reach, and the buy
+        stop fills."""
         self._feed(29)
-        self.assertEqual(self.campaign.all_fills, [])
-        l4 = self.campaign.legs[1].pending_orders[4]
-        self.assertFalse(l4.armed)
-        self.assertIsNone(l4.working_price)
+        self.assertTrue(self.campaign.all_fills, "the pooled level 2 should have filled")
+        fill = self.campaign.all_fills[0]
+        self.assertEqual(fill.level, 2)
+        self.assertLess(fill.price, self.campaign.mother_high)
 
-    def test_mother_break_with_nothing_filled_ends_flat(self):
-        """Same day, run to the mother break. With no entry taken there is no
-        round to realise — the campaign simply ends flat rather than closing a
-        position it never opened."""
+    def test_mother_break_realises_the_round_it_opened(self):
+        """Same day, run to the mother break. Price cannot reach the mother high
+        without passing the target first, so the round must close in profit."""
         self._feed(29)
         for idx, o, h, low, c in [
             (37, 64416.01, 64608.00, 64398.15, 64604.65),
@@ -431,8 +439,9 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         ]:
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
-        self.assertEqual(self.campaign.rounds, [])
-        self.assertEqual(self.campaign.filled_base_qty, 0.0)
+        self.assertEqual(len(self.campaign.rounds), 1)
+        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
+        self.assertEqual(self.campaign.filled_base_qty, 0.0)  # closed out, flat
 
 
 # Third regression day: BTCUSDT 5m from the mother candle at 2026-07-20 18:10
