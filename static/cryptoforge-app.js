@@ -7908,6 +7908,16 @@ function _cfCascadeLadderRows(campaign) {
     + '<tbody>' + rows + '</tbody></table></div></div>';
 }
 
+// Why a campaign ended, in words. "COMPLETED" on its own tells you nothing —
+// a retest and a target hit both land there.
+var _CF_CASCADE_REASONS = {
+  tp_filled: ['Target hit', 'ok'],
+  mother_broken: ['Mother broken', 'warn'],
+  mother_retested: ['Retested — restarted', 'warn'],
+  deleted: ['Deleted', 'muted'],
+  stopped: ['Stopped', 'muted']
+};
+
 function _cfCascadeCampaignCard(campaign) {
   var cid = _escapeHtml(campaign.campaign_id || '');
   var stateTone = campaign.state === 'TRENDLINE_ACTIVE' ? 'ok' : 'warn';
@@ -7925,6 +7935,9 @@ function _cfCascadeCampaignCard(campaign) {
   var ended = campaign.state === 'MOTHER_BROKEN' || campaign.state === 'COMPLETED'
     || campaign.state === 'STOPPED';
   var open = _cfCascadeIsOpen(campaign.campaign_id, ended);
+  // An ended campaign shows WHY it ended, not just that it did.
+  var reasonMeta = _CF_CASCADE_REASONS[String(campaign.close_reason || '')];
+  var stateLabel = (ended && reasonMeta) ? reasonMeta[0] : String(campaign.state || '');
   var num = Number(campaign.seq) > 0 ? '#' + campaign.seq : '#' + cid;
   var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
   var realised = rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0);
@@ -7956,7 +7969,7 @@ function _cfCascadeCampaignCard(campaign) {
     + '<span class="cf-cascade-caret" aria-hidden="true">&#9656;</span>'
     + '<span class="cf-cascade-num">' + _escapeHtml(num) + '</span>'
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
-    + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(campaign.state || '') + '</span>'
+    + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(stateLabel) + '</span>'
     + modeBadge
     + (campaign.stale_model ? '<span class="admin-pill" data-state="warn" title="Built with older fib rules — hit Recalc">STALE RULES</span>' : '')
     + '<span class="table-meta cf-cascade-gist">' + _escapeHtml(gist) + '</span>'
@@ -8058,7 +8071,7 @@ function _cfCascadePositionPanel(campaign, fills) {
     out += '<div class="cf-cascade-position is-waiting">'
       + '<strong>No entry yet.</strong> Orders rest at the PENDING levels above and '
       + 'fill only if price trades down to them. MERGED levels were below Binance\'s '
-      + '$5 minimum and folded into the next deeper level.'
+      + '$5 minimum and were pooled UP into the next shallower level, where price can still reach them.'
       + '</div>';
   }
 
@@ -8186,12 +8199,7 @@ function cfRenderCascadeClosed(closed) {
     body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>';
     return;
   }
-  var REASONS = {
-    tp_filled: ['Target hit', 'ok'],
-    mother_broken: ['Mother broken', 'warn'],
-    deleted: ['Deleted', 'muted'],
-    stopped: ['Stopped', 'muted']
-  };
+  var REASONS = _CF_CASCADE_REASONS;
   body.innerHTML = closed.slice().reverse().map(function(campaign) {
     // Realised P&L across every round, not just the last one.
     var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
@@ -8469,14 +8477,16 @@ function _cfCascadeChartSvg(d) {
   if (d.mother && d.mother.high) hline(d.mother.high, '#a855f7', 'mother ' + fmt(d.mother.high), '5,3', 1.2);
 
   // every trendline, mother high -> its swing high
-  var tlColors = ['#1f6fd6', '#c2410c', '#0891b2', '#7c3aed', '#be185d', '#0f766e'];
-  (d.trendlines || []).forEach(function (tl, idx) {
+  var tlColors = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7'];
+  // Only the four most recent lines stay on the chart: TL5 retires TL1, TL6
+  // retires TL2. Beyond four the older ones are noise over the price action.
+  (d.trendlines || []).slice(-4).forEach(function (tl) {
     var a1 = tl.a1, a2 = tl.a2;
     if (!a1 || !a2 || a2.t === a1.t) return;
     var slope = (a2.p - a1.p) / (a2.t - a1.t);
     var t0 = candles[0].t, t1 = candles[n - 1].t;
     var p0 = a1.p + slope * (t0 - a1.t), p1 = a1.p + slope * (t1 - a1.t);
-    var col = tlColors[idx % tlColors.length];
+    var col = tlColors[(Math.max(1, Number(tl.id) || 1) - 1) % tlColors.length];
     // A same-shelf line is real geometry but carries no fib and places no
     // orders — dashed and dimmed so it never reads as a tradeable structure.
     var noFib = tl.bears_fib === false;
@@ -8488,9 +8498,11 @@ function _cfCascadeChartSvg(d) {
   });
 
   // every fib: 0/1 anchors solid, 2/4/8 buy levels dotted
-  var fibColors = ['#22d3ee', '#f59e0b', '#a3e635', '#f472b6', '#38bdf8', '#fb923c'];
-  legs.forEach(function (leg, idx) {
-    var col = fibColors[idx % fibColors.length];
+  // Fixed four-colour cycle: fib 1 blue, 2 green, 3 red, 4 purple, then repeat.
+  // Keyed off leg_id, not position, so a fib keeps its colour as others retire.
+  var fibColors = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7'];
+  legs.forEach(function (leg) {
+    var col = fibColors[(Math.max(1, Number(leg.leg_id) || 1) - 1) % fibColors.length];
     hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 1.4);
     hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 1.4);
     [2, 4, 8].forEach(function (lv) {
