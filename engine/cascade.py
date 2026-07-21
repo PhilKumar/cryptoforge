@@ -31,6 +31,14 @@ Model (as specified by the user against their TradingView drawings):
 
 There is no candle-count logic anywhere — only rises, touches and cuts.
 
+A structure may sit anywhere relative to the mother candle — above its low or
+below it. The only size test is MIN_FIB_RANGE_PCT, which throws out a few ticks
+of chop whose fib levels would be noise rather than support.
+
+A rise back to within MOTHER_RETEST_PCT of the mother high (once price has left
+the mother candle's range) retires that mother candle and restarts on the rise:
+a trendline drawn to a point that close comes out flat and can never be touched.
+
 Campaigns default to paper mode (simulated fills at live prices). Live mode
 uses a desired-state sync: the state machine only mutates local order intents
 and _sync_live_orders diffs them against the exchange's open orders, placing,
@@ -89,7 +97,7 @@ MIN_FIB_RANGE_PCT = 0.0008
 MOTHER_RETEST_PCT = 0.0005
 MAX_ACTIVE_BEFORE_ALERT = 5
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 9  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 10  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
