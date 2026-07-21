@@ -10,15 +10,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-14">
-<link rel="manifest" href="/manifest.webmanifest?v=20260720-14">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260720-15">
+<link rel="manifest" href="/manifest.webmanifest?v=20260720-15">
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
-<script src="/static/cryptoforge-boot.js?v=20260720-14"></script>
+<script src="/static/cryptoforge-boot.js?v=20260720-15"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-14">
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-14">
-<script src="/static/error-handler.js?v=20260720-14" defer></script>
-<script src="/static/pwa.js?v=20260720-14" defer></script>
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260720-15">
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-15">
+<script src="/static/error-handler.js?v=20260720-15" defer></script>
+<script src="/static/pwa.js?v=20260720-15" defer></script>
 </head>
 <body>
 
@@ -949,6 +949,18 @@
           <tr><td colspan="10" class="cf-table-empty-cell">Loading journal&hellip;</td></tr>
         </tbody>
       </table>
+    </div>
+  </section>
+
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Converted (Off-Orderbook)</h3>
+        <div class="table-meta">Binance Convert exits &mdash; these never appear in the spot trade log, so a lot closed this way would otherwise look permanently open.</div>
+      </div>
+    </div>
+    <div id="cf-journal-converts" style="padding:0 14px 14px;">
+      <div class="cf-table-empty-cell">Loading&hellip;</div>
     </div>
   </section>
 </div>
@@ -1972,7 +1984,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260720-14" defer></script>
-<script src="/static/cryptoforge-admin.js?v=20260720-14" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260720-15" defer></script>
+<script src="/static/cryptoforge-admin.js?v=20260720-15" defer></script>
 </body>
 </html>

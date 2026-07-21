@@ -18,6 +18,11 @@ class BaseBroker:
     # Spot clients set this False so the UI can hide meaningless chips.
     supports_funding = True
 
+    def get_convert_history(self, days: int = 30) -> list:
+        """Off-orderbook conversions. Only Binance Spot has these; the default
+        keeps every caller free of hasattr checks."""
+        return []
+
     _SYMBOL_ALIASES = {
         "GOLD": "PAXGUSD",
         "GOLDUSDT": "PAXGUSD",

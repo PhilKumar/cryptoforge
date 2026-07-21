@@ -6565,10 +6565,22 @@ def _coerce_float_safe(value, default: float = 0.0) -> float:
 
 
 @app.get("/api/journal/trades")
-async def journal_trades():
+async def journal_trades(convert_days: int = 90):
     doc = _load_trade_journal()
     trades = [t for t in (doc.get("trades") or []) if isinstance(t, dict)]
     capital_base = _coerce_float_safe(doc.get("capital_base_usd"))
+
+    # Convert exits never reach /api/v3/myTrades, so a lot closed that way looks
+    # permanently open to the rest of the app. Surface them here as their own
+    # section rather than silently merging them into the spot trade log.
+    converts = []
+    convert_error = ""
+    try:
+        converts = await asyncio.to_thread(delta.get_convert_history, convert_days)
+    except Exception as exc:
+        convert_error = str(exc)
+        _logger.warning("[JOURNAL] convert history unavailable: %s", exc)
+
     return {
         "status": "ok",
         "source": doc.get("source") or "",
@@ -6576,6 +6588,9 @@ async def journal_trades():
         "capital_base_usd": capital_base,
         "trades": trades,
         "summary": _journal_summary(trades, capital_base),
+        "converts": converts,
+        "convert_error": convert_error,
+        "convert_supported": bool(getattr(delta, "get_convert_history", None)) and _broker_is_configured(),
     }
 
 

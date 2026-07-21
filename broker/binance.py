@@ -819,6 +819,86 @@ class BinanceSpotClient(BaseBroker):
         trades.sort(key=lambda item: item.get("time") or 0, reverse=True)
         return trades
 
+    def get_convert_history(self, days: int = 30) -> list:
+        """
+        Binance Convert trades. Convert is an OTC quote engine, NOT the
+        orderbook — its fills never appear in /api/v3/myTrades, so a position
+        exited via Convert looks permanently open to anything reading spot
+        trades alone. This is the usual escape hatch for dust too small to sell
+        (below LOT_SIZE or MIN_NOTIONAL), which makes it common, not exotic.
+
+        The endpoint caps each query at 30 days, so longer ranges are paged.
+        """
+        if not self._is_configured():
+            return []
+        now_ms = int(round(_time.time() * 1000))
+        window_ms = 30 * 24 * 60 * 60 * 1000
+        remaining_ms = max(int(days), 1) * 24 * 60 * 60 * 1000
+        rows: list = []
+        end = now_ms
+        while remaining_ms > 0:
+            span = min(window_ms, remaining_ms)
+            try:
+                payload = self._signed_request(
+                    "GET",
+                    "/sapi/v1/convert/tradeFlow",
+                    params={"startTime": end - span, "endTime": end, "limit": 1000},
+                )
+            except Exception as exc:
+                _binance_log.warning("[BINANCE SPOT] Convert history error: %s", exc)
+                break
+            batch = (payload or {}).get("list") or []
+            for raw in batch:
+                row = dict(raw)
+                from_asset = str(row.get("fromAsset") or "")
+                to_asset = str(row.get("toAsset") or "")
+                from_amount = self.coerce_float(row.get("fromAmount"), 0.0)
+                to_amount = self.coerce_float(row.get("toAmount"), 0.0)
+                quote = self.quote_asset
+                # Selling the base for quote is a sell; buying it back is a buy.
+                if to_asset == quote:
+                    side, base, base_qty, quote_qty = "sell", from_asset, from_amount, to_amount
+                elif from_asset == quote:
+                    side, base, base_qty, quote_qty = "buy", to_asset, to_amount, from_amount
+                else:
+                    side, base, base_qty, quote_qty = "convert", from_asset, from_amount, to_amount
+                price = (quote_qty / base_qty) if base_qty else 0.0
+                ts = int(row.get("createTime") or 0)
+                rows.append(
+                    {
+                        "id": f"convert-{row.get('orderId')}",
+                        "order_id": row.get("orderId"),
+                        "source": "convert",
+                        "symbol": f"{base}{quote}" if base and side != "convert" else f"{from_asset}{to_asset}",
+                        "product_symbol": f"{base}{quote}" if base and side != "convert" else f"{from_asset}{to_asset}",
+                        "side": side,
+                        "price": price,
+                        "average_fill_price": price,
+                        "fill_price": price,
+                        "size": base_qty,
+                        "filled_size": base_qty,
+                        "quote_size": quote_qty,
+                        "from_asset": from_asset,
+                        "to_asset": to_asset,
+                        "from_amount": from_amount,
+                        "to_amount": to_amount,
+                        "paid_commission": 0.0,  # Convert prices the cost into the spread
+                        "state": "closed",
+                        "order_type": "convert",
+                        "status": row.get("orderStatus"),
+                        "time": ts,
+                        "updated_at": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat() if ts else "",
+                    }
+                )
+            if len(batch) < 1000:
+                end -= span
+                remaining_ms -= span
+            else:
+                end = min(int(r.get("createTime") or end) for r in batch) - 1
+                remaining_ms -= span
+        rows.sort(key=lambda item: item.get("time") or 0, reverse=True)
+        return rows
+
     def set_leverage(self, product_id: str, leverage: int) -> dict:
         return {"status": "ok", "message": "Binance Spot uses cash balance only; leverage is fixed at 1x."}
 

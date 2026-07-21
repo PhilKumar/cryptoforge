@@ -5826,6 +5826,58 @@ function _cfRenderTradeJournal(data) {
     meta.textContent = trades.length + ' trade' + (trades.length === 1 ? '' : 's')
       + ' shown · multi-buy trades expand to show each entry.';
   }
+
+  _cfRenderJournalConverts(data);
+}
+
+// Binance Convert exits never appear in /api/v3/myTrades, so a position closed
+// that way looks permanently open everywhere else in the app. They get their
+// own section — the cost lives in the spread, not in a fee field, so they are
+// deliberately not merged into the spot P&L above.
+function _cfRenderJournalConverts(data) {
+  var mount = document.getElementById('cf-journal-converts');
+  if (!mount) return;
+  var rows = Array.isArray(data.converts) ? data.converts : [];
+
+  if (data.convert_error) {
+    mount.innerHTML = '<div class="cf-table-empty-cell">Convert history unavailable: '
+      + _escapeHtml(data.convert_error) + '</div>';
+    return;
+  }
+  if (!data.convert_supported) {
+    mount.innerHTML = '<div class="cf-table-empty-cell">Connect Binance Spot API keys to pull Convert history.</div>';
+    return;
+  }
+  if (!rows.length) {
+    mount.innerHTML = '<div class="cf-table-empty-cell">No conversions in the last 90 days.</div>';
+    return;
+  }
+
+  mount.innerHTML = '<div class="table-scroll"><table class="trade-table"><thead><tr>'
+    + '<th>Date</th><th>Side</th><th>From</th><th>To</th>'
+    + '<th class="num">Rate</th><th class="num">Value</th><th>Status</th>'
+    + '</tr></thead><tbody>'
+    + rows.map(function(r) {
+      var when = r.time ? new Date(Number(r.time)).toLocaleString() : '--';
+      var tone = r.side === 'sell' ? 'var(--green,#3fae56)'
+        : r.side === 'buy' ? 'var(--accent)' : 'var(--muted)';
+      return '<tr>'
+        + '<td>' + _escapeHtml(when) + '</td>'
+        + '<td style="color:' + tone + ';text-transform:uppercase;font-size:11px;">'
+          + _escapeHtml(String(r.side || '')) + '</td>'
+        + '<td>' + Number(r.from_amount || 0).toFixed(8).replace(/0+$/, '').replace(/\.$/, '')
+          + ' ' + _escapeHtml(String(r.from_asset || '')) + '</td>'
+        + '<td>' + Number(r.to_amount || 0).toFixed(8).replace(/0+$/, '').replace(/\.$/, '')
+          + ' ' + _escapeHtml(String(r.to_asset || '')) + '</td>'
+        + '<td class="num">' + _cfJournalUsd(r.price, 2) + '</td>'
+        + '<td class="num">' + _cfJournalUsd(r.quote_size, 2) + '</td>'
+        + '<td>' + _escapeHtml(String(r.status || '')) + '</td>'
+        + '</tr>';
+    }).join('')
+    + '</tbody></table></div>'
+    + '<div class="table-meta" style="margin-top:8px;">Convert is an OTC quote, not an '
+    + 'orderbook trade: no fee line, the cost sits in the spread, and Binance keeps it out '
+    + 'of the spot trade log. Shown separately so the P&amp;L above stays orderbook-only.</div>';
 }
 
 async function cfLoadTradeJournal(showToast) {
