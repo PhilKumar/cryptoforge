@@ -504,6 +504,84 @@ class CascadeThirdDayRegressionTests(unittest.TestCase):
         self.assertNotAlmostEqual(self.campaign.legs[0].touch_high, 65274.58)
 
 
+class CascadeClosedHistoryTests(unittest.TestCase):
+    """A campaign that ended holding a position used to skip archiving, so it
+    stayed in the live set and never reached history — which is why Avg Entry
+    and Exit were blank in the closed table. The campaign itself was persisted
+    intact, so those are recoverable."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+
+    def _orphan(self):
+        from engine.cascade import Round
+
+        campaign = Campaign(
+            campaign_id="orphan1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            seq=1,
+            mode="paper",
+        )
+        campaign.state = "MOTHER_BROKEN"
+        campaign.close_reason = "mother_broken"
+        campaign.rounds = [
+            Round(
+                round_id=1,
+                leg_id=2,
+                avg_entry=64138.25,
+                quantity=0.00011232,
+                invested_usd=7.20,
+                exit_price=64370.69,
+                pnl=0.0261,
+            )
+        ]
+        return campaign.to_dict()
+
+    def test_restore_adopts_ended_campaigns_that_never_archived(self):
+        self.engine.restore_campaigns([self._orphan()])
+        self.assertEqual(len(self.engine.closed_campaigns), 1)
+        row = self.engine.closed_campaigns[0]
+        self.assertEqual(row["close_reason"], "mother_broken")
+        # The entry/exit the closed table reads come from the rounds.
+        self.assertEqual(len(row["rounds"]), 1)
+        self.assertAlmostEqual(row["rounds"][0]["avg_entry"], 64138.25)
+        self.assertAlmostEqual(row["rounds"][0]["exit_price"], 64370.69)
+
+    def test_backfill_is_idempotent(self):
+        snapshot = self._orphan()
+        self.engine.restore_campaigns([snapshot])
+        self.engine.restore_campaigns([snapshot])
+        self.assertEqual(len(self.engine.closed_campaigns), 1)
+
+    def test_live_campaigns_are_not_adopted(self):
+        campaign = _mk_campaign(self.engine)
+        campaign.state = "TRENDLINE_ACTIVE"
+        self.engine.restore_campaigns([campaign.to_dict()])
+        self.assertEqual(self.engine.closed_campaigns, [])
+
+    def test_sequence_numbers_are_not_reused_after_delete(self):
+        a = self.engine.campaigns
+        first = Campaign(
+            campaign_id="a",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=100.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            seq=1,
+        )
+        a["a"] = first
+        self.assertEqual(self.engine._next_seq(), 2)
+        first.state = "STOPPED"
+        self.engine.delete_campaign("a")
+        # The number stays claimed by the archived campaign.
+        self.assertEqual(self.engine._next_seq(), 2)
+
+
 class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.broker = FakeCascadeBroker()

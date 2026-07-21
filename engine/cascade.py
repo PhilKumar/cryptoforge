@@ -1175,7 +1175,31 @@ class CascadeEngine:
                 continue
             self.campaigns[campaign.campaign_id] = campaign
             restored += 1
+        self._backfill_closed_history()
         return restored
+
+    def _backfill_closed_history(self) -> int:
+        """
+        Adopt already-ended campaigns into the closed list.
+
+        A campaign that ended while holding a position used to skip archiving
+        entirely, so it stayed in the live set and never reached history. The
+        campaign itself was persisted intact — rounds and all — so those can be
+        recovered rather than lost. Runs on every restore and is idempotent.
+        """
+        known = {row.get("campaign_id") for row in self.closed_campaigns}
+        adopted = 0
+        for campaign in self.campaigns.values():
+            if campaign.state not in FINAL_STATES or campaign.campaign_id in known:
+                continue
+            if not campaign.close_reason:
+                campaign.close_reason = campaign.state.lower()
+            self.closed_campaigns.append(campaign.to_dict())
+            adopted += 1
+        if adopted:
+            self.closed_campaigns = self.closed_campaigns[-100:]
+            _log.info("[CASCADE] adopted %s ended campaign(s) into closed history", adopted)
+        return adopted
 
     async def reconcile(self, campaign_id: Optional[str] = None) -> dict:
         """Restart recovery: replay missed candles, then sync live orders."""
