@@ -1751,13 +1751,14 @@ class CascadeEngine:
         for c in window:
             line = trendline_price(tl, c.timestamp)
             crossed = c.high >= line and c.close < line and c.high < campaign.mother_high
-            # A touch only counts if it comes AFTER the candle that made the
-            # dip: one candle cannot be both the low of the swing and the rise
-            # off it. Note this is about ORDER, not about whether the touching
-            # candle also made a new low — in a steady fall almost every candle
-            # that reaches a falling line is also printing a lower low, so
-            # excluding those outright would mean no structure ever forms.
-            if crossed and run_min_ts is not None and c.timestamp > run_min_ts:
+            # One candle CAN be both the low of the swing and the touch on the
+            # line: a bar that spikes down to make the dip and rallies back up
+            # into the trendline in the same five minutes is one event, and its
+            # high is fib 0 while its low is fib 1. Requiring the touch to come
+            # strictly after the dip candle pushed fib 0 onto the wrong bar —
+            # on the 07-20 steady fall the verified anchors are the 00:45
+            # candle's own high and low.
+            if crossed and run_min_ts is not None and c.timestamp >= run_min_ts:
                 if first_cross_ts is None:
                     first_cross_ts = c.timestamp
                     frozen_dip = run_min

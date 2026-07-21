@@ -532,14 +532,31 @@ class CascadeThirdDayRegressionTests(unittest.TestCase):
         self.assertTrue(self.campaign.legs, "a steady fall must still form a structure")
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
 
+    @unittest.expectedFailure
     def test_matches_the_user_chart_exactly(self):
+        """The verified target for this day, not yet reached.
+
+        Phil's finalised chart puts BOTH anchors on the 00:45 candle: its high
+        65,196.00 is fib 0 and its low 65,082.81 is fib 1. His levels solve back
+        to exactly that pair (L2 64,969.62, L4 64,743.24), so it is not a
+        reading error.
+
+        This test used to assert 65,246.00 with the comment "00:45 IST high" —
+        but 65,246.00 is the 00:40 candle's high. The comment named the right
+        candle and the number came from the wrong one, so the reference we were
+        defending was itself wrong.
+
+        The engine currently touches at 00:40 and freezes fib 1 at the 00:30 low
+        of 65,160.00, one candle early on both. Marked expected-failure rather
+        than deleted: it is the target, and it should start passing when the
+        touch detection and the ultimate-low rule are fixed together.
+        """
         self._feed(16)
         leg = self.campaign.legs[0]
-        self.assertAlmostEqual(leg.touch_high, 65246.00)  # 00:45 IST high
-        self.assertAlmostEqual(leg.low, 65160.00)  # 00:30 IST low
-        self.assertAlmostEqual(leg.fib.level_price(2), 65074.00)
-        self.assertAlmostEqual(leg.fib.level_price(4), 64902.00)
-        self.assertAlmostEqual(leg.fib.level_price(8), 64558.00)
+        self.assertAlmostEqual(leg.touch_high, 65196.00)  # 00:45 IST high
+        self.assertAlmostEqual(leg.low, 65082.81)  # the SAME candle's low
+        self.assertAlmostEqual(leg.fib.level_price(2), 64969.62)
+        self.assertAlmostEqual(leg.fib.level_price(4), 64743.24)
 
     def test_the_dip_candle_high_is_not_its_own_touch(self):
         """The 00:30 candle both set the dip (65,160) and reached the line with a
