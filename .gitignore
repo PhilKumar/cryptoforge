@@ -25,3 +25,6 @@ cache/
 Tier A*
 e2e-tests/playwright-report/
 e2e-tests/test-results/
+
+# Cached Binance candles for tools/cascade_backtest.py
+tools/.backtest_cache/
