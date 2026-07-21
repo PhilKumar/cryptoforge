@@ -7114,7 +7114,34 @@ html[data-theme="light"] .journal-entry-notes section {
     background: rgba(var(--tint-primary-rgb), 0.12);
     flex: none;
   }
-  .cf-cascade-gist { font-size: 11px; }
+  /* Title and buttons share one row: the title takes the slack and clips its
+     gist, the buttons never wrap down to a second line. */
+  .cf-cascade-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+  .cf-cascade-actions {
+    display: flex;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+  .cf-cascade-actions .btn { white-space: nowrap; }
+  .cf-cascade-gist {
+    font-size: 11px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The fib strip is the widest thing in the table. Letting it WRAP keeps the
+     table inside the card; before this it stretched the table and pushed the
+     Status column off the right edge behind a scrollbar. */
+  .cf-cascade-card .cf-cascade-leg-head td { white-space: normal; }
+  .cf-cascade-card .trade-table { width: 100%; table-layout: auto; }
   .cf-cascade-body { display: none; }
   .cf-cascade-card.is-open .cf-cascade-body { display: block; }
 

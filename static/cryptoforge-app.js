@@ -7842,6 +7842,11 @@ function cfRenderCascadeStatus(data) {
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
 }
 
+// The designed 20/30/50 split, and where a level's money goes when it is under
+// Binance's minimum: deeper levels pool UP into the shallower one.
+var _CF_CASCADE_SHARE = { 2: 20, 4: 30, 8: 50 };
+var _CF_CASCADE_MERGE_TO = { 4: 2, 8: 4 };
+
 function _cfCascadeLadderRows(campaign) {
   var legs = Array.isArray(campaign.legs) ? campaign.legs : [];
   if (!legs.length) return '<div class="table-meta">No legs yet — waiting for the first trendline touch.</div>';
@@ -7860,26 +7865,27 @@ function _cfCascadeLadderRows(campaign) {
       ? { 0: leg.fib.high_anchor, 1: leg.fib.low_anchor }
       : { 0: leg.touch_high, 1: leg.low };
     var allocPct = Number(leg.allocation_pct);
-    var basis = leg.leg_id === 1 ? 'from mother high' : 'from fib ' + (leg.leg_id - 1) + ' level 1';
-    var fallTxt = isFinite(allocPct)
-      ? ' · <strong style="color:var(--yellow,#f59e0b);">' + allocPct.toFixed(3) + '%</strong> ' + basis
-      : '';
+    // "MC" for the mother candle, "f1" for fib 1 — the strip has to fit on one
+    // line or the whole table goes sideways and the Status column falls off.
+    var basis = leg.leg_id === 1 ? 'MC' : 'f' + (leg.leg_id - 1) + ' L1';
     var head = '<tr class="cf-cascade-leg-head">'
-      + '<td colspan="6" style="padding-top:10px;">'
+      + '<td colspan="5" style="padding-top:10px;">'
       + '<strong>Fib ' + leg.leg_id + '</strong>'
       + '<span class="table-meta"> · TL' + (leg.trendline_id || '--')
-      + ' · 0 = ' + _cfCascadeFmt(levels[0]) + ' · 1 = ' + _cfCascadeFmt(levels[1])
-      + fallTxt
-      + (leg.finalized ? ' · finalized' : ' · forming')
-      + (leg.escalated ? ' · escalated 15m' : '')
-      + (leg.pool_usd ? ' · pool $' + _cfCascadeFmt(leg.pool_usd) : '')
+      + ' · 0 ' + _cfCascadeFmt(levels[0]) + ' · 1 ' + _cfCascadeFmt(levels[1])
+      + (isFinite(allocPct)
+        ? ' · <strong style="color:var(--yellow,#f59e0b);">' + allocPct.toFixed(2) + '%</strong> of ' + basis
+        : '')
+      + (leg.finalized ? '' : ' · forming')
+      + (leg.escalated ? ' · 15m' : '')
+      + ' · pool $' + _cfCascadeFmt(leg.pool_total_usd || leg.pool_usd)
       + (Number(leg.carry_in_usd) > 0
-        ? ' <strong style="color:var(--green,#3fae56);">+ $' + _cfCascadeFmt(leg.carry_in_usd)
-          + ' carried from fib ' + (leg.leg_id - 1) + '</strong>'
-          + ' = $' + _cfCascadeFmt(leg.pool_total_usd)
+        ? '<strong style="color:var(--green,#3fae56);"> (incl. $'
+          + _cfCascadeFmt(leg.carry_in_usd) + ' from f' + (leg.leg_id - 1) + ')</strong>'
         : '')
       + (legLive > 0
-        ? ' · <strong style="color:var(--accent,#1f6fd6);">$' + _cfCascadeFmt(legLive) + ' live</strong>'
+        ? ' · <strong style="color:var(--accent,#1f6fd6);">$' + _cfCascadeFmt(legLive)
+          + ' waiting to buy</strong>'
         : '')
       + '</span></td></tr>';
     var body = [2, 4, 8].map(function(level) {
@@ -7903,12 +7909,27 @@ function _cfCascadeLadderRows(campaign) {
               + ' · fib ' + _cfCascadeFmt(order.price) + '</div>'
             : '<span style="opacity:.6;">below ' + _cfCascadeFmt(order.price) + '</span>')
         : _cfCascadeFmt(order.price);
+      // Every level's designed share of the pool, shown even when the money
+      // ended up somewhere else — that is the question "how much is allocated
+      // here", and the answer is the same whether or not it could be placed.
+      var share = _CF_CASCADE_SHARE[level];
+      var amount = Number(order.usd_notional) || 0;
+      var amountCell = amount > 0
+        ? '$' + _cfCascadeFmt(amount)
+          + '<div class="table-meta">' + share + '% of pool'
+          + (Number(order.quantity) ? ' · ' + _cfCascadeFmt(order.quantity, 4) : '') + '</div>'
+        : '<span style="opacity:.6;">$0</span>'
+          + '<div class="table-meta">' + share + '% &rarr; '
+          // Level 2 is the shallowest, so it has nowhere up to go; its share
+          // rolls into the next fib instead.
+          + (status === 'MERGED' && _CF_CASCADE_MERGE_TO[level] ? 'L' + _CF_CASCADE_MERGE_TO[level]
+             : status === 'MERGED' || status === 'CARRIED' ? 'next fib' : 'unused')
+          + '</div>';
       return '<tr>'
         + '<td>L' + level + (stop ? '<div class="table-meta">buy stop</div>' : '') + '</td>'
         + '<td class="num">' + priceCell + '</td>'
         + '<td>' + _escapeHtml(order.timeframe || '5m') + '</td>'
-        + '<td class="num">$' + _cfCascadeFmt(order.usd_notional) + '</td>'
-        + '<td class="num">' + _cfCascadeFmt(order.quantity, 8) + '</td>'
+        + '<td class="num">' + amountCell + '</td>'
         + '<td style="color:' + tone + ';font-weight:600;">' + _escapeHtml(status) + '</td>'
         + '</tr>';
     }).join('');
@@ -7916,13 +7937,14 @@ function _cfCascadeLadderRows(campaign) {
   }).join('');
   var foot = liveTotal > 0
     ? '<tr class="cf-cascade-leg-head"><td colspan="3" style="padding-top:10px;">'
-      + '<strong>Waiting across every fib</strong>'
-      + '<span class="table-meta"> · all of these are live at once</span></td>'
+      + '<strong>Waiting to buy, all fibs</strong>'
+      + '<span class="table-meta"> · none of this is spent yet</span></td>'
       + '<td class="num" style="padding-top:10px;"><strong>$' + _cfCascadeFmt(liveTotal) + '</strong></td>'
-      + '<td colspan="2"></td></tr>'
+      + '<td></td></tr>'
     : '';
   return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
-    + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th><th class="num">Amount</th><th class="num">Qty</th><th>Status</th></tr></thead>'
+    + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th>'
+    + '<th class="num">Amount</th><th>Status</th></tr></thead>'
     + '<tbody>' + rows + foot + '</tbody></table></div></div>';
 }
 
@@ -7983,7 +8005,7 @@ function _cfCascadeCampaignCard(campaign) {
       + ' aria-expanded="' + (open ? 'true' : 'false') + '"'
       + ' title="Click to ' + (open ? 'collapse' : 'expand') + '"'
       + ' data-cf-click="cfCascadeToggleCard(\'' + cid + '\')">'
-    + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;">'
+    + '<div class="cf-cascade-title">'
     + '<span class="cf-cascade-caret" aria-hidden="true">&#9656;</span>'
     + '<span class="cf-cascade-num">' + _escapeHtml(num) + '</span>'
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
@@ -7993,7 +8015,7 @@ function _cfCascadeCampaignCard(campaign) {
     + '<span class="table-meta cf-cascade-gist">' + _escapeHtml(gist) + '</span>'
     + '</div>'
     // Buttons live inside the header but must not toggle it.
-    + '<div style="display:flex;gap:6px;flex-wrap:wrap;" data-cf-stop="1" onclick="event.stopPropagation()">'
+    + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRecalculate(\'' + cid + '\')">Recalc</button>'
     + goLive
@@ -8011,7 +8033,8 @@ function _cfCascadeCampaignCard(campaign) {
     + '<div class="stat-box"><div class="stat-label" title="' + (flat ? 'Exit' : 'Take Profit') + '"><span>' + (flat ? 'Exit' : 'Take Profit') + '</span></div><div class="stat-value">' + _cfCascadeFmt(tpShown) + '</div>' + roundNote + '</div>'
     + '<div class="stat-box"><div class="stat-label" title="In Position / Capital"><span>In Position / Capital</span></div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div>'
       + (Number(campaign.resting_usd) > 0
-        ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.resting_usd) + ' waiting on the ladders</div>' : '')
+        ? '<div class="admin-stat-note" title="Orders resting on the exchange — not bought yet">$'
+          + _cfCascadeFmt(campaign.resting_usd) + ' waiting to buy</div>' : '')
       + (Number(campaign.carry_forward_usd) > 0
         ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.carry_forward_usd) + ' carried</div>' : '')
       + '</div>'
@@ -8089,9 +8112,11 @@ function _cfCascadePositionPanel(campaign, fills) {
       + '</div>';
   } else if (!rounds.length) {
     out += '<div class="cf-cascade-position is-waiting">'
-      + '<strong>No entry yet.</strong> Orders rest at the PENDING levels above and '
-      + 'fill only if price trades down to them. MERGED levels were below Binance\'s '
-      + '$5 minimum and were pooled UP into the next shallower level, where price can still reach them.'
+      + '<strong>Nothing bought yet — no money has left the account.</strong> '
+      + 'Every "waiting to buy" amount above is an order sitting on the exchange, '
+      + 'not a position. It only becomes a real buy when price reaches it. '
+      + 'MERGED levels were under Binance\'s $5 minimum, so their share moved up '
+      + 'into the next shallower level where price can still reach it.'
       + '</div>';
   }
 
@@ -8150,7 +8175,15 @@ function cfRenderCascadeCampaigns(campaigns) {
     mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">No campaigns yet — start one on the left.</div>';
     return;
   }
-  mount.innerHTML = campaigns.map(_cfCascadeCampaignCard).join('');
+  // The status poll runs every 3s. Rewriting innerHTML on every tick destroys
+  // and rebuilds every table, which throws away the scroll position mid-drag —
+  // the bar snaps back the instant you let go and the right-hand columns are
+  // unreadable. Nothing usually changes between ticks, so only repaint when it
+  // actually did.
+  var html = campaigns.map(_cfCascadeCampaignCard).join('');
+  if (mount.getAttribute('data-cf-html-key') === html) return;
+  mount.setAttribute('data-cf-html-key', html);
+  mount.innerHTML = html;
   _cfCascadeMarkClippedLabels(mount);
 }
 
