@@ -7731,6 +7731,9 @@ function _cfCascadeSetError(message) {
 }
 
 function _cfCascadeFmt(value, digits) {
+  // null/undefined are "no value", not zero — Number(null) is 0, which used to
+  // print a confident "0" for prices the engine never had.
+  if (value == null || value === '') return '--';
   var num = Number(value);
   if (!isFinite(num)) return '--';
   return num.toLocaleString('en-US', { maximumFractionDigits: digits == null ? 2 : digits });
@@ -7850,6 +7853,16 @@ function _cfCascadeCampaignCard(campaign) {
   if (rounds.length) {
     gist += ' · ' + (realised >= 0 ? '+' : '') + '$' + _cfCascadeFmt(realised);
   }
+  // Once a round closes the live avg/TP are cleared — the position is flat, so
+  // there is nothing to average. Fall back to what the last round actually
+  // traded at, labelled, rather than showing blanks for a campaign that traded.
+  var lastRound = rounds.length ? rounds[rounds.length - 1] : null;
+  var flat = !fills.length && lastRound;
+  var entryShown = flat ? lastRound.avg_entry : campaign.avg_entry_price;
+  var tpShown = flat ? lastRound.exit_price : tp;
+  var roundNote = flat
+    ? '<div class="admin-stat-note">round ' + _escapeHtml(String(lastRound.round_id || rounds.length)) + '</div>'
+    : '';
 
   return '<div class="card cf-cascade-card' + (ended ? ' is-ended' : '') + (open ? ' is-open' : '') + '"'
       + ' data-campaign="' + cid + '">'
@@ -7881,8 +7894,8 @@ function _cfCascadeCampaignCard(campaign) {
     + '<div class="stat-box"><div class="stat-label" title="Down from Mother"><span>Down from Mother</span></div><div class="stat-value">'
       + (isFinite(Number(campaign.fall_pct_from_mother)) ? Number(campaign.fall_pct_from_mother).toFixed(3) + '%' : '--')
       + '</div><div class="admin-stat-note">allocated ' + (isFinite(Number(campaign.allocated_pct)) ? Number(campaign.allocated_pct).toFixed(3) : '0') + '%</div></div>'
-    + '<div class="stat-box"><div class="stat-label" title="Avg Entry"><span>Avg Entry</span></div><div class="stat-value">' + _cfCascadeFmt(campaign.avg_entry_price) + '</div></div>'
-    + '<div class="stat-box"><div class="stat-label" title="Take Profit"><span>Take Profit</span></div><div class="stat-value">' + _cfCascadeFmt(tp) + '</div></div>'
+    + '<div class="stat-box"><div class="stat-label" title="Avg Entry"><span>Avg Entry</span></div><div class="stat-value">' + _cfCascadeFmt(entryShown) + '</div>' + roundNote + '</div>'
+    + '<div class="stat-box"><div class="stat-label" title="' + (flat ? 'Exit' : 'Take Profit') + '"><span>' + (flat ? 'Exit' : 'Take Profit') + '</span></div><div class="stat-value">' + _cfCascadeFmt(tpShown) + '</div>' + roundNote + '</div>'
     + '<div class="stat-box"><div class="stat-label" title="In Position / Capital"><span>In Position / Capital</span></div><div class="stat-value">$' + _cfCascadeFmt(campaign.spent_usd) + ' / $' + _cfCascadeFmt(campaign.capital_usd, 0) + '</div>'
       + (Number(campaign.carry_forward_usd) > 0
         ? '<div class="admin-stat-note">$' + _cfCascadeFmt(campaign.carry_forward_usd) + ' carried</div>' : '')
