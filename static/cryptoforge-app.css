@@ -6730,7 +6730,10 @@ html[data-theme="light"] .journal-entry-notes section {
   /* One row, always. Wrapping was letting the buttons drop to a second line on
      campaigns carrying an extra badge, so no two cards lined up. */
   .cf-cascade-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: nowrap; }
-  .cf-cascade-head .admin-pill { font-size: 10px; padding: 2px 8px; }
+  /* Badges keep their size; the summary text is what gives way when the row is
+     tight. A clipped "PAPE" is worse than no summary. */
+  .cf-cascade-head .admin-pill { font-size: 10px; padding: 2px 8px; flex: none; }
+  .cf-cascade-title > strong { flex: none; }
   /* One row, always — seven compact stats beside the start form. Labels are
      clipped rather than wrapped; hovering a box marquees the full heading. */
   .cf-cascade-stats {
@@ -7189,8 +7192,30 @@ html[data-theme="light"] .journal-entry-notes section {
   /* The fib strip is the widest thing in the table. Letting it WRAP keeps the
      table inside the card; before this it stretched the table and pushed the
      Status column off the right edge behind a scrollbar. */
-  .cf-cascade-card .cf-cascade-leg-head td { white-space: normal; }
-  .cf-cascade-card .trade-table { width: 100%; table-layout: auto; }
+  /* Every full-width row in this table must be allowed to wrap. A colspan row
+     that refuses to break sets the minimum width of the columns underneath it,
+     which is what made the ladder wider than its panel. */
+  .cf-cascade-card .cf-cascade-leg-head td,
+  .cf-cascade-card .cf-cascade-pot td { white-space: normal; }
+  .cf-cascade-card .trade-table th,
+  .cf-cascade-card .trade-table td { padding: 5px 6px; }
+  /* Fixed layout with declared shares, so the ladder is exactly as wide as its
+     panel at every window size and never needs a sideways scroll. Chasing the
+     natural width down never worked: the widest cell in any column sets the
+     floor, and one long note put it back over the edge every time. */
+  .cf-cascade-card .trade-table { table-layout: fixed; width: 100%; }
+  .cf-cascade-card .trade-table th:nth-child(1),
+  .cf-cascade-card .trade-table td:nth-child(1) { width: 11%; }
+  .cf-cascade-card .trade-table th:nth-child(2),
+  .cf-cascade-card .trade-table td:nth-child(2) { width: 25%; }
+  .cf-cascade-card .trade-table th:nth-child(3),
+  .cf-cascade-card .trade-table td:nth-child(3) { width: 8%; }
+  .cf-cascade-card .trade-table th:nth-child(4),
+  .cf-cascade-card .trade-table td:nth-child(4) { width: 34%; }
+  .cf-cascade-card .trade-table th:nth-child(5),
+  .cf-cascade-card .trade-table td:nth-child(5) { width: 22%; }
+  .cf-cascade-card .trade-table td { overflow-wrap: anywhere; }
+
   .cf-cascade-body { display: none; }
   .cf-cascade-card.is-open .cf-cascade-body { display: block; }
 
