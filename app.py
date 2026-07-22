@@ -1555,6 +1555,48 @@ async def service_worker():
     )
 
 
+_ASSET_VERSION_CACHE: dict = {}
+_ASSET_REF_RE = re.compile(r'(?P<attr>(?:src|href)=")(?P<path>/static/[^"?]+)(?:\?v=[^"]*)?(?P<close>")')
+
+
+def _asset_version(rel_path: str) -> str:
+    """Content hash for a /static asset, cached until the file changes.
+
+    The ?v= tokens used to be typed by hand, which meant an edited file could
+    keep an unchanged URL — the browser and the service worker (cache-first on
+    /static) would both go on serving the old bytes, and the UI would look
+    unchanged no matter how many times it was deployed. Hashing the content
+    makes the URL change exactly when the file does.
+    """
+    full = os.path.join(_HERE, rel_path.lstrip("/"))
+    try:
+        stat = os.stat(full)
+    except OSError:
+        return ""
+    cached = _ASSET_VERSION_CACHE.get(rel_path)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+    try:
+        with open(full, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()[:12]
+    except OSError:
+        return ""
+    _ASSET_VERSION_CACHE[rel_path] = (stat.st_mtime_ns, stat.st_size, digest)
+    return digest
+
+
+def _version_static_assets(html: str) -> str:
+    def _replace(match: "re.Match") -> str:
+        path = match.group("path")
+        version = _asset_version(path)
+        # An unreadable asset keeps whatever the document already had rather
+        # than silently dropping the cache-buster.
+        suffix = f"?v={version}" if version else ""
+        return f"{match.group('attr')}{path}{suffix}{match.group('close')}"
+
+    return _ASSET_REF_RE.sub(_replace, html)
+
+
 # ── Serve Frontend ────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend(request: Request):
@@ -1563,14 +1605,14 @@ async def serve_frontend(request: Request):
         login_path = os.path.join(_HERE, "login.html")
         if os.path.exists(login_path):
             with open(login_path, encoding="utf-8") as f:
-                resp = HTMLResponse(f.read())
+                resp = HTMLResponse(_version_static_assets(f.read()))
                 resp.headers["Cache-Control"] = "no-store"
                 return resp
         return HTMLResponse("<h2>login.html not found</h2>")
     html_path = os.path.join(_HERE, "strategy.html")
     if os.path.exists(html_path):
         with open(html_path, encoding="utf-8") as f:
-            resp = HTMLResponse(f.read())
+            resp = HTMLResponse(_version_static_assets(f.read()))
             resp.headers["Cache-Control"] = "no-store"
             _ensure_csrf_cookie(resp, request)
             return resp

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -3182,3 +3183,53 @@ class BinanceTestnetCredentialTests(unittest.TestCase):
         self.assertTrue(payload["help"])
         # A secret must never be echoed back to the browser in the clear.
         self.assertEqual(payload["value"], "")
+
+
+class StaticAssetVersionTests(unittest.TestCase):
+    """The ?v= cache-busting tokens used to be typed by hand, so an edited JS
+    file could keep an unchanged URL. The browser HTTP cache and the service
+    worker (cache-first on /static) would both keep serving the old bytes, and
+    the deployed UI would look untouched — which is exactly how an admin-console
+    change shipped and stayed invisible. Tokens are now content hashes."""
+
+    def setUp(self):
+        self.app_module = import_module("app")
+        self.app_module._ASSET_VERSION_CACHE.clear()
+        self.addCleanup(self.app_module._ASSET_VERSION_CACHE.clear)
+
+    def test_every_static_reference_gets_a_content_hash(self):
+        for name in ("strategy.html", "login.html"):
+            with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), name), encoding="utf-8") as handle:
+                rendered = self.app_module._version_static_assets(handle.read())
+            refs = re.findall(r'(?:src|href)="(/static/[^"]+)"', rendered)
+            self.assertTrue(refs, f"{name} referenced no static assets")
+            for ref in refs:
+                self.assertRegex(ref, r"\?v=[0-9a-f]{12}$", f"{ref} in {name} has no content hash")
+
+    def test_token_tracks_file_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            static_dir = os.path.join(tmp, "static")
+            os.makedirs(static_dir)
+            asset = os.path.join(static_dir, "probe.js")
+            with open(asset, "w") as handle:
+                handle.write("first();")
+
+            with patch.object(self.app_module, "_HERE", tmp):
+                markup = '<script src="/static/probe.js?v=hand-typed"></script>'
+                first = self.app_module._version_static_assets(markup)
+                self.assertNotIn("hand-typed", first)
+
+                # Same content, cache hit — the token must be stable, or every
+                # page load would bust the cache and defeat the point.
+                self.assertEqual(first, self.app_module._version_static_assets(markup))
+
+                with open(asset, "w") as handle:
+                    handle.write("second(); // edited")
+                os.utime(asset, (time.time() + 2, time.time() + 2))
+                self.assertNotEqual(first, self.app_module._version_static_assets(markup))
+
+    def test_missing_asset_does_not_break_rendering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(self.app_module, "_HERE", tmp):
+                rendered = self.app_module._version_static_assets('<script src="/static/gone.js?v=1"></script>')
+        self.assertEqual(rendered, '<script src="/static/gone.js"></script>')

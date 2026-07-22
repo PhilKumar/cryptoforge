@@ -1,23 +1,21 @@
-const CACHE_NAME = 'cryptoforge-shell-v83';
+const CACHE_NAME = 'cryptoforge-shell-v84';
+
+// Scripts and stylesheets are requested with a content-hash ?v= token that the
+// server computes at render time, so their URLs cannot be known here — listing
+// guessed versions only precached bytes the page would never ask for. They are
+// picked up by the runtime cache below on first load instead, and a changed
+// file arrives under a new URL that no cache entry can shadow. Only assets
+// referenced with a stable URL belong in the precache.
 const APP_SHELL = [
-  '/manifest.webmanifest?v=20260720-10',
-  '/apple-touch-icon.png?v=20260720-10',
-  '/static/pwa-icons/favicon-16.png?v=20260720-10',
-  '/static/pwa-icons/favicon-32.png?v=20260720-10',
-  '/static/pwa-icons/apple-touch-icon.png?v=20260720-10',
-  '/static/pwa-icons/icon-192.png?v=20260720-10',
-  '/static/pwa-icons/icon-512.png?v=20260720-10',
-  '/static/pwa-icons/icon-maskable-192.png?v=20260720-10',
-  '/static/pwa-icons/icon-maskable-512.png?v=20260720-10',
-  '/static/cryptoforge-boot.js?v=20260720-10',
-  '/static/cryptoforge-app.css?v=20260720-10',
-  '/static/cryptoforge-app.js?v=20260720-10',
-  '/static/cryptoforge-admin.js?v=20260720-10',
-  '/static/cryptoforge-login.css?v=20260720-10',
-  '/static/cryptoforge-login.js?v=20260720-10',
-  '/static/cryptoforge-pwa.css?v=20260720-10',
-  '/static/error-handler.js?v=20260720-10',
-  '/static/pwa.js?v=20260720-10'
+  '/manifest.webmanifest',
+  '/apple-touch-icon.png',
+  '/static/pwa-icons/favicon-16.png',
+  '/static/pwa-icons/favicon-32.png',
+  '/static/pwa-icons/apple-touch-icon.png',
+  '/static/pwa-icons/icon-192.png',
+  '/static/pwa-icons/icon-512.png',
+  '/static/pwa-icons/icon-maskable-192.png',
+  '/static/pwa-icons/icon-maskable-512.png'
 ];
 
 self.addEventListener('install', (event) => {
