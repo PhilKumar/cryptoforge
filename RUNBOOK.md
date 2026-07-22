@@ -46,12 +46,25 @@ Run these in order. Stop at the first one that explains it.
 
 ```bash
 cat ~/.cryptoforge-active-port
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:$(cat ~/.cryptoforge-active-port)/api/health
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:$(cat ~/.cryptoforge-active-port)/health
 ```
 
 - **200** → the backend is fine; the problem is nginx or your browser
 - **000** → nothing is listening. The process is stopped or dead
 - **hangs** → the app is wedged; go to step 3
+
+`/health` is the cheap one — it touches no database, no broker and no disk, so
+it still answers when the box is struggling. That is the point of it: use this
+to ask "is the process alive", not `/api/health`.
+
+`/api/health` is the *readiness* check — broker configured, state store
+writable, recovery needed — and it costs more. It is what `cd-deploy.sh` polls.
+Use it once you know the process is up and you want to know whether it can
+trade.
+
+Point any external uptime monitor at `https://crypto.philforge.in/health`. It
+used to 404 (nginx proxied the path, the app never defined it), so a monitor
+aimed there reported the site down while it was perfectly healthy.
 
 ### Step 2 — just fix it
 
@@ -226,8 +239,17 @@ venv/bin/python tools/cascade_backtest.py
 # full test suite
 venv/bin/python -m pytest tests/ -q
 
+# set up the login second factor (prints locally, sends nothing anywhere)
+venv/bin/python tools/totp_setup.py
+venv/bin/python tools/totp_setup.py --verify 123456   # after setting .env
+
+# locked out? clear the escalating lockout for one address
+redis-cli DEL "cryptoforge:loginlock:<ip>" "cryptoforge:login:<ip>"
+# no Redis: the lockout is in memory, so a restart clears it
+sudo systemctl restart cryptoforge@$(cat ~/.cryptoforge-active-port)
+
 # what is listening
-sudo ss -ltnp | grep -E ':(8000|9000|9001)'
+sudo ss -ltnp | grep -E ':(9000|9001)'
 
 # recent deploys
 gh run list --limit 5
@@ -325,12 +347,25 @@ plumbing with real fills and fees; cheap enough that another bug costs a coffee.
 
 ## 8. Still open
 
+- **Cascade P&L is gross — no fees.** `engine/backtest.py` and
+  `engine/paper_trading.py` both model `fee_pct`; `engine/cascade.py` does not.
+  At Binance spot 0.1%/side a ~$22 round trip costs about **$0.044**, so SOL
+  #10's reported **+$0.08** was really about **+$0.036**. Every Cascade number
+  on screen is optimistic by that much, and comparing a Cascade result to a
+  backtest result compares gross against net. See `AUDIT.md` §1.2 — it needs a
+  decision, not a quiet patch.
+- **Carried LOT_SIZE dust is booked to the wrong round.** Residual sold in round
+  N+1 is valued at N+1's average entry while its cost sat in N's `invested`.
+  Live-only; paper never generates a residual, so the two modes compute
+  per-round P&L by different rules. `AUDIT.md` §1.3.
 - **Why Binance returned buy stops as terminal.** The churn stopped because the
   order filled, not because the cause was found. `7e820ce` makes the next
   occurrence self-describing — the log will read
   `came back CANCELED/EXPIRED/REJECTED` with the trigger prices. **Send that
   line when it appears.**
-- **Partial fills** have never run against a real exchange.
+- **Partial fills** have never run against a real exchange. A fill *during
+  downtime* is now covered by `CascadeRestartSafetyTests` (six tests, both
+  mutation-checked), but that is a fake broker, not Binance.
 - **`prior_low`** is computed in `_evaluate_cut` and never used — a documented
   rule that was never wired up (`engine/cascade.py`, search `prior_low`).
 - **`test_matches_the_user_chart_exactly`** is `@unittest.expectedFailure`: the

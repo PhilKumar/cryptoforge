@@ -115,6 +115,12 @@ MOTHER_RETEST_PCT = 0.0005
 MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
+# How many closed campaigns stay in memory. This was written as a bare 50 in
+# _archive_campaign while _adopt_ended_campaigns, load_closed_campaigns and the
+# persistence layer all used 100 — so every archive quietly threw away 50
+# campaigns the rest of the system was trying to keep, and the panel lost
+# history that was still in the database. One name, one number.
+CLOSED_HISTORY_LIMIT = 100
 MODEL_VERSION = 20  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
@@ -942,6 +948,8 @@ class CascadeEngine:
         self.closed_campaigns: List[dict] = []
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        # Strong references to in-flight _schedule() work — see _schedule.
+        self._pending_tasks: set = set()
         self._candles_5m: Dict[str, List[Candle]] = {}  # per-campaign candle history (rebuilt on restart)
         self._price_cache: Dict[str, tuple] = {}
         self._last_sync_ts: Dict[str, float] = {}  # per campaign — a shared
@@ -1310,7 +1318,9 @@ class CascadeEngine:
             key = row.get("campaign_id")
             if key:
                 merged[key] = row
-        self.closed_campaigns = sorted(merged.values(), key=lambda r: str(r.get("closed_at") or ""))[-100:]
+        self.closed_campaigns = sorted(merged.values(), key=lambda r: str(r.get("closed_at") or ""))[
+            -CLOSED_HISTORY_LIMIT:
+        ]
 
     def get_status(self) -> dict:
         campaigns = []
@@ -1661,7 +1671,7 @@ class CascadeEngine:
             self.closed_campaigns.append(campaign.to_dict())
             adopted += 1
         if adopted:
-            self.closed_campaigns = self.closed_campaigns[-100:]
+            self.closed_campaigns = self.closed_campaigns[-CLOSED_HISTORY_LIMIT:]
             _log.info("[CASCADE] adopted %s ended campaign(s) into closed history", adopted)
         return adopted
 
@@ -2654,7 +2664,15 @@ class CascadeEngine:
             coro.close()
             _log.warning("[CASCADE] no running event loop; skipped a scheduled order task")
             return
-        asyncio.ensure_future(coro)
+        # Keep a strong reference until it finishes. The event loop only holds a
+        # weak one, so a task nothing else refers to can be garbage-collected
+        # part-way through. This is the path that cancels resting live orders on
+        # a mother break — losing it leaves real buy stops working for a
+        # campaign that has ended, which is the kind of failure that shows up as
+        # an unexplained fill days later.
+        task = asyncio.ensure_future(coro)
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
 
     def _auto_restart(self, parent: Campaign, candle: Candle) -> Optional[Campaign]:
         """
@@ -2729,8 +2747,8 @@ class CascadeEngine:
     def _archive_campaign(self, campaign: Campaign) -> None:
         payload = campaign.to_dict()
         self.closed_campaigns.append(payload)
-        if len(self.closed_campaigns) > 50:
-            self.closed_campaigns = self.closed_campaigns[-50:]
+        if len(self.closed_campaigns) > CLOSED_HISTORY_LIMIT:
+            self.closed_campaigns = self.closed_campaigns[-CLOSED_HISTORY_LIMIT:]
         if self.on_campaign_closed:
             try:
                 self.on_campaign_closed(payload)

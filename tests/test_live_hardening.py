@@ -1965,7 +1965,7 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
         self.app_module._rate_limits.clear()
-        self.app_module._login_attempts.clear()
+        self.app_module._login_state.clear()
         self.app_module._scalp_engine = None
         self.addAsyncCleanup(self._restore_session_file)
 

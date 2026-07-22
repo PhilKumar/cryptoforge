@@ -31,6 +31,11 @@ _DISCORD_OK = bool(DISCORD_WEBHOOK_URL)
 # Shared async client — connection-pooled, reused across calls
 _client: Optional[httpx.AsyncClient] = None
 
+# In-flight sends. The event loop keeps only a weak reference to a task, so an
+# alert nobody holds on to can be collected before it is delivered — and a
+# dropped alert is invisible by definition: you find out by not being told.
+_inflight: set = set()
+
 
 def _get_client() -> httpx.AsyncClient:
     global _client
@@ -107,7 +112,9 @@ def alert(title: str, body: str, level: str = "error") -> None:
 
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(_dispatch(html, plain))
+        task = loop.create_task(_dispatch(html, plain))
+        _inflight.add(task)
+        task.add_done_callback(_inflight.discard)
     except RuntimeError:
         _log.debug("No event loop — alert skipped: %s", title)
 

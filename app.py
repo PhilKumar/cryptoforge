@@ -5,7 +5,9 @@ Production-ready: multi-engine, market feed, portfolio history, full CRUD.
 """
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import inspect
 import json
 import logging
@@ -13,6 +15,7 @@ import os
 import re
 import secrets
 import shutil
+import struct
 import sys
 import tempfile
 import time
@@ -451,6 +454,10 @@ def _check_trade_alerts(run_id: str, mode_label: str, event: dict):
 
 ws_clients: List[WebSocket] = []
 
+# Strong references to fire-and-forget tasks, so the garbage collector cannot
+# take one mid-flight. Entries remove themselves on completion.
+_inflight_tasks: set = set()
+
 
 # ── Authentication ────────────────────────────────────────────────
 AUTH_PIN = os.getenv("CRYPTOFORGE_PIN") or os.getenv("CRYPTOFORGE_PASSWORD")
@@ -461,6 +468,61 @@ if not AUTH_PIN:
         "Set it in your .env file: CRYPTOFORGE_PIN=<your-6-digit-pin>"
     )
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+
+# ── Optional second factor (RFC 6238 TOTP) ────────────────────────
+# Deliberately stdlib-only. requirements.txt is pinned and installed on the
+# server at deploy time, so reaching for pyotp here would mean a login path that
+# works locally and 500s in production until someone remembers to pip install.
+#
+# Unset CRYPTOFORGE_TOTP_SECRET means the login flow behaves exactly as before.
+# Generate a secret with `venv/bin/python tools/totp_setup.py` — it prints the
+# value and the QR payload locally and never sends it anywhere.
+TOTP_SECRET = (os.getenv("CRYPTOFORGE_TOTP_SECRET") or "").strip().replace(" ", "").upper()
+_TOTP_STEP_SEC = 30
+_TOTP_DIGITS = 6
+_TOTP_DRIFT_STEPS = 1  # accept one step either side of now, for clock skew
+_totp_used_counters: dict = {}  # counter -> expiry, so a code cannot be replayed
+
+
+def _totp_enabled() -> bool:
+    return bool(TOTP_SECRET)
+
+
+def _totp_code_at(counter: int) -> str:
+    padding = "=" * (-len(TOTP_SECRET) % 8)
+    key = base64.b32decode(TOTP_SECRET + padding, casefold=True)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    truncated = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(truncated % (10**_TOTP_DIGITS)).zfill(_TOTP_DIGITS)
+
+
+def _verify_totp(code: str) -> bool:
+    """True if `code` is valid for now (±1 step) and has not already been used."""
+    digits = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if len(digits) != _TOTP_DIGITS:
+        return False
+    now = time.time()
+    current = int(now // _TOTP_STEP_SEC)
+    for key, expiry in list(_totp_used_counters.items()):
+        if expiry < now:
+            _totp_used_counters.pop(key, None)
+    for delta in range(-_TOTP_DRIFT_STEPS, _TOTP_DRIFT_STEPS + 1):
+        counter = current + delta
+        try:
+            expected = _totp_code_at(counter)
+        except Exception as exc:
+            _logger.error("TOTP secret is not valid base32: %s", exc)
+            return False
+        if secrets.compare_digest(digits, expected):
+            # One code, one login. Without this a code stays good for its whole
+            # 30s window, so anyone who sees it over your shoulder can reuse it.
+            if counter in _totp_used_counters:
+                _logger.warning("Rejected a replayed TOTP code")
+                return False
+            _totp_used_counters[counter] = now + _TOTP_STEP_SEC * (_TOTP_DRIFT_STEPS + 2)
+            return True
+    return False
 
 
 def _state_dir_candidates() -> List[str]:
@@ -758,11 +820,27 @@ def _normalize_datetime(value) -> Optional[datetime]:
 
 
 def _client_ip(request) -> str:
+    """The caller's address, as the proxy saw it — never as the caller claims.
+
+    This used to read the FIRST entry of X-Forwarded-For. nginx sets that header
+    with $proxy_add_x_forwarded_for, which APPENDS the real peer to whatever the
+    client sent, so entry zero is a value the caller chose. Since this function
+    keys the login lockout, anyone could defeat the 5-attempts-per-5-minutes
+    limit on a 6-digit PIN by varying one request header — the brute force would
+    have looked like a million different first-time visitors.
+
+    X-Real-IP is set by nginx to $remote_addr and cannot be influenced by the
+    client, so it is the one to trust. Falling back to the LAST X-Forwarded-For
+    hop preserves the same property for any proxy that only sets that header.
+    """
     if request is None:
         return "unknown"
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
+    real_ip = (request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip
+    hops = [part.strip() for part in (request.headers.get("x-forwarded-for") or "").split(",") if part.strip()]
+    if hops:
+        return hops[-1]
     client = getattr(request, "client", None)
     return client.host if client else "unknown"
 
@@ -1056,6 +1134,7 @@ async def auth_middleware(request: Request, call_next):
         "/",
         "/api/auth/login",
         "/api/auth/status",
+        "/health",
         "/api/health",
         "/api/ready",
         "/favicon.ico",
@@ -1155,53 +1234,121 @@ def check_rate_limit(endpoint: str, max_calls: int = 5, window_sec: int = 10, cl
 
 
 # ── Brute-Force Protection ────────────────────────────────────────
-_login_attempts: dict = defaultdict(list)  # fallback
+# A 6-digit PIN is 10^6 combinations. A flat 5-per-5-minutes limit still allows
+# ~1,440 guesses a day, which walks the whole space in under two years and half
+# of it in under one. Escalating the lockout collapses that: after the first
+# five failures each further wrong guess costs progressively more, so a patient
+# attacker gets a handful of tries per day rather than fifteen hundred.
+_login_state: dict = {}  # ip -> {"fails": int, "until": float}  (fallback when Redis is down)
 _LOGIN_MAX_ATTEMPTS = 5
-_LOGIN_LOCKOUT_SEC = 300  # 5 minutes
+_LOGIN_LOCKOUT_SEC = 300  # first lockout, and the floor for every later one
+_LOGIN_FAIL_TTL_SEC = 86400  # a quiet day clears the escalation
 _LOGIN_RL_PREFIX = "cryptoforge:login:"
+_LOGIN_LOCK_PREFIX = "cryptoforge:loginlock:"
+# failures -> seconds locked out. Past the end of the ladder it stays at 24h.
+_LOGIN_LOCKOUT_LADDER = (300, 900, 3600, 21600, 86400)
 
 
-def _check_login_rate(ip: str):
+def _login_lockout_sec(fails: int) -> int:
+    if fails < _LOGIN_MAX_ATTEMPTS:
+        return 0
+    tier = fails - _LOGIN_MAX_ATTEMPTS
+    return _LOGIN_LOCKOUT_LADDER[min(tier, len(_LOGIN_LOCKOUT_LADDER) - 1)]
+
+
+def _humanize_seconds(seconds: float) -> str:
+    seconds = max(int(seconds), 1)
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    if seconds < 3600:
+        minutes = (seconds + 59) // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = (seconds + 3599) // 3600
+    return f"{hours} hour{'s' if hours != 1 else ''}"
+
+
+def _prune_login_state(now: float) -> None:
+    if len(_login_state) <= 10_000:
+        return
+    for key, row in list(_login_state.items()):
+        if now > row.get("until", 0) and now - row.get("seen", 0) > _LOGIN_FAIL_TTL_SEC:
+            _login_state.pop(key, None)
+
+
+def _login_lock_remaining(ip: str) -> float:
+    """Seconds still to wait, 0 if the caller may try a PIN now."""
+    now = time.time()
     r = _get_redis()
     if r is not None:
         try:
-            count = int(r.get(f"{_LOGIN_RL_PREFIX}{ip}") or 0)
-            if count >= _LOGIN_MAX_ATTEMPTS:
-                raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 5 minutes.")
-            return
-        except HTTPException:
-            raise
+            until = float(r.get(f"{_LOGIN_LOCK_PREFIX}{ip}") or 0)
+            return max(until - now, 0.0)
         except Exception as e:
-            _logger.warning(f"[Redis] _check_login_rate failed, using in-memory: {e}")
-    now = time.time()
-    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOGIN_LOCKOUT_SEC]
-    if len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 5 minutes.")
+            _logger.warning(f"[Redis] login lock read failed, using in-memory: {e}")
+    return max(float(_login_state.get(ip, {}).get("until", 0)) - now, 0.0)
+
+
+def _check_login_rate(ip: str):
+    remaining = _login_lock_remaining(ip)
+    if remaining > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in {_humanize_seconds(remaining)}.",
+        )
 
 
 def _record_failed_login(ip: str):
+    now = time.time()
+    fails = 0
     r = _get_redis()
     if r is not None:
         try:
             pipe = r.pipeline()
             pipe.incr(f"{_LOGIN_RL_PREFIX}{ip}")
-            pipe.expire(f"{_LOGIN_RL_PREFIX}{ip}", _LOGIN_LOCKOUT_SEC)
-            pipe.execute()
-            return
+            pipe.expire(f"{_LOGIN_RL_PREFIX}{ip}", _LOGIN_FAIL_TTL_SEC)
+            fails = int(pipe.execute()[0] or 0)
         except Exception as e:
             _logger.warning(f"[Redis] _record_failed_login failed, using in-memory: {e}")
-    _login_attempts[ip].append(time.time())
+            r = None
+    if r is None:
+        row = _login_state.setdefault(ip, {"fails": 0, "until": 0.0, "seen": now})
+        if now - row.get("seen", now) > _LOGIN_FAIL_TTL_SEC:
+            row["fails"] = 0
+        row["fails"] += 1
+        row["seen"] = now
+        fails = row["fails"]
+
+    lockout = _login_lockout_sec(fails)
+    if not lockout:
+        return
+    until = now + lockout
+    if r is not None:
+        try:
+            r.setex(f"{_LOGIN_LOCK_PREFIX}{ip}", int(lockout) + 1, str(until))
+        except Exception as e:
+            _logger.warning(f"[Redis] login lock write failed, using in-memory: {e}")
+            _login_state.setdefault(ip, {"fails": fails, "seen": now})["until"] = until
+    else:
+        _login_state[ip]["until"] = until
+    _prune_login_state(now)
+    _logger.warning("Login locked out for %s after %s failed attempt(s): %ss", ip, fails, lockout)
+    if lockout >= 3600:
+        alerter.alert(
+            "Repeated failed logins",
+            f"{fails} failed PIN attempts from {ip}.\nLocked out for {_humanize_seconds(lockout)}.",
+            level="warn",
+        )
 
 
 def _clear_login_attempts(ip: str):
     r = _get_redis()
     if r is not None:
         try:
-            r.delete(f"{_LOGIN_RL_PREFIX}{ip}")
+            r.delete(f"{_LOGIN_RL_PREFIX}{ip}", f"{_LOGIN_LOCK_PREFIX}{ip}")
             return
         except Exception:
             pass
-    _login_attempts.pop(ip, None)
+    _login_state.pop(ip, None)
 
 
 # ── Models ────────────────────────────────────────────────────────
@@ -1626,7 +1773,12 @@ async def auth_login(request: Request):
     _check_login_rate(ip)
     body = await request.json()
     password = str(body.get("password", ""))
-    if secrets.compare_digest(password, str(AUTH_PIN)):
+    pin_ok = secrets.compare_digest(password, str(AUTH_PIN))
+    # Check both factors before branching, and always check both even when the
+    # PIN is already wrong — replying faster for a bad PIN than for a bad code
+    # tells an attacker which half they got right.
+    totp_ok = _verify_totp(body.get("totp") or body.get("code") or "") if _totp_enabled() else True
+    if pin_ok and totp_ok:
         _clear_login_attempts(ip)
         token = _create_session(request=request)
         resp = JSONResponse({"status": "ok", "message": "Login successful"})
@@ -1644,14 +1796,19 @@ async def auth_login(request: Request):
         _set_csrf_cookie(resp, _create_csrf_token(), request)
         return resp
     _record_failed_login(ip)
-    raise HTTPException(status_code=401, detail="Invalid PIN")
+    # One message for both factors, on purpose: naming which one was wrong hands
+    # an attacker a free oracle for cracking them one at a time.
+    raise HTTPException(status_code=401, detail="Invalid PIN or code" if _totp_enabled() else "Invalid PIN")
 
 
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     token = _get_session_token(request)
     authenticated = _validate_session(token, request=request)
-    resp = JSONResponse({"authenticated": authenticated})
+    # The login page asks for this before drawing its form, so it knows whether
+    # to show the authenticator field. Advertising only that a second factor is
+    # configured gives away nothing the login attempt would not.
+    resp = JSONResponse({"authenticated": authenticated, "totp_required": _totp_enabled()})
     resp.headers["Cache-Control"] = "no-store"
     if authenticated:
         _ensure_csrf_cookie(resp, request)
@@ -1739,10 +1896,16 @@ def _bucket_counts_snapshot() -> dict:
 
 
 def _engine_recovery_candidates(bucket: str) -> list[dict]:
-    snapshot = _get_state_store().export_snapshot()
+    # One bucket, read as one bucket. This used to call export_snapshot(), which
+    # is SELECT * across every bucket in the database with a json.loads on every
+    # payload — and _ops_state_summary calls this twice, so /api/health read the
+    # whole store twice per request. On a 5 MB store that measured 50 ms of
+    # blocked event loop, growing with every backtest run saved. cd-deploy.sh
+    # health-checks with `curl --max-time 3`, so the cost was on a path to
+    # failing deploys for no visible reason.
     candidates = []
-    for state_key, entry in dict(((snapshot.get("buckets") or {}).get(bucket) or {})).items():
-        payload = dict((entry or {}).get("payload") or {})
+    for state_key, raw in _get_state_store().get_mapping(bucket).items():
+        payload = dict(raw or {})
         open_trades = payload.get("open_trades") or []
         if payload.get("in_trade") or open_trades:
             candidates.append(
@@ -2763,6 +2926,22 @@ def _validate_state_snapshot(snapshot: dict) -> dict:
 
 
 # ── Health ────────────────────────────────────────────────────────
+@app.get("/health")
+async def liveness():
+    """Bare liveness. Touches nothing — no database, no broker, no disk.
+
+    deploy/nginx.conf has proxied /health since it was written, but the app only
+    ever defined /api/health, so this path returned 404 and any uptime monitor
+    aimed at it reported the site down while it was perfectly healthy.
+
+    Deliberately kept separate from /api/health rather than aliased: this
+    answers "is the process up", which is what a monitor polls every minute and
+    what must stay cheap even when the box is struggling. /api/health answers
+    "is it ready to trade", which costs more and is worth more.
+    """
+    return {"status": "ok", "uptime_sec": round(max(time.time() - APP_BOOT_TS, 0.0), 1)}
+
+
 @app.get("/api/health")
 async def health():
     summary = _ops_state_summary()
@@ -3033,7 +3212,7 @@ async def update_admin_config(payload: AdminConfigUpdateRequest, request: Reques
         "admin_config_update",
         max_calls=6,
         window_sec=60,
-        client_ip=request.client.host if request and request.client else "global",
+        client_ip=_client_ip(request),
     )
     return await _apply_admin_config_update(payload)
 
@@ -3049,7 +3228,7 @@ async def update_broker_settings(payload: BrokerSettingsRequest, request: Reques
         "broker_switch",
         max_calls=4,
         window_sec=60,
-        client_ip=request.client.host if request and request.client else "global",
+        client_ip=_client_ip(request),
     )
     requested_name = str(payload.broker or "").strip().lower()
     supported = {item["name"] for item in _available_broker_defs()}
@@ -3089,7 +3268,7 @@ async def check_broker(request: Request = None):
         "broker_check",
         max_calls=6,
         window_sec=30,
-        client_ip=request.client.host if request and request.client else "global",
+        client_ip=_client_ip(request),
     )
     broker_settings = _broker_settings_payload()
     try:
@@ -3160,7 +3339,7 @@ async def connect_broker(request: Request = None):
         "broker_connect",
         max_calls=4,
         window_sec=30,
-        client_ip=request.client.host if request and request.client else "global",
+        client_ip=_client_ip(request),
     )
     broker_settings = _broker_settings_payload()
     try:
@@ -3505,16 +3684,31 @@ async def get_ticker():
             funding = _safe_float(t.get("funding_rate"))
             oi = _safe_float(t.get("open_interest"))
 
-            # Compute 24h % change: (close - open) / open * 100
-            # Delta doesn't provide percent change, so estimate from low/high midpoint
+            # 24h change, best source first.
+            #
+            # Binance and CoinDCX both report the real figure and the broker
+            # layer already carries it as price_change_percent_24h — but this
+            # block used to start at t["open"], which the bulk endpoints never
+            # return. So it fell through to the high/low midpoint every time,
+            # and the whole market table showed an estimate that is not the 24h
+            # change at all: against the midpoint, a coin that closed exactly
+            # where it opened reads positive or negative purely by where the
+            # day's wick sat. Delta does return `open`, so that path is kept.
+            reported = t.get("price_change_percent_24h", t.get("price_change_24h"))
             open_price = _safe_float(t.get("open"))
-            if open_price > 0 and close > 0:
+            if reported is not None:
+                change_24h = _safe_float(reported)
+                change_estimated = False
+            elif open_price > 0 and close > 0:
                 change_24h = ((close - open_price) / open_price) * 100
+                change_estimated = False
             elif high_24h > 0 and low_24h > 0 and close > 0:
                 mid = (high_24h + low_24h) / 2
                 change_24h = ((close - mid) / mid) * 100
+                change_estimated = True
             else:
                 change_24h = 0.0
+                change_estimated = False
 
             # Turnover as dollar volume
             turnover = _safe_float(t.get("turnover"))
@@ -3526,6 +3720,9 @@ async def get_ticker():
                 "name": crypto["name"],
                 "price": price,
                 "change_24h": round(change_24h, 2),
+                # So the UI can mark a midpoint guess as a guess rather than
+                # presenting it with the same confidence as a real figure.
+                "change_estimated": change_estimated,
                 "volume_24h": dollar_vol,
                 "high_24h": high_24h,
                 "low_24h": low_24h,
@@ -3641,7 +3838,7 @@ async def api_run_backtest(payload: StrategyPayload, request: Request = None):
         "backtest",
         max_calls=3,
         window_sec=30,
-        client_ip=request.client.host if request and request.client else "global",
+        client_ip=_client_ip(request),
     )
     try:
         _logger.info(
@@ -6183,9 +6380,7 @@ async def scalp_activity():
 
 @app.post("/api/scalp/enter")
 async def scalp_enter(request: Request):
-    check_rate_limit(
-        "scalp_enter", max_calls=6, window_sec=10, client_ip=request.client.host if request.client else "global"
-    )
+    check_rate_limit("scalp_enter", max_calls=6, window_sec=10, client_ip=_client_ip(request))
     body = await _read_json_body(request)
     eng = _get_scalp_engine()
     symbol = _normalize_scalp_symbol(_body_value(body, "symbol", default="BTCUSDT"))
@@ -6319,9 +6514,7 @@ async def scalp_enter(request: Request):
 
 @app.post("/api/scalp/exit")
 async def scalp_exit(request: Request):
-    check_rate_limit(
-        "scalp_exit", max_calls=8, window_sec=10, client_ip=request.client.host if request.client else "global"
-    )
+    check_rate_limit("scalp_exit", max_calls=8, window_sec=10, client_ip=_client_ip(request))
     body = await _read_json_body(request)
     trade_id = _parse_int_field(body, "trade_id", default=0, min_value=1)
     eng = _get_scalp_engine()
@@ -6355,9 +6548,7 @@ async def scalp_exit(request: Request):
 @app.put("/api/scalp/trades/{trade_id}/targets")
 async def update_scalp_targets(trade_id: int, request: Request):
     """Modify TP/SL for an active scalp trade."""
-    check_rate_limit(
-        "scalp_targets", max_calls=10, window_sec=15, client_ip=request.client.host if request.client else "global"
-    )
+    check_rate_limit("scalp_targets", max_calls=10, window_sec=15, client_ip=_client_ip(request))
     body = await _read_json_body(request)
     eng = _get_scalp_engine()
     kwargs = {}
@@ -6382,9 +6573,7 @@ async def update_scalp_targets(trade_id: int, request: Request):
 
 @app.post("/api/scalp/trades/{trade_id}/add")
 async def add_scalp_quantity(trade_id: int, request: Request):
-    check_rate_limit(
-        "scalp_add", max_calls=8, window_sec=15, client_ip=request.client.host if request.client else "global"
-    )
+    check_rate_limit("scalp_add", max_calls=8, window_sec=15, client_ip=_client_ip(request))
     body = await _read_json_body(request)
     qty_mode = _parse_scalp_qty_mode(body, "qty_mode", default="base")
     qty_value = _parse_float_field(body, "qty_value", "qty_base", "qty_usdt", default=0.0, min_value=0.0)
@@ -6605,7 +6794,11 @@ def _broadcast_cascade_update(status: dict) -> None:
                     ws_clients.remove(ws)
 
     try:
-        asyncio.get_running_loop().create_task(_push())
+        # Held until it completes: the loop's own reference to a task is weak,
+        # so an unreferenced broadcast can be collected before it sends.
+        task = asyncio.get_running_loop().create_task(_push())
+        _inflight_tasks.add(task)
+        task.add_done_callback(_inflight_tasks.discard)
     except RuntimeError:
         pass  # no running loop (e.g. during tests) — snapshot is already saved
 
@@ -6632,7 +6825,16 @@ def _restore_cascade_runtime(engine: "CascadeEngine") -> bool:
     if restored and engine.active_campaigns and not engine._running:
         engine.start()
         try:
-            asyncio.get_running_loop().create_task(engine.reconcile())
+            # This is the restart recovery: it replays candles missed while the
+            # process was down and re-syncs live orders against the exchange.
+            # Unreferenced, it could be collected before it runs, and the engine
+            # would come back up believing whatever the last snapshot said —
+            # including that a buy stop which filled during the outage is still
+            # resting, with no TP placed against the coin now sitting in the
+            # account.
+            task = asyncio.get_running_loop().create_task(engine.reconcile())
+            _inflight_tasks.add(task)
+            task.add_done_callback(_inflight_tasks.discard)
         except RuntimeError:
             pass
     return bool(restored)

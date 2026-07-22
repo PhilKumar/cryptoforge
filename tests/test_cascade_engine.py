@@ -2502,3 +2502,194 @@ class CascadeRoundTradeLogTests(unittest.TestCase):
         self.assertEqual(rnd.fills, [])
         self.assertEqual(rnd.opened_ts, 0)
         self.assertEqual(rnd.pnl, 10.0)
+
+
+class CascadeRestartSafetyTests(unittest.IsolatedAsyncioTestCase):
+    """A buy stop that fills while the process is DOWN.
+
+    This is the one gap that never got exercised. Everything else about live
+    sync is tested against an engine that stayed up and watched the order go
+    from resting to filled. But a deploy, a crash or an OOM kill lands the
+    process somewhere else entirely: it comes back holding a snapshot that says
+    "buy stop resting", while the exchange has already filled it and the coin
+    is sitting in the account with nothing selling it.
+
+    reconcile() is supposed to close that gap. These tests are what proves it,
+    and they are deliberately built the hard way — snapshot, throw the engine
+    away, build a new one — rather than reusing a live engine, because a live
+    engine is exactly the case that already worked.
+    """
+
+    def _armed_live_campaign(self, engine):
+        campaign = _mk_campaign(engine, mode="live")
+        campaign.state = "TRENDLINE_ACTIVE"
+        leg = Leg(leg_id=1, trendline_id=1, low=99.5, touch_high=102.0, touch_timestamp=1200)
+        campaign.legs.append(leg)
+        build_fib_ladder_and_pool(campaign, leg)
+        plan_leg_orders(campaign, leg)
+        campaign.pending_usd = 40.0
+        campaign.collected = [[1, 2, 16.0, 97.0], [1, 4, 24.0, 96.0]]
+        leg.pending_orders[2].status = "COLLECTED"
+        leg.pending_orders[4].status = "COLLECTED"
+        campaign.pending_line = 96.0
+        campaign.pending_stop_price = 96.5
+        campaign.pending_limit_price = 96.55
+        campaign.pending_rev = 1
+        return campaign
+
+    async def asyncSetUp(self):
+        # ── before the outage: the stop goes out and rests ──
+        self.before_broker = FakeCascadeBroker()
+        before_engine = _mk_engine(self.before_broker)
+        campaign = self._armed_live_campaign(before_engine)
+        await before_engine._sync_live_orders(campaign)
+        self.order_id = str(campaign.pending_order_id)
+        self.assertTrue(self.order_id, "setup: the buy stop should be resting")
+        # This snapshot is all that survives the restart.
+        self.snapshot = campaign.to_dict()
+        self.fill_qty = 40.0 / 96.55
+        self.fill_price = 96.55
+
+    def _restart(self, *, open_orders=None, lookup=None):
+        """A fresh process: new engine, new broker, only the snapshot carried over."""
+        broker = FakeCascadeBroker()
+        broker.open_orders = list(open_orders or [])
+        broker.order_lookup = dict(lookup or {})
+        engine = _mk_engine(broker)
+        restored = engine.restore_campaigns([self.snapshot])
+        self.assertTrue(restored, "the snapshot should restore")
+        return engine, broker, engine.campaigns[self.snapshot["campaign_id"]]
+
+    async def test_a_fill_during_downtime_is_booked_on_reconcile(self):
+        # The exchange filled it while we were gone: not in open orders any
+        # more, and FILLED when asked directly.
+        engine, broker, campaign = self._restart(
+            lookup={
+                self.order_id: {
+                    "status": "FILLED",
+                    "executedQty": str(self.fill_qty),
+                    "cummulativeQuoteQty": str(self.fill_qty * self.fill_price),
+                }
+            }
+        )
+        self.assertEqual(campaign.all_fills, [], "nothing is booked before reconcile")
+
+        await engine.reconcile()
+
+        self.assertEqual(len(campaign.all_fills), 1, "the fill must be picked up")
+        self.assertAlmostEqual(campaign.avg_entry_price, self.fill_price, places=6)
+        self.assertAlmostEqual(campaign.filled_base_qty, self.fill_qty, places=8)
+        self.assertEqual(campaign.pending_usd, 0.0, "the pot is spent once bought")
+        self.assertIsNone(campaign.pending_order_id)
+
+    async def test_the_position_gets_a_tp_it_would_otherwise_never_have(self):
+        """The actual money question: is the coin left sitting there unsold?"""
+        engine, broker, campaign = self._restart(
+            lookup={
+                self.order_id: {
+                    "status": "FILLED",
+                    "executedQty": str(self.fill_qty),
+                    "cummulativeQuoteQty": str(self.fill_qty * self.fill_price),
+                }
+            }
+        )
+        await engine.reconcile()
+
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1, "exactly one TP sell, covering the position")
+        # A sell carries the coin amount in base_qty; `size` is the USD notional
+        # the buy side uses and is deliberately 0.0 here.
+        self.assertAlmostEqual(sells[0]["base_qty"], campaign.filled_base_qty, places=8)
+        self.assertAlmostEqual(sells[0]["limit_price"], compute_tp_price(campaign), places=6)
+        self.assertIsNotNone(campaign.tp_order_id)
+
+    async def test_reconciling_twice_does_not_stack_a_second_sell(self):
+        """Restart recovery can run more than once — a restore, then a manual
+        reconcile, then a poll. Each extra sell against one position is an
+        oversell that can actually execute."""
+        engine, broker, campaign = self._restart(
+            lookup={
+                self.order_id: {
+                    "status": "FILLED",
+                    "executedQty": str(self.fill_qty),
+                    "cummulativeQuoteQty": str(self.fill_qty * self.fill_price),
+                }
+            }
+        )
+        await engine.reconcile()
+        tp_id = str(campaign.tp_order_id)
+        # The TP we just placed is now resting on the exchange.
+        broker.open_orders = [
+            {"orderId": tp_id, "clientOrderId": f"cf-csc-{campaign.campaign_id}-tp-{campaign.tp_rev}"}
+        ]
+        broker.placed_orders.clear()
+
+        await engine.reconcile()
+        await engine.reconcile()
+
+        self.assertEqual([o for o in broker.placed_orders if o["side"] == "sell"], [])
+        self.assertEqual(str(campaign.tp_order_id), tp_id, "it should still be the same order")
+
+    async def test_a_tp_already_resting_is_adopted_not_duplicated(self):
+        """Worse variant: the fill AND the TP both happened before the crash,
+        but the snapshot predates the TP so its id was never saved. Without
+        adoption by client order id, recovery sells the position twice."""
+        engine, broker, campaign = self._restart(
+            lookup={
+                self.order_id: {
+                    "status": "FILLED",
+                    "executedQty": str(self.fill_qty),
+                    "cummulativeQuoteQty": str(self.fill_qty * self.fill_price),
+                }
+            }
+        )
+        campaign.tp_order_id = None  # the id the snapshot never captured
+        orphan_tp = {"orderId": "999999", "clientOrderId": f"cf-csc-{campaign.campaign_id}-tp-1"}
+        broker.open_orders = [orphan_tp]
+
+        await engine.reconcile()
+
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(sells, [], "the resting TP should be adopted, not joined by a second one")
+        self.assertEqual(str(campaign.tp_order_id), "999999")
+
+    async def test_a_partial_fill_during_downtime_keeps_the_rest_working(self):
+        """Half bought, half still resting. The booked half needs a TP; the
+        unbought half must stay collected rather than being written off."""
+        part_qty = (40.0 / 96.55) * 0.4
+        engine, broker, campaign = self._restart(
+            open_orders=[
+                {
+                    "orderId": self.order_id,
+                    "clientOrderId": f"cf-csc-{self.snapshot['campaign_id']}-buy-1",
+                    "executedQty": str(part_qty),
+                    "cummulativeQuoteQty": str(part_qty * self.fill_price),
+                }
+            ]
+        )
+        await engine.reconcile()
+
+        self.assertEqual(len(campaign.all_fills), 1)
+        self.assertAlmostEqual(campaign.filled_base_qty, part_qty, places=8)
+        self.assertGreater(campaign.pending_usd, 0.0, "the unfilled remainder stays working")
+        self.assertEqual(str(campaign.pending_order_id), self.order_id)
+
+    async def test_an_untouched_order_survives_the_restart_unchanged(self):
+        """The common case: nothing happened while we were down. Recovery must
+        not cancel and re-place a perfectly good resting order."""
+        engine, broker, campaign = self._restart(
+            open_orders=[
+                {
+                    "orderId": self.order_id,
+                    "clientOrderId": f"cf-csc-{self.snapshot['campaign_id']}-buy-1",
+                    "executedQty": "0",
+                    "cummulativeQuoteQty": "0",
+                }
+            ]
+        )
+        await engine.reconcile()
+
+        self.assertEqual(broker.placed_orders, [], "nothing new should be sent")
+        self.assertEqual(broker.cancelled, [], "and nothing should be pulled")
+        self.assertEqual(str(campaign.pending_order_id), self.order_id)
+        self.assertEqual(campaign.all_fills, [])

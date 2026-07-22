@@ -7409,3 +7409,103 @@ html[data-theme="light"] .journal-entry-notes section {
     .cf-chart-overlay .table-toolbar { flex-wrap: wrap; gap: 8px; }
     .cf-chart-overlay .admin-inline-actions { flex-wrap: wrap; gap: 6px; }
   }
+
+/* ══════════════════════════════════════════════════════════════════
+   Grouped mobile navigation
+
+   Nine tabs collapse to icon-only below 767px, which turns navigation
+   into a guessing game — and a tenth tab would not fit at all. On
+   mobile the labels come back and the tabs stack into three named
+   groups instead of one horizontal scroller.
+
+   Desktop is deliberately untouched: the group headings are display:none
+   above the breakpoint, and the buttons keep their original DOM order.
+   Mobile rearranges purely with flex `order`, so nothing in the markup
+   or in showPage() has to know which layout is showing.
+   ══════════════════════════════════════════════════════════════════ */
+
+.nav-group-label { display: none; }
+
+@media (max-width: 767px) {
+  /* No longer a scroller — everything is on screen at once. */
+  .nav-bar {
+    overflow-x: visible;
+    overflow-y: visible;
+  }
+  .nav-tabs {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    min-width: 0 !important;
+    row-gap: 2px;
+    column-gap: 2px;
+    padding: 6px 8px 8px;
+  }
+
+  .nav-group-label {
+    display: block;
+    flex: 0 0 100%;      /* a full-width item forces the next row to wrap */
+    padding: 8px 2px 2px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    opacity: 0.55;
+    line-height: 1;
+  }
+  .nav-group-label:first-child { padding-top: 2px; }
+
+  /* Labels return: an icon with a word beside it is the whole point. */
+  .nav-tabs .nav-tab {
+    flex: 1 1 0 !important;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 6px !important;
+    white-space: nowrap;
+    border-bottom-width: 2px;
+    border-radius: 8px 8px 0 0;
+  }
+  .nav-tabs .nav-tab .tab-label {
+    display: inline !important;
+    font-size: 11.5px !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .nav-tabs .nav-tab .tab-icon { font-size: 15px !important; }
+  .nav-tabs .nav-tab .tab-icon svg { width: 15px; height: 15px; }
+
+  /* Grouping. Order values interleave headings with their members:
+     Trading 1-4, Analysis 5-8, Setup 9-12. */
+  .nav-group-label[data-nav-group="trading"]  { order: 1; }
+  #nav-cascade   { order: 2; }
+  #nav-scalp     { order: 3; }
+  #nav-live      { order: 4; }
+
+  .nav-group-label[data-nav-group="analysis"] { order: 5; }
+  #nav-journal   { order: 6; }
+  #nav-results   { order: 7; }
+  #nav-market    { order: 8; }
+
+  .nav-group-label[data-nav-group="setup"]    { order: 9; }
+  #nav-builder   { order: 10; }
+  #nav-portfolio { order: 11; }
+  #nav-dashboard { order: 12; }
+
+  /* The Cascade live dot sits inline rather than absolutely, so it cannot
+     land on top of a neighbouring tab now that they are packed tighter. */
+  .nav-tabs .nav-tab .live-dot {
+    position: static;
+    flex: 0 0 auto;
+    margin: 0;
+  }
+}
+
+/* Very narrow phones: keep three per row but let the type shrink rather
+   than letting a fourth row appear. */
+@media (max-width: 400px) {
+  .nav-tabs .nav-tab { padding: 9px 3px !important; gap: 4px; }
+  .nav-tabs .nav-tab .tab-label { font-size: 10.5px !important; }
+  .nav-tabs .nav-tab .tab-icon svg { width: 14px; height: 14px; }
+}

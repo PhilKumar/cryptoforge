@@ -23,6 +23,19 @@ KillSignal=SIGINT
 KillMode=mixed
 UMask=0077
 LimitNOFILE=65536
+
+# ── Memory ceiling ──────────────────────────────────────────────
+# Two of these run at once during a blue-green deploy, on a small Lightsail
+# box that also hosts nginx. Without a ceiling a runaway process is reaped by
+# the kernel OOM killer, which picks its own victim — and that has taken nginx
+# down with it, so the failure reads as "the whole site is gone" rather than
+# "one service restarted". With MemoryMax set, the process dies alone and
+# Restart=on-failure brings it straight back.
+# Raise both if the instance is larger than 1 GB; MemoryHigh should stay a
+# little under MemoryMax so reclaim gets a chance before the hard kill.
+MemoryAccounting=true
+MemoryHigh=280M
+MemoryMax=340M
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectControlGroups=true

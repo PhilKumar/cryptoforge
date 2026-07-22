@@ -120,9 +120,13 @@ MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
 
-# ── Delta Exchange Available Perpetual Futures ─────────────
-# These are the ACTUAL live perps on Delta Exchange (USDT-settled)
-TOP_25_CRYPTOS = [
+# ── Tradable symbols shown in the market table ─────────────
+# Six, despite the historical name — it was TOP_25_CRYPTOS when this tracked a
+# longer Delta perps list, and "only 6 of 25 symbols resolve" is a reading of
+# the name, not a symbol-normalisation gap. All six resolve on Binance spot
+# exactly as written; verified against /api/v3/ticker/24hr.
+# TOP_25_CRYPTOS stays as an alias so nothing outside this file has to change.
+TRADABLE_SYMBOLS = [
     {"symbol": "BTCUSDT", "name": "Bitcoin", "ticker": "BTC", "icon": "₿"},
     {"symbol": "ETHUSDT", "name": "Ethereum", "ticker": "ETH", "icon": "Ξ"},
     {"symbol": "SOLUSDT", "name": "Solana", "ticker": "SOL", "icon": "◎"},
@@ -130,6 +134,8 @@ TOP_25_CRYPTOS = [
     {"symbol": "DOGEUSDT", "name": "Dogecoin", "ticker": "DOGE", "icon": "Ð"},
     {"symbol": "PAXGUSDT", "name": "PAX Gold", "ticker": "PAXG", "icon": "🥇"},
 ]
+
+TOP_25_CRYPTOS = TRADABLE_SYMBOLS  # legacy name, same list
 
 # Spot pairs for extra market data display
 SPOT_PAIRS = [
