@@ -3,6 +3,10 @@
 **Professional algorithmic trading platform for crypto perpetual futures.**
 Backtest, paper trade, and go live on [Delta Exchange](https://www.delta.exchange/) — all from a single sleek web UI.
 
+> **Running the deployed app?** See **[RUNBOOK.md](RUNBOOK.md)** — server access,
+> what to do when the site is down, every fix shipped and why, the geometry
+> ground truth, and the pre-live checklist.
+
 ---
 
 ## Features
