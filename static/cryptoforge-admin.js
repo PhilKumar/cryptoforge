@@ -334,6 +334,35 @@
     await cfAdminSave();
   }
 
+  function adminSetTestResult(state, text) {
+    var mount = adminEl('admin-test-result');
+    if (!mount) return;
+    mount.dataset.state = state;
+    mount.textContent = text;
+  }
+
+  async function cfAdminTestActive() {
+    // Writes into the panel rather than relying on a toast: the toast sits
+    // top-right for four seconds, which is easy to miss while reading a panel
+    // mid-page, and "I clicked it and nothing happened" is indistinguishable
+    // from a real failure.
+    adminSetTestResult('busy', 'Testing the active broker…');
+    try {
+      var response = await cfApiFetch('/api/broker/connect', { method: 'POST', cache: 'no-store' });
+      var data = await cfReadApiPayload(response);
+      var where = data.environment ? ' — ' + data.environment + ' at ' + (data.base_url || 'unknown host') : '';
+      if (data.status === 'connected') {
+        adminSetTestResult('ok', 'Signed account call accepted' + where + '. Keys are valid.');
+      } else {
+        adminSetTestResult('warn', (data.message || cfApiErrorDetail(data, 'Broker test failed')) + where);
+      }
+      if (typeof refreshBrokerState === 'function') await refreshBrokerState(true);
+      await cfAdminLoad(true);
+    } catch (error) {
+      adminSetTestResult('warn', 'Request failed: ' + ((error && error.message) || 'unknown error'));
+    }
+  }
+
   function cfOpenAdminConsole() {
     var modal = adminEl('admin-console-modal');
     if (!modal) return;
@@ -362,4 +391,5 @@
   window.cfAdminLoad = cfAdminLoad;
   window.cfAdminSave = cfAdminSave;
   window.cfAdminSwitchBroker = cfAdminSwitchBroker;
+  window.cfAdminTestActive = cfAdminTestActive;
 })();

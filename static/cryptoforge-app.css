@@ -5491,6 +5491,28 @@ body.admin-console-open { overflow: hidden; }
 .admin-env-banner[data-env="unknown"] {
   opacity: 0.7;
 }
+.admin-test-result {
+  margin: 10px 0 0;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(118,138,176,0.2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.admin-test-result[data-state="idle"] { opacity: 0.65; }
+.admin-test-result[data-state="busy"] { opacity: 0.85; }
+.admin-test-result[data-state="ok"] {
+  border-color: rgba(90,190,140,0.4);
+  background: rgba(90,190,140,0.1);
+  color: var(--success, #4bbd85);
+}
+.admin-test-result[data-state="warn"] {
+  border-color: rgba(240,90,110,0.45);
+  background: rgba(240,90,110,0.12);
+  color: var(--danger, #f05a6e);
+}
 .admin-health-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

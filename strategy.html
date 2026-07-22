@@ -1789,9 +1789,10 @@
         <div class="admin-inline-actions">
           <select id="admin-active-broker-select" class="broker-select" aria-label="Select active broker"></select>
           <button class="btn btn-outline btn-sm" data-cf-click="cfAdminSwitchBroker()">Switch</button>
-          <button class="btn btn-outline btn-sm" data-cf-click="connectBroker()">Test Active</button>
+          <button class="btn btn-outline btn-sm" data-cf-click="cfAdminTestActive()">Test Active</button>
         </div>
       </div>
+      <div class="admin-test-result" id="admin-test-result" data-state="idle">Test Active runs a signed account call and reports the result here.</div>
       <div class="admin-broker-cards" id="admin-broker-cards"></div>
       <div class="admin-lock-reasons" id="admin-lock-reasons"></div>
     </section>
