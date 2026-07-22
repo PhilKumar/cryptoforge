@@ -267,9 +267,22 @@ Ordered. Items 2 and 3 mostly happen by leaving it alone.
 2. **Three complete rounds, unattended**, at least one overnight. One round
    proves the path exists; three prove it repeats. *(1 of 3 done — SOL #10
    closed green.)*
-3. **Deploy while holding a position.** Every deploy so far happened flat. Run
-   `bash deploy/cd-deploy.sh` with a position open and confirm the TP is still
-   resting afterwards and the campaign still knows its order IDs.
+3. ~~**Deploy while holding a position.**~~ — **passed 2026-07-22 12:30 UTC.**
+   Deployed with BTCUSDT #36 holding 0.00011 BTC and its TP resting. The new
+   engine started, declined the lock, waited 35s for the old one to exit, then
+   took over. No order activity at all during the handover, and the TP came
+   through untouched — same id `19545717`, same revision `tp-2`. Repeat this
+   after any change to the engine's lifecycle or the deploy script.
+
+   ```
+   engine started
+   another instance holds the write lock — not placing orders until it exits
+   took the write lock — this instance now owns order placement
+   ```
+
+   **Fail looks like:** two different PIDs on any `Buy stop placed` or
+   `TP limit sell placed` line, or a second order appearing in
+   `tools/cancel_duplicate_orders.py`.
 4. **Lock the mainnet key down**: spot trading on, **withdrawals off**, IP
    whitelisted to the Lightsail address.
 5. Stop a campaign while holding, and confirm for yourself that you are left
