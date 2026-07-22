@@ -8504,23 +8504,43 @@ var _cfCascadeLedgerPage = 0;
 var _cfCascadeLedgerCoin = 'ALL';
 var _cfCascadeLedgerAll = [];
 
+function _cfCascadeCampaignHasEnded(campaign) {
+  var state = String((campaign || {}).state || '');
+  return state === 'MOTHER_BROKEN' || state === 'COMPLETED' || state === 'STOPPED';
+}
+
 function _cfCascadeCollectRounds(status) {
-  var pools = [status.campaigns || [], status.closed_campaigns || []];
+  // Both pools, but each campaign only ONCE. Archiving a campaign appends it to
+  // closed_campaigns without removing it from campaigns, so an ended campaign
+  // is in both — and reading them blindly listed every one of its rounds twice.
+  // SOL #10 showed up as two identical $14.61 rows, one tagged "running" and
+  // one "ended", and the summary above counted both: $36.82 deployed and
+  // +$0.19 realised when the truth was $22.21 and +$0.11.
+  //
+  // Keyed by campaign_id, first pool wins. `campaigns` is the live object and
+  // the archived copy is a snapshot of it, so the live one is never staler.
+  var byId = {};
+  var order = [];
+  [status.campaigns || [], status.closed_campaigns || []].forEach(function(pool) {
+    pool.forEach(function(campaign) {
+      var id = String((campaign || {}).campaign_id || '');
+      if (!id || byId[id]) return;
+      byId[id] = campaign;
+      order.push(id);
+    });
+  });
+
   var out = [];
-  for (var p = 0; p < pools.length; p++) {
-    for (var i = 0; i < pools[p].length; i++) {
-      var campaign = pools[p][i];
-      var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
-      for (var r = 0; r < rounds.length; r++) {
-        out.push({
-          campaign: campaign,
-          round: rounds[r],
-          symbol: String(campaign.symbol || ''),
-          ended: p === 1
-        });
-      }
-    }
-  }
+  order.forEach(function(id) {
+    var campaign = byId[id];
+    var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
+    // Ended-ness comes from the campaign's own state, not from which pool it
+    // was found in — that was how a finished campaign still read "running".
+    var ended = _cfCascadeCampaignHasEnded(campaign);
+    rounds.forEach(function(round) {
+      out.push({ campaign: campaign, round: round, symbol: String(campaign.symbol || ''), ended: ended });
+    });
+  });
   // Candle close time first; it is the only field that means the same thing in
   // a backtest and in live trading. Legacy rounds predate it and carry 0, so
   // fall back to the wall-clock string, which sorts correctly as written.
