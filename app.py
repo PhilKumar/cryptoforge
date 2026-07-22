@@ -651,6 +651,28 @@ def _available_broker_defs() -> list[dict]:
     return brokers
 
 
+def _broker_environment(client=None) -> dict:
+    """Which exchange environment the *live client object* is bound to.
+
+    Read off the client, not off config: the client captures its base URL and
+    keys at construction, so reporting config here would show the intended
+    environment rather than the one orders would actually reach. A connected
+    pill looks identical on testnet and mainnet, so this is the only thing
+    that distinguishes them before real money moves.
+    """
+    current = client or globals().get("delta")
+    base_url = str(getattr(current, "base_url", "") or "")
+    # Binance carries an explicit flag; Delta only encodes it in the host
+    # (testnet-api.delta.exchange), so fall back to the URL rather than
+    # reporting a Delta testnet as LIVE.
+    testnet = bool(getattr(current, "testnet", False)) or "testnet" in base_url.lower()
+    return {
+        "environment": "TESTNET" if testnet else "LIVE",
+        "testnet": testnet,
+        "base_url": base_url,
+    }
+
+
 def _broker_summary(client=None) -> dict:
     current = client or globals().get("delta")
     return {
@@ -659,6 +681,7 @@ def _broker_summary(client=None) -> dict:
         "configured": _broker_is_configured(current),
         "feed_kind": str(getattr(current, "get_market_feed_kind", lambda: "polling")() or "polling"),
         "supports_funding": bool(getattr(current, "supports_funding", True)),
+        **_broker_environment(current),
     }
 
 
@@ -1779,6 +1802,9 @@ def _broker_settings_payload() -> dict:
         "current_label": broker_info["label"],
         "configured": broker_info["configured"],
         "feed_kind": broker_info["feed_kind"],
+        "environment": broker_info["environment"],
+        "testnet": broker_info["testnet"],
+        "base_url": broker_info["base_url"],
         "available_brokers": _available_broker_defs(),
         "switchable": runtime_locks["switchable"],
         "runtime_locks": runtime_locks,

@@ -160,6 +160,23 @@
     select.disabled = !settings.switchable;
   }
 
+  function adminRenderBinanceEnv(settings) {
+    var mount = adminEl('admin-binance-env');
+    if (!mount) return;
+    // Read off the active client, so this reflects where orders would really
+    // go rather than what the toggle was last set to.
+    if (String(settings.current_broker || '') !== 'binance') {
+      mount.dataset.env = 'inactive';
+      mount.textContent = 'Binance is not the active broker — these settings are idle.';
+      return;
+    }
+    var testnet = !!settings.testnet;
+    mount.dataset.env = testnet ? 'testnet' : 'live';
+    mount.textContent =
+      (testnet ? 'TESTNET — virtual funds. ' : 'LIVE — real money. ') +
+      'Orders route to ' + adminEscape(settings.base_url || 'an unknown host') + '.';
+  }
+
   function adminRenderLocks(settings) {
     var mount = adminEl('admin-lock-reasons');
     if (!mount) return;
@@ -223,6 +240,7 @@
     adminSetText('admin-console-updated', adminState.updated_at ? ('Runtime configuration - ' + adminState.updated_at) : 'Runtime configuration');
 
     adminRenderBrokerCards(settings);
+    adminRenderBinanceEnv(settings);
     adminRenderLocks(settings);
     ['delta', 'coindcx', 'binance', 'routing', 'security'].forEach(adminRenderFieldSection);
     adminSetPill('admin-delta-pill', adminSectionConfigured('delta'));

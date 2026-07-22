@@ -3061,6 +3061,7 @@ class BinanceTestnetCredentialTests(unittest.TestCase):
                 "BINANCE_SPOT_API_KEY",
                 "BINANCE_SPOT_API_SECRET",
                 "BINANCE_SPOT_TESTNET",
+                "BINANCE_SPOT_BASE_URL",
             )
         }
         self._saved_env = {
@@ -3092,6 +3093,7 @@ class BinanceTestnetCredentialTests(unittest.TestCase):
     def _apply(self, testnet: bool):
         config.BINANCE_SPOT_TESTNET = testnet
         config.BINANCE_SPOT_API_KEY, config.BINANCE_SPOT_API_SECRET = config.binance_spot_credentials(testnet)
+        config.BINANCE_SPOT_BASE_URL = "https://testnet.binance.vision" if testnet else "https://api.binance.com"
 
     def test_testnet_on_uses_testnet_keys(self):
         os.environ["BINANCE_TESTNET_API_KEY"] = self.TEST_KEY
@@ -3126,6 +3128,44 @@ class BinanceTestnetCredentialTests(unittest.TestCase):
         self.assertEqual(os.environ["BINANCE_API_SECRET"], self.LIVE_SECRET)
         self._apply(False)
         self.assertEqual(BinanceSpotClient().api_key, self.LIVE_KEY)
+
+    def test_broker_summary_reports_the_environment_of_the_live_client(self):
+        """A "connected" pill looks identical on testnet and mainnet, so the
+        summary must say which one — and it must read the client object, not
+        config, because the client captured its base URL at construction."""
+        app_module = import_module("app")
+        os.environ["BINANCE_TESTNET_API_KEY"] = self.TEST_KEY
+        os.environ["BINANCE_TESTNET_API_SECRET"] = self.TEST_SECRET
+
+        self._apply(True)
+        summary = app_module._broker_summary(BinanceSpotClient())
+        self.assertEqual(summary["environment"], "TESTNET")
+        self.assertTrue(summary["testnet"])
+        self.assertEqual(summary["base_url"], "https://testnet.binance.vision")
+
+        self._apply(False)
+        summary = app_module._broker_summary(BinanceSpotClient())
+        self.assertEqual(summary["environment"], "LIVE")
+        self.assertFalse(summary["testnet"])
+        self.assertEqual(summary["base_url"], "https://api.binance.com")
+
+    def test_settings_payload_forwards_the_environment_to_the_ui(self):
+        """_broker_settings_payload picks fields explicitly, so a key added to
+        _broker_summary does not reach the admin console unless forwarded —
+        the banner would silently render "undefined" instead of TESTNET."""
+        app_module = import_module("app")
+        payload = app_module._broker_settings_payload()
+        for key in ("environment", "testnet", "base_url"):
+            self.assertIn(key, payload)
+
+    def test_environment_falls_back_to_the_host_for_brokers_without_a_flag(self):
+        """Delta has no `testnet` attribute — it only encodes the environment
+        in the host — so a flag-only check would report its testnet as LIVE."""
+        app_module = import_module("app")
+        delta_testnet = SimpleNamespace(base_url="https://testnet-api.delta.exchange/v2", display_name="Delta")
+        self.assertEqual(app_module._broker_environment(delta_testnet)["environment"], "TESTNET")
+        delta_live = SimpleNamespace(base_url="https://api.india.delta.exchange/v2", display_name="Delta")
+        self.assertEqual(app_module._broker_environment(delta_live)["environment"], "LIVE")
 
     def test_admin_console_exposes_testnet_keys_as_optional_secrets(self):
         app_module = import_module("app")
