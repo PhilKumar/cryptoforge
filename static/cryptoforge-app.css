@@ -5461,6 +5461,12 @@ body.admin-console-open { overflow: hidden; }
   min-height: 18px;
   overflow-wrap: anywhere;
 }
+.admin-field-help {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.4;
+  opacity: 0.75;
+}
 .admin-health-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

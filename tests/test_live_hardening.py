@@ -3024,6 +3024,121 @@ class AdminConfigEnvReloadTests(unittest.TestCase):
         string, so re-saving the form can never reintroduce the bug."""
         self.assertEqual(self.app_module._normalize_admin_env_update("BINANCE_SPOT_QUOTE_ASSET", ""), "USDT")
         self.assertEqual(self.app_module._normalize_admin_env_update("COINDCX_MARGIN_CURRENCY", ""), "USDT")
+
+    def test_blank_spot_base_url_is_not_coerced_to_mainnet(self):
+        """BINANCE_SPOT_BASE_URL is the one blank field that must stay blank.
+
+        Coercing it to the mainnet host writes an explicit override into .env,
+        and an explicit override outranks BINANCE_SPOT_TESTNET — so clearing
+        the field in the admin console would silently route testnet orders to
+        real money. The read side already defaults a blank value correctly."""
+        self.assertEqual(self.app_module._normalize_admin_env_update("BINANCE_SPOT_BASE_URL", ""), "")
         self.assertEqual(
-            self.app_module._normalize_admin_env_update("BINANCE_SPOT_BASE_URL", ""), "https://api.binance.com"
+            self.app_module._normalize_admin_env_update("BINANCE_SPOT_BASE_URL", "https://custom.example.com"),
+            "https://custom.example.com",
         )
+
+
+class BinanceTestnetCredentialTests(unittest.TestCase):
+    """Testnet keys (testnet.binance.vision, GitHub login) and mainnet keys are
+    issued by different systems and are not interchangeable. Enabling the
+    testnet must switch to the testnet pair without touching the live pair,
+    and must never quietly fall back to live keys — that only produces a -2015
+    auth error at order time, which reads like a broken key rather than a
+    missing one."""
+
+    LIVE_KEY = "live-key-abcdefghijklmnop"
+    LIVE_SECRET = "live-secret-abcdefghijklmnop"
+    TEST_KEY = "testnet-key-abcdefghijklmnop"
+    TEST_SECRET = "testnet-secret-abcdefghijklmnop"
+
+    def setUp(self):
+        self._saved = {
+            name: getattr(config, name)
+            for name in (
+                "BINANCE_API_KEY",
+                "BINANCE_API_SECRET",
+                "BINANCE_SPOT_API_KEY",
+                "BINANCE_SPOT_API_SECRET",
+                "BINANCE_SPOT_TESTNET",
+            )
+        }
+        self._saved_env = {
+            name: os.environ.get(name)
+            for name in (
+                "BINANCE_API_KEY",
+                "BINANCE_API_SECRET",
+                "BINANCE_SPOT_API_KEY",
+                "BINANCE_SPOT_API_SECRET",
+                "BINANCE_TESTNET_API_KEY",
+                "BINANCE_TESTNET_API_SECRET",
+            )
+        }
+        self.addCleanup(self._restore)
+        os.environ["BINANCE_API_KEY"] = self.LIVE_KEY
+        os.environ["BINANCE_API_SECRET"] = self.LIVE_SECRET
+        os.environ.pop("BINANCE_SPOT_API_KEY", None)
+        os.environ.pop("BINANCE_SPOT_API_SECRET", None)
+
+    def _restore(self):
+        for name, value in self._saved.items():
+            setattr(config, name, value)
+        for name, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _apply(self, testnet: bool):
+        config.BINANCE_SPOT_TESTNET = testnet
+        config.BINANCE_SPOT_API_KEY, config.BINANCE_SPOT_API_SECRET = config.binance_spot_credentials(testnet)
+
+    def test_testnet_on_uses_testnet_keys(self):
+        os.environ["BINANCE_TESTNET_API_KEY"] = self.TEST_KEY
+        os.environ["BINANCE_TESTNET_API_SECRET"] = self.TEST_SECRET
+        self._apply(True)
+        client = BinanceSpotClient()
+        self.assertEqual(client.api_key, self.TEST_KEY)
+        self.assertEqual(client.api_secret, self.TEST_SECRET)
+        self.assertTrue(client._is_configured())
+
+    def test_testnet_off_uses_live_keys_and_ignores_testnet_pair(self):
+        os.environ["BINANCE_TESTNET_API_KEY"] = self.TEST_KEY
+        os.environ["BINANCE_TESTNET_API_SECRET"] = self.TEST_SECRET
+        self._apply(False)
+        client = BinanceSpotClient()
+        self.assertEqual(client.api_key, self.LIVE_KEY)
+        self.assertEqual(client.api_secret, self.LIVE_SECRET)
+
+    def test_missing_testnet_keys_do_not_fall_back_to_live(self):
+        os.environ.pop("BINANCE_TESTNET_API_KEY", None)
+        os.environ.pop("BINANCE_TESTNET_API_SECRET", None)
+        self._apply(True)
+        client = BinanceSpotClient()
+        self.assertNotEqual(client.api_key, self.LIVE_KEY)
+        self.assertFalse(client._is_configured())
+
+    def test_enabling_testnet_leaves_live_keys_intact(self):
+        os.environ["BINANCE_TESTNET_API_KEY"] = self.TEST_KEY
+        os.environ["BINANCE_TESTNET_API_SECRET"] = self.TEST_SECRET
+        self._apply(True)
+        self.assertEqual(os.environ["BINANCE_API_KEY"], self.LIVE_KEY)
+        self.assertEqual(os.environ["BINANCE_API_SECRET"], self.LIVE_SECRET)
+        self._apply(False)
+        self.assertEqual(BinanceSpotClient().api_key, self.LIVE_KEY)
+
+    def test_admin_console_exposes_testnet_keys_as_optional_secrets(self):
+        app_module = import_module("app")
+        fields = {field["key"]: field for field in app_module._ADMIN_CONFIG_FIELDS}
+        for key in ("BINANCE_TESTNET_API_KEY", "BINANCE_TESTNET_API_SECRET"):
+            self.assertIn(key, fields)
+            self.assertEqual(fields[key]["section"], "binance")
+            self.assertTrue(fields[key]["secret"])
+            # Optional so an operator who only trades live still sees the
+            # Binance section pill as Configured.
+            self.assertTrue(fields[key].get("optional"))
+        payload = app_module._admin_config_field_payload(fields["BINANCE_TESTNET_API_KEY"], {})
+        self.assertTrue(payload["optional"])
+        self.assertTrue(payload["help"])
+        # A secret must never be echoed back to the browser in the clear.
+        self.assertEqual(payload["value"], "")

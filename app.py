@@ -1826,8 +1826,40 @@ _ADMIN_CONFIG_FIELDS = [
         "kind": "text",
         "secret": False,
     },
-    {"key": "BINANCE_API_KEY", "label": "API Key", "section": "binance", "kind": "password", "secret": True},
-    {"key": "BINANCE_API_SECRET", "label": "API Secret", "section": "binance", "kind": "password", "secret": True},
+    {
+        "key": "BINANCE_API_KEY",
+        "label": "Live API Key",
+        "section": "binance",
+        "kind": "password",
+        "secret": True,
+        "help": "Mainnet key from binance.com. Used only when Spot Testnet is FALSE.",
+    },
+    {
+        "key": "BINANCE_API_SECRET",
+        "label": "Live API Secret",
+        "section": "binance",
+        "kind": "password",
+        "secret": True,
+        "help": "Mainnet secret from binance.com. Used only when Spot Testnet is FALSE.",
+    },
+    {
+        "key": "BINANCE_TESTNET_API_KEY",
+        "label": "Testnet API Key",
+        "section": "binance",
+        "kind": "password",
+        "secret": True,
+        "optional": True,
+        "help": "Key from testnet.binance.vision (GitHub login). Used only when Spot Testnet is TRUE.",
+    },
+    {
+        "key": "BINANCE_TESTNET_API_SECRET",
+        "label": "Testnet API Secret",
+        "section": "binance",
+        "kind": "password",
+        "secret": True,
+        "optional": True,
+        "help": "Secret shown once when the testnet key is generated.",
+    },
     {
         "key": "BINANCE_SPOT_TESTNET",
         "label": "Spot Testnet",
@@ -1835,6 +1867,7 @@ _ADMIN_CONFIG_FIELDS = [
         "kind": "boolean",
         "options": ["false", "true"],
         "secret": False,
+        "help": "TRUE routes orders to testnet.binance.vision using the testnet keys. Live keys are left untouched.",
     },
     {
         "key": "BINANCE_SPOT_BASE_URL",
@@ -1842,6 +1875,7 @@ _ADMIN_CONFIG_FIELDS = [
         "section": "binance",
         "kind": "text",
         "secret": False,
+        "help": "Leave blank — the testnet toggle picks the host. A value set here overrides it.",
     },
     {
         "key": "BINANCE_SPOT_QUOTE_ASSET",
@@ -1891,6 +1925,8 @@ def _admin_config_field_payload(field: dict, values: dict) -> dict:
         "configured": bool(str(value).strip()),
         "masked": _mask_secret(value) if secret else "",
         "value": "" if secret else value,
+        "help": field.get("help") or "",
+        "optional": bool(field.get("optional")),
     }
     if field.get("options"):
         payload["options"] = list(field.get("options") or [])
@@ -1973,7 +2009,9 @@ def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
                 raise HTTPException(
                     status_code=400, detail="BINANCE_SPOT_BASE_URL must start with https:// and include a host"
                 )
-        return raw or "https://api.binance.com"
+        # Blank stays blank. Persisting the mainnet URL here would silently
+        # outrank the testnet toggle and send testnet orders to real money.
+        return raw
     return raw
 
 
@@ -2038,9 +2076,12 @@ def _reload_runtime_config_from_env() -> None:
     config.COINDCX_MARGIN_CURRENCY = (os.getenv("COINDCX_MARGIN_CURRENCY") or "USDT").upper()
     config.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE")
     config.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "YOUR_BINANCE_API_SECRET_HERE")
-    config.BINANCE_SPOT_API_KEY = os.getenv("BINANCE_SPOT_API_KEY") or config.BINANCE_API_KEY
-    config.BINANCE_SPOT_API_SECRET = os.getenv("BINANCE_SPOT_API_SECRET") or config.BINANCE_API_SECRET
+    config.BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY", "")
+    config.BINANCE_TESTNET_API_SECRET = os.getenv("BINANCE_TESTNET_API_SECRET", "")
     config.BINANCE_SPOT_TESTNET = os.getenv("BINANCE_SPOT_TESTNET", "false").lower() == "true"
+    config.BINANCE_SPOT_API_KEY, config.BINANCE_SPOT_API_SECRET = config.binance_spot_credentials(
+        config.BINANCE_SPOT_TESTNET
+    )
     config.BINANCE_SPOT_BASE_URL = (
         os.getenv("BINANCE_SPOT_BASE_URL")
         or ("https://testnet.binance.vision" if config.BINANCE_SPOT_TESTNET else "https://api.binance.com")
@@ -2060,6 +2101,37 @@ def _reload_runtime_config_from_env() -> None:
         config.DELTA_WS_URL = "wss://socket.india.delta.exchange"
     AUTH_PIN = os.getenv("CRYPTOFORGE_PIN") or os.getenv("CRYPTOFORGE_PASSWORD") or AUTH_PIN
     SESSION_SECRET = os.getenv("SESSION_SECRET", SESSION_SECRET)
+
+
+async def _rebind_broker_bound_engines() -> None:
+    """Drop engines that captured a broker client at construction time.
+
+    Both engines hold `self.broker`, an instance built with the base URL and
+    keys that were live when they started. Saving new credentials — or
+    flipping the testnet toggle — rebuilds the module-level client but leaves
+    those references pointing at the old environment, so the UI would say
+    testnet while orders still went to mainnet. Nulling the singletons makes
+    the next call rebuild them. Safe here: the caller has already verified no
+    open scalp trades and no active cascade campaigns.
+    """
+    global _scalp_engine
+
+    scalp_engine = globals().get("_scalp_engine")
+    if scalp_engine is not None:
+        try:
+            await scalp_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown scalp engine after config change: %s", exc)
+    _scalp_engine = None
+
+    cascade_engine = globals().get("_cascade_engine")
+    if cascade_engine is not None:
+        try:
+            _persist_cascade_runtime_snapshot(cascade_engine)
+            await cascade_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown cascade engine after config change: %s", exc)
+    globals()["_cascade_engine"] = None
 
 
 async def _apply_admin_config_update(payload: AdminConfigUpdateRequest) -> dict:
@@ -2111,6 +2183,8 @@ async def _apply_admin_config_update(payload: AdminConfigUpdateRequest) -> dict:
     _reload_runtime_config_from_env()
     active_target = requested_active or _active_broker_name()
     _set_active_broker(active_target, persist=True)
+    if broker_sensitive_keys:
+        await _rebind_broker_bound_engines()
     _market_cache["data"] = None
     _market_cache["timestamp"] = 0
     _ticker_cache["data"] = None
@@ -2369,6 +2443,8 @@ def _production_readiness_payload() -> dict:
         "COINDCX_PUBLIC_URL",
         "BINANCE_API_KEY",
         "BINANCE_API_SECRET",
+        "BINANCE_TESTNET_API_KEY",
+        "BINANCE_TESTNET_API_SECRET",
         "BINANCE_SPOT_TESTNET",
         "BINANCE_SPOT_BASE_URL",
         "BINANCE_SPOT_QUOTE_ASSET",

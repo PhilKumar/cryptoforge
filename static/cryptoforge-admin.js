@@ -31,7 +31,9 @@
   }
 
   function adminSectionConfigured(section) {
-    var fields = adminFields(section).filter(function (field) { return field.secret; });
+    // Optional secrets (the Binance testnet pair) must not drag the section
+    // pill to "Missing" for someone who only ever trades live.
+    var fields = adminFields(section).filter(function (field) { return field.secret && !field.optional; });
     return fields.length > 0 && fields.every(function (field) { return !!field.configured; });
   }
 
@@ -99,6 +101,12 @@
         clearLabel.appendChild(clear);
         clearLabel.appendChild(document.createTextNode(' Clear saved value'));
         meta.appendChild(clearLabel);
+      }
+      if (field.help) {
+        var hint = document.createElement('span');
+        hint.className = 'admin-field-help';
+        hint.textContent = field.help;
+        meta.appendChild(hint);
       }
     } else {
       meta.textContent = field.help || field.key;

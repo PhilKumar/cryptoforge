@@ -34,9 +34,33 @@ COINDCX_MARGIN_CURRENCY = (os.getenv("COINDCX_MARGIN_CURRENCY") or "USDT").upper
 # ── Binance Spot API Credentials ────────────────────────────
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "YOUR_BINANCE_API_SECRET_HERE")
-BINANCE_SPOT_API_KEY = os.getenv("BINANCE_SPOT_API_KEY") or BINANCE_API_KEY
-BINANCE_SPOT_API_SECRET = os.getenv("BINANCE_SPOT_API_SECRET") or BINANCE_API_SECRET
+BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY", "")
+BINANCE_TESTNET_API_SECRET = os.getenv("BINANCE_TESTNET_API_SECRET", "")
 BINANCE_SPOT_TESTNET = os.getenv("BINANCE_SPOT_TESTNET", "false").lower() == "true"
+
+
+def binance_spot_credentials(testnet: bool) -> tuple[str, str]:
+    """Pick the Binance key pair that matches the environment we point at.
+
+    Testnet keys are issued by testnet.binance.vision and are not valid on
+    mainnet; mainnet keys are not valid on the testnet. Falling back from one
+    to the other can only ever produce a -2015 auth error, so the two sets
+    stay strictly separate and a missing testnet key reads as "not
+    configured" instead of a confusing rejection at order time. Enabling the
+    testnet therefore never touches the live keys stored in .env.
+    """
+    if testnet:
+        return (
+            os.getenv("BINANCE_TESTNET_API_KEY", ""),
+            os.getenv("BINANCE_TESTNET_API_SECRET", ""),
+        )
+    return (
+        os.getenv("BINANCE_SPOT_API_KEY") or os.getenv("BINANCE_API_KEY", "YOUR_BINANCE_API_KEY_HERE"),
+        os.getenv("BINANCE_SPOT_API_SECRET") or os.getenv("BINANCE_API_SECRET", "YOUR_BINANCE_API_SECRET_HERE"),
+    )
+
+
+BINANCE_SPOT_API_KEY, BINANCE_SPOT_API_SECRET = binance_spot_credentials(BINANCE_SPOT_TESTNET)
 BINANCE_SPOT_BASE_URL = _env_url(
     "BINANCE_SPOT_BASE_URL",
     "https://testnet.binance.vision" if BINANCE_SPOT_TESTNET else "https://api.binance.com",

@@ -55,6 +55,8 @@ DELTA_API_KEY=your_key_here
 DELTA_API_SECRET=your_secret_here
 BINANCE_API_KEY=your_binance_key_here
 BINANCE_API_SECRET=your_binance_secret_here
+BINANCE_TESTNET_API_KEY=your_testnet_key_here
+BINANCE_TESTNET_API_SECRET=your_testnet_secret_here
 BINANCE_SPOT_TESTNET=true
 BINANCE_SPOT_QUOTE_ASSET=USDT
 APP_HOST=127.0.0.1
@@ -64,6 +66,14 @@ CRYPTOFORGE_PIN=your_pin_here
 
 > Get your API credentials at [delta.exchange/app/account/api-keys](https://www.delta.exchange/app/account/api-keys)
 > `Binance Spot` is the default broker (`CRYPTOFORGE_BROKER=binance`). Keep `BINANCE_SPOT_TESTNET=true` until access, symbols, balances, and order sizing have been verified with your Binance account. Delta Exchange and CoinDCX remain available as alternate brokers.
+
+**Binance testnet keys are separate from live keys.** Sign in with GitHub at
+[testnet.binance.vision](https://testnet.binance.vision/) and generate an HMAC-SHA-256 key; the secret is
+shown only once. Put the pair in `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET` — the live
+`BINANCE_API_KEY` pair stays where it is and is ignored while the testnet toggle is on. Leave
+`BINANCE_SPOT_BASE_URL` blank: the toggle selects `https://testnet.binance.vision`, and a value set there
+overrides the toggle. Testnet balances are virtual, only `/api` endpoints exist (no `/sapi`), and the
+environment resets about monthly — orders and balances are wiped, the keys survive.
 
 ### 3. Run
 
