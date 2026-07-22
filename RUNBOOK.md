@@ -70,8 +70,17 @@ and leaves the current instance alone if the new one is unhealthy.
 ### Step 3 — read the log
 
 ```bash
-sudo journalctl -u cryptoforge@$(cat ~/.cryptoforge-active-port) --since "30 min ago" --no-pager | tail -150
+sudo journalctl -u cryptoforge@9000 -u cryptoforge@9001 --since "2 hours ago" --no-pager | tail -150
 ```
+
+**Two traps, both of which have cost time:**
+
+- **The journal is in UTC; everything in the UI and these notes is IST**
+  (UTC + 5:30). `--since "13:00"` asks for 18:30 IST. **Always use relative
+  time** — `--since "2 hours ago"` — and never a clock time.
+- **Query BOTH units.** Every deploy switches 9000 ↔ 9001, so an incident that
+  spans a deploy has its history split. `$(cat ~/.cryptoforge-active-port)`
+  only reads the instance running *now*, which may have started minutes ago.
 
 What to look for, and what it means:
 
