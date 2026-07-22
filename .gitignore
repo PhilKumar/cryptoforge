@@ -1,30 +1,31 @@
-.env
-__pycache__/
-*.pyc
-.scrip_cache/
-*.csv
-runs.json
-strategies.json
-node_modules/
-.venv/
-.DS_Store
-*.log
+
+# Cached Binance candles for tools/cascade_backtest.py
 *.bak
+*.csv
+*.log
+*.pem
+*.pyc
+*.sessions.json
+*.tmp
+*_state_*.json
+.DS_Store
+.cascade-writer.lock
+.env
+.scrip_cache/
+.sessions.json
+.venv/
+Tier A*
+__pycache__/
 _test_*.py
 _validate*.py
-*.sessions.json
-*_state_*.json
-*.pem
-*.tmp
-.sessions.json
-live_state_*.json
+cache/
 cryptoforge_state.db
 cryptoforge_state.db-shm
 cryptoforge_state.db-wal
-cache/
-Tier A*
 e2e-tests/playwright-report/
 e2e-tests/test-results/
-
-# Cached Binance candles for tools/cascade_backtest.py
+live_state_*.json
+node_modules/
+runs.json
+strategies.json
 tools/.backtest_cache/

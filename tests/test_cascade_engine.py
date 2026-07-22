@@ -1,5 +1,7 @@
 """CascadeEngine tests: paper-mode state machine + live desired-state order sync."""
 
+import os
+import tempfile
 import time
 import unittest
 
@@ -1972,6 +1974,61 @@ class CascadeAnchorToleranceTests(unittest.TestCase):
         ]
         price, ts = find_valid_anchor2(mother_price, mother_ts, between)
         self.assertNotEqual(ts, anchor_ts, "an anchor whose line was truly broken was accepted")
+
+
+class CascadeSingleWriterTests(unittest.TestCase):
+    """Only one process may place orders.
+
+    The blue-green deploy runs the old and new instances together while it
+    drains. On 2026-07-22 that put two engines — briefly three, PIDs 1946379,
+    1947235 and 1947424 — on the same campaigns against the same Binance
+    account. Each treated the other's resting orders as unrecognised, cancelled
+    them, and placed its own. That produced the "buy stop was cancelled on the
+    exchange; re-placing" loop, five stacked TP sells, and a duplicate SOL buy
+    of $14.58 that no campaign ever knew it owned.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.lock = os.path.join(self.tmp, "writer.lock")
+
+    def _engine(self):
+        engine = _mk_engine()
+        engine._lock_path = self.lock
+        self.addCleanup(engine._release_write_lock)
+        return engine
+
+    def test_the_second_engine_does_not_get_the_lock(self):
+        first, second = self._engine(), self._engine()
+        self.assertTrue(first._acquire_write_lock(), "the first engine must be able to trade")
+        self.assertFalse(second._acquire_write_lock(), "a second engine took the lock as well")
+
+    def test_the_lock_passes_on_when_the_holder_stops(self):
+        """A deploy must hand over, or the new instance never trades."""
+        first, second = self._engine(), self._engine()
+        self.assertTrue(first._acquire_write_lock())
+        self.assertFalse(second._acquire_write_lock())
+        first.stop()  # what the old instance does as it shuts down
+        self.assertTrue(second._acquire_write_lock(), "the lock was not released on stop")
+
+    def test_holding_it_is_idempotent(self):
+        engine = self._engine()
+        self.assertTrue(engine._acquire_write_lock())
+        self.assertTrue(engine._acquire_write_lock())
+
+    def test_the_holder_records_its_pid(self):
+        """So an operator can see WHICH process owns the orders."""
+        engine = self._engine()
+        self.assertTrue(engine._acquire_write_lock())
+        with open(self.lock) as handle:
+            self.assertEqual(handle.read().strip(), str(os.getpid()))
+
+    def test_an_unusable_lock_path_does_not_stop_trading(self):
+        """A broken lock must not silently disable the engine — losing the
+        exit on an open position is worse than the race it guards against."""
+        engine = self._engine()
+        engine._lock_path = os.path.join(self.tmp, "no-such-dir", "writer.lock")
+        self.assertTrue(engine._acquire_write_lock())
 
 
 class CascadeLotSizeResidueTests(unittest.IsolatedAsyncioTestCase):

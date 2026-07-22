@@ -53,7 +53,9 @@ mother candle under the current rules.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
+import os
 import time
 import uuid
 from dataclasses import MISSING, dataclass, field
@@ -953,6 +955,12 @@ class CascadeEngine:
         self._sync_interval_sec = 10.0
         self._last_candle_ts = 0.0  # monotonic time of the last processed candle, for stall detection
         self._stall_alerted = False
+        # See _acquire_write_lock: only the holder places orders.
+        self._lock_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cascade-writer.lock"
+        )
+        self._lock_handle = None
+        self._lock_warned = False
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -963,11 +971,65 @@ class CascadeEngine:
         self._task = asyncio.create_task(self._monitor_loop())
         _log.info("[CASCADE] engine started")
 
+    # ── single writer ────────────────────────────────────────────
+    #
+    # Only ONE process may drive orders. The blue-green deploy runs the old and
+    # new instances together while it drains, so on 2026-07-22 two engines — at
+    # one point three — managed the same campaigns against the same Binance
+    # account. Each saw the other's resting orders as unrecognised, cancelled
+    # them, and placed its own. That is the whole "buy stop was cancelled on
+    # the exchange; re-placing" loop, the five stacked TP sells, and a
+    # duplicate SOL buy of $14.58 that no campaign ever knew it owned.
+    #
+    # An advisory lock on a file settles it without coordination: whoever holds
+    # it trades, everyone else serves HTTP and waits. The kernel drops it when
+    # the holder exits, so the incoming instance takes over the moment the old
+    # one stops, with no handoff protocol and nothing to get wrong.
+
+    def _acquire_write_lock(self) -> bool:
+        """True if this process holds the right to place orders."""
+        if self._lock_handle is not None:
+            return True
+        # Opening and locking fail for opposite reasons and must not share a
+        # handler. A missing directory is an OSError too, and folding it in
+        # here read as "another process is trading" — which would silently stop
+        # this one placing orders, including the exit on an open position.
+        try:
+            handle = open(self._lock_path, "a+")
+        except Exception as exc:
+            _log.warning("[CASCADE] write lock unusable (%s); trading without it", exc)
+            return True
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # Held elsewhere. Expected during a deploy — not an error.
+            handle.close()
+            return False
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"{os.getpid()}\n")
+        handle.flush()
+        self._lock_handle = handle
+        return True
+
+    def _release_write_lock(self) -> None:
+        if self._lock_handle is None:
+            return
+        try:
+            fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_UN)
+            self._lock_handle.close()
+        except Exception:
+            pass
+        self._lock_handle = None
+
     def stop(self):
         self._running = False
         if self._task:
             self._task.cancel()
             self._task = None
+        # Hand the lock over promptly so the incoming instance can start
+        # trading rather than waiting for this process to be reaped.
+        self._release_write_lock()
 
     async def shutdown(self):
         self.stop()
@@ -1628,6 +1690,21 @@ class CascadeEngine:
     async def _monitor_loop(self):
         while self._running:
             try:
+                # Without the lock another process owns the orders. Sitting out
+                # is the whole point: two engines reconciling one account cancel
+                # each other's orders and duplicate fills.
+                if not self._acquire_write_lock():
+                    if not self._lock_warned:
+                        self._lock_warned = True
+                        _log.info(
+                            "[CASCADE] another instance holds the write lock — "
+                            "not placing orders until it exits (normal during a deploy)"
+                        )
+                    await asyncio.sleep(self._loop_interval_sec)
+                    continue
+                if self._lock_warned:
+                    self._lock_warned = False
+                    _log.info("[CASCADE] took the write lock — this instance now owns order placement")
                 changed = False
                 for campaign in list(self.active_campaigns):
                     try:
