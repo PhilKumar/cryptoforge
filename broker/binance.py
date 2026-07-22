@@ -440,8 +440,19 @@ class BinanceSpotClient(BaseBroker):
         if not asset or asset == self.quote_asset or total_qty <= 0:
             return None
         pair = f"{asset}{self.quote_asset}"
-        ticker = self.get_ticker(pair)
-        mark_price = self.coerce_float(ticker.get("mark_price") or ticker.get("last_price"), 0.0)
+        # Deriving {asset}USDT for every balance and pricing it blindly is what
+        # took the site down twice in one day. The testnet credits every account
+        # with junk assets — ZAR, IDR, 456, 这是测试币 — whose pairs are not
+        # listed, so each one cost a network round trip on EVERY portfolio
+        # refresh, in the shared thread pool. It only turned fatal once tickers
+        # moved to the market-data host, where those symbols return 400 instead
+        # of quietly resolving. Unlisted means unpriceable: skip the call and
+        # leave the balance at zero value, exactly as a failed ticker did.
+        if pair not in self._tradable_pairs():
+            mark_price = 0.0
+        else:
+            ticker = self.get_ticker(pair)
+            mark_price = self.coerce_float(ticker.get("mark_price") or ticker.get("last_price"), 0.0)
         return {
             "product_id": pair,
             "product_symbol": self.from_broker_symbol(pair),

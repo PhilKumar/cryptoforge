@@ -3408,6 +3408,67 @@ class BinanceOrderHistoryScanTests(unittest.TestCase):
         self.assertEqual(len(client.get_order_history()), 1)
 
 
+class BinanceBalancePricingTests(unittest.TestCase):
+    """Regression: the site went down a second time on the same root cause.
+
+    _balance_position derived {asset}USDT for every wallet balance and called
+    the ticker endpoint with no check that the pair is listed. The testnet
+    credits every account with junk assets — ZAR, IDR, 456, 这是测试币 — so
+    every portfolio refresh made a network round trip per junk symbol in the
+    shared thread pool. That was survivable while tickers went to the testnet
+    host, which resolved them quietly; once tickers moved to the market-data
+    host each one returned 400 Bad Request and the pile-up starved the pool.
+    """
+
+    TESTNET_WALLET = [
+        {"asset_symbol": "BTC", "total_balance": "0.5"},
+        {"asset_symbol": "USDT", "total_balance": "1000"},
+        {"asset_symbol": "ZAR", "total_balance": "250"},
+        {"asset_symbol": "这是测试币", "total_balance": "99"},
+        {"asset_symbol": "456", "total_balance": "12"},
+        {"asset_symbol": "IDR", "total_balance": "5000"},
+    ]
+
+    def _client(self):
+        client = BinanceSpotClient()
+        client.quote_asset = "USDT"
+        client._is_configured = lambda: True
+        client.get_products = lambda force_refresh=False: [
+            {"broker_symbol": "BTCUSDT"},
+            {"broker_symbol": "ETHUSDT"},
+        ]
+        return client
+
+    def test_unlisted_balances_are_never_priced_over_the_network(self):
+        client = self._client()
+        asked = []
+        client.get_ticker = lambda pair: asked.append(pair) or {"mark_price": 60000.0}
+
+        priced = [client._balance_position(row) for row in self.TESTNET_WALLET]
+
+        self.assertEqual(asked, ["BTCUSDT"], f"priced unlisted pairs over the network: {asked}")
+        btc = next(p for p in priced if p and p["product_id"] == "BTCUSDT")
+        self.assertAlmostEqual(btc["mark_price"], 60000.0)
+
+    def test_an_unlisted_balance_still_appears_at_zero_value(self):
+        """Behaviour must match what a failed ticker call already produced, so
+        skipping the request changes cost and nothing else."""
+        client = self._client()
+        client.get_ticker = lambda pair: self.fail(f"should not have priced {pair}")
+
+        row = client._balance_position({"asset_symbol": "ZAR", "total_balance": "250"})
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["mark_price"], 0.0)
+        self.assertEqual(row["size"], 0.0)
+        self.assertAlmostEqual(row["base_size"], 250.0)
+
+    def test_the_quote_asset_itself_is_skipped(self):
+        client = self._client()
+        client.get_ticker = lambda pair: self.fail("priced the quote asset against itself")
+        self.assertIsNone(client._balance_position({"asset_symbol": "USDT", "total_balance": "1000"}))
+
+
 class BinanceMarketDataHostTests(unittest.TestCase):
     """Regression: with the testnet enabled, klines came from the testnet's own
     thin simulated book, whose prices drift from the real market. A mother
