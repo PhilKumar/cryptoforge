@@ -6,6 +6,7 @@ import unittest
 import pandas as pd
 
 from engine.cascade import (
+    ANCHOR_CLOSE_TOLERANCE_PCT,
     MIN_LEG_SEPARATION_PCT,
     Campaign,
     Candle,
@@ -16,6 +17,7 @@ from engine.cascade import (
     Round,
     build_fib_ladder_and_pool,
     compute_tp_price,
+    find_valid_anchor2,
     ladders_overlap,
     plan_leg_orders,
 )
@@ -237,10 +239,21 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertAlmostEqual(tl.anchor1_price, 65107.99)  # mother high
         self.assertAlmostEqual(tl.anchor2_price, 64904.00)  # 6th candle open
 
-    def test_second_trendline_anchors_to_the_0915_candle_open(self):
+    def test_second_trendline_anchors_to_a_later_red_open_once_closes_have_slack(self):
+        """Was 64,902.63 (candle #42) under zero tolerance. With
+        ANCHOR_CLOSE_TOLERANCE_PCT the search reaches one swing further right to
+        #45's open, 64,869.79 — also a red candle open, which is the rule.
+
+        Nothing Phil has confirmed moves with it: both fibs on this fixture are
+        byte-identical either way, and they are what places orders. The anchor
+        itself was locked to engine behaviour here, not to one of his charts."""
         self._feed_real(59)
         self.assertEqual(len(self.campaign.trendlines), 2)
-        self.assertAlmostEqual(self.campaign.trendlines[1].anchor2_price, 64902.63)
+        self.assertAlmostEqual(self.campaign.trendlines[1].anchor2_price, 64869.79)
+        self.assertAlmostEqual(self.campaign.legs[0].touch_high, 64928.00)
+        self.assertAlmostEqual(self.campaign.legs[0].low, 64790.01)
+        self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64964.00)
+        self.assertAlmostEqual(self.campaign.legs[1].low, 64416.00)
 
     def test_fall_pct_and_pool_follow_the_leg_low(self):
         self._feed_real(59)
@@ -1900,6 +1913,65 @@ class CascadeOrderChurnTests(unittest.IsolatedAsyncioTestCase):
         # The same sync goes on to re-place, so the id is a NEW one rather than
         # None — that is the loop the brake above bounds, not a leak.
         self.assertNotEqual(campaign.pending_order_id, "9999")
+
+
+class CascadeAnchorToleranceTests(unittest.TestCase):
+    """The trendline anchor rejected a close sitting ONE CENT above the line.
+
+    On SOLUSDT #10 that froze the anchor at 07-21 19:30 for the rest of the
+    campaign: every later candidate — including the 07-22 06:20 red open at
+    78.53, the swing top before the 11:30 candle broke the previous low — was
+    thrown out by three closes 0.01 over, 0.013% of price. No fifth trendline
+    could ever be drawn, even though it would sit 0.639% off the fourth, four
+    times the separation needed to count as a distinct line.
+
+    The tolerance is a measured band, not a free knob — see the sweep recorded
+    on the constant. These bounds are what the confirmed anchors allow.
+    """
+
+    def test_the_tolerance_stays_inside_the_measured_band(self):
+        self.assertGreaterEqual(
+            ANCHOR_CLOSE_TOLERANCE_PCT,
+            0.0004,
+            "below 0.04% BTC #36 fib 3's dip drifts off Phil's confirmed 66,052.63",
+        )
+        self.assertLessEqual(
+            ANCHOR_CLOSE_TOLERANCE_PCT,
+            0.0005,
+            "above 0.05% PAXG TL2 slides off Phil's confirmed 4,064.83 @ 16:10",
+        )
+
+    def test_a_one_cent_overshoot_no_longer_kills_an_anchor(self):
+        """The exact shape that blocked SOL: a close a hair above the line."""
+        mother_price, mother_ts = 78.88, 0
+        # Candidate anchor: a red open at 78.53, two hours out.
+        anchor_ts = 7200
+        between = [
+            Candle(timestamp=3600, open=78.80, high=78.80, low=78.60, close=78.71),
+            # line is at 78.6175 here; this close sits 0.0125 over — 0.016% of
+            # price, the same order as the three cents that blocked SOL.
+            Candle(timestamp=5400, open=78.66, high=78.70, low=78.60, close=78.63),
+            Candle(timestamp=anchor_ts, open=78.53, high=78.53, low=78.43, close=78.49),
+        ]
+        line_at_5400 = mother_price + ((78.53 - mother_price) / anchor_ts) * 5400
+        self.assertAlmostEqual(line_at_5400, 78.6175, places=3)
+        self.assertGreater(between[1].close, line_at_5400, "test needs a genuine overshoot")
+        self.assertLess((between[1].close - line_at_5400) / line_at_5400, 0.0004, "overshoot must be inside the band")
+
+        price, ts = find_valid_anchor2(mother_price, mother_ts, between)
+        self.assertAlmostEqual(price, 78.53)
+        self.assertEqual(ts, anchor_ts)
+
+    def test_a_real_break_above_the_line_still_disqualifies(self):
+        """Slack is for ticks, not for closes that genuinely broke the line."""
+        mother_price, mother_ts = 78.88, 0
+        anchor_ts = 7200
+        between = [
+            Candle(timestamp=3600, open=78.80, high=79.20, low=78.60, close=79.10),  # way above
+            Candle(timestamp=anchor_ts, open=78.53, high=78.53, low=78.43, close=78.49),
+        ]
+        price, ts = find_valid_anchor2(mother_price, mother_ts, between)
+        self.assertNotEqual(ts, anchor_ts, "an anchor whose line was truly broken was accepted")
 
 
 class CascadeOrderIdTests(unittest.IsolatedAsyncioTestCase):

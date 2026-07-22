@@ -135,6 +135,19 @@ _MAX_SAME_TRIGGER_PLACEMENTS = 3
 # ones. A new line has to sit this far from each existing line, measured at the
 # candle that created it, or it reuses the line already there.
 MIN_TRENDLINE_SEPARATION_PCT = 0.0015
+# How far a close may poke above a candidate trendline before it disqualifies
+# the anchor. Nobody drags a line that respects every close to the cent, and
+# testing that way froze SOLUSDT #10's anchor for a whole day over three
+# ONE-CENT overshoots, so no fifth trendline could ever be drawn.
+#
+# Swept against every anchor Phil has confirmed. Only 0.04%-0.05% satisfies all
+# of them at once, so this sits in the middle of that band:
+#   0.00%  PAXG TL2 lands at 4063.83 @ 15:50, not his 4064.83 @ 16:10; SOL
+#          never gets its fifth line
+#   0.02%  fixes both, but BTC #36 fib 3's dip drifts 66,052.63 -> 66,098.71
+#   0.06%  BTC holds, but PAXG TL2 slides to 4062.73 @ 16:15
+# Widening this is not a free knob: it moves anchors he has drawn by hand.
+ANCHOR_CLOSE_TOLERANCE_PCT = 0.00045
 MIN_NOTIONAL_FLOOR_USD = 5.0  # Binance Spot MIN_NOTIONAL filter is ~$5 on USDT pairs
 # Cushion over the exchange minimum on every rung. An order sized exactly at
 # MIN_NOTIONAL is one tick of adverse quote movement from being rejected, so
@@ -222,6 +235,16 @@ def find_valid_anchor2(anchor1_price, anchor1_ts, candles_between, epsilon=1e-9)
     connecting line is not crossed by any earlier candle's CLOSE. That is the
     tightest descending line the price action allows — the same line you get by
     dragging from the mother candle with TradingView's magnet on.
+
+    A close is allowed to poke ANCHOR_CLOSE_TOLERANCE_PCT above the line before
+    it disqualifies the anchor. Testing to the cent was rejecting anchors that
+    are obviously right on the chart: on SOLUSDT 07-22 the 06:20 red open at
+    78.53 — the swing top before the 11:30 candle broke the previous low — was
+    thrown out by three closes sitting ONE CENT over, 0.017% of price, all
+    within twenty minutes of it. That left the anchor frozen at 07-21 19:30 for
+    the rest of the campaign, so no fifth trendline could ever be drawn, even
+    though the line it would give sits 0.639% off the fourth — four times the
+    separation needed to count as a different line.
     """
     red_candidates = [c for c in candles_between if c.is_red]
     for candidate in reversed(red_candidates):
@@ -232,7 +255,8 @@ def find_valid_anchor2(anchor1_price, anchor1_ts, candles_between, epsilon=1e-9)
         for c in candles_between:
             if c.timestamp < candidate.timestamp:
                 line_price_at_c = anchor1_price + slope * (c.timestamp - anchor1_ts)
-                if c.close > line_price_at_c + epsilon:
+                allowance = abs(line_price_at_c) * ANCHOR_CLOSE_TOLERANCE_PCT
+                if c.close > line_price_at_c + allowance + epsilon:
                     violated = True
                     break
         if not violated:
