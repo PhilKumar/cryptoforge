@@ -7937,11 +7937,24 @@ function _cfCascadeLadderRows(campaign) {
   // at the TOP of the table in the site's amber, not buried under the levels.
   var pot = Number(campaign.pending_usd) || 0;
   var rung = Number(campaign.rung_usd) || 5.5;
+  // "Armed" only means the engine has worked out a trigger. On a LIVE campaign
+  // that is not the same as an order existing on Binance, and the difference is
+  // the whole question when a pot sits there without ever buying — so say which.
+  var isLive = String(campaign.mode || '').toLowerCase() === 'live';
+  var onExchange = !!campaign.pending_order_id;
+  var stopNote = 'buy stop armed at ' + _cfCascadeFmt(campaign.pending_stop_price)
+    + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')';
+  if (isLive) {
+    stopNote = onExchange
+      ? 'buy stop RESTING on Binance at ' + _cfCascadeFmt(campaign.pending_stop_price)
+        + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')'
+      : 'buy stop armed at ' + _cfCascadeFmt(campaign.pending_stop_price)
+        + ' — not on Binance yet, going out on the next sync';
+  }
   var potNote = pot <= 0
     ? 'price has not reached a level yet'
     : campaign.pending_stop_price
-      ? 'buy stop armed at ' + _cfCascadeFmt(campaign.pending_stop_price)
-        + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')'
+      ? stopNote
       : campaign.pending_line
         ? 'clears the $' + _cfCascadeUsd(rung) + ' minimum — waiting for two reds below '
           + _cfCascadeFmt(campaign.pending_line)

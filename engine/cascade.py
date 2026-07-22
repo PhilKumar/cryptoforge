@@ -56,7 +56,8 @@ import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field
+from dataclasses import fields as dataclass_fields
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
@@ -1248,6 +1249,73 @@ class CascadeEngine:
             )
         return rows[-max_candles:]
 
+    # What survives a replay. Everything NOT named here is derived from the
+    # candles and is rebuilt from its dataclass default, so a field added later
+    # cannot be forgotten. It was a hand-written reset list that caused this:
+    # `collected` and `pending_usd` were added to Campaign long after the list
+    # was written, so every Recalc replayed the same levels on top of the
+    # previous run's total. Six presses turned a $7.60 pot into $46.62, and
+    # once the inflated total cleared the rung it armed a buy stop for money
+    # no level had actually collected.
+    _RECALC_KEEP = frozenset(
+        {
+            # identity and settings
+            "campaign_id",
+            "symbol",
+            "capital_usd",
+            "mother_high",
+            "mother_low",
+            "mother_timestamp",
+            "seq",
+            "mode",
+            "min_notional_usd",
+            "tick_size",
+            "parent_campaign_id",
+            "generation",
+            "barren_chain",
+            "created_at",
+            "event_log",
+            # Monotonic, NOT derived. Client ids are cf-csc-{id}-buy-{rev} and
+            # Binance remembers every id it has seen, so rewinding these would
+            # collide with orders this campaign already placed.
+            "pending_rev",
+            "tp_rev",
+        }
+    )
+
+    def _reset_derived_state(self, campaign: Campaign) -> None:
+        """Return every replay-derived field to its default before a replay."""
+        for spec in dataclass_fields(Campaign):
+            if spec.name in self._RECALC_KEEP:
+                continue
+            if spec.default is not MISSING:
+                setattr(campaign, spec.name, spec.default)
+            elif spec.default_factory is not MISSING:  # type: ignore[misc]
+                setattr(campaign, spec.name, spec.default_factory())  # type: ignore[misc]
+        campaign.window_start_ts = campaign.mother_timestamp
+        campaign.model_version = MODEL_VERSION
+
+    async def _cancel_campaign_orders(self, campaign: Campaign) -> int:
+        """Cancel every order this campaign still has resting on the exchange."""
+        cancelled = 0
+        try:
+            open_orders = await self._open_orders_by_id(campaign)
+        except Exception as exc:
+            _log.warning("[CASCADE] could not list open orders for %s: %s", campaign.campaign_id, exc)
+            return 0
+        for order_id, row in open_orders.items():
+            client_id = str(row.get("clientOrderId") or "")
+            if client_id.startswith(f"cf-csc-{campaign.campaign_id}-"):
+                await self._safe_cancel(campaign, order_id)
+                cancelled += 1
+        if cancelled:
+            self._log_event(
+                campaign,
+                "order",
+                f"Cancelled {cancelled} resting order(s) before replaying the campaign.",
+            )
+        return cancelled
+
     async def recalculate_campaign(self, campaign_id: str) -> dict:
         """
         Rebuild a campaign's trendlines and fibs from scratch under the current
@@ -1268,26 +1336,14 @@ class CascadeEngine:
         if not candles:
             return {"error": "No candles available to replay"}
 
-        # Reset everything derived from the candles, keeping the campaign's
-        # identity and settings.
-        campaign.trendlines = []
-        campaign.legs = []
-        campaign.active_trendline_id = None
-        campaign.all_fills = []
-        campaign.rounds = []
-        campaign.avg_entry_price = None
-        campaign.filled_base_qty = 0.0
-        campaign.tp_price = None
-        campaign.tp_filled = False
-        campaign.realized_pnl = None
-        campaign.cumulative_used_pct = 0.0
-        campaign.carry_forward_usd = 0.0
-        campaign.mother_broken_above = False
-        campaign.closed_at = ""
-        campaign.close_reason = ""
-        campaign.state = "WAITING_FIRST_DEPTH"
-        campaign.window_start_ts = campaign.mother_timestamp
-        campaign.model_version = MODEL_VERSION
+        # A live campaign can be carrying a resting buy stop for the pot the
+        # replay is about to erase. Cancel it FIRST: if it were left working it
+        # would still be an order for money the campaign no longer believes it
+        # collected, and a fill would land on a position nothing is tracking.
+        if campaign.mode == "live":
+            await self._cancel_campaign_orders(campaign)
+
+        self._reset_derived_state(campaign)
         self._candles_5m[campaign_id] = []
 
         for candle in candles:

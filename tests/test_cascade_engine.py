@@ -1544,6 +1544,133 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(campaign.legs[1].touch_high, 64964.00)
         self.assertAlmostEqual(campaign.legs[1].low, 64416.00)
 
+    async def _replayable(self, engine, broker):
+        broker.candles_df = pd.DataFrame(
+            {
+                "open": [row[1] for row in _REAL],
+                "high": [row[2] for row in _REAL],
+                "low": [row[3] for row in _REAL],
+                "close": [row[4] for row in _REAL],
+            },
+            index=pd.to_datetime([row[0] * 300 for row in _REAL], unit="s", utc=True),
+        )
+        mother = _REAL[0]
+        campaign = Campaign(
+            campaign_id="repeat",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    async def test_recalculating_twice_gives_the_same_campaign(self):
+        """The pot is derived from the candles, so replaying the same candles
+        must produce the same pot. It did not: `collected` and `pending_usd`
+        were missing from the hand-written reset list, so every press re-added
+        the same levels on top of the previous run's total — the user's $7.60
+        fib showed $46.62 after six presses. Worse, once the inflated total
+        cleared the rung it armed a buy stop for money no level had collected,
+        and the very next replay booked a fill that never happened."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = await self._replayable(engine, broker)
+
+        await engine.recalculate_campaign("repeat")
+        first = (
+            campaign.pending_usd,
+            [list(row) for row in campaign.collected],
+            campaign.pending_line,
+            campaign.pending_stop_price,
+            len(campaign.legs),
+            len(campaign.all_fills),
+            campaign.state,
+        )
+        self.assertGreater(first[0], 0, "test needs a campaign that actually collects")
+
+        for _ in range(5):
+            await engine.recalculate_campaign("repeat")
+            self.assertEqual(
+                (
+                    campaign.pending_usd,
+                    [list(row) for row in campaign.collected],
+                    campaign.pending_line,
+                    campaign.pending_stop_price,
+                    len(campaign.legs),
+                    len(campaign.all_fills),
+                    campaign.state,
+                ),
+                first,
+            )
+
+    async def test_every_replay_derived_field_is_reset(self):
+        """Guard the reset itself. Anything not explicitly kept has to come back
+        to its default, so a field added to Campaign later cannot quietly start
+        surviving replays the way `collected` did."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = await self._replayable(engine, broker)
+
+        dirty = {
+            "pending_usd": 46.62,
+            "collected": [[1, 2, 46.62, 66559.42]],
+            "pending_line": 65997.64,
+            "pending_stop_price": 65967.40,
+            "pending_limit_price": 65967.45,
+            "pending_stop_ts": 123,
+            "pending_last_red": 65984.0,
+            "pending_order_id": "stale-order",
+            "pending_filled_qty": 0.5,
+            "reuse_below": 65000.0,
+            "left_mother_range": True,
+            "broken_above": True,
+            "tp_order_id": "stale-tp",
+            "cumulative_used_pct": 9.9,
+        }
+        for name, value in dirty.items():
+            setattr(campaign, name, value)
+        # Monotonic counters back the exchange's client-order-id memory, so
+        # these must NOT rewind — a reused id collides with a live order.
+        campaign.pending_rev = 7
+        campaign.tp_rev = 3
+
+        engine._reset_derived_state(campaign)
+
+        for name in dirty:
+            self.assertNotEqual(getattr(campaign, name), dirty[name], f"{name} survived the reset")
+        self.assertEqual(campaign.pending_usd, 0.0)
+        self.assertEqual(campaign.collected, [])
+        self.assertIsNone(campaign.pending_order_id)
+        self.assertEqual(campaign.pending_rev, 7)
+        self.assertEqual(campaign.tp_rev, 3)
+        self.assertEqual(campaign.window_start_ts, campaign.mother_timestamp)
+        self.assertEqual(campaign.symbol, "BTCUSDT")
+        self.assertEqual(campaign.capital_usd, 2000.0)
+
+    async def test_live_recalc_cancels_resting_orders_first(self):
+        """A live campaign can be carrying a buy stop for the pot the replay is
+        about to erase. Left working, it is an order for money the campaign no
+        longer believes it collected — and a fill lands on a position nothing
+        is tracking."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = await self._replayable(engine, broker)
+        campaign.mode = "live"
+        campaign.pending_order_id = "9001"
+        broker.open_orders = [
+            {"orderId": "9001", "clientOrderId": f"cf-csc-{campaign.campaign_id}-buy-3"},
+            {"orderId": "9002", "clientOrderId": "someone-elses-order"},
+        ]
+
+        await engine.recalculate_campaign("repeat")
+
+        self.assertIn("9001", [str(row) for row in broker.cancelled])
+        self.assertNotIn("9002", [str(row) for row in broker.cancelled])
+
     async def test_live_campaign_with_fills_refuses_recalculation(self):
         engine = _mk_engine()
         campaign = self._stale_campaign(engine)
