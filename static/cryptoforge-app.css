@@ -1252,7 +1252,19 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
     .allocator-grid {
-      grid-template-columns: 1fr;
+      /* minmax(0,1fr), not 1fr. `1fr` is shorthand for `minmax(auto,1fr)`, and
+         `auto` as a track minimum resolves to the item's MIN-CONTENT width —
+         so the Start Campaign / Active Campaigns panels sized the column to
+         441px inside a 366px phone screen and pushed the whole document 63px
+         wider than the viewport. That is what made the topbar and nav look
+         narrower than the page under them. */
+      grid-template-columns: minmax(0, 1fr);
+    }
+    /* Grid items default to min-width:auto, which is the same min-content trap
+       one level down: without this the panel overflows its track even once the
+       track itself is correct. */
+    .allocator-grid > * {
+      min-width: 0;
     }
     .allocator-buy-toolbar {
       display: grid;
