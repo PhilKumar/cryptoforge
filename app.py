@@ -497,11 +497,22 @@ def _totp_code_at(counter: int) -> str:
     return str(truncated % (10**_TOTP_DIGITS)).zfill(_TOTP_DIGITS)
 
 
-def _verify_totp(code: str) -> bool:
-    """True if `code` is valid for now (±1 step) and has not already been used."""
+def _verify_totp(code: str) -> Optional[int]:
+    """The step counter `code` matches, or None.
+
+    Checking and spending are separate on purpose. When they were one call, any
+    failed login spent the code — so mistyping the PIN burned the six digits
+    still on your phone screen, the obvious retry with that same code was
+    rejected as a replay, and the message said "wrong PIN or code" both times
+    with no hint that you now had to wait up to 30 seconds. Repeat that a few
+    times and the escalating lockout has you out of your own trading app for
+    hours, from one fat-fingered digit.
+
+    Only a login that actually succeeds spends a code. See _consume_totp.
+    """
     digits = "".join(ch for ch in str(code or "") if ch.isdigit())
     if len(digits) != _TOTP_DIGITS:
-        return False
+        return None
     now = time.time()
     current = int(now // _TOTP_STEP_SEC)
     for key, expiry in list(_totp_used_counters.items()):
@@ -513,16 +524,22 @@ def _verify_totp(code: str) -> bool:
             expected = _totp_code_at(counter)
         except Exception as exc:
             _logger.error("TOTP secret is not valid base32: %s", exc)
-            return False
+            return None
         if secrets.compare_digest(digits, expected):
-            # One code, one login. Without this a code stays good for its whole
-            # 30s window, so anyone who sees it over your shoulder can reuse it.
             if counter in _totp_used_counters:
                 _logger.warning("Rejected a replayed TOTP code")
-                return False
-            _totp_used_counters[counter] = now + _TOTP_STEP_SEC * (_TOTP_DRIFT_STEPS + 2)
-            return True
-    return False
+                return None
+            return counter
+    return None
+
+
+def _consume_totp(counter: int) -> None:
+    """Spend a code so it cannot be used again inside its own window.
+
+    One code, one login: without this a code stays good for its full 30
+    seconds, so anyone who reads it over your shoulder can sign in behind you.
+    """
+    _totp_used_counters[int(counter)] = time.time() + _TOTP_STEP_SEC * (_TOTP_DRIFT_STEPS + 2)
 
 
 def _state_dir_candidates() -> List[str]:
@@ -1777,8 +1794,13 @@ async def auth_login(request: Request):
     # Check both factors before branching, and always check both even when the
     # PIN is already wrong — replying faster for a bad PIN than for a bad code
     # tells an attacker which half they got right.
-    totp_ok = _verify_totp(body.get("totp") or body.get("code") or "") if _totp_enabled() else True
+    totp_counter = _verify_totp(body.get("totp") or body.get("code") or "") if _totp_enabled() else None
+    totp_ok = True if not _totp_enabled() else totp_counter is not None
     if pin_ok and totp_ok:
+        # Spend the code only now. A failed attempt must leave it usable, or a
+        # PIN typo costs you the code still showing on your phone.
+        if totp_counter is not None:
+            _consume_totp(totp_counter)
         _clear_login_attempts(ip)
         token = _create_session(request=request)
         resp = JSONResponse({"status": "ok", "message": "Login successful"})

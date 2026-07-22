@@ -7,10 +7,14 @@ between a stranger and an app that places real orders.
 """
 
 import base64
+import os
+import tempfile
 import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from httpx import ASGITransport, AsyncClient
 
 import app as app_module
 
@@ -134,6 +138,7 @@ class LockoutEscalationTests(unittest.TestCase):
 
 
 class TotpTests(unittest.TestCase):
+    wants_totp = True  # see tests/conftest.py — these patch TOTP_SECRET themselves
     # RFC 6238 Appendix B publishes expected codes for the ASCII secret
     # "12345678901234567890". If our implementation disagrees with these, it
     # disagrees with every authenticator app on the planet.
@@ -157,37 +162,57 @@ class TotpTests(unittest.TestCase):
     def test_accepts_the_current_code(self):
         with patch.object(app_module, "TOTP_SECRET", self.RFC_SECRET):
             now = int(time.time() // app_module._TOTP_STEP_SEC)
-            self.assertTrue(app_module._verify_totp(app_module._totp_code_at(now)))
+            self.assertEqual(app_module._verify_totp(app_module._totp_code_at(now)), now)
 
     def test_tolerates_one_step_of_clock_drift(self):
         with patch.object(app_module, "TOTP_SECRET", self.RFC_SECRET):
             now = int(time.time() // app_module._TOTP_STEP_SEC)
-            self.assertTrue(app_module._verify_totp(app_module._totp_code_at(now - 1)))
-            app_module._totp_used_counters.clear()
-            self.assertTrue(app_module._verify_totp(app_module._totp_code_at(now + 1)))
+            self.assertEqual(app_module._verify_totp(app_module._totp_code_at(now - 1)), now - 1)
+            self.assertEqual(app_module._verify_totp(app_module._totp_code_at(now + 1)), now + 1)
 
     def test_rejects_two_steps_of_drift(self):
         with patch.object(app_module, "TOTP_SECRET", self.RFC_SECRET):
             now = int(time.time() // app_module._TOTP_STEP_SEC)
-            self.assertFalse(app_module._verify_totp(app_module._totp_code_at(now - 2)))
+            self.assertIsNone(app_module._verify_totp(app_module._totp_code_at(now - 2)))
 
-    def test_a_code_cannot_be_replayed(self):
+    def test_a_spent_code_cannot_be_replayed(self):
         # A code is valid for 30 seconds. Without this, someone who reads it
         # over your shoulder can sign in behind you inside that window.
         with patch.object(app_module, "TOTP_SECRET", self.RFC_SECRET):
             now = int(time.time() // app_module._TOTP_STEP_SEC)
             code = app_module._totp_code_at(now)
-            self.assertTrue(app_module._verify_totp(code))
-            self.assertFalse(app_module._verify_totp(code), "the same code must not work twice")
+            counter = app_module._verify_totp(code)
+            self.assertIsNotNone(counter)
+            app_module._consume_totp(counter)  # what a SUCCESSFUL login does
+            self.assertIsNone(app_module._verify_totp(code), "a spent code must not work twice")
+
+    def test_checking_a_code_does_not_spend_it(self):
+        """The bug this guards is a self-lockout, not a break-in.
+
+        Checking and spending used to be one call, so a wrong PIN burned the
+        code still on your phone. The obvious retry — same code, PIN typed
+        correctly this time — came back "wrong PIN or code" with no hint that
+        you now had to wait for the next 30-second window. A few rounds of that
+        and the escalating lockout has you out for hours, from one typo.
+        """
+        with patch.object(app_module, "TOTP_SECRET", self.RFC_SECRET):
+            now = int(time.time() // app_module._TOTP_STEP_SEC)
+            code = app_module._totp_code_at(now)
+            for attempt in range(5):
+                self.assertEqual(
+                    app_module._verify_totp(code),
+                    now,
+                    f"attempt {attempt + 1}: a failed login must leave the code usable",
+                )
 
     def test_rejects_malformed_input(self):
         with patch.object(app_module, "TOTP_SECRET", self.RFC_SECRET):
             for bad in ("", "12345", "1234567", "abcdef", None, "   "):
-                self.assertFalse(app_module._verify_totp(bad), repr(bad))
+                self.assertIsNone(app_module._verify_totp(bad), repr(bad))
 
     def test_bad_secret_fails_closed(self):
         with patch.object(app_module, "TOTP_SECRET", "not-valid-base32!!"):
-            self.assertFalse(app_module._verify_totp("123456"))
+            self.assertIsNone(app_module._verify_totp("123456"))
 
     def test_setup_tool_agrees_with_the_server(self):
         """tools/totp_setup.py --verify must not disagree with the login path."""
@@ -200,3 +225,93 @@ class TotpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoginRouteTwoFactorTests(unittest.IsolatedAsyncioTestCase):
+    """The login route end to end, because the unit tests above passed while
+    the real sequence still locked you out."""
+
+    wants_totp = True  # see tests/conftest.py — opt out of the auto-disable
+    RFC_SECRET = TotpTests.RFC_SECRET
+    PIN = "424242"
+
+    async def asyncSetUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addAsyncCleanup(self._tmp.cleanup)
+        for name, value in (
+            ("AUTH_PIN", self.PIN),
+            ("TOTP_SECRET", self.RFC_SECRET),
+            ("_STATE_DB_FILE", os.path.join(self._tmp.name, "t.db")),
+        ):
+            patcher = patch.object(app_module, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(app_module, "_get_redis", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app_module._login_state.clear()
+        app_module._totp_used_counters.clear()
+        self.addCleanup(app_module._login_state.clear)
+        self.addCleanup(app_module._totp_used_counters.clear)
+
+        self.client = AsyncClient(transport=ASGITransport(app=app_module.app), base_url="http://testserver")
+        self.addAsyncCleanup(self.client.aclose)
+
+    def _code(self, offset=0):
+        return app_module._totp_code_at(int(time.time() // app_module._TOTP_STEP_SEC) + offset)
+
+    async def _login(self, pin, code):
+        return await self.client.post("/api/auth/login", json={"password": pin, "totp": code})
+
+    async def test_status_advertises_the_second_factor(self):
+        res = await self.client.get("/api/auth/status")
+        self.assertTrue(res.json()["totp_required"])
+
+    async def test_pin_alone_is_not_enough(self):
+        self.assertEqual((await self._login(self.PIN, "")).status_code, 401)
+
+    async def test_correct_pin_and_code_gets_in(self):
+        res = await self._login(self.PIN, self._code())
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("cryptoforge_session", res.cookies)
+
+    async def test_a_pin_typo_does_not_burn_the_code(self):
+        """The regression. Mistype the PIN, then retype it correctly with the
+        same code still on screen — that must work."""
+        code = self._code()
+        self.assertEqual((await self._login("424241", code)).status_code, 401)
+        res = await self._login(self.PIN, code)
+        self.assertEqual(res.status_code, 200, "the retry with the same on-screen code must succeed")
+
+    async def test_several_pin_typos_still_leave_the_code_usable(self):
+        code = self._code()
+        for _ in range(4):  # stop short of the 5-failure lockout
+            self.assertEqual((await self._login("000000", code)).status_code, 401)
+        self.assertEqual((await self._login(self.PIN, code)).status_code, 200)
+
+    async def test_a_code_already_used_to_log_in_is_refused(self):
+        code = self._code()
+        self.assertEqual((await self._login(self.PIN, code)).status_code, 200)
+        self.assertEqual((await self._login(self.PIN, code)).status_code, 401, "no replay")
+
+    async def test_wrong_code_with_right_pin_is_refused(self):
+        self.assertEqual((await self._login(self.PIN, "000000")).status_code, 401)
+
+    async def test_the_error_does_not_say_which_factor_failed(self):
+        """Naming the wrong half lets an attacker crack them one at a time."""
+
+        def detail(res):
+            # error_handlers.py reshapes 4xx bodies into {success, error:{...}}.
+            body = res.json()
+            return (body.get("error") or {}).get("detail", body.get("detail"))
+
+        bad_pin = detail(await self._login("000000", self._code()))
+        bad_code = detail(await self._login(self.PIN, "000000"))
+        self.assertEqual(bad_pin, bad_code)
+        self.assertEqual(bad_pin, "Invalid PIN or code")
+
+    async def test_repeated_failures_still_lock_out(self):
+        for _ in range(5):
+            await self._login("000000", "000000")
+        res = await self._login(self.PIN, self._code())
+        self.assertEqual(res.status_code, 429, "the lockout must still bite")
