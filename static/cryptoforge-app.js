@@ -8169,12 +8169,13 @@ function _cfCascadePositionPanel(campaign, fills) {
       + '</div>'
       + '<table class="trade-table"><thead><tr>'
         + '<th>Round</th><th>Fib</th><th class="num">Avg Entry</th><th class="num">Exit</th>'
-        + '<th class="num">Qty</th><th class="num">P&amp;L</th><th class="num">ROI</th>'
+        + '<th class="num">Qty</th><th class="num">P&amp;L</th><th class="num">ROI</th><th></th>'
       + '</tr></thead><tbody>'
       + rounds.slice().reverse().map(function(r) {
         var pnl = Number(r.pnl) || 0;
         var inv = Number(r.invested_usd) || 0;
         var tone = pnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+        var buys = (r.fills || []).length;
         return '<tr><td>#' + _escapeHtml(String(r.round_id)) + '</td>'
           + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'
           + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
@@ -8182,6 +8183,10 @@ function _cfCascadePositionPanel(campaign, fills) {
           + '<td class="num">' + Number(r.quantity || 0).toFixed(8) + '</td>'
           + '<td class="num" style="color:' + tone + ';">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeFmt(pnl) + '</td>'
           + '<td class="num" style="color:' + tone + ';">' + (inv > 0 ? (pnl / inv * 100).toFixed(2) + '%' : '--') + '</td>'
+          + '<td class="num"><button type="button" class="btn btn-outline btn-sm"'
+            + ' data-cf-click="cfCascadeShowRoundLog(\'' + _escapeHtml(String(campaign.campaign_id)) + '\',' + Number(r.round_id) + ')"'
+            + (buys ? '' : ' disabled title="No per-buy detail recorded for this round"')
+            + '>Log' + (buys ? ' (' + buys + ')' : '') + '</button></td>'
           + '</tr>';
       }).join('')
       + '</tbody></table></div>';
@@ -8604,6 +8609,116 @@ function cfCascadeReconcile() {
 }
 
 
+// ═══ CASCADE CLOSED-ROUND TRADE LOG ═════════════════════════════
+
+function _cfCascadeFindRound(campaignId, roundId) {
+  var status = _cfCascadeLastStatus || {};
+  var pools = [status.campaigns || [], status.closed_campaigns || []];
+  for (var p = 0; p < pools.length; p++) {
+    for (var i = 0; i < pools[p].length; i++) {
+      var campaign = pools[p][i];
+      if (String(campaign.campaign_id) !== String(campaignId)) continue;
+      var rounds = campaign.rounds || [];
+      for (var r = 0; r < rounds.length; r++) {
+        if (Number(rounds[r].round_id) === Number(roundId)) {
+          return { campaign: campaign, round: rounds[r] };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function cfCascadeShowRoundLog(campaignId, roundId) {
+  var overlay = document.getElementById('cf-cascade-round-overlay');
+  var body = document.getElementById('cf-cascade-round-body');
+  var title = document.getElementById('cf-cascade-round-title');
+  var meta = document.getElementById('cf-cascade-round-meta');
+  if (!overlay || !body) return;
+
+  var found = _cfCascadeFindRound(campaignId, roundId);
+  if (!found) {
+    body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
+      + 'That round is no longer in the current status payload.</div>';
+    overlay.style.display = '';
+    document.body.classList.add('cf-chart-fs-open');
+    return;
+  }
+
+  var campaign = found.campaign;
+  var round = found.round;
+  var fills = round.fills || [];
+  var pnl = Number(round.pnl) || 0;
+  var invested = Number(round.invested_usd) || 0;
+  var tone = pnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+
+  if (title) {
+    title.textContent = (campaign.symbol || 'Campaign') + ' — Round #' + round.round_id + ' closed trades';
+  }
+  if (meta) {
+    meta.textContent = fills.length + ' buy' + (fills.length === 1 ? '' : 's')
+      + ' averaged into one position, then sold in full at the target. Times are IST.';
+  }
+
+  var rows = fills.map(function(f, index) {
+    var price = Number(f.price) || 0;
+    var qty = Number(f.quantity) || 0;
+    var usd = Number(f.usd);
+    if (!isFinite(usd)) usd = price * qty;
+    return '<tr>'
+      + '<td>' + (index + 1) + '</td>'
+      + '<td>' + _escapeHtml(_cfCascadeIst(f.timestamp)) + '<div class="table-meta">IST</div></td>'
+      + '<td>F' + _escapeHtml(String(f.leg_id || '--')) + ' · L' + _escapeHtml(String(f.level)) + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(price) + '</td>'
+      + '<td class="num">' + qty.toFixed(8) + '</td>'
+      + '<td class="num">$' + _cfCascadeFmt(usd) + '</td>'
+      + '</tr>';
+  }).join('');
+
+  body.innerHTML =
+    '<div class="cf-cascade-round-summary">'
+      + '<div><span>Bought</span><strong>$' + _cfCascadeFmt(invested) + '</strong></div>'
+      + '<div><span>Quantity</span><strong>' + Number(round.quantity || 0).toFixed(8) + '</strong></div>'
+      + '<div><span>Avg entry</span><strong>' + _cfCascadeFmt(round.avg_entry) + '</strong></div>'
+      + '<div><span>Sold at</span><strong>' + _cfCascadeFmt(round.exit_price) + '</strong></div>'
+      + '<div><span>Realised</span><strong style="color:' + tone + ';">'
+        + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeFmt(pnl)
+        + (invested > 0 ? ' (' + (pnl / invested * 100).toFixed(2) + '%)' : '') + '</strong></div>'
+      + '<div><span>Held</span><strong>' + _escapeHtml(_cfCascadeHeldFor(round)) + '</strong></div>'
+    + '</div>'
+    + (fills.length
+      ? '<table class="trade-table"><thead><tr>'
+          + '<th>#</th><th>Filled</th><th>Level</th>'
+          + '<th class="num">Price</th><th class="num">Quantity</th><th class="num">Spent</th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table>'
+      : '<div class="cf-table-empty-cell" style="padding:16px;">'
+        + 'This round closed before per-buy detail was recorded, so only the '
+        + 'averages above survive. Rounds closed from now on carry the full log.</div>');
+
+  overlay.style.display = '';
+  document.body.classList.add('cf-chart-fs-open');
+}
+
+function _cfCascadeHeldFor(round) {
+  var from = Number(round.opened_ts) || 0;
+  var to = Number(round.closed_ts) || 0;
+  if (!from || !to || to <= from) return '--';
+  var mins = Math.round((to - from) / 60);
+  if (mins < 60) return mins + 'm';
+  return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+}
+
+function cfCascadeHideRoundLog() {
+  var overlay = document.getElementById('cf-cascade-round-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'none';
+  document.body.classList.remove('cf-chart-fs-open');
+}
+
+function cfCascadeRoundBackdrop(event) {
+  if (event && event.target && event.target.id === 'cf-cascade-round-overlay') cfCascadeHideRoundLog();
+}
+
 // ═══ CASCADE CHART ══════════════════════════════════════════════
 var _cfCascadeChartId = '';
 
@@ -9001,6 +9116,11 @@ function cfCascadeToggleFullscreen(force) {
 
 document.addEventListener('keydown', function(event) {
   if (event.key !== 'Escape') return;
+  var roundOverlay = document.getElementById('cf-cascade-round-overlay');
+  if (roundOverlay && roundOverlay.style.display !== 'none') {
+    cfCascadeHideRoundLog();
+    return;
+  }
   var panel = document.getElementById('cf-cascade-chart-panel');
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   if (panel && panel.classList.contains('cf-cascade-chart-fs')) {

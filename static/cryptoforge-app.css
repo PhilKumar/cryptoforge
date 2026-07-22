@@ -7028,6 +7028,47 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-chart-overlay #cf-cascade-chart-body svg { width: 100%; height: auto; }
   body.cf-chart-fs-open { overflow: hidden; }
 
+  /* Closed-round trade log: a reading dialog, not a drawing, so it wants a
+     narrower measure than the chart's 1320px. */
+  #cf-cascade-round-panel { width: min(860px, 100%); }
+  .cf-chart-overlay #cf-cascade-round-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+  .cf-cascade-round-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .cf-cascade-round-summary > div {
+    display: grid;
+    gap: 3px;
+    padding: 9px 12px;
+    border: 1px solid rgba(118,138,176,0.16);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.035);
+    min-width: 0;
+  }
+  .cf-cascade-round-summary span {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.65;
+  }
+  .cf-cascade-round-summary strong {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+  [data-theme="light"] .cf-cascade-round-summary > div {
+    background: rgba(15,23,42,0.035);
+    border-color: rgba(15,23,42,0.12);
+  }
+
   /* Expanded: edge to edge, chart only. */
   .cf-chart-overlay:has(> .cf-cascade-chart-fs) { padding: 0; }
   .cf-cascade-chart-fs {

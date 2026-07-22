@@ -1349,6 +1349,23 @@
     </section>
   </div>
 
+  <div class="cf-chart-overlay" id="cf-cascade-round-overlay" style="display:none;"
+       role="dialog" aria-modal="true" aria-label="Closed round trade log"
+       data-cf-click="cfCascadeRoundBackdrop(event)">
+    <section class="card table-panel" id="cf-cascade-round-panel">
+      <div class="table-toolbar">
+        <div class="table-title-group">
+          <h3 class="table-title" id="cf-cascade-round-title">Closed Trades</h3>
+          <div class="table-meta" id="cf-cascade-round-meta">Every buy that made up this round, in the order it filled.</div>
+        </div>
+        <div class="admin-inline-actions">
+          <button type="button" class="btn btn-outline btn-sm" data-cf-click="cfCascadeHideRoundLog()">Close</button>
+        </div>
+      </div>
+      <div id="cf-cascade-round-body"></div>
+    </section>
+  </div>
+
   <div class="cf-chart-overlay" id="cf-cascade-chart-overlay" style="display:none;"
        role="dialog" aria-modal="true" aria-label="Campaign chart"
        data-cf-click="cfCascadeChartBackdrop(event)">

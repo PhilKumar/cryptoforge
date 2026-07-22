@@ -389,6 +389,13 @@ class Round:
     exit_price: float
     pnl: float
     closed_at: str = ""
+    # Closing a round flattens the position and clears campaign.all_fills, so
+    # the individual buys that made up the average are gone the moment the TP
+    # lands. Snapshot them here: an average entry alone cannot tell you when
+    # each rung filled, what it cost, or which fib level it came from.
+    fills: List[dict] = field(default_factory=list)
+    opened_ts: int = 0
+    closed_ts: int = 0
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -404,6 +411,9 @@ class Round:
             exit_price=_coerce_float(data.get("exit_price")),
             pnl=_coerce_float(data.get("pnl")),
             closed_at=data.get("closed_at") or "",
+            fills=[dict(row) for row in (data.get("fills") or []) if isinstance(row, dict)],
+            opened_ts=int(data.get("opened_ts") or 0),
+            closed_ts=int(data.get("closed_ts") or 0),
         )
 
 
@@ -2267,6 +2277,23 @@ class CascadeEngine:
         avg = campaign.avg_entry_price or 0.0
         invested = sum(f.price * f.quantity for f in campaign.all_fills)
         leg = campaign.current_leg
+        ordered_fills = sorted(campaign.all_fills, key=lambda f: (f.timestamp, f.level))
+        fill_log = [
+            {
+                "timestamp": int(fill.timestamp or 0),
+                "price": fill.price,
+                "quantity": fill.quantity,
+                "usd": round(fill.price * fill.quantity, 8),
+                "level": fill.level,
+                "leg_id": fill.leg_id,
+                "order_id": fill.order_id,
+            }
+            for fill in ordered_fills
+        ]
+        # Candle time, not wall-clock: in a backtest the two are years apart,
+        # and the UI reads every cascade timestamp as a candle in IST.
+        seen = self._candles_5m.get(campaign.campaign_id) or []
+        closed_ts = int(seen[-1].timestamp) if seen else 0
         rnd = Round(
             round_id=len(campaign.rounds) + 1,
             leg_id=leg.leg_id if leg else 0,
@@ -2276,6 +2303,9 @@ class CascadeEngine:
             exit_price=exit_price,
             pnl=round((exit_price - avg) * qty, 8),
             closed_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            fills=fill_log,
+            opened_ts=int(ordered_fills[0].timestamp or 0) if ordered_fills else 0,
+            closed_ts=closed_ts,
         )
         campaign.rounds.append(rnd)
 

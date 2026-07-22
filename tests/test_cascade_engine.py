@@ -13,6 +13,7 @@ from engine.cascade import (
     FibLadder,
     Fill,
     Leg,
+    Round,
     build_fib_ladder_and_pool,
     plan_leg_orders,
 )
@@ -1635,3 +1636,77 @@ class BinanceSignedRequestTests(unittest.TestCase):
         self.assertEqual(captured.get("recvWindow"), binance_mod._RECV_WINDOW_MS)
         self.assertIn("signature", captured)
         self.assertGreater(captured.get("timestamp", 0), 0)
+
+
+class CascadeRoundTradeLogTests(unittest.TestCase):
+    """Closing a round flattens the position and clears campaign.all_fills, so
+    the individual buys vanished the moment the TP landed — only the average
+    survived. The round now snapshots them, because an average cannot tell you
+    when each rung filled, what it cost, or which fib level it came from."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = Campaign(
+            campaign_id="log1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        self.campaign.state = "TRENDLINE_ACTIVE"
+        leg = Leg(leg_id=3, trendline_id=1, low=64900.0, touch_high=65000.0, touch_timestamp=0)
+        leg.fib = FibLadder(high_anchor=65000.0, low_anchor=64900.0)
+        self.campaign.legs = [leg]
+        self.engine.campaigns[self.campaign.campaign_id] = self.campaign
+        self.campaign.all_fills = [
+            Fill(price=64800.0, quantity=0.00005, level=2, leg_id=3, timestamp=1_700_000_600, order_id="b2"),
+            Fill(price=64600.0, quantity=0.00006, level=4, leg_id=3, timestamp=1_700_000_300, order_id="b1"),
+        ]
+        self.campaign.filled_base_qty = 0.00011
+        self.campaign.avg_entry_price = 64690.909
+
+    def test_round_keeps_each_buy(self):
+        self.engine._close_round(self.campaign, 65000.0)
+        rnd = self.campaign.rounds[0]
+        self.assertEqual(len(rnd.fills), 2)
+        # Ordered by fill time, not by the order they happened to sit in memory.
+        self.assertEqual([f["timestamp"] for f in rnd.fills], [1_700_000_300, 1_700_000_600])
+        first = rnd.fills[0]
+        self.assertEqual(first["level"], 4)
+        self.assertEqual(first["leg_id"], 3)
+        self.assertAlmostEqual(first["usd"], 64600.0 * 0.00006, places=8)
+        self.assertEqual(rnd.opened_ts, 1_700_000_300)
+
+    def test_log_survives_the_position_reset(self):
+        """The clear-down that wipes all_fills must not reach into the round."""
+        self.engine._close_round(self.campaign, 65000.0)
+        self.assertEqual(self.campaign.all_fills, [])
+        self.assertEqual(len(self.campaign.rounds[0].fills), 2)
+
+    def test_log_round_trips_through_persistence(self):
+        self.engine._close_round(self.campaign, 65000.0)
+        restored = Campaign.from_dict(self.campaign.to_dict())
+        self.assertEqual(len(restored.rounds[0].fills), 2)
+        self.assertEqual(restored.rounds[0].fills[0]["level"], 4)
+        self.assertEqual(restored.rounds[0].opened_ts, 1_700_000_300)
+
+    def test_rounds_closed_before_this_change_still_load(self):
+        """Existing persisted rounds have no fills key and must not break."""
+        legacy = {
+            "round_id": 1,
+            "leg_id": 2,
+            "avg_entry": 100.0,
+            "quantity": 1.0,
+            "invested_usd": 100.0,
+            "exit_price": 110.0,
+            "pnl": 10.0,
+            "closed_at": "2026-07-20 10:00:00",
+        }
+        rnd = Round.from_dict(legacy)
+        self.assertEqual(rnd.fills, [])
+        self.assertEqual(rnd.opened_ts, 0)
+        self.assertEqual(rnd.pnl, 10.0)
