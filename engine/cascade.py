@@ -124,6 +124,10 @@ DECISIVE_BREAK_PCT = 0.0002
 # against both verified days: keepers separate by 0.055% and 0.173%, the
 # skipped one by 0.015%.
 MIN_LEG_SEPARATION_PCT = 0.0003
+# How many times the SAME trigger may be sent before we stop retrying. A stop
+# walking down a real fall changes price every time and is never throttled;
+# only a trigger that will not stay resting hits this.
+_MAX_SAME_TRIGGER_PLACEMENTS = 3
 # Every trendline starts at the same point — the mother high — so two of them
 # are the same line whenever their second anchors are close. Drawn on the chart
 # they overlap into one thick smear, which is not what gets drawn by hand: the
@@ -908,6 +912,9 @@ class CascadeEngine:
         self._price_cache: Dict[str, tuple] = {}
         self._last_sync_ts: Dict[str, float] = {}  # per campaign — a shared
         # timestamp meant two live campaigns starved each other of syncs
+        # campaign_id -> ((stop, limit), attempts) — see the churn brake in
+        # _place_pending_stop. In memory only: a restart is a fresh chance.
+        self._place_attempts: Dict[str, tuple] = {}
         self._loop_interval_sec = 5.0
         # 30s left a fill un-hedged for up to half a minute before the TP
         # went up. Weight cost at 10s is trivial against Binance's budget.
@@ -2676,7 +2683,18 @@ class CascadeEngine:
                     self._fill_pending(campaign, price, int(time.time()), campaign.pending_order_id)
                     changed = True
                 elif status in {"CANCELED", "EXPIRED", "REJECTED"}:
-                    self._log_event(campaign, "warn", "The buy stop was cancelled on the exchange; re-placing")
+                    # Say WHICH. The three mean very different things — EXPIRED
+                    # is a stop that triggered and could not fill inside its
+                    # limit, CANCELED is something pulling it, REJECTED is the
+                    # order never being accepted — and the old message collapsed
+                    # all three into "cancelled", which made a re-place loop
+                    # impossible to diagnose from the log alone.
+                    self._log_event(
+                        campaign,
+                        "warn",
+                        f"The buy stop came back {status} from the exchange "
+                        f"(trigger {campaign.pending_stop_price}, limit {campaign.pending_limit_price}); re-placing",
+                    )
                     campaign.pending_order_id = None
                     changed = True
 
@@ -2714,6 +2732,19 @@ class CascadeEngine:
         changed |= await self._sync_tp_order(campaign, open_orders)
         return changed
 
+    async def _adopt_order_by_client_id(self, campaign: Campaign, client_id: str) -> Optional[str]:
+        """Find a resting order by the client id we gave it, and return its
+        exchange id. Client ids are ours and unique, so a match is definitive."""
+        try:
+            open_orders = await self._open_orders_by_id(campaign)
+        except Exception as exc:
+            _log.warning("[CASCADE] could not list orders to adopt %s: %s", client_id, exc)
+            return None
+        for order_id, row in open_orders.items():
+            if str(row.get("clientOrderId") or "") == client_id:
+                return str(order_id)
+        return None
+
     async def _place_pending_stop(self, campaign: Campaign) -> bool:
         """Rest the accumulated buy on the exchange. One order, whatever the
         fall has collected so far, at the trigger the last red set."""
@@ -2738,6 +2769,36 @@ class CascadeEngine:
             # would bury the 200-entry log within minutes. The UI says so
             # instead, from pending_stop_price and last_price.
             return False
+        # Churn brake. On 2026-07-22 a live campaign placed the same trigger,
+        # had it come back cancelled, and re-placed — every 10-15s, indefinitely.
+        # Whatever the underlying cause, an entry that will not stay resting must
+        # not be retried forever: it burns rate limit and hides the real fault.
+        # Keyed in memory only, and cleared whenever the trigger actually moves,
+        # so a stop walking down a real fall is never throttled.
+        attempts = self._place_attempts.get(campaign.campaign_id)
+        if attempts and attempts[0] == (stop, limit):
+            if attempts[1] >= _MAX_SAME_TRIGGER_PLACEMENTS:
+                if attempts[1] == _MAX_SAME_TRIGGER_PLACEMENTS:
+                    self._place_attempts[campaign.campaign_id] = (attempts[0], attempts[1] + 1)
+                    self._log_event(
+                        campaign,
+                        "error",
+                        f"Buy stop at {stop:,.2f} would not stay on the exchange after "
+                        f"{_MAX_SAME_TRIGGER_PLACEMENTS} attempts — holding off until the trigger moves. "
+                        f"${campaign.pending_usd:,.2f} stays collected and unarmed.",
+                    )
+                    self._alert(
+                        "Cascade entry keeps being cancelled",
+                        f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
+                        f"${campaign.pending_usd:,.2f} buy stop at {stop:,.2f} will not rest.\n"
+                        f"Stopped retrying to protect the rate limit.",
+                        level="error",
+                        dedupe_sec=1800,
+                    )
+                return False
+            self._place_attempts[campaign.campaign_id] = (attempts[0], attempts[1] + 1)
+        else:
+            self._place_attempts[campaign.campaign_id] = ((stop, limit), 1)
         client_id = f"cf-csc-{campaign.campaign_id}-buy-{campaign.pending_rev}"
         try:
             result = await asyncio.to_thread(
@@ -2762,6 +2823,23 @@ class CascadeEngine:
             )
             return True
         error = (result or {}).get("error") if isinstance(result, dict) else "unknown error"
+        # "Duplicate order sent" means this exact client id already rests on the
+        # exchange — the order we wanted IS there, we simply lost track of its
+        # id (a restart, or a placement whose reply never arrived). Adopting it
+        # is the correct resolution. Treating it as a failure left the id unset,
+        # so the next sync tried the same client id and was refused again, for
+        # as long as the campaign ran.
+        if "duplicate" in str(error).lower():
+            adopted = await self._adopt_order_by_client_id(campaign, client_id)
+            if adopted:
+                campaign.pending_order_id = adopted
+                self._log_event(
+                    campaign,
+                    "order",
+                    f"Buy stop for ${campaign.pending_usd:,.2f} was already resting on the exchange "
+                    f"({client_id}); adopted it instead of placing a second one.",
+                )
+                return True
         self._log_event(campaign, "error", f"Failed to place the buy stop: {error}")
         self._alert(
             "Cascade order FAILED",

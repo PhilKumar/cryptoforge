@@ -1797,6 +1797,111 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(campaign.tp_order_id)
 
 
+class CascadeOrderChurnTests(unittest.IsolatedAsyncioTestCase):
+    """A live campaign placed the same buy stop every 10-15s for as long as it
+    ran: place -> came back cancelled -> re-place, forever. Two faults fed it —
+    a reused client id that Binance refused as a duplicate, and no ceiling on
+    retrying a trigger that would not stay resting."""
+
+    def _armed(self, engine, broker):
+        campaign = Campaign(
+            campaign_id="churn",
+            symbol="SOLUSDT",
+            capital_usd=2000.0,
+            mother_high=78.88,
+            mother_low=78.57,
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        campaign.pending_usd = 14.61
+        campaign.pending_stop_price = 77.14
+        campaign.pending_limit_price = 77.16
+        engine.campaigns[campaign.campaign_id] = campaign
+        engine._price_cache["SOLUSDT"] = (77.10, time.monotonic())
+        return campaign
+
+    async def test_a_duplicate_rejection_adopts_the_resting_order(self):
+        """-2010 means the order we wanted IS on the exchange under our own
+        client id. Failing left the id unset, so the next sync sent the same id
+        and was refused again — the loop had no exit."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        client_id = f"cf-csc-{campaign.campaign_id}-buy-{campaign.pending_rev}"
+        broker.open_orders = [{"orderId": "7788", "clientOrderId": client_id}]
+        broker.place_order = lambda *a, **k: {"error": "Binance -2010: Duplicate order sent."}
+
+        self.assertTrue(await engine._place_pending_stop(campaign))
+        self.assertEqual(campaign.pending_order_id, "7788")
+
+    async def test_a_duplicate_with_nothing_resting_is_still_a_failure(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        broker.open_orders = []
+        broker.place_order = lambda *a, **k: {"error": "Binance -2010: Duplicate order sent."}
+
+        self.assertFalse(await engine._place_pending_stop(campaign))
+        self.assertIsNone(campaign.pending_order_id)
+
+    async def test_the_same_trigger_is_not_retried_forever(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        attempts = []
+
+        def _refuse(*a, **k):
+            attempts.append(k.get("stop_price"))
+            return {"error": "Binance -2011: Unknown order sent."}
+
+        broker.place_order = _refuse
+        for _ in range(10):
+            await engine._place_pending_stop(campaign)
+
+        self.assertLessEqual(len(attempts), 3, "the same trigger was retried without a ceiling")
+
+    async def test_a_trigger_that_moves_is_never_throttled(self):
+        """The stop walking down a real fall must keep going out — the brake
+        is only for a trigger that will not stay resting."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        attempts = []
+
+        def _refuse(*a, **k):
+            attempts.append(k.get("stop_price"))
+            return {"error": "Binance -2011: Unknown order sent."}
+
+        broker.place_order = _refuse
+        for i in range(10):
+            campaign.pending_stop_price = round(77.14 - i * 0.01, 2)
+            campaign.pending_limit_price = round(campaign.pending_stop_price + 0.02, 2)
+            engine._price_cache["SOLUSDT"] = (campaign.pending_stop_price - 0.05, time.monotonic())
+            await engine._place_pending_stop(campaign)
+
+        self.assertEqual(len(attempts), 10, "a walking stop was throttled")
+
+    async def test_the_log_says_which_terminal_state_came_back(self):
+        """CANCELED, EXPIRED and REJECTED mean different things; collapsing all
+        three into 'cancelled' made the loop undiagnosable from the log."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        campaign.pending_order_id = "9999"
+        broker.open_orders = []
+        broker.order_lookup = {"9999": {"status": "EXPIRED"}}
+
+        await engine._sync_live_orders(campaign)
+
+        messages = " ".join(e.get("message", "") for e in campaign.event_log)
+        self.assertIn("EXPIRED", messages)
+        # The same sync goes on to re-place, so the id is a NEW one rather than
+        # None — that is the loop the brake above bounds, not a leak.
+        self.assertNotEqual(campaign.pending_order_id, "9999")
+
+
 class CascadePaperTpOnReplayTests(unittest.TestCase):
     """A replay must be able to CLOSE a paper round, not only open one.
 
