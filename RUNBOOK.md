@@ -315,8 +315,10 @@ Ordered. Items 2 and 3 mostly happen by leaving it alone.
 
 1. ~~No duplicate orders resting~~ — **verified clean 2026-07-22**
 2. **Three complete rounds, unattended**, at least one overnight. One round
-   proves the path exists; three prove it repeats. *(1 of 3 done — SOL #10
-   closed green.)*
+   proves the path exists; three prove it repeats. *(**2 of 3 done** — SOL #10
+   and a BTC round on 2026-07-22, both unattended.)* Remember the P&L shown is
+   **gross** — the Cascade engine models no fees, so subtract ~0.2% round-trip
+   before judging any of these. See §8.
 3. ~~**Deploy while holding a position.**~~ — **passed 2026-07-22 12:30 UTC.**
    Deployed with BTCUSDT #36 holding 0.00011 BTC and its TP resting. The new
    engine started, declined the lock, waited 35s for the old one to exit, then
@@ -345,6 +347,19 @@ Ordered. Items 2 and 3 mostly happen by leaving it alone.
    `cancel_duplicate_orders.py` (expect no cascade orders) and
    `show_fills.py --hours 1` (expect NO sell). Do this LAST — it deliberately
    abandons a position.
+
+   **8. ~~Second factor on the login.~~ — done 2026-07-22.** A 6-digit PIN was
+   the only thing between a stranger and an app that places real orders.
+   `CRYPTOFORGE_TOTP_SECRET` is set on the server and the login asks for PIN
+   then code. The lockout also escalates now (5m → 15m → 1h → 6h → 24h).
+   Rollback if a phone is ever lost:
+
+   ```bash
+   sudo sed -i 's/^CRYPTOFORGE_TOTP_SECRET=/#&/' /home/ec2-user/cryptoforge/.env
+   sudo systemctl restart cryptoforge@$(cat ~/.cryptoforge-active-port)
+   ```
+
+   Re-issue with `venv/bin/python tools/totp_setup.py`.
 6. ~~**Confirm Telegram alerts arrive.**~~ — **verified 2026-07-22.** The
    `-2010 Duplicate order sent` failure fired "Cascade order FAILED" and it was
    received. Telegram returned HTTP 200 in the same second.
