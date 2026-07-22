@@ -3233,3 +3233,108 @@ class StaticAssetVersionTests(unittest.TestCase):
             with patch.object(self.app_module, "_HERE", tmp):
                 rendered = self.app_module._version_static_assets('<script src="/static/gone.js?v=1"></script>')
         self.assertEqual(rendered, '<script src="/static/gone.js"></script>')
+
+
+class BinanceOrderHistoryScanTests(unittest.TestCase):
+    """Regression: enabling the Binance testnet took the whole site down.
+
+    get_order_history derived {asset}USDT for every non-zero wallet balance and
+    made one signed /api/v3/myTrades call per symbol. On mainnet that is a
+    handful of coins. The testnet credits every account with balances across a
+    large set of assets — junk test tokens and fiat codes included — so the
+    scan ballooned to hundreds of requests, blew the 6000 weight/minute limit,
+    and then ground through the remainder at three backed-off retries each.
+    Those calls run in the shared thread pool, so the pool saturated and every
+    request queued behind it: nginx returned 504 for the entire site."""
+
+    TESTNET_WALLET = [
+        {"asset_symbol": "USDT"},
+        {"asset_symbol": "BTC"},
+        {"asset_symbol": "ZAR"},
+        {"asset_symbol": "这是测试币"},
+        {"asset_symbol": "456"},
+        {"asset_symbol": "JPY"},
+        {"asset_symbol": "XNO"},
+    ]
+
+    def _client(self, wallet, listed=("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "XNOUSDT")):
+        client = BinanceSpotClient()
+        client.quote_asset = "USDT"
+        client._is_configured = lambda: True
+        client.get_wallet = lambda: wallet
+        client.get_products = lambda force_refresh=False: [{"broker_symbol": pair} for pair in listed]
+        return client
+
+    def test_unlisted_pairs_are_never_requested(self):
+        client = self._client(self.TESTNET_WALLET)
+        symbols = client._order_history_symbols()
+        for junk in ("ZARUSDT", "这是测试币USDT", "456USDT", "JPYUSDT"):
+            self.assertNotIn(junk, symbols)
+        # A listed holding is still scanned, and the majors always are.
+        self.assertIn("XNOUSDT", symbols)
+        self.assertIn("BTCUSDT", symbols)
+
+    def test_rate_limit_stops_the_scan(self):
+        client = self._client(self.TESTNET_WALLET)
+        calls = []
+
+        def _fake_request(method, path, params=None):
+            calls.append(params["symbol"])
+            if len(calls) == 2:
+                raise Exception('Binance API 429: {"code":-1003,"msg":"Too much request weight used"}')
+            return []
+
+        client._signed_request = _fake_request
+        client.get_order_history()
+        # Stopped at the rate limit instead of walking every remaining symbol.
+        self.assertEqual(len(calls), 2)
+
+    def test_symbol_list_is_capped(self):
+        many = [{"asset_symbol": f"C{index}"} for index in range(500)]
+        listed = [f"C{index}USDT" for index in range(500)]
+        client = self._client(many, listed=tuple(listed))
+        self.assertLessEqual(len(client._order_history_symbols()), client._MAX_HISTORY_SYMBOLS)
+
+    def test_missing_product_list_falls_back_to_majors(self):
+        """If exchangeInfo fails we cannot tell listed pairs from junk, so scan
+        only the majors rather than replaying the unbounded guess."""
+        client = self._client(self.TESTNET_WALLET, listed=())
+        self.assertEqual(
+            client._order_history_symbols(),
+            [f"{asset}USDT" for asset in client._MAJOR_ASSETS],
+        )
+
+    def test_rate_limit_detection(self):
+        self.assertTrue(BinanceSpotClient._is_rate_limited(Exception("Binance API 429: ...")))
+        self.assertTrue(BinanceSpotClient._is_rate_limited(Exception('{"code":-1003,"msg":"Too much request weight"}')))
+        self.assertFalse(BinanceSpotClient._is_rate_limited(Exception("Binance -1121: Invalid symbol.")))
+
+    def test_history_is_cached_between_polls(self):
+        client = self._client(self.TESTNET_WALLET)
+        calls = []
+
+        def _fake_request(method, path, params=None):
+            calls.append(params["symbol"])
+            return []
+
+        client._signed_request = _fake_request
+        client.get_order_history()
+        first = len(calls)
+        self.assertGreater(first, 0)
+
+        # A second poll inside the TTL must not re-scan: the portfolio
+        # endpoints call this on every refresh, and each symbol costs weight 20.
+        client.get_order_history()
+        self.assertEqual(len(calls), first)
+
+        client.get_order_history(force_refresh=True)
+        self.assertGreater(len(calls), first)
+
+    def test_cached_history_cannot_be_mutated_by_callers(self):
+        client = self._client(self.TESTNET_WALLET)
+        client._signed_request = lambda method, path, params=None: (
+            [{"id": 1, "orderId": 2, "time": 1}] if params["symbol"] == "BTCUSDT" else []
+        )
+        first = client.get_order_history()
+        first.clear()
+        self.assertEqual(len(client.get_order_history()), 1)

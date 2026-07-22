@@ -115,6 +115,9 @@ class BinanceSpotClient(BaseBroker):
         self._products_cache = None
         self._products_ts = 0.0
         self._CACHE_TTL = 3600
+        self._history_cache = None
+        self._history_ts = 0.0
+        self._HISTORY_TTL = 30
         # Binance rejects a signed request whose timestamp drifts outside
         # recvWindow of *its* clock (-1021). Track the offset to our own clock
         # and re-sync periodically so a drifting host doesn't start failing orders.
@@ -764,29 +767,80 @@ class BinanceSpotClient(BaseBroker):
         return result
 
     _MAJOR_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+    _MAX_HISTORY_SYMBOLS = 40
+
+    @staticmethod
+    def _is_rate_limited(exc: Exception) -> bool:
+        """True for Binance's weight-limit (-1003/429) and IP-ban (418) replies."""
+        text = str(exc)
+        return "429" in text or "-1003" in text or "418" in text or "Too much request weight" in text
+
+    def _tradable_pairs(self) -> set:
+        """Every symbol the exchange actually lists, from the cached products."""
+        pairs = set()
+        try:
+            for product in self.get_products() or []:
+                pair = str(product.get("broker_symbol") or product.get("symbol") or "").upper()
+                if pair:
+                    pairs.add(pair)
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] product list unavailable for history scan: %s", exc)
+        return pairs
 
     def _order_history_symbols(self) -> list[str]:
         """Symbols to pull trade history for: the majors plus every asset the
-        account currently holds, so trades in any held coin are included."""
+        account currently holds, so trades in any held coin are included.
+
+        Held assets are only included when {asset}{quote} is a symbol the
+        exchange actually lists. Deriving the pair blindly is fine on a mainnet
+        account holding a handful of coins, but the testnet credits every
+        account with balances across a large set of assets — junk test tokens
+        and fiat codes among them — and each unlisted guess still costs a
+        signed round trip to be told -1121. The list is also capped, so no
+        account can turn one history call into an unbounded scan.
+        """
         symbols = [f"{asset}{self.quote_asset}" for asset in self._MAJOR_ASSETS]
         seen = set(symbols)
+        listed = self._tradable_pairs()
         try:
             wallet = self.get_wallet()
         except Exception:
             wallet = None
         for row in wallet if isinstance(wallet, list) else []:
+            if len(symbols) >= self._MAX_HISTORY_SYMBOLS:
+                _binance_log.warning(
+                    "[BINANCE SPOT] history scan capped at %s symbols; older trades in "
+                    "other held assets are not included",
+                    self._MAX_HISTORY_SYMBOLS,
+                )
+                break
             asset = str(row.get("asset_symbol") or "").upper()
             if not asset or asset == self.quote_asset:
                 continue
             pair = f"{asset}{self.quote_asset}"
-            if pair not in seen:
-                seen.add(pair)
-                symbols.append(pair)
+            if pair in seen:
+                continue
+            # An empty product list means exchangeInfo failed; fall back to the
+            # majors alone rather than replaying the unbounded scan.
+            if listed and pair not in listed:
+                continue
+            if not listed:
+                continue
+            seen.add(pair)
+            symbols.append(pair)
         return symbols
 
-    def get_order_history(self) -> list:
+    def get_order_history(self, force_refresh: bool = False) -> list:
         if not self._is_configured():
             return []
+        # One scan costs weight 20 per symbol, and the portfolio endpoints call
+        # this on every poll. Uncached, a few open browser tabs alone can spend
+        # the whole 6000/minute budget. Fills only feed display and cost basis
+        # here — order reconciliation uses get_order/get_orders — so a short TTL
+        # is safe.
+        now = _time.time()
+        if self._history_cache is not None and not force_refresh and (now - self._history_ts) < self._HISTORY_TTL:
+            return list(self._history_cache)
         # NOTE: Binance /api/v3/myTrades rejects any startTime/endTime window
         # longer than 24h. Omit the window entirely and fetch the most recent
         # trades per symbol (limit only) so history is not silently dropped.
@@ -801,6 +855,17 @@ class BinanceSpotClient(BaseBroker):
                     params={"symbol": symbol, "limit": per_symbol_limit},
                 )
             except Exception as exc:
+                # -1003/429 means the weight budget is already spent. Carrying
+                # on through the remaining symbols cannot succeed, burns three
+                # backed-off retries each, and is how a polling client earns an
+                # IP ban. Keep whatever was collected and stop.
+                if self._is_rate_limited(exc):
+                    _binance_log.warning(
+                        "[BINANCE SPOT] rate limited at %s - stopping history scan with %s trades",
+                        symbol,
+                        len(trades),
+                    )
+                    break
                 _binance_log.warning("[BINANCE SPOT] Trades error for %s: %s", symbol, exc)
                 continue
             for row in rows or []:
@@ -829,7 +894,9 @@ class BinanceSpotClient(BaseBroker):
                 )
                 trades.append(row)
         trades.sort(key=lambda item: item.get("time") or 0, reverse=True)
-        return trades
+        self._history_cache = trades
+        self._history_ts = now
+        return list(trades)
 
     def get_convert_history(self, days: int = 30) -> list:
         """
