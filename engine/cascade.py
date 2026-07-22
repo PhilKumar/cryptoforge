@@ -2692,8 +2692,23 @@ class CascadeEngine:
                 if client_id.startswith(f"cf-csc-{campaign.campaign_id}-") and order_id not in known_ids:
                     await self._safe_cancel(campaign, order_id)
                     changed = True
-            if await self._place_pending_stop(campaign):
-                changed = True
+            # Isolated on purpose. This step raised for days and the tick's
+            # try/except swallowed it, which ALSO meant step 3 below never ran
+            # — so a live campaign could neither buy nor place a take-profit.
+            # A failure to arm the entry must never take the exit down with it.
+            try:
+                if await self._place_pending_stop(campaign):
+                    changed = True
+            except Exception as exc:
+                _log.warning("[CASCADE] buy stop placement failed for %s: %s", campaign.campaign_id, exc)
+                self._alert(
+                    "Cascade entry not placed",
+                    f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
+                    f"${campaign.pending_usd:,.2f} collected but the buy stop could not be placed.\n"
+                    f"{type(exc).__name__}: {exc}",
+                    level="error",
+                    dedupe_sec=900,
+                )
 
         # 3) TP management.
         changed |= await self._sync_tp_order(campaign, open_orders)
@@ -2708,10 +2723,21 @@ class CascadeEngine:
         limit = campaign.pending_limit_price
         if not stop or not limit:
             return False  # not armed: two reds have not printed below the line yet
-        last = self._price_cache.get(campaign.symbol) or {}
-        market = _coerce_float(last.get("price"))
+        # _price_cache holds (price, monotonic) tuples — see _get_price. This
+        # read used to call .get("price") on that tuple, which raised
+        # AttributeError on every sync that had a cached price, i.e. all of
+        # them after the first tick. The exception was swallowed by the tick's
+        # try/except, so a live campaign collected forever and never placed a
+        # single order — and because this runs at step 2 of 3, it also took the
+        # TP sync down with it.
+        cached = self._price_cache.get(campaign.symbol)
+        market = _coerce_float(cached[0]) if cached else 0.0
         if market and market >= stop:
-            return False  # a buy stop must sit above the market or it fires at once
+            # A buy stop has to sit above the market or it fires at once. Not
+            # logged: this is re-evaluated every sync, and an event per sync
+            # would bury the 200-entry log within minutes. The UI says so
+            # instead, from pending_stop_price and last_price.
+            return False
         client_id = f"cf-csc-{campaign.campaign_id}-buy-{campaign.pending_rev}"
         try:
             result = await asyncio.to_thread(

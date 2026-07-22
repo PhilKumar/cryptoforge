@@ -1717,6 +1717,86 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", result)
 
 
+class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
+    """The live entry never reached Binance.
+
+    _place_pending_stop read the cached market price with .get("price"), but
+    _price_cache holds (price, monotonic) TUPLES. So every sync that had a
+    cached price — all of them after the first tick — raised AttributeError.
+    The tick's try/except swallowed it, so the symptom was silence: a live
+    campaign collected level after level and never placed an order. Because
+    the throw happened at step 2 of 3, it also skipped TP management entirely.
+    """
+
+    def _armed(self, engine, broker, stop=77.14):
+        campaign = Campaign(
+            campaign_id="sol10",
+            symbol="SOLUSDT",
+            capital_usd=2000.0,
+            mother_high=78.88,
+            mother_low=78.57,
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        campaign.pending_usd = 14.61
+        campaign.pending_stop_price = stop
+        campaign.pending_limit_price = round(stop + 0.05, 2)
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    async def test_a_cached_price_below_the_trigger_places_the_order(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        # Exactly the shape _get_price stores.
+        engine._price_cache["SOLUSDT"] = (77.10, time.monotonic())
+
+        placed = await engine._place_pending_stop(campaign)
+
+        self.assertTrue(placed, "the buy stop never reached the exchange")
+        self.assertEqual(len(broker.placed_orders), 1)
+        order = broker.placed_orders[0]
+        self.assertEqual(order["side"], "buy")
+        self.assertEqual(order["order_type"], "stop_limit")
+        self.assertAlmostEqual(order["stop_price"], 77.14)
+        self.assertAlmostEqual(order["size"], 14.61)
+        self.assertTrue(campaign.pending_order_id)
+
+    async def test_a_market_at_the_trigger_holds_off_without_raising(self):
+        """A buy stop must sit above the market. Declining is correct — but it
+        has to decline, not explode."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        engine._price_cache["SOLUSDT"] = (77.14, time.monotonic())
+
+        self.assertFalse(await engine._place_pending_stop(campaign))
+        self.assertEqual(broker.placed_orders, [])
+        self.assertIsNone(campaign.pending_order_id)
+
+    async def test_the_tp_still_syncs_when_the_entry_cannot_be_placed(self):
+        """Step 2 raising must not take step 3 down with it: a campaign
+        holding coin needs its exit resting whatever the entry is doing."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        campaign.all_fills.append(Fill(price=77.50, quantity=0.1, level=8, leg_id=1, timestamp=_RECENT_TS))
+        campaign.filled_base_qty = 0.1
+        campaign.avg_entry_price = 77.50
+
+        async def _boom(_campaign):
+            raise RuntimeError("exchange unreachable")
+
+        engine._place_pending_stop = _boom
+        await engine._sync_live_orders(campaign)
+
+        sells = [o for o in broker.placed_orders if str(o.get("side", "")).lower() == "sell"]
+        self.assertEqual(len(sells), 1, "the take-profit was not placed")
+        self.assertTrue(campaign.tp_order_id)
+
+
 class CascadePaperTpOnReplayTests(unittest.TestCase):
     """A replay must be able to CLOSE a paper round, not only open one.
 

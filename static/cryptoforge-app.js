@@ -7945,10 +7945,18 @@ function _cfCascadeLadderRows(campaign) {
   var stopNote = 'buy stop armed at ' + _cfCascadeFmt(campaign.pending_stop_price)
     + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')';
   if (isLive) {
+    // A buy stop must sit above the market. When price has already climbed
+    // back to the trigger the order cannot be placed, and saying only "not on
+    // Binance yet" hides why — it reads like a bug rather than the rule.
+    var mkt = Number(campaign.last_price);
+    var blocked = isFinite(mkt) && mkt > 0 && mkt >= Number(campaign.pending_stop_price);
     stopNote = onExchange
       ? 'resting on Binance at ' + _cfCascadeFmt(campaign.pending_stop_price)
         + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')'
-      : 'armed at ' + _cfCascadeFmt(campaign.pending_stop_price) + ' · not on Binance yet';
+      : blocked
+        ? 'trigger ' + _cfCascadeFmt(campaign.pending_stop_price) + ' is at or below the market '
+          + _cfCascadeFmt(mkt) + ' — waits for the next red close to walk it down'
+        : 'armed at ' + _cfCascadeFmt(campaign.pending_stop_price) + ' · not on Binance yet';
   }
   var potNote = pot <= 0
     ? 'price has not reached a level yet'
