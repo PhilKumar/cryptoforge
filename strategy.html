@@ -1414,6 +1414,45 @@
   <section class="card table-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
+        <h3 class="table-title">Closed Rounds &mdash; Every Trade</h3>
+        <div class="table-meta" id="cf-cascade-ledger-meta">Every round that reached its target, across every campaign &mdash; running and ended alike. Newest first. Log opens the individual buys that made up the average.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Filter closed rounds by coin" id="cf-cascade-ledger-filters"></div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table cf-cascade-ledger">
+          <thead>
+            <tr>
+              <th>Closed</th>
+              <th>Symbol</th>
+              <th>Campaign</th>
+              <th>Round</th>
+              <th>Fib</th>
+              <th class="num">Avg Entry</th>
+              <th class="num">Exit</th>
+              <th class="num">Quantity</th>
+              <th class="num">Invested</th>
+              <th class="num">P&amp;L $</th>
+              <th class="num">ROI</th>
+              <th>Held</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-cascade-ledger-body">
+            <tr><td colspan="13" class="cf-table-empty-cell">No closed rounds yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="cf-cascade-pager" id="cf-cascade-ledger-pager"></div>
+  </section>
+
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
         <h3 class="table-title">Closed Campaigns</h3>
         <div class="table-meta">Every campaign that has ended — target hit, mother broken, stopped, or deleted. Kept across restarts; use Remove to clear a row for good.</div>
       </div>

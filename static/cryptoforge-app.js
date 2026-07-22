@@ -7850,6 +7850,7 @@ function cfRenderCascadeStatus(data) {
   cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
+  cfRenderCascadeLedger(data);
 }
 
 var _CF_LEVEL_SHARE = { 2: 20, 4: 30, 8: 50 };
@@ -7956,7 +7957,7 @@ function _cfCascadeLadderRows(campaign) {
         + '<td class="num">$' + _cfCascadeUsd(liveTotal) + '</td><td></td></tr>'
       : '');
 
-  return '<div class="table-surface"><div class="table-scroll"><table class="trade-table">'
+  return '<div class="table-surface"><div class="table-scroll"><table class="trade-table cf-cascade-ladder">'
     + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th>'
     + '<th class="num">Amount</th><th>Status</th></tr></thead>'
     + '<tbody>' + head + rows + '</tbody></table></div></div>';
@@ -8131,7 +8132,7 @@ function _cfCascadePositionPanel(campaign, fills) {
         + '<span>' + fills.length + ' entr' + (fills.length === 1 ? 'y' : 'ies')
         + ' · $' + _cfCascadeFmt(invested) + ' invested</span>'
       + '</div>'
-      + '<table class="trade-table"><thead><tr>'
+      + '<table class="trade-table cf-cascade-fills"><thead><tr>'
         + '<th>Entry</th><th>Fib</th><th>Level</th>'
         + '<th class="num">Price</th><th class="num">Qty</th><th class="num">Cost</th>'
       + '</tr></thead><tbody>'
@@ -8167,7 +8168,7 @@ function _cfCascadePositionPanel(campaign, fills) {
         + '<span style="color:' + (total >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)') + ';">'
         + (total >= 0 ? '+' : '') + '$' + _cfCascadeFmt(total) + ' realised</span>'
       + '</div>'
-      + '<table class="trade-table"><thead><tr>'
+      + '<table class="trade-table cf-cascade-rounds"><thead><tr>'
         + '<th>Round</th><th>Fib</th><th class="num">Avg Entry</th><th class="num">Exit</th>'
         + '<th class="num">Qty</th><th class="num">P&amp;L</th><th class="num">ROI</th><th></th>'
       + '</tr></thead><tbody>'
@@ -8181,7 +8182,7 @@ function _cfCascadePositionPanel(campaign, fills) {
           + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
           + '<td class="num">' + _cfCascadeFmt(r.exit_price) + '</td>'
           + '<td class="num">' + Number(r.quantity || 0).toFixed(8) + '</td>'
-          + '<td class="num" style="color:' + tone + ';">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeFmt(pnl) + '</td>'
+          + '<td class="num" style="color:' + tone + ';">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeUsd(pnl) + '</td>'
           + '<td class="num" style="color:' + tone + ';">' + (inv > 0 ? (pnl / inv * 100).toFixed(2) + '%' : '--') + '</td>'
           + '<td class="num"><button type="button" class="btn btn-outline btn-sm"'
             + ' data-cf-click="cfCascadeShowRoundLog(\'' + _escapeHtml(String(campaign.campaign_id)) + '\',' + Number(r.round_id) + ')"'
@@ -8460,6 +8461,179 @@ function _cfRenderClosedPager(pages, total) {
 function cfCascadeClosedPage(step) {
   _cfCascadeClosedPage += step;
   cfRenderCascadeClosed(_cfCascadeClosedAll);
+}
+
+// ═══ CASCADE CLOSED-ROUND LEDGER ════════════════════════════════
+// One flat list of every round that ever reached its target. The per-campaign
+// tables answer "how did this campaign go"; this answers "what have I actually
+// traded", which no per-campaign view can — a round belongs to a campaign, but
+// a trading record belongs to the account.
+//
+// Rounds are read from BOTH pools. A running campaign that has already banked
+// three rounds is history as much as an ended one, and leaving it out would
+// make the ledger disagree with the totals on the cards above it.
+var _CF_LEDGER_PAGE_SIZE = 15;
+var _cfCascadeLedgerPage = 0;
+var _cfCascadeLedgerCoin = 'ALL';
+var _cfCascadeLedgerAll = [];
+
+function _cfCascadeCollectRounds(status) {
+  var pools = [status.campaigns || [], status.closed_campaigns || []];
+  var out = [];
+  for (var p = 0; p < pools.length; p++) {
+    for (var i = 0; i < pools[p].length; i++) {
+      var campaign = pools[p][i];
+      var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
+      for (var r = 0; r < rounds.length; r++) {
+        out.push({
+          campaign: campaign,
+          round: rounds[r],
+          symbol: String(campaign.symbol || ''),
+          ended: p === 1
+        });
+      }
+    }
+  }
+  // Candle close time first; it is the only field that means the same thing in
+  // a backtest and in live trading. Legacy rounds predate it and carry 0, so
+  // fall back to the wall-clock string, which sorts correctly as written.
+  out.sort(function(a, b) {
+    var at = Number(a.round.closed_ts) || 0;
+    var bt = Number(b.round.closed_ts) || 0;
+    if (at !== bt) return bt - at;
+    return String(b.round.closed_at || '').localeCompare(String(a.round.closed_at || ''));
+  });
+  return out;
+}
+
+function cfCascadeSetLedgerFilter(coin) {
+  _cfCascadeLedgerCoin = coin || 'ALL';
+  _cfCascadeLedgerPage = 0;
+  _cfCascadeRenderLedgerRows();
+}
+
+function cfCascadeLedgerPage(step) {
+  _cfCascadeLedgerPage += step;
+  _cfCascadeRenderLedgerRows();
+}
+
+function cfRenderCascadeLedger(status) {
+  _cfCascadeLedgerAll = _cfCascadeCollectRounds(status || {});
+  var mount = document.getElementById('cf-cascade-ledger-filters');
+  if (mount) {
+    var coins = [];
+    _cfCascadeLedgerAll.forEach(function(row) {
+      if (row.symbol && coins.indexOf(row.symbol) === -1) coins.push(row.symbol);
+    });
+    coins.sort();
+    if (coins.length < 2) {
+      mount.innerHTML = '';
+      if (coins.length < 2 && _cfCascadeLedgerCoin !== 'ALL') _cfCascadeLedgerCoin = 'ALL';
+    } else {
+      mount.innerHTML = ['ALL'].concat(coins).map(function(name) {
+        var on = name === _cfCascadeLedgerCoin;
+        return '<button type="button" class="cf-tf-option' + (on ? ' is-active' : '') + '"'
+          + ' role="radio" aria-checked="' + (on ? 'true' : 'false') + '"'
+          + ' data-cf-click="cfCascadeSetLedgerFilter(\'' + _escapeHtml(name) + '\')">'
+          + _escapeHtml(name === 'ALL' ? 'All' : name.replace('USDT', '')) + '</button>';
+      }).join('');
+    }
+  }
+  _cfCascadeRenderLedgerRows();
+}
+
+function _cfCascadeRenderLedgerRows() {
+  var body = document.getElementById('cf-cascade-ledger-body');
+  if (!body) return;
+  var meta = document.getElementById('cf-cascade-ledger-meta');
+  var rows = _cfCascadeLedgerCoin === 'ALL'
+    ? _cfCascadeLedgerAll
+    : _cfCascadeLedgerAll.filter(function(row) { return row.symbol === _cfCascadeLedgerCoin; });
+
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="13" class="cf-table-empty-cell">'
+      + (_cfCascadeLedgerAll.length ? 'No closed rounds for this coin' : 'No closed rounds yet')
+      + '</td></tr>';
+    _cfCascadeRenderLedgerPager(0, 0);
+    if (meta) {
+      meta.textContent = 'Every round that reached its target, across every campaign — '
+        + 'running and ended alike. Nothing has closed yet.';
+    }
+    return;
+  }
+
+  var invested = 0, realised = 0, wins = 0;
+  rows.forEach(function(row) {
+    invested += Number(row.round.invested_usd) || 0;
+    realised += Number(row.round.pnl) || 0;
+    if ((Number(row.round.pnl) || 0) > 0) wins++;
+  });
+
+  var pages = Math.max(1, Math.ceil(rows.length / _CF_LEDGER_PAGE_SIZE));
+  if (_cfCascadeLedgerPage >= pages) _cfCascadeLedgerPage = pages - 1;
+  if (_cfCascadeLedgerPage < 0) _cfCascadeLedgerPage = 0;
+  var from = _cfCascadeLedgerPage * _CF_LEDGER_PAGE_SIZE;
+
+  body.innerHTML = rows.slice(from, from + _CF_LEDGER_PAGE_SIZE).map(function(row) {
+    var campaign = row.campaign;
+    var r = row.round;
+    var pnl = Number(r.pnl) || 0;
+    var inv = Number(r.invested_usd) || 0;
+    var tone = pnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+    var buys = (r.fills || []).length;
+    var cid = String(campaign.campaign_id || '');
+    var num = Number(campaign.seq) > 0 ? '#' + campaign.seq : '#' + cid;
+    // Candle time reads in IST like every other timestamp on the site. Rounds
+    // closed before the log existed have no candle stamp, so show the wall
+    // clock we did record rather than a bare dash.
+    var when = Number(r.closed_ts) > 0
+      ? _cfCascadeIst(r.closed_ts) + '<div class="table-meta">IST</div>'
+      : _escapeHtml(String(r.closed_at || '--')) + '<div class="table-meta">server clock</div>';
+    return '<tr>'
+      + '<td style="white-space:nowrap;">' + when + '</td>'
+      + '<td>' + _escapeHtml(row.symbol) + '</td>'
+      + '<td>' + _escapeHtml(num)
+        + (row.ended ? '<div class="table-meta">ended</div>' : '<div class="table-meta">running</div>') + '</td>'
+      + '<td>#' + _escapeHtml(String(r.round_id)) + '</td>'
+      + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
+      + '<td class="num">' + _cfCascadeFmt(r.exit_price) + '</td>'
+      + '<td class="num">' + Number(r.quantity || 0).toFixed(8) + '</td>'
+      + '<td class="num">$' + _cfCascadeUsd(inv) + '</td>'
+      + '<td class="num" style="color:' + tone + ';">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeUsd(pnl) + '</td>'
+      + '<td class="num" style="color:' + tone + ';">' + (inv > 0 ? (pnl / inv * 100).toFixed(2) + '%' : '--') + '</td>'
+      + '<td>' + _escapeHtml(_cfCascadeHeldFor(r)) + '</td>'
+      + '<td class="num"><button type="button" class="btn btn-outline btn-sm"'
+        + ' data-cf-click="cfCascadeShowRoundLog(\'' + _escapeHtml(cid) + '\',' + Number(r.round_id) + ')"'
+        + (buys ? '' : ' disabled title="No per-buy detail recorded for this round"')
+        + '>Log' + (buys ? ' (' + buys + ')' : '') + '</button></td>'
+      + '</tr>';
+  }).join('');
+
+  if (meta) {
+    var tone = realised >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+    meta.innerHTML = rows.length + ' round' + (rows.length === 1 ? '' : 's') + ' closed at target · '
+      + '$' + _cfCascadeUsd(invested) + ' deployed · '
+      + '<strong style="color:' + tone + ';">' + (realised >= 0 ? '+' : '') + '$'
+      + _cfCascadeUsd(realised) + ' realised</strong>'
+      + (invested > 0 ? ' (' + (realised / invested * 100).toFixed(2) + '%)' : '')
+      + ' · ' + wins + '/' + rows.length + ' in profit. '
+      + 'Log opens the individual buys behind each average.';
+  }
+  _cfCascadeRenderLedgerPager(pages, rows.length);
+}
+
+function _cfCascadeRenderLedgerPager(pages, total) {
+  var host = document.getElementById('cf-cascade-ledger-pager');
+  if (!host) return;
+  if (pages <= 1) { host.innerHTML = ''; return; }
+  var from = _cfCascadeLedgerPage * _CF_LEDGER_PAGE_SIZE + 1;
+  var to = Math.min(from + _CF_LEDGER_PAGE_SIZE - 1, total);
+  host.innerHTML = '<span class="table-meta">' + from + '–' + to + ' of ' + total + '</span>'
+    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeLedgerPage === 0 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeLedgerPage(-1)">Newer</button>'
+    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeLedgerPage >= pages - 1 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeLedgerPage(1)">Older</button>';
 }
 
 async function cfCascadePurgeClosed(campaignId) {

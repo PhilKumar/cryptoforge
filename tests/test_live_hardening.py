@@ -3185,6 +3185,74 @@ class BinanceTestnetCredentialTests(unittest.TestCase):
         self.assertEqual(payload["value"], "")
 
 
+class CascadeTableColumnTests(unittest.TestCase):
+    """A cascade card holds three different tables that all carry `.trade-table`,
+    and the card puts them in `table-layout: fixed`. Column shares written for
+    one of them silently applied to all three: the ladder's five widths landed
+    on the rounds table's eight columns, truncating "Avg Entry" and starving
+    P&L, ROI and Log of any width at all. Widths must name their table."""
+
+    ROOT = os.path.dirname(os.path.dirname(__file__))
+
+    def _read(self, name):
+        with open(os.path.join(self.ROOT, name), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_cascade_column_widths_are_scoped_to_one_table(self):
+        css = self._read(os.path.join("static", "cryptoforge-app.css"))
+        stray = re.findall(r"\.cf-cascade-card \.trade-table (?:th|td):nth-child", css)
+        self.assertEqual(
+            stray,
+            [],
+            "column widths on `.cf-cascade-card .trade-table` hit every table in "
+            "the card; scope them to .cf-cascade-ladder/-fills/-rounds instead",
+        )
+
+    def test_every_declared_ladder_width_set_covers_its_whole_table(self):
+        css = self._read(os.path.join("static", "cryptoforge-app.css"))
+        js = self._read(os.path.join("static", "cryptoforge-app.js"))
+        # Each table's rendered header count, taken from the markup that builds
+        # it, so adding a column without adding a width fails here.
+        for klass, columns in (("cf-cascade-ladder", 5), ("cf-cascade-fills", 6), ("cf-cascade-rounds", 8)):
+            self.assertIn(f"trade-table {klass}", js, f"no table renders with .{klass}")
+            widths = re.findall(
+                rf"\.{klass} td:nth-child\((\d+)\) \{{ width: ([\d.]+)%; \}}",
+                css,
+            )
+            self.assertEqual(
+                sorted(int(n) for n, _ in widths),
+                list(range(1, columns + 1)),
+                f".{klass} declares widths for the wrong columns",
+            )
+            self.assertAlmostEqual(
+                sum(float(pct) for _, pct in widths),
+                100.0,
+                places=1,
+                msg=f".{klass} widths do not add up to the table",
+            )
+
+    def test_closed_round_ledger_is_a_standalone_section(self):
+        html = self._read("strategy.html")
+        self.assertIn('id="cf-cascade-ledger-body"', html)
+        # The empty-state colspan has to span the real table or the "no rounds
+        # yet" row leaves a ragged edge.
+        table = html.split('class="trade-table cf-cascade-ledger"', 1)[1]
+        head, rest = table.split("</thead>", 1)
+        self.assertEqual(
+            len(re.findall(r"<th[ >]", head)),
+            int(re.search(r'colspan="(\d+)"', rest).group(1)),
+            "ledger empty-state colspan does not match its header count",
+        )
+
+    def test_ledger_reads_rounds_from_running_and_ended_campaigns(self):
+        js = self._read(os.path.join("static", "cryptoforge-app.js"))
+        collect = js.split("function _cfCascadeCollectRounds", 1)[1].split("\nfunction ", 1)[0]
+        # A running campaign that has already banked rounds is history too;
+        # omitting it would make the ledger disagree with the cards above it.
+        self.assertIn("status.campaigns", collect)
+        self.assertIn("status.closed_campaigns", collect)
+
+
 class StaticAssetVersionTests(unittest.TestCase):
     """The ?v= cache-busting tokens used to be typed by hand, so an edited JS
     file could keep an unchanged URL. The browser HTTP cache and the service
