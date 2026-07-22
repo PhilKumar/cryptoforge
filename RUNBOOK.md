@@ -117,6 +117,34 @@ curl -s -o /dev/null -w "%{http_code}\n" -H "Host: crypto.philforge.in" http://1
 
 A `301` is healthy nginx redirecting to HTTPS.
 
+### Step 5 — is the box swapping?
+
+Everything can be "up" and still crawl. This box has 916 MB of RAM and runs
+**two** apps — CryptoForge and PhilForge — plus a second CryptoForge instance
+during every blue-green deploy. When RAM runs out the kernel pages to disk, and
+on Lightsail that disk is over the network.
+
+```bash
+free -m
+```
+
+`Swap used` in the hundreds of MB means the box is thrashing. Find the owner:
+
+```bash
+for p in $(pgrep -f 'uvicorn app:app'); do echo "PID $p  swap=$(awk '/VmSwap/{print $2}' /proc/$p/status)KB  rss=$(awk '/VmRSS/{print $2}' /proc/$p/status)KB  up=$(ps -o etime= -p $p)  $(tr '\0' ' ' < /proc/$p/cmdline | cut -c1-60)"; done
+```
+
+**Seen on 2026-07-22:** PhilForge (port 8000) had been up 63 days holding
+**1.22 GB** of swap — roughly 20 MB/day — against an RSS of only 88 MB. Almost
+everything it had allocated was paged out. CryptoForge was clean at 0.
+`sudo systemctl restart philforge@8000` took swap from 1287 MB to 27 MB.
+
+Restarting the leaking process is the fix; **do not run `swapoff`** without
+knowing what is in there, as it forces every page back into RAM at once.
+
+PhilForge lives in the algoforge repo, not this one. If its swap climbs again,
+it needs its own `MemoryMax` or a weekly restart timer.
+
 ---
 
 ## 3. The two outage patterns seen so far
