@@ -1902,6 +1902,94 @@ class CascadeOrderChurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(campaign.pending_order_id, "9999")
 
 
+class CascadeOrderIdTests(unittest.IsolatedAsyncioTestCase):
+    """A placement reply with no order id must never read as success.
+
+    `str(result.get("orderId") or result.get("id") or "")` stored an empty
+    string, which is falsy — so the next sync believed nothing was resting,
+    skipped the cancel, and placed ANOTHER order, while logging "placed" every
+    time. On the take-profit that means several sell orders against one
+    position, every one of them able to fill. Seen live on SOLUSDT: the same
+    0.18937135 @ 77.58 sell going out every ten seconds.
+    """
+
+    def _holding(self, engine):
+        campaign = Campaign(
+            campaign_id="ids",
+            symbol="SOLUSDT",
+            capital_usd=2000.0,
+            mother_high=78.88,
+            mother_low=78.57,
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        campaign.all_fills.append(Fill(price=77.23, quantity=0.18937135, level=8, leg_id=1, timestamp=_RECENT_TS))
+        campaign.filled_base_qty = 0.18937135
+        campaign.avg_entry_price = 77.23
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    async def test_an_idless_reply_does_not_stack_a_second_sell(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._holding(engine)
+        # Accepted, but the reply carries neither orderId nor id — while the
+        # order really does start resting, which is what makes the stacking
+        # dangerous rather than merely noisy.
+        sent = []
+
+        def _idless(*a, **k):
+            sent.append(k.get("client_order_id"))
+            broker.open_orders.append({"orderId": f"e{len(sent)}", "clientOrderId": k.get("client_order_id")})
+            return {"status": "NEW"}
+
+        broker.place_order = _idless
+
+        for _ in range(5):
+            await engine._sync_tp_order(campaign, {str(o["orderId"]): o for o in broker.open_orders})
+
+        self.assertEqual(len(sent), 1, f"stacked {len(sent)} sells for one position: {sent}")
+        self.assertEqual(campaign.tp_order_id, "e1")
+
+    async def test_an_idless_reply_is_recovered_by_client_id(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._holding(engine)
+        expected_client = f"cf-csc-{campaign.campaign_id}-tp-1"
+        broker.open_orders = [{"orderId": "4242", "clientOrderId": expected_client}]
+        broker.place_order = lambda *a, **k: {"status": "NEW"}
+
+        await engine._sync_tp_order(campaign, {})
+
+        self.assertEqual(campaign.tp_order_id, "4242")
+
+    async def test_a_resting_tp_at_the_right_price_is_left_alone(self):
+        """The loop's real cost was re-placing something already correct."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._holding(engine)
+
+        await engine._sync_tp_order(campaign, {})
+        first = campaign.tp_order_id
+        self.assertTrue(first)
+        placed_once = len(broker.placed_orders)
+
+        for _ in range(4):
+            await engine._sync_tp_order(campaign, {str(first): {"clientOrderId": "x"}})
+
+        self.assertEqual(len(broker.placed_orders), placed_once, "re-placed a TP that was already resting")
+        self.assertEqual(campaign.tp_order_id, first)
+
+    def test_the_extractor_rejects_unusable_replies(self):
+        self.assertEqual(CascadeEngine._order_id_from({"orderId": 55}), "55")
+        self.assertEqual(CascadeEngine._order_id_from({"id": "abc"}), "abc")
+        self.assertEqual(CascadeEngine._order_id_from({"status": "NEW"}), "")
+        self.assertEqual(CascadeEngine._order_id_from({}), "")
+        self.assertEqual(CascadeEngine._order_id_from(None), "")
+
+
 class CascadePaperTpOnReplayTests(unittest.TestCase):
     """A replay must be able to CLOSE a paper round, not only open one.
 

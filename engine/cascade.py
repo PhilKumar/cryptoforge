@@ -2732,6 +2732,20 @@ class CascadeEngine:
         changed |= await self._sync_tp_order(campaign, open_orders)
         return changed
 
+    @staticmethod
+    def _order_id_from(result: dict) -> str:
+        """The exchange id out of a placement reply, or "" if it carried none.
+
+        Storing str(...or "") straight onto the campaign was a live-money bug:
+        an empty string is falsy, so the next sync believed nothing was resting,
+        skipped the cancel, and placed ANOTHER order — while still logging
+        "placed" each time. For a TP that means several sell orders for one
+        position, all able to fill.
+        """
+        if not isinstance(result, dict):
+            return ""
+        return str(result.get("orderId") or result.get("id") or "")
+
     async def _adopt_order_by_client_id(self, campaign: Campaign, client_id: str) -> Optional[str]:
         """Find a resting order by the client id we gave it, and return its
         exchange id. Client ids are ours and unique, so a match is definitive."""
@@ -2815,7 +2829,16 @@ class CascadeEngine:
         except Exception as exc:
             result = {"error": str(exc)}
         if isinstance(result, dict) and not result.get("error"):
-            campaign.pending_order_id = str(result.get("orderId") or result.get("id") or "")
+            order_id = self._order_id_from(result) or (await self._adopt_order_by_client_id(campaign, client_id) or "")
+            if not order_id:
+                self._log_event(
+                    campaign,
+                    "error",
+                    "Buy stop was accepted but carried no order id and could not be found by client id; "
+                    "not recording it, so the next sync will reconcile rather than place a second one.",
+                )
+                return False
+            campaign.pending_order_id = order_id
             self._log_event(
                 campaign,
                 "order",
@@ -2857,6 +2880,16 @@ class CascadeEngine:
         if campaign.tp_order_id and str(campaign.tp_order_id) not in open_orders:
             status_row = await self._safe_get_order(campaign, campaign.tp_order_id)
             status = str(status_row.get("status") or "").upper()
+            if status != "FILLED":
+                # Dropping the id silently made a re-place loop unreadable: the
+                # log showed "TP limit sell placed" over and over with nothing
+                # explaining why the last one stopped counting.
+                self._log_event(
+                    campaign,
+                    "warn",
+                    f"TP order {campaign.tp_order_id} is no longer open (status {status or 'unknown'}); "
+                    f"will place a fresh one.",
+                )
             if status == "FILLED":
                 executed = _coerce_float(status_row.get("executedQty"), campaign.filled_base_qty)
                 quote = _coerce_float(status_row.get("cummulativeQuoteQty"))
@@ -2873,6 +2906,25 @@ class CascadeEngine:
         desired_tp = compute_tp_price(campaign)
         if not desired_tp:
             return changed
+        # The exchange is the authority on what is resting, not our id. If any
+        # TP of ours is already open, adopt it rather than sending a second
+        # sell — a lost id (restart, or a reply that carried none) otherwise
+        # stacks one sell order per sync against a single position, and every
+        # one of them can fill.
+        if not campaign.tp_order_id:
+            mine = f"cf-csc-{campaign.campaign_id}-tp-"
+            existing = next(
+                (oid for oid, row in open_orders.items() if str(row.get("clientOrderId") or "").startswith(mine)),
+                None,
+            )
+            if existing:
+                campaign.tp_order_id = str(existing)
+                self._log_event(
+                    campaign,
+                    "order",
+                    f"Adopted the TP already resting on the exchange ({existing}) instead of placing another.",
+                )
+                changed = True
         current_price_ok = campaign.tp_price and abs((campaign.tp_price or 0.0) - desired_tp) < 1e-9
         if campaign.tp_order_id and current_price_ok:
             return changed
@@ -2880,6 +2932,7 @@ class CascadeEngine:
             await self._safe_cancel(campaign, campaign.tp_order_id)
             campaign.tp_order_id = None
         campaign.tp_rev += 1
+        tp_client_id = f"cf-csc-{campaign.campaign_id}-tp-{campaign.tp_rev}"
         try:
             result = await asyncio.to_thread(
                 lambda: self.broker.place_order(
@@ -2888,14 +2941,27 @@ class CascadeEngine:
                     "sell",
                     order_type="limit_order",
                     limit_price=desired_tp,
-                    client_order_id=f"cf-csc-{campaign.campaign_id}-tp-{campaign.tp_rev}",
+                    client_order_id=tp_client_id,
                     base_qty=campaign.filled_base_qty,
                 )
             )
         except Exception as exc:
             result = {"error": str(exc)}
         if isinstance(result, dict) and not result.get("error"):
-            campaign.tp_order_id = str(result.get("orderId") or result.get("id") or "")
+            order_id = self._order_id_from(result)
+            if not order_id:
+                # Accepted but unidentifiable. Find it by our own client id
+                # rather than storing "" and placing a second sell next sync.
+                order_id = await self._adopt_order_by_client_id(campaign, tp_client_id) or ""
+            if not order_id:
+                self._log_event(
+                    campaign,
+                    "error",
+                    "TP sell was accepted but carried no order id and could not be found by client id; "
+                    "not recording it, so the next sync will reconcile rather than stack a second sell.",
+                )
+                return changed
+            campaign.tp_order_id = order_id
             campaign.tp_price = desired_tp
             self._log_event(
                 campaign,
