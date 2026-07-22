@@ -3100,7 +3100,7 @@ async def check_broker(request: Request = None):
                 "message": f"{_broker_label()} API credentials not configured.",
                 **broker_settings,
             }
-        wallet = delta.get_wallet()
+        wallet = await asyncio.to_thread(delta.get_wallet)
         if isinstance(wallet, dict) and "error" not in wallet:
             return {
                 "status": "connected",
@@ -3171,7 +3171,7 @@ async def connect_broker(request: Request = None):
                 "message": "API credentials not configured. Update .env file.",
                 **broker_settings,
             }
-        wallet = delta.get_wallet()
+        wallet = await asyncio.to_thread(delta.get_wallet)
         if isinstance(wallet, (dict, list)) and (not isinstance(wallet, dict) or "error" not in wallet):
             return {
                 "status": "connected",
@@ -3476,7 +3476,7 @@ async def get_ticker():
         return _ticker_cache["data"]
 
     try:
-        tickers = delta.get_tickers_bulk()
+        tickers = await asyncio.to_thread(delta.get_tickers_bulk)
         # Build a map by broker symbol and normalized app symbol.
         ticker_map = {}
         for t in tickers:
@@ -3545,7 +3545,7 @@ async def get_ticker():
 async def get_single_ticker(symbol: str):
     """Get ticker for a single symbol."""
     try:
-        return delta.get_ticker(symbol)
+        return await asyncio.to_thread(delta.get_ticker, symbol)
     except Exception as e:
         return {"status": "error", "message": str(e)[:100]}
 
@@ -3822,7 +3822,7 @@ async def live_start(payload: StrategyPayload):
         return {"status": "already_running", "run_id": run_id}
 
     try:
-        product = delta.get_product_by_symbol(payload.symbol)
+        product = await asyncio.to_thread(delta.get_product_by_symbol, payload.symbol)
     except Exception as e:
         return {"status": "error", "message": f"Live start preflight failed for {payload.symbol}: {e}"}
     if not product:
@@ -4122,16 +4122,18 @@ async def paper_status(run_id: str = ""):
 async def place_order(req: OrderRequest):
     check_rate_limit("place_order", max_calls=3, window_sec=5)
     try:
-        product = delta.get_product_by_symbol(req.symbol)
+        product = await asyncio.to_thread(delta.get_product_by_symbol, req.symbol)
         if not product:
             raise HTTPException(status_code=404, detail=f"Product {req.symbol} not found")
-        result = delta.place_order(
-            product_id=product["id"],
-            size=req.size,
-            side=req.side,
-            order_type=req.order_type,
-            limit_price=req.limit_price,
-            leverage=req.leverage,
+        result = await asyncio.to_thread(
+            lambda: delta.place_order(
+                product_id=product["id"],
+                size=req.size,
+                side=req.side,
+                order_type=req.order_type,
+                limit_price=req.limit_price,
+                leverage=req.leverage,
+            )
         )
         return result
     except Exception as e:
@@ -4142,7 +4144,7 @@ async def place_order(req: OrderRequest):
 @app.get("/api/orders")
 async def get_orders():
     try:
-        orders = delta.get_orders()
+        orders = await asyncio.to_thread(delta.get_orders)
         return {"status": "success", "data": orders}
     except Exception as e:
         return {"status": "error", "message": str(e)[:100], "data": []}
@@ -4151,7 +4153,7 @@ async def get_orders():
 @app.get("/api/positions")
 async def get_positions():
     try:
-        positions = delta.get_positions()
+        positions = await asyncio.to_thread(delta.get_positions)
         return {"status": "success", "data": positions}
     except Exception as e:
         return {"status": "error", "message": str(e)[:100], "data": []}
@@ -4160,7 +4162,7 @@ async def get_positions():
 @app.get("/api/wallet")
 async def get_wallet():
     try:
-        wallet = delta.get_wallet()
+        wallet = await asyncio.to_thread(delta.get_wallet)
         if isinstance(wallet, dict) and wallet.get("error"):
             return {"status": "error", "message": str(wallet.get("error"))[:100], "data": []}
         return wallet
@@ -4790,7 +4792,7 @@ def _portfolio_journal_payload(
 async def get_broker_trades():
     """Get filled order history from the active broker."""
     try:
-        orders = _normalize_filled_orders(delta.get_order_history())
+        orders = _normalize_filled_orders(await asyncio.to_thread(delta.get_order_history))
         return {"status": "ok", "trades": orders}
     except Exception as e:
         return {"status": "error", "trades": [], "message": str(e)[:100]}
@@ -4801,9 +4803,9 @@ async def get_portfolio_summary():
     """Aggregated portfolio data: balance, positions, recent trades."""
     try:
         generated_at = datetime.now().isoformat(timespec="seconds")
-        wallet = delta.get_wallet()
-        positions = delta.get_positions()
-        orders = delta.get_order_history()
+        wallet = await asyncio.to_thread(delta.get_wallet)
+        positions = await asyncio.to_thread(delta.get_positions)
+        orders = await asyncio.to_thread(delta.get_order_history)
         currency = _portfolio_currency_meta()
 
         wallet_asset = _wallet_asset_row(wallet)
@@ -5275,7 +5277,9 @@ async def get_portfolio_history():
     """Return combined historical P&L from real trades + paper runs for monthly/yearly charts."""
     try:
         daily = {}
-        broker_sync = _add_broker_fills_to_portfolio_history(daily)
+        # Reaches the exchange through get_order_history, so it belongs off the
+        # event loop like every other broker call in this file.
+        broker_sync = await asyncio.to_thread(_add_broker_fills_to_portfolio_history, daily)
         broker_real_loaded = bool(broker_sync.get("loaded"))
         runs = _load_runs()
         seen_trade_signatures = set()

@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import json
 import os
@@ -3406,6 +3407,93 @@ class BinanceOrderHistoryScanTests(unittest.TestCase):
         first = client.get_order_history()
         first.clear()
         self.assertEqual(len(client.get_order_history()), 1)
+
+
+class EventLoopBlockingTests(unittest.TestCase):
+    """No broker call may run on the event loop.
+
+    Every broker method here is synchronous `requests` I/O. Called directly
+    from an `async def` handler it blocks the whole loop, so uvicorn cannot
+    serve ANY request until it returns — and /api/portfolio/summary made three
+    such calls, one of which scans up to 40 symbols. That is why the site went
+    unusable while the log still showed 200s: the responses were arriving, far
+    too late, and the browser had already given up ("Client closed request
+    before response completed").
+
+    asyncio.to_thread moves them to the worker pool, which is the difference
+    between one slow endpoint and a dead site.
+    """
+
+    BROKER_CALLS = {
+        "get_wallet",
+        "get_positions",
+        "get_order_history",
+        "get_orders",
+        "get_ticker",
+        "get_tickers_bulk",
+        "get_products",
+        "get_balance",
+        "get_order",
+        "place_order",
+        "cancel_order",
+        "get_product_by_symbol",
+        "get_candles",
+    }
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.py")
+        with open(path, encoding="utf-8") as handle:
+            self.tree = ast.parse(handle.read())
+
+    @staticmethod
+    def _awaited_call_ids(node):
+        awaited = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Await):
+                for inner in ast.walk(sub):
+                    if isinstance(inner, ast.Call):
+                        awaited.add(id(inner))
+        return awaited
+
+    def _sync_helpers_that_touch_the_broker(self):
+        helpers = {}
+        for node in ast.walk(self.tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                    if sub.func.attr in self.BROKER_CALLS:
+                        helpers.setdefault(node.name, set()).add(sub.func.attr)
+        return helpers
+
+    def test_no_async_handler_calls_the_broker_directly(self):
+        offenders = []
+        for node in ast.walk(self.tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            awaited = self._awaited_call_ids(node)
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and id(sub) not in awaited:
+                    func = sub.func
+                    if isinstance(func, ast.Attribute) and func.attr in self.BROKER_CALLS:
+                        offenders.append(f"{node.name} calls {func.attr}() at app.py:{sub.lineno}")
+        self.assertEqual(offenders, [], "wrap these in await asyncio.to_thread(...): " + "; ".join(offenders))
+
+    def test_no_async_handler_reaches_the_broker_through_a_sync_helper(self):
+        """One level down blocks exactly as hard — /api/portfolio/history did
+        it through _add_broker_fills_to_portfolio_history."""
+        helpers = self._sync_helpers_that_touch_the_broker()
+        offenders = []
+        for node in ast.walk(self.tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            awaited = self._awaited_call_ids(node)
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and id(sub) not in awaited:
+                    name = sub.func.id if isinstance(sub.func, ast.Name) else None
+                    if name in helpers:
+                        offenders.append(f"{node.name} calls {name}() at app.py:{sub.lineno}")
+        self.assertEqual(offenders, [], "wrap these in await asyncio.to_thread(...): " + "; ".join(offenders))
 
 
 class BinanceBalancePricingTests(unittest.TestCase):
