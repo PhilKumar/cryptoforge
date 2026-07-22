@@ -6727,6 +6727,15 @@ html[data-theme="light"] .journal-entry-notes section {
 
   /* ── Cascade campaign cards: compact stat grid ── */
   .cf-cascade-card { padding: 14px 16px; margin-bottom: 12px; }
+  .cf-cascade-pager {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .cf-cascade-pager .btn[disabled] { opacity: 0.45; pointer-events: none; }
   /* One row, always. Wrapping was letting the buttons drop to a second line on
      campaigns carrying an extra badge, so no two cards lined up. */
   .cf-cascade-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: nowrap; }
@@ -6946,6 +6955,15 @@ html[data-theme="light"] .journal-entry-notes section {
     overflow: hidden;
     box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55);
   }
+  /* The 15m and 1H views append "geometry is always 5m-derived" to the meta
+     line, which widened the title block enough to bump the whole button row
+     onto a second line. Let the title take the squeeze and wrap its own text;
+     the controls stay where they are at every timeframe. */
+  #cf-cascade-chart-panel > .table-toolbar { flex-wrap: nowrap; align-items: flex-start; }
+  #cf-cascade-chart-panel > .table-toolbar .table-title-group { min-width: 0; flex: 1 1 auto; }
+  #cf-cascade-chart-panel > .table-toolbar .admin-inline-actions { flex: 0 0 auto; flex-wrap: nowrap; }
+  #cf-cascade-chart-meta { white-space: normal; }
+
   .cf-chart-overlay #cf-cascade-chart-body {
     flex: 1;
     min-height: 0;

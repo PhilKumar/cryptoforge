@@ -76,6 +76,12 @@ STOP_ENTRY_LEVELS = (2, 4)
 # Gap between the stop trigger and the limit cap, in exchange ticks. On BTCUSDT
 # (tick 0.01) that is 0.05 — a stop at 66,067.78 caps at 66,067.83.
 STOP_LIMIT_OFFSET_TICKS = 5
+# How far the limit sits above the trigger, per symbol. The gap has to be wide
+# enough that the order still fills when the turn is quick, and tight enough
+# that it never pays much over the trigger. Phil set these by feel per market:
+# SOL moves in bigger relative steps than BTC or PAXG, so it wants 2 cents flat
+# rather than five ticks.
+STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
 DEFAULT_TICK_SIZE = 0.01
 # A mother break rolls straight into a fresh campaign on the breaking candle.
 # If price simply rips upward, every candle would break its predecessor, so a
@@ -106,7 +112,7 @@ MOTHER_RETEST_PCT = 0.0005
 MOTHER_DEPART_PCT = 0.005
 MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
-MODEL_VERSION = 19  # bump when the fib/trendline rules change; older campaigns are flagged stale
+MODEL_VERSION = 20  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
@@ -496,6 +502,11 @@ class Campaign:
     pending_order_id: Optional[str] = None
     pending_rev: int = 0
     pending_filled_qty: float = 0.0
+    # The low that was standing when the last round closed. Levels the round
+    # bought are released back onto the ladder, but only once price drops under
+    # this — otherwise the campaign would buy the same shelf straight back at
+    # the same price it just sold.
+    reuse_below: Optional[float] = None
     trendlines: List[Trendline] = field(default_factory=list)
     legs: List[Leg] = field(default_factory=list)
     active_trendline_id: Optional[int] = None
@@ -604,6 +615,7 @@ class Campaign:
             "carry_forward_usd": self.carry_forward_usd,
             "pending_rev": self.pending_rev,
             "pending_filled_qty": self.pending_filled_qty,
+            "reuse_below": self.reuse_below,
             "pending_order_id": self.pending_order_id,
             "pending_last_red": self.pending_last_red,
             "pending_stop_ts": self.pending_stop_ts,
@@ -667,6 +679,7 @@ class Campaign:
             "pending_order_id",
             "pending_rev",
             "pending_filled_qty",
+            "reuse_below",
             "active_trendline_id",
             "avg_entry_price",
             "tp_price",
@@ -1686,6 +1699,9 @@ class CascadeEngine:
             # been filled — advancing first would hide that.
             if campaign.mode == "paper":
                 self._paper_fill_check(campaign, candle)
+            # A new low under the last closed round releases the levels that
+            # round bought: fresh ground, so the ladder can work them again.
+            self._release_closed_levels(campaign, candle)
             # Levels the candle reached hand their money to the running total,
             # then the total's stop walks down with the fall.
             self._collect_crossed_levels(campaign, candle)
@@ -1962,6 +1978,37 @@ class CascadeEngine:
                 closed_5m.timestamp,
             )
 
+    def _release_closed_levels(self, campaign: Campaign, candle: Candle) -> None:
+        """Give back the levels a closed round bought, once price breaks under
+        the low that was standing when it closed."""
+        if campaign.reuse_below is None or candle.low >= campaign.reuse_below:
+            return
+        released = [
+            (leg, level)
+            for leg in campaign.legs
+            for level, order in leg.pending_orders.items()
+            if order.status == "CLOSED"
+        ]
+        campaign.reuse_below = None
+        if not released:
+            return
+        for leg, level in released:
+            order = leg.pending_orders[level]
+            order.status = "PENDING"
+            order.filled_qty = 0.0
+            order.fill_price = None
+            order.fill_timestamp = None
+            order.order_id = None
+            order.rev += 1
+            order.client_order_id = f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-{order.rev}"
+        replan_ladder(campaign)
+        self._log_event(
+            campaign,
+            "level",
+            f"New low at {candle.low:,.2f} — {len(released)} level(s) the last round bought are back "
+            f"on the ladder: " + ", ".join(f"F{leg.leg_id} L{level}" for leg, level in released),
+        )
+
     def _collect_crossed_levels(self, campaign: Campaign, candle: Candle) -> None:
         """Price reaching a level adds that level's money to the running total.
 
@@ -2054,7 +2101,8 @@ class CascadeEngine:
     def _set_pending_stop(self, campaign: Campaign, trigger: float, probe: Candle) -> None:
         tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
         stop = round(trigger, 8)
-        limit = round(trigger + STOP_LIMIT_OFFSET_TICKS * tick, 8)
+        gap = STOP_LIMIT_GAP_USD.get(campaign.symbol.upper())
+        limit = round(trigger + (gap if gap is not None else STOP_LIMIT_OFFSET_TICKS * tick), 8)
         first = campaign.pending_stop_price is None
         if campaign.pending_order_id:
             # The resting order is at the wrong trigger now; drop the id so the
@@ -2227,6 +2275,14 @@ class CascadeEngine:
             for order in lg.pending_orders.values():
                 if order.status == "FILLED":
                     order.status = "CLOSED"
+
+        # The levels this round bought are spent for now, but their money came
+        # back with the principal — so they are not gone, only parked. They come
+        # back onto the ladder the moment price makes a new low under where the
+        # round closed. Arming them immediately would buy the same shelf back at
+        # the price it was just sold at.
+        history = self._candles_5m.get(campaign.campaign_id, [])
+        campaign.reuse_below = min((c.low for c in history), default=exit_price)
 
         # The principal is back in the pool, so the rungs still waiting get a
         # bigger share of it.

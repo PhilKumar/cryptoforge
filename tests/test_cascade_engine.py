@@ -290,11 +290,16 @@ class CascadeSwingModelTests(unittest.TestCase):
         self._feed_real(59)
         self.assertGreaterEqual(len(self.campaign.legs), 2)
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
-        self.assertAlmostEqual(
-            self.campaign.resting_usd + self.campaign.pending_usd + self.campaign.spent_usd,
-            self.campaign.total_allocation_usd,
-            places=1,
+        # The new low released the parked levels back onto the ladder, and every
+        # dollar of both fibs' pools is marked on one level or another.
+        self.assertIsNone(self.campaign.reuse_below)
+        marked = sum(
+            o.usd_notional
+            for lg in self.campaign.legs
+            for o in lg.pending_orders.values()
+            if o.status in {"PENDING", "PLACED", "COLLECTED"}
         )
+        self.assertAlmostEqual(marked, self.campaign.total_allocation_usd, places=1)
 
     def test_mother_break_ends_the_campaign(self):
         self._feed_real(6)

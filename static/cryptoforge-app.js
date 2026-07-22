@@ -7966,7 +7966,7 @@ function _cfCascadeLadderRows(campaign) {
 // a retest and a target hit both land there.
 var _CF_CASCADE_REASONS = {
   tp_filled: ['Target hit', 'ok'],
-  mother_broken: ['Mother broken', 'warn'],
+  mother_broken: ['MC broken', 'warn'],
   mother_retested: ['Retested — restarted', 'warn'],
   deleted: ['Deleted', 'muted'],
   stopped: ['Stopped', 'muted']
@@ -8073,10 +8073,29 @@ function _cfCascadeCampaignCard(campaign) {
 var _cfCascadeOpenCards = {};
 
 function _cfCascadeIsOpen(cid, ended) {
+  // Collapsed unless you opened it. With several campaigns running, all-expanded
+  // is a wall of ladders; the header line already says what each is doing.
   if (Object.prototype.hasOwnProperty.call(_cfCascadeOpenCards, cid)) {
     return _cfCascadeOpenCards[cid];
   }
-  return !ended;
+  return false;
+}
+
+// A fixed running order, so a card never moves under the cursor just because
+// another symbol traded. Anything not listed sorts after, alphabetically.
+var _CF_SYMBOL_ORDER = ['BTCUSDT', 'PAXGUSDT', 'SOLUSDT'];
+
+function _cfCascadeSortCampaigns(campaigns) {
+  return campaigns.slice().sort(function (a, b) {
+    var ai = _CF_SYMBOL_ORDER.indexOf(String(a.symbol || '').toUpperCase());
+    var bi = _CF_SYMBOL_ORDER.indexOf(String(b.symbol || '').toUpperCase());
+    if (ai === -1) ai = _CF_SYMBOL_ORDER.length;
+    if (bi === -1) bi = _CF_SYMBOL_ORDER.length;
+    if (ai !== bi) return ai - bi;
+    var bySymbol = String(a.symbol || '').localeCompare(String(b.symbol || ''));
+    if (bySymbol) return bySymbol;
+    return (Number(a.seq) || 0) - (Number(b.seq) || 0);
+  });
 }
 
 function cfCascadeToggleCard(cid) {
@@ -8284,7 +8303,18 @@ function cfRenderCascadeCampaigns(campaigns) {
     });
   });
 
-  mount.innerHTML = campaigns.map(_cfCascadeCampaignCard).join('');
+  // A campaign that has ended is history, and history lives in Closed
+  // Campaigns. Leaving the dead ones here just buried the live ones.
+  var live = campaigns.filter(function (c) {
+    return c.state !== 'MOTHER_BROKEN' && c.state !== 'COMPLETED' && c.state !== 'STOPPED';
+  });
+  if (!live.length) {
+    mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
+      + 'No live campaigns — ended ones are in Closed Campaigns below.</div>';
+    _cfCascadeMarkClippedLabels(mount);
+    return;
+  }
+  mount.innerHTML = _cfCascadeSortCampaigns(live).map(_cfCascadeCampaignCard).join('');
 
   mount.querySelectorAll('.cf-cascade-card').forEach(function (card) {
     var cid = card.getAttribute('data-campaign') || '';
@@ -8359,10 +8389,16 @@ function cfRenderCascadeClosed(closed) {
   }
   if (!closed.length) {
     body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>';
+    _cfRenderClosedPager(0, 0);
     return;
   }
+  var ordered = closed.slice().reverse();          // newest first
+  var pages = Math.max(1, Math.ceil(ordered.length / _CF_CLOSED_PAGE_SIZE));
+  if (_cfCascadeClosedPage >= pages) _cfCascadeClosedPage = pages - 1;
+  if (_cfCascadeClosedPage < 0) _cfCascadeClosedPage = 0;
+  var from = _cfCascadeClosedPage * _CF_CLOSED_PAGE_SIZE;
   var REASONS = _CF_CASCADE_REASONS;
-  body.innerHTML = closed.slice().reverse().map(function(campaign) {
+  body.innerHTML = ordered.slice(from, from + _CF_CLOSED_PAGE_SIZE).map(function(campaign) {
     // Realised P&L across every round, not just the last one.
     var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
     var pnl = rounds.length
@@ -8388,10 +8424,37 @@ function cfRenderCascadeClosed(closed) {
       + '<td class="num">' + _cfCascadeFmt(exit) + '</td>'
       + '<td class="num" style="color:' + tone + ';">' + pnlText + '</td>'
       + '<td>' + _escapeHtml(campaign.closed_at || '') + '</td>'
-      + '<td><button class="btn btn-outline btn-sm" title="Remove from history"'
-        + ' data-cf-click="cfCascadePurgeClosed(\'' + cid + '\')">Remove</button></td>'
+      + '<td style="white-space:nowrap;">'
+        + '<button class="btn btn-outline btn-sm" title="See the chart as it ended"'
+          + ' data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button> '
+        + '<button class="btn btn-outline btn-sm" title="Remove from history"'
+          + ' data-cf-click="cfCascadePurgeClosed(\'' + cid + '\')">Remove</button></td>'
       + '</tr>';
   }).join('');
+  _cfRenderClosedPager(pages, ordered.length);
+}
+
+// Ten rows a page. The history only grows, and a table you have to scroll past
+// to reach anything else stops being history and starts being an obstacle.
+var _CF_CLOSED_PAGE_SIZE = 10;
+var _cfCascadeClosedPage = 0;
+
+function _cfRenderClosedPager(pages, total) {
+  var host = document.getElementById('cf-cascade-closed-pager');
+  if (!host) return;
+  if (pages <= 1) { host.innerHTML = ''; return; }
+  var from = _cfCascadeClosedPage * _CF_CLOSED_PAGE_SIZE + 1;
+  var to = Math.min(from + _CF_CLOSED_PAGE_SIZE - 1, total);
+  host.innerHTML = '<span class="table-meta">' + from + '\u2013' + to + ' of ' + total + '</span>'
+    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeClosedPage === 0 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeClosedPage(-1)">Newer</button>'
+    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeClosedPage >= pages - 1 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeClosedPage(1)">Older</button>';
+}
+
+function cfCascadeClosedPage(step) {
+  _cfCascadeClosedPage += step;
+  cfRenderCascadeClosed(_cfCascadeClosedAll);
 }
 
 async function cfCascadePurgeClosed(campaignId) {
@@ -8709,8 +8772,10 @@ function _cfCascadeChartSvg(d) {
     // Varying the style per level made the deep ones (L8 especially) fade out
     // of the chart altogether, and a level you cannot see is a level you cannot
     // check. The money on the level goes in its label, not into its styling.
-    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 1.1, 0.9);
-    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 1.1, 0.9);
+    // 0 and 1 only frame the swing; the buy levels are what you act on. Faint
+    // enough to stay readable, quiet enough not to crowd them.
+    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 0.8, 0.4);
+    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 0.8, 0.4);
     [2, 4, 8].forEach(function (lv) {
       var p = leg.levels ? leg.levels[String(lv)] : null;
       if (p == null) return;
