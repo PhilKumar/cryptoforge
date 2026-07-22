@@ -1716,6 +1716,87 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", result)
 
 
+class CascadeStopCancelsEverythingTests(unittest.IsolatedAsyncioTestCase):
+    """Stopping a live campaign has to leave nothing working on the exchange.
+
+    The accumulated buy stop lives in campaign.pending_order_id, not in
+    leg.pending_orders — those are collection markers that only reach "PLACED"
+    through a legacy recovery path. Cancelling by marker status missed the one
+    order that was actually resting, so Stop pulled the TP and left the buy
+    stop live. It could still fill minutes later, buying coin for a campaign
+    that had already been archived, with no TP to sell it again.
+    """
+
+    def _live_campaign(self, engine, broker):
+        campaign = Campaign(
+            campaign_id="stopme",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=66928.49,
+            mother_low=66823.36,
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        campaign.pending_usd = 7.60
+        campaign.pending_order_id = "5001"
+        campaign.pending_stop_price = 65871.82
+        campaign.pending_limit_price = 65871.87
+        broker.open_orders = [
+            {"orderId": "5001", "clientOrderId": f"cf-csc-{campaign.campaign_id}-buy-2"},
+            {"orderId": "5002", "clientOrderId": f"cf-csc-{campaign.campaign_id}-tp-1"},
+            {"orderId": "5003", "clientOrderId": "unrelated-manual-order"},
+        ]
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    async def test_stop_cancels_the_accumulated_buy_stop(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._live_campaign(engine, broker)
+        campaign.tp_order_id = "5002"
+
+        await engine.stop_campaign("stopme")
+
+        self.assertIn("5001", broker.cancelled, "the working buy stop was left on the exchange")
+        self.assertIn("5002", broker.cancelled)
+        self.assertNotIn("5003", broker.cancelled, "cancelled an order that was not ours")
+        self.assertIsNone(campaign.pending_order_id)
+        self.assertIsNone(campaign.pending_stop_price)
+        self.assertEqual(campaign.state, "STOPPED")
+
+    async def test_stop_does_not_sell_the_position(self):
+        """Stop cancels orders; it never liquidates. Coin already bought stays
+        in the account, which is why the TP handling below matters."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._live_campaign(engine, broker)
+        campaign.all_fills.append(Fill(price=66074.47, quantity=0.00011, level=8, leg_id=1, timestamp=1))
+        campaign.filled_base_qty = 0.00011
+
+        await engine.stop_campaign("stopme")
+
+        sells = [o for o in broker.placed_orders if str(o.get("side", "")).lower() == "sell"]
+        self.assertEqual(sells, [], "Stop must not place a sell")
+        self.assertEqual(campaign.filled_base_qty, 0.00011, "the position is untouched")
+
+    async def test_ending_while_holding_keeps_the_exit_but_pulls_the_buy(self):
+        """When a campaign ends holding coin the TP is deliberately left
+        resting, so the exit still happens. The buy stop must go regardless —
+        otherwise an ended campaign keeps buying."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._live_campaign(engine, broker)
+        campaign.tp_order_id = "5002"
+
+        await engine._cancel_all_live_orders(campaign, include_tp=False)
+
+        self.assertIn("5001", broker.cancelled)
+        self.assertNotIn("5002", broker.cancelled, "the resting exit was cancelled")
+        self.assertEqual(campaign.tp_order_id, "5002")
+
+
 class CascadeLiveTimingTests(unittest.IsolatedAsyncioTestCase):
     """Regressions for the live-path timing bugs found in the pre-live audit."""
 

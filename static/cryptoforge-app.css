@@ -6869,6 +6869,28 @@ html[data-theme="light"] .journal-entry-notes section {
     padding-bottom: 4px;
   }
   .cf-cascade-pot.is-quiet td .table-meta { color: var(--muted); }
+  /* The banner spans the whole row, so the note gets the full strip and the
+     amount stays hard right. Two lines is the cap: past that the row grows
+     taller than the ladder rows underneath it and stops reading as a header. */
+  .cf-cascade-pot-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+  }
+  .cf-cascade-pot-label {
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .cf-cascade-pot-amount {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
 
   /* ── Cascade start form: two columns, paired fields ── */
   .cf-cascade-form {

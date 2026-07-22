@@ -7946,10 +7946,9 @@ function _cfCascadeLadderRows(campaign) {
     + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')';
   if (isLive) {
     stopNote = onExchange
-      ? 'buy stop RESTING on Binance at ' + _cfCascadeFmt(campaign.pending_stop_price)
+      ? 'resting on Binance at ' + _cfCascadeFmt(campaign.pending_stop_price)
         + ' (limit ' + _cfCascadeFmt(campaign.pending_limit_price) + ')'
-      : 'buy stop armed at ' + _cfCascadeFmt(campaign.pending_stop_price)
-        + ' — not on Binance yet, going out on the next sync';
+      : 'armed at ' + _cfCascadeFmt(campaign.pending_stop_price) + ' · not on Binance yet';
   }
   var potNote = pot <= 0
     ? 'price has not reached a level yet'
@@ -7959,15 +7958,22 @@ function _cfCascadeLadderRows(campaign) {
         ? 'clears the $' + _cfCascadeUsd(rung) + ' minimum — waiting for two reds below '
           + _cfCascadeFmt(campaign.pending_line)
         : 'needs $' + _cfCascadeUsd(rung) + ' before it can be an order';
-  var head = '<tr class="cf-cascade-pot"><td colspan="3">'
-      + '<strong>Collected so far</strong>'
-      + '<span class="table-meta"> · ' + _escapeHtml(potNote) + '</span></td>'
-      + '<td class="num"><strong>$' + _cfCascadeUsd(pot) + '</strong></td>'
-      + '<td></td></tr>'
+  // One banner across the whole strip rather than three squeezed cells. The
+  // note is the longest text in the table and the ladder's narrow first column
+  // was wrapping it to three ragged lines; spanning the row and laying it out
+  // with flex gives the text the full width and keeps the amount hard right.
+  var head = '<tr class="cf-cascade-pot"><td colspan="5">'
+      + '<div class="cf-cascade-pot-row">'
+        + '<span class="cf-cascade-pot-label"><strong>Collected so far</strong>'
+        + '<span class="table-meta"> · ' + _escapeHtml(potNote) + '</span></span>'
+        + '<strong class="cf-cascade-pot-amount">$' + _cfCascadeUsd(pot) + '</strong>'
+      + '</div></td></tr>'
     + (liveTotal > 0
-      ? '<tr class="cf-cascade-pot is-quiet"><td colspan="3">'
-        + '<span class="table-meta">Still marked on levels price has not reached</span></td>'
-        + '<td class="num">$' + _cfCascadeUsd(liveTotal) + '</td><td></td></tr>'
+      ? '<tr class="cf-cascade-pot is-quiet"><td colspan="5">'
+        + '<div class="cf-cascade-pot-row">'
+          + '<span class="cf-cascade-pot-label table-meta">Still marked on levels price has not reached</span>'
+          + '<span class="cf-cascade-pot-amount">$' + _cfCascadeUsd(liveTotal) + '</span>'
+        + '</div></td></tr>'
       : '');
 
   return '<div class="table-surface"><div class="table-scroll"><table class="trade-table cf-cascade-ladder">'

@@ -2807,6 +2807,26 @@ class CascadeEngine:
             _log.warning("[CASCADE] cancel failed for %s: %s", order_id, exc)
 
     async def _cancel_all_live_orders(self, campaign: Campaign, include_tp: bool) -> None:
+        """Pull every working order this campaign owns.
+
+        The accumulated buy stop lives in campaign.pending_order_id, NOT in
+        leg.pending_orders — those are collection markers and only ever reach
+        "PLACED" through a legacy recovery path. Cancelling by marker status
+        alone therefore missed the one order that was actually working, so
+        stopping a live campaign left a live buy stop on the exchange. It could
+        still fill after the campaign was archived, buying coin with nothing
+        tracking it and no TP to sell it.
+
+        include_tp is False when the campaign ends holding a position: the TP
+        is deliberately left resting so the exit still happens.
+        """
+        if campaign.pending_order_id:
+            await self._safe_cancel(campaign, campaign.pending_order_id)
+            campaign.pending_order_id = None
+        campaign.pending_stop_price = None
+        campaign.pending_limit_price = None
+        campaign.pending_stop_ts = None
+        campaign.pending_last_red = None
         for leg in campaign.legs:
             for order in leg.pending_orders.values():
                 if order.status == "PLACED" and order.order_id:
@@ -2816,3 +2836,18 @@ class CascadeEngine:
         if include_tp and campaign.tp_order_id:
             await self._safe_cancel(campaign, campaign.tp_order_id)
             campaign.tp_order_id = None
+        # Belt and braces: sweep anything of ours still open on the exchange.
+        # Our own bookkeeping is exactly what failed above, so the exchange —
+        # not the campaign object — gets the final say on what is still working.
+        try:
+            open_orders = await self._open_orders_by_id(campaign)
+        except Exception as exc:
+            _log.warning("[CASCADE] cancel sweep could not list orders: %s", exc)
+            return
+        for order_id, row in open_orders.items():
+            client_id = str(row.get("clientOrderId") or "")
+            if not client_id.startswith(f"cf-csc-{campaign.campaign_id}-"):
+                continue
+            if not include_tp and "-tp-" in client_id:
+                continue  # the exit stays working on purpose
+            await self._safe_cancel(campaign, order_id)
