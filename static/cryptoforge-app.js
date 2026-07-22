@@ -5554,6 +5554,29 @@ function _cfJournalPct(value, digits) {
   return (n >= 0 ? '' : '-') + Math.abs(n).toFixed(digits === undefined ? 2 : digits) + '%';
 }
 
+// Where a row came from. A trade read off Binance knows its fees; one typed
+// into the spreadsheet does not, and the two should not look identical.
+function _cfJournalSourceTag(t) {
+  var open = String(t.status || '') === 'Open';
+  var bits = [];
+  if (String(t.source || '') === 'binance') bits.push('<span class="cf-journal-src" title="Paired from your Binance fills — P&amp;L is net of commission">Binance</span>');
+  else bits.push('<span class="cf-journal-src is-sheet" title="From the imported spreadsheet — P&amp;L is gross, fees not included">Sheet</span>');
+  if (open) bits.push('<span class="cf-journal-src is-open" title="Still holding — no realised result yet">Open</span>');
+  return '<div class="table-note">' + bits.join(' ') + '</div>';
+}
+
+// Fees are only known for broker-paired rows; showing "$0.00 fees" on a
+// spreadsheet row would claim something we did not measure.
+function _cfJournalFeeNote(t) {
+  if (String(t.source || '') !== 'binance') return '';
+  var fee = Number(t.fees_usd) || 0;
+  if (!fee) return '';
+  var gross = Number(t.pnl_gross_usd);
+  return '<div class="table-note" title="Gross ' + _escapeHtml(_cfJournalUsd(gross))
+    + ' less ' + _escapeHtml(_cfJournalUsd(fee)) + ' commission">net · fee '
+    + _escapeHtml(_cfJournalUsd(fee)) + '</div>';
+}
+
 function _cfJournalTone(value) {
   var n = Number(value) || 0;
   if (n > 0) return 'var(--green, #3fae56)';
@@ -5789,11 +5812,12 @@ function _cfRenderTradeJournal(data) {
   }
   body.innerHTML = trades.map(function(t) {
     var pnlTone = _cfJournalTone(t.pnl_usd);
+    if (String(t.status || '') === 'Open') pnlTone = 'var(--muted)';
     var head = '<tr class="cf-journal-traderow" data-journal-trade="' + _escapeHtml(t.trade_id) + '"'
       + ' role="button" tabindex="0" aria-expanded="false"'
       + ' data-cf-click="cfJournalToggleTrade(\'' + t.trade_id + '\')">'
       + '<td><span class="cf-journal-caret" aria-hidden="true">&#9656;</span>'
-        + _escapeHtml(t.trade_id) + '</td>'
+        + _escapeHtml(t.trade_id) + _cfJournalSourceTag(t) + '</td>'
       + '<td>' + _escapeHtml(t.date) + '</td>'
       + '<td>' + _escapeHtml(String(t.coin).replace('USDT', '')) + '</td>'
       + '<td class="num">' + t.buy_count + '</td>'
@@ -5801,7 +5825,8 @@ function _cfRenderTradeJournal(data) {
       + '<td class="num">' + Number(t.total_qty).toFixed(5) + '</td>'
       + '<td class="num">' + _cfJournalUsd(t.invested_usd) + '</td>'
       + '<td class="num">' + _cfJournalUsd(t.sell_price) + '</td>'
-      + '<td class="num" style="color:' + pnlTone + ';">' + _cfJournalUsd(t.pnl_usd) + '</td>'
+      + '<td class="num" style="color:' + pnlTone + ';">' + _cfJournalUsd(t.pnl_usd)
+        + _cfJournalFeeNote(t) + '</td>'
       + '<td class="num" style="color:' + pnlTone + ';">' + _cfJournalPct(t.roi_pct, 2) + '</td>'
       + '</tr>';
     var buys = (t.buys || []).length > 1
@@ -5814,8 +5839,16 @@ function _cfRenderTradeJournal(data) {
 
   var meta = document.getElementById('cf-journal-table-meta');
   if (meta) {
-    meta.textContent = trades.length + ' trade' + (trades.length === 1 ? '' : 's')
-      + ' shown · multi-buy trades expand to show each entry.';
+    var bits = [trades.length + ' trade' + (trades.length === 1 ? '' : 's') + ' shown'];
+    if (data.broker_synced) {
+      bits.push(data.broker_trade_count + ' paired live from Binance (net of fees)');
+    } else if (data.broker_error) {
+      // Say it out loud. A short list that silently omits everything traded by
+      // hand looks complete, which is how the missing trades went unnoticed.
+      bits.push('Binance sync unavailable — ' + data.broker_error);
+    }
+    bits.push('multi-buy trades expand to show each entry');
+    meta.textContent = bits.join(' · ') + '.';
   }
 
   _cfRenderJournalConverts(data);

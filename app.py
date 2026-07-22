@@ -61,6 +61,7 @@ from engine.cascade import CascadeEngine
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade, normalize_scalp_order_type
+from engine.trade_journal import merge_with_sheet, pair_fills_into_trades
 from state_store import get_json_store
 
 
@@ -6967,11 +6968,36 @@ def _coerce_float_safe(value, default: float = 0.0) -> float:
         return default
 
 
+async def _broker_journal_trades() -> tuple[list, str]:
+    """Round trips paired from the account's own fills.
+
+    The journal used to be nothing but a Google Sheets export, so anything
+    traded by hand on Binance never appeared in it at all. This reads the
+    exchange directly, which also means the P&L is net of commission — the
+    sheet's figures and the Cascade engine's are both gross.
+    """
+    if not _broker_is_configured():
+        return [], "Broker API keys are not configured."
+    try:
+        fills = await asyncio.to_thread(delta.get_order_history)
+    except Exception as exc:
+        _logger.warning("[JOURNAL] broker fill history unavailable: %s", exc)
+        return [], str(exc)
+    try:
+        return pair_fills_into_trades(fills or []), ""
+    except Exception as exc:
+        _logger.error("[JOURNAL] pairing fills failed: %s", exc)
+        return [], str(exc)
+
+
 @app.get("/api/journal/trades")
-async def journal_trades(convert_days: int = 90):
+async def journal_trades(convert_days: int = 90, include_broker: bool = True):
     doc = _load_trade_journal()
-    trades = [t for t in (doc.get("trades") or []) if isinstance(t, dict)]
+    sheet_trades = [t for t in (doc.get("trades") or []) if isinstance(t, dict)]
     capital_base = _coerce_float_safe(doc.get("capital_base_usd"))
+
+    broker_trades, broker_error = ([], "") if not include_broker else await _broker_journal_trades()
+    trades = merge_with_sheet(sheet_trades, broker_trades) if include_broker else sheet_trades
 
     # Convert exits never reach /api/v3/myTrades, so a lot closed that way looks
     # permanently open to the rest of the app. Surface them here as their own
@@ -6994,6 +7020,13 @@ async def journal_trades(convert_days: int = 90):
         "converts": converts,
         "convert_error": convert_error,
         "convert_supported": bool(getattr(delta, "get_convert_history", None)) and _broker_is_configured(),
+        # So the page can say where each row came from, and say plainly when
+        # the exchange could not be read rather than quietly showing a short
+        # list that looks complete.
+        "broker_synced": bool(broker_trades),
+        "broker_trade_count": len(broker_trades),
+        "sheet_trade_count": len(sheet_trades),
+        "broker_error": broker_error,
     }
 
 

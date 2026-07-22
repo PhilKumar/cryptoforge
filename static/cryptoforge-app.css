@@ -7571,3 +7571,29 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-chart-overlay .cf-tf-toggle { flex: 0 0 auto; }
   .cf-chart-overlay .table-toolbar .btn { flex: 0 0 auto; }
 }
+
+/* Journal row provenance. A trade paired from Binance fills knows its
+   commission; one imported from the spreadsheet does not, so the two must not
+   read as the same kind of number. */
+.cf-journal-src {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  color: var(--accent);
+  background: rgba(34, 211, 238, 0.08);
+}
+.cf-journal-src.is-sheet {
+  border-color: rgba(148, 163, 184, 0.32);
+  color: var(--muted);
+  background: rgba(148, 163, 184, 0.08);
+}
+.cf-journal-src.is-open {
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--yellow, #f59e0b);
+  background: rgba(245, 158, 11, 0.08);
+}
