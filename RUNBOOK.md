@@ -283,13 +283,39 @@ Ordered. Items 2 and 3 mostly happen by leaving it alone.
    **Fail looks like:** two different PIDs on any `Buy stop placed` or
    `TP limit sell placed` line, or a second order appearing in
    `tools/cancel_duplicate_orders.py`.
-4. **Lock the mainnet key down**: spot trading on, **withdrawals off**, IP
-   whitelisted to the Lightsail address.
-5. Stop a campaign while holding, and confirm for yourself that you are left
-   holding coin with no TP.
-6. Confirm Telegram alerts actually arrive.
-7. `minNotional` and `LOT_SIZE` differ per symbol on mainnet — the $5.50 rung
-   minimum may be below the real floor on some pairs.
+4. ~~**Lock the mainnet key down.**~~ — **done 2026-07-22.** Key "Cryptoforge"
+   (HMAC): Reading on, Spot Trading on, **Withdrawals OFF**, Universal Transfer
+   off, Margin Loan off, and IP-restricted to `13.205.229.208`. Withdrawals-off
+   is what turns a worst-case bug into a bad trade rather than a drained
+   account. *Still to consider: the Symbol Whitelist, which would stop a wrong
+   symbol being traded at all — not hypothetical, since deriving bad symbols
+   from wallet balances took the site down twice.*
+5. **Stop a campaign while holding**, and confirm for yourself that you are
+   left holding coin with no TP. Note the TP order id, press Stop, then
+   `cancel_duplicate_orders.py` (expect no cascade orders) and
+   `show_fills.py --hours 1` (expect NO sell). Do this LAST — it deliberately
+   abandons a position.
+6. ~~**Confirm Telegram alerts arrive.**~~ — **verified 2026-07-22.** The
+   `-2010 Duplicate order sent` failure fired "Cascade order FAILED" and it was
+   received. Telegram returned HTTP 200 in the same second.
+7. ~~**Check mainnet symbol filters.**~~ — **verified 2026-07-22** against the
+   public `exchangeInfo`. Every pair's `minNotional` is $5 ($1 DOGE), so the
+   $5.50 rung minimum clears everywhere.
+
+   **But LOT_SIZE granularity varies enormously at small order sizes.** One
+   lot step, as a share of a minimum $5.50 order:
+
+   | symbol | 1 step | share of a $5.50 order |
+   |---|---|---|
+   | BTCUSDT | $0.66 | **12%** |
+   | PAXGUSDT | $0.41 | 7.5% |
+   | ETHUSDT | $0.19 | 3.5% |
+   | XRPUSDT | $0.11 | 2.1% |
+   | SOLUSDT | $0.077 | **1.4%** |
+   | DOGEUSDT | $0.072 | 1.3% |
+
+   `d8b0ffb` carries the remainder forward rather than stranding it, but the
+   coarseness is real. **Run the first live campaigns on SOL or XRP, not BTC.**
 
 **Day one sizing: $100–200 campaign capital, one symbol, one campaign.** A fib
 risks about 1% of capital, so $200 puts ~$2 on a fib. Enough to prove the
