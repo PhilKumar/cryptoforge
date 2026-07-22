@@ -111,6 +111,16 @@ class BinanceSpotClient(BaseBroker):
         self.api_secret = getattr(config, "BINANCE_SPOT_API_SECRET", "") or config.BINANCE_API_SECRET
         self.base_url = config.BINANCE_SPOT_BASE_URL.rstrip("/")
         self.testnet = bool(getattr(config, "BINANCE_SPOT_TESTNET", False))
+        # Candles and tickers must ALWAYS describe the real market. The testnet
+        # runs its own thin simulated book whose prices drift from reality —
+        # a mother-candle high read off a real chart simply does not exist in
+        # testnet klines, and an engine replaying testnet candles rehearses a
+        # market that never happened. data-api.binance.vision is Binance's
+        # public market-data host: production prices, no API key. Signed calls
+        # (orders, account) and venue-specific truth (exchangeInfo filters,
+        # /time for signing clocks) stay on base_url, because those must match
+        # the venue the order is actually sent to.
+        self.market_data_url = "https://data-api.binance.vision" if self.testnet else self.base_url
         self.quote_asset = config.BINANCE_SPOT_QUOTE_ASSET.upper()
         self._products_cache = None
         self._products_ts = 0.0
@@ -144,6 +154,13 @@ class BinanceSpotClient(BaseBroker):
 
     def _public_get(self, path: str, *, params: dict | None = None):
         url = f"{self.base_url}{path}"
+        resp = _request_with_retry("GET", url, headers={"Content-Type": "application/json"}, params=params, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _market_get(self, path: str, *, params: dict | None = None):
+        """Public market data — real prices even when trading the testnet."""
+        url = f"{self.market_data_url}{path}"
         resp = _request_with_retry("GET", url, headers={"Content-Type": "application/json"}, params=params, timeout=30)
         resp.raise_for_status()
         return resp.json()
@@ -299,7 +316,7 @@ class BinanceSpotClient(BaseBroker):
             params["startTime"] = int(datetime.strptime(start, "%Y-%m-%d").timestamp() * 1000)
         if end:
             params["endTime"] = int(datetime.strptime(end, "%Y-%m-%d").timestamp() * 1000)
-        candles = self._public_get("/api/v3/klines", params=params)
+        candles = self._market_get("/api/v3/klines", params=params)
         if not candles:
             return pd.DataFrame()
         df = pd.DataFrame(
@@ -332,7 +349,7 @@ class BinanceSpotClient(BaseBroker):
     def get_ticker(self, symbol: str) -> dict:
         pair = self.to_broker_symbol(symbol)
         try:
-            ticker = self._public_get("/api/v3/ticker/24hr", params={"symbol": pair})
+            ticker = self._market_get("/api/v3/ticker/24hr", params={"symbol": pair})
             last_price = self.coerce_float(ticker.get("lastPrice"), 0.0)
             return {
                 "symbol": self.from_broker_symbol(pair),
@@ -354,7 +371,7 @@ class BinanceSpotClient(BaseBroker):
 
     def get_tickers_bulk(self) -> list:
         try:
-            rows = self._public_get("/api/v3/ticker/24hr")
+            rows = self._market_get("/api/v3/ticker/24hr")
             return [
                 {
                     "symbol": item.get("symbol"),

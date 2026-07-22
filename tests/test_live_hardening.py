@@ -3406,3 +3406,74 @@ class BinanceOrderHistoryScanTests(unittest.TestCase):
         first = client.get_order_history()
         first.clear()
         self.assertEqual(len(client.get_order_history()), 1)
+
+
+class BinanceMarketDataHostTests(unittest.TestCase):
+    """Regression: with the testnet enabled, klines came from the testnet's own
+    thin simulated book, whose prices drift from the real market. A mother
+    candle high read off a real chart (PAXGUSDT 4132.58) simply did not exist
+    in testnet candles, so every campaign start failed with "could not find a
+    recent 5m candle" — and had it matched, the engine would have replayed a
+    market that never happened. Market data must always be real; only signed
+    calls and venue truth (exchangeInfo, /time) belong to the environment."""
+
+    def _client(self, testnet):
+        with (
+            patch.object(config, "BINANCE_SPOT_TESTNET", testnet),
+            patch.object(
+                config,
+                "BINANCE_SPOT_BASE_URL",
+                "https://testnet.binance.vision" if testnet else "https://api.binance.com",
+            ),
+        ):
+            return BinanceSpotClient()
+
+    def test_testnet_reads_market_data_from_the_real_market(self):
+        client = self._client(testnet=True)
+        self.assertEqual(client.market_data_url, "https://data-api.binance.vision")
+        # Orders and signing still target the testnet.
+        self.assertEqual(client.base_url, "https://testnet.binance.vision")
+
+    def test_mainnet_keeps_one_host(self):
+        client = self._client(testnet=False)
+        self.assertEqual(client.market_data_url, client.base_url)
+
+    def test_klines_and_tickers_use_the_market_host(self):
+        client = self._client(testnet=True)
+        seen = []
+
+        def _fake_market_get(path, params=None):
+            seen.append(path)
+            return []
+
+        client._market_get = _fake_market_get
+        client._public_get = lambda path, params=None: self.fail(
+            f"{path} went to the environment host; market data must come from the real market"
+        )
+        client.get_candles("PAXGUSDT")
+        client.get_ticker("PAXGUSDT")
+        client.get_tickers_bulk()
+        self.assertEqual(
+            seen,
+            ["/api/v3/klines", "/api/v3/ticker/24hr", "/api/v3/ticker/24hr"],
+        )
+
+    def test_venue_truth_stays_on_the_environment_host(self):
+        """exchangeInfo filters (LOT_SIZE, minNotional) and the signing clock
+        must describe the venue the order is sent to, not the data mirror."""
+        client = self._client(testnet=True)
+        seen = []
+
+        def _fake_public_get(path, params=None):
+            seen.append(path)
+            return {"serverTime": 0, "symbols": []}
+
+        client._public_get = _fake_public_get
+        client._market_get = lambda path, params=None: self.fail(
+            f"{path} went to the market-data host; venue truth belongs to the environment"
+        )
+        client.get_products(force_refresh=True)
+        client._time_offset_ts = 0.0
+        client._server_time_offset_ms()
+        self.assertIn("/api/v3/exchangeInfo", seen)
+        self.assertIn("/api/v3/time", seen)
