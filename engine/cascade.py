@@ -1325,13 +1325,32 @@ class CascadeEngine:
             out.append(current)
         return out
 
+    def _closed_campaign(self, campaign_id: str) -> Optional[Campaign]:
+        """Rebuild an ended campaign from the closed history.
+
+        Archiving drops a campaign out of self.campaigns, so anything that only
+        looked there could not see it — which is why Closed Campaigns' Chart
+        button did nothing. The geometry is all in the stored snapshot.
+        """
+        for row in reversed(self.closed_campaigns):
+            if isinstance(row, dict) and str(row.get("campaign_id")) == str(campaign_id):
+                try:
+                    return Campaign.from_dict(row)
+                except Exception as exc:  # a malformed old record must not 500
+                    _log.warning("[CASCADE] closed campaign %s could not be read: %s", campaign_id, exc)
+                    return None
+        return None
+
     async def get_chart_data(self, campaign_id: str, max_candles: int = 300, timeframe: str = "5m") -> dict:
         """
         Candles plus the geometry the engine actually used — trendline anchors,
         each leg's fib anchors/levels, ladder order prices and fills — so the
         marked levels can be verified visually against a real chart.
+
+        Ended campaigns work too — they are read back out of the closed history,
+        which is the whole point of the Chart button on that table.
         """
-        campaign = self.campaigns.get(campaign_id)
+        campaign = self.campaigns.get(campaign_id) or self._closed_campaign(campaign_id)
         if campaign is None:
             return {"error": f"Campaign {campaign_id} not found"}
 

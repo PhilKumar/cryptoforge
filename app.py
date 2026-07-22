@@ -6703,6 +6703,10 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "5m"):
     eng = _get_cascade_engine()
     if not eng.campaigns:
         _restore_cascade_runtime(eng)
+    if not eng.closed_campaigns:
+        # The chart works for ended campaigns too, and after a restart their
+        # history has to be loaded before it can be found.
+        eng.load_closed_campaigns(_load_cascade_closed())
     result = await eng.get_chart_data(campaign_id, timeframe=timeframe)
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])

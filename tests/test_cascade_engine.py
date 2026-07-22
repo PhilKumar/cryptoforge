@@ -1338,6 +1338,44 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.broker.placed_orders, [])
 
 
+class CascadeClosedChartTests(unittest.IsolatedAsyncioTestCase):
+    """The Chart button on the Closed Campaigns table."""
+
+    def _engine_with_archived(self):
+        engine = _mk_engine()
+        campaign = Campaign(
+            campaign_id="gone",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=100.0,
+            mother_low=99.0,
+            mother_timestamp=_RECENT_TS,
+            seq=7,
+        )
+        campaign.state = "MOTHER_BROKEN"
+        engine._archive_campaign(campaign)
+        return engine
+
+    async def test_an_ended_campaign_still_has_a_chart(self):
+        """Archiving drops a campaign out of engine.campaigns, so a lookup that
+        only checked there returned "not found" and the button did nothing."""
+        engine = self._engine_with_archived()
+        self.assertNotIn("gone", engine.campaigns)
+        result = await engine.get_chart_data("gone")
+        self.assertIsNone(result.get("error"))
+        self.assertEqual(result["symbol"], "BTCUSDT")
+        self.assertEqual(result["state"], "MOTHER_BROKEN")
+        engine.stop()
+
+    async def test_an_ended_campaign_cannot_be_stopped_or_restarted(self):
+        """Reading history is fine; acting on it is not. Only the chart reaches
+        into the closed list."""
+        engine = self._engine_with_archived()
+        self.assertIn("not found", (await engine.stop_campaign("gone")).get("error", ""))
+        self.assertIn("not found", (await engine.recalculate_campaign("gone")).get("error", ""))
+        engine.stop()
+
+
 class CascadeEngineApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_campaign_validates_inputs(self):
         engine = _mk_engine()
