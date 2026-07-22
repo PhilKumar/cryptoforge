@@ -15,6 +15,7 @@ from engine.cascade import (
     Leg,
     Round,
     build_fib_ladder_and_pool,
+    compute_tp_price,
     ladders_overlap,
     plan_leg_orders,
 )
@@ -1714,6 +1715,71 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         campaign.all_fills.append(Fill(price=64700.0, quantity=0.001, level=2, leg_id=1, timestamp=1))
         result = await engine.recalculate_campaign("stale")
         self.assertIn("error", result)
+
+
+class CascadePaperTpOnReplayTests(unittest.TestCase):
+    """A replay must be able to CLOSE a paper round, not only open one.
+
+    The live loop tests the TP against the last traded price. A candle replay
+    has no such price, so nothing closed a round during a replay — and Recalc
+    is a replay. Pressing it on a paper campaign therefore erased every closed
+    round and handed back an open position that should have been sold: the SOL
+    07-21 campaign replayed to a position still open, when its round had closed
+    at 78.05 and 79 later candles had traded above the target.
+    """
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = Campaign(
+            campaign_id="tp",
+            symbol="SOLUSDT",
+            capital_usd=2000.0,
+            mother_high=78.88,
+            mother_low=78.57,
+            mother_timestamp=_RECENT_TS,
+            mode="paper",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        self.campaign.all_fills.append(
+            Fill(price=77.77, quantity=0.09013759, level=4, leg_id=3, timestamp=_RECENT_TS + 300)
+        )
+        self.campaign.filled_base_qty = 0.09013759
+        self.campaign.avg_entry_price = 77.77
+        self.engine.campaigns["tp"] = self.campaign
+        self.engine._candles_5m["tp"] = []
+        # 77.77 + 25% of the way to the mother high 78.88
+        self.tp = 78.0475
+
+    def _candle(self, ts, high):
+        return Candle(timestamp=ts, open=77.9, high=high, low=77.8, close=77.9)
+
+    def test_a_candle_through_the_target_closes_the_round(self):
+        self.assertAlmostEqual(compute_tp_price(self.campaign), self.tp, places=4)
+        self.engine._paper_tp_check(self.campaign, self._candle(_RECENT_TS + 900, 78.06))
+        self.assertEqual(len(self.campaign.rounds), 1)
+        rnd = self.campaign.rounds[0]
+        self.assertAlmostEqual(rnd.avg_entry, 77.77)
+        self.assertAlmostEqual(rnd.exit_price, self.tp, places=4)
+        self.assertGreater(rnd.pnl, 0)
+        self.assertEqual(self.campaign.filled_base_qty, 0.0)
+
+    def test_a_candle_short_of_the_target_leaves_it_open(self):
+        self.engine._paper_tp_check(self.campaign, self._candle(_RECENT_TS + 900, 78.00))
+        self.assertEqual(self.campaign.rounds, [])
+        self.assertEqual(self.campaign.filled_base_qty, 0.09013759)
+
+    def test_the_candle_that_bought_cannot_also_sell(self):
+        """Tick order inside a candle is unknowable, so the pessimistic reading
+        is that the target comes on a later candle."""
+        self.engine._paper_tp_check(self.campaign, self._candle(_RECENT_TS + 300, 79.00))
+        self.assertEqual(self.campaign.rounds, [])
+
+    def test_a_flat_position_is_ignored(self):
+        self.campaign.all_fills = []
+        self.campaign.filled_base_qty = 0.0
+        self.engine._paper_tp_check(self.campaign, self._candle(_RECENT_TS + 900, 99.0))
+        self.assertEqual(self.campaign.rounds, [])
 
 
 class CascadeStopCancelsEverythingTests(unittest.IsolatedAsyncioTestCase):

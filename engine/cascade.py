@@ -1811,6 +1811,7 @@ class CascadeEngine:
             # been filled — advancing first would hide that.
             if campaign.mode == "paper":
                 self._paper_fill_check(campaign, candle)
+                self._paper_tp_check(campaign, candle)
             # A new low under the last closed round releases the levels that
             # round bought: fresh ground, so the ladder can work them again.
             self._release_closed_levels(campaign, candle)
@@ -2101,6 +2102,29 @@ class CascadeEngine:
                 campaign.pending_limit_price or campaign.pending_stop_price,
                 closed_5m.timestamp,
             )
+
+    def _paper_tp_check(self, campaign: Campaign, closed_5m: Candle) -> None:
+        """Close a paper round when a candle trades through the target.
+
+        The live loop tests the TP against the last traded price, which a
+        candle replay does not have — so the replay could OPEN a position and
+        never sell it. Recalc is a replay, which meant pressing it on a paper
+        campaign erased every closed round and handed back an open position
+        that should have been sold hours earlier: the SOL 07-21 campaign
+        replayed to a position still open, when its round had in fact closed
+        at 78.05 and 79 later candles had traded above the target.
+        """
+        if campaign.filled_base_qty <= 0:
+            return
+        tp = compute_tp_price(campaign)
+        if not tp or closed_5m.high < tp:
+            return
+        # A candle that also took the entry cannot be assumed to have reached
+        # the target afterwards — the order of ticks inside it is unknowable,
+        # so the pessimistic reading is that the target comes later.
+        if any(fill.timestamp >= closed_5m.timestamp for fill in campaign.all_fills):
+            return
+        self._close_round(campaign, tp)
 
     def _release_closed_levels(self, campaign: Campaign, candle: Candle) -> None:
         """Give back the levels a closed round bought, once price breaks under
