@@ -15,6 +15,7 @@ from engine.cascade import (
     Leg,
     Round,
     build_fib_ladder_and_pool,
+    ladders_overlap,
     plan_leg_orders,
 )
 
@@ -430,6 +431,41 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
                     MIN_LEG_SEPARATION_PCT,
                     f"fibs at {a} and {b} are the same shelf and should not both exist",
                 )
+
+    def test_a_deeper_swing_off_the_same_high_is_not_the_same_shelf(self):
+        """Real numbers from BTCUSDT campaign #36, 2026-07-21.
+
+        The engine found 0=66,739.89 / 1=66,052.63 — both anchors Phil had
+        drawn by hand — and discarded it because its high sat 0.010% from fib
+        1's 66,746.68. But fib 1 spans 93 points and this one spans 687: its
+        shallowest rung is 65,365 while fib 1's deepest is 65,997, so the two
+        ladders share no price at all. Nothing could be split between them,
+        which is the only thing the same-shelf rule exists to prevent."""
+        fib1_high, fib1_low = 66746.68, 66653.05
+        deep_high, deep_low = 66739.89, 66052.63
+
+        # Close enough on the high alone that the old rule dropped it.
+        self.assertLess(abs(deep_high - fib1_high) / fib1_high, MIN_LEG_SEPARATION_PCT)
+        # The ladders do not touch: shallowest rung of one is below the
+        # deepest rung of the other.
+        self.assertLess(
+            deep_high - 2 * (deep_high - deep_low),
+            fib1_high - 8 * (fib1_high - fib1_low),
+        )
+        self.assertFalse(ladders_overlap(deep_high, deep_low, fib1_high, fib1_low))
+
+    def test_a_genuine_duplicate_shelf_still_overlaps(self):
+        """The SOL duplicate this rule was written for must stay caught: same
+        high AND a comparable range, so the rungs interleave."""
+        self.assertTrue(ladders_overlap(64763.67, 64502.00, 64753.77, 64599.89))
+        # And a fib compared against itself is trivially the same shelf.
+        self.assertTrue(ladders_overlap(64753.77, 64599.89, 64753.77, 64599.89))
+
+    def test_degenerate_ranges_are_treated_as_the_same_shelf(self):
+        """A zero or inverted range has no ladder to compare, so it must not
+        fall through the overlap check and be admitted as a fresh structure."""
+        self.assertTrue(ladders_overlap(100.0, 100.0, 100.0, 99.0))
+        self.assertTrue(ladders_overlap(100.0, 101.0, 100.0, 99.0))
 
     def test_skipping_keeps_the_money_on_one_ladder(self):
         """A same-shelf third fib adds rungs a few ticks from ones already on

@@ -801,6 +801,33 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
     replan_ladder(campaign)
 
 
+def ladders_overlap(high_a: float, low_a: float, high_b: float, low_b: float) -> bool:
+    """Do two fibs put rungs in the same stretch of price?
+
+    Rungs are laid from the touch high downward at CASCADE_LEVELS multiples of
+    the fib range, so each ladder spans [high - max*range, high - min*range].
+    Two ladders overlap unless one finishes entirely above where the other
+    starts.
+
+    This is the question the same-shelf rule actually needs answered. Comparing
+    touch highs alone treats "same high, far deeper low" as a duplicate, and it
+    is not: on BTCUSDT 07-21 a structure at 0=66,739.89 / 1=66,052.63 was
+    dropped for sitting 0.010% from fib 1's high, yet its shallowest rung
+    (65,365) was below fib 1's deepest (65,997). Two ladders that share no
+    price cannot split money between near-identical rungs, which is the only
+    harm the rule exists to prevent.
+    """
+    deepest = max(CASCADE_LEVELS)
+    shallowest = min(CASCADE_LEVELS)
+    range_a = high_a - low_a
+    range_b = high_b - low_b
+    if range_a <= 0 or range_b <= 0:
+        return True  # degenerate: fall back to treating them as the same shelf
+    floor_a, ceiling_a = high_a - deepest * range_a, high_a - shallowest * range_a
+    floor_b, ceiling_b = high_b - deepest * range_b, high_b - shallowest * range_b
+    return ceiling_a >= floor_b and ceiling_b >= floor_a
+
+
 def rung_size_usd(campaign: Campaign) -> float:
     """The standard amount on one rung.
 
@@ -1907,10 +1934,22 @@ class CascadeEngine:
         # only ever compared against fib 2. That matters more now that every
         # fib keeps its ladder resting — a same-shelf fib puts a second set of
         # orders a few ticks from the first and splits the money between them.
+        #
+        # The touch high alone does NOT settle it. A structure can start from
+        # the same high and fall very much further, and then it is a different
+        # swing with a different ladder, not a duplicate of the shelf. On
+        # BTCUSDT 07-21 the engine found 0=66,739.89 / 1=66,052.63 — a 687-point
+        # range against fib 1's 93 — and dropped it because the two highs were
+        # 0.010% apart. Its shallowest rung (65,365) sat BELOW fib 1's deepest
+        # (65,997): the ladders did not share a single price, so there was no
+        # money to split and nothing to cancel. So the ladders have to actually
+        # overlap before the second structure counts as the same shelf.
         prior = None
         separation = 0.0
         for leg in campaign.legs:
-            if not leg.touch_high:
+            if not leg.touch_high or not leg.low:
+                continue
+            if not ladders_overlap(touch_high, frozen_dip, leg.touch_high, leg.low):
                 continue
             gap = abs(touch_high - leg.touch_high) / leg.touch_high
             if prior is None or gap < separation:
