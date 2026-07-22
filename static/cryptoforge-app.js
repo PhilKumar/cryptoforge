@@ -9196,7 +9196,11 @@ function _cfCascadeChartHtml(d) {
     + '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
 }
 
-var _cfCascadeChartTf = '5m';
+// 'auto' asks the server for the smallest timeframe that still fits the whole
+// campaign on one screen. On a fixed 5m a campaign older than ~25 hours pushed
+// its own mother candle off the left edge, and every line on the chart is
+// measured from that candle.
+var _cfCascadeChartTf = 'auto';
 
 function cfCascadeSetMode(mode) {
   var picked = mode === 'live' ? 'live' : 'paper';
@@ -9211,15 +9215,24 @@ function cfCascadeSetMode(mode) {
 }
 
 function cfCascadeSetTimeframe(tf) {
-  var picked = (tf === '15m' || tf === '1h') ? tf : '5m';
+  var picked = (tf === '15m' || tf === '1h' || tf === '5m') ? tf : 'auto';
   _cfCascadeChartTf = picked;
-  var options = document.querySelectorAll('.cf-tf-option');
+  _cfCascadeMarkTimeframe(picked);
+  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId);
+}
+
+// Highlights the button in use. On 'auto' the server decides, so the resolved
+// timeframe is shown as a secondary mark rather than moving the selection —
+// otherwise Auto would look like it had switched itself off.
+function _cfCascadeMarkTimeframe(selected, resolved) {
+  var options = document.querySelectorAll('.cf-tf-option[data-tf]');
   for (var i = 0; i < options.length; i++) {
-    var on = options[i].getAttribute('data-tf') === picked;
+    var tf = options[i].getAttribute('data-tf');
+    var on = tf === selected;
     options[i].classList.toggle('is-active', on);
+    options[i].classList.toggle('is-resolved', selected === 'auto' && !!resolved && tf === resolved);
     options[i].setAttribute('aria-checked', on ? 'true' : 'false');
   }
-  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId);
 }
 
 // ── Chart zoom / pan ────────────────────────────────────────
@@ -9257,8 +9270,17 @@ function cfCascadeZoom(factor, resetPan) {
   if (!svg.dataset.baseViewbox) svg.dataset.baseViewbox = svg.getAttribute('viewBox') || '';
   var base = (svg.dataset.baseViewbox || '').split(/\s+/).map(Number);
   var z = _cfChartZoom;
-  var prevK = z.k;
-  z.k = Math.max(1, Math.min(12, factor === 0 ? 1 : z.k * factor));
+  var prevK = Number(z.k) || 1;
+  z.k = prevK;
+  // A non-finite factor must not poison k. It used to: the buttons passed the
+  // expression 1/1.4, which the click dispatcher hands over as the STRING
+  // "1/1.4" because it only parses plain numbers — so k became NaN on the
+  // first zoom-out, every later multiply stayed NaN, and the readout showed
+  // "NaN%" with both buttons dead until the dialog was reopened.
+  var step = Number(factor);
+  if (!isFinite(step)) return;
+  z.k = Math.max(1, Math.min(12, step === 0 ? 1 : prevK * step));
+  if (!isFinite(z.k)) z.k = 1;
   if (factor === 0 || resetPan || z.k === 1) {
     z.x = base[0]; z.y = base[1];
   } else if (base.length === 4) {
@@ -9270,6 +9292,9 @@ function cfCascadeZoom(factor, resetPan) {
   _cfChartApplyZoom();
 }
 
+// Named wrappers so the markup never has to contain an arithmetic expression.
+function cfCascadeZoomIn() { cfCascadeZoom(1.4); }
+function cfCascadeZoomOut() { cfCascadeZoom(1 / 1.4); }
 function cfCascadeZoomReset() { cfCascadeZoom(0); }
 
 function _cfChartBindZoom() {
@@ -9367,12 +9392,14 @@ async function cfCascadeShowChart(campaignId) {
     body.innerHTML = _cfCascadeChartHtml(data);
     _cfChartBindZoom();
     cfCascadeZoomReset();
+    _cfCascadeMarkTimeframe(_cfCascadeChartTf, data.timeframe);
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta) {
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + (data.candles || []).length
         + ' ' + (data.timeframe || '5m') + ' candles since mother candle ('
         + _cfCascadeIst(data.mother && data.mother.t) + ' IST) · '
         + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)'
+        + (data.timeframe_auto ? ' · auto-fitted to ' + (data.timeframe || '5m') : '')
         + (data.timeframe && data.timeframe !== '5m' ? ' · geometry is always 5m-derived' : '');
     }
   } catch (error) {

@@ -7071,7 +7071,7 @@ async def cascade_recalculate_campaign(campaign_id: str):
 
 
 @app.get("/api/cascade/campaigns/{campaign_id}/chart")
-async def cascade_campaign_chart(campaign_id: str, timeframe: str = "5m"):
+async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
     eng = _get_cascade_engine()
     if not eng.campaigns:
         _restore_cascade_runtime(eng)

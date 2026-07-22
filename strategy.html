@@ -1422,7 +1422,9 @@
       </div>
       <div class="admin-inline-actions">
         <div class="cf-tf-toggle" role="radiogroup" aria-label="Chart timeframe">
-          <button type="button" class="cf-tf-option is-active" data-tf="5m" role="radio" aria-checked="true"
+          <button type="button" class="cf-tf-option is-active" data-tf="auto" role="radio" aria-checked="true"
+                  data-cf-click="cfCascadeSetTimeframe('auto')" title="Pick the timeframe that fits the whole campaign">Auto</button>
+          <button type="button" class="cf-tf-option" data-tf="5m" role="radio" aria-checked="false"
                   data-cf-click="cfCascadeSetTimeframe('5m')">5m</button>
           <button type="button" class="cf-tf-option" data-tf="15m" role="radio" aria-checked="false"
                   data-cf-click="cfCascadeSetTimeframe('15m')">15m</button>
@@ -1430,9 +1432,12 @@
                   data-cf-click="cfCascadeSetTimeframe('1h')">1H</button>
         </div>
         <div class="cf-tf-toggle" role="group" aria-label="Chart zoom">
-          <button type="button" class="cf-tf-option" data-cf-click="cfCascadeZoom(1/1.4)" title="Zoom out" aria-label="Zoom out">&minus;</button>
+          <!-- Named functions, not an expression. data-cf-click only parses plain
+               numbers, so `cfCascadeZoom(1/1.4)` passed the STRING "1/1.4" and
+               `z.k * "1/1.4"` was NaN — one click of minus killed the control. -->
+          <button type="button" class="cf-tf-option" data-cf-click="cfCascadeZoomOut()" title="Zoom out" aria-label="Zoom out">&minus;</button>
           <button type="button" class="cf-tf-option" id="cf-cascade-zoom-level" data-cf-click="cfCascadeZoomReset()" title="Reset zoom">100%</button>
-          <button type="button" class="cf-tf-option" data-cf-click="cfCascadeZoom(1.4)" title="Zoom in" aria-label="Zoom in">+</button>
+          <button type="button" class="cf-tf-option" data-cf-click="cfCascadeZoomIn()" title="Zoom in" aria-label="Zoom in">+</button>
         </div>
         <button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRefreshChart()"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> Refresh</button>
         <button class="btn btn-outline btn-sm" id="cf-cascade-fullscreen-btn"

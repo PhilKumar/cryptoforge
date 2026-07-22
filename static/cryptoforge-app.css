@@ -7521,3 +7521,53 @@ html[data-theme="light"] .journal-entry-notes section {
   .nav-tabs .nav-tab .tab-label { font-size: 10.5px !important; }
   .nav-tabs .nav-tab .tab-icon svg { width: 14px; height: 14px; }
 }
+
+/* Auto-timeframe: mark which one the server actually picked, without moving
+   the selection off "Auto" — otherwise Auto looks like it switched itself off. */
+.cf-tf-option.is-resolved:not(.is-active) {
+  color: var(--accent);
+  opacity: 0.95;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* ── Chart dialog header on mobile ──────────────────────────────────
+   The header is one flex row: title+meta on the left, the timeframe /
+   zoom / Refresh / Expand / Close buttons on the right. At phone width
+   the buttons refused to shrink and the title group collapsed to ZERO
+   width, so "Campaign Chart" sat under the toolbar and the meta line
+   rendered one word per line down the screen.
+   Give the title its own full-width row and let the controls wrap under it. */
+@media (max-width: 767px) {
+  .cf-chart-overlay .table-toolbar {
+    flex-wrap: wrap !important;
+    align-items: flex-start;
+    row-gap: 8px;
+    /* The bar scrolled sideways instead of wrapping, which pushed Refresh,
+       Expand and CLOSE off the right edge — leaving no visible way out of the
+       dialog on a phone unless you happened to swipe the toolbar. A flex line
+       cannot wrap while it is allowed to overflow, so the scroll has to go. */
+    overflow-x: visible;
+  }
+  .cf-chart-overlay .table-title-group {
+    flex: 1 1 100% !important;
+    min-width: 0;
+  }
+  .cf-chart-overlay .table-meta {
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: anywhere;
+  }
+  /* The controls are not children of .table-toolbar — they sit in
+     .admin-inline-actions, which was 597px wide at nowrap inside a 325px
+     parent. That is what pushed Refresh, Expand and Close off-screen; wrapping
+     the outer bar alone did nothing. */
+  .cf-chart-overlay .admin-inline-actions {
+    flex-wrap: wrap !important;
+    justify-content: flex-start;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+  }
+  .cf-chart-overlay .cf-tf-toggle { flex: 0 0 auto; }
+  .cf-chart-overlay .table-toolbar .btn { flex: 0 0 auto; }
+}

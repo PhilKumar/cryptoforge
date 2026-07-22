@@ -2693,3 +2693,63 @@ class CascadeRestartSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(broker.cancelled, [], "and nothing should be pulled")
         self.assertEqual(str(campaign.pending_order_id), self.order_id)
         self.assertEqual(campaign.all_fills, [])
+
+
+class CascadeAutoChartTimeframeTests(unittest.TestCase):
+    """Which timeframe the CHART picks so the whole campaign stays on screen.
+
+    The chart renders the last `max_candles` buckets, so on a fixed 5m a
+    campaign older than about 25 hours pushed its own mother candle off the
+    left edge — and every line on the chart is measured from that candle.
+
+    View only. None of this touches how the engine computes geometry or places
+    orders; that is 5m throughout, deliberately.
+    """
+
+    def _campaign_aged(self, hours):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.mother_timestamp = int(time.time()) - int(hours * 3600)
+        return campaign
+
+    def pick(self, hours, budget=250):
+        return CascadeEngine._auto_chart_timeframe(self._campaign_aged(hours), budget)
+
+    def test_a_young_campaign_stays_on_5m(self):
+        self.assertEqual(self.pick(1), "5m")
+        self.assertEqual(self.pick(20), "5m")
+
+    def test_it_rolls_up_once_5m_would_not_fit(self):
+        # 250 x 5m = 20.8h. Past that, 5m would start hiding the mother candle.
+        self.assertEqual(self.pick(21), "15m")
+        self.assertEqual(self.pick(60), "15m")
+
+    def test_it_rolls_up_again_once_15m_would_not_fit(self):
+        # 250 x 15m = 62.5h.
+        self.assertEqual(self.pick(63), "1h")
+        self.assertEqual(self.pick(200), "1h")
+
+    def test_a_very_old_campaign_stops_at_1h(self):
+        """1H is the coarsest view there is — it must not fall off the end."""
+        self.assertEqual(self.pick(24 * 365), "1h")
+
+    def test_the_boundary_follows_the_candle_budget(self):
+        """A smaller screen budget escalates sooner, a larger one later.
+
+        30h on the default 250 budget is 15m. Narrow the screen to 100 buckets
+        and 15m only reaches 25h, so it goes to 1H; widen it to 400 and 5m
+        reaches 33h, so it stays put.
+        """
+        self.assertEqual(self.pick(30), "15m")
+        self.assertEqual(self.pick(30, budget=100), "1h")
+        self.assertEqual(self.pick(30, budget=400), "5m")
+
+    def test_a_zero_or_missing_budget_does_not_divide_by_zero(self):
+        self.assertIn(self.pick(1, budget=0), {"5m", "15m", "1h"})
+
+    def test_a_missing_mother_timestamp_does_not_crash(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.mother_timestamp = 0
+        # Epoch 0 is ~56 years of span; it must resolve, not raise.
+        self.assertEqual(CascadeEngine._auto_chart_timeframe(campaign, 250), "1h")

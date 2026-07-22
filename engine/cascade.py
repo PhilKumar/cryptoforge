@@ -1545,7 +1545,27 @@ class CascadeEngine:
                     return None
         return None
 
-    async def get_chart_data(self, campaign_id: str, max_candles: int = 300, timeframe: str = "5m") -> dict:
+    @staticmethod
+    def _auto_chart_timeframe(campaign: Campaign, max_candles: int) -> str:
+        """The smallest timeframe that still fits the WHOLE campaign on screen.
+
+        The chart takes the last `max_candles` buckets, so on 5m a campaign
+        older than about 25 hours pushed its own mother candle off the left
+        edge — and the mother candle is the one thing every line on the chart
+        is measured from. Rolling up to 15m and then 1H keeps the entire
+        campaign, mother included, inside one screen.
+
+        View only. The engine still computes every fib, trendline and entry
+        from 5m candles regardless of what is being displayed.
+        """
+        span_sec = max(int(time.time()) - int(campaign.mother_timestamp or 0), 0)
+        budget = max(int(max_candles), 1)
+        for name in ("5m", "15m", "1h"):
+            if span_sec <= CHART_TIMEFRAMES[name] * budget:
+                return name
+        return "1h"
+
+    async def get_chart_data(self, campaign_id: str, max_candles: int = 300, timeframe: str = "auto") -> dict:
         """
         Candles plus the geometry the engine actually used — trendline anchors,
         each leg's fib anchors/levels, ladder order prices and fills — so the
@@ -1562,7 +1582,10 @@ class CascadeEngine:
         # engine's in-memory list: that list is only what this process has
         # stepped through, so after a restart it can hold a handful of candles
         # and the chart would render almost empty.
-        bucket_sec = CHART_TIMEFRAMES.get(str(timeframe).lower(), FIVE_MIN_SEC)
+        requested = str(timeframe).lower()
+        if requested == "auto":
+            requested = self._auto_chart_timeframe(campaign, max_candles)
+        bucket_sec = CHART_TIMEFRAMES.get(requested, FIVE_MIN_SEC)
         # Pull enough 5m candles that the rolled-up view still spans the window.
         raw_needed = max_candles * max(bucket_sec // FIVE_MIN_SEC, 1)
         history = await self._chart_candles(campaign, raw_needed)
@@ -1629,7 +1652,8 @@ class CascadeEngine:
             "state": campaign.state,
             "mode": campaign.mode,
             "mother": mother,
-            "timeframe": str(timeframe).lower() if str(timeframe).lower() in CHART_TIMEFRAMES else "5m",
+            "timeframe": requested if requested in CHART_TIMEFRAMES else "5m",
+            "timeframe_auto": str(timeframe).lower() == "auto",
             "candles": candles,
             "trendlines": trendlines,
             "legs": legs,
