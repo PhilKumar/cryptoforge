@@ -557,6 +557,12 @@ class Campaign:
     tp_rev: int = 0
     tp_filled: bool = False
     filled_base_qty: float = 0.0
+    # Base asset bought but not sellable yet. Binance floors a sell to the
+    # symbol's LOT_SIZE step, so a round that bought 0.00011542 BTC could only
+    # offer 0.00011 — stranding 0.00000542, which is 4.7% of a $7.60 position.
+    # The remainder is carried into the next round's sell instead of being
+    # abandoned, so it clears as soon as the total reaches another whole step.
+    residual_base_qty: float = 0.0
     realized_pnl: Optional[float] = None
     mother_broken_above: bool = False
     # The structure window: candles since the last cut (the cut candle seeds
@@ -674,6 +680,7 @@ class Campaign:
             "tp_rev": self.tp_rev,
             "tp_filled": self.tp_filled,
             "filled_base_qty": self.filled_base_qty,
+            "residual_base_qty": self.residual_base_qty,
             "realized_pnl": self.realized_pnl,
             "mother_broken_above": self.mother_broken_above,
             "window_start_ts": self.window_start_ts,
@@ -726,6 +733,7 @@ class Campaign:
             "tp_rev",
             "tp_filled",
             "filled_base_qty",
+            "residual_base_qty",
             "realized_pnl",
             "mother_broken_above",
             "window_start_ts",
@@ -2415,7 +2423,7 @@ class CascadeEngine:
         # so the next buy is planned from the money actually still available.
         replan_ladder(campaign)
 
-    def _close_round(self, campaign: Campaign, exit_price: float) -> None:
+    def _close_round(self, campaign: Campaign, exit_price: float, sold_qty: Optional[float] = None) -> None:
         """
         A TP fill closes the current open-to-TP round, not the campaign. The
         principal comes back into available capital and the position resets to
@@ -2423,7 +2431,10 @@ class CascadeEngine:
         the rungs still waiting. Only a mother-high breach (or a manual stop)
         ends the campaign.
         """
-        qty = campaign.filled_base_qty
+        # What the exchange actually sold, when it told us. Booking the bought
+        # quantity instead overstates the round: LOT_SIZE can leave part of it
+        # unsold, and the P&L would claim coin that never left the account.
+        qty = campaign.filled_base_qty if sold_qty is None else sold_qty
         avg = campaign.avg_entry_price or 0.0
         invested = sum(f.price * f.quantity for f in campaign.all_fills)
         leg = campaign.current_leg
@@ -2915,12 +2926,17 @@ class CascadeEngine:
                     f"will place a fresh one.",
                 )
             if status == "FILLED":
-                executed = _coerce_float(status_row.get("executedQty"), campaign.filled_base_qty)
+                offered = campaign.filled_base_qty + campaign.residual_base_qty
+                executed = _coerce_float(status_row.get("executedQty"), offered)
                 quote = _coerce_float(status_row.get("cummulativeQuoteQty"))
                 exit_price = quote / executed if executed > 0 and quote > 0 else (campaign.tp_price or 0.0)
+                # Whatever LOT_SIZE would not let us offer stays ours; carry it
+                # so the next round's sell clears it once the total reaches
+                # another whole step, rather than stranding it forever.
+                campaign.residual_base_qty = max(round(offered - executed, 12), 0.0)
                 # Entry buys that never filled stay resting — the campaign is
                 # still live and price can come back down to them.
-                self._close_round(campaign, exit_price)
+                self._close_round(campaign, exit_price, sold_qty=executed)
                 return True
             campaign.tp_order_id = None
             changed = True
@@ -2966,7 +2982,7 @@ class CascadeEngine:
                     order_type="limit_order",
                     limit_price=desired_tp,
                     client_order_id=tp_client_id,
-                    base_qty=campaign.filled_base_qty,
+                    base_qty=campaign.filled_base_qty + campaign.residual_base_qty,
                 )
             )
         except Exception as exc:
@@ -2990,7 +3006,9 @@ class CascadeEngine:
             self._log_event(
                 campaign,
                 "order",
-                f"TP limit sell placed: {campaign.filled_base_qty:.8f} @ {desired_tp:,.2f}",
+                f"TP limit sell placed: {campaign.filled_base_qty + campaign.residual_base_qty:.8f} "
+                f"@ {desired_tp:,.2f}"
+                + (f" (includes {campaign.residual_base_qty:.8f} carried)" if campaign.residual_base_qty else ""),
             )
             changed = True
         else:

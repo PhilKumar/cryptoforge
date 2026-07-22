@@ -1974,6 +1974,86 @@ class CascadeAnchorToleranceTests(unittest.TestCase):
         self.assertNotEqual(ts, anchor_ts, "an anchor whose line was truly broken was accepted")
 
 
+class CascadeLotSizeResidueTests(unittest.IsolatedAsyncioTestCase):
+    """Binance floors a sell to the symbol's LOT_SIZE step.
+
+    BTCUSDT #36 bought 0.00011542 and could only offer 0.00011 — stranding
+    0.00000542, which is 4.7% of a $7.60 position. Left alone it accumulates
+    round after round, and the round's P&L claims coin that never left the
+    account.
+    """
+
+    def _holding(self, engine, bought, residual=0.0):
+        campaign = Campaign(
+            campaign_id="lot",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=66928.49,
+            mother_low=66823.36,
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        campaign.all_fills.append(Fill(price=65844.03, quantity=bought, level=8, leg_id=1, timestamp=_RECENT_TS))
+        campaign.filled_base_qty = bought
+        campaign.residual_base_qty = residual
+        campaign.avg_entry_price = 65844.03
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    async def test_the_sell_offers_the_carried_residue_too(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._holding(engine, bought=0.00011542, residual=0.00000542)
+        await engine._sync_tp_order(campaign, {})
+        sells = [o for o in broker.placed_orders if str(o.get("side", "")).lower() == "sell"]
+        self.assertEqual(len(sells), 1)
+        self.assertAlmostEqual(sells[0]["base_qty"], 0.00012084, places=8)
+
+    async def test_an_unsold_remainder_is_carried_not_abandoned(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._holding(engine, bought=0.00011542)
+        campaign.tp_order_id = "7001"
+        campaign.tp_price = 66109.86
+        # The exchange filled only the whole lot steps it could.
+        broker.order_lookup = {"7001": {"status": "FILLED", "executedQty": "0.00011", "cummulativeQuoteQty": "7.2721"}}
+        await engine._sync_tp_order(campaign, {})
+
+        self.assertEqual(len(campaign.rounds), 1)
+        rnd = campaign.rounds[0]
+        self.assertAlmostEqual(rnd.quantity, 0.00011, places=8)
+        self.assertAlmostEqual(campaign.residual_base_qty, 0.00000542, places=8)
+
+    async def test_the_round_books_what_sold_not_what_was_bought(self):
+        """P&L must not claim coin that never left the account."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._holding(engine, bought=0.00011542)
+        campaign.tp_order_id = "7002"
+        campaign.tp_price = 66109.86
+        broker.order_lookup = {"7002": {"status": "FILLED", "executedQty": "0.00011", "cummulativeQuoteQty": "7.2721"}}
+        await engine._sync_tp_order(campaign, {})
+
+        rnd = campaign.rounds[0]
+        expected = round((rnd.exit_price - 65844.03) * 0.00011, 8)
+        self.assertAlmostEqual(rnd.pnl, expected, places=8)
+        self.assertLess(rnd.quantity, 0.00011542, "booked the bought quantity, not the sold one")
+
+    async def test_residue_clears_once_it_reaches_a_whole_step(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._holding(engine, bought=0.00011542, residual=0.00000542)
+        campaign.tp_order_id = "7003"
+        campaign.tp_price = 66109.86
+        # 0.00012084 offered; the exchange can now take a full 0.00012.
+        broker.order_lookup = {"7003": {"status": "FILLED", "executedQty": "0.00012", "cummulativeQuoteQty": "7.9332"}}
+        await engine._sync_tp_order(campaign, {})
+        self.assertAlmostEqual(campaign.residual_base_qty, 0.00000084, places=8)
+        self.assertAlmostEqual(campaign.rounds[0].quantity, 0.00012, places=8)
+
+
 class CascadeOrderIdTests(unittest.IsolatedAsyncioTestCase):
     """A placement reply with no order id must never read as success.
 
