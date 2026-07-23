@@ -9130,7 +9130,7 @@ function _cfCascadeChartSvg(d) {
   }
 
   // mother candle high
-  if (d.mother && d.mother.high) hline(d.mother.high, PAL.mother, 'MOTHER ' + fmt(d.mother.high), '5,3', 1.1);
+  if (d.mother && d.mother.high) hline(d.mother.high, PAL.mother, 'MOTHER (' + fmt(d.mother.high) + ')', '5,3', 1.1);
 
   // every trendline, mother high -> its swing high
   var tlColors = PAL.fibs;
@@ -9173,15 +9173,19 @@ function _cfCascadeChartSvg(d) {
     // check. The money on the level goes in its label, not into its styling.
     // 0 and 1 only frame the swing; the buy levels are what you act on. Faint
     // enough to stay readable, quiet enough not to crowd them.
-    hline(leg.touch_high, col, 'F' + leg.leg_id + ' 0 ' + fmt(leg.touch_high), null, 0.8, 0.4);
-    hline(leg.low, col, 'F' + leg.leg_id + ' 1 ' + fmt(leg.low), null, 0.8, 0.4);
+    // Labels drop the "F" and wrap the price in brackets so the level number
+    // and the price never blur together — "1·0 (66,746.68)", not "F1 0 66,746.68".
+    // The middle dot keeps the fib number and the level readable once the F is
+    // gone (otherwise "1 0" reads as one number).
+    hline(leg.touch_high, col, leg.leg_id + '·0 (' + fmt(leg.touch_high) + ')', null, 0.8, 0.4);
+    hline(leg.low, col, leg.leg_id + '·1 (' + fmt(leg.low) + ')', null, 0.8, 0.4);
     [2, 4, 8].forEach(function (lv) {
       var p = leg.levels ? leg.levels[String(lv)] : null;
       if (p == null) return;
       var order = (leg.orders || []).find(function (o) { return o.level === lv; }) || {};
       var usd = Number(order.usd_notional) || 0;
       hline(Number(p), col,
-        'F' + leg.leg_id + ' L' + lv + ' ' + fmt(p) + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
+        leg.leg_id + '·L' + lv + ' (' + fmt(p) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
         null, 1.1, 0.9);
     });
     if (leg.touch_timestamp && inView(leg.touch_high)) {
@@ -9191,8 +9195,8 @@ function _cfCascadeChartSvg(d) {
   });
 
   // take profit (only exists once an entry has filled)
-  if (d.tp_price) hline(Number(d.tp_price), PAL.tp, 'TARGET ' + fmt(d.tp_price), '6,3', 1.2);
-  if (d.avg_entry_price) hline(Number(d.avg_entry_price), PAL.avg, 'AVG ENTRY ' + fmt(d.avg_entry_price), '4,4', 1.1);
+  if (d.tp_price) hline(Number(d.tp_price), PAL.tp, 'TARGET (' + fmt(d.tp_price) + ')', '6,3', 1.2);
+  if (d.avg_entry_price) hline(Number(d.avg_entry_price), PAL.avg, 'AVG ENTRY (' + fmt(d.avg_entry_price) + ')', '4,4', 1.1);
 
   // fills
   (d.fills || []).forEach(function (f) {

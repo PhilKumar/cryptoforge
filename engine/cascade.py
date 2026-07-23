@@ -60,10 +60,21 @@ import time
 import uuid
 from dataclasses import MISSING, dataclass, field
 from dataclasses import fields as dataclass_fields
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
 _log = logging.getLogger("cryptoforge.cascade")
+
+# Every user-facing time in this app is IST. The event log, closed_at and
+# created_at used a bare datetime.now(), which is the SERVER clock — UTC on the
+# Lightsail box — so the log read 5.5 hours behind the chart, whose candle
+# stamps are converted to IST. One helper, so the two never disagree again.
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _ist_now_str() -> str:
+    return datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S")
+
 
 CASCADE_LEVELS = (2, 4, 8)
 LEVEL_ALLOCATION = {2: 0.20, 4: 0.30, 8: 0.50}
@@ -1066,7 +1077,7 @@ class CascadeEngine:
 
     def _log_event(self, campaign: Optional[Campaign], level: str, message: str):
         event = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": _ist_now_str(),
             "level": level,
             "message": message,
             "campaign_id": campaign.campaign_id if campaign else None,
@@ -1219,7 +1230,7 @@ class CascadeEngine:
             min_notional_usd=min_notional,
             tick_size=tick_size,
             model_version=MODEL_VERSION,
-            created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            created_at=_ist_now_str(),
             last_processed_ts=mother_ts,
             window_start_ts=mother_ts,
         )
@@ -1244,7 +1255,7 @@ class CascadeEngine:
             await self._cancel_all_live_orders(campaign, include_tp=True)
         campaign.state = "STOPPED"
         campaign.close_reason = "stopped"
-        campaign.closed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        campaign.closed_at = _ist_now_str()
         self._log_event(campaign, "stop", f"Campaign {campaign_id} stopped")
         self._archive_campaign(campaign)
         self._emit_update()
@@ -1310,7 +1321,7 @@ class CascadeEngine:
         if not any(row.get("campaign_id") == campaign_id for row in self.closed_campaigns):
             if not campaign.close_reason:
                 campaign.close_reason = "deleted"
-                campaign.closed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                campaign.closed_at = _ist_now_str()
             self._archive_campaign(campaign)
         self._emit_update()
         return {"status": "ok"}
@@ -1369,7 +1380,7 @@ class CascadeEngine:
             "closed_campaigns": list(self.closed_campaigns[-40:]),
             "active_count": len(self.active_campaigns),
             "live_count": len(self.live_campaigns),
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": _ist_now_str(),
         }
 
     async def _chart_candles(self, campaign: Campaign, max_candles: int) -> List[Candle]:
@@ -2585,7 +2596,7 @@ class CascadeEngine:
             invested_usd=round(invested, 8),
             exit_price=exit_price,
             pnl=round((exit_price - avg) * qty, 8),
-            closed_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            closed_at=_ist_now_str(),
             fills=fill_log,
             opened_ts=int(ordered_fills[0].timestamp or 0) if ordered_fills else 0,
             closed_ts=closed_ts,
@@ -2638,7 +2649,7 @@ class CascadeEngine:
         gap = campaign.mother_high - candle.high
         campaign.state = "COMPLETED"
         campaign.close_reason = "mother_retested"
-        campaign.closed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        campaign.closed_at = _ist_now_str()
         self._log_event(
             campaign,
             "warn",
@@ -2660,7 +2671,7 @@ class CascadeEngine:
         campaign.mother_broken_above = True
         campaign.state = "MOTHER_BROKEN"
         campaign.close_reason = "mother_broken"
-        campaign.closed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        campaign.closed_at = _ist_now_str()
         self._log_event(
             campaign,
             "warn",
@@ -2753,7 +2764,7 @@ class CascadeEngine:
             generation=parent.generation + 1,
             barren_chain=barren,
             model_version=MODEL_VERSION,
-            created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            created_at=_ist_now_str(),
             last_processed_ts=candle.timestamp,
             window_start_ts=candle.timestamp,
         )
