@@ -9257,7 +9257,7 @@ function _cfCascadeChartHtml(d) {
     + '<span style="color:' + P.fill + ';">● fills</span>'
     + '<br>Fib 1 is blue, 2 green, 3 red, 4 purple, then the cycle repeats. Labels are on the left,'
     + ' and each funded buy level carries the dollars resting on it.'
-    + ' Scroll to move down the dialog; hold Ctrl (or &#8984;) and scroll to zoom, or drag to pan.'
+    + ' Scroll to move down the dialog; the +/&minus; buttons or Ctrl (&#8984;) + scroll zoom, and Expand lets you zoom with the wheel. Drag to pan.'
     + '</div>';
   return legend + _cfCascadeChartSvg(d)
     + '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
@@ -9369,15 +9369,22 @@ function _cfChartBindZoom() {
   if (!body || body.dataset.zoomBound === '1') return;
   body.dataset.zoomBound = '1';
 
-  // Wheel over the CHART zooms; wheel over the tables/legend below it scrolls
-  // the dialog, so both stay reachable. (Ctrl/Cmd + wheel zooms anywhere, as a
-  // fallback.) The old rule required Ctrl/Cmd even over the chart, so a plain
-  // scroll just moved the dialog and the zoom looked dead.
+  // Zooming on the wheel must not trap the dialog scroll. So:
+  //   • Ctrl/Cmd + wheel  → zoom, anywhere (the universal convention)
+  //   • plain wheel        → zoom ONLY when the chart is EXPANDED (fullscreen,
+  //                          where there is nothing to scroll to)
+  //   • plain wheel in the compact dialog → left alone, so it scrolls the
+  //                          dialog and the tables below stay reachable
+  // The previous version zoomed on any plain wheel over the chart, which is
+  // what trapped the page scroll while the dialog was open.
   body.addEventListener('wheel', function(e) {
     var svg = _cfChartSvg();
     if (!svg) return;
+    var panel = document.getElementById('cf-cascade-chart-panel');
+    var expanded = !!panel && panel.classList.contains('cf-cascade-chart-fs');
     var overChart = svg === e.target || svg.contains(e.target);
-    if (!overChart && !(e.ctrlKey || e.metaKey)) return;
+    var wantsZoom = (e.ctrlKey || e.metaKey) || (expanded && overChart);
+    if (!wantsZoom) return;  // let the wheel scroll the dialog
     e.preventDefault();
     cfCascadeZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
   }, { passive: false });
