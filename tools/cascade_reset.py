@@ -17,12 +17,16 @@ those three buckets and NOTHING else: no orders are placed or cancelled, the
 trade journal is untouched, and no other engine is affected. It reads and writes
 the same state DB the running service uses.
 
-Run it while the Cascade engine is Idle, then restart the service so it reloads
-the now-empty state:
+IMPORTANT — the service must be STOPPED while you clear, not merely restarted.
+A graceful shutdown re-persists the in-memory campaigns (app.py lifespan), so
+`--yes` followed by `systemctl restart` is undone by the very restart: the
+shutdown writes the old campaigns back before the new process boots. Stop the
+service, clear, then start it:
 
-    venv/bin/python tools/cascade_reset.py           # dry run — shows what it would clear
-    venv/bin/python tools/cascade_reset.py --yes     # actually clears the three buckets
-    sudo systemctl restart cryptoforge@$(cat ~/.cryptoforge-active-port)
+    venv/bin/python tools/cascade_reset.py            # dry run — shows what it would clear
+    sudo systemctl stop cryptoforge@$(cat ~/.cryptoforge-active-port)
+    venv/bin/python tools/cascade_reset.py --yes      # clears the three buckets
+    sudo systemctl start cryptoforge@$(cat ~/.cryptoforge-active-port)
 """
 
 import argparse
@@ -75,8 +79,9 @@ def main() -> int:
         store.delete(bucket, key)
         print(f"cleared: {label}")
 
-    print("\nDone. Restart the service so it reloads the now-empty state:")
-    print("  sudo systemctl restart cryptoforge@$(cat ~/.cryptoforge-active-port)")
+    print("\nCleared. This only sticks if the service was STOPPED — a running")
+    print("service re-persists the old campaigns on its next shutdown. Start it:")
+    print("  sudo systemctl start cryptoforge@$(cat ~/.cryptoforge-active-port)")
     return 0
 
 
