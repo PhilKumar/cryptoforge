@@ -1779,9 +1779,10 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(order["size"], 14.61)
         self.assertTrue(campaign.pending_order_id)
 
-    async def test_a_market_at_the_trigger_takes_a_capped_limit_buy(self):
-        """Price has reached the trigger — the turn is in. Rather than a stop
-        that would be rejected, take the entry as a limit buy at the cap."""
+    async def test_a_market_at_the_trigger_re_arms_the_stop_above_the_market(self):
+        """Price has reached the trigger. The order stays a STOP, re-armed just
+        above the live price, so it fills only on a continuation up — never a
+        limit that would fill into a continued fall (the PAXG knife)."""
         broker = FakeCascadeBroker()
         engine = _mk_engine(broker)
         campaign = self._armed(engine, broker)
@@ -1790,8 +1791,8 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await engine._place_pending_stop(campaign))
         self.assertEqual(len(broker.placed_orders), 1)
         order = broker.placed_orders[0]
-        self.assertEqual(order["order_type"], "limit_order")
-        self.assertAlmostEqual(order["limit_price"], 77.19)  # stop 77.14 + 0.05 cap
+        self.assertEqual(order["order_type"], "stop_limit", "never a limit")
+        self.assertGreater(order["stop_price"], 77.14, "raised above the market, not left at the stale trigger")
         self.assertAlmostEqual(order["size"], 14.61)
         self.assertTrue(campaign.pending_order_id)
 
@@ -2788,20 +2789,35 @@ class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_is_trigger_immediately_error("Binance -2011: Unknown order"))
         self.assertFalse(_is_trigger_immediately_error(""))
 
-    async def test_price_already_at_the_trigger_takes_a_capped_limit_buy(self):
-        """The turn has happened — price reached the trigger. Instead of resting
-        a stop Binance would reject, take the entry as a LIMIT buy at the cap.
-        This is what a person does by hand, and what paper mode already does."""
+    async def test_price_already_past_the_trigger_raises_the_stop_never_a_limit(self):
+        """Price has passed the trigger. It must NOT become a limit buy — a limit
+        fills on the way DOWN and catches the knife (the PAXG bug). Instead the
+        STOP is re-armed just above the current price, so it can only fill on a
+        continuation UP, never on a fall."""
         self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.9}  # above stop 96.5
         placed = await self.engine._place_pending_stop(self.campaign)
         self.assertTrue(placed)
         buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
         self.assertEqual(len(buys), 1)
-        self.assertEqual(buys[0]["order_type"], "limit_order", "a plain limit, never a stop, once the turn is in")
-        self.assertNotIn("stop_price", {k: v for k, v in buys[0].items() if v is not None})
-        self.assertAlmostEqual(buys[0]["limit_price"], 96.55, msg="capped at the limit — never chases above it")
-        self.assertAlmostEqual(buys[0]["size"], 40.0)
+        self.assertEqual(buys[0]["order_type"], "stop_limit", "always a stop — never a downward-filling limit")
+        # Raised to just ABOVE the live price (96.9), not left at the stale 96.5.
+        self.assertGreater(
+            buys[0]["stop_price"], 96.9, "the stop must sit above the market, so only an up-move fills it"
+        )
+        self.assertAlmostEqual(buys[0]["stop_price"], 96.9 + self.campaign.tick_size, places=6)
+        self.assertGreater(buys[0]["limit_price"], buys[0]["stop_price"], "limit is the cap above the raised stop")
         self.assertIsNotNone(self.campaign.pending_order_id)
+
+    async def test_the_raised_stop_only_fills_upward_not_on_a_continued_fall(self):
+        """The invariant, stated as the PAXG failure: price above the trigger,
+        then it keeps falling. The order must be a stop above the market, which a
+        fall can never reach — so no knife is caught."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.9}
+        await self.engine._place_pending_stop(self.campaign)
+        order = [o for o in self.broker.placed_orders if o["side"] == "buy"][0]
+        # A stop above 96.9 cannot be hit by price falling to, say, 96.0.
+        self.assertGreater(order["stop_price"], 96.9)
+        self.assertEqual(order["order_type"], "stop_limit")
 
     async def test_price_below_the_trigger_still_rests_a_stop(self):
         """Below the trigger, nothing has turned yet — rest the stop as before."""

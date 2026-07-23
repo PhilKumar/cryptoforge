@@ -2949,18 +2949,26 @@ class CascadeEngine:
         # a thin book like PAXG the price crosses the trigger inside those 4
         # seconds. One ticker call is cheap — placement is gated on arming.
         market = await self._get_price(campaign.symbol, max_age=1.0)
-        # If price has ALREADY reached the trigger, the turn we were waiting for
-        # has happened. A resting buy stop would only be rejected; instead take
-        # the entry now as a LIMIT buy capped at the same limit price. That is
-        # marketable when price sits between the trigger and the cap (fills at
-        # once), and a plain resting limit when price is already past the cap
-        # (fills only on a pullback to our level) — so it never pays above the
-        # cap and cannot chase a runaway. It is also exactly what paper mode
-        # already does (_paper_fill_check fills when a candle reaches the stop),
-        # so it closes the live-vs-paper gap the -2010 rejection had opened.
-        # A missing price (market == 0) falls through to the resting stop, the
-        # safe default when we cannot see the market.
-        take_now = bool(market and market >= stop)
+        # If price has ALREADY reached the trigger, a stop placed at the trigger
+        # would be rejected -2010. The RIGHT answer is NOT a limit buy: a limit
+        # fills on the way DOWN, so when the fall continues it buys into the
+        # knife — which is the one thing the buy stop exists to prevent. (PAXG,
+        # 2026-07-23: a stale trigger below a falling price took a limit that
+        # filled at 4,108.69 while price carried on down to 4,103.61.)
+        #
+        # Instead RAISE the stop to just above the current price and keep it a
+        # STOP. It then fills only if price continues UP through it — a real
+        # turn — and if price falls it simply rests above and waits. The entry
+        # is necessarily a touch higher than the original trigger, which is the
+        # cost of price having already passed it; the invariant that matters is
+        # preserved: the entry never fills on a downward move.
+        tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
+        eff_stop, eff_limit = stop, limit
+        raised = bool(market and market >= stop)
+        if raised:
+            gap = limit - stop
+            eff_stop = round(market + tick, 8)
+            eff_limit = round(eff_stop + (gap if gap > 0 else STOP_LIMIT_OFFSET_TICKS * tick), 8)
         # Churn brake. On 2026-07-22 a live campaign placed the same trigger,
         # had it come back cancelled, and re-placed — every 10-15s, indefinitely.
         # Whatever the underlying cause, an entry that will not stay resting must
@@ -2993,30 +3001,20 @@ class CascadeEngine:
             self._place_attempts[campaign.campaign_id] = ((stop, limit), 1)
         client_id = f"cf-csc-{campaign.campaign_id}-buy-{campaign.pending_rev}"
         try:
-            if take_now:
-                # The turn has arrived — take the entry as a capped limit buy.
-                result = await asyncio.to_thread(
-                    lambda: self.broker.place_order(
-                        campaign.symbol,
-                        campaign.pending_usd,
-                        "buy",
-                        order_type="limit_order",
-                        limit_price=limit,
-                        client_order_id=client_id,
-                    )
+            # ALWAYS a stop — never a limit. A stop fills only on an upward
+            # cross, so it can never buy into a fall. When raised, eff_stop sits
+            # just above the current price; otherwise it is the original trigger.
+            result = await asyncio.to_thread(
+                lambda: self.broker.place_order(
+                    campaign.symbol,
+                    campaign.pending_usd,
+                    "buy",
+                    order_type="stop_limit",
+                    limit_price=eff_limit,
+                    stop_price=eff_stop,
+                    client_order_id=client_id,
                 )
-            else:
-                result = await asyncio.to_thread(
-                    lambda: self.broker.place_order(
-                        campaign.symbol,
-                        campaign.pending_usd,
-                        "buy",
-                        order_type="stop_limit",
-                        limit_price=limit,
-                        stop_price=stop,
-                        client_order_id=client_id,
-                    )
-                )
+            )
         except Exception as exc:
             result = {"error": str(exc)}
         if isinstance(result, dict) and not result.get("error"):
@@ -3030,13 +3028,13 @@ class CascadeEngine:
                 )
                 return False
             campaign.pending_order_id = order_id
-            if take_now:
+            if raised:
                 self._log_event(
                     campaign,
                     "order",
-                    f"Price {market:,.2f} had already reached the trigger {stop:,.2f} — took the entry as a "
-                    f"limit buy at {limit:,.2f} (${campaign.pending_usd:,.2f}) rather than resting a stop it "
-                    f"would have rejected.",
+                    f"Price {market:,.2f} had already passed the trigger {stop:,.2f} — re-armed the buy stop "
+                    f"just above the market at {eff_stop:,.2f} / limit {eff_limit:,.2f} (${campaign.pending_usd:,.2f}) "
+                    f"so it fills only on a continuation up, never on the fall.",
                 )
             else:
                 self._log_event(
