@@ -9541,6 +9541,11 @@ async function cfCascadeShowChart(campaignId) {
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   var body = document.getElementById('cf-cascade-chart-body');
   if (!overlay || !body) return;
+  // The overlay markup lives inside the Cascade page section, which is
+  // display:none on every other tab — so opening it from a Journal row set its
+  // own display to flex but a hidden ancestor kept it invisible. Reparent it to
+  // <body> so it is a true top-level modal that shows over whatever tab is up.
+  if (overlay.parentNode !== document.body) document.body.appendChild(overlay);
   _cfCascadeChartId = campaignId;
   overlay.style.display = '';
   document.body.classList.add('cf-chart-fs-open');
