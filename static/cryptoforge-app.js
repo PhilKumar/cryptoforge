@@ -5605,6 +5605,25 @@ function _cfJournalTone(value) {
   return 'var(--muted, #888)';
 }
 
+// A round paired from Binance that the server could tie back to a Cascade
+// campaign gets a chart button — the same campaign chart (mother candle,
+// trendline, fib ladder, fills) that shows how the trade was taken. Rows with
+// no linked campaign (hand-placed, or a campaign that rotated out of history)
+// simply have no button. event.stopPropagation keeps the click from also
+// toggling the row's expand.
+function _cfJournalChartBtn(t) {
+  var cid = t && t.campaign_id;
+  if (!cid) return '';
+  var seq = t.campaign_seq ? ' #' + _escapeHtml(String(t.campaign_seq)) : '';
+  return ' <button type="button" class="btn btn-outline btn-sm cf-journal-chartbtn"'
+    + ' title="See how this trade was taken — campaign chart' + seq + '"'
+    + ' aria-label="View trade chart"'
+    + ' data-cf-click="event.stopPropagation();cfCascadeShowChart(\'' + _escapeHtml(String(cid)) + '\')">'
+    + '<svg class="cf-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></button>';
+}
+
 function _cfJournalKpiHtml(summary) {
   var gross = Number(summary.gross_pnl_usd);
   var fees = Number(summary.fees_usd) || 0;
@@ -5845,7 +5864,7 @@ function _cfRenderTradeJournal(data) {
       + ' role="button" tabindex="0" aria-expanded="false"'
       + ' data-cf-click="cfJournalToggleTrade(\'' + t.trade_id + '\')">'
       + '<td><span class="cf-journal-caret" aria-hidden="true">&#9656;</span>'
-        + _escapeHtml(t.trade_id) + _cfJournalSourceTag(t) + '</td>'
+        + _escapeHtml(t.trade_id) + _cfJournalChartBtn(t) + _cfJournalSourceTag(t) + '</td>'
       + '<td>' + _escapeHtml(t.date) + '</td>'
       + '<td>' + _escapeHtml(String(t.coin).replace('USDT', '')) + '</td>'
       + '<td class="num">' + t.buy_count + '</td>'

@@ -7597,3 +7597,12 @@ html[data-theme="light"] .journal-entry-notes section {
   color: var(--yellow, #f59e0b);
   background: rgba(245, 158, 11, 0.08);
 }
+/* The 'how we took the trade' chart button sits inline with the trade id.
+   Kept compact so it reads as an affordance, not a second data column. */
+.cf-journal-chartbtn {
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 2px 6px;
+  line-height: 1;
+}
+.cf-journal-chartbtn .cf-ico { vertical-align: middle; }

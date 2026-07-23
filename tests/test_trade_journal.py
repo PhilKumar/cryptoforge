@@ -15,9 +15,9 @@ _DAY = 86_400_000
 _BASE = 1_784_000_000_000  # a fixed ms epoch so dates in assertions are stable
 
 
-def fill(symbol, side, price, qty, *, ms, fee=0.0):
+def fill(symbol, side, price, qty, *, ms, fee=0.0, order_id=None):
     """A fill shaped the way broker/binance.py normalises /api/v3/myTrades."""
-    return {
+    row = {
         "symbol": symbol,
         "isBuyer": side == "buy",
         "side": side,
@@ -28,6 +28,9 @@ def fill(symbol, side, price, qty, *, ms, fee=0.0):
         "paid_commission": fee,
         "commissionAsset": "USDT",
     }
+    if order_id is not None:
+        row["order_id"] = order_id
+    return row
 
 
 class PairingTests(unittest.TestCase):
@@ -49,6 +52,29 @@ class PairingTests(unittest.TestCase):
         self.assertAlmostEqual(t["invested_usd"], cost, places=3)
         self.assertAlmostEqual(t["avg_buy_price"], cost / 0.253, places=4)
         self.assertAlmostEqual(t["sell_price"], 81.65, places=4)
+
+    def test_buy_order_ids_are_carried_for_campaign_linking(self):
+        """The journal round must expose the exchange order id(s) of its buys so
+        the app can tie it back to the Cascade campaign that placed them and
+        offer the trade chart."""
+        fills = [
+            fill("SOLUSDT", "buy", 77.15, 0.1, ms=_BASE, order_id="3139163"),
+            fill("SOLUSDT", "buy", 77.05, 0.1, ms=_BASE + 60_000, order_id="3139163"),
+            fill("SOLUSDT", "sell", 77.59, 0.2, ms=_BASE + 120_000, order_id="3139999"),
+        ]
+        t = pair_fills_into_trades(fills)[0]
+        # Deduped: one accumulated buy order behind both rungs.
+        self.assertEqual(t["buy_order_ids"], ["3139163"])
+
+    def test_buy_order_ids_absent_when_fills_carry_none(self):
+        """A hand-placed fill with no order id must not fabricate one."""
+        t = pair_fills_into_trades(
+            [
+                fill("BTCUSDT", "buy", 100.0, 1.0, ms=_BASE),
+                fill("BTCUSDT", "sell", 101.0, 1.0, ms=_BASE + 1000),
+            ]
+        )[0]
+        self.assertEqual(t["buy_order_ids"], [])
 
     def test_pnl_is_net_of_fees(self):
         """The whole point of reading the exchange rather than a spreadsheet."""

@@ -7015,6 +7015,66 @@ async def _broker_journal_trades(converts: Optional[list] = None) -> tuple[list,
         return [], str(exc)
 
 
+def _cascade_order_id_index() -> dict:
+    """Map every Binance order id a Cascade campaign placed to its campaign.
+
+    A paired journal round shares the exchange order id of the buy the engine
+    placed, so this lets a journal row link straight to the campaign chart that
+    shows how the trade was taken. Both active campaigns (live objects) and
+    closed history (snapshot dicts) are scanned, and because closing a round
+    moves its buys out of all_fills into rounds[].fills, both lists are read.
+    Paper fills carry the sentinel order id "PAPER" and are skipped — there is
+    no exchange order behind them to match.
+    """
+    engine = globals().get("_cascade_engine")
+    if engine is None:
+        return {}
+    index: dict[str, dict] = {}
+
+    def _register(fills, campaign_id, seq):
+        for fill in fills or []:
+            oid = fill.get("order_id") if isinstance(fill, dict) else getattr(fill, "order_id", None)
+            oid = str(oid or "").strip()
+            if oid and oid != "PAPER" and oid not in index:
+                index[oid] = {"campaign_id": campaign_id, "seq": seq}
+
+    for camp in list(getattr(engine, "campaigns", {}).values()):
+        cid, seq = getattr(camp, "campaign_id", None), getattr(camp, "seq", None)
+        _register(getattr(camp, "all_fills", None), cid, seq)
+        for rnd in getattr(camp, "rounds", None) or []:
+            _register(getattr(rnd, "fills", None), cid, seq)
+
+    for camp in list(getattr(engine, "closed_campaigns", None) or []):
+        if not isinstance(camp, dict):
+            continue
+        cid, seq = camp.get("campaign_id"), camp.get("seq")
+        _register(camp.get("all_fills"), cid, seq)
+        for rnd in camp.get("rounds") or []:
+            if isinstance(rnd, dict):
+                _register(rnd.get("fills"), cid, seq)
+    return index
+
+
+def _link_trades_to_campaigns(trades: list) -> None:
+    """Attach campaign_id/seq to each paired journal round whose buy order id
+    matches a Cascade campaign, so the row can offer its trade chart. Harmless
+    when the engine is absent or a trade was placed by hand: the internal
+    buy_order_ids key is stripped either way and unmatched rows get no chart."""
+    index = _cascade_order_id_index()
+    for trade in trades:
+        if not isinstance(trade, dict):
+            continue
+        order_ids = trade.pop("buy_order_ids", None) or []
+        if trade.get("campaign_id") or not index:
+            continue
+        for oid in order_ids:
+            hit = index.get(str(oid))
+            if hit:
+                trade["campaign_id"] = hit["campaign_id"]
+                trade["campaign_seq"] = hit["seq"]
+                break
+
+
 @app.get("/api/journal/trades")
 async def journal_trades(convert_days: int = 90, include_broker: bool = True):
     doc = _load_trade_journal()
@@ -7036,6 +7096,9 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
 
     broker_trades, broker_error = ([], "") if not include_broker else await _broker_journal_trades(converts)
     trades = merge_with_sheet(sheet_trades, broker_trades) if include_broker else sheet_trades
+    # Link each paired round to the Cascade campaign that placed it (by shared
+    # exchange order id) so the row can show a "how we took the trade" chart.
+    _link_trades_to_campaigns(trades)
 
     return {
         "status": "ok",

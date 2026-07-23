@@ -201,5 +201,86 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(campaigns[0]["campaign_id"], cid)
 
 
+class _FakeFill:
+    def __init__(self, order_id):
+        self.order_id = order_id
+
+
+class _FakeRound:
+    def __init__(self, fills):
+        self.fills = fills
+
+
+class _FakeCampaign:
+    def __init__(self, campaign_id, seq, all_fills=None, rounds=None):
+        self.campaign_id = campaign_id
+        self.seq = seq
+        self.all_fills = all_fills or []
+        self.rounds = rounds or []
+
+
+class _FakeEngine:
+    def __init__(self, campaigns=None, closed=None):
+        self.campaigns = campaigns or {}
+        self.closed_campaigns = closed or []
+
+
+class CascadeJournalLinkTests(unittest.TestCase):
+    """The journal row's 'how we took the trade' chart depends on tying a paired
+    round back to its campaign by shared exchange order id."""
+
+    def setUp(self):
+        self.app_module = import_module("app")
+        self._orig_engine = getattr(self.app_module, "_cascade_engine", None)
+        self.addCleanup(setattr, self.app_module, "_cascade_engine", self._orig_engine)
+
+    def test_active_campaign_fill_links_by_order_id(self):
+        self.app_module._cascade_engine = _FakeEngine(
+            campaigns={"abc": _FakeCampaign("abc", 53, all_fills=[_FakeFill("3139163")])}
+        )
+        trades = [{"coin": "SOLUSDT", "buy_order_ids": ["3139163"], "source": "binance"}]
+        self.app_module._link_trades_to_campaigns(trades)
+        self.assertEqual(trades[0]["campaign_id"], "abc")
+        self.assertEqual(trades[0]["campaign_seq"], 53)
+        self.assertNotIn("buy_order_ids", trades[0], "internal key must be stripped")
+
+    def test_closed_round_fill_links_from_rounds_snapshot(self):
+        # A closed round moves its buys out of all_fills into rounds[].fills.
+        closed = [
+            {
+                "campaign_id": "old",
+                "seq": 10,
+                "all_fills": [],
+                "rounds": [{"fills": [{"order_id": "555"}]}],
+            }
+        ]
+        self.app_module._cascade_engine = _FakeEngine(closed=closed)
+        trades = [{"coin": "SOLUSDT", "buy_order_ids": ["555"], "source": "binance"}]
+        self.app_module._link_trades_to_campaigns(trades)
+        self.assertEqual(trades[0]["campaign_id"], "old")
+        self.assertEqual(trades[0]["campaign_seq"], 10)
+
+    def test_unmatched_and_paper_trades_get_no_campaign(self):
+        self.app_module._cascade_engine = _FakeEngine(
+            campaigns={"abc": _FakeCampaign("abc", 1, all_fills=[_FakeFill("PAPER")])}
+        )
+        trades = [
+            {"coin": "ETHUSDT", "buy_order_ids": ["PAPER"], "source": "binance"},  # paper sentinel
+            {"coin": "ETHUSDT", "buy_order_ids": ["999"], "source": "binance"},  # no such campaign
+            {"coin": "ETHUSDT", "source": "sheet"},  # hand-typed row
+        ]
+        self.app_module._link_trades_to_campaigns(trades)
+        for t in trades:
+            self.assertNotIn("campaign_id", t)
+            self.assertNotIn("buy_order_ids", t)
+
+    def test_no_engine_is_harmless(self):
+        self.app_module._cascade_engine = None
+        trades = [{"coin": "SOLUSDT", "buy_order_ids": ["3139163"], "source": "binance"}]
+        self.app_module._link_trades_to_campaigns(trades)
+        self.assertNotIn("campaign_id", trades[0])
+        self.assertNotIn("buy_order_ids", trades[0])
+
+
 if __name__ == "__main__":
     unittest.main()

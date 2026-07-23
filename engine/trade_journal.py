@@ -101,6 +101,10 @@ class _OpenPosition:
         self.sell_proceeds = 0.0
         self.opened_ms = 0
         self.closed_ms = 0
+        # Exchange order ids behind the buys, kept so a paired round can be
+        # matched back to the Cascade campaign that placed it (its fills carry
+        # the same order id) and offered a "how we took the trade" chart.
+        self.buy_order_ids: list[str] = []
 
     @property
     def bought_qty(self) -> float:
@@ -118,6 +122,9 @@ class _OpenPosition:
         self.cost += quote
         self.fees += _fee_usd(fill)
         first_price = _f(self.buys[0]["buy_price"]) if self.buys else price
+        oid = str(fill.get("order_id") or fill.get("orderId") or "").strip()
+        if oid and oid not in self.buy_order_ids:
+            self.buy_order_ids.append(oid)
         self.buys.append(
             {
                 "buy_no": len(self.buys) + 1,
@@ -188,6 +195,7 @@ class _OpenPosition:
             "residual_qty": round(max(self.qty, 0.0), 8),
             "opened_ts": int(self.opened_ms),
             "closed_ts": int(self.closed_ms),
+            "buy_order_ids": list(self.buy_order_ids),
             "source": "binance",
         }
 
