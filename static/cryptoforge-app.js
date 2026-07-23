@@ -9200,8 +9200,17 @@ function _cfCascadeChartSvg(d) {
   var labelSlots = [];
   function label(y, text, color) {
     var ly = y;
-    for (var k = 0; k < labelSlots.length; k++) {
-      if (Math.abs(labelSlots[k] - ly) < 10) { ly = labelSlots[k] + 10; k = -1; }
+    // Nudge the label down past any already-placed one within 10px. The move
+    // OVERSHOOTS by 0.5px on purpose: an exact +10 can land, in floating point,
+    // at 9.9999999998 away from the slot it just cleared, which the "< 10" test
+    // reads as still colliding — so ly jumped to the same value forever and
+    // froze the whole chart on price scales that rounded that way (ETH hit it).
+    // Overshooting clears the gap for good, and the pass count is bounded.
+    for (var pass = 0, moved = true; moved && pass <= labelSlots.length; pass++) {
+      moved = false;
+      for (var k = 0; k < labelSlots.length; k++) {
+        if (Math.abs(labelSlots[k] - ly) < 10) { ly = labelSlots[k] + 10.5; moved = true; break; }
+      }
     }
     labelSlots.push(ly);
     parts.push('<text x="' + (padL - 6) + '" y="' + (ly + 3).toFixed(1) + '" fill="' + color +
