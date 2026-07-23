@@ -9369,11 +9369,15 @@ function _cfChartBindZoom() {
   if (!body || body.dataset.zoomBound === '1') return;
   body.dataset.zoomBound = '1';
 
-  // Plain wheel scrolls the dialog; Ctrl/Cmd + wheel zooms the chart. It used
-  // to swallow every wheel event anywhere in the dialog, which meant the
-  // anchor tables under the chart could not be reached by scrolling at all.
+  // Wheel over the CHART zooms; wheel over the tables/legend below it scrolls
+  // the dialog, so both stay reachable. (Ctrl/Cmd + wheel zooms anywhere, as a
+  // fallback.) The old rule required Ctrl/Cmd even over the chart, so a plain
+  // scroll just moved the dialog and the zoom looked dead.
   body.addEventListener('wheel', function(e) {
-    if (!_cfChartSvg() || !(e.ctrlKey || e.metaKey)) return;
+    var svg = _cfChartSvg();
+    if (!svg) return;
+    var overChart = svg === e.target || svg.contains(e.target);
+    if (!overChart && !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     cfCascadeZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
   }, { passive: false });
@@ -9462,12 +9466,20 @@ async function cfCascadeShowChart(campaignId) {
     _cfCascadeMarkTimeframe(_cfCascadeChartTf, data.timeframe);
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta) {
-      meta.textContent = data.symbol + ' · ' + data.state + ' · ' + (data.candles || []).length
+      // The mother PRICE line is always drawn; the mother CANDLE only fits if
+      // it is inside the window. On 5m a campaign older than ~25h pushes the
+      // candle off the left edge — say so, and point at Auto which rolls the
+      // timeframe up until the whole campaign (mother included) fits.
+      var cands = data.candles || [];
+      var motherT = data.mother && data.mother.t;
+      var motherOff = motherT && cands.length && Number(cands[0].t) > Number(motherT);
+      meta.textContent = data.symbol + ' · ' + data.state + ' · ' + cands.length
         + ' ' + (data.timeframe || '5m') + ' candles since mother candle ('
-        + _cfCascadeIst(data.mother && data.mother.t) + ' IST) · '
+        + _cfCascadeIst(motherT) + ' IST) · '
         + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)'
         + (data.timeframe_auto ? ' · auto-fitted to ' + (data.timeframe || '5m') : '')
-        + (data.timeframe && data.timeframe !== '5m' ? ' · geometry is always 5m-derived' : '');
+        + (data.timeframe && data.timeframe !== '5m' ? ' · geometry is always 5m-derived' : '')
+        + (motherOff ? ' · ⚠ mother candle is off the left edge on this timeframe — the mother LINE still shows; tap Auto to fit the whole campaign' : '');
     }
   } catch (error) {
     body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(error.message) + '</div>';
