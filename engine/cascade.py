@@ -2825,6 +2825,31 @@ class CascadeEngine:
                 result[str(row["orderId"])] = row
         return result
 
+    async def _free_base_balance(self, campaign: Campaign) -> Optional[float]:
+        """How much of the base asset is actually free to sell, per the exchange.
+
+        A spot BUY pays its commission out of the coin received (unless fees are
+        settled in BNB), so the account ends up holding slightly LESS than
+        usd/price — the gross quantity the books recorded. Trying to sell the
+        recorded amount is rejected -2010 "insufficient balance". The exchange
+        balance is the only authority on what can really be sold, so the TP is
+        capped to it. Returns None if the balance could not be read, in which
+        case the caller falls back to the recorded quantity and retries.
+        """
+        try:
+            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
+            wallet = await asyncio.to_thread(self.broker.get_wallet)
+        except Exception as exc:
+            _log.warning("[CASCADE] free-balance lookup failed for %s: %s", campaign.symbol, exc)
+            return None
+        base = str((product or {}).get("base_asset") or "").upper()
+        if not base or not isinstance(wallet, list):
+            return None
+        for row in wallet:
+            if str(row.get("asset_symbol") or "").upper() == base:
+                return _coerce_float(row.get("free_balance"), 0.0)
+        return 0.0
+
     async def _sync_live_orders(self, campaign: Campaign) -> bool:
         """
         Desired-state reconciliation for a live campaign:
@@ -3163,6 +3188,22 @@ class CascadeEngine:
         if campaign.tp_order_id:
             await self._safe_cancel(campaign, campaign.tp_order_id)
             campaign.tp_order_id = None
+        # Sell what the exchange says is actually there, not the gross the books
+        # recorded: the buy's commission came out of the coin, so the recorded
+        # quantity over-asks by the fee and Binance rejects the whole sell -2010.
+        # Capping at the free balance (the broker floors it to LOT_SIZE) fixes
+        # that; it is a no-op when fees are paid in BNB and the balance is full.
+        desired_qty = campaign.filled_base_qty + campaign.residual_base_qty
+        free_qty = await self._free_base_balance(campaign)
+        sell_qty = desired_qty if free_qty is None else min(desired_qty, free_qty)
+        if sell_qty <= 0:
+            self._log_event(
+                campaign,
+                "error",
+                f"TP not placed — the books show {desired_qty:.8f} to sell but the exchange free "
+                f"balance is {(free_qty or 0.0):.8f}. Holding the position; will retry next sync.",
+            )
+            return changed
         campaign.tp_rev += 1
         tp_client_id = f"cf-csc-{campaign.campaign_id}-tp-{campaign.tp_rev}"
         try:
@@ -3174,7 +3215,7 @@ class CascadeEngine:
                     order_type="limit_order",
                     limit_price=desired_tp,
                     client_order_id=tp_client_id,
-                    base_qty=campaign.filled_base_qty + campaign.residual_base_qty,
+                    base_qty=sell_qty,
                 )
             )
         except Exception as exc:
@@ -3195,12 +3236,13 @@ class CascadeEngine:
                 return changed
             campaign.tp_order_id = order_id
             campaign.tp_price = desired_tp
+            short = desired_qty - sell_qty
             self._log_event(
                 campaign,
                 "order",
-                f"TP limit sell placed: {campaign.filled_base_qty + campaign.residual_base_qty:.8f} "
-                f"@ {desired_tp:,.2f}"
-                + (f" (includes {campaign.residual_base_qty:.8f} carried)" if campaign.residual_base_qty else ""),
+                f"TP limit sell placed: {sell_qty:.8f} @ {desired_tp:,.2f}"
+                + (f" (includes {campaign.residual_base_qty:.8f} carried)" if campaign.residual_base_qty else "")
+                + (f" — capped to the exchange balance, {short:.8f} held back as fee dust" if short > 1e-9 else ""),
             )
             changed = True
         else:

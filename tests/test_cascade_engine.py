@@ -38,12 +38,28 @@ class FakeCascadeBroker:
         self._next_order_id = 1000
         self.configured = True
         self.candles_df = None  # optional DataFrame returned by async_get_candles
+        # None keeps get_wallet a no-op (returns a non-list, so the engine falls
+        # back to its recorded quantity). Set to {asset: free_qty} to simulate a
+        # real balance and exercise the fee-aware TP cap.
+        self.free_balances = None
 
     def _is_configured(self):
         return self.configured
 
     def get_product_by_symbol(self, symbol):
-        return {"symbol": symbol, "broker_symbol": symbol, "min_notional": "5.0", "tick_size": "0.01"}
+        base = symbol[:-4] if symbol.upper().endswith("USDT") else symbol
+        return {
+            "symbol": symbol,
+            "broker_symbol": symbol,
+            "base_asset": base,
+            "min_notional": "5.0",
+            "tick_size": "0.01",
+        }
+
+    def get_wallet(self):
+        if self.free_balances is None:
+            return {"error": "not simulated"}
+        return [{"asset_symbol": a, "free_balance": str(v)} for a, v in self.free_balances.items()]
 
     def get_ticker(self, symbol):
         return {"symbol": symbol, "last_price": 0.0, "mark_price": 0.0}
@@ -1308,6 +1324,51 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(sells[0]["limit_price"], 99.0)
         self.assertAlmostEqual(sells[0]["base_qty"], self.campaign.filled_base_qty)
         self.assertIsNotNone(self.campaign.tp_order_id)
+
+    async def test_tp_sell_is_capped_to_the_free_exchange_balance(self):
+        """A mainnet spot BUY pays its commission out of the coin, so the account
+        holds slightly less than usd/price. The TP must sell what is actually
+        there, not the gross the books recorded, or Binance rejects it -2010."""
+        await self.engine._sync_live_orders(self.campaign)
+        order_id = self.campaign.pending_order_id
+        qty = 40.0 / 97.0  # gross the books will record
+        self.broker.order_lookup[str(order_id)] = {
+            "status": "FILLED",
+            "executedQty": str(qty),
+            "cummulativeQuoteQty": str(qty * 97.0),
+        }
+        # The exchange actually credited less (0.1% fee taken in the base asset).
+        free = qty * 0.999
+        self.broker.free_balances = {"BTC": free}
+        self.broker.placed_orders.clear()
+
+        await self.engine._sync_live_orders(self.campaign)
+
+        sells = [o for o in self.broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1, "the TP must still be placed, not rejected")
+        self.assertAlmostEqual(sells[0]["base_qty"], free, places=8)
+        self.assertLess(sells[0]["base_qty"], self.campaign.filled_base_qty, "must sell less than the gross")
+        self.assertIsNotNone(self.campaign.tp_order_id)
+
+    async def test_tp_is_held_back_when_the_exchange_shows_no_balance(self):
+        """If the coin is not actually there, do not place a doomed sell — log it
+        and hold, so the next sync reconciles instead of stacking rejects."""
+        await self.engine._sync_live_orders(self.campaign)
+        order_id = self.campaign.pending_order_id
+        qty = 40.0 / 97.0
+        self.broker.order_lookup[str(order_id)] = {
+            "status": "FILLED",
+            "executedQty": str(qty),
+            "cummulativeQuoteQty": str(qty * 97.0),
+        }
+        self.broker.free_balances = {"BTC": 0.0}
+        self.broker.placed_orders.clear()
+
+        await self.engine._sync_live_orders(self.campaign)
+
+        sells = [o for o in self.broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(sells, [], "no sell should be attempted with a zero balance")
+        self.assertIsNone(self.campaign.tp_order_id)
 
     async def test_a_partial_fill_is_booked_and_the_rest_keeps_working(self):
         """A stop-limit can execute in pieces. The part that traded is booked
