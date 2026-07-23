@@ -8343,7 +8343,15 @@ function cfRenderCascadeTrades(campaigns) {
     var toTp = tp && last ? ((tp - last) / last) * 100 : null;
     return '<tr>'
       + '<td><strong>#' + _escapeHtml(String(c.seq || '')) + '</strong>'
-        + '<div class="table-meta">' + _escapeHtml(String(c.mode || 'paper').toUpperCase()) + '</div></td>'
+        + '<div class="table-meta">' + _escapeHtml(String(c.mode || 'paper').toUpperCase())
+        + (String(c.state) === 'STOPPED'
+            ? ' · <span style="color:var(--amber,#d9a441);" title="'
+              + (c.tp_order_id
+                  ? 'Engine stopped — take-profit sell still resting on the exchange, sells itself at target'
+                  : 'Engine stopped — no resting sell, exit this position manually')
+              + '">stopped' + (c.tp_order_id ? ' · TP live' : ' · manual exit') + '</span>'
+            : '')
+        + '</div></td>'
       + '<td><strong>' + _escapeHtml(c.symbol || '') + '</strong>'
         + '<div class="table-meta">' + fills.length + ' buy' + (fills.length === 1 ? '' : 's') + '</div></td>'
       + '<td>' + _escapeHtml(_cfCascadeIst(opened)) + '<div class="table-meta">IST</div></td>'

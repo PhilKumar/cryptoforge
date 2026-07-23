@@ -2349,6 +2349,27 @@ class CascadeStopCancelsEverythingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("5002", broker.cancelled, "the resting exit was cancelled")
         self.assertEqual(campaign.tp_order_id, "5002")
 
+    async def test_manual_stop_while_holding_leaves_the_tp_resting(self):
+        """A manual stop must not strand the position: the pending buy is
+        pulled, but coin already held keeps its TP sell on the exchange so it
+        still exits at target."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._live_campaign(engine, broker)
+        campaign.tp_order_id = "5002"
+        campaign.tp_price = 66940.00
+        campaign.all_fills.append(Fill(price=66074.47, quantity=0.00011, level=8, leg_id=1, timestamp=1))
+        campaign.filled_base_qty = 0.00011
+
+        await engine.stop_campaign("stopme")
+
+        self.assertIn("5001", broker.cancelled, "the pending buy stop must be pulled")
+        self.assertNotIn("5002", broker.cancelled, "the TP that sells the held coin was cancelled")
+        self.assertEqual(campaign.tp_order_id, "5002", "the resting exit was dropped")
+        self.assertEqual(campaign.state, "STOPPED")
+        sells = [o for o in broker.placed_orders if str(o.get("side", "")).lower() == "sell"]
+        self.assertEqual(sells, [], "stop must not place a fresh sell")
+
 
 class CascadeLiveTimingTests(unittest.IsolatedAsyncioTestCase):
     """Regressions for the live-path timing bugs found in the pre-live audit."""

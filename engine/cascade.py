@@ -1251,12 +1251,26 @@ class CascadeEngine:
             return {"error": f"Campaign {campaign_id} not found"}
         if campaign.state in FINAL_STATES:
             return {"error": f"Campaign {campaign_id} is already {campaign.state.lower()}"}
+        holding = _coerce_float(campaign.filled_base_qty, 0.0) > 0
         if cancel_orders and campaign.mode == "live":
-            await self._cancel_all_live_orders(campaign, include_tp=True)
+            # Stopping pulls the pending buys so no new entry fires, but a
+            # position already held keeps its TP sell resting on the exchange
+            # so it still exits at target — stopping the engine must never
+            # strand coins with nothing to sell them.
+            await self._cancel_all_live_orders(campaign, include_tp=not holding)
         campaign.state = "STOPPED"
         campaign.close_reason = "stopped"
         campaign.closed_at = _ist_now_str()
-        self._log_event(campaign, "stop", f"Campaign {campaign_id} stopped")
+        tp_for_log = _coerce_float(campaign.tp_price, 0.0)
+        if holding and campaign.mode == "live" and campaign.tp_order_id and tp_for_log > 0:
+            self._log_event(
+                campaign,
+                "stop",
+                f"Campaign {campaign_id} stopped — still holding, TP sell left "
+                f"resting at {tp_for_log:,.2f} so it exits at target",
+            )
+        else:
+            self._log_event(campaign, "stop", f"Campaign {campaign_id} stopped")
         self._archive_campaign(campaign)
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict()}
