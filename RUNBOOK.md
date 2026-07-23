@@ -401,11 +401,18 @@ plumbing with real fills and fees; cheap enough that another bug costs a coffee.
   N+1 is valued at N+1's average entry while its cost sat in N's `invested`.
   Live-only; paper never generates a residual, so the two modes compute
   per-round P&L by different rules. `AUDIT.md` §1.3.
-- **Why Binance returned buy stops as terminal.** The churn stopped because the
-  order filled, not because the cause was found. `7e820ce` makes the next
-  occurrence self-describing — the log will read
-  `came back CANCELED/EXPIRED/REJECTED` with the trigger prices. **Send that
-  line when it appears.**
+- **Buy-stop -2010 "would trigger immediately" — resolved 2026-07-23.** The
+  cause was not mysterious: on a thin book (PAXG especially) the price reaches
+  the trigger before a resting buy stop can be placed, and Binance rejects a
+  buy stop whose trigger is at or below the market. The engine now reads a ≤1s
+  fresh price and, when price has **already reached the trigger**, takes the
+  entry as a **limit buy capped at the limit price** instead of resting a stop
+  that would be rejected — the same thing paper mode and a manual trade already
+  do. Below the trigger it still rests a stop. A -2010 that slips through the
+  race is a silent wait, not an alert. This makes live match paper: paper fills
+  when a candle reaches the stop, and live had been rejecting at that exact
+  moment. **Still needs a live paper→live proving round before trusting it with
+  real orders on a thin market.**
 - **Partial fills** have never run against a real exchange. A fill *during
   downtime* is now covered by `CascadeRestartSafetyTests` (six tests, both
   mutation-checked), but that is a fake broker, not Binance.

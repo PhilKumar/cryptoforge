@@ -2933,18 +2933,23 @@ class CascadeEngine:
         limit = campaign.pending_limit_price
         if not stop or not limit:
             return False  # not armed: two reds have not printed below the line yet
-        # A buy stop has to sit ABOVE the market or Binance rejects it with
-        # -2010 "would trigger immediately". Check against a FRESH price, not the
-        # 4s cache: on a thin book (PAXG especially) the price crosses the
-        # trigger inside those 4 seconds, we submit an order we already know is
-        # doomed, and the log fills with red -2010 errors. A ≤1s price is worth
-        # one ticker call here — placement is infrequent and gated on arming.
+        # A buy stop has to sit ABOVE the market, or Binance rejects it -2010
+        # "would trigger immediately". Read a FRESH price (not the 4s cache): on
+        # a thin book like PAXG the price crosses the trigger inside those 4
+        # seconds. One ticker call is cheap — placement is gated on arming.
         market = await self._get_price(campaign.symbol, max_age=1.0)
-        if market and market >= stop:
-            # Re-evaluated every sync, so not logged per-attempt — the UI shows
-            # it from pending_stop_price vs last_price. The money stays collected
-            # and armed; it rests the moment price is back below the trigger.
-            return False
+        # If price has ALREADY reached the trigger, the turn we were waiting for
+        # has happened. A resting buy stop would only be rejected; instead take
+        # the entry now as a LIMIT buy capped at the same limit price. That is
+        # marketable when price sits between the trigger and the cap (fills at
+        # once), and a plain resting limit when price is already past the cap
+        # (fills only on a pullback to our level) — so it never pays above the
+        # cap and cannot chase a runaway. It is also exactly what paper mode
+        # already does (_paper_fill_check fills when a candle reaches the stop),
+        # so it closes the live-vs-paper gap the -2010 rejection had opened.
+        # A missing price (market == 0) falls through to the resting stop, the
+        # safe default when we cannot see the market.
+        take_now = bool(market and market >= stop)
         # Churn brake. On 2026-07-22 a live campaign placed the same trigger,
         # had it come back cancelled, and re-placed — every 10-15s, indefinitely.
         # Whatever the underlying cause, an entry that will not stay resting must
@@ -2977,17 +2982,30 @@ class CascadeEngine:
             self._place_attempts[campaign.campaign_id] = ((stop, limit), 1)
         client_id = f"cf-csc-{campaign.campaign_id}-buy-{campaign.pending_rev}"
         try:
-            result = await asyncio.to_thread(
-                lambda: self.broker.place_order(
-                    campaign.symbol,
-                    campaign.pending_usd,
-                    "buy",
-                    order_type="stop_limit",
-                    limit_price=limit,
-                    stop_price=stop,
-                    client_order_id=client_id,
+            if take_now:
+                # The turn has arrived — take the entry as a capped limit buy.
+                result = await asyncio.to_thread(
+                    lambda: self.broker.place_order(
+                        campaign.symbol,
+                        campaign.pending_usd,
+                        "buy",
+                        order_type="limit_order",
+                        limit_price=limit,
+                        client_order_id=client_id,
+                    )
                 )
-            )
+            else:
+                result = await asyncio.to_thread(
+                    lambda: self.broker.place_order(
+                        campaign.symbol,
+                        campaign.pending_usd,
+                        "buy",
+                        order_type="stop_limit",
+                        limit_price=limit,
+                        stop_price=stop,
+                        client_order_id=client_id,
+                    )
+                )
         except Exception as exc:
             result = {"error": str(exc)}
         if isinstance(result, dict) and not result.get("error"):
@@ -2996,16 +3014,25 @@ class CascadeEngine:
                 self._log_event(
                     campaign,
                     "error",
-                    "Buy stop was accepted but carried no order id and could not be found by client id; "
+                    "Buy was accepted but carried no order id and could not be found by client id; "
                     "not recording it, so the next sync will reconcile rather than place a second one.",
                 )
                 return False
             campaign.pending_order_id = order_id
-            self._log_event(
-                campaign,
-                "order",
-                f"Buy stop placed: ${campaign.pending_usd:,.2f}, trigger {stop:,.2f} / limit {limit:,.2f}",
-            )
+            if take_now:
+                self._log_event(
+                    campaign,
+                    "order",
+                    f"Price {market:,.2f} had already reached the trigger {stop:,.2f} — took the entry as a "
+                    f"limit buy at {limit:,.2f} (${campaign.pending_usd:,.2f}) rather than resting a stop it "
+                    f"would have rejected.",
+                )
+            else:
+                self._log_event(
+                    campaign,
+                    "order",
+                    f"Buy stop placed: ${campaign.pending_usd:,.2f}, trigger {stop:,.2f} / limit {limit:,.2f}",
+                )
             return True
         error = (result or {}).get("error") if isinstance(result, dict) else "unknown error"
         # -2010 "would trigger immediately" is not a failure to diagnose — it is

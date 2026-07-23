@@ -1779,17 +1779,21 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(order["size"], 14.61)
         self.assertTrue(campaign.pending_order_id)
 
-    async def test_a_market_at_the_trigger_holds_off_without_raising(self):
-        """A buy stop must sit above the market. Declining is correct — but it
-        has to decline, not explode."""
+    async def test_a_market_at_the_trigger_takes_a_capped_limit_buy(self):
+        """Price has reached the trigger — the turn is in. Rather than a stop
+        that would be rejected, take the entry as a limit buy at the cap."""
         broker = FakeCascadeBroker()
         engine = _mk_engine(broker)
         campaign = self._armed(engine, broker)
-        engine._price_cache["SOLUSDT"] = (77.14, time.monotonic())
+        engine._price_cache["SOLUSDT"] = (77.14, time.monotonic())  # == trigger
 
-        self.assertFalse(await engine._place_pending_stop(campaign))
-        self.assertEqual(broker.placed_orders, [])
-        self.assertIsNone(campaign.pending_order_id)
+        self.assertTrue(await engine._place_pending_stop(campaign))
+        self.assertEqual(len(broker.placed_orders), 1)
+        order = broker.placed_orders[0]
+        self.assertEqual(order["order_type"], "limit_order")
+        self.assertAlmostEqual(order["limit_price"], 77.19)  # stop 77.14 + 0.05 cap
+        self.assertAlmostEqual(order["size"], 14.61)
+        self.assertTrue(campaign.pending_order_id)
 
     async def test_the_tp_still_syncs_when_the_entry_cannot_be_placed(self):
         """Step 2 raising must not take step 3 down with it: a campaign
@@ -2784,14 +2788,37 @@ class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_is_trigger_immediately_error("Binance -2011: Unknown order"))
         self.assertFalse(_is_trigger_immediately_error(""))
 
-    async def test_a_fresh_price_at_or_above_the_trigger_is_not_submitted(self):
-        """If the market has already reached the trigger, don't even try —
-        that is what produced the -2010 in the first place."""
+    async def test_price_already_at_the_trigger_takes_a_capped_limit_buy(self):
+        """The turn has happened — price reached the trigger. Instead of resting
+        a stop Binance would reject, take the entry as a LIMIT buy at the cap.
+        This is what a person does by hand, and what paper mode already does."""
         self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.9}  # above stop 96.5
         placed = await self.engine._place_pending_stop(self.campaign)
-        self.assertFalse(placed)
-        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "buy"], [])
-        self.assertIsNone(self.campaign.pending_order_id)
+        self.assertTrue(placed)
+        buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
+        self.assertEqual(len(buys), 1)
+        self.assertEqual(buys[0]["order_type"], "limit_order", "a plain limit, never a stop, once the turn is in")
+        self.assertNotIn("stop_price", {k: v for k, v in buys[0].items() if v is not None})
+        self.assertAlmostEqual(buys[0]["limit_price"], 96.55, msg="capped at the limit — never chases above it")
+        self.assertAlmostEqual(buys[0]["size"], 40.0)
+        self.assertIsNotNone(self.campaign.pending_order_id)
+
+    async def test_price_below_the_trigger_still_rests_a_stop(self):
+        """Below the trigger, nothing has turned yet — rest the stop as before."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 95.0}  # below stop 96.5
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
+        self.assertEqual(buys[0]["order_type"], "stop_limit")
+        self.assertAlmostEqual(buys[0]["stop_price"], 96.5)
+
+    async def test_no_price_falls_back_to_the_resting_stop(self):
+        """A failed price read must not trigger the aggressive immediate buy."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 0.0}
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
+        self.assertEqual(buys[0]["order_type"], "stop_limit", "no price → safe default, rest a stop")
 
     async def test_a_minus_2010_is_silent_and_not_counted_as_churn(self):
         """When the race still produces a -2010, it must not alert or trip the
