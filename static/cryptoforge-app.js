@@ -9231,9 +9231,10 @@ function _cfCascadeChartSvg(d) {
 
   // every trendline, mother high -> its swing high
   var tlColors = PAL.fibs;
-  // Only the four most recent lines stay on the chart: TL5 retires TL1, TL6
-  // retires TL2. Beyond four the older ones are noise over the price action.
-  (d.trendlines || []).slice(-4).forEach(function (tl) {
+  // Only the three most recent trendlines stay on the chart — drawing the 4th
+  // retires the 1st. Beyond three the older ones are noise over the price
+  // action. The engine still tracks every line; this is display only.
+  (d.trendlines || []).slice(-3).forEach(function (tl) {
     var a1 = tl.a1, a2 = tl.a2;
     if (!a1 || !a2 || a2.t === a1.t) return;
     var slope = (a2.p - a1.p) / (a2.t - a1.t);
@@ -9261,7 +9262,9 @@ function _cfCascadeChartSvg(d) {
   // Fixed four-colour cycle: fib 1 blue, 2 green, 3 red, 4 purple, then repeat.
   // Keyed off leg_id, not position, so a fib keeps its colour as others retire.
   var fibColors = PAL.fibs;
-  legs.forEach(function (leg) {
+  // Only the three most recent fibs are drawn — the 4th retires the 1st — so the
+  // chart stays readable. The engine still tracks every leg; this is display only.
+  legs.slice(-3).forEach(function (leg) {
     var col = fibColors[(Math.max(1, Number(leg.leg_id) || 1) - 1) % fibColors.length];
     // Every level of every fib is drawn identically — same weight, same solid
     // stroke, same opacity. Only the colour says which fib it belongs to.

@@ -1601,7 +1601,7 @@ class CascadeEngine:
                 return name
         return "1h"
 
-    async def get_chart_data(self, campaign_id: str, max_candles: int = 300, timeframe: str = "auto") -> dict:
+    async def get_chart_data(self, campaign_id: str, max_candles: int = 200, timeframe: str = "auto") -> dict:
         """
         Candles plus the geometry the engine actually used — trendline anchors,
         each leg's fib anchors/levels, ladder order prices and fills — so the
