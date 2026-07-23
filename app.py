@@ -6989,13 +6989,17 @@ def _coerce_float_safe(value, default: float = 0.0) -> float:
         return default
 
 
-async def _broker_journal_trades() -> tuple[list, str]:
-    """Round trips paired from the account's own fills.
+async def _broker_journal_trades(converts: Optional[list] = None) -> tuple[list, str]:
+    """Round trips paired from the account's own fills, including Convert exits.
 
     The journal used to be nothing but a Google Sheets export, so anything
     traded by hand on Binance never appeared in it at all. This reads the
     exchange directly, which also means the P&L is net of commission — the
     sheet's figures and the Cascade engine's are both gross.
+
+    Convert trades are passed in (already fetched for their own section) because
+    an exit done via Convert is invisible to the spot trade history — leaving
+    them out made closed positions read as permanently open.
     """
     if not _broker_is_configured():
         return [], "Broker API keys are not configured."
@@ -7005,7 +7009,7 @@ async def _broker_journal_trades() -> tuple[list, str]:
         _logger.warning("[JOURNAL] broker fill history unavailable: %s", exc)
         return [], str(exc)
     try:
-        return pair_fills_into_trades(fills or []), ""
+        return pair_fills_into_trades(fills or [], converts=converts or []), ""
     except Exception as exc:
         _logger.error("[JOURNAL] pairing fills failed: %s", exc)
         return [], str(exc)
@@ -7017,19 +7021,21 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
     sheet_trades = [t for t in (doc.get("trades") or []) if isinstance(t, dict)]
     capital_base = _coerce_float_safe(doc.get("capital_base_usd"))
 
-    broker_trades, broker_error = ([], "") if not include_broker else await _broker_journal_trades()
-    trades = merge_with_sheet(sheet_trades, broker_trades) if include_broker else sheet_trades
-
     # Convert exits never reach /api/v3/myTrades, so a lot closed that way looks
-    # permanently open to the rest of the app. Surface them here as their own
-    # section rather than silently merging them into the spot trade log.
+    # permanently open to the rest of the app. Fetch them FIRST — they get their
+    # own section below, and they also feed the pairing so a convert-closed
+    # position is not reported as still held.
     converts = []
     convert_error = ""
-    try:
-        converts = await asyncio.to_thread(delta.get_convert_history, convert_days)
-    except Exception as exc:
-        convert_error = str(exc)
-        _logger.warning("[JOURNAL] convert history unavailable: %s", exc)
+    if _broker_is_configured():
+        try:
+            converts = await asyncio.to_thread(delta.get_convert_history, convert_days)
+        except Exception as exc:
+            convert_error = str(exc)
+            _logger.warning("[JOURNAL] convert history unavailable: %s", exc)
+
+    broker_trades, broker_error = ([], "") if not include_broker else await _broker_journal_trades(converts)
+    trades = merge_with_sheet(sheet_trades, broker_trades) if include_broker else sheet_trades
 
     return {
         "status": "ok",

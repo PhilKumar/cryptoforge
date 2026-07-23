@@ -192,22 +192,76 @@ class _OpenPosition:
         }
 
 
-def pair_fills_into_trades(fills: Iterable[dict], *, include_open: bool = True) -> list[dict]:
+def _convert_as_fill(row: dict) -> Optional[dict]:
+    """A Binance Convert trade, shaped like a spot fill so it can be paired.
+
+    This is the whole reason the SOL position read as "3 buys, still open": the
+    account exits via Convert, and Convert trades NEVER appear in /api/v3/myTrades.
+    The pairing saw every buy and none of the convert-sells, so it invented a
+    position that had in fact been closed. broker.get_convert_history already
+    normalises the side and the base symbol; fold that in as a fill and the
+    phantom position closes on the exit that really happened.
+
+    Convert charges no explicit commission — its cost is the spread — so the fee
+    is zero here rather than unknown.
+    """
+    side = str(row.get("side") or "").lower()
+    if side not in {"buy", "sell"}:
+        return None  # asset-to-asset convert with no quote leg: not a spot round trip
+    symbol = str(row.get("symbol") or row.get("product_symbol") or "").upper()
+    qty = abs(_f(row.get("base_qty") or row.get("size") or row.get("qty")))
+    quote = abs(_f(row.get("quote_size") or row.get("quoteQty")))
+    if not symbol or qty <= 0:
+        return None
+    price = _f(row.get("price")) or (quote / qty if qty else 0.0)
+    when = row.get("time") or row.get("createTime") or row.get("timestamp")
+    return {
+        "symbol": symbol,
+        "isBuyer": side == "buy",
+        "side": side,
+        "price": price,
+        "qty": qty,
+        "quoteQty": quote or qty * price,
+        "time": int(_f(when)),
+        "paid_commission": 0.0,
+        "source": "convert",
+    }
+
+
+def pair_fills_into_trades(
+    fills: Iterable[dict], *, converts: Optional[Iterable[dict]] = None, include_open: bool = True
+) -> list[dict]:
     """Round trips, oldest first, from a flat list of exchange fills.
 
     Fills may arrive in any order and for any mix of symbols; each symbol is
     tracked on its own. A sell with no position behind it is ignored rather than
     inventing a short — this is a spot account, so that only happens when the
     history window starts mid-position.
+
+    `converts` are Binance Convert trades. They are folded in as fills because
+    an exit done through Convert is invisible to the spot trade history, and
+    leaving them out is what made closed positions look permanently open.
     """
     by_symbol: dict[str, list[dict]] = {}
-    for fill in fills or []:
-        if not isinstance(fill, dict):
-            continue
-        symbol = str(fill.get("symbol") or fill.get("product_symbol") or "").upper()
-        if not symbol:
-            continue
-        by_symbol.setdefault(symbol, []).append(fill)
+    convert_ms: set[int] = set()
+
+    def _ingest(source, mark_convert):
+        for row in source or []:
+            if not isinstance(row, dict):
+                continue
+            if mark_convert:
+                row = _convert_as_fill(row)
+                if row is None:
+                    continue
+            symbol = str(row.get("symbol") or row.get("product_symbol") or "").upper()
+            if not symbol:
+                continue
+            by_symbol.setdefault(symbol, []).append(row)
+            if mark_convert:
+                convert_ms.add(int(_f(row.get("time"))))
+
+    _ingest(fills, False)
+    _ingest(converts, True)
 
     trades: list[dict] = []
     for symbol in sorted(by_symbol):
@@ -225,7 +279,12 @@ def pair_fills_into_trades(fills: Iterable[dict], *, include_open: bool = True) 
             position.add_sell(fill)
             if position.is_flat():
                 counter += 1
-                trades.append(position.to_trade(counter, closed=True))
+                trade = position.to_trade(counter, closed=True)
+                # Flag the round if a Convert closed it, so the UI can say the
+                # exit was off-orderbook rather than a spot sell.
+                if int(position.closed_ms) in convert_ms:
+                    trade["closed_via"] = "convert"
+                trades.append(trade)
                 position = None
         if position is not None and position.bought_qty > 0 and include_open:
             counter += 1

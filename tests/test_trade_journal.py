@@ -351,3 +351,60 @@ class JournalSummaryTests(unittest.TestCase):
         self.assertEqual(s["trade_count"], 0)
         self.assertEqual(s["fees_usd"], 0.0)
         self.assertEqual(s["win_rate_pct"], 0.0)
+
+
+class ConvertExitTests(unittest.TestCase):
+    """A position exited via Binance Convert. Convert trades never appear in
+    /api/v3/myTrades, so without folding them in the pairing saw the buys, never
+    the exit, and reported a closed position as permanently open — exactly the
+    'SOL 3 buys, still open' the journal showed."""
+
+    def _convert(self, symbol, side, base_qty, quote_qty, ms):
+        # The shape broker.get_convert_history emits.
+        return {
+            "symbol": symbol,
+            "product_symbol": symbol,
+            "side": side,
+            "source": "convert",
+            "base_qty": base_qty,
+            "quote_size": quote_qty,
+            "price": quote_qty / base_qty if base_qty else 0.0,
+            "time": ms,
+        }
+
+    def test_a_convert_exit_closes_the_position(self):
+        # One real buy, then the exit done via Convert — the actual SOL case.
+        fills = [fill("SOLUSDT", "buy", 77.11, 0.129, ms=_BASE)]
+        converts = [self._convert("SOLUSDT", "sell", 0.129, 9.94, _BASE + 3600_000)]
+        trades = pair_fills_into_trades(fills, converts=converts)
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["status"], "Closed", "the convert-sell closes it")
+        self.assertEqual(trades[0]["closed_via"], "convert")
+
+    def test_without_the_convert_it_would_read_open(self):
+        """The bug, pinned: same buy, no convert supplied -> phantom open."""
+        fills = [fill("SOLUSDT", "buy", 77.11, 0.129, ms=_BASE)]
+        self.assertEqual(pair_fills_into_trades(fills)[0]["status"], "Open")
+        self.assertEqual(pair_fills_into_trades(fills, converts=[])[0]["status"], "Open")
+
+    def test_a_spot_sell_still_takes_precedence_by_time(self):
+        # Buy, spot-sell most of it, convert the dust away — one closed trade.
+        fills = [
+            fill("SOLUSDT", "buy", 77.0, 1.0, ms=_BASE),
+            fill("SOLUSDT", "sell", 78.0, 0.99, ms=_BASE + 1000),
+        ]
+        converts = [self._convert("SOLUSDT", "sell", 0.01, 0.78, _BASE + 2000)]
+        trades = pair_fills_into_trades(fills, converts=converts)
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["status"], "Closed")
+
+    def test_asset_to_asset_converts_are_ignored(self):
+        # A SOL->BTC convert has no USDT leg; it is not a spot round trip.
+        fills = [fill("SOLUSDT", "buy", 77.0, 1.0, ms=_BASE)]
+        weird = {"symbol": "SOLBTC", "side": "convert", "base_qty": 1.0, "quote_size": 0.001, "time": _BASE + 1000}
+        trades = pair_fills_into_trades(fills, converts=[weird])
+        self.assertEqual(trades[0]["status"], "Open", "the SOL buy is untouched by a SOL->BTC convert")
+
+    def test_convert_only_history_makes_no_phantom_trades(self):
+        converts = [self._convert("SOLUSDT", "sell", 0.5, 38.0, _BASE)]
+        self.assertEqual(pair_fills_into_trades([], converts=converts), [])

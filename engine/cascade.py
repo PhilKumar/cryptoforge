@@ -760,6 +760,17 @@ class Campaign:
         return campaign
 
 
+def _is_trigger_immediately_error(error) -> bool:
+    """True for Binance -2010 'Stop price would trigger immediately'.
+
+    A deterministic, market-relative rejection — the trigger is at or below the
+    current price — not a fault to alert on. Matched on both the code and the
+    text so a wording change on either side does not turn it back into noise.
+    """
+    text = str(error or "").lower()
+    return "-2010" in text or "would trigger immediately" in text
+
+
 def timeframe_for_level(leg: Leg, level: int) -> str:
     if level == 2:
         return BASE_TIMEFRAME
@@ -1783,9 +1794,9 @@ class CascadeEngine:
 
     # ── pricing / candles ────────────────────────────────────────
 
-    async def _get_price(self, symbol: str) -> float:
+    async def _get_price(self, symbol: str, max_age: float = 4.0) -> float:
         cached = self._price_cache.get(symbol)
-        if cached and time.monotonic() - cached[1] < 4.0:
+        if cached and time.monotonic() - cached[1] < max_age:
             return cached[0]
         try:
             ticker = await asyncio.to_thread(self.broker.get_ticker, symbol)
@@ -2922,20 +2933,17 @@ class CascadeEngine:
         limit = campaign.pending_limit_price
         if not stop or not limit:
             return False  # not armed: two reds have not printed below the line yet
-        # _price_cache holds (price, monotonic) tuples — see _get_price. This
-        # read used to call .get("price") on that tuple, which raised
-        # AttributeError on every sync that had a cached price, i.e. all of
-        # them after the first tick. The exception was swallowed by the tick's
-        # try/except, so a live campaign collected forever and never placed a
-        # single order — and because this runs at step 2 of 3, it also took the
-        # TP sync down with it.
-        cached = self._price_cache.get(campaign.symbol)
-        market = _coerce_float(cached[0]) if cached else 0.0
+        # A buy stop has to sit ABOVE the market or Binance rejects it with
+        # -2010 "would trigger immediately". Check against a FRESH price, not the
+        # 4s cache: on a thin book (PAXG especially) the price crosses the
+        # trigger inside those 4 seconds, we submit an order we already know is
+        # doomed, and the log fills with red -2010 errors. A ≤1s price is worth
+        # one ticker call here — placement is infrequent and gated on arming.
+        market = await self._get_price(campaign.symbol, max_age=1.0)
         if market and market >= stop:
-            # A buy stop has to sit above the market or it fires at once. Not
-            # logged: this is re-evaluated every sync, and an event per sync
-            # would bury the 200-entry log within minutes. The UI says so
-            # instead, from pending_stop_price and last_price.
+            # Re-evaluated every sync, so not logged per-attempt — the UI shows
+            # it from pending_stop_price vs last_price. The money stays collected
+            # and armed; it rests the moment price is back below the trigger.
             return False
         # Churn brake. On 2026-07-22 a live campaign placed the same trigger,
         # had it come back cancelled, and re-placed — every 10-15s, indefinitely.
@@ -3000,12 +3008,18 @@ class CascadeEngine:
             )
             return True
         error = (result or {}).get("error") if isinstance(result, dict) else "unknown error"
+        # -2010 "would trigger immediately" is not a failure to diagnose — it is
+        # the deterministic answer that the market is at or above the trigger
         # "Duplicate order sent" means this exact client id already rests on the
         # exchange — the order we wanted IS there, we simply lost track of its
         # id (a restart, or a placement whose reply never arrived). Adopting it
         # is the correct resolution. Treating it as a failure left the id unset,
         # so the next sync tried the same client id and was refused again, for
         # as long as the campaign ran.
+        #
+        # Checked BEFORE the -2010 case: a duplicate must always be adopted, and
+        # some clients return it carrying a -2010 code, so a phrase match on
+        # "duplicate" has to win over the code match.
         if "duplicate" in str(error).lower():
             adopted = await self._adopt_order_by_client_id(campaign, client_id)
             if adopted:
@@ -3017,6 +3031,15 @@ class CascadeEngine:
                     f"({client_id}); adopted it instead of placing a second one.",
                 )
                 return True
+        # -2010 "would trigger immediately" is the same condition the fresh-price
+        # guard above catches, lost to the race between our fetch and Binance's.
+        # Treat it as a benign wait: roll back the churn attempt so it is not
+        # counted toward the "won't rest" brake, and stay silent — no red error,
+        # no alert. It rests on its own the next sync where price is below the
+        # trigger.
+        if _is_trigger_immediately_error(error):
+            self._place_attempts.pop(campaign.campaign_id, None)
+            return False
         self._log_event(campaign, "error", f"Failed to place the buy stop: {error}")
         self._alert(
             "Cascade order FAILED",

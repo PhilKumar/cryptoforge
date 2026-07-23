@@ -2753,3 +2753,72 @@ class CascadeAutoChartTimeframeTests(unittest.TestCase):
         campaign.mother_timestamp = 0
         # Epoch 0 is ~56 years of span; it must resolve, not raise.
         self.assertEqual(CascadeEngine._auto_chart_timeframe(campaign, 250), "1h")
+
+
+class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
+    """Binance -2010 'would trigger immediately' — the buy stop's trigger is at
+    or below the live market. Thin books (PAXG) hit it constantly. It must be a
+    quiet wait, not a red error storm with a false 'won't rest' alert."""
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+        self.campaign = _mk_campaign(self.engine, mode="live")
+        self.campaign.state = "TRENDLINE_ACTIVE"
+        leg = Leg(leg_id=1, trendline_id=1, low=99.5, touch_high=102.0, touch_timestamp=1200)
+        self.campaign.legs.append(leg)
+        build_fib_ladder_and_pool(self.campaign, leg)
+        plan_leg_orders(self.campaign, leg)
+        self.campaign.pending_usd = 40.0
+        self.campaign.collected = [[1, 2, 16.0, 97.0]]
+        self.campaign.pending_line = 96.0
+        self.campaign.pending_stop_price = 96.5
+        self.campaign.pending_limit_price = 96.55
+        self.campaign.pending_rev = 1
+
+    async def test_helper_matches_code_and_text(self):
+        from engine.cascade import _is_trigger_immediately_error
+
+        self.assertTrue(_is_trigger_immediately_error("Binance -2010: Stop price would trigger immediately."))
+        self.assertTrue(_is_trigger_immediately_error("would trigger immediately"))
+        self.assertFalse(_is_trigger_immediately_error("Binance -2011: Unknown order"))
+        self.assertFalse(_is_trigger_immediately_error(""))
+
+    async def test_a_fresh_price_at_or_above_the_trigger_is_not_submitted(self):
+        """If the market has already reached the trigger, don't even try —
+        that is what produced the -2010 in the first place."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.9}  # above stop 96.5
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertFalse(placed)
+        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "buy"], [])
+        self.assertIsNone(self.campaign.pending_order_id)
+
+    async def test_a_minus_2010_is_silent_and_not_counted_as_churn(self):
+        """When the race still produces a -2010, it must not alert or trip the
+        'won't rest after 3 attempts' brake."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.0}  # below stop: guard passes
+        self.broker.place_order = lambda *a, **k: {"error": "Binance -2010: Stop price would trigger immediately."}
+        alerts = []
+        self.engine.on_alert = lambda *a, **k: alerts.append(a)
+
+        for _ in range(6):
+            placed = await self.engine._place_pending_stop(self.campaign)
+            self.assertFalse(placed)
+
+        self.assertEqual(alerts, [], "a -2010 must never fire the 'keeps being cancelled' alert")
+        self.assertNotIn(
+            self.campaign.campaign_id,
+            self.engine._place_attempts,
+            "the -2010 must not accumulate toward the churn brake",
+        )
+        errors = [e for e in self.campaign.event_log if e["level"] == "error"]
+        self.assertEqual(errors, [], "a -2010 must not spam the event log with red errors")
+
+    async def test_a_genuine_failure_still_alerts(self):
+        """The quiet path is only for -2010. A real rejection must still shout."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.0}
+        self.broker.place_order = lambda *a, **k: {"error": "Binance -1013: Filter failure: MIN_NOTIONAL"}
+        alerts = []
+        self.engine.on_alert = lambda *a, **k: alerts.append(a)
+        await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(alerts, "a non-2010 failure must still alert")

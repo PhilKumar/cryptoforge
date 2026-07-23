@@ -5565,16 +5565,37 @@ function _cfJournalSourceTag(t) {
   return '<div class="table-note">' + bits.join(' ') + '</div>';
 }
 
-// Fees are only known for broker-paired rows; showing "$0.00 fees" on a
-// spreadsheet row would claim something we did not measure.
-function _cfJournalFeeNote(t) {
+// Fees are only known for broker-paired rows; a spreadsheet row never carried
+// them, so its Fee cell is a dash rather than a fabricated $0.00.
+function _cfJournalFeeCell(t) {
+  if (String(t.source || '') !== 'binance') {
+    return '<span style="color:var(--muted);" title="Imported from the spreadsheet — fees were not recorded">—</span>';
+  }
+  var fee = Number(t.fees_usd) || 0;
+  return '<span style="color:var(--red,#e2574c);" title="Exchange commission on this round trip">'
+    + _cfJournalUsd(fee) + '</span>';
+}
+
+// The P&L cell shows net; this note shows the gross it came from, so the fee's
+// bite is legible right where the number is.
+function _cfJournalGrossNote(t) {
   if (String(t.source || '') !== 'binance') return '';
   var fee = Number(t.fees_usd) || 0;
   if (!fee) return '';
-  var gross = Number(t.pnl_gross_usd);
-  return '<div class="table-note" title="Gross ' + _escapeHtml(_cfJournalUsd(gross))
-    + ' less ' + _escapeHtml(_cfJournalUsd(fee)) + ' commission">net · fee '
-    + _escapeHtml(_cfJournalUsd(fee)) + '</div>';
+  return '<div class="table-note" title="Before commission">gross ' + _escapeHtml(_cfJournalUsd(t.pnl_gross_usd)) + '</div>';
+}
+
+// A position closed through Binance Convert exited off the orderbook, so its
+// "sell price" is a convert rate, not a spot fill — say so.
+function _cfJournalSellCell(t) {
+  var price = _cfJournalUsd(t.sell_price);
+  if (String(t.closed_via || '') === 'convert') {
+    return price + '<div class="table-note" title="Exited via Binance Convert, off the orderbook">via convert</div>';
+  }
+  if (String(t.status || '') === 'Open') {
+    return '<span style="color:var(--muted);" title="Still holding — not sold yet">held</span>';
+  }
+  return price;
 }
 
 function _cfJournalTone(value) {
@@ -5814,7 +5835,7 @@ function _cfRenderTradeJournal(data) {
   var body = document.getElementById('cf-journal-body');
   if (!body) return;
   if (!trades.length) {
-    body.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">No trades for this filter.</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" class="cf-table-empty-cell">No trades for this filter.</td></tr>';
     return;
   }
   body.innerHTML = trades.map(function(t) {
@@ -5831,14 +5852,15 @@ function _cfRenderTradeJournal(data) {
       + '<td class="num">' + _cfJournalUsd(t.avg_buy_price) + '</td>'
       + '<td class="num">' + Number(t.total_qty).toFixed(5) + '</td>'
       + '<td class="num">' + _cfJournalUsd(t.invested_usd) + '</td>'
-      + '<td class="num">' + _cfJournalUsd(t.sell_price) + '</td>'
+      + '<td class="num">' + _cfJournalSellCell(t) + '</td>'
+      + '<td class="num">' + _cfJournalFeeCell(t) + '</td>'
       + '<td class="num" style="color:' + pnlTone + ';">' + _cfJournalUsd(t.pnl_usd)
-        + _cfJournalFeeNote(t) + '</td>'
+        + _cfJournalGrossNote(t) + '</td>'
       + '<td class="num" style="color:' + pnlTone + ';">' + _cfJournalPct(t.roi_pct, 2) + '</td>'
       + '</tr>';
     var buys = (t.buys || []).length > 1
       ? '<tr class="cf-journal-buys" data-journal-buys="' + _escapeHtml(t.trade_id) + '">'
-        + '<td colspan="10" style="padding:0;"><table class="trade-table cf-journal-subtable">'
+        + '<td colspan="11" style="padding:0;"><table class="trade-table cf-journal-subtable">'
         + '<tbody>' + _cfJournalBuyRows(t) + '</tbody></table></td></tr>'
       : '';
     return head + buys;
@@ -5925,7 +5947,7 @@ async function cfLoadTradeJournal(showToast) {
   } catch (error) {
     var body = document.getElementById('cf-journal-body');
     if (body) {
-      body.innerHTML = '<tr><td colspan="10" class="cf-table-empty-cell">'
+      body.innerHTML = '<tr><td colspan="11" class="cf-table-empty-cell">'
         + _escapeHtml(error.message) + '</td></tr>';
     }
     if (showToast) cfToast('Journal refresh failed: ' + error.message, 'danger');
