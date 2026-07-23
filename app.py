@@ -57,6 +57,7 @@ from broker import get_broker_client, get_supported_brokers
 from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
 from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
+from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
 from engine.cascade import CascadeEngine
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
@@ -583,6 +584,9 @@ _BUCKET_SCALP_RUNTIME = "scalp_runtime"
 _BUCKET_CASCADE_RUNTIME = "cascade_runtime"
 _BUCKET_CASCADE_EVENTS = "cascade_events"
 _BUCKET_CASCADE_CLOSED = "cascade_closed"
+# One frozen chart payload per campaign, keyed by campaign_id — the permanent,
+# static "how the trade was taken" record shown from the journal.
+_BUCKET_CASCADE_CHART_SNAP = "cascade_chart_snap"
 _BUCKET_APP_SETTINGS = "app_settings"
 _APP_SETTINGS_BROKER_KEY = "selected_broker"
 
@@ -6776,6 +6780,36 @@ def _cascade_persist_closed_list(engine: "CascadeEngine") -> None:
         _logger.error("[CASCADE] Failed to persist closed campaigns: %s", exc)
 
 
+def _persist_chart_snapshot(campaign_id, payload) -> None:
+    """Freeze one campaign's chart payload as its permanent trade record."""
+    try:
+        if campaign_id and isinstance(payload, dict) and not payload.get("error"):
+            _get_state_store().put(_BUCKET_CASCADE_CHART_SNAP, str(campaign_id), dict(payload))
+    except Exception as exc:
+        _logger.warning("[CASCADE] chart snapshot persist failed for %s: %s", campaign_id, exc)
+
+
+def _load_chart_snapshot(campaign_id):
+    try:
+        snap = _get_state_store().get(_BUCKET_CASCADE_CHART_SNAP, str(campaign_id), default=None)
+        return snap if isinstance(snap, dict) else None
+    except Exception:
+        return None
+
+
+async def _capture_chart_snapshot(engine: "CascadeEngine", campaign_id: str) -> None:
+    """Render the campaign's chart once and freeze it as the trade record. Runs
+    at close so every trade keeps a static picture of how it was taken, viewable
+    from the journal forever — no local files to manage."""
+    try:
+        if _load_chart_snapshot(campaign_id) is not None:
+            return  # already frozen; the record does not change
+        result = await engine.get_chart_data(campaign_id)
+        _persist_chart_snapshot(campaign_id, result)
+    except Exception as exc:
+        _logger.warning("[CASCADE] chart snapshot capture failed for %s: %s", campaign_id, exc)
+
+
 def _cascade_persist_closed(campaign: dict) -> None:
     try:
         store = _get_state_store()
@@ -6787,6 +6821,16 @@ def _cascade_persist_closed(campaign: dict) -> None:
         store.put(_BUCKET_CASCADE_CLOSED, "campaigns", closed[-100:])
     except Exception as exc:
         _logger.error("[CASCADE] Failed to persist closed campaign: %s", exc)
+    # Freeze the trade's chart record the moment it closes.
+    cid = campaign.get("campaign_id") if isinstance(campaign, dict) else None
+    engine = globals().get("_cascade_engine")
+    if cid and engine is not None:
+        try:
+            task = asyncio.get_running_loop().create_task(_capture_chart_snapshot(engine, cid))
+            _inflight_tasks.add(task)
+            task.add_done_callback(_inflight_tasks.discard)
+        except RuntimeError:
+            pass
 
     reason = str(campaign.get("close_reason") or "")
     if reason in {"tp_filled", "mother_broken"}:
@@ -7203,9 +7247,20 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
         # history has to be loaded before it can be found.
         eng.load_closed_campaigns(_load_cascade_closed())
     result = await eng.get_chart_data(campaign_id, timeframe=timeframe)
-    if result.get("error"):
-        raise HTTPException(status_code=404, detail=result["error"])
-    return result
+    if not result.get("error"):
+        # While the campaign is in memory serve it live (timeframe toggle works);
+        # once it has ended, freeze a static record on first view if the close
+        # capture did not already — so it survives the campaign rotating out.
+        if result.get("state") in CASCADE_FINAL_STATES and _load_chart_snapshot(campaign_id) is None:
+            _persist_chart_snapshot(campaign_id, result)
+        return result
+    # The campaign is gone from memory — serve its permanent frozen record.
+    snapshot = _load_chart_snapshot(campaign_id)
+    if snapshot:
+        snapshot = dict(snapshot)
+        snapshot["snapshot"] = True
+        return snapshot
+    raise HTTPException(status_code=404, detail=result["error"])
 
 
 @app.get("/api/cascade/campaigns/{campaign_id}/events")

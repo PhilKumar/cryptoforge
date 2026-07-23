@@ -58,26 +58,32 @@ def main() -> int:
     runtime = store.get(app._BUCKET_CASCADE_RUNTIME, "current", default={}) or {}
     closed = store.get(app._BUCKET_CASCADE_CLOSED, "campaigns", default=[]) or []
     events = store.get(app._BUCKET_CASCADE_EVENTS, "log", default=[]) or []
+    snaps = store.get_mapping(app._BUCKET_CASCADE_CHART_SNAP) or {}
     active = runtime.get("campaigns") or []
 
     print("Currently persisted:")
     print(f"  active / restored campaigns : {len(active)}")
     print(f"  closed campaigns            : {len(closed)}")
     print(f"  event-log entries           : {len(events)}")
+    print(f"  chart snapshots             : {len(snaps)}")
     for camp in active:
         print(f"    - #{camp.get('seq')} {camp.get('symbol')} {camp.get('state')} ({camp.get('mode')})")
 
-    if not (active or closed or events):
+    if not (active or closed or events or snaps):
         print("\nNothing persisted — already clean.")
         return 0
 
     if not args.yes:
-        print("\nDry run. Re-run with --yes to clear all three buckets, then restart the service.")
+        print("\nDry run. Re-run with --yes to clear every bucket, then restart the service.")
         return 0
 
     for bucket, key, label in _BUCKETS:
         store.delete(bucket, key)
         print(f"cleared: {label}")
+    for cid in list(snaps.keys()):
+        store.delete(app._BUCKET_CASCADE_CHART_SNAP, cid)
+    if snaps:
+        print("cleared: chart snapshots (trade records)")
 
     print("\nCleared. This only sticks if the service was STOPPED — a running")
     print("service re-persists the old campaigns on its next shutdown. Start it:")

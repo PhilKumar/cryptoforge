@@ -200,6 +200,34 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(campaigns), 1)
         self.assertEqual(campaigns[0]["campaign_id"], cid)
 
+    async def test_chart_serves_the_frozen_record_when_the_campaign_is_gone(self):
+        """The permanent trade record: once a campaign has rotated out of memory,
+        the chart still opens from its frozen snapshot — no live campaign needed,
+        so every trade keeps its picture forever."""
+        self.app_module._persist_chart_snapshot(
+            "gone-123",
+            {
+                "status": "ok",
+                "campaign_id": "gone-123",
+                "state": "COMPLETED",
+                "candles": [{"t": 1, "o": 1.0, "h": 2.0, "l": 1.0, "c": 1.5}],
+                "legs": [],
+                "trendlines": [],
+            },
+        )
+        async with self._client() as client:
+            resp = await client.get("/api/cascade/campaigns/gone-123/chart")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data.get("snapshot"), "must be flagged as a frozen record")
+        self.assertEqual(data.get("campaign_id"), "gone-123")
+        self.assertEqual(len(data.get("candles") or []), 1)
+
+    async def test_chart_missing_and_unfrozen_is_404(self):
+        async with self._client() as client:
+            resp = await client.get("/api/cascade/campaigns/never-existed/chart")
+        self.assertEqual(resp.status_code, 404)
+
 
 class _FakeFill:
     def __init__(self, order_id):
