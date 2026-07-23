@@ -5655,7 +5655,7 @@ function _cfJournalChartBtn(t) {
   return ' <button type="button" class="btn btn-outline btn-sm cf-journal-chartbtn"'
     + ' title="See how this trade was taken — campaign chart' + seq + '"'
     + ' aria-label="View trade chart"'
-    + ' data-cf-click="event.stopPropagation();cfCascadeShowChart(\'' + _escapeHtml(String(cid)) + '\')">'
+    + ' data-cf-click="event.stopPropagation();cfCascadeShowChart(\'' + _escapeHtml(String(cid)) + '\',\'journal\')">'
     + '<svg class="cf-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
     + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
     + '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></button>';
@@ -8970,7 +8970,7 @@ async function cfCascadeRecalculate(campaignId) {
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
     'Campaign recalculated'
   );
-  if (data && _cfCascadeChartId === campaignId) cfCascadeShowChart(campaignId);
+  if (data && _cfCascadeChartId === campaignId) cfCascadeShowChart(campaignId, _cfCascadeChartMode);
 }
 
 function cfCascadeReconcile() {
@@ -9090,6 +9090,9 @@ function cfCascadeRoundBackdrop(event) {
 
 // ═══ CASCADE CHART ══════════════════════════════════════════════
 var _cfCascadeChartId = '';
+// 'full' = the live cascade view (chart + trendline/leg/order tables). 'journal'
+// = a clean static snapshot of just the chart, for the trade record — no tables.
+var _cfCascadeChartMode = 'full';
 
 // Every candle time on this site reads in IST. Binance hands us epoch seconds;
 // shift by +5:30 and format off the UTC getters so the result is IST no matter
@@ -9334,18 +9337,24 @@ function _cfCascadeChartHtml(d) {
       + 'If it was just created, wait for the next 5m candle or hit Broker Sync.</div>';
   }
   var P = _cfChartPalette();
+  var journal = _cfCascadeChartMode === 'journal';
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
     + '<span style="color:' + P.mother + ';">┄ mother high</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— trendlines (TL)</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— fib levels 0, 1, 2, 4 and 8 (all drawn alike)</span> &nbsp; '
     + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
     + '<span style="color:' + P.fill + ';">● fills</span>'
-    + '<br>Fib 1 is blue, 2 green, 3 red, 4 purple, then the cycle repeats. Labels are on the left,'
-    + ' and each funded buy level carries the dollars resting on it.'
-    + ' Scroll to move down the dialog; the +/&minus; buttons or Ctrl (&#8984;) + scroll zoom, and Expand lets you zoom with the wheel. Drag to pan.'
+    // In journal mode this is a static trade record: skip the interaction hints
+    // and the fib-colour key that only matter alongside the live detail tables.
+    + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red, 4 purple, then the cycle repeats. Labels are on the left,'
+      + ' and each funded buy level carries the dollars resting on it.'
+      + ' Scroll to move down the dialog; the +/&minus; buttons or Ctrl (&#8984;) + scroll zoom, and Expand lets you zoom with the wheel. Drag to pan.'))
     + '</div>';
-  return legend + _cfCascadeChartSvg(d)
-    + '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
+  var html = legend + _cfCascadeChartSvg(d);
+  // The journal wants just the picture of how the trade was taken — the
+  // trendline / leg / order tables belong to the live cascade view only.
+  if (!journal) html += '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
+  return html;
 }
 
 // 'auto' asks the server for the smallest timeframe that still fits the whole
@@ -9370,7 +9379,7 @@ function cfCascadeSetTimeframe(tf) {
   var picked = (tf === '15m' || tf === '1h' || tf === '5m') ? tf : 'auto';
   _cfCascadeChartTf = picked;
   _cfCascadeMarkTimeframe(picked);
-  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId);
+  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId, _cfCascadeChartMode);
 }
 
 // Highlights the button in use. On 'auto' the server decides, so the resolved
@@ -9537,10 +9546,14 @@ document.addEventListener('keydown', function(event) {
   }
 });
 
-async function cfCascadeShowChart(campaignId) {
+async function cfCascadeShowChart(campaignId, mode) {
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   var body = document.getElementById('cf-cascade-chart-body');
   if (!overlay || !body) return;
+  // Openers pass the mode ('journal' from a journal row, nothing = 'full' from
+  // the cascade tab); internal re-renders pass the current mode to preserve it.
+  _cfCascadeChartMode = mode || 'full';
+  overlay.classList.toggle('cf-chart-journal', _cfCascadeChartMode === 'journal');
   // The overlay markup lives inside the Cascade page section, which is
   // display:none on every other tab — so opening it from a Journal row set its
   // own display to flex but a hidden ancestor kept it invisible. Reparent it to
@@ -9582,7 +9595,7 @@ async function cfCascadeShowChart(campaignId) {
 }
 
 function cfCascadeRefreshChart() {
-  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId);
+  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId, _cfCascadeChartMode);
 }
 
 function cfCascadeHideChart() {
