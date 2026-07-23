@@ -5897,11 +5897,16 @@ function _cfRenderTradeJournal(data) {
     if (tradePager) tradePager.innerHTML = '';
     return;
   }
-  var tradeTotalPages = Math.max(1, Math.ceil(trades.length / TABLE_PAGE_SIZE));
+  // Newest first: the pairing yields oldest→newest, but the journal reads best
+  // with the most recent round on top (and it keeps a freshly-linked trade on
+  // page 1 where its chart button is reachable). Charts above still use the
+  // original order.
+  var ordered = trades.slice().reverse();
+  var tradeTotalPages = Math.max(1, Math.ceil(ordered.length / TABLE_PAGE_SIZE));
   _cfJournalTradePage = Math.min(Math.max(_cfJournalTradePage, 1), tradeTotalPages);
   var tradeStart = (_cfJournalTradePage - 1) * TABLE_PAGE_SIZE;
-  var pageTrades = trades.slice(tradeStart, tradeStart + TABLE_PAGE_SIZE);
-  if (tradePager) tradePager.innerHTML = _cfJournalPagerBar(trades.length, _cfJournalTradePage, '_cfSetJournalTradePage');
+  var pageTrades = ordered.slice(tradeStart, tradeStart + TABLE_PAGE_SIZE);
+  if (tradePager) tradePager.innerHTML = _cfJournalPagerBar(ordered.length, _cfJournalTradePage, '_cfSetJournalTradePage');
   body.innerHTML = pageTrades.map(function(t) {
     var pnlTone = _cfJournalTone(t.pnl_usd);
     if (String(t.status || '') === 'Open') pnlTone = 'var(--muted)';
