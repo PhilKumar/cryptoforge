@@ -6902,14 +6902,27 @@ def _load_trade_journal() -> dict:
 
 
 def _journal_summary(trades: List[dict], capital_base: float) -> dict:
-    invested = sum(_coerce_float_safe(t.get("invested_usd")) for t in trades)
-    pnl = sum(_coerce_float_safe(t.get("pnl_usd")) for t in trades)
-    wins = [t for t in trades if _coerce_float_safe(t.get("pnl_usd")) > 0]
-    losses = [t for t in trades if _coerce_float_safe(t.get("pnl_usd")) < 0]
-    rois = [_coerce_float_safe(t.get("roi_pct")) for t in trades]
+    # Realised stats are computed on CLOSED trades only. An open position has
+    # made no money yet — counting its $0 result diluted the win rate, and
+    # counting its still-deployed capital inflated "capital deployed" with money
+    # that has not come back. Open trades are reported on their own instead.
+    closed = [t for t in trades if str(t.get("status") or "Closed") != "Open"]
+    open_trades = [t for t in trades if str(t.get("status") or "") == "Open"]
+
+    invested = sum(_coerce_float_safe(t.get("invested_usd")) for t in closed)
+    pnl = sum(_coerce_float_safe(t.get("pnl_usd")) for t in closed)
+    # Gross and fees only exist on broker-paired rows; a sheet row carries
+    # neither, so gross falls back to the (already gross) sheet P&L and its fee
+    # contribution is zero. Total fees are therefore only ever what the exchange
+    # actually charged, never a guess.
+    gross = sum(_coerce_float_safe(t.get("pnl_gross_usd"), _coerce_float_safe(t.get("pnl_usd"))) for t in closed)
+    fees = sum(_coerce_float_safe(t.get("fees_usd")) for t in closed)
+    wins = [t for t in closed if _coerce_float_safe(t.get("pnl_usd")) > 0]
+    losses = [t for t in closed if _coerce_float_safe(t.get("pnl_usd")) < 0]
+    rois = [_coerce_float_safe(t.get("roi_pct")) for t in closed]
 
     by_coin: Dict[str, dict] = {}
-    for t in trades:
+    for t in closed:
         row = by_coin.setdefault(
             str(t.get("coin") or "?"), {"coin": t.get("coin"), "trades": 0, "invested": 0.0, "pnl": 0.0}
         )
@@ -6923,7 +6936,7 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
         row["roi_pct"] = round(row["roi_pct"], 3)
 
     by_day: Dict[str, dict] = {}
-    for t in trades:
+    for t in closed:
         day = str(t.get("date") or "")
         row = by_day.setdefault(day, {"date": day, "trades": 0, "invested": 0.0, "pnl": 0.0})
         row["trades"] += 1
@@ -6940,14 +6953,22 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
         equity.append({"date": day, "pnl": row["pnl"], "cumulative_pnl": round(running, 4)})
 
     return {
-        "trade_count": len(trades),
+        "trade_count": len(closed),
         "invested_usd": round(invested, 2),
         "realized_pnl_usd": round(pnl, 2),
+        # Both figures, side by side, because the difference between them is
+        # exactly the commission — and on the small rounds this app trades that
+        # difference is a large share of the result.
+        "gross_pnl_usd": round(gross, 2),
+        "fees_usd": round(fees, 4),
+        "fee_drag_pct": round(fees / gross * 100, 1) if gross > 0 else 0.0,
+        "open_trade_count": len(open_trades),
+        "open_invested_usd": round(sum(_coerce_float_safe(t.get("invested_usd")) for t in open_trades), 2),
         "roi_pct": round(pnl / invested * 100, 3) if invested else 0.0,
         "capital_roi_pct": round(pnl / capital_base * 100, 3) if capital_base else 0.0,
         "win_count": len(wins),
         "loss_count": len(losses),
-        "win_rate_pct": round(len(wins) / len(trades) * 100, 2) if trades else 0.0,
+        "win_rate_pct": round(len(wins) / len(closed) * 100, 2) if closed else 0.0,
         "avg_roi_pct": round(sum(rois) / len(rois), 3) if rois else 0.0,
         "best_roi_pct": round(max(rois), 3) if rois else 0.0,
         "worst_roi_pct": round(min(rois), 3) if rois else 0.0,

@@ -5585,17 +5585,24 @@ function _cfJournalTone(value) {
 }
 
 function _cfJournalKpiHtml(summary) {
+  var gross = Number(summary.gross_pnl_usd);
+  var fees = Number(summary.fees_usd) || 0;
+  var openCount = Number(summary.open_trade_count) || 0;
   var cards = [
     { label: 'Realised P&L', value: _cfJournalUsd(summary.realized_pnl_usd), tone: summary.realized_pnl_usd,
-      note: _cfJournalPct(summary.roi_pct, 2) + ' on capital deployed' },
+      note: _cfJournalPct(summary.roi_pct, 2) + ' on capital deployed · net of fees' },
+    // Fees earn their own tile: on these small rounds the commission is a large
+    // share of the result, and it was invisible before.
+    { label: 'Fees Paid', value: _cfJournalUsd(fees, 2), tone: fees ? -1 : 0,
+      note: fees ? 'gross was ' + _cfJournalUsd(gross, 2) + ' · ' + _cfJournalPct(summary.fee_drag_pct, 1) + ' drag'
+                 : 'no exchange fees recorded' },
     { label: 'Capital Deployed', value: _cfJournalUsd(summary.invested_usd),
-      note: 'across ' + summary.trade_count + ' closed trades' },
+      note: 'across ' + summary.trade_count + ' closed trade' + (summary.trade_count === 1 ? '' : 's')
+        + (openCount ? ' · ' + openCount + ' still open (' + _cfJournalUsd(summary.open_invested_usd, 2) + ')' : '') },
     { label: 'Win Rate', value: _cfJournalPct(summary.win_rate_pct, 1),
       note: summary.win_count + 'W / ' + summary.loss_count + 'L' },
     { label: 'Average ROI', value: _cfJournalPct(summary.avg_roi_pct, 2), tone: summary.avg_roi_pct,
       note: 'per trade' },
-    { label: 'Best Trade', value: _cfJournalPct(summary.best_roi_pct, 2), tone: 1,
-      note: 'worst ' + _cfJournalPct(summary.worst_roi_pct, 2) },
     { label: 'Avg Win', value: _cfJournalUsd(summary.avg_win_usd, 2), tone: 1,
       note: summary.loss_count ? 'avg loss ' + _cfJournalUsd(summary.avg_loss_usd, 2) : 'no losing trades yet' }
   ];
@@ -5873,7 +5880,8 @@ function _cfRenderJournalConverts(data) {
     return;
   }
   if (!rows.length) {
-    mount.innerHTML = '<div class="cf-table-empty-cell">No conversions in the last 90 days.</div>';
+    mount.innerHTML = '<div class="cf-table-empty-cell">No Binance Convert (off-orderbook) trades in the last 90 days. '
+      + 'This section only fills in if you have used Convert — normal spot buys and sells appear in the table above.</div>';
     return;
   }
 

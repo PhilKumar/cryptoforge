@@ -280,3 +280,74 @@ class DustValueRuleTests(unittest.TestCase):
         t = pair_fills_into_trades(fills)[0]
         self.assertEqual(t["status"], "Closed")
         self.assertEqual(t["residual_qty"], 0.0)
+
+
+class JournalSummaryTests(unittest.TestCase):
+    """The Journal KPI summary, from app._journal_summary — realised stats on
+    CLOSED trades only, with fees and gross surfaced."""
+
+    def setUp(self):
+        import app
+
+        self.summary = app._journal_summary
+
+    def _closed(self, coin, invested, net, gross, fees, roi):
+        return {
+            "coin": coin,
+            "status": "Closed",
+            "date": "2026-07-20",
+            "invested_usd": invested,
+            "pnl_usd": net,
+            "pnl_gross_usd": gross,
+            "fees_usd": fees,
+            "roi_pct": roi,
+            "source": "binance",
+        }
+
+    def test_fees_and_gross_are_totalled(self):
+        trades = [
+            self._closed("SOLUSDT", 22.25, 0.1965, 0.2412, 0.0447, 0.883),
+            self._closed("BTCUSDT", 7.24, 0.0128, 0.0266, 0.0138, 0.194),
+        ]
+        s = self.summary(trades, 2000.0)
+        self.assertAlmostEqual(s["fees_usd"], 0.0585, places=4)
+        self.assertAlmostEqual(s["gross_pnl_usd"], 0.27, places=2)
+        self.assertAlmostEqual(s["realized_pnl_usd"], 0.21, places=2)
+        self.assertGreater(s["gross_pnl_usd"], s["realized_pnl_usd"], "gross must exceed net")
+
+    def test_open_trades_do_not_count_in_realised_stats(self):
+        trades = [
+            self._closed("BTCUSDT", 7.24, 0.0128, 0.0266, 0.0138, 0.194),
+            {"coin": "SOLUSDT", "status": "Open", "invested_usd": 35.46, "pnl_usd": 0.0, "date": "2026-07-23"},
+        ]
+        s = self.summary(trades, 2000.0)
+        self.assertEqual(s["trade_count"], 1, "the open trade is not a closed trade")
+        self.assertEqual(s["open_trade_count"], 1)
+        self.assertAlmostEqual(s["open_invested_usd"], 35.46, places=2)
+        self.assertAlmostEqual(s["invested_usd"], 7.24, places=2, msg="open capital is not 'deployed' realised")
+        self.assertEqual(s["win_rate_pct"], 100.0, "one closed win, not one-of-two")
+
+    def test_a_sheet_row_contributes_no_fees(self):
+        """A sheet row has no fee field; its gross must fall back to its own P&L
+        so the totals do not silently drop it."""
+        trades = [
+            {
+                "coin": "SOLUSDT",
+                "status": "Closed",
+                "invested_usd": 20.46,
+                "pnl_usd": 0.19,
+                "roi_pct": 0.93,
+                "source": "sheet",
+                "date": "2026-07-05",
+            }
+        ]
+        s = self.summary(trades, 2000.0)
+        self.assertEqual(s["fees_usd"], 0.0)
+        self.assertAlmostEqual(s["gross_pnl_usd"], 0.19, places=2)
+        self.assertAlmostEqual(s["realized_pnl_usd"], 0.19, places=2)
+
+    def test_empty_is_safe(self):
+        s = self.summary([], 2000.0)
+        self.assertEqual(s["trade_count"], 0)
+        self.assertEqual(s["fees_usd"], 0.0)
+        self.assertEqual(s["win_rate_pct"], 0.0)
