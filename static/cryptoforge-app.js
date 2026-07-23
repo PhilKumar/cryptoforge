@@ -9112,13 +9112,13 @@ var _CF_CHART_DARK = {
   grid: 'rgba(148,163,184,0.12)', axis: 'rgba(148,163,184,0.55)',
   up: '#3fae56', down: '#d9534f', mother: '#a855f7', tp: '#10b981',
   avg: '#e2e8f0', fill: '#22c55e', fillRing: '#0b1220',
-  fibs: ['#3b82f6', '#22c55e', '#ef4444', '#a855f7']
+  fibs: ['#3b82f6', '#22c55e', '#ef4444']
 };
 var _CF_CHART_LIGHT = {
   grid: 'rgba(15,23,42,0.10)', axis: 'rgba(51,65,85,0.75)',
   up: '#0f766e', down: '#be123c', mother: '#7c3aed', tp: '#047857',
   avg: '#334155', fill: '#15803d', fillRing: '#ffffff',
-  fibs: ['#1d4ed8', '#15803d', '#be123c', '#7c3aed']
+  fibs: ['#1d4ed8', '#15803d', '#be123c']
 };
 
 function _cfChartPalette() {
@@ -9259,7 +9259,7 @@ function _cfCascadeChartSvg(d) {
   });
 
   // every fib: 0/1 anchors solid, 2/4/8 buy levels dotted
-  // Fixed four-colour cycle: fib 1 blue, 2 green, 3 red, 4 purple, then repeat.
+  // Fixed three-colour cycle: fib 1 blue, 2 green, 3 red, then repeat.
   // Keyed off leg_id, not position, so a fib keeps its colour as others retire.
   var fibColors = PAL.fibs;
   // Only the three most recent fibs are drawn — the 4th retires the 1st — so the
@@ -9358,7 +9358,7 @@ function _cfCascadeChartHtml(d) {
     + '<span style="color:' + P.fill + ';">● fills</span>'
     // In journal mode this is a static trade record: skip the interaction hints
     // and the fib-colour key that only matter alongside the live detail tables.
-    + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red, 4 purple, then the cycle repeats. Labels are on the left,'
+    + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red, then the cycle repeats. Labels are on the left,'
       + ' and each funded buy level carries the dollars resting on it.'
       + ' Scroll to move down the dialog; the +/&minus; buttons or Ctrl (&#8984;) + scroll zoom, and Expand lets you zoom with the wheel. Drag to pan.'))
     + '</div>';
