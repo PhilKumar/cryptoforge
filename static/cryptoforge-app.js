@@ -5538,6 +5538,43 @@ function showPortfolioMonthDetails(key) {
 
 var _cfJournalData = null;
 var _cfJournalCoinFilter = 'ALL';
+var _cfJournalTradePage = 1;
+var _cfJournalConvertPage = 1;
+
+// A pager bar for a data-level paginated table (the row is sliced before it is
+// rendered, so this never fights the DOM-row pager used elsewhere). fnName is a
+// global function that takes the 1-based page number.
+function _cfJournalPagerBar(total, page, fnName) {
+  var totalPages = Math.max(1, Math.ceil(total / TABLE_PAGE_SIZE));
+  page = Math.min(Math.max(page, 1), totalPages);
+  var start = (page - 1) * TABLE_PAGE_SIZE;
+  var info = total <= TABLE_PAGE_SIZE
+    ? (total + ' total')
+    : ('Showing ' + (start + 1) + '–' + Math.min(start + TABLE_PAGE_SIZE, total) + ' of ' + total);
+  if (totalPages <= 1) {
+    return '<div class="pagination-bar" style="display:flex;"><div class="pagination-info">' + info + '</div></div>';
+  }
+  var btns = '';
+  btns += '<button class="page-btn" data-cf-click="' + fnName + '(1)" ' + (page <= 1 ? 'disabled' : '') + '>«</button>';
+  btns += '<button class="page-btn" data-cf-click="' + fnName + '(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') + '>‹</button>';
+  for (var p = Math.max(1, page - 2); p <= Math.min(totalPages, page + 2); p++) {
+    btns += '<button class="page-btn ' + (p === page ? 'active' : '') + '" data-cf-click="' + fnName + '(' + p + ')">' + p + '</button>';
+  }
+  btns += '<button class="page-btn" data-cf-click="' + fnName + '(' + (page + 1) + ')" ' + (page >= totalPages ? 'disabled' : '') + '>›</button>';
+  btns += '<button class="page-btn" data-cf-click="' + fnName + '(' + totalPages + ')" ' + (page >= totalPages ? 'disabled' : '') + '>»</button>';
+  return '<div class="pagination-bar" style="display:flex;"><div class="pagination-info">' + info
+    + '</div><div class="pagination-actions">' + btns + '</div></div>';
+}
+
+function _cfSetJournalTradePage(page) {
+  _cfJournalTradePage = page;
+  if (_cfJournalData) _cfRenderTradeJournal(_cfJournalData);
+}
+
+function _cfSetJournalConvertPage(page) {
+  _cfJournalConvertPage = page;
+  if (_cfJournalData) _cfRenderJournalConverts(_cfJournalData);
+}
 
 function _cfJournalUsd(value, digits) {
   var n = Number(value);
@@ -5807,6 +5844,7 @@ function cfJournalToggleTrade(tradeId) {
 
 function cfJournalSetCoinFilter(coin) {
   _cfJournalCoinFilter = coin || 'ALL';
+  _cfJournalTradePage = 1;  // a narrower filter can have fewer pages
   if (_cfJournalData) _cfRenderTradeJournal(_cfJournalData);
 }
 
@@ -5853,11 +5891,18 @@ function _cfRenderTradeJournal(data) {
 
   var body = document.getElementById('cf-journal-body');
   if (!body) return;
+  var tradePager = document.getElementById('cf-journal-trades-pager');
   if (!trades.length) {
     body.innerHTML = '<tr><td colspan="11" class="cf-table-empty-cell">No trades for this filter.</td></tr>';
+    if (tradePager) tradePager.innerHTML = '';
     return;
   }
-  body.innerHTML = trades.map(function(t) {
+  var tradeTotalPages = Math.max(1, Math.ceil(trades.length / TABLE_PAGE_SIZE));
+  _cfJournalTradePage = Math.min(Math.max(_cfJournalTradePage, 1), tradeTotalPages);
+  var tradeStart = (_cfJournalTradePage - 1) * TABLE_PAGE_SIZE;
+  var pageTrades = trades.slice(tradeStart, tradeStart + TABLE_PAGE_SIZE);
+  if (tradePager) tradePager.innerHTML = _cfJournalPagerBar(trades.length, _cfJournalTradePage, '_cfSetJournalTradePage');
+  body.innerHTML = pageTrades.map(function(t) {
     var pnlTone = _cfJournalTone(t.pnl_usd);
     if (String(t.status || '') === 'Open') pnlTone = 'var(--muted)';
     var head = '<tr class="cf-journal-traderow" data-journal-trade="' + _escapeHtml(t.trade_id) + '"'
@@ -5887,7 +5932,7 @@ function _cfRenderTradeJournal(data) {
 
   var meta = document.getElementById('cf-journal-table-meta');
   if (meta) {
-    var bits = [trades.length + ' trade' + (trades.length === 1 ? '' : 's') + ' shown'];
+    var bits = [trades.length + ' trade' + (trades.length === 1 ? '' : 's') + ' total'];
     if (data.broker_synced) {
       bits.push(data.broker_trade_count + ' paired live from Binance (net of fees)');
     } else if (data.broker_error) {
@@ -5909,6 +5954,8 @@ function _cfRenderTradeJournal(data) {
 function _cfRenderJournalConverts(data) {
   var mount = document.getElementById('cf-journal-converts');
   if (!mount) return;
+  var pager = document.getElementById('cf-journal-converts-pager');
+  if (pager) pager.innerHTML = '';
   var rows = Array.isArray(data.converts) ? data.converts : [];
 
   if (data.convert_error) {
@@ -5926,11 +5973,17 @@ function _cfRenderJournalConverts(data) {
     return;
   }
 
+  var convertTotalPages = Math.max(1, Math.ceil(rows.length / TABLE_PAGE_SIZE));
+  _cfJournalConvertPage = Math.min(Math.max(_cfJournalConvertPage, 1), convertTotalPages);
+  var convertStart = (_cfJournalConvertPage - 1) * TABLE_PAGE_SIZE;
+  var pageRows = rows.slice(convertStart, convertStart + TABLE_PAGE_SIZE);
+  if (pager) pager.innerHTML = _cfJournalPagerBar(rows.length, _cfJournalConvertPage, '_cfSetJournalConvertPage');
+
   mount.innerHTML = '<div class="table-scroll"><table class="trade-table"><thead><tr>'
     + '<th>Date</th><th>Side</th><th>From</th><th>To</th>'
     + '<th class="num">Rate</th><th class="num">Value</th><th>Status</th>'
     + '</tr></thead><tbody>'
-    + rows.map(function(r) {
+    + pageRows.map(function(r) {
       var when = r.time ? new Date(Number(r.time)).toLocaleString() : '--';
       var tone = r.side === 'sell' ? 'var(--green,#3fae56)'
         : r.side === 'buy' ? 'var(--accent)' : 'var(--muted)';
@@ -9396,22 +9449,20 @@ function _cfChartBindZoom() {
   if (!body || body.dataset.zoomBound === '1') return;
   body.dataset.zoomBound = '1';
 
-  // Zooming on the wheel must not trap the dialog scroll. So:
-  //   • Ctrl/Cmd + wheel  → zoom, anywhere (the universal convention)
-  //   • plain wheel        → zoom ONLY when the chart is EXPANDED (fullscreen,
-  //                          where there is nothing to scroll to)
-  //   • plain wheel in the compact dialog → left alone, so it scrolls the
-  //                          dialog and the tables below stay reachable
-  // The previous version zoomed on any plain wheel over the chart, which is
-  // what trapped the page scroll while the dialog was open.
+  // Zooming on the wheel must not trap the scroll to the tables below. So:
+  //   • wheel over the CHART itself → zoom (compact or expanded). The chart
+  //                          lives in a modal, so there is no page scroll to
+  //                          trap; only the tables under the chart need the
+  //                          wheel, and those are not "over the chart".
+  //   • Ctrl/Cmd + wheel  → zoom anywhere (the universal convention)
+  //   • plain wheel over the tables → left alone, so the dialog scrolls and
+  //                          the tables below the chart stay reachable
   body.addEventListener('wheel', function(e) {
     var svg = _cfChartSvg();
     if (!svg) return;
-    var panel = document.getElementById('cf-cascade-chart-panel');
-    var expanded = !!panel && panel.classList.contains('cf-cascade-chart-fs');
     var overChart = svg === e.target || svg.contains(e.target);
-    var wantsZoom = (e.ctrlKey || e.metaKey) || (expanded && overChart);
-    if (!wantsZoom) return;  // let the wheel scroll the dialog
+    var wantsZoom = (e.ctrlKey || e.metaKey) || overChart;
+    if (!wantsZoom) return;  // let the wheel scroll the dialog to the tables
     e.preventDefault();
     cfCascadeZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
   }, { passive: false });
