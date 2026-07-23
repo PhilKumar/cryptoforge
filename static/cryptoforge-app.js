@@ -9173,19 +9173,19 @@ function _cfCascadeChartSvg(d) {
     // check. The money on the level goes in its label, not into its styling.
     // 0 and 1 only frame the swing; the buy levels are what you act on. Faint
     // enough to stay readable, quiet enough not to crowd them.
-    // Labels drop the "F" and wrap the price in brackets so the level number
-    // and the price never blur together — "1·0 (66,746.68)", not "F1 0 66,746.68".
-    // The middle dot keeps the fib number and the level readable once the F is
-    // gone (otherwise "1 0" reads as one number).
-    hline(leg.touch_high, col, leg.leg_id + '·0 (' + fmt(leg.touch_high) + ')', null, 0.8, 0.4);
-    hline(leg.low, col, leg.leg_id + '·1 (' + fmt(leg.low) + ')', null, 0.8, 0.4);
+    // Labels carry only the level and the bracketed price — no fib prefix at
+    // all. Which fib a line belongs to is already told by its COLOUR (fib 1
+    // blue, 2 green, 3 red, 4 purple; see the legend), so "F1·" in front of
+    // every label was redundant. Anchors read "0"/"1", buy levels "L2/L4/L8".
+    hline(leg.touch_high, col, '0 (' + fmt(leg.touch_high) + ')', null, 0.8, 0.4);
+    hline(leg.low, col, '1 (' + fmt(leg.low) + ')', null, 0.8, 0.4);
     [2, 4, 8].forEach(function (lv) {
       var p = leg.levels ? leg.levels[String(lv)] : null;
       if (p == null) return;
       var order = (leg.orders || []).find(function (o) { return o.level === lv; }) || {};
       var usd = Number(order.usd_notional) || 0;
       hline(Number(p), col,
-        leg.leg_id + '·L' + lv + ' (' + fmt(p) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
+        'L' + lv + ' (' + fmt(p) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
         null, 1.1, 0.9);
     });
     if (leg.touch_timestamp && inView(leg.touch_high)) {
