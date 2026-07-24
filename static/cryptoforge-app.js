@@ -8140,6 +8140,27 @@ var _CF_CASCADE_REASONS = {
   stopped: ['Stopped', 'muted']
 };
 
+// Three ways a campaign ends up on the timeframe it is running:
+//   initiate  — started on 5m off a recent or minor MC. Climbs the ladder.
+//   escalated — started as an initiate and has since outgrown 5m.
+//   older MC  — anchored deliberately to a bigger candle from the left. Fixed.
+function _cfCascadeTimeframePill(campaign) {
+  var tf = String(campaign.timeframe || '5m');
+  var note, why;
+  if (campaign.escalates === false) {
+    note = 'older MC';
+    why = 'Anchored deliberately to an older mother candle — keeps this timeframe for life, never escalates.';
+  } else if (tf === '5m') {
+    note = 'initiate';
+    why = 'Started on 5m off a recent or minor MC. Escalates 5m to 15m to 1H to 4H as it outgrows the screen.';
+  } else {
+    note = 'escalated';
+    why = 'Started on 5m and has since escalated. Capped at 4H.';
+  }
+  return '<span class="admin-pill" data-state="info" title="' + why + '">'
+    + _escapeHtml(tf.toUpperCase()) + ' · ' + note + '</span>';
+}
+
 function _cfCascadeCampaignCard(campaign) {
   var cid = _escapeHtml(campaign.campaign_id || '');
   var stateTone = campaign.state === 'TRENDLINE_ACTIVE' ? 'ok' : 'warn';
@@ -8193,19 +8214,11 @@ function _cfCascadeCampaignCard(campaign) {
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
     + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(stateLabel) + '</span>'
     + modeBadge
-    // The timeframe the engine steps this campaign on. Two campaigns on the
-    // same symbol can now be running on different candles, so the card has to
-    // say which — and whether this one is allowed to escalate.
-    + '<span class="admin-pill" data-state="info" title="'
-      + (campaign.escalates === false
-        ? 'Fixed timeframe — started deliberately from an older mother candle, never escalates.'
-        : 'Escalates 5m to 15m to 1H to 4H as the campaign outgrows the screen.')
-      + '">' + _escapeHtml(String(campaign.timeframe || '5m').toUpperCase())
-      + (campaign.escalates === false ? ' · fixed' : '') + '</span>'
-    + (campaign.mc_kind === 'minor'
-      ? '<span class="admin-pill" data-state="info" title="Sub-mother marked inside a move that was '
-        + 'already running — always 5m, whatever chart it was spotted on.">MINOR MC</span>'
-      : '')
+    // The timeframe the engine steps this campaign on, and how it got there.
+    // Two campaigns on the same symbol can now be running on different candles,
+    // so the card has to say which. One pill, not two: 5m and "initiate off a
+    // minor MC" are the same fact, so printing both just repeats it.
+    + _cfCascadeTimeframePill(campaign)
     + (campaign.stale_model
       ? '<span class="admin-pill" data-state="warn" title="The fib and trendline rules have changed since '
         + 'this campaign drew its structure, so what you see came from the older logic. Nothing is broken '
@@ -8866,10 +8879,11 @@ async function cfCascadeStartCampaign() {
   var motherLow = Number((document.getElementById('cf-cascade-mother-low') || {}).value || 0);
   var motherTimeRaw = (document.getElementById('cf-cascade-mother-time') || {}).value || '';
   var mode = (document.getElementById('cf-cascade-mode') || {}).value || 'paper';
-  var mcKind = (document.getElementById('cf-cascade-mc-kind') || {}).value || 'major';
-  // A minor MC is 5m by rule, not by choice — the picker is locked when one is
-  // selected, and the server forces it too, so a stale form cannot smuggle 1D in.
-  var timeframe = mcKind === 'minor' ? '5m' : ((document.getElementById('cf-cascade-timeframe') || {}).value || '5m');
+  // One picker, because the kind and the timeframe say the same thing: 5m IS
+  // "initiate off a minor MC", anything higher IS "older MC". The server
+  // derives the kind the same way, so the two can never drift apart.
+  var timeframe = (document.getElementById('cf-cascade-timeframe') || {}).value || '5m';
+  var mcKind = timeframe === '5m' ? 'minor' : 'major';
 
   if (!symbol.trim()) return _cfCascadeSetError('Enter a symbol (e.g. BTCUSDT).');
   if (!(capital > 0)) return _cfCascadeSetError('Enter the campaign capital in USD.');
@@ -9395,25 +9409,6 @@ function _cfCascadeChartHtml(d) {
 // its own mother candle off the left edge, and every line on the chart is
 // measured from that candle.
 var _cfCascadeChartTf = 'auto';
-
-// A minor MC — a sub-mother marked inside a move that is already running — is
-// always a 5m campaign, whatever chart it was spotted on. Looking at a 1D or 1H
-// chart does not make the minor high a 1D or 1H structure. So picking Minor
-// pins the timeframe to 5m and locks the picker rather than leaving a choice
-// that is only ever wrong.
-function cfCascadeSyncMcKind() {
-  var kind = (document.getElementById('cf-cascade-mc-kind') || {}).value || 'major';
-  var tf = document.getElementById('cf-cascade-timeframe');
-  if (!tf) return;
-  if (kind === 'minor') {
-    tf.value = '5m';
-    tf.disabled = true;
-    tf.title = 'A minor MC is always 5m, whatever chart you marked it on.';
-  } else {
-    tf.disabled = false;
-    tf.title = '';
-  }
-}
 
 function cfCascadeSetMode(mode) {
   var picked = mode === 'live' ? 'live' : 'paper';

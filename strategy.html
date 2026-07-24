@@ -1356,19 +1356,14 @@
           <input type="number" id="cf-cascade-capital" min="10" step="1" inputmode="decimal" value="2000">
         </div>
         <div class="input-group">
-          <label for="cf-cascade-mc-kind">Mother Candle</label>
-          <select id="cf-cascade-mc-kind" data-cf-change="cfCascadeSyncMcKind()">
-            <option value="major" selected>Major MC — this campaign's own anchor</option>
-            <option value="minor">Minor MC — sub-mother inside a move (always 5m)</option>
-          </select>
-        </div>
-        <div class="input-group">
           <label for="cf-cascade-timeframe">Timeframe</label>
           <select id="cf-cascade-timeframe">
-            <option value="5m" selected>5m — mother at the right edge</option>
-            <option value="4h">4H — older mother from the left, fixed</option>
-            <option value="1d">1D — older mother from the left, fixed</option>
-            <option value="1w">1W — older mother from the left, fixed</option>
+            <option value="5m" selected>5m — Initiate (Minor MC)</option>
+            <option value="15m">15m — Older MC</option>
+            <option value="1h">1H — Older MC</option>
+            <option value="4h">4H — Older MC</option>
+            <option value="1d">1D — Older MC</option>
+            <option value="1w">1W — Older MC</option>
           </select>
         </div>
         <div class="input-group">
@@ -1394,7 +1389,7 @@
           </div>
         </div>
         <div class="cf-cascade-form-note">Leave the time blank to auto-detect the mother candle from its high, on the timeframe picked above (5m looks back ~3.5 days).</div>
-        <div class="cf-cascade-form-note">A <strong>minor MC</strong> always starts on 5m, whatever chart you spotted it on — mark one while viewing 1D or 1H and it is still a 5m campaign, so the timeframe picker is locked. A <strong>major MC</strong> at the right-hand edge is 5m and escalates 5m → 15m → 1H → 4H as it outgrows the screen; read from the left it is 4H/1D/1W and never escalates.</div>
+        <div class="cf-cascade-form-note"><strong>5m — Initiate</strong> is a fresh campaign off a recent or minor MC, including a sub-mother marked inside a move already running. It stays 5m whatever chart you spotted it on, and it escalates 5m → 15m → 1H → 4H as it outgrows the screen. <strong>Older MC</strong> anchors deliberately to a bigger candle from the left and never escalates — it keeps the timeframe you start it on. A mother candle breaking above always restarts on 5m.</div>
       </div>
       <div class="allocator-actions">
         <button class="btn btn-primary" id="cf-cascade-start-btn" data-cf-click="cfCascadeStartCampaign()">Start Campaign</button>

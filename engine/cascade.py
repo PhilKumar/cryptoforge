@@ -190,20 +190,22 @@ TIMEFRAME_SECONDS = {
 # Capped at 4H on purpose: a 5m campaign quietly becoming a weekly position is
 # too big a change of character to happen by itself.
 ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
-# What may be picked when STARTING a campaign. The timeframe is not really a
-# free choice — it falls out of what KIND of mother candle is being set:
-#   MAJOR — the campaign's own anchor. Read off the right-hand edge it is 5m;
-#           read from the left, off an older and bigger candle, it is a 4H/1D/1W
-#           campaign started deliberately, and it keeps that timeframe for life.
-#   MINOR — a sub-mother marked inside a move that is already running. It is
-#           ALWAYS 5m, whatever chart it was spotted on. Phil's rule: viewing a
-#           1D or 1H chart and marking a minor MC still starts a 5m campaign,
-#           because the minor high is a small structure and only 5m candles
-#           resolve it. MC_KIND_TIMEFRAMES enforces this — the timeframe sent
-#           with a minor MC is ignored, never obeyed.
-# 15m and 1h exist as *running* timeframes (a 5m campaign escalates into them)
-# but are not offered as starting points, so the rule stays one sentence.
-CAMPAIGN_START_TIMEFRAMES = ("5m", "4h", "1d", "1w")
+# What may be picked when STARTING a campaign. There are only two situations,
+# and the timeframe IS the choice between them:
+#   5m                 — INITIATE, off a minor MC: a fresh campaign started at a
+#                        recent or minor high, including a sub-mother marked
+#                        inside a move that is already running. ALWAYS 5m,
+#                        whatever chart it was spotted on — viewing 1D or 1H and
+#                        marking a minor high does not make that high a 1D or 1H
+#                        structure, so a mc_kind of "minor" overrides any
+#                        timeframe sent with it.
+#   15m/1h/4h/1d/1w    — an OLDER MC, anchored deliberately to a bigger candle
+#                        from the left. These never escalate; the timeframe they
+#                        start on is the timeframe they keep. 15m and 1H are
+#                        also rungs a 5m campaign escalates INTO, which is a
+#                        different route to the same place and is fine: what
+#                        makes a campaign fixed is being STARTED there.
+CAMPAIGN_START_TIMEFRAMES = ("5m", "15m", "1h", "4h", "1d", "1w")
 MC_KINDS = ("major", "minor")
 MINOR_MC_TIMEFRAME = BASE_TIMEFRAME
 # How far back a mother candle may be anchored, measured in bars of the
@@ -1269,18 +1271,24 @@ class CascadeEngine:
         mother_timestamp: Optional[int] = None,
         mode: str = "paper",
         timeframe: str = BASE_TIMEFRAME,
-        mc_kind: str = "major",
+        mc_kind: str = "",
     ) -> dict:
         symbol = str(symbol or "").strip().upper()
         mode = "live" if str(mode or "").strip().lower() == "live" else "paper"
         timeframe = str(timeframe or BASE_TIMEFRAME).strip().lower() or BASE_TIMEFRAME
-        mc_kind = "minor" if str(mc_kind or "").strip().lower() == "minor" else "major"
-        # A minor MC is a sub-mother marked inside a move that is already
-        # running. It is always 5m, whatever chart it was spotted on — you can
-        # be looking at 1D, mark a minor high, and it still starts a 5m
-        # campaign. So the timeframe is not asked for here, it is decided.
-        if mc_kind == "minor":
-            timeframe = MINOR_MC_TIMEFRAME
+        # The kind and the timeframe say the same thing, so the UI only asks
+        # once: picking 5m IS picking "initiate / minor MC", and picking
+        # 4H/1D/1W IS picking "older MC". The explicit parameter stays for
+        # callers that want to be unambiguous — and asking for a minor MC still
+        # forces 5m, whatever timeframe came with it, because a minor high is a
+        # small structure no matter which chart it was spotted on.
+        asked = str(mc_kind or "").strip().lower()
+        if asked == "minor":
+            mc_kind, timeframe = "minor", MINOR_MC_TIMEFRAME
+        elif asked == "major":
+            mc_kind = "major"
+        else:
+            mc_kind = "minor" if timeframe == MINOR_MC_TIMEFRAME else "major"
         capital_usd = _coerce_float(capital_usd)
         mother_high = _coerce_float(mother_high)
         mother_low = _coerce_float(mother_low)
@@ -2929,13 +2937,14 @@ class CascadeEngine:
             mother_low=candle.low,
             mother_timestamp=candle.timestamp,
             mode=parent.mode,
-            # The break was seen on the parent's candle, so that candle IS the
-            # child's mother — the child necessarily runs on the same timeframe.
-            # It also inherits whether it may escalate: a 5m chain keeps
-            # climbing, a 1D chain stays on 1D.
-            timeframe=parent.timeframe,
-            escalates=parent.escalates,
-            mc_kind=parent.mc_kind,
+            # ALWAYS 5m, whatever the parent was running. Phil's rule: when the
+            # major mother candle breaks above, the whole campaign stops and
+            # restarts from that high on 5m. A 1D campaign does not spawn
+            # another 1D campaign — the break is a fresh start at a new high,
+            # and a fresh start is an initiate, which is a 5m minor MC.
+            timeframe=BASE_TIMEFRAME,
+            escalates=True,
+            mc_kind="minor",
             min_notional_usd=parent.min_notional_usd,
             tick_size=parent.tick_size,
             parent_campaign_id=parent.campaign_id,
@@ -2947,14 +2956,20 @@ class CascadeEngine:
             window_start_ts=candle.timestamp,
         )
         self.campaigns[child.campaign_id] = child
-        # The breaking candle is the mother, so history starts clean from it.
-        self._candles[child.campaign_id] = [candle]
+        # The breaking candle is the mother, so history starts clean from it —
+        # but only when it is a candle of the child's own size. A 1D parent
+        # breaks on a DAILY candle, and dropping that into a 5m history would
+        # leave one day-sized bar pretending to be a 5m one. Left empty, the
+        # next step fetches the real 5m candles from the mother forward.
+        self._candles[child.campaign_id] = [candle] if parent.timeframe == BASE_TIMEFRAME else []
         self._log_event(
             child,
             "start",
             f"Auto-started from the break of campaign #{parent.seq} — new mother candle "
             f"high {candle.high:,.2f} / low {candle.low:,.2f} ({child.mode.upper()}, "
-            f"generation {child.generation}). Nothing carried over.",
+            f"generation {child.generation}), restarting on {BASE_TIMEFRAME}"
+            + (f" from a {parent.timeframe} break" if parent.timeframe != BASE_TIMEFRAME else "")
+            + ". Nothing carried over.",
         )
         why = "broke above" if parent.close_reason == "mother_broken" else "was retested from below"
         self._alert(

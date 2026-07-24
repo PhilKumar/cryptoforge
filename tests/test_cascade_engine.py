@@ -2979,17 +2979,33 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(campaign.escalates)
         self.assertFalse(campaign.can_escalate)
 
-    async def test_only_the_four_start_timeframes_are_accepted(self):
-        """15m and 1H are rungs a 5m campaign climbs into, not starting points —
-        offering them would blur the one-sentence rule above."""
+    async def test_15m_and_1h_can_be_started_as_older_mcs(self):
+        """Phil wants to anchor an older MC on 15m or 1H sometimes. They are
+        also rungs a 5m campaign escalates INTO — a different route to the same
+        place. What makes a campaign fixed is being STARTED there."""
         engine = _mk_engine()
-        for bad in ("15m", "1h", "3m", "1M", ""):
-            result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe=bad)
-            if bad == "":
-                self.assertEqual(result["campaign"]["timeframe"], "5m")  # blank means default
-                continue
-            self.assertIn("error", result, f"{bad} must not be a starting timeframe")
+        for tf in ("15m", "1h"):
+            result = await engine.start_campaign(
+                "BTCUSDT",
+                2000,
+                105 + CAMPAIGN_START_TIMEFRAMES.index(tf),
+                99,
+                mother_timestamp=_RECENT_TS,
+                timeframe=tf,
+            )
+            self.assertEqual(result["campaign"]["timeframe"], tf)
+            self.assertEqual(result["campaign"]["mc_kind"], "major")
+            self.assertFalse(result["campaign"]["escalates"], f"a {tf} older MC must not escalate")
         engine.stop()
+
+    async def test_a_timeframe_off_the_list_is_still_refused(self):
+        engine = _mk_engine()
+        for bad in ("3m", "1M", "30m"):
+            result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe=bad)
+            self.assertIn("error", result, f"{bad} must not be a starting timeframe")
+        blank = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe="")
+        engine.stop()
+        self.assertEqual(blank["campaign"]["timeframe"], "5m", "blank means the 5m default")
 
     async def test_mother_age_is_measured_in_bars_not_days(self):
         """A weekly mother a year back is 52 bars — the whole point of 1W. The
@@ -3065,19 +3081,36 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(campaign.timeframe, "4h")
         self.assertFalse(campaign.escalates)
 
-    def test_an_auto_restart_child_inherits_the_timeframe(self):
-        """The break was seen on the parent's candle, so that candle IS the
-        child's mother — the child cannot be running on anything else."""
+    def test_an_auto_restart_always_comes_back_on_5m(self):
+        """Phil's rule: when the major mother candle breaks above, the whole
+        campaign stops and restarts from that high on 5m. A 1D campaign does not
+        spawn another 1D campaign — a fresh start is an initiate, and an
+        initiate is a 5m minor MC."""
         engine = _mk_engine()
         parent = _mk_campaign(engine)
         parent.timeframe = "1d"
         parent.escalates = False
+        parent.mc_kind = "major"
         parent.close_reason = "mother_broken"
         candle = Candle(timestamp=_RECENT_TS + 86400, open=106.0, high=110.0, low=105.0, close=109.0)
         child = engine._auto_restart(parent, candle)
         self.assertIsNotNone(child)
-        self.assertEqual(child.timeframe, "1d")
-        self.assertFalse(child.escalates)
+        self.assertEqual(child.timeframe, "5m")
+        self.assertTrue(child.escalates)
+        self.assertEqual(child.mc_kind, "minor")
+        self.assertEqual(child.mother_high, 110.0, "the new mother is that breaking high")
+        # The daily breaking candle must NOT be seeded into a 5m history — the
+        # next step fetches the real 5m candles from the mother forward.
+        self.assertEqual(engine._candles[child.campaign_id], [])
+
+    def test_a_5m_break_still_seeds_the_breaking_candle(self):
+        """Same-size candle, so it belongs in the child's history as-is."""
+        engine = _mk_engine()
+        parent = _mk_campaign(engine)
+        parent.close_reason = "mother_broken"
+        candle = Candle(timestamp=_RECENT_TS + 300, open=106.0, high=110.0, low=105.0, close=109.0)
+        child = engine._auto_restart(parent, candle)
+        self.assertEqual(engine._candles[child.campaign_id], [candle])
 
     def test_the_stall_watchdog_does_not_cry_wolf_at_a_daily_campaign(self):
         """15 minutes of silence is a stall on 5m and completely normal on 1D."""
