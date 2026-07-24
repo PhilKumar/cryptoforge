@@ -186,9 +186,12 @@ TIMEFRAME_SECONDS = {
     "1d": 86400,
     "1w": 7 * 86400,
 }
-# The ladder a 5m campaign climbs as it outgrows the screen (Phase 2 walks it).
-# Capped at 4H on purpose: a 5m campaign quietly becoming a weekly position is
-# too big a change of character to happen by itself.
+# The ladder a campaign climbs as it outgrows the screen (Phase 2 walks it).
+# Every rung climbs to the next one — 5m to 15m, 15m to 1H, 1H to 4H — so where
+# a campaign STARTS on the ladder only decides where it joins, not whether it
+# moves. Capped at 4H on purpose: a campaign quietly becoming a weekly position
+# is too big a change of character to happen by itself, which is also why 1D and
+# 1W are not on the ladder at all.
 ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
 # What may be picked when STARTING a campaign. There are only two situations,
 # and the timeframe IS the choice between them:
@@ -200,12 +203,15 @@ ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
 #                        structure, so a mc_kind of "minor" overrides any
 #                        timeframe sent with it.
 #   15m/1h/4h/1d/1w    — an OLDER MC, anchored deliberately to a bigger candle
-#                        from the left. These never escalate; the timeframe they
-#                        start on is the timeframe they keep. 15m and 1H are
-#                        also rungs a 5m campaign escalates INTO, which is a
-#                        different route to the same place and is fine: what
-#                        makes a campaign fixed is being STARTED there.
+#                        from the left.
+# Whether a campaign escalates is decided by the LADDER, not by which of those
+# two it is: start at 5m, 15m or 1H and it climbs toward the 4H cap. Start at
+# 4H, 1D or 1W and it is fixed — 4H because it is already the cap, 1D and 1W
+# because they are off the ladder by design.
 CAMPAIGN_START_TIMEFRAMES = ("5m", "15m", "1h", "4h", "1d", "1w")
+# The rungs that still have somewhere to climb to. Starting on one of these is
+# what makes a campaign an escalating one.
+ESCALATING_START_TIMEFRAMES = ESCALATION_LADDER[:-1]  # 5m, 15m, 1h
 MC_KINDS = ("major", "minor")
 MINOR_MC_TIMEFRAME = BASE_TIMEFRAME
 # How far back a mother candle may be anchored, measured in bars of the
@@ -606,9 +612,13 @@ class Campaign:
     # setting that changes what the geometry means. Escalation (Phase 2) moves
     # it UP the ladder; nothing ever moves it back down.
     timeframe: str = BASE_TIMEFRAME
-    # Whether this campaign may escalate at all. True only for campaigns
-    # started on 5m — the right-hand-edge and sub-mother cases. A campaign
-    # started deliberately on 4H/1D/1W keeps its timeframe for life.
+    # The rung it JOINED the ladder at, never changed afterwards. Without it a
+    # campaign sitting on 1H cannot say whether it was started there or climbed
+    # there, which are different things to read on a card.
+    start_timeframe: str = BASE_TIMEFRAME
+    # Whether this campaign climbs the ladder at all. True for campaigns started
+    # on 5m, 15m or 1H — every rung with somewhere above it to go. A campaign
+    # started on 4H (the cap), 1D or 1W keeps its timeframe for life.
     escalates: bool = True
     # "major" = this campaign's own anchor, the one whose timeframe you choose.
     # "minor" = a sub-mother marked inside a move that is already running, which
@@ -683,8 +693,13 @@ class Campaign:
 
     @property
     def can_escalate(self) -> bool:
-        """A 5m-born campaign that has not already reached the 4H cap."""
+        """A ladder-born campaign that has not already reached the 4H cap."""
         return bool(self.escalates) and self.timeframe != ESCALATION_LADDER[-1]
+
+    @property
+    def has_escalated(self) -> bool:
+        """It has climbed at least one rung since it was started."""
+        return self.timeframe != self.start_timeframe
 
     @property
     def active_trendline(self) -> Optional[Trendline]:
@@ -754,6 +769,7 @@ class Campaign:
             "mother_timestamp": self.mother_timestamp,
             "mode": self.mode,
             "timeframe": self.timeframe,
+            "start_timeframe": self.start_timeframe,
             "escalates": self.escalates,
             "mc_kind": self.mc_kind,
             "min_notional_usd": self.min_notional_usd,
@@ -814,6 +830,7 @@ class Campaign:
         for key in (
             "mode",
             "timeframe",
+            "start_timeframe",
             "escalates",
             "mc_kind",
             "min_notional_usd",
@@ -1374,9 +1391,10 @@ class CascadeEngine:
             mother_timestamp=mother_ts,
             mode=mode,
             timeframe=timeframe,
-            # Only a 5m campaign — right-hand edge or sub-mother — ever climbs
-            # the ladder. One started on 4H/1D/1W stays there for life.
-            escalates=timeframe == BASE_TIMEFRAME,
+            start_timeframe=timeframe,
+            # Every rung with somewhere above it climbs: 5m, 15m and 1H all
+            # escalate toward the 4H cap. 4H/1D/1W stay put for life.
+            escalates=timeframe in ESCALATING_START_TIMEFRAMES,
             mc_kind=mc_kind,
             min_notional_usd=min_notional,
             tick_size=tick_size,
@@ -1392,11 +1410,8 @@ class CascadeEngine:
             f"Campaign {campaign.campaign_id} started ({mode.upper()}) — {symbol} {timeframe}, "
             f"{mc_kind} MC, capital ${capital_usd:g}, "
             f"mother high {mother_high:g} / low {mother_low:g}"
-            + (
-                " — minor MC, so 5m regardless of the chart it was marked on"
-                if mc_kind == "minor"
-                else ("" if campaign.escalates else " — fixed timeframe, no escalation")
-            ),
+            + (" — minor MC, so 5m regardless of the chart it was marked on" if mc_kind == "minor" else "")
+            + (f" — climbs to {ESCALATION_LADDER[-1]}" if campaign.escalates else " — fixed timeframe, no escalation"),
         )
         self.start()
         self._emit_update()
@@ -1606,6 +1621,7 @@ class CascadeEngine:
             # Settings, not replay output. A recalc that reset these would
             # replay a 1D campaign as if it were 5m.
             "timeframe",
+            "start_timeframe",
             "escalates",
             "mc_kind",
             "min_notional_usd",
@@ -2943,6 +2959,7 @@ class CascadeEngine:
             # another 1D campaign — the break is a fresh start at a new high,
             # and a fresh start is an initiate, which is a 5m minor MC.
             timeframe=BASE_TIMEFRAME,
+            start_timeframe=BASE_TIMEFRAME,
             escalates=True,
             mc_kind="minor",
             min_notional_usd=parent.min_notional_usd,

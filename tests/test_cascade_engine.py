@@ -2979,12 +2979,12 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(campaign.escalates)
         self.assertFalse(campaign.can_escalate)
 
-    async def test_15m_and_1h_can_be_started_as_older_mcs(self):
-        """Phil wants to anchor an older MC on 15m or 1H sometimes. They are
-        also rungs a 5m campaign escalates INTO — a different route to the same
-        place. What makes a campaign fixed is being STARTED there."""
+    async def test_every_rung_with_somewhere_to_go_escalates(self):
+        """The LADDER decides escalation, not major/minor. 5m, 15m and 1H all
+        have a rung above them, so all three climb toward the 4H cap — a 15m
+        older MC escalates to 1H exactly like a 5m one escalates to 15m."""
         engine = _mk_engine()
-        for tf in ("15m", "1h"):
+        for tf in ("5m", "15m", "1h"):
             result = await engine.start_campaign(
                 "BTCUSDT",
                 2000,
@@ -2993,10 +2993,45 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
                 mother_timestamp=_RECENT_TS,
                 timeframe=tf,
             )
-            self.assertEqual(result["campaign"]["timeframe"], tf)
-            self.assertEqual(result["campaign"]["mc_kind"], "major")
-            self.assertFalse(result["campaign"]["escalates"], f"a {tf} older MC must not escalate")
+            campaign = engine.campaigns[result["campaign"]["campaign_id"]]
+            self.assertEqual(campaign.timeframe, tf)
+            self.assertTrue(campaign.escalates, f"{tf} has a rung above it, so it must climb")
+            self.assertTrue(campaign.can_escalate)
+            self.assertFalse(campaign.has_escalated, "it has not moved yet")
         engine.stop()
+
+    async def test_the_cap_and_the_off_ladder_timeframes_are_fixed(self):
+        """4H is fixed because it IS the cap; 1D and 1W because they are off the
+        ladder by design — a campaign must not drift into a weekly position."""
+        engine = _mk_engine()
+        mother_ts = (int(time.time()) - 30 * 86400) // 86400 * 86400
+        for tf in ("4h", "1d", "1w"):
+            result = await engine.start_campaign(
+                "BTCUSDT",
+                2000,
+                105 + CAMPAIGN_START_TIMEFRAMES.index(tf),
+                99,
+                mother_timestamp=mother_ts,
+                timeframe=tf,
+            )
+            campaign = engine.campaigns[result["campaign"]["campaign_id"]]
+            self.assertEqual(campaign.timeframe, tf)
+            self.assertFalse(campaign.escalates, f"{tf} must keep its timeframe for life")
+            self.assertFalse(campaign.can_escalate)
+        engine.stop()
+
+    async def test_the_start_rung_is_remembered_so_climbing_can_be_told_apart(self):
+        """A campaign sitting on 1H could have been started there or climbed
+        there. Those read differently on a card, so the start rung is kept."""
+        engine = _mk_engine()
+        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe="15m")
+        campaign = engine.campaigns[result["campaign"]["campaign_id"]]
+        engine.stop()
+        self.assertEqual(campaign.start_timeframe, "15m")
+        self.assertFalse(campaign.has_escalated)
+        campaign.timeframe = "1h"  # what Phase 2 will do
+        self.assertTrue(campaign.has_escalated)
+        self.assertEqual(campaign.start_timeframe, "15m", "the start rung never moves")
 
     async def test_a_timeframe_off_the_list_is_still_refused(self):
         engine = _mk_engine()

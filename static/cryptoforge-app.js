@@ -8140,25 +8140,30 @@ var _CF_CASCADE_REASONS = {
   stopped: ['Stopped', 'muted']
 };
 
-// Three ways a campaign ends up on the timeframe it is running:
-//   initiate  — started on 5m off a recent or minor MC. Climbs the ladder.
-//   escalated — started as an initiate and has since outgrown 5m.
-//   older MC  — anchored deliberately to a bigger candle from the left. Fixed.
+// How a campaign ended up on the timeframe it is running. "Started at 15m" and
+// "climbed to 15m" are different facts, so start_timeframe decides which is
+// shown rather than guessing from the timeframe alone.
 function _cfCascadeTimeframePill(campaign) {
   var tf = String(campaign.timeframe || '5m');
+  var start = String(campaign.start_timeframe || tf);
   var note, why;
-  if (campaign.escalates === false) {
-    note = 'older MC';
-    why = 'Anchored deliberately to an older mother candle — keeps this timeframe for life, never escalates.';
+  if (tf !== start) {
+    note = 'climbed from ' + start.toUpperCase();
+    why = 'Started on ' + start + ' and has escalated since. Capped at 4H.';
+  } else if (campaign.escalates === false) {
+    note = 'fixed';
+    why = tf === '4h'
+      ? 'Started at the 4H ladder cap — there is no rung above it, so it stays here.'
+      : 'Off the escalation ladder by design — 1D and 1W keep their timeframe for life.';
   } else if (tf === '5m') {
     note = 'initiate';
-    why = 'Started on 5m off a recent or minor MC. Escalates 5m to 15m to 1H to 4H as it outgrows the screen.';
+    why = 'Started on 5m off a recent or minor MC. Climbs 5m to 15m to 1H to 4H as it outgrows the screen.';
   } else {
-    note = 'escalated';
-    why = 'Started on 5m and has since escalated. Capped at 4H.';
+    note = 'older MC · climbs';
+    why = 'Anchored to an older mother candle at ' + tf + ', and still climbs toward the 4H cap.';
   }
   return '<span class="admin-pill" data-state="info" title="' + why + '">'
-    + _escapeHtml(tf.toUpperCase()) + ' · ' + note + '</span>';
+    + _escapeHtml(tf.toUpperCase()) + ' · ' + _escapeHtml(note) + '</span>';
 }
 
 function _cfCascadeCampaignCard(campaign) {
