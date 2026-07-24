@@ -6748,6 +6748,7 @@ def _snapshot_cascade_runtime(status: dict) -> dict:
         "saved_at": str(datetime.now()),
         "campaigns": list(status.get("campaigns") or []),
         "closed_campaigns": list(status.get("closed_campaigns") or [])[-20:],
+        "capital_groups": dict(status.get("capital_groups") or {}),
     }
 
 
@@ -6885,6 +6886,9 @@ def _restore_cascade_runtime(engine: "CascadeEngine") -> bool:
     # deploy silently emptied the Closed Campaigns table.
     engine.load_closed_campaigns(_load_cascade_closed())
     runtime_state = _load_cascade_runtime()
+    # Groups restore even when no campaigns do — a budget set while everything
+    # was flat must still be standing when the next campaign starts.
+    engine.load_capital_groups(runtime_state.get("capital_groups") or {})
     snapshots = runtime_state.get("campaigns") or []
     if not snapshots:
         return False
@@ -7195,6 +7199,21 @@ async def cascade_start_campaign(request: Request):
         timeframe=str(body.get("timeframe") or "5m"),
         mc_kind=str(body.get("mc_kind") or "major"),
     )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
+@app.post("/api/cascade/capital-groups")
+async def cascade_set_capital_group(request: Request):
+    """Set (budget > 0) or clear (budget 0/blank) a symbol's capital group."""
+    check_rate_limit("cascade_group", max_calls=6, window_sec=10)
+    body = await _read_json_body(request)
+    eng = _get_cascade_engine()
+    if not eng.campaigns:
+        _restore_cascade_runtime(eng)
+    result = eng.set_capital_group(str(body.get("symbol") or ""), body.get("budget_usd") or body.get("budget") or 0)
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     _persist_cascade_runtime_snapshot(eng)

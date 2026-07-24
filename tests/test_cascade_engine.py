@@ -3242,3 +3242,224 @@ class CascadeMinorMotherCandleTests(unittest.IsolatedAsyncioTestCase):
         # A snapshot written before the field existed is a major MC.
         legacy = Campaign.from_dict({"campaign_id": "old", "symbol": "BTCUSDT"})
         self.assertEqual(legacy.mc_kind, "major")
+
+
+class CascadeEscalationTests(unittest.TestCase):
+    """Phase 2: a campaign climbs one rung when it outgrows ~200 bars.
+
+    Forward-only, per Phil: everything already built — trendlines, fibs, the
+    pot, resting orders — is frozen untouched; only structure drawn AFTER the
+    switch uses the new timeframe. A pot mid-arm finishes on its old timeframe
+    (the switch waits). The mother high is never touched.
+    """
+
+    # Aligned so the arithmetic is inspectable: mother on a 15m boundary, and
+    # the trigger candle closes exactly on one (ts % 900 == 600 means the 5m
+    # candle's close lands on a 15m bucket end).
+    MOTHER = 900000
+    TRIGGER = 960900  # (960900 + 300 - 900000) / 300 = 204 bars > 200
+
+    def _aged_campaign(self, engine):
+        campaign = _mk_campaign(engine)
+        campaign.mother_timestamp = self.MOTHER
+        campaign.state = "TRENDLINE_ACTIVE"
+        history = engine._candles.setdefault(campaign.campaign_id, [])
+        # 203 candles: the last one opens at TRIGGER and closes at TRIGGER+300,
+        # which is exactly a 15m bucket end — the moment the switch is allowed.
+        for i in range(203):
+            ts = self.MOTHER + (i + 1) * 300
+            history.append(Candle(timestamp=ts, open=100.0, high=101.0, low=99.0, close=100.5))
+        return campaign
+
+    def test_it_climbs_to_15m_and_aggregates_its_history(self):
+        engine = _mk_engine()
+        campaign = self._aged_campaign(engine)
+        candle = engine._candles[campaign.campaign_id][-1]
+        self.assertEqual(candle.timestamp, self.TRIGGER)
+        self.assertTrue(engine._maybe_escalate(campaign, candle))
+        self.assertEqual(campaign.timeframe, "15m")
+        self.assertEqual(campaign.start_timeframe, "5m", "the start rung never moves")
+        self.assertTrue(campaign.has_escalated)
+        history = engine._candles[campaign.campaign_id]
+        self.assertTrue(all(c.timestamp % 900 == 0 for c in history), "history is 15m buckets now")
+        self.assertEqual(len(history), 68)  # 204 five-minute bars = 68 buckets
+        # Next fetch must start at the NEXT bucket: strict > of this open ts.
+        self.assertEqual(campaign.last_processed_ts, self.TRIGGER + 300 - 900)
+
+    def test_it_waits_for_a_bucket_boundary(self):
+        engine = _mk_engine()
+        campaign = self._aged_campaign(engine)
+        mid_bucket = Candle(timestamp=self.TRIGGER + 300, open=100, high=101, low=99, close=100)
+        self.assertFalse(engine._maybe_escalate(campaign, mid_bucket))
+        self.assertEqual(campaign.timeframe, "5m")
+
+    def test_a_pot_mid_arm_defers_the_switch(self):
+        """Phil's explicit call: mid-arm finishes on the old timeframe."""
+        engine = _mk_engine()
+        campaign = self._aged_campaign(engine)
+        campaign.pending_stop_price = 100.5  # a buy stop is armed and walking
+        candle = engine._candles[campaign.campaign_id][-1]
+        self.assertFalse(engine._maybe_escalate(campaign, candle))
+        self.assertEqual(campaign.timeframe, "5m")
+        campaign.pending_stop_price = None  # the arm settled
+        self.assertTrue(engine._maybe_escalate(campaign, candle))
+
+    def test_everything_already_built_is_frozen(self):
+        engine = _mk_engine()
+        campaign = self._aged_campaign(engine)
+        leg = Leg(leg_id=1, trendline_id=1, low=95.0, touch_high=98.0, touch_timestamp=100)
+        campaign.legs.append(leg)
+        build_fib_ladder_and_pool(campaign, leg)
+        plan_leg_orders(campaign, leg)
+        campaign.pending_usd = 7.6  # the pot
+        before_prices = {lv: o.price for lv, o in leg.pending_orders.items()}
+        before_tls = len(campaign.trendlines)
+        candle = engine._candles[campaign.campaign_id][-1]
+        self.assertTrue(engine._maybe_escalate(campaign, candle))
+        self.assertEqual({lv: o.price for lv, o in leg.pending_orders.items()}, before_prices)
+        self.assertEqual(len(campaign.trendlines), before_tls)
+        self.assertEqual(campaign.pending_usd, 7.6, "the pot is frozen, not reset")
+        self.assertEqual(campaign.mother_high, 105.0, "the mother high is never touched")
+
+    def test_it_stops_at_the_4h_cap_and_fixed_campaigns_never_climb(self):
+        engine = _mk_engine()
+        campaign = self._aged_campaign(engine)
+        campaign.timeframe = "4h"
+        candle = engine._candles[campaign.campaign_id][-1]
+        self.assertFalse(engine._maybe_escalate(campaign, candle))
+        campaign.timeframe = "1d"
+        campaign.escalates = False
+        self.assertFalse(engine._maybe_escalate(campaign, candle))
+        self.assertEqual(campaign.timeframe, "1d")
+
+    def test_a_young_campaign_stays_put(self):
+        engine = _mk_engine()
+        campaign = self._aged_campaign(engine)
+        early = Candle(timestamp=self.MOTHER + 30 * 300 + 600, open=100, high=101, low=99, close=100)
+        self.assertFalse(engine._maybe_escalate(campaign, early))
+        self.assertEqual(campaign.timeframe, "5m")
+
+    def test_the_switch_is_written_to_the_event_log(self):
+        engine = _mk_engine()
+        campaign = self._aged_campaign(engine)
+        candle = engine._candles[campaign.campaign_id][-1]
+        engine._maybe_escalate(campaign, candle)
+        messages = [e["message"] for e in campaign.event_log if e.get("level") == "escalate"]
+        self.assertTrue(any("5m -> 15m" in m for m in messages))
+
+
+class CascadeCapitalGroupTests(unittest.IsolatedAsyncioTestCase):
+    """Phase 3: one budget per symbol, shared by its campaigns.
+
+    A new campaign takes at most what active siblings have not committed,
+    measured once at creation and fixed after. No group set = typed capital,
+    unchanged — existing campaigns and flows must keep working exactly as
+    before.
+    """
+
+    async def test_without_a_group_the_typed_capital_is_used_unchanged(self):
+        engine = _mk_engine()
+        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS)
+        engine.stop()
+        self.assertEqual(result["campaign"]["capital_usd"], 2000)
+
+    async def test_siblings_share_one_budget(self):
+        engine = _mk_engine()
+        engine.set_capital_group("ETHUSDT", 1000)
+        first = await engine.start_campaign("ETHUSDT", 600, 105, 99, mother_timestamp=_RECENT_TS)
+        self.assertEqual(first["campaign"]["capital_usd"], 600, "typing less than the remainder is allowed")
+        second = await engine.start_campaign("ETHUSDT", 2000, 106, 99, mother_timestamp=_RECENT_TS)
+        self.assertEqual(second["campaign"]["capital_usd"], 400, "capped to what is left")
+        third = await engine.start_campaign("ETHUSDT", 500, 107, 99, mother_timestamp=_RECENT_TS)
+        engine.stop()
+        self.assertIn("error", third)
+        self.assertIn("exhausted", third["error"])
+
+    async def test_an_ended_campaign_frees_its_capital(self):
+        engine = _mk_engine()
+        engine.set_capital_group("ETHUSDT", 1000)
+        first = await engine.start_campaign("ETHUSDT", 1000, 105, 99, mother_timestamp=_RECENT_TS)
+        blocked = await engine.start_campaign("ETHUSDT", 500, 106, 99, mother_timestamp=_RECENT_TS)
+        self.assertIn("error", blocked)
+        engine.campaigns[first["campaign"]["campaign_id"]].state = "COMPLETED"
+        after = await engine.start_campaign("ETHUSDT", 500, 106, 99, mother_timestamp=_RECENT_TS)
+        engine.stop()
+        self.assertEqual(after["campaign"]["capital_usd"], 500)
+
+    async def test_the_snapshot_is_fixed_raising_the_budget_later_changes_nothing(self):
+        engine = _mk_engine()
+        engine.set_capital_group("ETHUSDT", 1000)
+        first = await engine.start_campaign("ETHUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS)
+        self.assertEqual(first["campaign"]["capital_usd"], 1000)
+        engine.set_capital_group("ETHUSDT", 5000)
+        engine.stop()
+        campaign = engine.campaigns[first["campaign"]["campaign_id"]]
+        self.assertEqual(campaign.capital_usd, 1000, "measured once at creation, fixed after")
+
+    async def test_groups_only_touch_their_own_symbol(self):
+        engine = _mk_engine()
+        engine.set_capital_group("ETHUSDT", 100)
+        btc = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS)
+        engine.stop()
+        self.assertEqual(btc["campaign"]["capital_usd"], 2000)
+
+    def test_an_auto_restart_child_is_clamped_to_what_is_left(self):
+        engine = _mk_engine()
+        parent = _mk_campaign(engine)
+        parent.close_reason = "mother_broken"
+        parent.state = "MOTHER_BROKEN"  # already archived — its capital is back in the pool
+        engine.set_capital_group("BTCUSDT", 1500)
+        sibling = Campaign(
+            campaign_id="sib1",
+            symbol="BTCUSDT",
+            capital_usd=1200,
+            mother_high=104.0,
+            mother_low=98.0,
+            mother_timestamp=1,
+            state="TRENDLINE_ACTIVE",
+        )
+        engine.campaigns[sibling.campaign_id] = sibling
+        candle = Candle(timestamp=_RECENT_TS + 300, open=106.0, high=110.0, low=105.0, close=109.0)
+        child = engine._auto_restart(parent, candle)
+        self.assertIsNotNone(child)
+        self.assertEqual(child.capital_usd, 300, "parent wanted 2000, the group had 300 left")
+
+    def test_an_exhausted_group_blocks_the_restart_loudly(self):
+        engine = _mk_engine()
+        parent = _mk_campaign(engine)
+        parent.close_reason = "mother_broken"
+        parent.state = "MOTHER_BROKEN"
+        engine.set_capital_group("BTCUSDT", 1200)
+        sibling = Campaign(
+            campaign_id="sib1",
+            symbol="BTCUSDT",
+            capital_usd=1195,
+            mother_high=104.0,
+            mother_low=98.0,
+            mother_timestamp=1,
+            state="TRENDLINE_ACTIVE",
+        )
+        engine.campaigns[sibling.campaign_id] = sibling
+        alerts = []
+        engine.on_alert = lambda title, body, level="warn": alerts.append(title)
+        candle = Candle(timestamp=_RECENT_TS + 300, open=106.0, high=110.0, low=105.0, close=109.0)
+        child = engine._auto_restart(parent, candle)
+        self.assertIsNone(child)
+        self.assertTrue(any("capital group" in t.lower() for t in alerts), "silence here would strand the chain")
+
+    def test_status_reports_and_zero_removes(self):
+        engine = _mk_engine()
+        engine.set_capital_group("ETHUSDT", 1000)
+        campaign = _mk_campaign(engine)  # BTCUSDT, not in the group
+        groups = engine.get_status()["capital_groups"]
+        self.assertEqual(groups["ETHUSDT"]["available_usd"], 1000)
+        engine.set_capital_group("ETHUSDT", 0)
+        self.assertEqual(engine.get_status()["capital_groups"], {})
+
+    def test_groups_survive_a_snapshot_round_trip(self):
+        engine = _mk_engine()
+        engine.set_capital_group("ETHUSDT", 1000)
+        saved = engine.get_status()["capital_groups"]
+        fresh = _mk_engine()
+        fresh.load_capital_groups(saved)
+        self.assertEqual(fresh.capital_groups, {"ETHUSDT": 1000})

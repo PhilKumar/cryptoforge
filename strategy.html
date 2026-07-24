@@ -1356,6 +1356,13 @@
           <input type="number" id="cf-cascade-capital" min="10" step="1" inputmode="decimal" value="2000">
         </div>
         <div class="input-group">
+          <label for="cf-cascade-group-budget">Group Budget $ (per symbol, optional)</label>
+          <div style="display:flex;gap:6px;">
+            <input type="number" id="cf-cascade-group-budget" min="0" step="1" inputmode="decimal" placeholder="1000" style="flex:1;min-width:0;">
+            <button type="button" class="btn btn-outline btn-sm" data-cf-click="cfCascadeSaveCapitalGroup()">Set</button>
+          </div>
+        </div>
+        <div class="input-group">
           <label for="cf-cascade-timeframe">Timeframe</label>
           <select id="cf-cascade-timeframe">
             <option value="5m" selected>5m — Initiate (Minor MC) · climbs to 4H</option>
@@ -1390,6 +1397,8 @@
         </div>
         <div class="cf-cascade-form-note">Leave the time blank to auto-detect the mother candle from its high, on the timeframe picked above (5m looks back ~3.5 days).</div>
         <div class="cf-cascade-form-note"><strong>5m — Initiate</strong> is a fresh campaign off a recent or minor MC, including a sub-mother marked inside a move already running; it stays 5m whatever chart you spotted it on. <strong>Older MC</strong> anchors deliberately to a bigger candle from the left. Either way the ladder decides escalation, not the kind: <strong>5m, 15m and 1H all climb</strong> to the next rung as they outgrow the screen (5m → 15m → 1H → 4H), and <strong>4H, 1D and 1W are fixed</strong> — 4H because it is the cap, 1D and 1W because they are off the ladder. A mother candle breaking above always restarts on 5m.</div>
+        <div class="cf-cascade-form-note">With a <strong>group budget</strong> set for a symbol, its campaigns share that one pot: a new campaign takes at most what running siblings have not committed, snapshotted at start. Set the budget to 0 to remove the group and go back to independent capital.</div>
+        <div id="cf-cascade-groups" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;"></div>
       </div>
       <div class="allocator-actions">
         <button class="btn btn-primary" id="cf-cascade-start-btn" data-cf-click="cfCascadeStartCampaign()">Start Campaign</button>

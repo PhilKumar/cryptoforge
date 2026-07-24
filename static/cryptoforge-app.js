@@ -7990,7 +7990,55 @@ function cfRenderCascadeStatus(data) {
   cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
+  cfRenderCascadeGroups(data.capital_groups || {});
   cfRenderCascadeLedger(data);
+}
+
+// One line per capital group: budget, what running campaigns hold, what a new
+// campaign could take. No groups set = the block stays hidden and campaigns
+// take their typed capital, exactly as before groups existed.
+function cfRenderCascadeGroups(groups) {
+  var mount = document.getElementById('cf-cascade-groups');
+  if (!mount) return;
+  var symbols = Object.keys(groups);
+  if (!symbols.length) {
+    mount.style.display = 'none';
+    mount.innerHTML = '';
+    return;
+  }
+  var rows = symbols.map(function(sym) {
+    var g = groups[sym] || {};
+    var available = Number(g.available_usd) || 0;
+    return '<div class="table-meta" style="display:flex;justify-content:space-between;gap:8px;">'
+      + '<span><strong>' + _escapeHtml(sym) + '</strong> group</span>'
+      + '<span>$' + _cfCascadeUsd(g.committed_usd) + ' committed · '
+      + '<strong style="color:' + (available > 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)') + ';">$'
+      + _cfCascadeUsd(available) + '</strong> free of $' + _cfCascadeUsd(g.budget_usd) + '</span>'
+      + '</div>';
+  }).join('');
+  mount.innerHTML = rows;
+  mount.style.display = '';
+}
+
+async function cfCascadeSaveCapitalGroup() {
+  var symbol = (document.getElementById('cf-cascade-symbol') || {}).value || '';
+  var budget = Number((document.getElementById('cf-cascade-group-budget') || {}).value || 0);
+  if (!symbol.trim()) return cfToast('Pick a symbol first', 'danger');
+  try {
+    var response = await cfApiFetch('/api/cascade/capital-groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: symbol.trim().toUpperCase(), budget_usd: budget })
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Failed to save group'));
+    cfToast(budget > 0
+      ? symbol.toUpperCase() + ' group set to $' + _cfCascadeUsd(budget)
+      : symbol.toUpperCase() + ' group removed', 'success');
+    cfLoadCascadeStatus(false);
+  } catch (error) {
+    cfToast('Group save failed: ' + error.message, 'danger');
+  }
 }
 
 var _CF_LEVEL_SHARE = { 2: 20, 4: 30, 8: 50 };

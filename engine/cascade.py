@@ -212,6 +212,11 @@ CAMPAIGN_START_TIMEFRAMES = ("5m", "15m", "1h", "4h", "1d", "1w")
 # The rungs that still have somewhere to climb to. Starting on one of these is
 # what makes a campaign an escalating one.
 ESCALATING_START_TIMEFRAMES = ESCALATION_LADDER[:-1]  # 5m, 15m, 1h
+# When a campaign has more bars than this behind it on its current rung, it has
+# outgrown the screen and climbs to the next one. 200 matches the chart budget:
+# the campaign chart draws its last ~200 buckets, so past this the mother candle
+# starts sliding off the left edge of its own chart.
+ESCALATION_BARS = 200
 MC_KINDS = ("major", "minor")
 MINOR_MC_TIMEFRAME = BASE_TIMEFRAME
 # How far back a mother candle may be anchored, measured in bars of the
@@ -1104,6 +1109,12 @@ class CascadeEngine:
         self._sync_interval_sec = 10.0
         self._last_candle_ts = 0.0  # monotonic time of the last processed candle, for stall detection
         self._stall_alerted = False
+        # Capital group per instrument: one budget per symbol, typed in once.
+        # A new campaign's capital = budget − what active siblings already
+        # committed, snapshotted at creation and fixed after. No entry for a
+        # symbol means no group — campaigns take their typed capital unchanged,
+        # which is exactly the pre-group behaviour.
+        self.capital_groups: Dict[str, float] = {}
         # See _acquire_write_lock: only the holder places orders.
         self._lock_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cascade-writer.lock"
@@ -1277,6 +1288,57 @@ class CascadeEngine:
             except Exception as exc:
                 _log.warning("[CASCADE] on_update callback failed: %s", exc)
 
+    # ── capital groups ───────────────────────────────────────────
+
+    def set_capital_group(self, symbol: str, budget_usd) -> dict:
+        """Set (or clear, with 0/blank) the one budget a symbol's campaigns share."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return {"error": "Symbol is required"}
+        budget = _coerce_float(budget_usd)
+        if budget <= 0:
+            existed = self.capital_groups.pop(symbol, None) is not None
+            self._emit_update()
+            return {"status": "ok", "symbol": symbol, "removed": existed}
+        committed = self.group_committed_usd(symbol)
+        self.capital_groups[symbol] = budget
+        self._emit_update()
+        return {
+            "status": "ok",
+            "symbol": symbol,
+            "budget_usd": budget,
+            "committed_usd": round(committed, 2),
+            "available_usd": round(budget - committed, 2),
+        }
+
+    def group_committed_usd(self, symbol: str) -> float:
+        """What the symbol's ACTIVE campaigns hold of the group budget.
+
+        A campaign commits its full capital_usd for its whole life — resting
+        orders are promises against it even before they fill — and releases it
+        only by ending. Ended campaigns are out of the sum, so their capital
+        flows back to the group automatically.
+        """
+        return sum(c.capital_usd for c in self.campaigns.values() if c.symbol == symbol and c.state in ACTIVE_STATES)
+
+    def capital_group_status(self) -> Dict[str, dict]:
+        out = {}
+        for symbol, budget in sorted(self.capital_groups.items()):
+            committed = self.group_committed_usd(symbol)
+            out[symbol] = {
+                "budget_usd": budget,
+                "committed_usd": round(committed, 2),
+                "available_usd": round(budget - committed, 2),
+            }
+        return out
+
+    def load_capital_groups(self, groups: dict) -> None:
+        """Seed groups from the persisted snapshot on restart."""
+        for symbol, value in (groups or {}).items():
+            budget = _coerce_float(value.get("budget_usd") if isinstance(value, dict) else value)
+            if budget > 0:
+                self.capital_groups[str(symbol).strip().upper()] = budget
+
     # ── public API ───────────────────────────────────────────────
 
     async def start_campaign(
@@ -1332,6 +1394,26 @@ class CascadeEngine:
             return {"error": f"Symbol {symbol} not found on {getattr(self.broker, 'display_name', 'broker')}"}
         min_notional = max(_coerce_float(product.get("min_notional"), min_notional), MIN_NOTIONAL_FLOOR_USD)
         tick_size = _coerce_float(product.get("tick_size"), DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
+        # Capital group: when the symbol has a budget, a new campaign may only
+        # take what its active siblings have not already committed — measured
+        # once, HERE, and fixed for the campaign's life. Typing less than the
+        # remainder is allowed (holding some back for the next minor MC is a
+        # reasonable thing to do); typing more is quietly capped to it.
+        group_budget = _coerce_float(self.capital_groups.get(symbol))
+        group_note = ""
+        if group_budget > 0:
+            available = group_budget - self.group_committed_usd(symbol)
+            if available < min_notional * 2:
+                return {
+                    "error": (
+                        f"{symbol} capital group is exhausted: ${group_budget:g} budget, "
+                        f"${group_budget - available:,.2f} committed by running campaigns, "
+                        f"${max(available, 0):,.2f} left. Stop a sibling campaign or raise the budget."
+                    )
+                }
+            if capital_usd <= 0 or capital_usd > available:
+                capital_usd = available
+            group_note = f" (capital group: ${capital_usd:,.2f} of ${available:,.2f} available)"
         if capital_usd < min_notional * 2:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
 
@@ -1411,7 +1493,8 @@ class CascadeEngine:
             f"{mc_kind} MC, capital ${capital_usd:g}, "
             f"mother high {mother_high:g} / low {mother_low:g}"
             + (" — minor MC, so 5m regardless of the chart it was marked on" if mc_kind == "minor" else "")
-            + (f" — climbs to {ESCALATION_LADDER[-1]}" if campaign.escalates else " — fixed timeframe, no escalation"),
+            + (f" — climbs to {ESCALATION_LADDER[-1]}" if campaign.escalates else " — fixed timeframe, no escalation")
+            + group_note,
         )
         self.start()
         self._emit_update()
@@ -1566,6 +1649,7 @@ class CascadeEngine:
             "closed_campaigns": list(self.closed_campaigns[-40:]),
             "active_count": len(self.active_campaigns),
             "live_count": len(self.live_campaigns),
+            "capital_groups": self.capital_group_status(),
             "updated_at": _ist_now_str(),
         }
 
@@ -2122,7 +2206,69 @@ class CascadeEngine:
             changed = True
             if campaign.state not in ACTIVE_STATES:
                 break
+            if self._maybe_escalate(campaign, candle):
+                # The rest of the batch is candles of the OLD timeframe. They
+                # must not be stepped as if nothing happened — the next tick
+                # fetches fresh candles at the new timeframe instead.
+                break
         return changed
+
+    def _maybe_escalate(self, campaign: Campaign, candle: Candle) -> bool:
+        """Climb one rung when the campaign has outgrown its current one.
+
+        Forward-only, by design (Phil's calls, all three):
+          - everything already built — trendlines, fibs, the pot, resting
+            orders — is frozen untouched; only structure drawn AFTER the switch
+            uses the new timeframe
+          - a pot that is mid-arm (a buy stop armed and walking the fall)
+            finishes on its OLD timeframe: the switch waits until the stop
+            fills or disarms
+          - the mother candle's high is never touched
+        The switch itself only happens on a candle that closes exactly on a
+        new-timeframe bucket boundary, so the aggregated history has no partial
+        bucket and the next fetch starts clean at the next bucket.
+        """
+        if not campaign.can_escalate:
+            return False
+        if campaign.pending_stop_price is not None:
+            return False  # mid-arm — finish the arm on the old timeframe first
+        old_sec = campaign.timeframe_sec
+        bars = (candle.timestamp + old_sec - campaign.mother_timestamp) / old_sec
+        if bars <= ESCALATION_BARS:
+            return False
+        new_tf = next_timeframe_up(campaign.timeframe)
+        new_sec = timeframe_seconds(new_tf)
+        if (candle.timestamp + old_sec) % new_sec != 0:
+            return False  # wait for the candle that completes a new-TF bucket
+        old_tf = campaign.timeframe
+        history = self._candles.get(campaign.campaign_id) or []
+        self._candles[campaign.campaign_id] = self._aggregate_candles(history, new_sec, old_sec)
+        campaign.timeframe = new_tf
+        # The open of the last COMPLETE new-TF bucket, so the next fetch's
+        # strict `> last_processed_ts` starts exactly at the next bucket —
+        # no re-processed candles, no gap.
+        campaign.last_processed_ts = candle.timestamp + old_sec - new_sec
+        self._log_event(
+            campaign,
+            "escalate",
+            f"Escalated {old_tf} -> {new_tf} after {bars:.0f} {old_tf} bars. Everything already "
+            f"built is frozen — existing trendlines, fibs, the pot and resting orders are "
+            f"untouched; only new structure is drawn on {new_tf} candles.",
+        )
+        self._alert(
+            "Cascade escalated",
+            f"{campaign.symbol} #{campaign.seq} outgrew {old_tf} ({bars:.0f} bars since the "
+            f"mother candle) and now steps {new_tf} candles.\n\n"
+            f"Nothing already built was changed. "
+            + (
+                f"Next rung: {next_timeframe_up(new_tf)}."
+                if campaign.can_escalate
+                else "This is the 4H cap — it stays here."
+            ),
+            level="info",
+            dedupe_sec=60.0,
+        )
+        return True
 
     def _candles_between(self, campaign: Campaign, until_ts: int) -> List[Candle]:
         history = self._candles.get(campaign.campaign_id, [])
@@ -2944,11 +3090,37 @@ class CascadeEngine:
         if self._active_duplicate(parent.symbol, candle.timestamp, candle.high) is not None:
             return None  # this candle already anchors a running campaign
 
+        # The child wants the parent's capital, but never more than the capital
+        # group has left. The parent is already archived (its state is final),
+        # so its own capital has flowed back and normally covers the child in
+        # full — the clamp only bites when siblings grabbed budget in between.
+        child_capital = parent.capital_usd
+        group_budget = _coerce_float(self.capital_groups.get(parent.symbol))
+        if group_budget > 0:
+            available = group_budget - self.group_committed_usd(parent.symbol)
+            child_capital = min(child_capital, available)
+            if child_capital < parent.min_notional_usd * 2:
+                self._log_event(
+                    parent,
+                    "warn",
+                    f"Mother break would auto-restart, but the {parent.symbol} capital group has "
+                    f"only ${max(available, 0):,.2f} left of ${group_budget:g}. No restart — stop "
+                    f"a sibling campaign or raise the budget, then start one by hand.",
+                )
+                self._alert(
+                    "Cascade restart blocked — capital group exhausted",
+                    f"{parent.symbol} #{parent.seq} ended on a mother break, but the capital group "
+                    f"has ${max(available, 0):,.2f} left of ${group_budget:g}, so no successor "
+                    f"was started.",
+                    level="warn",
+                )
+                return None
+
         child = Campaign(
             campaign_id=uuid.uuid4().hex[:10],
             seq=self._next_seq(),
             symbol=parent.symbol,
-            capital_usd=parent.capital_usd,
+            capital_usd=child_capital,
             mother_high=candle.high,
             mother_low=candle.low,
             mother_timestamp=candle.timestamp,
