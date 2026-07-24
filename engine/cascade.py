@@ -1339,6 +1339,57 @@ class CascadeEngine:
             if budget > 0:
                 self.capital_groups[str(symbol).strip().upper()] = budget
 
+    def instrument_stacks(self) -> Dict[str, dict]:
+        """Per-instrument roll-up: every symbol's running campaigns as one stack.
+
+        This is the Phase 4 view — with concurrent campaigns per symbol, each on
+        its own timeframe and sharing a capital group, the per-card view stops
+        answering the question that matters: "what is my total exposure on this
+        instrument?" One entry per symbol answers it.
+        """
+        stacks: Dict[str, dict] = {}
+
+        def _blank() -> dict:
+            return {
+                "active_count": 0,
+                "live_count": 0,
+                "committed_usd": 0.0,
+                "in_position_usd": 0.0,
+                "resting_usd": 0.0,
+                "pending_usd": 0.0,
+                "realized_pnl_usd": 0.0,
+                "rounds_closed": 0,
+                "timeframes": [],
+                "budget_usd": None,
+                "available_usd": None,
+            }
+
+        for campaign in self.campaigns.values():
+            if campaign.state not in ACTIVE_STATES:
+                continue
+            stack = stacks.setdefault(campaign.symbol, _blank())
+            stack["active_count"] += 1
+            if campaign.mode == "live":
+                stack["live_count"] += 1
+            stack["committed_usd"] += campaign.capital_usd
+            stack["in_position_usd"] += campaign.spent_usd
+            stack["resting_usd"] += campaign.resting_usd
+            stack["pending_usd"] += campaign.pending_usd
+            stack["realized_pnl_usd"] += campaign.realized_pnl_total
+            stack["rounds_closed"] += len(campaign.rounds)
+            if campaign.timeframe not in stack["timeframes"]:
+                stack["timeframes"].append(campaign.timeframe)
+        # A group with nothing running is still a stack — the budget is standing
+        # capital waiting for its next campaign and should stay visible.
+        for symbol, budget in self.capital_groups.items():
+            stack = stacks.setdefault(symbol, _blank())
+            stack["budget_usd"] = budget
+            stack["available_usd"] = round(budget - stack["committed_usd"], 2)
+        for stack in stacks.values():
+            for key in ("committed_usd", "in_position_usd", "resting_usd", "pending_usd", "realized_pnl_usd"):
+                stack[key] = round(stack[key], 2)
+        return dict(sorted(stacks.items()))
+
     # ── public API ───────────────────────────────────────────────
 
     async def start_campaign(
@@ -1650,6 +1701,7 @@ class CascadeEngine:
             "active_count": len(self.active_campaigns),
             "live_count": len(self.live_campaigns),
             "capital_groups": self.capital_group_status(),
+            "instruments": self.instrument_stacks(),
             "updated_at": _ist_now_str(),
         }
 

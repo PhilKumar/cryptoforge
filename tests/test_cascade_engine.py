@@ -3463,3 +3463,75 @@ class CascadeCapitalGroupTests(unittest.IsolatedAsyncioTestCase):
         fresh = _mk_engine()
         fresh.load_capital_groups(saved)
         self.assertEqual(fresh.capital_groups, {"ETHUSDT": 1000})
+
+
+class CascadeInstrumentStackTests(unittest.TestCase):
+    """Phase 4: one roll-up per symbol, answering "what is my total exposure
+    on this instrument?" across concurrent campaigns and their capital group."""
+
+    def _campaign(self, engine, cid, symbol, capital, state="TRENDLINE_ACTIVE", mode="paper", tf="5m"):
+        campaign = Campaign(
+            campaign_id=cid,
+            symbol=symbol,
+            capital_usd=capital,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=1,
+            mode=mode,
+            state=state,
+            timeframe=tf,
+        )
+        engine.campaigns[cid] = campaign
+        return campaign
+
+    def test_campaigns_on_one_symbol_stack_into_one_entry(self):
+        engine = _mk_engine()
+        a = self._campaign(engine, "a1", "ETHUSDT", 600)
+        b = self._campaign(engine, "b1", "ETHUSDT", 400, mode="live", tf="15m")
+        self._campaign(engine, "c1", "BTCUSDT", 2000)
+        a.all_fills.append(Fill(order_id="x", leg_id=1, level=2, price=100.0, quantity=0.05, timestamp=2))
+        b.rounds.append(
+            Round(round_id=1, leg_id=1, avg_entry=100.0, quantity=0.1, invested_usd=10.0, exit_price=101.0, pnl=1.5)
+        )
+        stacks = engine.instrument_stacks()
+        eth = stacks["ETHUSDT"]
+        self.assertEqual(eth["active_count"], 2)
+        self.assertEqual(eth["live_count"], 1)
+        self.assertEqual(eth["committed_usd"], 1000)
+        self.assertEqual(eth["in_position_usd"], 5.0)
+        self.assertEqual(eth["realized_pnl_usd"], 1.5)
+        self.assertEqual(eth["rounds_closed"], 1)
+        self.assertEqual(eth["timeframes"], ["5m", "15m"])
+        self.assertEqual(stacks["BTCUSDT"]["active_count"], 1)
+
+    def test_ended_campaigns_are_not_exposure(self):
+        engine = _mk_engine()
+        self._campaign(engine, "a1", "ETHUSDT", 600)
+        self._campaign(engine, "z1", "ETHUSDT", 999, state="COMPLETED")
+        stacks = engine.instrument_stacks()
+        self.assertEqual(stacks["ETHUSDT"]["active_count"], 1)
+        self.assertEqual(stacks["ETHUSDT"]["committed_usd"], 600)
+
+    def test_a_group_with_nothing_running_is_still_a_stack(self):
+        """The budget is standing capital waiting for its next campaign —
+        it must stay visible, not vanish with the last campaign."""
+        engine = _mk_engine()
+        engine.set_capital_group("SOLUSDT", 500)
+        stacks = engine.instrument_stacks()
+        sol = stacks["SOLUSDT"]
+        self.assertEqual(sol["active_count"], 0)
+        self.assertEqual(sol["budget_usd"], 500)
+        self.assertEqual(sol["available_usd"], 500)
+
+    def test_the_group_budget_joins_its_symbols_stack(self):
+        engine = _mk_engine()
+        engine.set_capital_group("ETHUSDT", 1000)
+        self._campaign(engine, "a1", "ETHUSDT", 600)
+        stacks = engine.instrument_stacks()
+        self.assertEqual(stacks["ETHUSDT"]["budget_usd"], 1000)
+        self.assertEqual(stacks["ETHUSDT"]["available_usd"], 400)
+
+    def test_status_carries_the_stacks(self):
+        engine = _mk_engine()
+        self._campaign(engine, "a1", "ETHUSDT", 600)
+        self.assertIn("ETHUSDT", engine.get_status()["instruments"])

@@ -7987,7 +7987,7 @@ function cfRenderCascadeStatus(data) {
     dot.classList.toggle('active', !!data.running && live);
   }
   cfRenderCascadeTrades(Array.isArray(data.campaigns) ? data.campaigns : []);
-  cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
+  cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : [], data.instruments || {});
   cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
   cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
   cfRenderCascadeGroups(data.capital_groups || {});
@@ -8540,7 +8540,39 @@ function cfRenderCascadeTrades(campaigns) {
   }
 }
 
-function cfRenderCascadeCampaigns(campaigns) {
+// The Phase 4 stack header: one bar per instrument above its campaign cards.
+// Shown only when the symbol has something to aggregate — two or more running
+// campaigns, or a capital group — so a lone ungrouped campaign keeps the flat
+// look it always had.
+function _cfCascadeStackHeader(symbol, stack, count) {
+  var tfs = (stack.timeframes || []).map(function(t) { return String(t).toUpperCase(); }).join(' + ');
+  var pnl = Number(stack.realized_pnl_usd) || 0;
+  var pnlTone = pnl >= 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)';
+  var group = '';
+  if (stack.budget_usd != null) {
+    var free = Number(stack.available_usd) || 0;
+    group = ' · group <strong style="color:' + (free > 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)') + ';">$'
+      + _cfCascadeUsd(free) + '</strong> free of $' + _cfCascadeUsd(stack.budget_usd);
+  }
+  return '<div class="cf-cascade-stack-head" style="display:flex;flex-wrap:wrap;align-items:center;'
+    + 'gap:8px;padding:8px 12px;margin:10px 0 6px;border:1px solid var(--border);border-radius:10px;'
+    + 'background:rgba(148,163,184,0.06);">'
+    + '<strong>' + _escapeHtml(symbol) + '</strong>'
+    + '<span class="table-meta">' + count + ' campaign' + (count === 1 ? '' : 's')
+    + (stack.live_count ? ' (' + stack.live_count + ' live)' : '')
+    + (tfs ? ' · ' + _escapeHtml(tfs) : '')
+    + ' · $' + _cfCascadeUsd(stack.in_position_usd) + ' in position'
+    + ' · $' + _cfCascadeUsd(stack.committed_usd) + ' committed'
+    + group
+    + (stack.rounds_closed
+      ? ' · <strong style="color:' + pnlTone + ';">' + (pnl >= 0 ? '+' : '−') + '$'
+        + _cfCascadeUsd(Math.abs(pnl)) + '</strong> realised over ' + stack.rounds_closed + ' round'
+        + (stack.rounds_closed === 1 ? '' : 's')
+      : '')
+    + '</span></div>';
+}
+
+function cfRenderCascadeCampaigns(campaigns, instruments) {
   var mount = document.getElementById('cf-cascade-campaigns');
   if (!mount) return;
   if (!campaigns.length) {
@@ -8574,7 +8606,25 @@ function cfRenderCascadeCampaigns(campaigns) {
     _cfCascadeMarkClippedLabels(mount);
     return;
   }
-  mount.innerHTML = _cfCascadeSortCampaigns(live).map(_cfCascadeCampaignCard).join('');
+  // Group the sorted cards under one stack header per instrument. The sort
+  // already clusters by symbol, so this is a single pass.
+  var stacks = instruments || {};
+  var sorted = _cfCascadeSortCampaigns(live);
+  var html = '';
+  var lastSymbol = null;
+  sorted.forEach(function (c) {
+    var symbol = String(c.symbol || '').toUpperCase();
+    if (symbol !== lastSymbol) {
+      lastSymbol = symbol;
+      var stack = stacks[symbol];
+      var count = sorted.filter(function (x) { return String(x.symbol || '').toUpperCase() === symbol; }).length;
+      if (stack && (count > 1 || stack.budget_usd != null)) {
+        html += _cfCascadeStackHeader(symbol, stack, count);
+      }
+    }
+    html += _cfCascadeCampaignCard(c);
+  });
+  mount.innerHTML = html;
 
   mount.querySelectorAll('.cf-cascade-card').forEach(function (card) {
     var cid = card.getAttribute('data-campaign') || '';
