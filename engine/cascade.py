@@ -79,7 +79,6 @@ def _ist_now_str() -> str:
 CASCADE_LEVELS = (2, 4, 8)
 LEVEL_ALLOCATION = {2: 0.20, 4: 0.30, 8: 0.50}
 BASE_TIMEFRAME = "5m"
-ESCALATED_TIMEFRAME = "15m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
 # Levels 2 and 4 are shallow: resting a limit there buys a knife price is still
@@ -176,9 +175,66 @@ RUNG_BUFFER_PCT = 0.10
 SPENT_ORDER_STATES = frozenset({"FILLED", "CLOSED", "CANCELLED"})
 FIVE_MIN_SEC = 300
 FIFTEEN_MIN_SEC = 900
-# View-only roll-ups for the campaign chart. The engine always steps in 5m;
-# these just change how the same candles are drawn.
-CHART_TIMEFRAMES = {"5m": FIVE_MIN_SEC, "15m": FIFTEEN_MIN_SEC, "1h": 3600}
+# Every timeframe the engine can step, in bar seconds. The names are exactly
+# what the broker's kline map expects.
+TIMEFRAME_SECONDS = {
+    "1m": 60,  # replay/backtest only — not a campaign starting timeframe
+    "5m": FIVE_MIN_SEC,
+    "15m": FIFTEEN_MIN_SEC,
+    "1h": 3600,
+    "4h": 4 * 3600,
+    "1d": 86400,
+    "1w": 7 * 86400,
+}
+# The ladder a 5m campaign climbs as it outgrows the screen (Phase 2 walks it).
+# Capped at 4H on purpose: a 5m campaign quietly becoming a weekly position is
+# too big a change of character to happen by itself.
+ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
+# What may be picked when STARTING a campaign. Two kinds only, per Phil:
+#   5m  — the normal case: a mother candle read off the right-hand edge, or a
+#         sub-mother started inside a move. It escalates up ESCALATION_LADDER.
+#   4h / 1d / 1w — a higher-timeframe campaign started deliberately from an
+#         older, bigger mother candle "from the left". These never escalate;
+#         the timeframe they were started on is the timeframe they keep.
+# 15m and 1h exist as *running* timeframes (a 5m campaign escalates into them)
+# but are not offered as starting points, so the rule stays one sentence.
+CAMPAIGN_START_TIMEFRAMES = ("5m", "4h", "1d", "1w")
+# How far back a mother candle may be anchored, measured in bars of the
+# campaign's own timeframe rather than in days. 5000 bars is 30 pages of the
+# broker's 1000-bar klines with room to spare.
+MAX_REPLAY_BARS = 5000
+# Roll-ups offered on the campaign chart: the campaign's own timeframe plus the
+# next two above it. View-only — the geometry is always computed on the
+# campaign's engine timeframe, whatever the chart is being read at.
+CHART_TIMEFRAME_LADDER = ("1m", "5m", "15m", "1h", "4h", "1d", "1w")
+
+
+def timeframe_seconds(timeframe: str) -> int:
+    return TIMEFRAME_SECONDS.get(str(timeframe or "").lower(), FIVE_MIN_SEC)
+
+
+def chart_timeframes_for(timeframe: str) -> Dict[str, int]:
+    """The chart roll-ups available to a campaign stepping `timeframe`.
+
+    A campaign cannot be drawn at a timeframe FINER than the candles it steps —
+    a 4H campaign has no 5m history to show — so the options start at its own
+    timeframe and climb from there.
+    """
+    base = str(timeframe or "").lower()
+    if base not in CHART_TIMEFRAME_LADDER:
+        base = BASE_TIMEFRAME
+    start = CHART_TIMEFRAME_LADDER.index(base)
+    return {name: TIMEFRAME_SECONDS[name] for name in CHART_TIMEFRAME_LADDER[start : start + 3]}
+
+
+def next_timeframe_up(timeframe: str) -> str:
+    """The next rung above `timeframe` on the escalation ladder, capped at 4H."""
+    base = str(timeframe or "").lower()
+    if base not in ESCALATION_LADDER:
+        return base or BASE_TIMEFRAME
+    index = ESCALATION_LADDER.index(base)
+    return ESCALATION_LADDER[min(index + 1, len(ESCALATION_LADDER) - 1)]
+
 
 ACTIVE_STATES = {"WAITING_FIRST_DEPTH", "TRENDLINE_ACTIVE"}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
@@ -536,6 +592,15 @@ class Campaign:
     mother_timestamp: int
     seq: int = 0  # human-facing number, assigned in start order
     mode: str = "paper"  # paper | live
+    # The candle this campaign is stepped on. Everything — trendlines, fibs,
+    # cuts, entries — is derived from candles of this size, so it is the one
+    # setting that changes what the geometry means. Escalation (Phase 2) moves
+    # it UP the ladder; nothing ever moves it back down.
+    timeframe: str = BASE_TIMEFRAME
+    # Whether this campaign may escalate at all. True only for campaigns
+    # started on 5m — the right-hand-edge and sub-mother cases. A campaign
+    # started deliberately on 4H/1D/1W keeps its timeframe for life.
+    escalates: bool = True
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
     tick_size: float = DEFAULT_TICK_SIZE  # exchange price increment, for the stop/limit gap
     parent_campaign_id: Optional[str] = None  # set when a mother break auto-started this one
@@ -590,7 +655,7 @@ class Campaign:
     # is no swing state to corrupt or restart.
     window_start_ts: int = 0
     broken_above: bool = False  # active trendline has been closed above
-    last_processed_ts: int = 0  # last processed closed 5m candle open ts
+    last_processed_ts: int = 0  # open ts of the last closed candle stepped
     closed_at: str = ""
     close_reason: str = ""
     event_log: List[dict] = field(default_factory=list)
@@ -598,6 +663,15 @@ class Campaign:
     @property
     def capital_unit_per_pct(self) -> float:
         return self.capital_usd / 100.0
+
+    @property
+    def timeframe_sec(self) -> int:
+        return timeframe_seconds(self.timeframe)
+
+    @property
+    def can_escalate(self) -> bool:
+        """A 5m-born campaign that has not already reached the 4H cap."""
+        return bool(self.escalates) and self.timeframe != ESCALATION_LADDER[-1]
 
     @property
     def active_trendline(self) -> Optional[Trendline]:
@@ -666,6 +740,8 @@ class Campaign:
             "mother_low": self.mother_low,
             "mother_timestamp": self.mother_timestamp,
             "mode": self.mode,
+            "timeframe": self.timeframe,
+            "escalates": self.escalates,
             "min_notional_usd": self.min_notional_usd,
             "tick_size": self.tick_size,
             "parent_campaign_id": self.parent_campaign_id,
@@ -723,6 +799,8 @@ class Campaign:
         )
         for key in (
             "mode",
+            "timeframe",
+            "escalates",
             "min_notional_usd",
             "tick_size",
             "parent_campaign_id",
@@ -782,10 +860,17 @@ def _is_trigger_immediately_error(error) -> bool:
     return "-2010" in text or "would trigger immediately" in text
 
 
-def timeframe_for_level(leg: Leg, level: int) -> str:
+def timeframe_for_level(campaign: Campaign, leg: Leg, level: int) -> str:
+    """The label an order carries: the campaign's own timeframe, or one rung up
+    for the deep levels of a leg that fell far enough to be marked escalated.
+
+    This is display only — every order is worked on the campaign's timeframe.
+    It used to be hardcoded 5m/15m, which read as a lie the moment a campaign
+    could step anything other than 5m.
+    """
     if level == 2:
-        return BASE_TIMEFRAME
-    return ESCALATED_TIMEFRAME if leg.escalated else BASE_TIMEFRAME
+        return campaign.timeframe
+    return next_timeframe_up(campaign.timeframe) if leg.escalated else campaign.timeframe
 
 
 def recompute_avg_entry_price(campaign: Campaign) -> Optional[float]:
@@ -859,7 +944,7 @@ def plan_leg_orders(campaign: Campaign, leg: Leg) -> None:
             usd_notional=0.0,
             quantity=0.0,
             leg_id=leg.leg_id,
-            timeframe=timeframe_for_level(leg, level),
+            timeframe=timeframe_for_level(campaign, leg, level),
             status="UNFUNDED",
             entry_style="stop" if level in STOP_ENTRY_LEVELS else "limit",
             client_order_id=f"cf-csc-{campaign.campaign_id}-{leg.leg_id}-{level}-0",
@@ -972,7 +1057,9 @@ class CascadeEngine:
         self._task: Optional[asyncio.Task] = None
         # Strong references to in-flight _schedule() work — see _schedule.
         self._pending_tasks: set = set()
-        self._candles_5m: Dict[str, List[Candle]] = {}  # per-campaign candle history (rebuilt on restart)
+        # Per-campaign candle history, in that campaign's own timeframe
+        # (rebuilt on restart). Not all 5m any more — read campaign.timeframe.
+        self._candles: Dict[str, List[Candle]] = {}
         self._price_cache: Dict[str, tuple] = {}
         self._last_sync_ts: Dict[str, float] = {}  # per campaign — a shared
         # timestamp meant two live campaigns starved each other of syncs
@@ -1115,11 +1202,17 @@ class CascadeEngine:
         if not active or not self._last_candle_ts:
             return
         stalled_for = time.monotonic() - self._last_candle_ts
-        if stalled_for > STALL_ALERT_SEC:
+        # Silence is only suspicious relative to the FASTEST campaign running.
+        # A 1D campaign legitimately processes nothing for a day, and firing the
+        # 15-minute alarm at it would be crying wolf every loop tick.
+        fastest = min(active, key=lambda c: c.timeframe_sec)
+        stall_limit = max(STALL_ALERT_SEC, 3 * fastest.timeframe_sec)
+        if stalled_for > stall_limit:
             self._alert(
                 "Cascade engine STALLED",
-                f"No 5m candle has been processed for {stalled_for / 60:.0f} minutes "
-                f"while {len(active)} campaign(s) are active.\n\n"
+                f"No candle has been processed for {stalled_for / 60:.0f} minutes "
+                f"while {len(active)} campaign(s) are active "
+                f"(fastest is {fastest.timeframe}).\n\n"
                 f"Orders already on Binance still stand, but nothing is being "
                 f"armed, stepped or filled. Check the server.",
                 level="error",
@@ -1162,14 +1255,25 @@ class CascadeEngine:
         mother_low: float,
         mother_timestamp: Optional[int] = None,
         mode: str = "paper",
+        timeframe: str = BASE_TIMEFRAME,
     ) -> dict:
         symbol = str(symbol or "").strip().upper()
         mode = "live" if str(mode or "").strip().lower() == "live" else "paper"
+        timeframe = str(timeframe or BASE_TIMEFRAME).strip().lower() or BASE_TIMEFRAME
         capital_usd = _coerce_float(capital_usd)
         mother_high = _coerce_float(mother_high)
         mother_low = _coerce_float(mother_low)
         if not symbol:
             return {"error": "Symbol is required"}
+        if timeframe not in CAMPAIGN_START_TIMEFRAMES:
+            return {
+                "error": (
+                    f"Timeframe must be one of {', '.join(CAMPAIGN_START_TIMEFRAMES)} — "
+                    "5m for a mother candle at the right-hand edge or a sub-mother, "
+                    "4h/1d/1w for a higher-timeframe campaign started from an older one"
+                )
+            }
+        tf_sec = timeframe_seconds(timeframe)
         if mother_high <= 0 or mother_low <= 0 or mother_high <= mother_low:
             return {"error": "Mother candle high must be greater than mother candle low (both > 0)"}
         min_notional = MIN_NOTIONAL_FLOOR_USD
@@ -1190,15 +1294,16 @@ class CascadeEngine:
             mother_ts = int(mother_timestamp)
         else:
             # No timestamp given: the mother candle is a past candle the user
-            # read off the chart, so find the recent 5m candle whose high
-            # matches the entered mother high and anchor there. Defaulting to
-            # "now" would make the engine wait for future candles forever and
-            # ignore all the history that already formed the trendlines.
-            detected = await self._resolve_mother_timestamp(symbol, mother_high)
+            # read off the chart, so find the recent candle of this campaign's
+            # timeframe whose high matches the entered mother high and anchor
+            # there. Defaulting to "now" would make the engine wait for future
+            # candles forever and ignore all the history that already formed
+            # the trendlines.
+            detected = await self._resolve_mother_timestamp(symbol, mother_high, timeframe)
             if detected is None:
                 return {
                     "error": (
-                        "Could not find a recent 5m candle matching that mother high. "
+                        f"Could not find a recent {timeframe} candle matching that mother high. "
                         "Set the Mother Candle Time so the engine can replay from it, "
                         "or double-check the high value."
                     )
@@ -1206,8 +1311,20 @@ class CascadeEngine:
             mother_ts = detected
         if mother_ts > now_ts:
             return {"error": "Mother candle timestamp cannot be in the future"}
-        if mother_ts < now_ts - 90 * 86400:
-            return {"error": "Mother candle is more than 90 days old — pick a more recent mother candle"}
+        # How far back a mother may be anchored is really a limit on how many
+        # candles the replay has to chew through, not on wall-clock age. 90 days
+        # of 5m is already ~26k candles; the same bar budget on 1D is years, and
+        # a "from the left" weekly mother is exactly the point of those
+        # timeframes. So: 90 days, or MAX_REPLAY_BARS of this timeframe,
+        # whichever reaches further.
+        max_age_sec = max(90 * 86400, MAX_REPLAY_BARS * tf_sec)
+        if mother_ts < now_ts - max_age_sec:
+            return {
+                "error": (
+                    f"Mother candle is more than {max_age_sec // 86400} days old for a {timeframe} "
+                    "campaign — pick a more recent mother candle or a higher timeframe"
+                )
+            }
         twin = self._active_duplicate(symbol, mother_ts, mother_high)
         if twin is not None:
             return {
@@ -1227,6 +1344,10 @@ class CascadeEngine:
             mother_low=mother_low,
             mother_timestamp=mother_ts,
             mode=mode,
+            timeframe=timeframe,
+            # Only a 5m campaign — right-hand edge or sub-mother — ever climbs
+            # the ladder. One started on 4H/1D/1W stays there for life.
+            escalates=timeframe == BASE_TIMEFRAME,
             min_notional_usd=min_notional,
             tick_size=tick_size,
             model_version=MODEL_VERSION,
@@ -1238,8 +1359,9 @@ class CascadeEngine:
         self._log_event(
             campaign,
             "start",
-            f"Campaign {campaign.campaign_id} started ({mode.upper()}) — {symbol}, capital ${capital_usd:g}, "
-            f"mother high {mother_high:g} / low {mother_low:g}",
+            f"Campaign {campaign.campaign_id} started ({mode.upper()}) — {symbol} {timeframe}, "
+            f"capital ${capital_usd:g}, mother high {mother_high:g} / low {mother_low:g}"
+            + ("" if campaign.escalates else " — fixed timeframe, no escalation"),
         )
         self.start()
         self._emit_update()
@@ -1330,7 +1452,7 @@ class CascadeEngine:
         campaign = self.campaigns.pop(campaign_id, None)
         if campaign is None:
             return {"error": f"Campaign {campaign_id} not found"}
-        self._candles_5m.pop(campaign_id, None)
+        self._candles.pop(campaign_id, None)
         self._last_sync_ts.pop(campaign_id, None)
         if not any(row.get("campaign_id") == campaign_id for row in self.closed_campaigns):
             if not campaign.close_reason:
@@ -1398,9 +1520,12 @@ class CascadeEngine:
         }
 
     async def _chart_candles(self, campaign: Campaign, max_candles: int) -> List[Candle]:
-        """Closed 5m candles from the mother candle forward, for the chart."""
+        """Closed candles from the mother candle forward, in the campaign's own
+        timeframe — the same candles the engine stepped, so the chart and the
+        geometry can never disagree."""
+        tf_sec = campaign.timeframe_sec
         try:
-            df = await self.broker.async_get_candles(campaign.symbol, resolution=BASE_TIMEFRAME)
+            df = await self.broker.async_get_candles(campaign.symbol, resolution=campaign.timeframe)
         except Exception as exc:
             _log.warning("[CASCADE] chart candle fetch failed for %s: %s", campaign.symbol, exc)
             return []
@@ -1410,7 +1535,7 @@ class CascadeEngine:
         rows = []
         for index, row in df.iterrows():
             ts = int(index.timestamp())
-            if ts < campaign.mother_timestamp or ts + FIVE_MIN_SEC > now:
+            if ts < campaign.mother_timestamp or ts + tf_sec > now:
                 continue
             rows.append(
                 Candle(
@@ -1419,6 +1544,7 @@ class CascadeEngine:
                     high=_coerce_float(row.get("high")),
                     low=_coerce_float(row.get("low")),
                     close=_coerce_float(row.get("close")),
+                    timeframe=campaign.timeframe,
                 )
             )
         return rows[-max_candles:]
@@ -1442,6 +1568,10 @@ class CascadeEngine:
             "mother_timestamp",
             "seq",
             "mode",
+            # Settings, not replay output. A recalc that reset these would
+            # replay a 1D campaign as if it were 5m.
+            "timeframe",
+            "escalates",
             "min_notional_usd",
             "tick_size",
             "parent_campaign_id",
@@ -1518,12 +1648,12 @@ class CascadeEngine:
             await self._cancel_campaign_orders(campaign)
 
         self._reset_derived_state(campaign)
-        self._candles_5m[campaign_id] = []
+        self._candles[campaign_id] = []
 
         for candle in candles:
             if candle.timestamp <= campaign.mother_timestamp:
                 continue  # the mother candle would trivially break its own high
-            self._candles_5m[campaign_id].append(candle)
+            self._candles[campaign_id].append(candle)
             self._process_candle(campaign, candle)
             campaign.last_processed_ts = candle.timestamp
             if campaign.state in FINAL_STATES:
@@ -1539,13 +1669,14 @@ class CascadeEngine:
         return {"status": "ok", "campaign": campaign.to_dict(), "candles_replayed": len(candles)}
 
     @staticmethod
-    def _aggregate_candles(candles: List[Candle], bucket_sec: int) -> List[Candle]:
+    def _aggregate_candles(candles: List[Candle], bucket_sec: int, base_sec: int = FIVE_MIN_SEC) -> List[Candle]:
         """
-        Roll 5m candles up into larger view buckets. The engine only ever reasons
-        in 5m — this is purely so the chart can be read at 15m or 1H without the
-        geometry (which is 5m-derived) shifting underneath it.
+        Roll the campaign's own candles up into larger view buckets. The engine
+        only ever reasons in the campaign timeframe — this is purely so a 5m
+        campaign can be read at 15m or 1H without the geometry (which is
+        5m-derived) shifting underneath it.
         """
-        if bucket_sec <= FIVE_MIN_SEC:
+        if bucket_sec <= base_sec:
             return candles
         out: List[Candle] = []
         current: Optional[Candle] = None
@@ -1592,14 +1723,17 @@ class CascadeEngine:
         campaign, mother included, inside one screen.
 
         View only. The engine still computes every fib, trendline and entry
-        from 5m candles regardless of what is being displayed.
+        from the campaign's own candles regardless of what is being displayed.
         """
+        options = chart_timeframes_for(campaign.timeframe)
         span_sec = max(int(time.time()) - int(campaign.mother_timestamp or 0), 0)
         budget = max(int(max_candles), 1)
-        for name in ("5m", "15m", "1h"):
-            if span_sec <= CHART_TIMEFRAMES[name] * budget:
-                return name
-        return "1h"
+        chosen = campaign.timeframe
+        for name, bucket_sec in options.items():
+            chosen = name
+            if span_sec <= bucket_sec * budget:
+                break
+        return chosen
 
     async def get_chart_data(self, campaign_id: str, max_candles: int = 200, timeframe: str = "auto") -> dict:
         """
@@ -1618,17 +1752,19 @@ class CascadeEngine:
         # engine's in-memory list: that list is only what this process has
         # stepped through, so after a restart it can hold a handful of candles
         # and the chart would render almost empty.
+        options = chart_timeframes_for(campaign.timeframe)
+        base_sec = campaign.timeframe_sec
         requested = str(timeframe).lower()
-        if requested == "auto":
+        if requested == "auto" or requested not in options:
             requested = self._auto_chart_timeframe(campaign, max_candles)
-        bucket_sec = CHART_TIMEFRAMES.get(requested, FIVE_MIN_SEC)
-        # Pull enough 5m candles that the rolled-up view still spans the window.
-        raw_needed = max_candles * max(bucket_sec // FIVE_MIN_SEC, 1)
+        bucket_sec = options.get(requested, base_sec)
+        # Pull enough base candles that the rolled-up view still spans the window.
+        raw_needed = max_candles * max(bucket_sec // base_sec, 1)
         history = await self._chart_candles(campaign, raw_needed)
         if not history:
-            history = self._candles_5m.get(campaign_id) or []
+            history = self._candles.get(campaign_id) or []
 
-        view = self._aggregate_candles(history, bucket_sec)
+        view = self._aggregate_candles(history, bucket_sec, base_sec)
         candles = [{"t": c.timestamp, "o": c.open, "h": c.high, "l": c.low, "c": c.close} for c in view[-max_candles:]]
         # Always include the mother candle itself as the left anchor of the view.
         mother = {
@@ -1688,8 +1824,13 @@ class CascadeEngine:
             "state": campaign.state,
             "mode": campaign.mode,
             "mother": mother,
-            "timeframe": requested if requested in CHART_TIMEFRAMES else "5m",
+            "timeframe": requested,
             "timeframe_auto": str(timeframe).lower() == "auto",
+            # What this campaign may be drawn at: its own timeframe and the two
+            # above it. A 4H campaign has no 5m history, so the chart must not
+            # offer 5m for it.
+            "timeframe_options": list(options.keys()),
+            "campaign_timeframe": campaign.timeframe,
             "candles": candles,
             "trendlines": trendlines,
             "legs": legs,
@@ -1832,15 +1973,18 @@ class CascadeEngine:
         self._price_cache[symbol] = (price, time.monotonic())
         return price
 
-    async def _resolve_mother_timestamp(self, symbol: str, mother_high: float) -> Optional[int]:
+    async def _resolve_mother_timestamp(
+        self, symbol: str, mother_high: float, timeframe: str = BASE_TIMEFRAME
+    ) -> Optional[int]:
         """
-        Find the open timestamp of the recent closed 5m candle whose high most
+        Find the open timestamp of the recent closed candle whose high most
         closely matches mother_high (within ~0.15%). Prefers the most recent
         candle on ties. Returns None if no close match is in the recent window
         (then the caller asks the user to supply the timestamp explicitly).
         """
+        tf_sec = timeframe_seconds(timeframe)
         try:
-            df = await self.broker.async_get_candles(symbol, resolution="5m")
+            df = await self.broker.async_get_candles(symbol, resolution=timeframe)
         except Exception as exc:
             _log.warning("[CASCADE] mother candle lookup failed for %s: %s", symbol, exc)
             return None
@@ -1852,7 +1996,7 @@ class CascadeEngine:
         best_diff = None
         for index, row in df.iterrows():
             ts = int(index.timestamp())
-            if ts + FIVE_MIN_SEC > now:
+            if ts + tf_sec > now:
                 continue  # skip the still-forming candle
             diff = abs(_coerce_float(row.get("high")) - mother_high)
             if diff <= tolerance and (best_diff is None or diff <= best_diff):
@@ -1860,15 +2004,16 @@ class CascadeEngine:
                 best_ts = ts
         return best_ts
 
-    async def _fetch_closed_5m(self, symbol: str, since_ts: int) -> List[Candle]:
-        """Fetch closed 5m candles with open ts > since_ts, paging as needed."""
+    async def _fetch_closed_candles(self, symbol: str, since_ts: int, timeframe: str = BASE_TIMEFRAME) -> List[Candle]:
+        """Closed candles of `timeframe` with open ts > since_ts, paging as needed."""
+        tf_sec = timeframe_seconds(timeframe)
         now = int(time.time())
         candles: List[Candle] = []
         cursor = since_ts
-        for _ in range(30):  # safety cap: 30 pages ≈ 100 days of 5m candles
-            start = datetime.utcfromtimestamp(max(cursor - FIVE_MIN_SEC, 0)).strftime("%Y-%m-%d")
+        for _ in range(30):  # safety cap: 30 pages of 1000 bars
+            start = datetime.utcfromtimestamp(max(cursor - tf_sec, 0)).strftime("%Y-%m-%d")
             try:
-                df = await self.broker.async_get_candles(symbol, resolution="5m", start=start)
+                df = await self.broker.async_get_candles(symbol, resolution=timeframe, start=start)
             except Exception as exc:
                 _log.warning("[CASCADE] candle fetch failed for %s: %s", symbol, exc)
                 break
@@ -1877,7 +2022,7 @@ class CascadeEngine:
             batch = []
             for index, row in df.iterrows():
                 ts = int(index.timestamp())
-                if ts <= cursor or ts + FIVE_MIN_SEC > now:
+                if ts <= cursor or ts + tf_sec > now:
                     continue
                 batch.append(
                     Candle(
@@ -1886,13 +2031,14 @@ class CascadeEngine:
                         high=_coerce_float(row.get("high")),
                         low=_coerce_float(row.get("low")),
                         close=_coerce_float(row.get("close")),
+                        timeframe=timeframe,
                     )
                 )
             if not batch:
                 break
             candles.extend(batch)
             cursor = batch[-1].timestamp
-            if cursor + 2 * FIVE_MIN_SEC > now:
+            if cursor + 2 * tf_sec > now:
                 break
         return candles
 
@@ -1900,16 +2046,17 @@ class CascadeEngine:
         if campaign.state not in ACTIVE_STATES:
             return False
         now = int(time.time())
-        if campaign.last_processed_ts and now < campaign.last_processed_ts + 2 * FIVE_MIN_SEC:
+        tf = campaign.timeframe
+        if campaign.last_processed_ts and now < campaign.last_processed_ts + 2 * campaign.timeframe_sec:
             return False
-        history = self._candles_5m.setdefault(campaign.campaign_id, [])
+        history = self._candles.setdefault(campaign.campaign_id, [])
         if not history and campaign.last_processed_ts > campaign.mother_timestamp:
             # Restored campaign: the structure window is derived from candle
             # history, so rebuild everything since the mother candle. Candles
             # already processed are backfilled without re-running the engine.
-            prior = await self._fetch_closed_5m(campaign.symbol, campaign.mother_timestamp)
+            prior = await self._fetch_closed_candles(campaign.symbol, campaign.mother_timestamp, tf)
             history.extend(c for c in prior if c.timestamp <= campaign.last_processed_ts)
-        new_candles = await self._fetch_closed_5m(campaign.symbol, campaign.last_processed_ts)
+        new_candles = await self._fetch_closed_candles(campaign.symbol, campaign.last_processed_ts, tf)
         if not new_candles:
             return False
         changed = False
@@ -1926,26 +2073,8 @@ class CascadeEngine:
         return changed
 
     def _candles_between(self, campaign: Campaign, until_ts: int) -> List[Candle]:
-        history = self._candles_5m.get(campaign.campaign_id, [])
+        history = self._candles.get(campaign.campaign_id, [])
         return [c for c in history if campaign.mother_timestamp < c.timestamp < until_ts]
-
-    def _fifteen_minute_candle(self, campaign: Campaign, closed_5m: Candle) -> Optional[Candle]:
-        """When closed_5m completes a 15m bucket, return the aggregated candle."""
-        bucket_start = (closed_5m.timestamp // FIFTEEN_MIN_SEC) * FIFTEEN_MIN_SEC
-        if closed_5m.timestamp != bucket_start + 2 * FIVE_MIN_SEC:
-            return None
-        history = self._candles_5m.get(campaign.campaign_id, [])
-        members = [c for c in history if bucket_start <= c.timestamp < bucket_start + FIFTEEN_MIN_SEC]
-        if len(members) < 3:
-            return None
-        return Candle(
-            timestamp=bucket_start,
-            open=members[0].open,
-            high=max(c.high for c in members),
-            low=min(c.low for c in members),
-            close=members[-1].close,
-            timeframe=ESCALATED_TIMEFRAME,
-        )
 
     # ── state machine ────────────────────────────────────────────
     #
@@ -2026,7 +2155,7 @@ class CascadeEngine:
         5. fib 0 = the highest crossing high (running max over the up-swing,
            per cascade_lib's running_max_high).
         """
-        history = self._candles_5m.get(campaign.campaign_id, [])
+        history = self._candles.get(campaign.campaign_id, [])
         window = [
             c
             for c in history
@@ -2273,23 +2402,23 @@ class CascadeEngine:
 
     # ── fills / TP ───────────────────────────────────────────────
 
-    def _paper_fill_check(self, campaign: Campaign, closed_5m: Candle) -> None:
+    def _paper_fill_check(self, campaign: Campaign, closed_candle: Candle) -> None:
         """A buy stop sits ABOVE the market and triggers on the way up. Fill at
         the limit cap: the pessimistic end of the band it can execute in."""
         if campaign.pending_stop_price is None or campaign.pending_usd <= 0:
             return
         # A candle that just set the stop is the fall continuing, not a turn —
         # it owns the trigger and cannot also take it.
-        if campaign.pending_stop_ts is not None and closed_5m.timestamp <= campaign.pending_stop_ts:
+        if campaign.pending_stop_ts is not None and closed_candle.timestamp <= campaign.pending_stop_ts:
             return
-        if closed_5m.high >= campaign.pending_stop_price:
+        if closed_candle.high >= campaign.pending_stop_price:
             self._fill_pending(
                 campaign,
                 campaign.pending_limit_price or campaign.pending_stop_price,
-                closed_5m.timestamp,
+                closed_candle.timestamp,
             )
 
-    def _paper_tp_check(self, campaign: Campaign, closed_5m: Candle) -> None:
+    def _paper_tp_check(self, campaign: Campaign, closed_candle: Candle) -> None:
         """Close a paper round when a candle trades through the target.
 
         The live loop tests the TP against the last traded price, which a
@@ -2303,12 +2432,12 @@ class CascadeEngine:
         if campaign.filled_base_qty <= 0:
             return
         tp = compute_tp_price(campaign)
-        if not tp or closed_5m.high < tp:
+        if not tp or closed_candle.high < tp:
             return
         # A candle that also took the entry cannot be assumed to have reached
         # the target afterwards — the order of ticks inside it is unknowable,
         # so the pessimistic reading is that the target comes later.
-        if any(fill.timestamp >= closed_5m.timestamp for fill in campaign.all_fills):
+        if any(fill.timestamp >= closed_candle.timestamp for fill in campaign.all_fills):
             return
         self._close_round(campaign, tp)
 
@@ -2386,7 +2515,7 @@ class CascadeEngine:
                     + ("" if campaign.pending_line else f" (needs ${rung:,.2f} to buy)"),
                 )
 
-    def _advance_stop_entries(self, campaign: Campaign, closed_5m: Candle) -> None:
+    def _advance_stop_entries(self, campaign: Campaign, closed_candle: Candle) -> None:
         """
         The running total goes in as ONE working BUY STOP, and the trigger sits
         at the close of the previous red candle.
@@ -2408,7 +2537,7 @@ class CascadeEngine:
         """
         if campaign.pending_line is None or campaign.pending_usd <= 0:
             return
-        probe = closed_5m
+        probe = closed_candle
         if probe.timestamp == campaign.pending_stop_ts:
             return
         if probe.close >= probe.open:
@@ -2600,7 +2729,7 @@ class CascadeEngine:
         ]
         # Candle time, not wall-clock: in a backtest the two are years apart,
         # and the UI reads every cascade timestamp as a candle in IST.
-        seen = self._candles_5m.get(campaign.campaign_id) or []
+        seen = self._candles.get(campaign.campaign_id) or []
         closed_ts = int(seen[-1].timestamp) if seen else 0
         rnd = Round(
             round_id=len(campaign.rounds) + 1,
@@ -2638,7 +2767,7 @@ class CascadeEngine:
         # back onto the ladder the moment price makes a new low under where the
         # round closed. Arming them immediately would buy the same shelf back at
         # the price it was just sold at.
-        history = self._candles_5m.get(campaign.campaign_id, [])
+        history = self._candles.get(campaign.campaign_id, [])
         campaign.reuse_below = min((c.low for c in history), default=exit_price)
 
         # The principal is back in the pool, so the rungs still waiting get a
@@ -2772,6 +2901,12 @@ class CascadeEngine:
             mother_low=candle.low,
             mother_timestamp=candle.timestamp,
             mode=parent.mode,
+            # The break was seen on the parent's candle, so that candle IS the
+            # child's mother — the child necessarily runs on the same timeframe.
+            # It also inherits whether it may escalate: a 5m chain keeps
+            # climbing, a 1D chain stays on 1D.
+            timeframe=parent.timeframe,
+            escalates=parent.escalates,
             min_notional_usd=parent.min_notional_usd,
             tick_size=parent.tick_size,
             parent_campaign_id=parent.campaign_id,
@@ -2784,7 +2919,7 @@ class CascadeEngine:
         )
         self.campaigns[child.campaign_id] = child
         # The breaking candle is the mother, so history starts clean from it.
-        self._candles_5m[child.campaign_id] = [candle]
+        self._candles[child.campaign_id] = [candle]
         self._log_event(
             child,
             "start",

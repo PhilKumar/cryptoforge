@@ -1356,6 +1356,15 @@
           <input type="number" id="cf-cascade-capital" min="10" step="1" inputmode="decimal" value="2000">
         </div>
         <div class="input-group">
+          <label for="cf-cascade-timeframe">Timeframe</label>
+          <select id="cf-cascade-timeframe">
+            <option value="5m" selected>5m — right edge / sub-mother (escalates)</option>
+            <option value="4h">4H — older mother, fixed</option>
+            <option value="1d">1D — older mother, fixed</option>
+            <option value="1w">1W — older mother, fixed</option>
+          </select>
+        </div>
+        <div class="input-group">
           <label for="cf-cascade-mother-high">Mother Candle High $</label>
           <input type="number" id="cf-cascade-mother-high" min="0" step="0.01" inputmode="decimal" placeholder="105000">
         </div>
@@ -1377,7 +1386,8 @@
                     data-cf-click="cfCascadeSetMode('live')">Live</button>
           </div>
         </div>
-        <div class="cf-cascade-form-note">Leave the time blank to auto-detect the mother candle from its high (must be within the last ~3.5 days).</div>
+        <div class="cf-cascade-form-note">Leave the time blank to auto-detect the mother candle from its high, on the timeframe picked above (5m looks back ~3.5 days).</div>
+        <div class="cf-cascade-form-note">5m is the normal case — a mother candle at the right-hand edge, or a sub-mother inside a move — and it escalates 5m → 15m → 1H → 4H as it outgrows the screen. 4H/1D/1W are for an older mother candle read from the left; they never escalate.</div>
       </div>
       <div class="allocator-actions">
         <button class="btn btn-primary" id="cf-cascade-start-btn" data-cf-click="cfCascadeStartCampaign()">Start Campaign</button>
@@ -1423,15 +1433,12 @@
         <div class="table-meta" id="cf-cascade-chart-meta">Trendlines, fib anchors and ladder levels as the engine marked them.</div>
       </div>
       <div class="admin-inline-actions">
-        <div class="cf-tf-toggle" role="radiogroup" aria-label="Chart timeframe">
+        <!-- Auto is always there; the roll-up buttons next to it depend on the
+             campaign's own timeframe (a 4H campaign has no 5m to show), so the
+             chart response fills them in. -->
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Chart timeframe" id="cf-cascade-chart-tf">
           <button type="button" class="cf-tf-option is-active" data-tf="auto" role="radio" aria-checked="true"
                   data-cf-click="cfCascadeSetTimeframe('auto')" title="Pick the timeframe that fits the whole campaign">Auto</button>
-          <button type="button" class="cf-tf-option" data-tf="5m" role="radio" aria-checked="false"
-                  data-cf-click="cfCascadeSetTimeframe('5m')">5m</button>
-          <button type="button" class="cf-tf-option" data-tf="15m" role="radio" aria-checked="false"
-                  data-cf-click="cfCascadeSetTimeframe('15m')">15m</button>
-          <button type="button" class="cf-tf-option" data-tf="1h" role="radio" aria-checked="false"
-                  data-cf-click="cfCascadeSetTimeframe('1h')">1H</button>
         </div>
         <div class="cf-tf-toggle" role="group" aria-label="Chart zoom">
           <!-- Named functions, not an expression. data-cf-click only parses plain

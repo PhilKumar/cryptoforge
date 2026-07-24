@@ -18,6 +18,7 @@ from engine.cascade import (
     Leg,
     Round,
     build_fib_ladder_and_pool,
+    chart_timeframes_for,
     compute_tp_price,
     find_valid_anchor2,
     ladders_overlap,
@@ -38,6 +39,7 @@ class FakeCascadeBroker:
         self._next_order_id = 1000
         self.configured = True
         self.candles_df = None  # optional DataFrame returned by async_get_candles
+        self.candle_requests = []  # kwargs of every async_get_candles call
         # None keeps get_wallet a no-op (returns a non-list, so the engine falls
         # back to its recorded quantity). Set to {asset: free_qty} to simulate a
         # real balance and exercise the fee-aware TP cap.
@@ -65,6 +67,7 @@ class FakeCascadeBroker:
         return {"symbol": symbol, "last_price": 0.0, "mark_price": 0.0}
 
     async def async_get_candles(self, symbol, **kwargs):
+        self.candle_requests.append(kwargs)
         return self.candles_df
 
     def place_order(self, product_id, size, side, order_type="market_order", limit_price=None, **kwargs):
@@ -111,7 +114,7 @@ def _mk_campaign(engine, mode="paper", capital=2000.0):
 
 
 def _feed(engine, campaign, candle):
-    engine._candles_5m.setdefault(campaign.campaign_id, []).append(candle)
+    engine._candles.setdefault(campaign.campaign_id, []).append(candle)
     engine._process_candle(campaign, candle)
 
 
@@ -2295,7 +2298,7 @@ class CascadePaperTpOnReplayTests(unittest.TestCase):
         self.campaign.filled_base_qty = 0.09013759
         self.campaign.avg_entry_price = 77.77
         self.engine.campaigns["tp"] = self.campaign
-        self.engine._candles_5m["tp"] = []
+        self.engine._candles["tp"] = []
         # 77.77 + 25% of the way to the mother high 78.88
         self.tp = 78.0475
 
@@ -2947,3 +2950,146 @@ class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
         self.engine.on_alert = lambda *a, **k: alerts.append(a)
         await self.engine._place_pending_stop(self.campaign)
         self.assertTrue(alerts, "a non-2010 failure must still alert")
+
+
+class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
+    """Phase 1 of the timeframe work: a campaign is stepped on ITS OWN candle.
+
+    Phil's rule, and the whole point of this class: 5m is for a mother candle
+    read off the right-hand edge or a sub-mother started inside a move, and only
+    those campaigns ever escalate. A 4H/1D/1W campaign is started deliberately
+    from an older mother candle and keeps that timeframe for life.
+    """
+
+    async def test_five_minute_is_the_default_and_escalates(self):
+        engine = _mk_engine()
+        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS)
+        engine.stop()
+        self.assertEqual(result["campaign"]["timeframe"], "5m")
+        self.assertTrue(result["campaign"]["escalates"])
+
+    async def test_a_higher_timeframe_campaign_never_escalates(self):
+        engine = _mk_engine()
+        mother_ts = (int(time.time()) - 30 * 86400) // 86400 * 86400
+        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=mother_ts, timeframe="1d")
+        campaign = engine.campaigns[result["campaign"]["campaign_id"]]
+        engine.stop()
+        self.assertEqual(campaign.timeframe, "1d")
+        self.assertFalse(campaign.escalates)
+        self.assertFalse(campaign.can_escalate)
+
+    async def test_only_the_four_start_timeframes_are_accepted(self):
+        """15m and 1H are rungs a 5m campaign climbs into, not starting points —
+        offering them would blur the one-sentence rule above."""
+        engine = _mk_engine()
+        for bad in ("15m", "1h", "3m", "1M", ""):
+            result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe=bad)
+            if bad == "":
+                self.assertEqual(result["campaign"]["timeframe"], "5m")  # blank means default
+                continue
+            self.assertIn("error", result, f"{bad} must not be a starting timeframe")
+        engine.stop()
+
+    async def test_mother_age_is_measured_in_bars_not_days(self):
+        """A weekly mother a year back is 52 bars — the whole point of 1W. The
+        same date on 5m is 100k candles and is still refused."""
+        engine = _mk_engine()
+        old_ts = int(time.time()) - 300 * 86400
+        weekly = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=old_ts, timeframe="1w")
+        five = await engine.start_campaign("BTCUSDT", 2000, 106, 99, mother_timestamp=old_ts, timeframe="5m")
+        engine.stop()
+        self.assertEqual(weekly.get("status"), "ok")
+        self.assertIn("error", five)
+
+    async def test_the_engine_fetches_the_campaigns_own_candles(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "4h"
+        campaign.escalates = False
+        campaign.mother_timestamp = int(time.time()) - 40 * 86400
+        campaign.last_processed_ts = campaign.mother_timestamp
+        await engine._candle_step(campaign)
+        engine.stop()
+        self.assertTrue(broker.candle_requests)
+        self.assertEqual({r.get("resolution") for r in broker.candle_requests}, {"4h"})
+
+    async def test_a_slow_campaign_is_not_re_fetched_every_tick(self):
+        """The step gate is two bars of the campaign's own timeframe. On 1D that
+        is two days, not ten minutes — otherwise every loop tick would re-page
+        the same klines for nothing."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "1d"
+        campaign.last_processed_ts = int(time.time()) - 3600  # one hour ago
+        stepped = await engine._candle_step(campaign)
+        engine.stop()
+        self.assertFalse(stepped)
+        self.assertEqual(broker.candle_requests, [], "no fetch is due yet on 1D")
+
+    def test_the_chart_never_offers_a_finer_timeframe_than_the_engine(self):
+        """A 4H campaign has no 5m history behind it, so 5m is not a view it
+        can be drawn at — the options start at its own timeframe."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "4h"
+        campaign.mother_timestamp = int(time.time()) - 200 * 86400
+        self.assertEqual(list(chart_timeframes_for("4h")), ["4h", "1d", "1w"])
+        self.assertEqual(list(chart_timeframes_for("5m")), ["5m", "15m", "1h"])
+        self.assertIn(CascadeEngine._auto_chart_timeframe(campaign, 250), {"4h", "1d", "1w"})
+
+    def test_the_timeframe_survives_a_snapshot_round_trip(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "1w"
+        campaign.escalates = False
+        restored = Campaign.from_dict(campaign.to_dict())
+        self.assertEqual(restored.timeframe, "1w")
+        self.assertFalse(restored.escalates)
+        # An older snapshot written before this field existed is a 5m campaign.
+        legacy = Campaign.from_dict({"campaign_id": "old", "symbol": "BTCUSDT", "mother_high": 105, "mother_low": 99})
+        self.assertEqual(legacy.timeframe, "5m")
+        self.assertTrue(legacy.escalates)
+
+    def test_recalc_does_not_reset_the_timeframe(self):
+        """_reset_derived_state wipes everything the replay rebuilds. Timeframe
+        is a setting, not replay output — resetting it would replay a 1D
+        campaign as if it were 5m."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "4h"
+        campaign.escalates = False
+        engine._reset_derived_state(campaign)
+        self.assertEqual(campaign.timeframe, "4h")
+        self.assertFalse(campaign.escalates)
+
+    def test_an_auto_restart_child_inherits_the_timeframe(self):
+        """The break was seen on the parent's candle, so that candle IS the
+        child's mother — the child cannot be running on anything else."""
+        engine = _mk_engine()
+        parent = _mk_campaign(engine)
+        parent.timeframe = "1d"
+        parent.escalates = False
+        parent.close_reason = "mother_broken"
+        candle = Candle(timestamp=_RECENT_TS + 86400, open=106.0, high=110.0, low=105.0, close=109.0)
+        child = engine._auto_restart(parent, candle)
+        self.assertIsNotNone(child)
+        self.assertEqual(child.timeframe, "1d")
+        self.assertFalse(child.escalates)
+
+    def test_the_stall_watchdog_does_not_cry_wolf_at_a_daily_campaign(self):
+        """15 minutes of silence is a stall on 5m and completely normal on 1D."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "1d"
+        campaign.state = "TRENDLINE_ACTIVE"
+        alerts = []
+        engine.on_alert = lambda title, body, level="warn": alerts.append(title)
+        engine._last_candle_ts = time.monotonic() - 3600  # an hour of silence
+        engine._check_watchdogs()
+        self.assertEqual(alerts, [])
+        # The same silence with a 5m campaign in the list IS a stall.
+        campaign.timeframe = "5m"
+        engine._check_watchdogs()
+        self.assertIn("Cascade engine STALLED", alerts)

@@ -234,6 +234,11 @@ def replay(case: Case, refetch: bool = False, capital: float = 2000.0) -> Result
         mother_low=mother[3],
         mother_timestamp=mother[0],
         mode="paper",
+        # The case's own chart timeframe. Replay feeds candles in directly, so
+        # this only labels the orders — but labelling a 15m replay "5m" is
+        # exactly the kind of quiet lie this field was added to stop.
+        timeframe=case.interval,
+        escalates=case.interval == "5m",
         min_notional_usd=5.0,
         tick_size=float(_tick_for(case.mother_high)),
         last_processed_ts=mother[0],
@@ -247,7 +252,7 @@ def replay(case: Case, refetch: bool = False, capital: float = 2000.0) -> Result
     for ts, o, h, low, c in rows[mi + 1 : limit]:
         candle = Candle(ts, o, h, low, c)
         history.append(candle)
-        engine._candles_5m["bt"] = list(history)
+        engine._candles["bt"] = list(history)
         engine._process_candle(campaign, candle)
         if first_fib_at is None and campaign.legs:
             first_fib_at = datetime.fromtimestamp(candle.timestamp, IST).strftime("%m-%d %H:%M")

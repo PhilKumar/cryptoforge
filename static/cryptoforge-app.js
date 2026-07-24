@@ -8193,6 +8193,15 @@ function _cfCascadeCampaignCard(campaign) {
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
     + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(stateLabel) + '</span>'
     + modeBadge
+    // The timeframe the engine steps this campaign on. Two campaigns on the
+    // same symbol can now be running on different candles, so the card has to
+    // say which — and whether this one is allowed to escalate.
+    + '<span class="admin-pill" data-state="info" title="'
+      + (campaign.escalates === false
+        ? 'Fixed timeframe — started deliberately from an older mother candle, never escalates.'
+        : 'Escalates 5m to 15m to 1H to 4H as the campaign outgrows the screen.')
+      + '">' + _escapeHtml(String(campaign.timeframe || '5m').toUpperCase())
+      + (campaign.escalates === false ? ' · fixed' : '') + '</span>'
     + (campaign.stale_model
       ? '<span class="admin-pill" data-state="warn" title="The fib and trendline rules have changed since '
         + 'this campaign drew its structure, so what you see came from the older logic. Nothing is broken '
@@ -8853,6 +8862,7 @@ async function cfCascadeStartCampaign() {
   var motherLow = Number((document.getElementById('cf-cascade-mother-low') || {}).value || 0);
   var motherTimeRaw = (document.getElementById('cf-cascade-mother-time') || {}).value || '';
   var mode = (document.getElementById('cf-cascade-mode') || {}).value || 'paper';
+  var timeframe = (document.getElementById('cf-cascade-timeframe') || {}).value || '5m';
 
   if (!symbol.trim()) return _cfCascadeSetError('Enter a symbol (e.g. BTCUSDT).');
   if (!(capital > 0)) return _cfCascadeSetError('Enter the campaign capital in USD.');
@@ -8862,7 +8872,8 @@ async function cfCascadeStartCampaign() {
   if (mode === 'live') {
     var confirmed = await cfConfirm(
       '<p><strong>LIVE mode places real orders on Binance Spot with real money.</strong></p>'
-      + '<p>' + _escapeHtml(symbol.trim().toUpperCase()) + ' — capital $' + _escapeHtml(String(capital)) + '</p>'
+      + '<p>' + _escapeHtml(symbol.trim().toUpperCase()) + ' ' + _escapeHtml(timeframe)
+      + ' — capital $' + _escapeHtml(String(capital)) + '</p>'
       + '<p>Start this live campaign?</p>',
       'Start LIVE Campaign', '🔴', true
     );
@@ -8874,7 +8885,8 @@ async function cfCascadeStartCampaign() {
     capital_usd: capital,
     mother_high: motherHigh,
     mother_low: motherLow,
-    mode: mode
+    mode: mode,
+    timeframe: timeframe
   };
   if (motherTimeRaw) {
     var parsed = Date.parse(motherTimeRaw);
@@ -9387,8 +9399,32 @@ function cfCascadeSetMode(mode) {
   }
 }
 
+// Which roll-ups the chart offers depends on the campaign: a 4H campaign has no
+// 5m candles behind it, so the server sends the three it can actually draw and
+// the buttons are rebuilt from that list rather than hardcoded to 5m/15m/1H.
+var _cfCascadeChartTfOptions = ['5m', '15m', '1h'];
+
+function _cfCascadeRenderTimeframeOptions(options) {
+  var list = (options && options.length) ? options : _cfCascadeChartTfOptions;
+  _cfCascadeChartTfOptions = list;
+  // The selection is sticky across campaigns. Opening a 4H campaign while '5m'
+  // was picked would leave a selection nothing can honour, so fall back to Auto.
+  if (_cfCascadeChartTf !== 'auto' && list.indexOf(_cfCascadeChartTf) < 0) _cfCascadeChartTf = 'auto';
+  var host = document.getElementById('cf-cascade-chart-tf');
+  if (!host) return;
+  var html = '';
+  for (var i = 0; i < list.length; i++) {
+    var tf = String(list[i]);
+    html += '<button type="button" class="cf-tf-option" data-tf="' + _escapeHtml(tf) + '" role="radio"'
+      + ' aria-checked="false" data-cf-click="cfCascadeSetTimeframe(\'' + _escapeHtml(tf) + '\')">'
+      + _escapeHtml(tf.toUpperCase()) + '</button>';
+  }
+  var auto = host.querySelector('[data-tf="auto"]');
+  host.innerHTML = (auto ? auto.outerHTML : '') + html;
+}
+
 function cfCascadeSetTimeframe(tf) {
-  var picked = (tf === '15m' || tf === '1h' || tf === '5m') ? tf : 'auto';
+  var picked = _cfCascadeChartTfOptions.indexOf(tf) >= 0 ? tf : 'auto';
   _cfCascadeChartTf = picked;
   _cfCascadeMarkTimeframe(picked);
   if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId, _cfCascadeChartMode);
@@ -9583,6 +9619,7 @@ async function cfCascadeShowChart(campaignId, mode) {
     body.innerHTML = _cfCascadeChartHtml(data);
     _cfChartBindZoom();
     cfCascadeZoomReset();
+    _cfCascadeRenderTimeframeOptions(data.timeframe_options);
     _cfCascadeMarkTimeframe(_cfCascadeChartTf, data.timeframe);
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta) {
@@ -9593,12 +9630,13 @@ async function cfCascadeShowChart(campaignId, mode) {
       var cands = data.candles || [];
       var motherT = data.mother && data.mother.t;
       var motherOff = motherT && cands.length && Number(cands[0].t) > Number(motherT);
+      var engineTf = data.campaign_timeframe || '5m';
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + cands.length
-        + ' ' + (data.timeframe || '5m') + ' candles since mother candle ('
+        + ' ' + (data.timeframe || engineTf) + ' candles since mother candle ('
         + _cfCascadeIst(motherT) + ' IST) · '
         + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)'
-        + (data.timeframe_auto ? ' · auto-fitted to ' + (data.timeframe || '5m') : '')
-        + (data.timeframe && data.timeframe !== '5m' ? ' · geometry is always 5m-derived' : '')
+        + (data.timeframe_auto ? ' · auto-fitted to ' + (data.timeframe || engineTf) : '')
+        + (data.timeframe && data.timeframe !== engineTf ? ' · geometry is always ' + engineTf + '-derived' : '')
         + (motherOff ? ' · ⚠ mother candle is off the left edge on this timeframe — the mother LINE still shows; tap Auto to fit the whole campaign' : '');
     }
   } catch (error) {
