@@ -2914,6 +2914,95 @@ class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(buys[0]["order_type"], "stop_limit")
         self.assertAlmostEqual(buys[0]["stop_price"], 96.5)
 
+
+class CascadeStalePotHoldTests(unittest.IsolatedAsyncioTestCase):
+    """The late/left-anchored start bug (BTCUSDT #3, 2026-07-24): a campaign
+    started 2+ days after its mother candle replayed a fall that had already
+    bottomed and bounced, then armed a buy stop just above the CURRENT price —
+    buying at 65,646 when the real low was ~64,511, on no new low at all.
+
+    A buy stop may be raised only for a genuine live cross; a market far above
+    the trigger means the turn already happened, so the pot is HELD until price
+    makes a fresh low. This is Phil's new-low rule, applied to the first entry.
+    """
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+        self.campaign = _mk_campaign(self.engine, mode="live")
+        self.campaign.state = "TRENDLINE_ACTIVE"
+        leg = Leg(leg_id=1, trendline_id=1, low=99.5, touch_high=102.0, touch_timestamp=1200)
+        self.campaign.legs.append(leg)
+        build_fib_ladder_and_pool(self.campaign, leg)
+        plan_leg_orders(self.campaign, leg)
+        self.campaign.pending_usd = 40.0
+        self.campaign.collected = [[1, 2, 16.0, 97.0]]
+        self.campaign.pending_line = 96.0
+        # Trigger from a fall that (in the bug) already bottomed days ago.
+        self.campaign.pending_stop_price = 96.5
+        self.campaign.pending_limit_price = 96.55
+        self.campaign.pending_rev = 1
+
+    async def test_a_market_far_above_the_trigger_is_held_not_armed(self):
+        # 96.5 -> 98.5 is 2.07% above, well past the 0.5% live-cross ceiling.
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 98.5}
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertFalse(placed)
+        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "buy"], [], "no buy may be placed")
+        self.assertIn(self.campaign.campaign_id, self.engine._stale_pot_held)
+        self.assertEqual(self.campaign.pending_usd, 40.0, "the pot stays collected, not lost")
+        held = [e for e in self.campaign.event_log if "HELD" in e["message"]]
+        self.assertEqual(len(held), 1, "the hold is logged once, not every tick")
+
+    async def test_the_hold_is_logged_once_across_repeated_ticks(self):
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 98.5}
+        alerts = []
+        self.engine.on_alert = lambda *a, **k: alerts.append(a)
+        for _ in range(5):
+            self.assertFalse(await self.engine._place_pending_stop(self.campaign))
+        held = [e for e in self.campaign.event_log if "HELD" in e["message"]]
+        self.assertEqual(len(held), 1, "five ticks, one log line")
+
+    async def test_a_small_live_cross_still_arms(self):
+        """The legitimate case is untouched: a real live cross within the ceiling
+        raises the stop just above the market and rests it."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.6}  # 0.10% above
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
+        self.assertEqual(len(buys), 1)
+        self.assertAlmostEqual(buys[0]["stop_price"], 96.6 + self.campaign.tick_size, places=6)
+        self.assertNotIn(self.campaign.campaign_id, self.engine._stale_pot_held)
+
+    async def test_a_fresh_low_below_the_trigger_releases_the_hold(self):
+        """Held while price is high; then price makes a new low and turns — the
+        walk-down clears the hold and the entry arms at the genuine turn."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 98.5}
+        self.assertFalse(await self.engine._place_pending_stop(self.campaign))
+        self.assertIn(self.campaign.campaign_id, self.engine._stale_pot_held)
+        # A new low re-arms the trigger lower (what _advance_stop_entries does).
+        self.engine._set_pending_stop(
+            self.campaign, 95.0, Candle(timestamp=9999, open=95.5, high=95.6, low=94.8, close=95.0)
+        )
+        self.assertNotIn(self.campaign.campaign_id, self.engine._stale_pot_held, "a new low is a fresh chance")
+        # Price now sits just above the fresh trigger — a real turn — so it arms.
+        # (Bust the 1s price cache: real ticks are seconds apart and read fresh.)
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 95.0}
+        self.engine._price_cache.clear()
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
+        self.assertAlmostEqual(buys[0]["stop_price"], 95.0 + self.campaign.tick_size, places=6)
+
+    async def test_placing_the_order_clears_the_held_flag(self):
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 98.5}
+        await self.engine._place_pending_stop(self.campaign)
+        self.assertIn(self.campaign.campaign_id, self.engine._stale_pot_held)
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 95.0}  # below trigger, rests normally
+        self.engine._price_cache.clear()
+        self.assertTrue(await self.engine._place_pending_stop(self.campaign))
+        self.assertNotIn(self.campaign.campaign_id, self.engine._stale_pot_held)
+
     async def test_no_price_falls_back_to_the_resting_stop(self):
         """A failed price read must not trigger the aggressive immediate buy."""
         self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 0.0}

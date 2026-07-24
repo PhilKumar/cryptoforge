@@ -95,6 +95,18 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # SOL moves in bigger relative steps than BTC or PAXG, so it wants 2 cents flat
 # rather than five ticks.
 STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
+# The most a buy stop may be raised above its trigger and still count as a
+# legitimate LIVE cross. When price is at or just above a freshly-set trigger
+# the stop is raised to sit just over the market — a real continuation up. But
+# when a campaign starts LATE or off a candle read from the left, the replay
+# collects a fall that already bottomed and bounced DAYS ago, and the current
+# price is far above the trigger. Arming there buys over value on no new low —
+# exactly what the new-low rule forbids ([[proj_cascade_new_low_rule]]). So a
+# raise beyond this fraction is refused: the pot stays collected and unarmed,
+# and the walk-down re-arms it only when a genuine new low prints below the
+# trigger. A live cross lands within a tick or two (well under 0.1% on the
+# moves seen); the late-start bug that motivated this was 1.39% above.
+MAX_STOP_RAISE_PCT = 0.005
 DEFAULT_TICK_SIZE = 0.01
 # A mother break rolls straight into a fresh campaign on the breaking candle.
 # If price simply rips upward, every candle would break its predecessor, so a
@@ -1115,6 +1127,11 @@ class CascadeEngine:
         # symbol means no group — campaigns take their typed capital unchanged,
         # which is exactly the pre-group behaviour.
         self.capital_groups: Dict[str, float] = {}
+        # Campaign ids whose pot is collected but HELD unarmed because the fall
+        # it collected already bounced far above the trigger (a late/left start).
+        # In memory only, for one-shot logging — the hold itself is recomputed
+        # from live price every tick, so a restart simply re-evaluates it.
+        self._stale_pot_held: set = set()
         # See _acquire_write_lock: only the holder places orders.
         self._lock_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cascade-writer.lock"
@@ -2825,6 +2842,10 @@ class CascadeEngine:
         campaign.pending_stop_price = stop
         campaign.pending_limit_price = limit
         campaign.pending_stop_ts = probe.timestamp
+        # The trigger just moved — a new low re-armed the pot lower. Whatever
+        # hold was in place is stale; let the next placement re-evaluate against
+        # the fresh trigger (and re-log a hold if the market is still far above).
+        self._stale_pot_held.discard(campaign.campaign_id)
         self._log_event(
             campaign,
             "order",
@@ -2882,6 +2903,7 @@ class CascadeEngine:
         campaign.pending_last_red = None
         campaign.pending_order_id = None
         campaign.pending_filled_qty = 0.0
+        self._stale_pot_held.discard(campaign.campaign_id)
 
     def _fill_pending(self, campaign: Campaign, price: float, timestamp: int, order_id: str = "PAPER") -> None:
         """The turn came: buy everything the fall collected, in one order."""
@@ -3425,6 +3447,37 @@ class CascadeEngine:
         eff_stop, eff_limit = stop, limit
         raised = bool(market and market >= stop)
         if raised:
+            # How far above the trigger is the market? A legitimate raise is a
+            # live cross — price ticked just over a freshly-set trigger within
+            # the price-cache window. A large gap means the fall this pot
+            # collected already bottomed and bounced (a late or left-anchored
+            # start replays an old fall in seconds), so arming just above the
+            # current price would buy over value on NO new low. Hold instead:
+            # keep the pot collected and let the walk-down re-arm it only when a
+            # genuine new low prints below the trigger.
+            raise_pct = (market - stop) / stop if stop > 0 else 0.0
+            if raise_pct > MAX_STOP_RAISE_PCT:
+                if campaign.campaign_id not in self._stale_pot_held:
+                    self._stale_pot_held.add(campaign.campaign_id)
+                    self._log_event(
+                        campaign,
+                        "order",
+                        f"Buy HELD, not armed: price {market:,.2f} is {raise_pct * 100:.2f}% above the "
+                        f"trigger {stop:,.2f}. The collected fall already bottomed and bounced, so arming "
+                        f"here would buy over value with no new low. ${campaign.pending_usd:,.2f} stays "
+                        f"collected — it will arm only when price makes a fresh low below {stop:,.2f}.",
+                    )
+                    self._alert(
+                        "Cascade entry held — no new low",
+                        f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()})\n"
+                        f"Price {market:,.2f} is {raise_pct * 100:.2f}% above the collected fall's trigger "
+                        f"{stop:,.2f}.\n\nHolding ${campaign.pending_usd:,.2f} until price makes a new low — "
+                        f"it will not buy over value. This is normal when a campaign is started late or from "
+                        f"an older mother candle.",
+                        level="warn",
+                        dedupe_sec=1800,
+                    )
+                return False
             gap = limit - stop
             eff_stop = round(market + tick, 8)
             eff_limit = round(eff_stop + (gap if gap > 0 else STOP_LIMIT_OFFSET_TICKS * tick), 8)
@@ -3487,6 +3540,7 @@ class CascadeEngine:
                 )
                 return False
             campaign.pending_order_id = order_id
+            self._stale_pot_held.discard(campaign.campaign_id)
             if raised:
                 self._log_event(
                     campaign,
