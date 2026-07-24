@@ -9,6 +9,7 @@ import pandas as pd
 
 from engine.cascade import (
     ANCHOR_CLOSE_TOLERANCE_PCT,
+    CAMPAIGN_START_TIMEFRAMES,
     MIN_LEG_SEPARATION_PCT,
     Campaign,
     Candle,
@@ -3093,3 +3094,83 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         campaign.timeframe = "5m"
         engine._check_watchdogs()
         self.assertIn("Cascade engine STALLED", alerts)
+
+
+class CascadeMinorMotherCandleTests(unittest.IsolatedAsyncioTestCase):
+    """Phil's rule: a MINOR mother candle is always 5m.
+
+    A minor MC is a sub-mother marked inside a move that is already running.
+    Which chart it was spotted on is irrelevant — sitting on a 1D or 1H chart
+    and marking a minor high does NOT make that high a 1D or 1H structure, so
+    the campaign it starts is 5m either way. Only a MAJOR mother candle gets to
+    choose a timeframe.
+    """
+
+    async def test_a_minor_mc_marked_on_a_daily_chart_still_starts_on_5m(self):
+        engine = _mk_engine()
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe="1d", mc_kind="minor"
+        )
+        engine.stop()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["campaign"]["timeframe"], "5m", "a minor MC is never 1D")
+        self.assertEqual(result["campaign"]["mc_kind"], "minor")
+
+    async def test_every_higher_timeframe_is_overridden_for_a_minor_mc(self):
+        engine = _mk_engine()
+        for asked in ("4h", "1d", "1w"):
+            result = await engine.start_campaign(
+                "BTCUSDT",
+                2000,
+                105 + CAMPAIGN_START_TIMEFRAMES.index(asked),
+                99,
+                mother_timestamp=_RECENT_TS,
+                timeframe=asked,
+                mc_kind="minor",
+            )
+            self.assertEqual(result["campaign"]["timeframe"], "5m", f"{asked} minor MC must be 5m")
+        engine.stop()
+
+    async def test_a_minor_mc_still_escalates_like_any_5m_campaign(self):
+        """It is 5m, so it climbs the ladder like any other 5m campaign. The
+        minor/major distinction decides the STARTING timeframe, not whether the
+        campaign is allowed to grow."""
+        engine = _mk_engine()
+        result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, mc_kind="minor")
+        engine.stop()
+        self.assertTrue(result["campaign"]["escalates"])
+
+    async def test_a_major_mc_keeps_the_timeframe_it_was_given(self):
+        """The override is for minors only — a major MC read from the left is
+        exactly the case that is allowed to be 1D."""
+        engine = _mk_engine()
+        mother_ts = (int(time.time()) - 30 * 86400) // 86400 * 86400
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 105, 99, mother_timestamp=mother_ts, timeframe="1d", mc_kind="major"
+        )
+        engine.stop()
+        self.assertEqual(result["campaign"]["timeframe"], "1d")
+        self.assertFalse(result["campaign"]["escalates"])
+
+    async def test_major_is_the_default_and_unknown_kinds_are_not_minor(self):
+        """Anything that is not literally 'minor' is a major MC — a typo must
+        not silently pin a deliberate 1D campaign to 5m."""
+        engine = _mk_engine()
+        mother_ts = (int(time.time()) - 30 * 86400) // 86400 * 86400
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 105, 99, mother_timestamp=mother_ts, timeframe="1d", mc_kind="MINR"
+        )
+        engine.stop()
+        self.assertEqual(result["campaign"]["mc_kind"], "major")
+        self.assertEqual(result["campaign"]["timeframe"], "1d")
+
+    def test_the_kind_survives_a_snapshot_round_trip_and_a_recalc(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.mc_kind = "minor"
+        self.assertEqual(Campaign.from_dict(campaign.to_dict()).mc_kind, "minor")
+        engine._reset_derived_state(campaign)
+        self.assertEqual(campaign.mc_kind, "minor", "the kind is a setting, not replay output")
+        # A snapshot written before the field existed is a major MC.
+        legacy = Campaign.from_dict({"campaign_id": "old", "symbol": "BTCUSDT"})
+        self.assertEqual(legacy.mc_kind, "major")

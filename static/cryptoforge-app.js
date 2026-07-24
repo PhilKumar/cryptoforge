@@ -8202,6 +8202,10 @@ function _cfCascadeCampaignCard(campaign) {
         : 'Escalates 5m to 15m to 1H to 4H as the campaign outgrows the screen.')
       + '">' + _escapeHtml(String(campaign.timeframe || '5m').toUpperCase())
       + (campaign.escalates === false ? ' · fixed' : '') + '</span>'
+    + (campaign.mc_kind === 'minor'
+      ? '<span class="admin-pill" data-state="info" title="Sub-mother marked inside a move that was '
+        + 'already running — always 5m, whatever chart it was spotted on.">MINOR MC</span>'
+      : '')
     + (campaign.stale_model
       ? '<span class="admin-pill" data-state="warn" title="The fib and trendline rules have changed since '
         + 'this campaign drew its structure, so what you see came from the older logic. Nothing is broken '
@@ -8862,7 +8866,10 @@ async function cfCascadeStartCampaign() {
   var motherLow = Number((document.getElementById('cf-cascade-mother-low') || {}).value || 0);
   var motherTimeRaw = (document.getElementById('cf-cascade-mother-time') || {}).value || '';
   var mode = (document.getElementById('cf-cascade-mode') || {}).value || 'paper';
-  var timeframe = (document.getElementById('cf-cascade-timeframe') || {}).value || '5m';
+  var mcKind = (document.getElementById('cf-cascade-mc-kind') || {}).value || 'major';
+  // A minor MC is 5m by rule, not by choice — the picker is locked when one is
+  // selected, and the server forces it too, so a stale form cannot smuggle 1D in.
+  var timeframe = mcKind === 'minor' ? '5m' : ((document.getElementById('cf-cascade-timeframe') || {}).value || '5m');
 
   if (!symbol.trim()) return _cfCascadeSetError('Enter a symbol (e.g. BTCUSDT).');
   if (!(capital > 0)) return _cfCascadeSetError('Enter the campaign capital in USD.');
@@ -8873,6 +8880,7 @@ async function cfCascadeStartCampaign() {
     var confirmed = await cfConfirm(
       '<p><strong>LIVE mode places real orders on Binance Spot with real money.</strong></p>'
       + '<p>' + _escapeHtml(symbol.trim().toUpperCase()) + ' ' + _escapeHtml(timeframe)
+      + ' · ' + _escapeHtml(mcKind) + ' MC'
       + ' — capital $' + _escapeHtml(String(capital)) + '</p>'
       + '<p>Start this live campaign?</p>',
       'Start LIVE Campaign', '🔴', true
@@ -8886,7 +8894,8 @@ async function cfCascadeStartCampaign() {
     mother_high: motherHigh,
     mother_low: motherLow,
     mode: mode,
-    timeframe: timeframe
+    timeframe: timeframe,
+    mc_kind: mcKind
   };
   if (motherTimeRaw) {
     var parsed = Date.parse(motherTimeRaw);
@@ -9386,6 +9395,25 @@ function _cfCascadeChartHtml(d) {
 // its own mother candle off the left edge, and every line on the chart is
 // measured from that candle.
 var _cfCascadeChartTf = 'auto';
+
+// A minor MC — a sub-mother marked inside a move that is already running — is
+// always a 5m campaign, whatever chart it was spotted on. Looking at a 1D or 1H
+// chart does not make the minor high a 1D or 1H structure. So picking Minor
+// pins the timeframe to 5m and locks the picker rather than leaving a choice
+// that is only ever wrong.
+function cfCascadeSyncMcKind() {
+  var kind = (document.getElementById('cf-cascade-mc-kind') || {}).value || 'major';
+  var tf = document.getElementById('cf-cascade-timeframe');
+  if (!tf) return;
+  if (kind === 'minor') {
+    tf.value = '5m';
+    tf.disabled = true;
+    tf.title = 'A minor MC is always 5m, whatever chart you marked it on.';
+  } else {
+    tf.disabled = false;
+    tf.title = '';
+  }
+}
 
 function cfCascadeSetMode(mode) {
   var picked = mode === 'live' ? 'live' : 'paper';

@@ -190,15 +190,22 @@ TIMEFRAME_SECONDS = {
 # Capped at 4H on purpose: a 5m campaign quietly becoming a weekly position is
 # too big a change of character to happen by itself.
 ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
-# What may be picked when STARTING a campaign. Two kinds only, per Phil:
-#   5m  — the normal case: a mother candle read off the right-hand edge, or a
-#         sub-mother started inside a move. It escalates up ESCALATION_LADDER.
-#   4h / 1d / 1w — a higher-timeframe campaign started deliberately from an
-#         older, bigger mother candle "from the left". These never escalate;
-#         the timeframe they were started on is the timeframe they keep.
+# What may be picked when STARTING a campaign. The timeframe is not really a
+# free choice — it falls out of what KIND of mother candle is being set:
+#   MAJOR — the campaign's own anchor. Read off the right-hand edge it is 5m;
+#           read from the left, off an older and bigger candle, it is a 4H/1D/1W
+#           campaign started deliberately, and it keeps that timeframe for life.
+#   MINOR — a sub-mother marked inside a move that is already running. It is
+#           ALWAYS 5m, whatever chart it was spotted on. Phil's rule: viewing a
+#           1D or 1H chart and marking a minor MC still starts a 5m campaign,
+#           because the minor high is a small structure and only 5m candles
+#           resolve it. MC_KIND_TIMEFRAMES enforces this — the timeframe sent
+#           with a minor MC is ignored, never obeyed.
 # 15m and 1h exist as *running* timeframes (a 5m campaign escalates into them)
 # but are not offered as starting points, so the rule stays one sentence.
 CAMPAIGN_START_TIMEFRAMES = ("5m", "4h", "1d", "1w")
+MC_KINDS = ("major", "minor")
+MINOR_MC_TIMEFRAME = BASE_TIMEFRAME
 # How far back a mother candle may be anchored, measured in bars of the
 # campaign's own timeframe rather than in days. 5000 bars is 30 pages of the
 # broker's 1000-bar klines with room to spare.
@@ -601,6 +608,10 @@ class Campaign:
     # started on 5m — the right-hand-edge and sub-mother cases. A campaign
     # started deliberately on 4H/1D/1W keeps its timeframe for life.
     escalates: bool = True
+    # "major" = this campaign's own anchor, the one whose timeframe you choose.
+    # "minor" = a sub-mother marked inside a move that is already running, which
+    # is always 5m no matter what chart it was spotted on.
+    mc_kind: str = "major"
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
     tick_size: float = DEFAULT_TICK_SIZE  # exchange price increment, for the stop/limit gap
     parent_campaign_id: Optional[str] = None  # set when a mother break auto-started this one
@@ -742,6 +753,7 @@ class Campaign:
             "mode": self.mode,
             "timeframe": self.timeframe,
             "escalates": self.escalates,
+            "mc_kind": self.mc_kind,
             "min_notional_usd": self.min_notional_usd,
             "tick_size": self.tick_size,
             "parent_campaign_id": self.parent_campaign_id,
@@ -801,6 +813,7 @@ class Campaign:
             "mode",
             "timeframe",
             "escalates",
+            "mc_kind",
             "min_notional_usd",
             "tick_size",
             "parent_campaign_id",
@@ -1256,10 +1269,18 @@ class CascadeEngine:
         mother_timestamp: Optional[int] = None,
         mode: str = "paper",
         timeframe: str = BASE_TIMEFRAME,
+        mc_kind: str = "major",
     ) -> dict:
         symbol = str(symbol or "").strip().upper()
         mode = "live" if str(mode or "").strip().lower() == "live" else "paper"
         timeframe = str(timeframe or BASE_TIMEFRAME).strip().lower() or BASE_TIMEFRAME
+        mc_kind = "minor" if str(mc_kind or "").strip().lower() == "minor" else "major"
+        # A minor MC is a sub-mother marked inside a move that is already
+        # running. It is always 5m, whatever chart it was spotted on — you can
+        # be looking at 1D, mark a minor high, and it still starts a 5m
+        # campaign. So the timeframe is not asked for here, it is decided.
+        if mc_kind == "minor":
+            timeframe = MINOR_MC_TIMEFRAME
         capital_usd = _coerce_float(capital_usd)
         mother_high = _coerce_float(mother_high)
         mother_low = _coerce_float(mother_low)
@@ -1348,6 +1369,7 @@ class CascadeEngine:
             # Only a 5m campaign — right-hand edge or sub-mother — ever climbs
             # the ladder. One started on 4H/1D/1W stays there for life.
             escalates=timeframe == BASE_TIMEFRAME,
+            mc_kind=mc_kind,
             min_notional_usd=min_notional,
             tick_size=tick_size,
             model_version=MODEL_VERSION,
@@ -1360,8 +1382,13 @@ class CascadeEngine:
             campaign,
             "start",
             f"Campaign {campaign.campaign_id} started ({mode.upper()}) — {symbol} {timeframe}, "
-            f"capital ${capital_usd:g}, mother high {mother_high:g} / low {mother_low:g}"
-            + ("" if campaign.escalates else " — fixed timeframe, no escalation"),
+            f"{mc_kind} MC, capital ${capital_usd:g}, "
+            f"mother high {mother_high:g} / low {mother_low:g}"
+            + (
+                " — minor MC, so 5m regardless of the chart it was marked on"
+                if mc_kind == "minor"
+                else ("" if campaign.escalates else " — fixed timeframe, no escalation")
+            ),
         )
         self.start()
         self._emit_update()
@@ -1572,6 +1599,7 @@ class CascadeEngine:
             # replay a 1D campaign as if it were 5m.
             "timeframe",
             "escalates",
+            "mc_kind",
             "min_notional_usd",
             "tick_size",
             "parent_campaign_id",
@@ -2907,6 +2935,7 @@ class CascadeEngine:
             # climbing, a 1D chain stays on 1D.
             timeframe=parent.timeframe,
             escalates=parent.escalates,
+            mc_kind=parent.mc_kind,
             min_notional_usd=parent.min_notional_usd,
             tick_size=parent.tick_size,
             parent_campaign_id=parent.campaign_id,

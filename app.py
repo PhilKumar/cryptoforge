@@ -7193,6 +7193,7 @@ async def cascade_start_campaign(request: Request):
         mother_timestamp=mother_timestamp,
         mode=mode,
         timeframe=str(body.get("timeframe") or "5m"),
+        mc_kind=str(body.get("mc_kind") or "major"),
     )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
