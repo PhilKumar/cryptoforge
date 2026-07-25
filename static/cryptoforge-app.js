@@ -8010,7 +8010,7 @@ function cfRenderCascadeGroups(groups) {
     var g = groups[sym] || {};
     var available = Number(g.available_usd) || 0;
     return '<div class="table-meta" style="display:flex;justify-content:space-between;gap:8px;">'
-      + '<span><strong>' + _escapeHtml(sym) + '</strong> group</span>'
+      + '<span><strong>' + _escapeHtml(sym) + '</strong> group fund</span>'
       + '<span>$' + _cfCascadeUsd(g.committed_usd) + ' committed · '
       + '<strong style="color:' + (available > 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)') + ';">$'
       + _cfCascadeUsd(available) + '</strong> free of $' + _cfCascadeUsd(g.budget_usd) + '</span>'
@@ -8033,8 +8033,8 @@ async function cfCascadeSaveCapitalGroup() {
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Failed to save group'));
     cfToast(budget > 0
-      ? symbol.toUpperCase() + ' group set to $' + _cfCascadeUsd(budget)
-      : symbol.toUpperCase() + ' group removed', 'success');
+      ? symbol.toUpperCase() + ' group fund set to $' + _cfCascadeUsd(budget)
+      : symbol.toUpperCase() + ' group fund removed', 'success');
     cfLoadCascadeStatus(false);
   } catch (error) {
     cfToast('Group save failed: ' + error.message, 'danger');
@@ -9475,9 +9475,11 @@ function _cfCascadeChartTables(d) {
     });
   });
   if (!rows.length) return '<div class="table-meta" style="padding:8px 0;">No trendline or fib marked yet.</div>';
-  return '<div class="table-surface" style="margin-top:10px;"><div class="table-scroll">'
+  return '<details class="cf-cascade-chart-details">'
+    + '<summary><span>Structure, fibs &amp; order details</span><em>' + rows.length + ' rows · expand</em></summary>'
+    + '<div class="table-surface"><div class="table-scroll">'
     + '<table class="trade-table"><thead><tr><th>Object</th><th>Anchor</th><th class="num">Price</th><th>Time / Status</th></tr></thead>'
-    + '<tbody>' + rows.join('') + '</tbody></table></div></div>';
+    + '<tbody>' + rows.join('') + '</tbody></table></div></div></details>';
 }
 
 function _cfCascadeChartHtml(d) {
@@ -9746,24 +9748,24 @@ async function cfCascadeShowChart(campaignId, mode) {
     _cfChartBindZoom();
     cfCascadeZoomReset();
     _cfCascadeRenderTimeframeOptions(data.timeframe_options);
+    // The API protects the mother candle from being pushed off screen.  Reflect
+    // a forced wider view in the selector so the visible chart and its control
+    // never disagree.
+    if (data.mother_forced_visible && data.timeframe) _cfCascadeChartTf = data.timeframe;
     _cfCascadeMarkTimeframe(_cfCascadeChartTf, data.timeframe);
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta) {
-      // The mother PRICE line is always drawn; the mother CANDLE only fits if
-      // it is inside the window. On 5m a campaign older than ~25h pushes the
-      // candle off the left edge — say so, and point at Auto which rolls the
-      // timeframe up until the whole campaign (mother included) fits.
       var cands = data.candles || [];
       var motherT = data.mother && data.mother.t;
-      var motherOff = motherT && cands.length && Number(cands[0].t) > Number(motherT);
       var engineTf = data.campaign_timeframe || '5m';
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + cands.length
         + ' ' + (data.timeframe || engineTf) + ' candles since mother candle ('
         + _cfCascadeIst(motherT) + ' IST) · '
         + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)'
         + (data.timeframe_auto ? ' · auto-fitted to ' + (data.timeframe || engineTf) : '')
+        + (data.mother_forced_visible ? ' · widened to keep the mother candle visible' : '')
         + (data.timeframe && data.timeframe !== engineTf ? ' · geometry is always ' + engineTf + '-derived' : '')
-        + (motherOff ? ' · ⚠ mother candle is off the left edge on this timeframe — the mother LINE still shows; tap Auto to fit the whole campaign' : '');
+        ;
     }
   } catch (error) {
     body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(error.message) + '</div>';

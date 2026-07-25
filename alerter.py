@@ -13,7 +13,7 @@ Configure via .env:
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -35,6 +35,14 @@ _client: Optional[httpx.AsyncClient] = None
 # alert nobody holds on to can be collected before it is delivered — and a
 # dropped alert is invisible by definition: you find out by not being told.
 _inflight: set = set()
+
+# Alerts go to people, not servers.  Keep their clock aligned with the chart
+# and Cascade event log even when the application host itself runs in UTC.
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _ist_timestamp() -> str:
+    return datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -103,7 +111,7 @@ def alert(title: str, body: str, level: str = "error") -> None:
         return
 
     icon = {"error": "🔴", "warn": "🟡", "info": "🟢"}.get(level, "⚪")
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts = _ist_timestamp()
 
     # HTML for Telegram
     html = f"{icon} <b>[CryptoForge] {title}</b>\n<code>{ts}</code>\n\n{body}"

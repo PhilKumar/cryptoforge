@@ -6919,8 +6919,20 @@ html[data-theme="light"] .journal-entry-notes section {
     margin-bottom: 14px;
   }
   .cf-cascade-form .input-group { margin: 0; min-width: 0; }
+  .cf-cascade-form .input-group > label {
+    min-height: 2.5em;
+    display: flex;
+    align-items: flex-end;
+  }
   .cf-cascade-form .input-group input,
   .cf-cascade-form .input-group select { width: 100%; }
+  .cf-cascade-group-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .cf-cascade-group-control .btn { min-width: 52px; }
   .cf-cascade-form-note {
     grid-column: 1 / -1;
     font-size: 11px;
@@ -7067,6 +7079,35 @@ html[data-theme="light"] .journal-entry-notes section {
     scrollbar-gutter: stable;
   }
   .cf-chart-overlay #cf-cascade-chart-body svg { width: 100%; height: auto; }
+  /* The structure ledger can grow by five rows per fib.  Keep the chart as the
+     primary view and expose the detail ledger as a compact, independently
+     scrollable drawer instead of making the entire dialog one long scroll. */
+  .cf-cascade-chart-details {
+    margin-top: 12px;
+    border: 1px solid rgba(118,138,176,0.2);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.025);
+    overflow: hidden;
+  }
+  .cf-cascade-chart-details > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .cf-cascade-chart-details > summary::-webkit-details-marker { display: none; }
+  .cf-cascade-chart-details > summary::before { content: '▸'; color: var(--accent); }
+  .cf-cascade-chart-details[open] > summary::before { content: '▾'; }
+  .cf-cascade-chart-details > summary span { margin-right: auto; }
+  .cf-cascade-chart-details > summary em { color: var(--muted); font-size: 11px; font-style: normal; font-weight: 500; }
+  .cf-cascade-chart-details[open] > summary { border-bottom: 1px solid rgba(118,138,176,0.16); }
+  .cf-cascade-chart-details .table-surface { margin: 0; border: 0; border-radius: 0; }
+  .cf-cascade-chart-details .table-scroll { max-height: min(34vh, 300px); overflow: auto; }
   body.cf-chart-fs-open { overflow: hidden; }
 
   /* Closed-round trade log: a reading dialog, not a drawing, so it wants a

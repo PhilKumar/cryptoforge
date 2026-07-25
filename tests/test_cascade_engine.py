@@ -17,6 +17,7 @@ from engine.cascade import (
     FibLadder,
     Fill,
     Leg,
+    PendingOrder,
     Round,
     build_fib_ladder_and_pool,
     chart_timeframes_for,
@@ -342,7 +343,7 @@ class CascadeSwingModelTests(unittest.TestCase):
     def test_mother_break_ends_the_campaign(self):
         self._feed_real(6)
         _feed(self.engine, self.campaign, Candle(99 * 300, 65000.0, 65200.0, 64900.0, 65150.0))
-        self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
+        self.assertEqual(self.campaign.state, "MOTHER_BREAK_PENDING")
         self.assertTrue(self.campaign.mother_broken_above)
 
 
@@ -544,6 +545,8 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
             (40, 64967.99, 65100.00, 64898.01, 64994.12),
         ]:
             _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
+        _feed(self.engine, self.campaign, Candle(41 * 300, 64994.12, 65010.0, 64920.0, 64960.0))
+        _feed(self.engine, self.campaign, Candle(42 * 300, 64960.0, 65020.0, 64900.0, 64980.0))
         self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
         self.assertEqual(self.campaign.filled_base_qty, 0.0)
         self.assertEqual(self.campaign.realized_pnl_total, 0.0)
@@ -814,8 +817,14 @@ class CascadeAutoRestartTests(unittest.TestCase):
         )
         self.engine.campaigns["p1"] = self.parent
 
-    def _break(self, high=65200.0, low=65050.0, ts=3000):
+    def _break(self, high=65200.0, low=65050.0, ts=3000, confirm=True):
         _feed(self.engine, self.parent, Candle(ts, 65100.0, high, low, 65180.0))
+        if confirm:
+            self._confirm_break(high, low, ts)
+
+    def _confirm_break(self, high=65200.0, low=65050.0, ts=3000):
+        _feed(self.engine, self.parent, Candle(ts + 300, high - 20.0, high - 5.0, low, high - 12.0))
+        _feed(self.engine, self.parent, Candle(ts + 600, high - 12.0, high - 4.0, low, high - 8.0))
 
     def _child(self):
         return next((c for c in self.engine.campaigns.values() if c.campaign_id != "p1"), None)
@@ -829,6 +838,26 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self.assertAlmostEqual(child.mother_low, 65050.0)  # and its low
         self.assertEqual(child.mother_timestamp, 3000)
         self.assertEqual(child.state, "WAITING_FIRST_DEPTH")
+
+    def test_break_freezes_for_two_closed_5m_candles_before_restarting(self):
+        self._break(confirm=False)
+        self.assertEqual(self.parent.state, "MOTHER_BREAK_PENDING")
+        self.assertEqual(self.parent.mother_break_wait_remaining, 2)
+        self.assertIsNone(self._child())
+        self.assertEqual(self.engine.closed_campaigns, [])
+
+        _feed(self.engine, self.parent, Candle(3300, 65180.0, 65190.0, 65080.0, 65170.0))
+        self.assertEqual(self.parent.state, "MOTHER_BREAK_PENDING")
+        self.assertEqual(self.parent.mother_break_wait_remaining, 1)
+        self.assertIsNone(self._child())
+
+        _feed(self.engine, self.parent, Candle(3600, 65170.0, 65195.0, 65090.0, 65185.0))
+        child = self._child()
+        self.assertEqual(self.parent.state, "MOTHER_BROKEN")
+        self.assertIsNotNone(child)
+        self.assertAlmostEqual(child.mother_high, 65200.0)
+        self.assertAlmostEqual(child.mother_low, 65050.0)
+        self.assertEqual(child.mother_timestamp, 3000)
 
     def test_nothing_is_carried_over(self):
         self.parent.legs.append(Leg(leg_id=1, trendline_id=1, low=1.0, touch_high=2.0, touch_timestamp=0))
@@ -887,6 +916,36 @@ class CascadeAutoRestartTests(unittest.TestCase):
         child.close_reason = "mother_broken"
         grandchild = self.engine._auto_restart(child, Candle(6000, 1.0, 2.0, 0.5, 1.5))
         self.assertEqual(grandchild.barren_chain, 0)
+
+
+class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
+    """The MC remains a 5m reference after the structure climbs to 15m/1H."""
+
+    async def test_an_escalated_campaign_freezes_on_the_first_5m_break(self):
+        engine = _mk_engine()
+        campaign = Campaign(
+            campaign_id="watch-1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            timeframe="1h",
+            start_timeframe="5m",
+            mode="paper",
+        )
+        engine.campaigns[campaign.campaign_id] = campaign
+
+        async def _five_minute_break(symbol, since_ts, timeframe):
+            self.assertEqual(timeframe, "5m")
+            return [Candle(300, 100.0, 106.0, 99.5, 104.0, timeframe="5m")]
+
+        engine._fetch_closed_candles = _five_minute_break
+        self.assertTrue(await engine._candle_step(campaign))
+        self.assertEqual(campaign.state, "MOTHER_BREAK_PENDING")
+        self.assertEqual(campaign.mother_break_candle["timestamp"], 300)
+        self.assertEqual(campaign.mother_break_candle["high"], 106.0)
+        self.assertEqual(campaign.mother_break_candle["low"], 99.5)
 
 
 class CascadeDuplicateTests(unittest.IsolatedAsyncioTestCase):
@@ -1093,13 +1152,13 @@ class CascadeMotherRetestTests(unittest.TestCase):
         _feed(self.engine, self.campaign, Candle(300, 66300.0, 66354.0, 66280.0, 66300.0))
         self.assertEqual(self.campaign.state, "WAITING_FIRST_DEPTH")
         _feed(self.engine, self.campaign, Candle(600, 66300.0, 66354.01, 66280.0, 66300.0))
-        self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
+        self.assertEqual(self.campaign.state, "MOTHER_BREAK_PENDING")
 
     def test_breaking_above_still_counts_as_a_break_not_a_retest(self):
         _feed(self.engine, self.campaign, Candle(300, 66300.0, 66310.0, 66000.0, 66050.0))
         _feed(self.engine, self.campaign, Candle(600, 66200.0, 66400.0, 66190.0, 66380.0))
-        self.assertEqual(self.campaign.state, "MOTHER_BROKEN")
-        self.assertEqual(self.campaign.close_reason, "mother_broken")
+        self.assertEqual(self.campaign.state, "MOTHER_BREAK_PENDING")
+        self.assertEqual(self.campaign.close_reason, "")
 
 
 class CascadeAlertTests(unittest.TestCase):
@@ -1454,6 +1513,117 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         changed = await self.engine._sync_live_orders(self.campaign)
         self.assertFalse(changed)
         self.assertEqual(self.broker.placed_orders, [])
+
+
+class CascadeTpReplacedOnAveragingTests(unittest.IsolatedAsyncioTestCase):
+    """Live bug (ETHUSDT, 2026-07-24): a second entry averages the position
+    down, the TARGET moves, but the OLD TP kept resting on the exchange — only
+    the stale one, never the averaged one.
+
+    Root cause: `_fill_pending`/`_record_fill` set `campaign.tp_price` to the
+    NEW desired target immediately, for the fill log line — before the
+    exchange order was ever touched. `_sync_tp_order`'s "is the resting order
+    already at the right price" check then compared `tp_price` (the just-
+    updated desired value) against itself, always found them equal, and never
+    cancelled + replaced the order actually sitting on Binance at the OLD
+    average's price. `tp_order_price` now tracks only what is ACTUALLY resting,
+    so the two can be compared for real.
+    """
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+        self.campaign = Campaign(
+            campaign_id="eth1",
+            symbol="ETHUSDT",
+            capital_usd=2000.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        self.engine.campaigns[self.campaign.campaign_id] = self.campaign
+        leg = Leg(leg_id=1, trendline_id=1, low=90.0, touch_high=98.0, touch_timestamp=1)
+        self.campaign.legs.append(leg)
+        self.leg = leg
+        # First entry already filled and its TP already rests on the exchange —
+        # this is the steady state a running campaign is in most of the time.
+        self.campaign.all_fills.append(Fill(price=97.0, quantity=40.0 / 97.0, level=2, leg_id=1, timestamp=1))
+        self.campaign.filled_base_qty = 40.0 / 97.0
+        self.campaign.avg_entry_price = 97.0
+        first_tp = compute_tp_price(self.campaign)  # 97 + 0.25*(105-97) = 99.0
+        self.campaign.tp_price = first_tp
+        self.campaign.tp_order_id = "TP-1"
+        self.campaign.tp_order_price = first_tp
+        # The order is genuinely resting on the exchange, exactly as it was placed.
+        self.broker.open_orders = [
+            {"orderId": "TP-1", "clientOrderId": "cf-csc-eth1-tp-1", "price": str(first_tp), "status": "NEW"}
+        ]
+
+    async def test_a_second_fill_cancels_the_stale_tp_and_places_the_averaged_one(self):
+        order = PendingOrder(level=4, price=90.0, usd_notional=40.0, quantity=40.0 / 90.0, leg_id=1)
+        self.leg.pending_orders[4] = order
+        self.engine._record_fill(self.campaign, self.leg, order, price=90.0, timestamp=2, order_id="BUY-2")
+
+        new_avg = self.campaign.avg_entry_price
+        self.assertLess(new_avg, 97.0, "the average must have moved down")
+        expected_new_tp = compute_tp_price(self.campaign)
+        self.assertLess(expected_new_tp, 99.0, "the target must have moved down with the average")
+        # This is the crux of the bug: the fill handler already updated
+        # tp_price to the new target for the log line, before the order was
+        # touched. If the sync compared against tp_price it would wrongly
+        # think the resting order (still at 99.0) is already correct.
+        self.assertAlmostEqual(self.campaign.tp_price, expected_new_tp)
+        self.assertEqual(self.campaign.tp_order_price, 99.0, "unchanged until the sync actually replaces it")
+
+        open_orders = await self.engine._open_orders_by_id(self.campaign)
+        changed = await self.engine._sync_tp_order(self.campaign, open_orders)
+
+        self.assertTrue(changed)
+        self.assertIn("TP-1", self.broker.cancelled, "the STALE order must be cancelled, not left resting")
+        sells = [o for o in self.broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1, "exactly one replacement sell, not a second one stacked on the first")
+        self.assertAlmostEqual(sells[0]["limit_price"], expected_new_tp)
+        self.assertNotEqual(self.campaign.tp_order_id, "TP-1", "the id must point at the NEW resting order")
+        self.assertAlmostEqual(self.campaign.tp_order_price, expected_new_tp)
+
+    async def test_no_new_fill_leaves_the_correct_tp_alone(self):
+        """The other half of the fix: when the resting order genuinely already
+        matches, do not cancel and replace it for no reason on every sync."""
+        open_orders = await self.engine._open_orders_by_id(self.campaign)
+        changed = await self.engine._sync_tp_order(self.campaign, open_orders)
+        self.assertFalse(changed)
+        self.assertEqual(self.broker.cancelled, [])
+        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "sell"], [])
+        self.assertEqual(self.campaign.tp_order_id, "TP-1")
+
+    async def test_adopting_an_existing_order_reads_its_real_resting_price(self):
+        """No local id at all (e.g. after a restart), but Binance shows one of
+        ours resting. Adopt it, and read ITS price off the exchange row rather
+        than assuming it already matches today's target."""
+        self.campaign.tp_order_id = None
+        self.campaign.tp_order_price = None
+        # The campaign has since averaged down (tp_price reflects the new
+        # target) but the row on the exchange is still the OLD order.
+        self.campaign.tp_price = 90.0
+        open_orders = {"TP-1": {"orderId": "TP-1", "clientOrderId": "cf-csc-eth1-tp-1", "price": "99.0"}}
+        await self.engine._sync_tp_order(self.campaign, open_orders)
+        self.assertEqual(self.campaign.tp_order_id, "TP-1", "adopted, not replaced, on the first pass")
+        self.assertAlmostEqual(self.campaign.tp_order_price, 99.0, "read off the exchange row, not assumed")
+
+    async def test_stop_campaign_reports_what_is_actually_resting(self):
+        """The 'still holding, TP left resting at X' message must name the
+        price ON THE EXCHANGE, not whatever the last fill recomputed."""
+        self.campaign.tp_price = 90.0  # a fresher target than what is resting
+        self.campaign.tp_order_price = 99.0  # the order genuinely on Binance
+        result = await self.engine.stop_campaign(self.campaign.campaign_id, cancel_orders=False)
+        self.assertEqual(result["status"], "ok")
+        messages = [e["message"] for e in self.campaign.event_log if "resting at" in e["message"]]
+        self.assertEqual(len(messages), 1)
+        self.assertIn("99.00", messages[0])
+        self.assertNotIn("90.00", messages[0])
 
 
 class CascadeClosedChartTests(unittest.IsolatedAsyncioTestCase):

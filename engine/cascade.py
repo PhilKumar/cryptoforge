@@ -269,6 +269,12 @@ def next_timeframe_up(timeframe: str) -> str:
 
 
 ACTIVE_STATES = {"WAITING_FIRST_DEPTH", "TRENDLINE_ACTIVE"}
+# A mother break freezes a campaign before it becomes final: its unfilled
+# entries are cancelled and no new structure is allowed, while two further
+# closed 5m candles confirm the reset.  It remains a running campaign during
+# that short window so its capital stays reserved and a live TP can be watched.
+MOTHER_BREAK_PENDING = "MOTHER_BREAK_PENDING"
+RUNNING_STATES = ACTIVE_STATES | {MOTHER_BREAK_PENDING}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
 # Endings that roll straight into a fresh campaign. A deliberate stop does not.
 RESTART_REASONS = {"mother_broken", "mother_retested"}
@@ -650,6 +656,14 @@ class Campaign:
     model_version: int = 0  # rules version the stored legs/trendlines were built with
     created_at: str = ""
     state: str = "WAITING_FIRST_DEPTH"
+    # Saved rather than held only in memory: a process restart in the 10-minute
+    # confirmation window must neither skip the wait nor invent a new mother.
+    mother_break_candle: Optional[dict] = None
+    mother_break_wait_remaining: int = 0
+    mother_break_last_5m_ts: int = 0
+    # Once structure has escalated, it may be stepping 15m/1H candles; the
+    # original mother is still a 5m reference and must be watched at 5m.
+    mother_watch_last_5m_ts: int = 0
     cumulative_used_pct: float = 0.0
     carry_forward_usd: float = 0.0  # legacy: kept so older snapshots still load
     # The running total. Price falling through a level moves that level's money
@@ -678,6 +692,16 @@ class Campaign:
     avg_entry_price: Optional[float] = None
     tp_price: Optional[float] = None  # active TP once fills exist; display estimate before
     tp_order_id: Optional[str] = None
+    # The price the RESTING exchange order was actually placed/adopted at. Kept
+    # separate from tp_price on purpose: tp_price is updated the instant a fill
+    # changes the average (for the fill log line and display), which happens
+    # BEFORE the exchange order is replaced. Comparing "is the order already at
+    # the right price" against tp_price was comparing the desired price to
+    # itself and always said yes — so a new fill moved the average, tp_price
+    # jumped to the new target immediately, and the sync saw "already correct"
+    # and never cancelled the stale order sitting at the OLD average's target.
+    # This field only ever reflects what is ACTUALLY resting on the exchange.
+    tp_order_price: Optional[float] = None
     tp_rev: int = 0
     tp_filled: bool = False
     filled_base_qty: float = 0.0
@@ -798,6 +822,10 @@ class Campaign:
             "model_version": self.model_version,
             "created_at": self.created_at,
             "state": self.state,
+            "mother_break_candle": self.mother_break_candle,
+            "mother_break_wait_remaining": self.mother_break_wait_remaining,
+            "mother_break_last_5m_ts": self.mother_break_last_5m_ts,
+            "mother_watch_last_5m_ts": self.mother_watch_last_5m_ts,
             "cumulative_used_pct": self.cumulative_used_pct,
             "carry_forward_usd": self.carry_forward_usd,
             "pending_rev": self.pending_rev,
@@ -819,6 +847,7 @@ class Campaign:
             "avg_entry_price": self.avg_entry_price,
             "tp_price": self.tp_price,
             "tp_order_id": self.tp_order_id,
+            "tp_order_price": self.tp_order_price,
             "tp_rev": self.tp_rev,
             "tp_filled": self.tp_filled,
             "filled_base_qty": self.filled_base_qty,
@@ -859,6 +888,10 @@ class Campaign:
             "model_version",
             "created_at",
             "state",
+            "mother_break_candle",
+            "mother_break_wait_remaining",
+            "mother_break_last_5m_ts",
+            "mother_watch_last_5m_ts",
             "cumulative_used_pct",
             "carry_forward_usd",
             "pending_usd",
@@ -876,6 +909,7 @@ class Campaign:
             "avg_entry_price",
             "tp_price",
             "tp_order_id",
+            "tp_order_price",
             "tp_rev",
             "tp_filled",
             "filled_base_qty",
@@ -1214,7 +1248,7 @@ class CascadeEngine:
 
     @property
     def active_campaigns(self) -> List[Campaign]:
-        return [c for c in self.campaigns.values() if c.state in ACTIVE_STATES]
+        return [c for c in self.campaigns.values() if c.state in RUNNING_STATES]
 
     @property
     def live_campaigns(self) -> List[Campaign]:
@@ -1551,6 +1585,7 @@ class CascadeEngine:
             model_version=MODEL_VERSION,
             created_at=_ist_now_str(),
             last_processed_ts=mother_ts,
+            mother_watch_last_5m_ts=mother_ts,
             window_start_ts=mother_ts,
         )
         self.campaigns[campaign.campaign_id] = campaign
@@ -1584,7 +1619,10 @@ class CascadeEngine:
         campaign.state = "STOPPED"
         campaign.close_reason = "stopped"
         campaign.closed_at = _ist_now_str()
-        tp_for_log = _coerce_float(campaign.tp_price, 0.0)
+        # What is on the exchange, not the freshly-computed target — the two can
+        # differ for a moment right after a fill, before the next sync replaces
+        # the resting order to match.
+        tp_for_log = _coerce_float(campaign.tp_order_price or campaign.tp_price, 0.0)
         if holding and campaign.mode == "live" and campaign.tp_order_id and tp_for_log > 0:
             self._log_event(
                 campaign,
@@ -1959,9 +1997,20 @@ class CascadeEngine:
         # and the chart would render almost empty.
         options = chart_timeframes_for(campaign.timeframe)
         base_sec = campaign.timeframe_sec
-        requested = str(timeframe).lower()
+        requested_input = str(timeframe).lower()
+        requested = requested_input
+        auto_timeframe = self._auto_chart_timeframe(campaign, max_candles)
+        mother_forced_visible = False
         if requested == "auto" or requested not in options:
-            requested = self._auto_chart_timeframe(campaign, max_candles)
+            requested = auto_timeframe
+        # A mother candle is the anchor for every trendline and fib, so showing
+        # a hand-picked smaller view that pushes it off-screen is misleading.
+        # A manual selection may zoom OUT (to 15m/1H/4H), but never IN far
+        # enough to hide the mother.  This changes presentation only; all
+        # trading calculations retain the campaign's own timeframe.
+        elif options[requested] < options[auto_timeframe]:
+            requested = auto_timeframe
+            mother_forced_visible = True
         bucket_sec = options.get(requested, base_sec)
         # Pull enough base candles that the rolled-up view still spans the window.
         raw_needed = max_candles * max(bucket_sec // base_sec, 1)
@@ -2030,7 +2079,8 @@ class CascadeEngine:
             "mode": campaign.mode,
             "mother": mother,
             "timeframe": requested,
-            "timeframe_auto": str(timeframe).lower() == "auto",
+            "timeframe_auto": requested_input == "auto",
+            "mother_forced_visible": mother_forced_visible,
             # What this campaign may be drawn at: its own timeframe and the two
             # above it. A 4H campaign has no 5m history, so the chart must not
             # offer 5m for it.
@@ -2248,8 +2298,22 @@ class CascadeEngine:
         return candles
 
     async def _candle_step(self, campaign: Campaign) -> bool:
+        if campaign.state == MOTHER_BREAK_PENDING:
+            return await self._mother_break_confirmation_step(campaign)
         if campaign.state not in ACTIVE_STATES:
             return False
+        # The structure timeframe can climb, but a mother break is always
+        # judged by closed 5m candles.  Without this watcher a campaign that
+        # reached 1H would reset on an hour bar and lose the precise 5m candle
+        # the user selected as the new mother.
+        if (
+            campaign.timeframe != BASE_TIMEFRAME
+            and campaign.timeframe in ESCALATION_LADDER
+            and campaign.escalates
+            and campaign.start_timeframe == BASE_TIMEFRAME
+            and await self._mother_break_watch_step(campaign)
+        ):
+            return True
         now = int(time.time())
         tf = campaign.timeframe
         if campaign.last_processed_ts and now < campaign.last_processed_ts + 2 * campaign.timeframe_sec:
@@ -2279,6 +2343,44 @@ class CascadeEngine:
                 # The rest of the batch is candles of the OLD timeframe. They
                 # must not be stepped as if nothing happened — the next tick
                 # fetches fresh candles at the new timeframe instead.
+                break
+        return changed
+
+    async def _mother_break_watch_step(self, campaign: Campaign) -> bool:
+        """Detect the first closed 5m wick above an escalated campaign's MC."""
+        after_ts = max(int(campaign.mother_watch_last_5m_ts or 0), int(campaign.mother_timestamp or 0))
+        candles = await self._fetch_closed_candles(campaign.symbol, after_ts, BASE_TIMEFRAME)
+        for candle in candles:
+            if candle.timestamp <= after_ts:
+                continue
+            campaign.mother_watch_last_5m_ts = candle.timestamp
+            if candle.high > campaign.mother_high:
+                self._mother_broken(campaign, candle)
+                return True
+        return bool(candles)
+
+    async def _mother_break_confirmation_step(self, campaign: Campaign) -> bool:
+        """Count the two 5m candles after a break while the parent is frozen.
+
+        The breaking candle itself remains the replacement mother.  These
+        follow-up bars are only a cooling-off window that prevents a rapid move
+        above the old high from spawning a new campaign every five minutes.
+        """
+        if campaign.mother_break_wait_remaining <= 0:
+            self._finish_mother_break(campaign)
+            return True
+        after_ts = int(campaign.mother_break_last_5m_ts or 0)
+        if after_ts <= 0:
+            return False
+        candles = await self._fetch_closed_candles(campaign.symbol, after_ts, BASE_TIMEFRAME)
+        changed = False
+        for candle in candles:
+            if candle.timestamp <= after_ts:
+                continue
+            campaign.mother_break_last_5m_ts = candle.timestamp
+            self._advance_mother_break_confirmation(campaign, candle)
+            changed = True
+            if campaign.state != MOTHER_BREAK_PENDING:
                 break
         return changed
 
@@ -2357,6 +2459,11 @@ class CascadeEngine:
     # 3. There is no candle-count logic anywhere — only rises and cuts.
 
     def _process_candle(self, campaign: Campaign, candle: Candle) -> None:
+        if campaign.state == MOTHER_BREAK_PENDING:
+            # A frozen campaign never marks another fib or entry.  These two
+            # candles only complete the confirmation window for its successor.
+            self._advance_mother_break_confirmation(campaign, candle)
+            return
         # Strictly ABOVE. A candle that prints the mother's high exactly is a
         # double top — the ceiling held, and the cascade below it is still
         # valid. Treating equality as a break killed campaigns on their second
@@ -3024,6 +3131,7 @@ class CascadeEngine:
         campaign.avg_entry_price = None
         campaign.tp_price = None
         campaign.tp_order_id = None
+        campaign.tp_order_price = None
         campaign.tp_rev += 1
         campaign.realized_pnl = round(campaign.realized_pnl_total, 8)
 
@@ -3083,14 +3191,32 @@ class CascadeEngine:
         self._auto_restart(campaign, candle)
 
     def _mother_broken(self, campaign: Campaign, candle: Optional[Candle] = None) -> None:
+        """Freeze at the first break, then restart after two more 5m closes.
+
+        Deliberately retain the *breaking* candle's OHLC as the new mother.
+        The later candles confirm the reset but do not become a synthetic 15m
+        mother and cannot alter its high or low.
+        """
+        if candle is None:
+            return
         campaign.mother_broken_above = True
-        campaign.state = "MOTHER_BROKEN"
-        campaign.close_reason = "mother_broken"
-        campaign.closed_at = _ist_now_str()
+        campaign.state = MOTHER_BREAK_PENDING
+        campaign.mother_break_candle = {
+            "timestamp": candle.timestamp,
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "timeframe": candle.timeframe,
+        }
+        campaign.mother_break_wait_remaining = 2
+        campaign.mother_break_last_5m_ts = candle.timestamp
         self._log_event(
             campaign,
             "warn",
-            f"Mother candle high {campaign.mother_high:g} broken above — campaign ended. "
+            f"Mother candle high {campaign.mother_high:g} broken above — campaign frozen. "
+            f"Keeping the breaking candle high {candle.high:,.2f} / low {candle.low:,.2f} as the next mother "
+            "after two further closed 5m candles. "
             + (
                 "Resting TP order left on the exchange to capture the exit."
                 if campaign.mode == "live" and campaign.filled_base_qty > 0
@@ -3099,17 +3225,55 @@ class CascadeEngine:
         )
         if campaign.mode == "live":
             self._schedule(self._cancel_all_live_orders(campaign, include_tp=False))
-        elif campaign.filled_base_qty > 0:
-            # Paper: price at/above mother high is at/above TP by construction.
+
+    def _advance_mother_break_confirmation(self, campaign: Campaign, candle: Candle) -> None:
+        """Use a closed post-break 5m candle to advance the frozen reset."""
+        source = campaign.mother_break_candle or {}
+        source_ts = int(source.get("timestamp") or 0)
+        if campaign.state != MOTHER_BREAK_PENDING or candle.timestamp <= source_ts:
+            return
+        campaign.mother_break_wait_remaining = max(int(campaign.mother_break_wait_remaining) - 1, 0)
+        if campaign.mother_break_wait_remaining:
+            self._log_event(
+                campaign,
+                "wait",
+                "Mother-break freeze confirmed by one closed 5m candle — one more closes before the restart.",
+            )
+            return
+        self._finish_mother_break(campaign)
+
+    def _finish_mother_break(self, campaign: Campaign) -> None:
+        """Archive the frozen parent and start from the original break candle."""
+        source = campaign.mother_break_candle or {}
+        if not source:
+            return
+        break_candle = Candle(
+            timestamp=int(source.get("timestamp") or 0),
+            open=_coerce_float(source.get("open")),
+            high=_coerce_float(source.get("high")),
+            low=_coerce_float(source.get("low")),
+            close=_coerce_float(source.get("close")),
+            timeframe=str(source.get("timeframe") or BASE_TIMEFRAME),
+        )
+        if break_candle.timestamp <= 0 or break_candle.high <= break_candle.low:
+            return
+        campaign.state = "MOTHER_BROKEN"
+        campaign.close_reason = "mother_broken"
+        campaign.closed_at = _ist_now_str()
+        campaign.mother_break_wait_remaining = 0
+        self._log_event(
+            campaign,
+            "warn",
+            "Mother-break confirmation complete — parent ended and successor starts from the original breaking candle.",
+        )
+        if campaign.mode == "paper" and campaign.filled_base_qty > 0:
+            # Paper has no resting exchange TP.  At a mother break the target
+            # has necessarily been reached, so close it as the live TP would.
             tp = compute_tp_price(campaign)
             if tp:
-                # Closing the round must NOT skip archiving — it used to return
-                # here, so any campaign that ended holding a position never
-                # reached the closed list at all.
                 self._close_round(campaign, tp)
         self._archive_campaign(campaign)
-        if candle is not None:
-            self._auto_restart(campaign, candle)
+        self._auto_restart(campaign, break_candle)
 
     def _schedule(self, coro) -> None:
         """
@@ -3216,15 +3380,19 @@ class CascadeEngine:
             model_version=MODEL_VERSION,
             created_at=_ist_now_str(),
             last_processed_ts=candle.timestamp,
+            mother_watch_last_5m_ts=candle.timestamp,
             window_start_ts=candle.timestamp,
         )
         self.campaigns[child.campaign_id] = child
         # The breaking candle is the mother, so history starts clean from it —
-        # but only when it is a candle of the child's own size. A 1D parent
-        # breaks on a DAILY candle, and dropping that into a 5m history would
-        # leave one day-sized bar pretending to be a 5m one. Left empty, the
-        # next step fetches the real 5m candles from the mother forward.
-        self._candles[child.campaign_id] = [candle] if parent.timeframe == BASE_TIMEFRAME else []
+        # but only when the candle itself is 5m.  An escalated parent can now
+        # detect its break through the dedicated 5m watcher, in which case this
+        # is correctly seeded even though the parent happened to be stepping
+        # 15m/1H.  A daily breaking candle still must not masquerade as 5m.
+        seed_from_break = parent.timeframe == BASE_TIMEFRAME or (
+            parent.escalates and parent.start_timeframe == BASE_TIMEFRAME and candle.timeframe == BASE_TIMEFRAME
+        )
+        self._candles[child.campaign_id] = [candle] if seed_from_break else []
         self._log_event(
             child,
             "start",
@@ -3620,7 +3788,11 @@ class CascadeEngine:
                 offered = campaign.filled_base_qty + campaign.residual_base_qty
                 executed = _coerce_float(status_row.get("executedQty"), offered)
                 quote = _coerce_float(status_row.get("cummulativeQuoteQty"))
-                exit_price = quote / executed if executed > 0 and quote > 0 else (campaign.tp_price or 0.0)
+                exit_price = (
+                    quote / executed
+                    if executed > 0 and quote > 0
+                    else (campaign.tp_order_price or campaign.tp_price or 0.0)
+                )
                 # Whatever LOT_SIZE would not let us offer stays ours; carry it
                 # so the next round's sell clears it once the total reaches
                 # another whole step, rather than stranding it forever.
@@ -3630,6 +3802,7 @@ class CascadeEngine:
                 self._close_round(campaign, exit_price, sold_qty=executed)
                 return True
             campaign.tp_order_id = None
+            campaign.tp_order_price = None
             changed = True
 
         if campaign.state not in ACTIVE_STATES or campaign.filled_base_qty <= 0:
@@ -3644,24 +3817,45 @@ class CascadeEngine:
         # one of them can fill.
         if not campaign.tp_order_id:
             mine = f"cf-csc-{campaign.campaign_id}-tp-"
-            existing = next(
-                (oid for oid, row in open_orders.items() if str(row.get("clientOrderId") or "").startswith(mine)),
+            existing_row = next(
+                (
+                    (oid, row)
+                    for oid, row in open_orders.items()
+                    if str(row.get("clientOrderId") or "").startswith(mine)
+                ),
                 None,
             )
-            if existing:
+            if existing_row:
+                existing, row = existing_row
                 campaign.tp_order_id = str(existing)
+                # Read the ACTUAL resting price off the exchange row rather than
+                # assuming it matches today's desired target — an adopted order
+                # was very likely placed against an older average.
+                campaign.tp_order_price = _coerce_float(row.get("price")) or None
                 self._log_event(
                     campaign,
                     "order",
                     f"Adopted the TP already resting on the exchange ({existing}) instead of placing another.",
                 )
                 changed = True
-        current_price_ok = campaign.tp_price and abs((campaign.tp_price or 0.0) - desired_tp) < 1e-9
+                # Recovery's first responsibility is to establish ownership,
+                # never to disturb a sell that may already protect the coin.
+                # The next normal sync will have the adopted order's full
+                # exchange row (including its actual price) and can replace it
+                # only if its target is genuinely stale.
+                return changed
+        # Compare against tp_order_price — the price ACTUALLY resting on the
+        # exchange — never against tp_price. tp_price is updated by the fill
+        # handlers the instant a fill moves the average, before this sync has
+        # had a chance to replace the order; comparing to it would compare the
+        # desired price to itself and always report "already correct".
+        current_price_ok = campaign.tp_order_price and abs((campaign.tp_order_price or 0.0) - desired_tp) < 1e-9
         if campaign.tp_order_id and current_price_ok:
             return changed
         if campaign.tp_order_id:
             await self._safe_cancel(campaign, campaign.tp_order_id)
             campaign.tp_order_id = None
+            campaign.tp_order_price = None
         # Sell what the exchange says is actually there, not the gross the books
         # recorded: the buy's commission came out of the coin, so the recorded
         # quantity over-asks by the fee and Binance rejects the whole sell -2010.
@@ -3710,6 +3904,7 @@ class CascadeEngine:
                 return changed
             campaign.tp_order_id = order_id
             campaign.tp_price = desired_tp
+            campaign.tp_order_price = desired_tp
             short = desired_qty - sell_qty
             self._log_event(
                 campaign,
@@ -3780,6 +3975,7 @@ class CascadeEngine:
         if include_tp and campaign.tp_order_id:
             await self._safe_cancel(campaign, campaign.tp_order_id)
             campaign.tp_order_id = None
+            campaign.tp_order_price = None
         # Belt and braces: sweep anything of ours still open on the exchange.
         # Our own bookkeeping is exactly what failed above, so the exchange —
         # not the campaign object — gets the final say on what is still working.
