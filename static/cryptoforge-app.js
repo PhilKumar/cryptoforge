@@ -9321,7 +9321,9 @@ function _cfCascadeChartSvg(d) {
       'font-size="9.5" font-family="monospace" text-anchor="middle">' + _escapeHtml(_cfCascadeIst(candles[ci].t)) + '</text>');
   }
 
-  // candles
+  // candles. The mother is a real price bar, not merely the purple horizontal
+  // high line: give its whole column a subtle highlight and a clear outline so
+  // it remains visible when a chart is rolled up to 1H/4H.
   var bodyW = Math.max(Math.min(cw * 0.65, 9), 1);
   candles.forEach(function (c, i) {
     var up = c.c >= c.o;
@@ -9332,6 +9334,16 @@ function _cfCascadeChartSvg(d) {
     var yTop = Y(Math.max(c.o, c.c)), yBot = Y(Math.min(c.o, c.c));
     parts.push('<rect x="' + (x - bodyW / 2).toFixed(1) + '" y="' + yTop.toFixed(1) + '" width="' + bodyW.toFixed(1) +
       '" height="' + Math.max(yBot - yTop, 1).toFixed(1) + '" fill="' + col + '"/>');
+    if (c.is_mother) {
+      parts.push('<rect x="' + (x - Math.max(bodyW, 6) / 2 - 3).toFixed(1) + '" y="' + (padT + 1) + '" width="'
+        + (Math.max(bodyW, 6) + 6).toFixed(1) + '" height="' + (plotH - 2).toFixed(1)
+        + '" fill="' + PAL.mother + '" opacity="0.09"/>');
+      parts.push('<rect x="' + (x - bodyW / 2 - 1).toFixed(1) + '" y="' + (Y(c.h) - 1).toFixed(1) + '" width="'
+        + (bodyW + 2).toFixed(1) + '" height="' + Math.max(Y(c.l) - Y(c.h) + 2, 4).toFixed(1)
+        + '" fill="none" stroke="' + PAL.mother + '" stroke-width="1.4"/>');
+      parts.push('<text x="' + x.toFixed(1) + '" y="' + Math.max(Y(c.h) - 8, padT + 10).toFixed(1)
+        + '" fill="' + PAL.mother + '" font-size="9.5" font-family="monospace" font-weight="700" text-anchor="middle">MC</text>');
+    }
   });
 
   // Left-hand labels, nudged apart so two levels a few ticks apart stay legible.
@@ -9369,10 +9381,10 @@ function _cfCascadeChartSvg(d) {
 
   // every trendline, mother high -> its swing high
   var tlColors = PAL.fibs;
-  // Only the three most recent trendlines stay on the chart — drawing the 4th
-  // retires the 1st. Beyond three the older ones are noise over the price
-  // action. The engine still tracks every line; this is display only.
-  (d.trendlines || []).slice(-3).forEach(function (tl) {
+  // Keep every line visible and colour in creation order: TL1 blue, TL2 green,
+  // TL3 red, TL4 blue. Hiding the older lines made the first visible line look
+  // red/green even though the requested sequence begins with blue.
+  (d.trendlines || []).forEach(function (tl) {
     var a1 = tl.a1, a2 = tl.a2;
     if (!a1 || !a2 || a2.t === a1.t) return;
     var slope = (a2.p - a1.p) / (a2.t - a1.t);
@@ -9400,9 +9412,9 @@ function _cfCascadeChartSvg(d) {
   // Fixed three-colour cycle: fib 1 blue, 2 green, 3 red, then repeat.
   // Keyed off leg_id, not position, so a fib keeps its colour as others retire.
   var fibColors = PAL.fibs;
-  // Only the three most recent fibs are drawn — the 4th retires the 1st — so the
-  // chart stays readable. The engine still tracks every leg; this is display only.
-  legs.slice(-3).forEach(function (leg) {
+  // Every fib remains visible, so the first fib is visibly blue rather than
+  // being silently retired when newer structures arrive.
+  legs.forEach(function (leg) {
     var col = fibColors[(Math.max(1, Number(leg.leg_id) || 1) - 1) % fibColors.length];
     // Every level of every fib is drawn identically — same weight, same solid
     // stroke, same opacity. Only the colour says which fib it belongs to.
@@ -9491,14 +9503,14 @@ function _cfCascadeChartHtml(d) {
   var P = _cfChartPalette();
   var journal = _cfCascadeChartMode === 'journal';
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
-    + '<span style="color:' + P.mother + ';">┄ mother high</span> &nbsp; '
+    + '<span style="color:' + P.mother + ';">▣ MC / ┄ mother high</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— trendlines (TL)</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— fib levels 0, 1, 2, 4 and 8 (all drawn alike)</span> &nbsp; '
     + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
     + '<span style="color:' + P.fill + ';">● fills</span>'
     // In journal mode this is a static trade record: skip the interaction hints
     // and the fib-colour key that only matter alongside the live detail tables.
-    + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red, then the cycle repeats. Labels are on the left,'
+    + (journal ? '' : ('<br>TL/Fib 1 is blue, 2 green, 3 red, then the cycle repeats. The purple MC column is the mother candle. Labels are on the left,'
       + ' and each funded buy level carries the dollars resting on it.'
       + ' Scroll to move down the dialog; the +/&minus; buttons or Ctrl (&#8984;) + scroll zoom, and Expand lets you zoom with the wheel. Drag to pan.'))
     + '</div>';

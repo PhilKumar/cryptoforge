@@ -1776,7 +1776,12 @@ class CascadeEngine:
         rows = []
         for index, row in df.iterrows():
             ts = int(index.timestamp())
-            if ts < campaign.mother_timestamp or ts + tf_sec > now:
+            # A manually selected mother may sit inside a higher-timeframe bar
+            # (for example 19:35 inside Binance's 19:30–20:30 1H candle).
+            # Filtering strictly from its timestamp discarded that very candle:
+            # the chart could draw the mother-high line but never the mother
+            # candle itself.  Keep the closed bar which CONTAINS the mother.
+            if ts + tf_sec <= campaign.mother_timestamp or ts + tf_sec > now:
                 continue
             rows.append(
                 Candle(
@@ -2019,7 +2024,20 @@ class CascadeEngine:
             history = self._candles.get(campaign_id) or []
 
         view = self._aggregate_candles(history, bucket_sec, base_sec)
-        candles = [{"t": c.timestamp, "o": c.open, "h": c.high, "l": c.low, "c": c.close} for c in view[-max_candles:]]
+        candles = [
+            {
+                "t": c.timestamp,
+                "o": c.open,
+                "h": c.high,
+                "l": c.low,
+                "c": c.close,
+                # The displayed bar may be a roll-up; flag the bucket that
+                # contains the actual mother timestamp so the client can make
+                # it unmistakable instead of relying on a high-price line.
+                "is_mother": c.timestamp <= campaign.mother_timestamp < c.timestamp + bucket_sec,
+            }
+            for c in view[-max_candles:]
+        ]
         # Always include the mother candle itself as the left anchor of the view.
         mother = {
             "t": campaign.mother_timestamp,
@@ -3533,6 +3551,14 @@ class CascadeEngine:
             for order_id, row in open_orders.items():
                 client_id = str(row.get("clientOrderId") or "")
                 if client_id.startswith(f"cf-csc-{campaign.campaign_id}-") and order_id not in known_ids:
+                    # TP ownership/recovery is deliberately handled by
+                    # _sync_tp_order below.  Cancelling an untracked TP here
+                    # first left a stale open-orders snapshot for that method
+                    # to "adopt", producing the false Adopted/CANCELED loop
+                    # seen after a service handover.  Entry cleanup must never
+                    # take down a protective sell.
+                    if "-tp-" in client_id:
+                        continue
                     await self._safe_cancel(campaign, order_id)
                     changed = True
             # Isolated on purpose. This step raised for days and the tick's

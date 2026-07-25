@@ -1613,6 +1613,23 @@ class CascadeTpReplacedOnAveragingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.campaign.tp_order_id, "TP-1", "adopted, not replaced, on the first pass")
         self.assertAlmostEqual(self.campaign.tp_order_price, 99.0, "read off the exchange row, not assumed")
 
+    async def test_untracked_tp_is_adopted_not_cancelled_by_entry_cleanup(self):
+        """On restart the saved id can be stale while a valid TP already
+        rests. The entry-order cleanup must leave that protective sell for the
+        TP reconciler to adopt; otherwise it adopts its own stale snapshot."""
+        self.campaign.tp_order_id = "TP-OLD"
+        self.campaign.tp_order_price = 99.0
+        self.broker.order_lookup["TP-OLD"] = {"status": "CANCELED"}
+        self.broker.open_orders = [
+            {"orderId": "TP-NEW", "clientOrderId": "cf-csc-eth1-tp-2", "price": "99.0", "status": "NEW"}
+        ]
+
+        await self.engine._sync_live_orders(self.campaign)
+
+        self.assertNotIn("TP-NEW", self.broker.cancelled)
+        self.assertEqual(self.campaign.tp_order_id, "TP-NEW")
+        self.assertAlmostEqual(self.campaign.tp_order_price, 99.0)
+
     async def test_stop_campaign_reports_what_is_actually_resting(self):
         """The 'still holding, TP left resting at X' message must name the
         price ON THE EXCHANGE, not whatever the last fill recomputed."""
@@ -1774,6 +1791,27 @@ class CascadeMotherTimestampTests(unittest.IsolatedAsyncioTestCase):
         result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS)
         engine.stop()
         self.assertEqual(result["campaign"]["mother_timestamp"], _RECENT_TS)
+
+    async def test_chart_keeps_the_higher_timeframe_bar_containing_mother(self):
+        """A 19:35 mother belongs to the 19:30–20:30 1H bar, so that bar
+        must not disappear merely because its open timestamp is earlier."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        now = int(time.time())
+        bar_ts = (now - 3 * 3600) // 3600 * 3600
+        campaign = Campaign(
+            campaign_id="chart-mother",
+            symbol="BTCUSDT",
+            capital_usd=100.0,
+            mother_high=101.0,
+            mother_low=99.0,
+            mother_timestamp=bar_ts + 5 * 60,
+            timeframe="1h",
+        )
+        broker.candles_df = self._candles_df([(bar_ts, 101.0), (bar_ts + 3600, 100.0)])
+        candles = await engine._chart_candles(campaign, max_candles=20)
+        engine.stop()
+        self.assertEqual([c.timestamp for c in candles], [bar_ts, bar_ts + 3600])
 
 
 if __name__ == "__main__":
