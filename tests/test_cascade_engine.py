@@ -1630,6 +1630,27 @@ class CascadeTpReplacedOnAveragingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.campaign.tp_order_id, "TP-NEW")
         self.assertAlmostEqual(self.campaign.tp_order_price, 99.0)
 
+    async def test_under_minimum_tp_is_held_once_without_rejected_retries(self):
+        """A legacy/partial fill worth $4.56832 at target cannot be sold on
+        Binance Spot. It must remain tracked, not be submitted and rejected on
+        every sync."""
+        self.campaign.all_fills = [Fill(price=97.0, quantity=4.56832 / 99.0, level=2, leg_id=1, timestamp=1)]
+        self.campaign.filled_base_qty = 4.56832 / 99.0
+        self.campaign.avg_entry_price = 97.0  # TP is 99.0
+        self.campaign.tp_price = 99.0
+        self.campaign.tp_order_id = None
+        self.campaign.tp_order_price = None
+
+        await self.engine._sync_tp_order(self.campaign, {})
+        await self.engine._sync_tp_order(self.campaign, {})
+
+        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "sell"], [])
+        warnings = [e["message"] for e in self.campaign.event_log if e["level"] == "warn"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("$4.56832", warnings[0])
+        self.assertIn("manual resolution", warnings[0])
+        self.assertEqual(self.campaign.filled_base_qty, 4.56832 / 99.0)
+
     async def test_stop_campaign_reports_what_is_actually_resting(self):
         """The 'still holding, TP left resting at X' message must name the
         price ON THE EXCHANGE, not whatever the last fill recomputed."""

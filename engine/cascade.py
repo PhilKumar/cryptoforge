@@ -61,6 +61,7 @@ import uuid
 from dataclasses import MISSING, dataclass, field
 from dataclasses import fields as dataclass_fields
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Callable, Dict, List, Optional
 
 _log = logging.getLogger("cryptoforge.cascade")
@@ -289,6 +290,18 @@ def _coerce_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _floor_to_step(quantity: float, step_size) -> float:
+    """Floor a base quantity exactly as the exchange will for LOT_SIZE."""
+    try:
+        qty = Decimal(str(quantity))
+        step = Decimal(str(step_size or "0.00000001"))
+        if qty <= 0 or step <= 0:
+            return 0.0
+        return float((qty / step).to_integral_value(rounding=ROUND_DOWN) * step)
+    except (InvalidOperation, ValueError, TypeError):
+        return max(_coerce_float(quantity), 0.0)
 
 
 # ── Pure model ──────────────────────────────────────────────────────
@@ -702,6 +715,10 @@ class Campaign:
     # and never cancelled the stale order sitting at the OLD average's target.
     # This field only ever reflects what is ACTUALLY resting on the exchange.
     tp_order_price: Optional[float] = None
+    # The exact lot-rounded TP amount was below Binance's minimum notional.
+    # Store the last reported combination so the 10-second sync never floods
+    # the event log with the same rejected sell while the dust is held.
+    tp_min_notional_notice: Optional[str] = None
     tp_rev: int = 0
     tp_filled: bool = False
     filled_base_qty: float = 0.0
@@ -848,6 +865,7 @@ class Campaign:
             "tp_price": self.tp_price,
             "tp_order_id": self.tp_order_id,
             "tp_order_price": self.tp_order_price,
+            "tp_min_notional_notice": self.tp_min_notional_notice,
             "tp_rev": self.tp_rev,
             "tp_filled": self.tp_filled,
             "filled_base_qty": self.filled_base_qty,
@@ -910,6 +928,7 @@ class Campaign:
             "tp_price",
             "tp_order_id",
             "tp_order_price",
+            "tp_min_notional_notice",
             "tp_rev",
             "tp_filled",
             "filled_base_qty",
@@ -3150,6 +3169,7 @@ class CascadeEngine:
         campaign.tp_price = None
         campaign.tp_order_id = None
         campaign.tp_order_price = None
+        campaign.tp_min_notional_notice = None
         campaign.tp_rev += 1
         campaign.realized_pnl = round(campaign.realized_pnl_total, 8)
 
@@ -3878,10 +3898,6 @@ class CascadeEngine:
         current_price_ok = campaign.tp_order_price and abs((campaign.tp_order_price or 0.0) - desired_tp) < 1e-9
         if campaign.tp_order_id and current_price_ok:
             return changed
-        if campaign.tp_order_id:
-            await self._safe_cancel(campaign, campaign.tp_order_id)
-            campaign.tp_order_id = None
-            campaign.tp_order_price = None
         # Sell what the exchange says is actually there, not the gross the books
         # recorded: the buy's commission came out of the coin, so the recorded
         # quantity over-asks by the fee and Binance rejects the whole sell -2010.
@@ -3898,6 +3914,44 @@ class CascadeEngine:
                 f"balance is {(free_qty or 0.0):.8f}. Holding the position; will retry next sync.",
             )
             return changed
+        # Binance validates the lot-rounded base quantity, not the book's
+        # nominal quantity. A partial/legacy fill can leave a $4.57 holding;
+        # submitting that TP every sync only produces a noisy rejection and
+        # never protects or exits anything. Keep it as campaign inventory so a
+        # later fill can combine with it, and retain an existing TP while this
+        # smaller replacement is impossible.
+        try:
+            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
+        except Exception as exc:
+            _log.warning("[CASCADE] TP product lookup failed for %s: %s", campaign.symbol, exc)
+            product = {}
+        product = product or {}
+        minimum = max(
+            _coerce_float(product.get("min_notional"), campaign.min_notional_usd),
+            _coerce_float(campaign.min_notional_usd, MIN_NOTIONAL_FLOOR_USD),
+            MIN_NOTIONAL_FLOOR_USD,
+        )
+        sell_qty = _floor_to_step(sell_qty, product.get("step_size"))
+        sell_notional = sell_qty * desired_tp
+        if sell_qty <= 0 or sell_notional + 1e-10 < minimum:
+            notice = f"{sell_qty:.12f}@{desired_tp:.12f}/{minimum:.12f}"
+            if campaign.tp_min_notional_notice != notice:
+                campaign.tp_min_notional_notice = notice
+                self._log_event(
+                    campaign,
+                    "warn",
+                    f"TP held — sellable amount is ${sell_notional:.5f}, below Binance's ${minimum:g} minimum. "
+                    "No TP was sent; it will combine with a later campaign fill or needs manual resolution.",
+                )
+            return changed
+        campaign.tp_min_notional_notice = None
+        # Only cancel a stale TP after proving the replacement meets the
+        # exchange rules. Keeping an older target is safer than leaving the
+        # position with no target at all.
+        if campaign.tp_order_id:
+            await self._safe_cancel(campaign, campaign.tp_order_id)
+            campaign.tp_order_id = None
+            campaign.tp_order_price = None
         campaign.tp_rev += 1
         tp_client_id = f"cf-csc-{campaign.campaign_id}-tp-{campaign.tp_rev}"
         try:
