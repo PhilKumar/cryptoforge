@@ -4449,3 +4449,110 @@ class CascadeMinorYieldsTests(unittest.TestCase):
         child = self._campaign(engine, "child-1", "minor", 3200, 2)
         child.parent_campaign_id = major.campaign_id
         self.assertFalse(engine._minor_yields_to_major(child))
+
+
+class CascadeFundedFloorTests(unittest.TestCase):
+    """A campaign starting inside another's funded range pays only for new ground.
+
+    The netting is on the PERCENT of fall, never on the capital: capital_usd is
+    a rate (capital/100 per 1% of fall), so cutting it would shrink every rung
+    and push the pot under Binance's minimum.
+    """
+
+    def _running(self, engine, cid, mother_high, lows, symbol="BTCUSDT"):
+        campaign = Campaign(
+            campaign_id=cid,
+            symbol=symbol,
+            capital_usd=2000.0,
+            mother_high=mother_high,
+            mother_low=mother_high * 0.94,
+            mother_timestamp=_RECENT_TS,
+            seq=1,
+        )
+        campaign.state = "TRENDLINE_ACTIVE"
+        for i, low in enumerate(lows, start=1):
+            campaign.legs.append(
+                Leg(leg_id=i, trendline_id=1, low=low, touch_high=mother_high * 0.99, touch_timestamp=0)
+            )
+        engine.campaigns[cid] = campaign
+        return campaign
+
+    def test_clear_ground_means_no_floor(self):
+        engine = _mk_engine()
+        self.assertEqual(engine._funded_floor_for("BTCUSDT", 100.0), (0.0, None))
+
+    def test_a_campaign_with_no_fib_yet_claims_nothing(self):
+        """Allocation happens when a fib is drawn; before that nothing is paid for."""
+        engine = _mk_engine()
+        self._running(engine, "a", 100.0, [])
+        self.assertEqual(engine._funded_floor_for("BTCUSDT", 100.0), (0.0, None))
+
+    def test_the_floor_is_the_deepest_price_already_funded(self):
+        engine = _mk_engine()
+        self._running(engine, "a", 100.0, [97.0, 95.0])
+        floor, owner = engine._funded_floor_for("BTCUSDT", 98.0)
+        self.assertEqual(floor, 95.0)
+        self.assertEqual(owner.campaign_id, "a")
+
+    def test_funding_that_stopped_above_the_new_mother_has_no_claim(self):
+        """It never reached this stretch of price, so it cannot own it."""
+        engine = _mk_engine()
+        self._running(engine, "a", 100.0, [99.0])
+        self.assertEqual(engine._funded_floor_for("BTCUSDT", 98.0), (0.0, None))
+
+    def test_the_deepest_of_two_campaigns_wins(self):
+        engine = _mk_engine()
+        self._running(engine, "a", 100.0, [96.0])
+        self._running(engine, "b", 100.0, [93.0])
+        floor, owner = engine._funded_floor_for("BTCUSDT", 98.0)
+        self.assertEqual(floor, 93.0)
+        self.assertEqual(owner.campaign_id, "b")
+
+    def test_an_ended_campaign_releases_its_ground(self):
+        engine = _mk_engine()
+        self._running(engine, "a", 100.0, [95.0]).state = "MOTHER_BROKEN"
+        self.assertEqual(engine._funded_floor_for("BTCUSDT", 98.0), (0.0, None))
+
+    def test_another_symbol_is_irrelevant(self):
+        engine = _mk_engine()
+        self._running(engine, "a", 100.0, [95.0], symbol="ETHUSDT")
+        self.assertEqual(engine._funded_floor_for("BTCUSDT", 98.0), (0.0, None))
+
+    def test_the_first_fib_funds_from_the_floor_not_the_mother_high(self):
+        """Phil's case: major covered down to 95, minor's own fall runs 98->94.
+        Only 95->94 is new ground, so only that percent is funded."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine, capital=2000.0)
+        campaign.mother_high = 98.0
+        campaign.funded_floor_price = 95.0
+        leg = Leg(leg_id=1, trendline_id=1, low=94.0, touch_high=97.0, touch_timestamp=0)
+        campaign.legs.append(leg)
+        build_fib_ladder_and_pool(campaign, leg)
+        expected_pct = (95.0 - 94.0) / 95.0 * 100
+        self.assertAlmostEqual(leg.allocation_pct, expected_pct)
+        # The capital is untouched, so the rate is still $20 per 1% of fall.
+        self.assertEqual(campaign.capital_unit_per_pct, 20.0)
+        self.assertAlmostEqual(leg.pool_usd, expected_pct * 20.0)
+
+    def test_without_a_floor_the_first_fib_funds_the_whole_fall(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine, capital=2000.0)
+        campaign.mother_high = 98.0
+        leg = Leg(leg_id=1, trendline_id=1, low=94.0, touch_high=97.0, touch_timestamp=0)
+        campaign.legs.append(leg)
+        build_fib_ladder_and_pool(campaign, leg)
+        self.assertAlmostEqual(leg.allocation_pct, (98.0 - 94.0) / 98.0 * 100)
+
+    def test_the_floor_only_affects_the_first_fib(self):
+        """Later fibs already measure from the previous fib's level 1."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine, capital=2000.0)
+        campaign.mother_high = 98.0
+        campaign.funded_floor_price = 95.0
+        first = Leg(leg_id=1, trendline_id=1, low=94.0, touch_high=97.0, touch_timestamp=0)
+        campaign.legs.append(first)
+        build_fib_ladder_and_pool(campaign, first)
+        second = Leg(leg_id=2, trendline_id=1, low=92.0, touch_high=93.5, touch_timestamp=0)
+        campaign.legs.append(second)
+        build_fib_ladder_and_pool(campaign, second)
+        self.assertAlmostEqual(second.allocation_pct, (94.0 - 92.0) / 94.0 * 100)

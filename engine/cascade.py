@@ -672,6 +672,16 @@ class Campaign:
     # "minor" = a sub-mother marked inside a move that is already running, which
     # is always 5m no matter what chart it was spotted on.
     mc_kind: str = "major"
+    # Price ground another campaign on this symbol had already funded when this
+    # one started. This campaign's FIRST fib funds from here down instead of
+    # from its own mother high, so a percent of fall is never paid for twice.
+    # 0.0 means it started on clear ground and funds its whole fall.
+    #
+    # Note this nets the PERCENT, never the capital: capital_usd is a rate
+    # (capital/100 per 1% of fall), so cutting it would shrink every rung and
+    # push the pot below Binance's minimum, leaving the campaign unable to buy
+    # shallow dips at all. The rate stays whole; only the ground narrows.
+    funded_floor_price: float = 0.0
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
     tick_size: float = DEFAULT_TICK_SIZE  # exchange price increment, for the stop/limit gap
     parent_campaign_id: Optional[str] = None  # set when a mother break auto-started this one
@@ -788,6 +798,17 @@ class Campaign:
         return self.legs[-1] if self.legs else None
 
     @property
+    def allocated_down_to(self) -> float:
+        """The lowest price this campaign has already allocated money down to.
+
+        Legs are opened progressively deeper, and each one funds from the
+        previous leg's level 1 down to its own, so the last leg's low is the
+        bottom of everything paid for so far. 0.0 while no fib has been drawn —
+        nothing has been funded, so nothing is claimed.
+        """
+        return min((leg.low for leg in self.legs if leg.low > 0), default=0.0)
+
+    @property
     def spent_usd(self) -> float:
         """Capital currently locked in the OPEN position. A closed round returns
         its principal here, which is what frees it up for the next fib."""
@@ -847,6 +868,7 @@ class Campaign:
             "start_timeframe": self.start_timeframe,
             "escalates": self.escalates,
             "mc_kind": self.mc_kind,
+            "funded_floor_price": self.funded_floor_price,
             "min_notional_usd": self.min_notional_usd,
             "tick_size": self.tick_size,
             "parent_campaign_id": self.parent_campaign_id,
@@ -915,6 +937,7 @@ class Campaign:
             "start_timeframe",
             "escalates",
             "mc_kind",
+            "funded_floor_price",
             "min_notional_usd",
             "tick_size",
             "parent_campaign_id",
@@ -1037,10 +1060,18 @@ def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
     # level 1; every fib after that measures the remaining move from the PREVIOUS
     # fib's level 1 down to its own level 1, so each leg only funds new ground.
     prior_leg = campaign.legs[-2] if len(campaign.legs) >= 2 else None
-    if prior_leg is None or not prior_leg.low:
-        allocation_pct = leg.leg_pct_from_mother
-    else:
+    if prior_leg is not None and prior_leg.low:
         allocation_pct = (prior_leg.low - leg.low) / prior_leg.low * 100
+    elif campaign.funded_floor_price > 0:
+        # First fib, but this campaign started inside ground another campaign
+        # had already funded. Measure from where that one stopped paying, not
+        # from this mother high — the stretch between them is bought once
+        # already, and funding it again would buy the same shelf twice with two
+        # campaigns' money. Exactly the rule used between fibs above, applied
+        # one level up between campaigns.
+        allocation_pct = (campaign.funded_floor_price - leg.low) / campaign.funded_floor_price * 100
+    else:
+        allocation_pct = leg.leg_pct_from_mother
     allocation_pct = max(allocation_pct, 0.0)
 
     leg.allocation_pct = allocation_pct
@@ -1556,6 +1587,15 @@ class CascadeEngine:
             group_note = f" (capital group: ${capital_usd:,.2f} of ${available:,.2f} available)"
         if capital_usd < min_notional * 2:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
+        # Ground a running campaign on this symbol has already paid for. Its
+        # capital is untouched — only the stretch of fall it funds narrows.
+        funded_floor, funded_by = self._funded_floor_for(symbol, mother_high)
+        floor_note = ""
+        if funded_floor > 0:
+            floor_note = (
+                f" (starts inside campaign #{funded_by.seq}'s funded range — its first fib funds from "
+                f"{funded_floor:,.2f} down, not from the mother high, so no percent of the fall is paid for twice)"
+            )
 
         now_ts = int(time.time())
         if mother_timestamp:
@@ -1618,6 +1658,7 @@ class CascadeEngine:
             # escalate toward the 4H cap. 4H/1D/1W stay put for life.
             escalates=timeframe in ESCALATING_START_TIMEFRAMES,
             mc_kind=mc_kind,
+            funded_floor_price=funded_floor,
             min_notional_usd=min_notional,
             tick_size=tick_size,
             model_version=MODEL_VERSION,
@@ -1635,7 +1676,8 @@ class CascadeEngine:
             f"mother high {mother_high:g} / low {mother_low:g}"
             + (" — minor MC, so 5m regardless of the chart it was marked on" if mc_kind == "minor" else "")
             + (f" — climbs to {ESCALATION_LADDER[-1]}" if campaign.escalates else " — fixed timeframe, no escalation")
-            + group_note,
+            + group_note
+            + floor_note,
         )
         self.start()
         self._emit_update()
@@ -3582,6 +3624,31 @@ class CascadeEngine:
         task = asyncio.ensure_future(coro)
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
+
+    def _funded_floor_for(self, symbol: str, mother_high: float) -> tuple:
+        """The lowest price a running campaign on this symbol has already funded.
+
+        Returns (price, that campaign) — (0.0, None) when the new campaign
+        starts on clear ground and should fund its whole fall.
+
+        Only a floor BELOW the new mother high counts. A campaign that has
+        already allocated past where the new one even begins leaves it no new
+        ground at all, and one whose funding stopped above the new mother high
+        never reached this stretch of price, so it has no claim on it.
+
+        The deepest such floor wins: if two campaigns have both funded into this
+        area, the ground is clear only below whichever reached furthest down.
+        """
+        deepest, owner = 0.0, None
+        for campaign in self.campaigns.values():
+            if campaign.symbol != symbol or campaign.state not in RUNNING_STATES:
+                continue
+            floor = campaign.allocated_down_to
+            if floor <= 0 or floor >= mother_high:
+                continue
+            if deepest == 0.0 or floor < deepest:
+                deepest, owner = floor, campaign
+        return deepest, owner
 
     def _ancestor_ids(self, campaign: Campaign) -> set:
         """Every campaign this one descends from, walking parent links upward."""
