@@ -62,7 +62,7 @@ from dataclasses import MISSING, dataclass, field
 from dataclasses import fields as dataclass_fields
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 _log = logging.getLogger("cryptoforge.cascade")
 
@@ -309,9 +309,10 @@ _ENDED_POSITION_CHECK_SEC = 120
 # refused with "capital group is exhausted", which is the fund-allocation
 # confusion that started all of this.
 #
-# What holds exposure down instead is Campaign.funded_floor_price: campaigns
-# overlapping in price fund the ground between them ONCE, so running several on
-# a symbol does not multiply the money at risk the way the nominal sum implied.
+# What holds exposure down instead is the band ledger (CROSS_CAMPAIGN_NETTING
+# below): campaigns overlapping in price fund the shared ground ONCE, so running
+# several on a symbol does not multiply the money at risk the way the nominal
+# sum implied.
 #
 # Turn this back to True to restore the cap — nothing else needs changing, the
 # budgets are still stored, still summed and still displayed.
@@ -320,22 +321,23 @@ GROUP_CAP_ENFORCED = False
 # Does a new campaign born inside ground another has already funded skip that
 # ground?
 #
-# OFF, deliberately, and shipped that way on 2026-07-28. The implementation
-# behind it is a single FLOOR — it takes the lowest price any running campaign
-# has funded down to and funds only below that. That is right when the new
-# campaign starts at or under the other's mother high (a minor MC inside a
-# major), and wrong when it starts ABOVE.
+# ON since 2026-07-28, backed by the per-symbol BAND LEDGER below.
 #
-# Phil's case: a 15m runs 95 -> 92 while a 4H starts at 100. The floor is 92, so
-# the 4H would fund only below 92 — silently skipping 100 -> 95, which NO
-# campaign has funded. About $100 of allocation at $2000 capital, gone. The
-# taken ground is a BAND in the middle, and a single floor cannot express that.
+# The first attempt at this shipped OFF, because it was a single FLOOR: the
+# lowest price any running campaign had funded down to, with the new campaign
+# funding only below it. Right when the new campaign starts under the other's
+# mother high (a minor MC inside a major), wrong when it starts above. Phil's
+# case: a 15m runs 95 -> 92 while a 4H starts at 100. The floor is 92, so the
+# 4H would fund only below 92 — silently skipping 100 -> 95, which NO campaign
+# has funded. About $100 of allocation at $2000 capital, gone. The taken ground
+# is a BAND in the middle, and a single floor cannot express that.
 #
-# The replacement is a per-symbol band ledger: track which stretches of price
-# are funded, and let a new campaign fund whatever is free, above and below.
-# Until that exists this stays False and every campaign funds its whole fall,
-# exactly as it always has.
-CROSS_CAMPAIGN_NETTING = False
+# The ledger does. It records which STRETCHES of price are funded, so a new
+# campaign funds whatever is free — above a sibling's band, below it, or both.
+#
+# Setting this to False restores the old behaviour exactly: every campaign funds
+# its whole fall, and the bands are still recorded but no longer subtracted.
+CROSS_CAMPAIGN_NETTING = True
 
 
 class CascadeModelError(Exception):
@@ -359,6 +361,66 @@ def _floor_to_step(quantity: float, step_size) -> float:
         return float((qty / step).to_integral_value(rounding=ROUND_DOWN) * step)
     except (InvalidOperation, ValueError, TypeError):
         return max(_coerce_float(quantity), 0.0)
+
+
+# ── Price band ledger ───────────────────────────────────────────────
+#
+# A "band" is a stretch of price [low, high] that some campaign's capital has
+# already been allocated across. Bands are always kept sorted, merged and
+# disjoint, so a list of them answers one question cheaply: of this fall, how
+# much is ground nobody has paid for yet?
+
+Band = Tuple[float, float]
+
+
+def merge_bands(bands: Iterable[Band]) -> List[Band]:
+    """Sort and coalesce bands into a disjoint, ascending list.
+
+    Touching bands merge — [90, 95] and [95, 100] describe one funded stretch
+    from 90 to 100, not two, and treating them as two would leave a zero-width
+    gap that later maths could trip over.
+    """
+    clean = sorted((float(low), float(high)) for low, high in bands if float(high) > float(low) > 0)
+    merged: List[Band] = []
+    for low, high in clean:
+        if merged and low <= merged[-1][1]:
+            if high > merged[-1][1]:
+                merged[-1] = (merged[-1][0], high)
+        else:
+            merged.append((low, high))
+    return merged
+
+
+def subtract_bands(span: Band, taken: Iterable[Band]) -> List[Band]:
+    """The parts of `span` no band in `taken` covers, ascending.
+
+    This is what makes the ledger different from a floor: taken ground in the
+    MIDDLE of a fall leaves free ground both above and below it, and both parts
+    come back.
+    """
+    low, high = float(span[0]), float(span[1])
+    if high <= low:
+        return []
+    free: List[Band] = []
+    cursor = low
+    for t_low, t_high in merge_bands(taken):
+        if t_high <= cursor:
+            continue
+        if t_low >= high:
+            break
+        if t_low > cursor:
+            free.append((cursor, min(t_low, high)))
+        cursor = max(cursor, t_high)
+        if cursor >= high:
+            break
+    if cursor < high:
+        free.append((cursor, high))
+    return free
+
+
+def free_span_of(span: Band, taken: Iterable[Band]) -> float:
+    """How much of `span`, in price, is unfunded ground."""
+    return sum(high - low for low, high in subtract_bands(span, taken))
 
 
 # ── Pure model ──────────────────────────────────────────────────────
@@ -640,6 +702,7 @@ class Leg:
     fib: Optional[FibLadder] = None
     leg_pct_from_mother: Optional[float] = None  # total fall from the mother high
     allocation_pct: Optional[float] = None  # percent this leg funds (see build_fib_ladder_and_pool)
+    netted_pct: float = 0.0  # percent of this leg's stretch a sibling had already funded
     pool_usd: Optional[float] = None  # this leg's own allocation
     carry_in_usd: float = 0.0  # legacy: kept so older snapshots still load
     pool_total_usd: float = 0.0  # this fib's own contribution to the shared pool
@@ -658,6 +721,7 @@ class Leg:
             "fib": self.fib.to_dict() if self.fib else None,
             "leg_pct_from_mother": self.leg_pct_from_mother,
             "allocation_pct": self.allocation_pct,
+            "netted_pct": self.netted_pct,
             "pool_usd": self.pool_usd,
             "carry_in_usd": self.carry_in_usd,
             "pool_total_usd": self.pool_total_usd,
@@ -680,6 +744,7 @@ class Leg:
             leg.fib = FibLadder.from_dict(data["fib"])
         leg.leg_pct_from_mother = data.get("leg_pct_from_mother")
         leg.allocation_pct = data.get("allocation_pct")
+        leg.netted_pct = _coerce_float(data.get("netted_pct"))
         leg.pool_usd = data.get("pool_usd")
         leg.carry_in_usd = _coerce_float(data.get("carry_in_usd"))
         leg.pool_total_usd = _coerce_float(data.get("pool_total_usd"))
@@ -717,16 +782,25 @@ class Campaign:
     # "minor" = a sub-mother marked inside a move that is already running, which
     # is always 5m no matter what chart it was spotted on.
     mc_kind: str = "major"
-    # Price ground another campaign on this symbol had already funded when this
-    # one started. This campaign's FIRST fib funds from here down instead of
-    # from its own mother high, so a percent of fall is never paid for twice.
-    # 0.0 means it started on clear ground and funds its whole fall.
+    # Superseded by funded_bands. Kept so campaigns saved before the band
+    # ledger still load; nothing reads it any more.
+    funded_floor_price: float = 0.0
+    # Stretches of price other campaigns on this symbol had already funded at
+    # the moment this one was born, as [low, high] pairs. Every fib this
+    # campaign draws funds only the parts of its fall that fall OUTSIDE these,
+    # so a percent of the fall is never paid for twice.
+    #
+    # Captured once, at birth, and then FIXED for life. A running campaign funds
+    # its own fall without skipping: campaigns born later stake their claim
+    # around it, not through it. Equally, a sibling ending does not retro-fund
+    # ground this campaign has already passed — money is deployed as price
+    # moves, and there is no going back to buy a dip that is over.
     #
     # Note this nets the PERCENT, never the capital: capital_usd is a rate
     # (capital/100 per 1% of fall), so cutting it would shrink every rung and
     # push the pot below Binance's minimum, leaving the campaign unable to buy
     # shallow dips at all. The rate stays whole; only the ground narrows.
-    funded_floor_price: float = 0.0
+    funded_bands: List[Band] = field(default_factory=list)
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
     tick_size: float = DEFAULT_TICK_SIZE  # exchange price increment, for the stop/limit gap
     parent_campaign_id: Optional[str] = None  # set when a mother break auto-started this one
@@ -867,6 +941,23 @@ class Campaign:
         return min((leg.low for leg in self.legs if leg.low > 0), default=0.0)
 
     @property
+    def claimed_bands(self) -> List[Band]:
+        """The stretches of price THIS campaign's capital has actually funded.
+
+        Its fibs run contiguously from the mother high down to the deepest leg
+        low, minus whatever was already taken when it was born — that ground
+        belongs to the campaign that paid for it, and when that one ends the
+        ground goes free rather than passing to this one.
+
+        Empty until a fib is drawn: an armed campaign that has not allocated a
+        cent has no claim, and must not block a sibling from funding the fall.
+        """
+        floor = self.allocated_down_to
+        if floor <= 0 or self.mother_high <= floor:
+            return []
+        return subtract_bands((floor, self.mother_high), self.funded_bands)
+
+    @property
     def spent_usd(self) -> float:
         """Capital currently locked in the OPEN position. A closed round returns
         its principal here, which is what frees it up for the next fib."""
@@ -927,6 +1018,7 @@ class Campaign:
             "escalates": self.escalates,
             "mc_kind": self.mc_kind,
             "funded_floor_price": self.funded_floor_price,
+            "funded_bands": [[low, high] for low, high in self.funded_bands],
             "min_notional_usd": self.min_notional_usd,
             "tick_size": self.tick_size,
             "parent_campaign_id": self.parent_campaign_id,
@@ -1049,6 +1141,11 @@ class Campaign:
         ):
             if key in data:
                 setattr(campaign, key, data[key])
+        campaign.funded_bands = merge_bands(
+            (_coerce_float(band[0]), _coerce_float(band[1]))
+            for band in data.get("funded_bands") or []
+            if isinstance(band, (list, tuple)) and len(band) >= 2
+        )
         campaign.trendlines = [Trendline.from_dict(tl) for tl in data.get("trendlines") or []]
         campaign.legs = [Leg.from_dict(leg) for leg in data.get("legs") or []]
         campaign.all_fills = [Fill.from_dict(f) for f in data.get("all_fills") or []]
@@ -1125,18 +1222,26 @@ def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
     # fib's level 1 down to its own level 1, so each leg only funds new ground.
     prior_leg = campaign.legs[-2] if len(campaign.legs) >= 2 else None
     if prior_leg is not None and prior_leg.low:
-        allocation_pct = (prior_leg.low - leg.low) / prior_leg.low * 100
-    elif CROSS_CAMPAIGN_NETTING and campaign.funded_floor_price > 0:
-        # First fib, but this campaign started inside ground another campaign
-        # had already funded. Measure from where that one stopped paying, not
-        # from this mother high — the stretch between them is bought once
-        # already, and funding it again would buy the same shelf twice with two
-        # campaigns' money. Exactly the rule used between fibs above, applied
-        # one level up between campaigns.
-        allocation_pct = (campaign.funded_floor_price - leg.low) / campaign.funded_floor_price * 100
+        anchor, allocation_pct = prior_leg.low, (prior_leg.low - leg.low) / prior_leg.low * 100
     else:
-        allocation_pct = leg.leg_pct_from_mother
+        anchor, allocation_pct = campaign.mother_high, leg.leg_pct_from_mother
     allocation_pct = max(allocation_pct, 0.0)
+
+    # Band ledger: this campaign was born with some of its fall already funded
+    # by a sibling on the same symbol. Charge only for the parts of this leg's
+    # stretch that nobody had paid for — which may be above the sibling's band,
+    # below it, or both, and that is exactly what a single floor could not say.
+    #
+    # The percent is scaled by the free PRICE, keeping the same denominator the
+    # full leg used, so free% + already-funded% always adds back to the whole
+    # leg. Nets the percent of the fall, never the capital: see funded_bands.
+    leg.netted_pct = 0.0
+    if CROSS_CAMPAIGN_NETTING and campaign.funded_bands and allocation_pct > 0 and anchor > 0:
+        span = (leg.low, min(anchor, campaign.mother_high))
+        if span[1] > span[0]:
+            free_ratio = free_span_of(span, campaign.funded_bands) / (span[1] - span[0])
+            gross, allocation_pct = allocation_pct, allocation_pct * max(min(free_ratio, 1.0), 0.0)
+            leg.netted_pct = max(gross - allocation_pct, 0.0)
 
     leg.allocation_pct = allocation_pct
     leg.pool_usd = allocation_pct * campaign.capital_unit_per_pct
@@ -1672,12 +1777,18 @@ class CascadeEngine:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
         # Ground a running campaign on this symbol has already paid for. Its
         # capital is untouched — only the stretch of fall it funds narrows.
-        funded_floor, funded_by = self._funded_floor_for(symbol, mother_high) if CROSS_CAMPAIGN_NETTING else (0.0, None)
+        funded_bands, funded_by = self._birth_bands_for(symbol, mother_high) if CROSS_CAMPAIGN_NETTING else ([], [])
         floor_note = ""
-        if funded_floor > 0:
+        if funded_bands:
+            taken_pct = sum(high - low for low, high in funded_bands) / mother_high * 100
             floor_note = (
-                f" (starts inside campaign #{funded_by.seq}'s funded range — its first fib funds from "
-                f"{funded_floor:,.2f} down, not from the mother high, so no percent of the fall is paid for twice)"
+                " (starts across ground campaign"
+                + ("s " if len(funded_by) > 1 else " ")
+                + ", ".join(f"#{c.seq}" for c in sorted(funded_by, key=lambda c: c.seq))
+                + " already funded — "
+                + ", ".join(f"{low:,.2f}-{high:,.2f}" for low, high in funded_bands)
+                + f", {taken_pct:.2f}% of the fall. It funds only what is free above and below those,"
+                " so no percent of the fall is paid for twice)"
             )
 
         now_ts = int(time.time())
@@ -1741,7 +1852,7 @@ class CascadeEngine:
             # escalate toward the 4H cap. 4H/1D/1W stay put for life.
             escalates=timeframe in ESCALATING_START_TIMEFRAMES,
             mc_kind=mc_kind,
-            funded_floor_price=funded_floor,
+            funded_bands=funded_bands,
             min_notional_usd=min_notional,
             tick_size=tick_size,
             model_version=MODEL_VERSION,
@@ -2161,6 +2272,18 @@ class CascadeEngine:
                 else None
             )
             payload["allocated_pct"] = round(campaign.cumulative_used_pct, 4)
+            # Ground a sibling had already funded when this campaign was born,
+            # so the strip can say why its pools are smaller than the raw fall
+            # implies. Empty for a campaign that started on clear ground.
+            payload["funded_bands"] = [[low, high] for low, high in campaign.funded_bands]
+            payload["netted_pct"] = (
+                round(
+                    sum(high - low for low, high in campaign.funded_bands) / campaign.mother_high * 100,
+                    4,
+                )
+                if campaign.funded_bands and campaign.mother_high > 0
+                else 0.0
+            )
             payload["rounds_closed"] = len(campaign.rounds)
             payload["realized_pnl_total"] = round(campaign.realized_pnl_total, 2)
             payload["carry_forward_usd"] = round(campaign.carry_forward_usd, 2)
@@ -2239,6 +2362,11 @@ class CascadeEngine:
             "start_timeframe",
             "escalates",
             "mc_kind",
+            # Birth settings, not replay output. The ledger a campaign was born
+            # against is fixed for its life, and a recalc that cleared it would
+            # replay every leg funding ground a sibling had already paid for.
+            "funded_bands",
+            "funded_floor_price",
             "min_notional_usd",
             "tick_size",
             "parent_campaign_id",
@@ -2526,6 +2654,7 @@ class CascadeEngine:
                     "pool_usd": leg.pool_usd,
                     "fall_pct_from_mother": leg.leg_pct_from_mother,
                     "allocation_pct": leg.allocation_pct,
+                    "netted_pct": leg.netted_pct,
                     "levels": levels,
                     "orders": [
                         {
@@ -3293,6 +3422,7 @@ class CascadeEngine:
             "leg",
             f"Fib {leg.leg_id} drawn on trendline {trendline_id}: 0={touch_high:g} 1={swing_low:g} "
             f"(adds {_coerce_float(leg.allocation_pct):.3f}% = ${_coerce_float(leg.pool_usd):,.2f} to the pool"
+            f"{f', {leg.netted_pct:.3f}% netted off as already funded' if leg.netted_pct > 0 else ''}"
             f"{', escalated' if leg.escalated else ''}). Ladder re-split by price — "
             + (
                 ", ".join(f"F{o.leg_id} L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in funded)
@@ -3878,30 +4008,46 @@ class CascadeEngine:
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
 
-    def _funded_floor_for(self, symbol: str, mother_high: float) -> tuple:
-        """The lowest price a running campaign on this symbol has already funded.
+    def funded_bands_for(self, symbol: str, exclude_id: str = "") -> List[Band]:
+        """Every stretch of price on this symbol that running capital already covers.
 
-        Returns (price, that campaign) — (0.0, None) when the new campaign
-        starts on clear ground and should fund its whole fall.
+        The ledger, assembled on demand from the campaigns themselves rather
+        than kept as a separate structure that could drift out of step with
+        them. Each running campaign contributes the ground it has actually
+        funded — see Campaign.claimed_bands.
 
-        Only a floor BELOW the new mother high counts. A campaign that has
-        already allocated past where the new one even begins leaves it no new
-        ground at all, and one whose funding stopped above the new mother high
-        never reached this stretch of price, so it has no claim on it.
-
-        The deepest such floor wins: if two campaigns have both funded into this
-        area, the ground is clear only below whichever reached furthest down.
+        Only RUNNING campaigns count, which IS the release rule: a campaign that
+        completes, breaks its mother or is stopped drops out of this sum, and
+        its ground is free for the next one. Release happens on campaign end,
+        not on a round closing — a campaign between rounds still holds its
+        fibs, and will buy that ground again on the next leg down.
         """
-        deepest, owner = 0.0, None
+        bands: List[Band] = []
         for campaign in self.campaigns.values():
-            if campaign.symbol != symbol or campaign.state not in RUNNING_STATES:
+            if campaign.symbol != symbol or campaign.campaign_id == exclude_id:
                 continue
-            floor = campaign.allocated_down_to
-            if floor <= 0 or floor >= mother_high:
+            if campaign.state not in RUNNING_STATES:
                 continue
-            if deepest == 0.0 or floor < deepest:
-                deepest, owner = floor, campaign
-        return deepest, owner
+            bands.extend(campaign.claimed_bands)
+        return merge_bands(bands)
+
+    def _birth_bands_for(self, symbol: str, mother_high: float) -> tuple:
+        """The ledger clipped to what a new campaign starting at `mother_high` sees.
+
+        Returns (bands, owners). Ground at or above the new mother high is
+        dropped — the campaign will never fall through it, so carrying it would
+        only clutter the record it keeps for life.
+        """
+        taken = [(low, min(high, mother_high)) for low, high in self.funded_bands_for(symbol) if low < mother_high]
+        bands = merge_bands(taken)
+        owners = [
+            campaign
+            for campaign in self.campaigns.values()
+            if campaign.symbol == symbol
+            and campaign.state in RUNNING_STATES
+            and any(low < mother_high for low, _high in campaign.claimed_bands)
+        ]
+        return bands, owners
 
     def _ancestor_ids(self, campaign: Campaign) -> set:
         """Every campaign this one descends from, walking parent links upward."""
@@ -4042,6 +4188,10 @@ class CascadeEngine:
             start_timeframe=BASE_TIMEFRAME,
             escalates=True,
             mc_kind="minor",
+            # A successor is a newly-born MC like any other, so it takes the
+            # band ledger as it stands now. The parent is already archived and
+            # has released its ground; only still-running siblings show up.
+            funded_bands=(self._birth_bands_for(parent.symbol, candle.high)[0] if CROSS_CAMPAIGN_NETTING else []),
             min_notional_usd=parent.min_notional_usd,
             tick_size=parent.tick_size,
             parent_campaign_id=parent.campaign_id,

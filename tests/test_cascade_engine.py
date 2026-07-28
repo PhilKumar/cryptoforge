@@ -1,5 +1,6 @@
 """CascadeEngine tests: paper-mode state machine + live desired-state order sync."""
 
+import json
 import os
 import tempfile
 import time
@@ -4475,17 +4476,42 @@ class CascadeMinorYieldsTests(unittest.TestCase):
         self.assertFalse(engine._minor_yields_to_major(child))
 
 
-class CascadeFundedFloorTests(unittest.TestCase):
-    """A campaign starting inside another's funded range pays only for new ground.
+class CascadeBandMathTests(unittest.TestCase):
+    """The interval primitives the ledger is built on."""
 
-    The netting is on the PERCENT of fall, never on the capital: capital_usd is
-    a rate (capital/100 per 1% of fall), so cutting it would shrink every rung
-    and push the pot under Binance's minimum.
+    def test_bands_are_sorted_and_coalesced(self):
+        merged = cascade_module.merge_bands([(95.0, 100.0), (80.0, 90.0), (88.0, 96.0)])
+        self.assertEqual(merged, [(80.0, 100.0)])
 
-    SHIPPED OFF (cascade.CROSS_CAMPAIGN_NETTING is False): the floor cannot
-    express taken ground that is a band in the MIDDLE, so a campaign starting
-    above another's range would skip ground nobody funded. These tests switch it
-    on to keep the piece that does work covered until the band ledger lands.
+    def test_touching_bands_become_one(self):
+        """[90,95] and [95,100] are one funded stretch, not two with a zero gap."""
+        self.assertEqual(cascade_module.merge_bands([(90.0, 95.0), (95.0, 100.0)]), [(90.0, 100.0)])
+
+    def test_degenerate_and_negative_bands_are_dropped(self):
+        self.assertEqual(cascade_module.merge_bands([(90.0, 90.0), (100.0, 95.0), (0.0, 5.0)]), [])
+
+    def test_taken_ground_in_the_middle_leaves_free_ground_on_both_sides(self):
+        """The whole reason a floor was not enough."""
+        free = cascade_module.subtract_bands((90.0, 100.0), [(93.0, 96.0)])
+        self.assertEqual(free, [(90.0, 93.0), (96.0, 100.0)])
+
+    def test_a_band_covering_everything_leaves_nothing(self):
+        self.assertEqual(cascade_module.subtract_bands((90.0, 100.0), [(85.0, 105.0)]), [])
+
+    def test_bands_outside_the_span_are_ignored(self):
+        free = cascade_module.subtract_bands((90.0, 100.0), [(70.0, 80.0), (110.0, 120.0)])
+        self.assertEqual(free, [(90.0, 100.0)])
+
+    def test_free_span_adds_up(self):
+        self.assertAlmostEqual(cascade_module.free_span_of((90.0, 100.0), [(93.0, 96.0)]), 7.0)
+
+
+class CascadeBandLedgerTests(unittest.TestCase):
+    """Which stretches of price a symbol's running capital already covers.
+
+    The ledger replaces the old single FLOOR, which could not express taken
+    ground sitting in the MIDDLE of a new campaign's fall — see
+    cascade.CROSS_CAMPAIGN_NETTING for the case that killed it.
     """
 
     def setUp(self):
@@ -4495,7 +4521,7 @@ class CascadeFundedFloorTests(unittest.TestCase):
     def tearDown(self):
         cascade_module.CROSS_CAMPAIGN_NETTING = self._netting_was
 
-    def _running(self, engine, cid, mother_high, lows, symbol="BTCUSDT"):
+    def _running(self, engine, cid, mother_high, lows, symbol="BTCUSDT", seq=1):
         campaign = Campaign(
             campaign_id=cid,
             symbol=symbol,
@@ -4503,7 +4529,7 @@ class CascadeFundedFloorTests(unittest.TestCase):
             mother_high=mother_high,
             mother_low=mother_high * 0.94,
             mother_timestamp=_RECENT_TS,
-            seq=1,
+            seq=seq,
         )
         campaign.state = "TRENDLINE_ACTIVE"
         for i, low in enumerate(lows, start=1):
@@ -4513,85 +4539,247 @@ class CascadeFundedFloorTests(unittest.TestCase):
         engine.campaigns[cid] = campaign
         return campaign
 
-    def test_clear_ground_means_no_floor(self):
-        engine = _mk_engine()
-        self.assertEqual(engine._funded_floor_for("BTCUSDT", 100.0), (0.0, None))
+    def test_clear_ground_means_an_empty_ledger(self):
+        self.assertEqual(_mk_engine().funded_bands_for("BTCUSDT"), [])
 
     def test_a_campaign_with_no_fib_yet_claims_nothing(self):
         """Allocation happens when a fib is drawn; before that nothing is paid for."""
         engine = _mk_engine()
         self._running(engine, "a", 100.0, [])
-        self.assertEqual(engine._funded_floor_for("BTCUSDT", 100.0), (0.0, None))
+        self.assertEqual(engine.funded_bands_for("BTCUSDT"), [])
 
-    def test_the_floor_is_the_deepest_price_already_funded(self):
+    def test_a_campaign_claims_from_its_deepest_leg_up_to_its_mother_high(self):
         engine = _mk_engine()
         self._running(engine, "a", 100.0, [97.0, 95.0])
-        floor, owner = engine._funded_floor_for("BTCUSDT", 98.0)
-        self.assertEqual(floor, 95.0)
-        self.assertEqual(owner.campaign_id, "a")
+        self.assertEqual(engine.funded_bands_for("BTCUSDT"), [(95.0, 100.0)])
 
-    def test_funding_that_stopped_above_the_new_mother_has_no_claim(self):
-        """It never reached this stretch of price, so it cannot own it."""
-        engine = _mk_engine()
-        self._running(engine, "a", 100.0, [99.0])
-        self.assertEqual(engine._funded_floor_for("BTCUSDT", 98.0), (0.0, None))
-
-    def test_the_deepest_of_two_campaigns_wins(self):
+    def test_overlapping_campaigns_merge_into_one_band(self):
         engine = _mk_engine()
         self._running(engine, "a", 100.0, [96.0])
-        self._running(engine, "b", 100.0, [93.0])
-        floor, owner = engine._funded_floor_for("BTCUSDT", 98.0)
-        self.assertEqual(floor, 93.0)
-        self.assertEqual(owner.campaign_id, "b")
+        self._running(engine, "b", 97.0, [93.0], seq=2)
+        self.assertEqual(engine.funded_bands_for("BTCUSDT"), [(93.0, 100.0)])
+
+    def test_separated_campaigns_stay_two_bands(self):
+        engine = _mk_engine()
+        self._running(engine, "a", 100.0, [98.0])
+        self._running(engine, "b", 90.0, [85.0], seq=2)
+        self.assertEqual(engine.funded_bands_for("BTCUSDT"), [(85.0, 90.0), (98.0, 100.0)])
 
     def test_an_ended_campaign_releases_its_ground(self):
+        """Release is on campaign END, not on a round closing."""
         engine = _mk_engine()
         self._running(engine, "a", 100.0, [95.0]).state = "MOTHER_BROKEN"
-        self.assertEqual(engine._funded_floor_for("BTCUSDT", 98.0), (0.0, None))
+        self.assertEqual(engine.funded_bands_for("BTCUSDT"), [])
 
     def test_another_symbol_is_irrelevant(self):
         engine = _mk_engine()
         self._running(engine, "a", 100.0, [95.0], symbol="ETHUSDT")
-        self.assertEqual(engine._funded_floor_for("BTCUSDT", 98.0), (0.0, None))
+        self.assertEqual(engine.funded_bands_for("BTCUSDT"), [])
 
-    def test_the_first_fib_funds_from_the_floor_not_the_mother_high(self):
-        """Phil's case: major covered down to 95, minor's own fall runs 98->94.
-        Only 95->94 is new ground, so only that percent is funded."""
+    def test_a_campaign_does_not_claim_ground_it_was_born_netted_out_of(self):
+        """A claims 90-100 and B is born inside it. B funds only 85-90, so when A
+        ends the ground above 90 goes free rather than passing to B."""
+        engine = _mk_engine()
+        a = self._running(engine, "a", 100.0, [90.0])
+        b = self._running(engine, "b", 95.0, [85.0], seq=2)
+        b.funded_bands = [(90.0, 95.0)]
+        self.assertEqual(b.claimed_bands, [(85.0, 90.0)])
+        a.state = "COMPLETED"
+        self.assertEqual(engine.funded_bands_for("BTCUSDT"), [(85.0, 90.0)])
+
+    def test_birth_bands_are_clipped_to_the_new_mother_high(self):
+        """Ground above where the new campaign starts is not ground it can fall
+        through, so it never enters the record it keeps for life."""
+        engine = _mk_engine()
+        self._running(engine, "a", 120.0, [95.0])
+        bands, owners = engine._birth_bands_for("BTCUSDT", 100.0)
+        self.assertEqual(bands, [(95.0, 100.0)])
+        self.assertEqual([c.campaign_id for c in owners], ["a"])
+
+    def test_ground_entirely_above_the_new_mother_high_is_dropped(self):
+        engine = _mk_engine()
+        self._running(engine, "a", 120.0, [110.0])
+        bands, owners = engine._birth_bands_for("BTCUSDT", 100.0)
+        self.assertEqual(bands, [])
+        self.assertEqual(owners, [])
+
+
+class CascadeBandAllocationTests(unittest.TestCase):
+    """What the ledger does to a leg's pool.
+
+    Netting is on the PERCENT of fall, never on the capital: capital_usd is a
+    rate (capital/100 per 1% of fall), so cutting it would shrink every rung and
+    push the pot under Binance's minimum.
+    """
+
+    def setUp(self):
+        self._netting_was = cascade_module.CROSS_CAMPAIGN_NETTING
+        cascade_module.CROSS_CAMPAIGN_NETTING = True
+
+    def tearDown(self):
+        cascade_module.CROSS_CAMPAIGN_NETTING = self._netting_was
+
+    def _campaign(self, mother_high, bands):
         engine = _mk_engine()
         campaign = _mk_campaign(engine, capital=2000.0)
-        campaign.mother_high = 98.0
-        campaign.funded_floor_price = 95.0
-        leg = Leg(leg_id=1, trendline_id=1, low=94.0, touch_high=97.0, touch_timestamp=0)
+        campaign.mother_high = mother_high
+        campaign.funded_bands = list(bands)
+        return campaign
+
+    def _draw(self, campaign, leg_id, low, touch_high):
+        leg = Leg(leg_id=leg_id, trendline_id=1, low=low, touch_high=touch_high, touch_timestamp=0)
         campaign.legs.append(leg)
         build_fib_ladder_and_pool(campaign, leg)
-        expected_pct = (95.0 - 94.0) / 95.0 * 100
+        return leg
+
+    def test_the_first_fib_funds_only_the_free_part_of_its_fall(self):
+        """Phil's case: a sibling covered down to 95, this one's fall runs 98->94.
+        Only 95->94 is new ground, so only that percent is funded."""
+        campaign = self._campaign(98.0, [(95.0, 98.0)])
+        leg = self._draw(campaign, 1, 94.0, 97.0)
+        expected_pct = (98.0 - 94.0) / 98.0 * 100 * (1.0 / 4.0)
         self.assertAlmostEqual(leg.allocation_pct, expected_pct)
         # The capital is untouched, so the rate is still $20 per 1% of fall.
         self.assertEqual(campaign.capital_unit_per_pct, 20.0)
         self.assertAlmostEqual(leg.pool_usd, expected_pct * 20.0)
 
-    def test_without_a_floor_the_first_fib_funds_the_whole_fall(self):
-        engine = _mk_engine()
-        campaign = _mk_campaign(engine, capital=2000.0)
-        campaign.mother_high = 98.0
-        leg = Leg(leg_id=1, trendline_id=1, low=94.0, touch_high=97.0, touch_timestamp=0)
-        campaign.legs.append(leg)
-        build_fib_ladder_and_pool(campaign, leg)
-        self.assertAlmostEqual(leg.allocation_pct, (98.0 - 94.0) / 98.0 * 100)
+    def test_taken_ground_in_the_middle_still_funds_above_and_below(self):
+        """The failure that kept netting switched off: a 15m runs 95->92 while a
+        4H starts at 100. 100->95 is free and must NOT be skipped."""
+        campaign = self._campaign(100.0, [(92.0, 95.0)])
+        leg = self._draw(campaign, 1, 90.0, 99.0)
+        free = (100.0 - 95.0) + (92.0 - 90.0)  # 7 of the 10 points fallen
+        self.assertAlmostEqual(leg.allocation_pct, (100.0 - 90.0) / 100.0 * 100 * (free / 10.0))
+        self.assertGreater(leg.allocation_pct, 0.0)
+        self.assertAlmostEqual(leg.netted_pct, (100.0 - 90.0) / 100.0 * 100 * (3.0 / 10.0))
 
-    def test_the_floor_only_affects_the_first_fib(self):
-        """Later fibs already measure from the previous fib's level 1."""
+    def test_an_empty_ledger_funds_the_whole_fall(self):
+        campaign = self._campaign(98.0, [])
+        leg = self._draw(campaign, 1, 94.0, 97.0)
+        self.assertAlmostEqual(leg.allocation_pct, (98.0 - 94.0) / 98.0 * 100)
+        self.assertEqual(leg.netted_pct, 0.0)
+
+    def test_a_leg_entirely_inside_taken_ground_funds_nothing(self):
+        campaign = self._campaign(100.0, [(90.0, 100.0)])
+        leg = self._draw(campaign, 1, 95.0, 99.0)
+        self.assertAlmostEqual(leg.allocation_pct, 0.0)
+        self.assertAlmostEqual(leg.pool_usd, 0.0)
+
+    def test_later_fibs_are_netted_too(self):
+        """The birth ledger applies for the campaign's whole life, not just its
+        first fib — the ground was taken before it existed either way."""
+        campaign = self._campaign(100.0, [(90.0, 96.0)])
+        self._draw(campaign, 1, 94.0, 99.0)
+        second = self._draw(campaign, 2, 88.0, 93.0)
+        # Second leg spans 94->88; 94->90 is taken, 90->88 is free.
+        self.assertAlmostEqual(second.allocation_pct, (94.0 - 88.0) / 94.0 * 100 * (2.0 / 6.0))
+
+    def test_a_later_fib_below_all_taken_ground_funds_in_full(self):
+        campaign = self._campaign(100.0, [(96.0, 100.0)])
+        self._draw(campaign, 1, 95.0, 99.0)
+        second = self._draw(campaign, 2, 90.0, 93.0)
+        self.assertAlmostEqual(second.allocation_pct, (95.0 - 90.0) / 95.0 * 100)
+        self.assertEqual(second.netted_pct, 0.0)
+
+    def test_free_and_netted_add_back_to_the_whole_leg(self):
+        campaign = self._campaign(100.0, [(92.0, 95.0)])
+        leg = self._draw(campaign, 1, 90.0, 99.0)
+        self.assertAlmostEqual(leg.allocation_pct + leg.netted_pct, leg.leg_pct_from_mother)
+
+    def test_the_flag_off_restores_funding_the_whole_fall(self):
+        cascade_module.CROSS_CAMPAIGN_NETTING = False
+        campaign = self._campaign(100.0, [(92.0, 95.0)])
+        leg = self._draw(campaign, 1, 90.0, 99.0)
+        self.assertAlmostEqual(leg.allocation_pct, (100.0 - 90.0) / 100.0 * 100)
+
+    def test_bands_survive_a_round_trip_through_json(self):
+        campaign = self._campaign(100.0, [(92.0, 95.0)])
+        restored = Campaign.from_dict(json.loads(json.dumps(campaign.to_dict())))
+        self.assertEqual(restored.funded_bands, [(92.0, 95.0)])
+
+    def test_a_recalc_keeps_the_birth_ledger(self):
+        """Replay output resets; birth settings do not. Clearing the ledger would
+        replay every leg funding ground a sibling already paid for."""
         engine = _mk_engine()
         campaign = _mk_campaign(engine, capital=2000.0)
-        campaign.mother_high = 98.0
-        campaign.funded_floor_price = 95.0
-        first = Leg(leg_id=1, trendline_id=1, low=94.0, touch_high=97.0, touch_timestamp=0)
-        campaign.legs.append(first)
-        build_fib_ladder_and_pool(campaign, first)
-        second = Leg(leg_id=2, trendline_id=1, low=92.0, touch_high=93.5, touch_timestamp=0)
-        campaign.legs.append(second)
-        build_fib_ladder_and_pool(campaign, second)
-        self.assertAlmostEqual(second.allocation_pct, (94.0 - 92.0) / 94.0 * 100)
+        campaign.mother_high = 100.0
+        campaign.funded_bands = [(92.0, 95.0)]
+        engine._reset_derived_state(campaign)
+        self.assertEqual(campaign.funded_bands, [(92.0, 95.0)])
+
+
+class CascadeBandBirthTests(unittest.IsolatedAsyncioTestCase):
+    """The ledger is captured at birth, by start_campaign itself.
+
+    Testing build_fib_ladder_and_pool alone would pass even if nothing ever put
+    a band on a real campaign, which is exactly how the old floor shipped inert.
+    """
+
+    def setUp(self):
+        self._netting_was = cascade_module.CROSS_CAMPAIGN_NETTING
+        cascade_module.CROSS_CAMPAIGN_NETTING = True
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+
+    def tearDown(self):
+        cascade_module.CROSS_CAMPAIGN_NETTING = self._netting_was
+
+    async def _start(self, mother_high, mother_low):
+        return await self.engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother_high,
+            mother_low=mother_low,
+            mother_timestamp=_RECENT_TS,
+        )
+
+    async def test_a_campaign_born_on_clear_ground_has_an_empty_ledger(self):
+        started = await self._start(66411.29, 66200.00)
+        campaign = self.engine.campaigns[started["campaign"]["campaign_id"]]
+        self.assertEqual(campaign.funded_bands, [])
+
+    async def test_a_campaign_born_over_a_siblings_funded_ground_records_it(self):
+        """Phil's case, end to end: a 15m has funded 66000-66411 when a wider
+        mother starts at 67000. The new one must record the taken band — and
+        NOT skip 67000-66411, which nobody has funded."""
+        first = await self._start(66411.29, 66200.00)
+        older = self.engine.campaigns[first["campaign"]["campaign_id"]]
+        older.state = "TRENDLINE_ACTIVE"
+        older.legs.append(Leg(leg_id=1, trendline_id=1, low=66000.0, touch_high=66400.0, touch_timestamp=0))
+
+        second = await self._start(67000.00, 66800.00)
+        newer = self.engine.campaigns[second["campaign"]["campaign_id"]]
+        self.assertEqual(newer.funded_bands, [(66000.0, 66411.29)])
+
+        leg = Leg(leg_id=1, trendline_id=1, low=65800.0, touch_high=66900.0, touch_timestamp=0)
+        newer.legs.append(leg)
+        build_fib_ladder_and_pool(newer, leg)
+        free = (67000.0 - 66411.29) + (66000.0 - 65800.0)
+        self.assertAlmostEqual(
+            leg.allocation_pct,
+            (67000.0 - 65800.0) / 67000.0 * 100 * (free / 1200.0),
+        )
+        # The ground above the sibling's band is funded, not silently skipped.
+        self.assertGreater(leg.allocation_pct, (66000.0 - 65800.0) / 66000.0 * 100)
+
+    async def test_the_start_log_says_which_ground_was_already_funded(self):
+        first = await self._start(66411.29, 66200.00)
+        older = self.engine.campaigns[first["campaign"]["campaign_id"]]
+        older.state = "TRENDLINE_ACTIVE"
+        older.legs.append(Leg(leg_id=1, trendline_id=1, low=66000.0, touch_high=66400.0, touch_timestamp=0))
+        second = await self._start(67000.00, 66800.00)
+        newer = self.engine.campaigns[second["campaign"]["campaign_id"]]
+        start_line = next(e["message"] for e in newer.event_log if e["level"] == "start")
+        self.assertIn("already funded", start_line)
+        self.assertIn("66,000.00-66,411.29", start_line)
+
+    async def test_a_running_campaign_is_not_renetted_by_one_born_later(self):
+        """Only a newly-born MC adjusts. A campaign already running funds its own
+        fall without skipping ground a latecomer claims."""
+        first = await self._start(67000.00, 66800.00)
+        older = self.engine.campaigns[first["campaign"]["campaign_id"]]
+        await self._start(66411.29, 66200.00)
+        self.assertEqual(older.funded_bands, [])
 
 
 class CascadeEndedPositionTests(unittest.IsolatedAsyncioTestCase):

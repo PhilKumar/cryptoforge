@@ -8072,6 +8072,12 @@ function _cfCascadeLadderRows(campaign) {
       + (isFinite(allocPct)
         ? ' · <strong style="color:var(--yellow,#f59e0b);">' + allocPct.toFixed(2) + '%</strong> of ' + basis
         : '')
+      // Why this fib's percent is smaller than the drop it spans.
+      + (Number(leg.netted_pct) > 0
+        ? ' · <span title="Another campaign on this symbol had already funded part of this stretch when '
+          + 'this campaign started, so that percent is not paid for twice.">−'
+          + Number(leg.netted_pct).toFixed(2) + '% netted</span>'
+        : '')
       + (leg.finalized ? '' : ' · forming')
       + (leg.escalated ? ' · 15m' : '')
       + ' · adds $' + _cfCascadeUsd(leg.pool_usd) + ' to the pool'
@@ -8203,6 +8209,23 @@ function _cfCascadeMcKindPill(campaign) {
     + (minor ? 'MINOR MC' : 'MAJOR MC') + '</span>';
 }
 
+// Ground a sibling campaign on the same symbol had already funded when this one
+// was born. Without this the strip looks broken: a campaign 5% down the chart
+// shows only 2% allocated, and nothing on screen says why.
+function _cfCascadeNettedNote(campaign) {
+  var netted = Number(campaign.netted_pct);
+  var bands = campaign.funded_bands;
+  if (!isFinite(netted) || netted <= 0 || !bands || !bands.length) return '';
+  var ranges = bands.map(function (b) {
+    return _cfCascadeFmt(b[0]) + '–' + _cfCascadeFmt(b[1]);
+  }).join(', ');
+  var why = 'Netted ' + netted.toFixed(3) + '% of the fall: ' + ranges + ' was already funded by another '
+    + 'campaign on this symbol when this one started, so this campaign funds only the free ground above '
+    + 'and below it. Its capital is untouched — only the stretch of fall it pays for narrows.';
+  return ' <span class="admin-pill" data-state="warn" title="' + _escapeHtml(why) + '">−'
+    + netted.toFixed(2) + '% netted</span>';
+}
+
 // How a campaign ended up on the timeframe it is running. "Started at 15m" and
 // "climbed to 15m" are different facts, so start_timeframe decides which is
 // shown rather than guessing from the timeframe alone.
@@ -8309,7 +8332,8 @@ function _cfCascadeCampaignCard(campaign) {
     + '<div class="stat-box"><div class="stat-label" title="Last Price"><span>Last Price</span></div><div class="stat-value">' + _cfCascadeFmt(campaign.last_price) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label" title="Down from Mother"><span>Down from Mother</span></div><div class="stat-value">'
       + (isFinite(Number(campaign.fall_pct_from_mother)) ? Number(campaign.fall_pct_from_mother).toFixed(3) + '%' : '--')
-      + '</div><div class="admin-stat-note">allocated ' + (isFinite(Number(campaign.allocated_pct)) ? Number(campaign.allocated_pct).toFixed(3) : '0') + '%</div></div>'
+      + '</div><div class="admin-stat-note">allocated ' + (isFinite(Number(campaign.allocated_pct)) ? Number(campaign.allocated_pct).toFixed(3) : '0') + '%'
+      + _cfCascadeNettedNote(campaign) + '</div></div>'
     + '<div class="stat-box"><div class="stat-label" title="Avg Entry"><span>Avg Entry</span></div><div class="stat-value">' + _cfCascadeFmt(entryShown) + '</div>' + roundNote + '</div>'
     + '<div class="stat-box"><div class="stat-label" title="' + (flat ? 'Exit' : 'Take Profit') + '"><span>' + (flat ? 'Exit' : 'Take Profit') + '</span></div><div class="stat-value">' + _cfCascadeFmt(tpShown) + '</div>' + roundNote + '</div>'
     // Capital moved to the note line: "$5.67 / $2,000" was too wide for the box
