@@ -4238,3 +4238,123 @@ class CascadeInstrumentStackTests(unittest.TestCase):
         engine = _mk_engine()
         self._campaign(engine, "a1", "ETHUSDT", 600)
         self.assertIn("ETHUSDT", engine.get_status()["instruments"])
+
+
+class CascadeLiquidateTests(unittest.IsolatedAsyncioTestCase):
+    """The manual way out of a position whose campaign has already ended."""
+
+    def _holding(self, engine, state="STOPPED"):
+        campaign = _mk_campaign(engine, mode="live")
+        campaign.state = state
+        campaign.close_reason = "stopped"
+        campaign.all_fills = [Fill(price=100.0, quantity=0.5, level=2, leg_id=1, timestamp=1000)]
+        campaign.filled_base_qty = 0.5
+        campaign.avg_entry_price = 100.0
+        return campaign
+
+    async def test_a_running_campaign_cannot_be_sold_at_market(self):
+        """Selling underneath a live campaign would leave its ladder armed and
+        buying back into a position it still believes it holds."""
+        engine = _mk_engine()
+        campaign = self._holding(engine, state="TRENDLINE_ACTIVE")
+        result = await engine.liquidate_campaign(campaign.campaign_id)
+        self.assertIn("stop it first", result["error"])
+        self.assertEqual(engine.broker.placed_orders, [])
+
+    async def test_a_flat_campaign_has_nothing_to_sell(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine, mode="live")
+        campaign.state = "STOPPED"
+        result = await engine.liquidate_campaign(campaign.campaign_id)
+        self.assertIn("not holding", result["error"])
+
+    async def test_the_resting_tp_is_cancelled_before_the_market_sell(self):
+        """A resting sell LOCKS its coin, so a market order placed alongside it
+        can only reach the unlocked remainder."""
+        engine = _mk_engine()
+        campaign = self._holding(engine)
+        campaign.tp_order_id = "tp-77"
+        result = await engine.liquidate_campaign(campaign.campaign_id)
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("tp-77", engine.broker.cancelled)
+        sell = engine.broker.placed_orders[-1]
+        self.assertEqual(sell["side"], "sell")
+        self.assertEqual(sell["order_type"], "market_order")
+        self.assertAlmostEqual(sell["base_qty"], 0.5)
+
+    async def test_the_sale_is_booked_as_a_round(self):
+        engine = _mk_engine()
+        campaign = self._holding(engine)
+        engine._price_cache[campaign.symbol] = (110.0, time.monotonic())
+        await engine.liquidate_campaign(campaign.campaign_id)
+        self.assertEqual(len(campaign.rounds), 1)
+        self.assertAlmostEqual(campaign.rounds[0].exit_price, 110.0)
+        self.assertAlmostEqual(campaign.rounds[0].pnl, 5.0)
+        self.assertEqual(campaign.filled_base_qty, 0.0)
+
+    async def test_selling_after_a_stop_does_not_duplicate_the_history_row(self):
+        """Stopped, then sold: the campaign is archived twice and the second
+        archive is the truthful one."""
+        engine = _mk_engine()
+        campaign = self._holding(engine)
+        engine._archive_campaign(campaign)
+        engine._price_cache[campaign.symbol] = (110.0, time.monotonic())
+        await engine.liquidate_campaign(campaign.campaign_id)
+        rows = [r for r in engine.closed_campaigns if r["campaign_id"] == campaign.campaign_id]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["filled_base_qty"], 0.0)
+
+
+class CascadeFrozenChartTests(unittest.IsolatedAsyncioTestCase):
+    """A finished trade is a record, and a record does not keep growing."""
+
+    def _ended(self, engine):
+        campaign = _mk_campaign(engine)
+        campaign.state = "COMPLETED"
+        campaign.rounds = [
+            Round(
+                round_id=1,
+                leg_id=1,
+                avg_entry=100.0,
+                quantity=0.5,
+                invested_usd=50.0,
+                exit_price=110.0,
+                pnl=5.0,
+                opened_ts=1200,
+                closed_ts=1800,
+                fills=[{"timestamp": 1200, "price": 100.0, "quantity": 0.5}],
+            )
+        ]
+        return campaign
+
+    def test_a_running_campaign_has_no_end(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.state = "TRENDLINE_ACTIVE"
+        self.assertEqual(engine._campaign_end_ts(campaign), 0)
+
+    def test_the_end_is_the_last_thing_it_did_not_the_wall_clock(self):
+        engine = _mk_engine()
+        campaign = self._ended(engine)
+        self.assertEqual(engine._campaign_end_ts(campaign), 1800)
+
+    def test_a_campaign_that_never_traded_falls_back_to_its_mother(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.state = "STOPPED"
+        campaign.mother_timestamp = 4200
+        self.assertEqual(engine._campaign_end_ts(campaign), 4200)
+
+    async def test_the_chart_stops_at_the_exit_and_carries_both_ends(self):
+        engine = _mk_engine()
+        campaign = self._ended(engine)
+        # Candles running well past the exit — a live chart would draw them all.
+        engine._candles[campaign.campaign_id] = [Candle(ts, 100.0, 101.0, 99.0, 100.0) for ts in range(600, 60000, 300)]
+        data = await engine.get_chart_data(campaign.campaign_id)
+        self.assertTrue(data["frozen"])
+        self.assertEqual(data["trade_end_ts"], 1800)
+        self.assertLessEqual(max(c["t"] for c in data["candles"]), 1800 + 6 * 300)
+        self.assertEqual([x["price"] for x in data["exits"]], [110.0])
+        # The buys are gone from all_fills once the round closed; the record
+        # still has to show what entered the trade.
+        self.assertEqual([e["price"] for e in data["entries"]], [100.0])

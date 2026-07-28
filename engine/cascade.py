@@ -283,6 +283,9 @@ RUNNING_STATES = ACTIVE_STATES | {MOTHER_BREAK_PENDING}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
 # Endings that roll straight into a fresh campaign. A deliberate stop does not.
 RESTART_REASONS = {"mother_broken", "mother_retested"}
+# Candles kept to the right of a finished campaign's last action, so the exit
+# marker has room to breathe instead of sitting on the chart's right edge.
+_CHART_TAIL_BUCKETS = 6
 
 
 class CascadeModelError(Exception):
@@ -1659,6 +1662,116 @@ class CascadeEngine:
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict()}
 
+    async def liquidate_campaign(self, campaign_id: str) -> dict:
+        """Sell a stopped campaign's remaining position at market, now.
+
+        A stopped campaign keeps its TP resting so it can still exit at target,
+        which is right when the target is reachable and wrong when it is not —
+        the coin then sits in the account forever with a dead campaign's name on
+        it. This is the manual way out: cancel the resting sell, market-sell what
+        the exchange actually holds, and book the round so the P&L is recorded
+        against the campaign rather than vanishing into the wallet.
+
+        Deliberately restricted to ENDED campaigns. A running campaign must exit
+        through its own target — selling underneath it would leave the ladder
+        armed and buying back into a position it thinks it still holds.
+        """
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            return {"error": f"Campaign {campaign_id} not found"}
+        if campaign.state not in FINAL_STATES:
+            return {"error": "Only an ended campaign can be sold at market — stop it first"}
+        desired_qty = _coerce_float(campaign.filled_base_qty, 0.0) + _coerce_float(campaign.residual_base_qty, 0.0)
+        if desired_qty <= 0:
+            return {"error": "This campaign is not holding anything"}
+
+        if campaign.mode != "live":
+            # Paper: there is nothing on an exchange to cancel or sell, so book
+            # it against the last price the engine saw.
+            price_meta = self._price_cache.get(campaign.symbol)
+            price = _coerce_float(price_meta[0] if price_meta else 0.0)
+            if price <= 0:
+                return {"error": "No price available to close the paper position against"}
+            self._close_round(campaign, price, sold_qty=desired_qty)
+            self._log_event(campaign, "stop", f"Paper position closed at market {price:,.2f}")
+            self._archive_campaign(campaign)
+            self._emit_update()
+            return {"status": "ok", "mode": "paper", "price": price, "quantity": desired_qty}
+
+        # Pull the resting TP FIRST. Its coin is locked while it rests, so a
+        # market sell placed alongside it can only reach the unlocked remainder
+        # — the same locked-balance trap the TP sizing had to learn.
+        if campaign.tp_order_id:
+            if not await self._safe_cancel(campaign, campaign.tp_order_id):
+                return {"error": "Could not cancel the resting take-profit — not selling on top of it"}
+            campaign.tp_order_id = None
+            campaign.tp_order_price = None
+
+        free_qty = await self._free_base_balance(campaign)
+        sell_qty = desired_qty if free_qty is None else min(desired_qty, free_qty)
+        try:
+            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
+        except Exception as exc:
+            _log.warning("[CASCADE] liquidate product lookup failed for %s: %s", campaign.symbol, exc)
+            product = {}
+        step = _coerce_float((product or {}).get("step_size"), 0.0) or float(DEFAULT_LOT_STEP)
+        sell_qty = _floor_to_step(sell_qty, step)
+        if sell_qty <= 0:
+            return {
+                "error": f"Nothing sellable — {desired_qty:.8f} rounds to zero at the "
+                f"exchange lot step {step:g}. This is dust, not a position."
+            }
+
+        client_id = f"cf-csc-{campaign.campaign_id}-liq-{int(time.time())}"
+        try:
+            result = await asyncio.to_thread(
+                lambda: self.broker.place_order(
+                    campaign.symbol,
+                    0.0,
+                    "sell",
+                    order_type="market_order",
+                    client_order_id=client_id,
+                    base_qty=sell_qty,
+                )
+            )
+        except Exception as exc:
+            result = {"error": str(exc)}
+        error = (result or {}).get("error") if isinstance(result, dict) else "unknown error"
+        if error:
+            self._log_event(campaign, "error", f"Market sell failed: {error}")
+            self._alert(
+                "Cascade market sell FAILED",
+                f"{campaign.symbol} #{campaign.seq} (LIVE)\n"
+                f"Tried to sell {sell_qty:.8f} at market and Binance refused: {error}\n\n"
+                f"The take-profit has already been cancelled — this position now has NO resting sell.",
+                level="error",
+            )
+            return {"error": str(error)}
+
+        executed = _coerce_float(result.get("executedQty"), sell_qty)
+        quote = _coerce_float(result.get("cummulativeQuoteQty"))
+        price_meta = self._price_cache.get(campaign.symbol)
+        exit_price = (
+            quote / executed if executed > 0 and quote > 0 else _coerce_float(price_meta[0] if price_meta else 0.0)
+        )
+        campaign.residual_base_qty = max(round(desired_qty - executed, 12), 0.0)
+        self._close_round(campaign, exit_price, sold_qty=executed)
+        self._log_event(
+            campaign,
+            "stop",
+            f"Position sold at market: {executed:.8f} @ {exit_price:,.2f}"
+            + (f" — {campaign.residual_base_qty:.8f} left as unsellable dust" if campaign.residual_base_qty else ""),
+        )
+        self._archive_campaign(campaign)
+        self._emit_update()
+        return {
+            "status": "ok",
+            "mode": "live",
+            "price": exit_price,
+            "quantity": executed,
+            "residual": campaign.residual_base_qty,
+        }
+
     async def set_mode(self, campaign_id: str, mode: str) -> dict:
         campaign = self.campaigns.get(campaign_id)
         if campaign is None:
@@ -1984,7 +2097,7 @@ class CascadeEngine:
         return None
 
     @staticmethod
-    def _auto_chart_timeframe(campaign: Campaign, max_candles: int) -> str:
+    def _auto_chart_timeframe(campaign: Campaign, max_candles: int, end_ts: int = 0) -> str:
         """The smallest timeframe that still fits the WHOLE campaign on screen.
 
         The chart takes the last `max_candles` buckets, so on 5m a campaign
@@ -1997,7 +2110,12 @@ class CascadeEngine:
         from the campaign's own candles regardless of what is being displayed.
         """
         options = chart_timeframes_for(campaign.timeframe)
-        span_sec = max(int(time.time()) - int(campaign.mother_timestamp or 0), 0)
+        # For a finished campaign the span ends where the TRADE ended, not at
+        # the wall clock. Measuring to "now" made a closed trade's chart zoom
+        # out a rung further every few hours — the same record, redrawn coarser
+        # each time you opened it, until a 5m trade was being shown on 1H bars.
+        span_end = int(end_ts) if end_ts else int(time.time())
+        span_sec = max(span_end - int(campaign.mother_timestamp or 0), 0)
         budget = max(int(max_candles), 1)
         chosen = campaign.timeframe
         for name, bucket_sec in options.items():
@@ -2005,6 +2123,24 @@ class CascadeEngine:
             if span_sec <= bucket_sec * budget:
                 break
         return chosen
+
+    @staticmethod
+    def _campaign_end_ts(campaign: Campaign) -> int:
+        """When this campaign stopped acting, or 0 while it is still running.
+
+        Taken from the last thing it actually DID — a round's exit, or a fill
+        still open when it ended — rather than the wall clock, so a campaign
+        stopped by hand hours after its last trade still charts to the trade.
+        """
+        if campaign.state not in FINAL_STATES:
+            return 0
+        stamps = [int(r.closed_ts or 0) for r in campaign.rounds]
+        stamps += [int(f.timestamp or 0) for f in campaign.all_fills]
+        latest = max(stamps) if stamps else 0
+        # A campaign that ended without ever filling still has a story — the
+        # mother and the structure it drew. Fall back to the mother so the
+        # window is anchored somewhere real rather than collapsing to nothing.
+        return latest or int(campaign.mother_timestamp or 0)
 
     async def get_chart_data(self, campaign_id: str, max_candles: int = 200, timeframe: str = "auto") -> dict:
         """
@@ -2027,7 +2163,8 @@ class CascadeEngine:
         base_sec = campaign.timeframe_sec
         requested_input = str(timeframe).lower()
         requested = requested_input
-        auto_timeframe = self._auto_chart_timeframe(campaign, max_candles)
+        trade_end_ts = self._campaign_end_ts(campaign)
+        auto_timeframe = self._auto_chart_timeframe(campaign, max_candles, end_ts=trade_end_ts)
         mother_forced_visible = False
         if requested == "auto" or requested not in options:
             requested = auto_timeframe
@@ -2047,6 +2184,18 @@ class CascadeEngine:
             history = self._candles.get(campaign_id) or []
 
         view = self._aggregate_candles(history, bucket_sec, base_sec)
+        # A finished trade is a record, not a live feed. Cut the view off at the
+        # candle the campaign ended in (plus a short tail so the exit is not
+        # jammed against the right edge), otherwise every later view redraws a
+        # longer and longer chart of price doing things this trade had no part
+        # in — and the entry/exit markers shrink into an unreadable corner.
+        if trade_end_ts:
+            cutoff = trade_end_ts + _CHART_TAIL_BUCKETS * bucket_sec
+            trimmed = [c for c in view if c.timestamp <= cutoff]
+            # Never trim to nothing: a campaign that ended before any candle was
+            # stepped would otherwise render an empty chart.
+            if trimmed:
+                view = trimmed
         candles = [
             {
                 "t": c.timestamp,
@@ -2131,9 +2280,39 @@ class CascadeEngine:
             "trendlines": trendlines,
             "legs": legs,
             "fills": [f.to_dict() for f in campaign.all_fills],
+            # Entries alone only tell half the trade. Each closed round carries
+            # the buys that made it and the price it was sold at, so the record
+            # can mark both ends of every cycle instead of a cloud of dots that
+            # never resolves into an exit.
+            "entries": [
+                {
+                    "t": int(fill.get("timestamp") or 0),
+                    "price": _coerce_float(fill.get("price"), 0.0),
+                    "round": r.round_id,
+                }
+                for r in campaign.rounds
+                for fill in (r.fills or [])
+            ]
+            + [{"t": int(f.timestamp or 0), "price": f.price, "round": None} for f in campaign.all_fills],
+            "exits": [
+                {
+                    "t": int(r.closed_ts or 0),
+                    "price": r.exit_price,
+                    "round": r.round_id,
+                    "pnl": r.pnl,
+                    "avg_entry": r.avg_entry,
+                }
+                for r in campaign.rounds
+                if r.closed_ts and r.exit_price
+            ],
             "avg_entry_price": campaign.avg_entry_price,
             "tp_price": compute_tp_price(campaign),
             "last_price": price_meta[0] if price_meta else None,
+            # Set once the campaign is over: the client renders a frozen record
+            # rather than a live chart, and stops offering the timeframe toggle.
+            "trade_end_ts": trade_end_ts,
+            "frozen": bool(trade_end_ts),
+            "close_reason": campaign.close_reason or "",
         }
 
     def restore_campaigns(self, snapshots: List[dict]) -> int:
@@ -3079,6 +3258,17 @@ class CascadeEngine:
             f"Bought ${usd:,.2f} at {price:,.2f} on the turn — {len(levels)} level(s) collected down to "
             f"{deepest:,.2f} (avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
         )
+        # An entry is money leaving the account. Not deduped: every fill is a
+        # distinct event and skipping one would hide a real position.
+        self._alert(
+            "Cascade ENTRY filled",
+            f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()}) — {campaign.mc_kind.upper()} MC\n"
+            f"Bought ${usd:,.2f} at {price:,.2f}\n"
+            f"{len(levels)} level(s) collected down to {deepest:,.2f}\n"
+            f"Average entry: {campaign.avg_entry_price:,.2f}\n"
+            f"Target: {campaign.tp_price:,.2f}",
+            level="info",
+        )
 
     def _record_fill(
         self,
@@ -3165,6 +3355,21 @@ class CascadeEngine:
             closed_ts=closed_ts,
         )
         campaign.rounds.append(rnd)
+        # The target landing is the event the whole campaign exists to produce.
+        # Alerted here rather than at campaign close, because a round closing is
+        # NOT a campaign closing — the cascade keeps running, and a TP that only
+        # announced itself when the mother finally broke could be hours late or
+        # never arrive at all.
+        self._alert(
+            "Cascade TARGET hit",
+            f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()}) — {campaign.mc_kind.upper()} MC\n"
+            f"Round {rnd.round_id} closed at {exit_price:,.2f}\n"
+            f"Average entry: {avg:,.2f}  ·  Qty: {qty:g}\n"
+            f"P&L: {'+' if rnd.pnl >= 0 else ''}${rnd.pnl:,.2f}\n\n"
+            f"Campaign realised so far: ${campaign.realized_pnl_total:,.2f}. "
+            f"The campaign keeps running — only a mother break or a stop ends it.",
+            level="info",
+        )
 
         # Flatten the position: principal returns to available capital.
         campaign.all_fills = []
@@ -3458,7 +3663,18 @@ class CascadeEngine:
 
     def _archive_campaign(self, campaign: Campaign) -> None:
         payload = campaign.to_dict()
-        self.closed_campaigns.append(payload)
+        # Replace, never duplicate. A campaign can be archived more than once —
+        # stopped first, then sold at market later — and the second archive is
+        # the truthful one. Appending blindly put the same campaign in the closed
+        # table twice, the stale copy still claiming an open position.
+        existing = next(
+            (i for i, row in enumerate(self.closed_campaigns) if row.get("campaign_id") == campaign.campaign_id),
+            None,
+        )
+        if existing is not None:
+            self.closed_campaigns[existing] = payload
+        else:
+            self.closed_campaigns.append(payload)
         if len(self.closed_campaigns) > CLOSED_HISTORY_LIMIT:
             self.closed_campaigns = self.closed_campaigns[-CLOSED_HISTORY_LIMIT:]
         if self.on_campaign_closed:
@@ -3562,6 +3778,26 @@ class CascadeEngine:
                         f"The buy stop came back {status} from the exchange "
                         f"(trigger {campaign.pending_stop_price}, limit {campaign.pending_limit_price}); re-placing",
                     )
+                    # Only for real money, and deduped: a stop walking down a
+                    # fall legitimately expires and re-places, and alerting on
+                    # every one of those would train the eye to ignore the case
+                    # that matters — something outside CryptoForge pulling our
+                    # orders.
+                    if campaign.mode == "live":
+                        meaning = {
+                            "EXPIRED": "the stop triggered but could not fill inside its limit price",
+                            "CANCELED": "something cancelled it — the exchange, another client, or by hand",
+                            "REJECTED": "the exchange never accepted it",
+                        }.get(status, "the exchange returned it unfilled")
+                        self._alert(
+                            "Cascade entry CANCELLED",
+                            f"{campaign.symbol} #{campaign.seq} (LIVE) — {campaign.mc_kind.upper()} MC\n"
+                            f"The ${campaign.pending_usd:,.2f} buy stop came back {status}: {meaning}.\n"
+                            f"Trigger {campaign.pending_stop_price} / limit {campaign.pending_limit_price}\n\n"
+                            f"The money stays collected and a fresh order goes out on the next sync.",
+                            level="warn",
+                            dedupe_sec=900,
+                        )
                     campaign.pending_order_id = None
                     changed = True
 

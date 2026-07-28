@@ -8188,6 +8188,21 @@ var _CF_CASCADE_REASONS = {
   stopped: ['Stopped', 'muted']
 };
 
+// Which kind of mother candle this campaign is anchored to. The timeframe pill
+// implies it (5m means minor), but two campaigns can run on the same symbol at
+// once and the one thing you need to read off the strip is which structure each
+// is trading — so it gets said outright rather than inferred from the candle.
+function _cfCascadeMcKindPill(campaign) {
+  var kind = String(campaign.mc_kind || 'major').toLowerCase();
+  var minor = kind === 'minor';
+  var why = minor
+    ? 'MINOR MC — a sub-mother marked inside a move that is already running. Always stepped on 5m, '
+      + 'whatever chart it was spotted on.'
+    : 'MAJOR MC — this campaign’s own anchor, on the timeframe you chose when you started it.';
+  return '<span class="admin-pill" data-state="' + (minor ? 'warn' : 'ok') + '" title="' + why + '">'
+    + (minor ? 'MINOR MC' : 'MAJOR MC') + '</span>';
+}
+
 // How a campaign ended up on the timeframe it is running. "Started at 15m" and
 // "climbed to 15m" are different facts, so start_timeframe decides which is
 // shown rather than guessing from the timeframe alone.
@@ -8271,6 +8286,7 @@ function _cfCascadeCampaignCard(campaign) {
     // Two campaigns on the same symbol can now be running on different candles,
     // so the card has to say which. One pill, not two: 5m and "initiate off a
     // minor MC" are the same fact, so printing both just repeats it.
+    + _cfCascadeMcKindPill(campaign)
     + _cfCascadeTimeframePill(campaign)
     + (campaign.stale_model
       ? '<span class="admin-pill" data-state="warn" title="The fib and trendline rules have changed since '
@@ -8378,7 +8394,7 @@ function _cfCascadePositionPanel(campaign, fills) {
         + '<span>' + fills.length + ' entr' + (fills.length === 1 ? 'y' : 'ies')
         + ' · $' + _cfCascadeFmt(invested) + ' invested</span>'
       + '</div>'
-      + '<table class="trade-table cf-cascade-fills"><thead><tr>'
+      + '<table class="trade-table cf-cascade-fills" id="cf-fills-' + _safeDomId(campaign.campaign_id) + '"><thead><tr>'
         + '<th>Entry</th><th>Fib</th><th>Level</th>'
         + '<th class="num">Price</th><th class="num">Qty</th><th class="num">Cost</th>'
       + '</tr></thead><tbody>'
@@ -8414,7 +8430,7 @@ function _cfCascadePositionPanel(campaign, fills) {
         + '<span style="color:' + (total >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)') + ';">'
         + (total >= 0 ? '+' : '') + '$' + _cfCascadeFmt(total) + ' realised</span>'
       + '</div>'
-      + '<table class="trade-table cf-cascade-rounds"><thead><tr>'
+      + '<table class="trade-table cf-cascade-rounds" id="cf-rounds-' + _safeDomId(campaign.campaign_id) + '"><thead><tr>'
         + '<th>Round</th><th>Fib</th><th class="num">Avg Entry</th><th class="num">Exit</th>'
         + '<th class="num">Qty</th><th class="num">P&amp;L</th><th class="num">ROI</th><th></th>'
       + '</tr></thead><tbody>'
@@ -8521,17 +8537,31 @@ function cfRenderCascadeTrades(campaigns) {
       + '<td class="num">' + _cfCascadeFmt(tp)
         + (toTp !== null ? '<div class="table-meta">' + toTp.toFixed(2) + '% away</div>' : '')
       + '</td>'
+      // A stopped campaign still holding coin is the one row here you may have
+      // to act on: its engine is gone, so nothing will manage this position
+      // again. Give it the way out rather than leaving the coin orphaned under
+      // a dead campaign's name.
+      + '<td>' + (_cfCascadeCampaignHasEnded(c)
+        ? '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeLiquidate(\''
+          + _escapeHtml(String(c.campaign_id || '')) + '\')"'
+          + ' title="Cancel any resting sell and sell this position at market, now.">Market Sell</button>'
+        : '<span class="table-meta">running</span>')
+      + '</td>'
       + '</tr>';
   }).join('');
 
   var totalPnl = totalNow - totalCost;
   var totalTone = totalPnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
   mount.innerHTML = '<div class="table-surface"><div class="table-scroll">'
-    + '<table class="trade-table"><thead><tr>'
+    + '<table class="trade-table" id="cf-cascade-trades-table"><thead><tr>'
     + '<th>Campaign</th><th>Symbol</th><th>Opened</th><th class="num">Avg entry</th>'
     + '<th class="num">Last</th><th class="num">Cost</th><th class="num">Unrealised</th>'
-    + '<th class="num">Target</th>'
+    + '<th class="num">Target</th><th>Action</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  // Run several instruments and this table is the first one to outgrow a
+  // screen. The generic pager hides rows in place, so it costs nothing when
+  // there are only three of them.
+  _renderTablePager('cf-cascade-trades-table', 'cf-cascade-trades-table', 'cf-cascade-trades-pagination');
   if (meta) {
     meta.innerHTML = open.length + ' open · $' + _cfCascadeUsd(totalCost) + ' invested · '
       + '<strong style="color:' + totalTone + ';">'
@@ -8632,13 +8662,25 @@ function cfRenderCascadeCampaigns(campaigns, instruments) {
       var at = scrolls[cid + '|' + i];
       if (at) { box.scrollLeft = at[0]; box.scrollTop = at[1]; }
     });
+    // A long-running campaign accumulates entries and closed rounds without
+    // limit, and both tables live inside a card you have to scroll past to
+    // reach the next campaign. Paged per card, keyed by campaign id so the page
+    // you are on survives the 3s status repaint.
+    var safe = _safeDomId(cid);
+    _renderTablePager('cf-fills-' + safe, 'cf-fills-' + safe, 'cf-fills-pg-' + safe);
+    _renderTablePager('cf-rounds-' + safe, 'cf-rounds-' + safe, 'cf-rounds-pg-' + safe);
   });
   _cfCascadeMarkClippedLabels(mount);
 }
 
+// The campaigns behind the log as it currently stands, so paging can re-render
+// without waiting for the next status poll.
+var _cfCascadeLastCampaigns = null;
+
 function cfRenderCascadeEvents(campaigns) {
   var mount = document.getElementById('cf-cascade-events');
   if (!mount) return;
+  _cfCascadeLastCampaigns = campaigns;
   var events = [];
   campaigns.forEach(function(campaign) {
     (campaign.event_log || []).forEach(function(event) { events.push(event); });
@@ -8646,9 +8688,19 @@ function cfRenderCascadeEvents(campaigns) {
   events.sort(function(a, b) { return String(a.timestamp || '').localeCompare(String(b.timestamp || '')); });
   if (!events.length) {
     mount.innerHTML = '<div class="cf-table-empty-cell">No events yet</div>';
+    _cfRenderEventsPager(0, 0);
     return;
   }
-  mount.innerHTML = events.slice(-80).reverse().map(function(event) {
+  // Paged rather than truncated. The old slice(-80) silently threw the older
+  // events away, so the one line explaining why a campaign did something an
+  // hour ago was simply gone — and the log is read precisely when you are
+  // trying to reconstruct that.
+  var ordered = events.slice().reverse();          // newest first
+  var pages = Math.max(1, Math.ceil(ordered.length / _CF_EVENTS_PAGE_SIZE));
+  if (_cfCascadeEventsPage >= pages) _cfCascadeEventsPage = pages - 1;
+  if (_cfCascadeEventsPage < 0) _cfCascadeEventsPage = 0;
+  var from = _cfCascadeEventsPage * _CF_EVENTS_PAGE_SIZE;
+  mount.innerHTML = ordered.slice(from, from + _CF_EVENTS_PAGE_SIZE).map(function(event) {
     var tone = event.level === 'error' || event.level === 'warn' ? 'var(--red, #d9534f)'
       : event.level === 'fill' || event.level === 'complete' ? 'var(--green, #3fae56)'
       : 'var(--muted, #888)';
@@ -8658,6 +8710,40 @@ function cfRenderCascadeEvents(campaigns) {
       + _escapeHtml(event.message || '')
       + '</div>';
   }).join('');
+  _cfRenderEventsPager(pages, ordered.length);
+}
+
+// Forty lines a page — about a screenful, and enough that a single fill and the
+// orders around it stay on one page together.
+var _CF_EVENTS_PAGE_SIZE = 40;
+var _cfCascadeEventsPage = 0;
+
+function cfCascadeEventsPage(delta) {
+  _cfCascadeEventsPage = Math.max(0, _cfCascadeEventsPage + delta);
+  if (_cfCascadeLastCampaigns) cfRenderCascadeEvents(_cfCascadeLastCampaigns);
+}
+
+function _cfRenderEventsPager(pages, total) {
+  var host = document.getElementById('cf-cascade-events-pagination');
+  if (!host) {
+    var mount = document.getElementById('cf-cascade-events');
+    if (!mount) return;
+    host = document.createElement('div');
+    host.id = 'cf-cascade-events-pagination';
+    host.className = 'pagination-bar';
+    mount.insertAdjacentElement('afterend', host);
+  }
+  if (!total) { host.style.display = 'none'; host.innerHTML = ''; return; }
+  var page = _cfCascadeEventsPage;
+  var from = page * _CF_EVENTS_PAGE_SIZE;
+  host.style.display = 'flex';
+  host.innerHTML = '<div class="pagination-info">Showing ' + (from + 1) + '-'
+      + Math.min(from + _CF_EVENTS_PAGE_SIZE, total) + ' of ' + total + '</div>'
+    + '<div class="pagination-actions">'
+    + '<button class="page-btn" data-cf-click="cfCascadeEventsPage(-1)" ' + (page <= 0 ? 'disabled' : '') + '>‹</button>'
+    + '<button class="page-btn active">' + (page + 1) + ' / ' + pages + '</button>'
+    + '<button class="page-btn" data-cf-click="cfCascadeEventsPage(1)" ' + (page >= pages - 1 ? 'disabled' : '') + '>›</button>'
+    + '</div>';
 }
 
 var _cfCascadeClosedCoin = 'ALL';
@@ -9067,6 +9153,25 @@ async function cfCascadeStopCampaign(campaignId) {
   );
 }
 
+// The manual exit for a position whose campaign has already ended. Worded
+// bluntly on purpose: this sells at whatever the book offers, and unlike every
+// other Cascade action it cannot be walked back.
+async function cfCascadeLiquidate(campaignId) {
+  var ok = await cfConfirm(
+    '<p>Sell the position held by campaign <strong>#' + _escapeHtml(campaignId) + '</strong> at <strong>market</strong>?</p>'
+    + '<p>Any resting take-profit is cancelled first, then the whole holding is sold at the best '
+    + 'price currently on the book — which may be well below your target.</p>'
+    + '<p><strong>This cannot be undone.</strong></p>',
+    'Market Sell', '⚠️', true
+  );
+  if (!ok) return;
+  _cfCascadeAction(
+    '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/liquidate',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    'Position sold at market'
+  );
+}
+
 async function cfCascadeSetLive(campaignId) {
   var ok = await cfConfirm(
     '<p>Flip campaign <strong>#' + _escapeHtml(campaignId) + '</strong> to <strong>LIVE</strong>?</p>'
@@ -9448,11 +9553,34 @@ function _cfCascadeChartSvg(d) {
   if (d.tp_price) hline(Number(d.tp_price), PAL.tp, 'TARGET (' + fmt(d.tp_price) + ')', '6,3', 1.2);
   if (d.avg_entry_price) hline(Number(d.avg_entry_price), PAL.avg, 'AVG ENTRY (' + fmt(d.avg_entry_price) + ')', '4,4', 1.1);
 
-  // fills
-  (d.fills || []).forEach(function (f) {
+  // Entries. On a finished trade these come from `entries`, which also carries
+  // the buys of rounds that already closed — campaign.all_fills is emptied the
+  // moment a TP lands, so a completed trade drawn from fills alone showed an
+  // exit with nothing entering it.
+  var entryPts = (d.entries && d.entries.length) ? d.entries : (d.fills || []).map(function (f) {
+    return { t: f && f.timestamp, price: f && f.price };
+  });
+  entryPts.forEach(function (f) {
     if (!f || !f.price || !inView(f.price)) return;
-    parts.push('<circle cx="' + Xt(f.timestamp).toFixed(1) + '" cy="' + Y(f.price).toFixed(1) +
+    parts.push('<circle cx="' + Xt(f.t).toFixed(1) + '" cy="' + Y(f.price).toFixed(1) +
       '" r="3.5" fill="' + PAL.fill + '" stroke="' + PAL.fillRing + '" stroke-width="1"/>');
+  });
+
+  // Exits. Drawn as a downward triangle so an entry and an exit sitting at
+  // similar prices are still told apart at a glance, and labelled with the
+  // round's P&L — the one number the record is kept for.
+  (d.exits || []).forEach(function (x) {
+    if (!x || !x.price || !inView(x.price)) return;
+    var cx = Xt(x.t), cy = Y(x.price);
+    var pnl = Number(x.pnl) || 0;
+    var col = pnl >= 0 ? PAL.tp : PAL.down;
+    parts.push('<path d="M' + (cx - 5).toFixed(1) + ' ' + (cy - 5).toFixed(1)
+      + 'L' + (cx + 5).toFixed(1) + ' ' + (cy - 5).toFixed(1)
+      + 'L' + cx.toFixed(1) + ' ' + (cy + 4).toFixed(1) + 'Z" fill="' + col
+      + '" stroke="' + PAL.fillRing + '" stroke-width="1"/>');
+    parts.push('<text x="' + (cx + 8).toFixed(1) + '" y="' + (cy - 6).toFixed(1) + '" fill="' + col
+      + '" font-size="9.5" font-family="monospace">EXIT ' + fmt(x.price)
+      + '  ' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeUsd(Math.abs(pnl)) + '</text>');
   });
 
   return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:900px;display:block;" ' +
@@ -9507,7 +9635,15 @@ function _cfCascadeChartHtml(d) {
     + '<span style="color:' + P.fibs[0] + ';">— trendlines (TL)</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— fib levels 0, 1, 2, 4 and 8 (all drawn alike)</span> &nbsp; '
     + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
-    + '<span style="color:' + P.fill + ';">● fills</span>'
+    + '<span style="color:' + P.fill + ';">● entries</span> &nbsp; '
+    + '<span style="color:' + P.tp + ';">▼ exits</span>'
+    // A frozen record must say so, or it reads as a live chart that has stopped
+    // updating — which is the same picture with the opposite meaning.
+    + (d.frozen || d.snapshot
+      ? ' &nbsp; <span class="admin-pill" data-state="info" title="This trade is closed. The chart was '
+        + 'captured when it ended and never changes again — it runs from the mother candle to the exit.">'
+        + 'FROZEN RECORD</span>'
+      : '')
     // In journal mode this is a static trade record: skip the interaction hints
     // and the fib-colour key that only matter alongside the live detail tables.
     + (journal ? '' : ('<br>TL/Fib 1 is blue, 2 green, 3 red, then the cycle repeats. The purple MC column is the mother candle. Labels are on the left,'

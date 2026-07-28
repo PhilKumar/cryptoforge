@@ -6834,7 +6834,10 @@ def _cascade_persist_closed(campaign: dict) -> None:
             pass
 
     reason = str(campaign.get("close_reason") or "")
-    if reason in {"tp_filled", "mother_broken"}:
+    # "stopped" is included: a campaign ending by hand is exactly as worth
+    # knowing about as one ending on a break — more so when it was stopped from
+    # another device and you are not the one who did it.
+    if reason in {"tp_filled", "mother_broken", "stopped"}:
         pnl = campaign.get("realized_pnl")
         alerter.alert(
             "Cascade Campaign Closed",
@@ -7233,6 +7236,28 @@ async def cascade_stop_campaign(campaign_id: str, request: Request):
     return result
 
 
+@app.post("/api/cascade/campaigns/{campaign_id}/liquidate")
+async def cascade_liquidate_campaign(campaign_id: str):
+    """Market-sell a stopped campaign's leftover position.
+
+    Rate limited hard: this spends real coin at whatever the book offers, and a
+    double-submit would sell a position that is already flat.
+    """
+    check_rate_limit("cascade_liquidate", max_calls=2, window_sec=30)
+    eng = _get_cascade_engine()
+    result = await eng.liquidate_campaign(campaign_id)
+    if result.get("error"):
+        raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    alerter.alert(
+        "Cascade position sold at market",
+        f"Campaign {campaign_id} — sold {result.get('quantity')} at {result.get('price')}\n"
+        f"Requested by hand from the Open Trades table.",
+        level="warn",
+    )
+    return result
+
+
 @app.post("/api/cascade/campaigns/{campaign_id}/mode")
 async def cascade_set_mode(campaign_id: str, request: Request):
     check_rate_limit("cascade_mode", max_calls=3, window_sec=10)
@@ -7267,20 +7292,25 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
         # The chart works for ended campaigns too, and after a restart their
         # history has to be loaded before it can be found.
         eng.load_closed_campaigns(_load_cascade_closed())
-    result = await eng.get_chart_data(campaign_id, timeframe=timeframe)
-    if not result.get("error"):
-        # While the campaign is in memory serve it live (timeframe toggle works);
-        # once it has ended, freeze a static record on first view if the close
-        # capture did not already — so it survives the campaign rotating out.
-        if result.get("state") in CASCADE_FINAL_STATES and _load_chart_snapshot(campaign_id) is None:
-            _persist_chart_snapshot(campaign_id, result)
-        return result
-    # The campaign is gone from memory — serve its permanent frozen record.
+    # An ENDED campaign is a trade record, and a record does not change. Serve
+    # the frozen snapshot before re-rendering anything: the campaign can sit in
+    # memory for days after it closed, and re-rendering it each view redrew a
+    # live, ever-lengthening chart of price long after the trade was over —
+    # which is exactly what the snapshot exists to prevent.
     snapshot = _load_chart_snapshot(campaign_id)
     if snapshot:
         snapshot = dict(snapshot)
         snapshot["snapshot"] = True
         return snapshot
+    result = await eng.get_chart_data(campaign_id, timeframe=timeframe)
+    if not result.get("error"):
+        # First view after it ended, if the close capture did not get there
+        # first: freeze it now, and serve that same frozen payload.
+        if result.get("state") in CASCADE_FINAL_STATES:
+            _persist_chart_snapshot(campaign_id, result)
+            result = dict(result)
+            result["snapshot"] = True
+        return result
     raise HTTPException(status_code=404, detail=result["error"])
 
 
