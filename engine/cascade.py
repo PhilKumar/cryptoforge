@@ -806,6 +806,11 @@ class Campaign:
     # None means never checked; 0.0 means the exchange says there is nothing.
     exchange_qty: Optional[float] = None
     position_checked_at: str = ""
+    # The last reported "books say X, exchange says Y" pair. The sweep runs
+    # every couple of minutes and this condition holds until a human settles it,
+    # so without a marker the same warning is logged forever. Same idea as
+    # tp_min_notional_notice.
+    position_missing_notice: str = ""
     realized_pnl: Optional[float] = None
     mother_broken_above: bool = False
     # The structure window: candles since the last cut (the cut candle seeds
@@ -963,6 +968,7 @@ class Campaign:
             "residual_base_qty": self.residual_base_qty,
             "exchange_qty": self.exchange_qty,
             "position_checked_at": self.position_checked_at,
+            "position_missing_notice": self.position_missing_notice,
             "realized_pnl": self.realized_pnl,
             "mother_broken_above": self.mother_broken_above,
             "window_start_ts": self.window_start_ts,
@@ -1030,6 +1036,7 @@ class Campaign:
             "residual_base_qty",
             "exchange_qty",
             "position_checked_at",
+            "position_missing_notice",
             "realized_pnl",
             "mother_broken_above",
             "window_start_ts",
@@ -1440,20 +1447,27 @@ class CascadeEngine:
                 dedupe_sec=1800,
             )
 
-    def _alert(self, title: str, body: str, level: str = "warn", dedupe_sec: float = 0.0) -> None:
+    def _alert(self, title: str, body: str, level: str = "warn", dedupe_sec: float = 0.0, dedupe_key: str = "") -> None:
         """
         Push something worth waking up for. `dedupe_sec` suppresses a repeat of
-        the same title within that window, so a condition that stays true (five
+        the same key within that window, so a condition that stays true (five
         campaigns open, the engine stalled) does not fire every loop tick.
+
+        `dedupe_key` defaults to the title, which is right for engine-wide
+        conditions. Pass a per-campaign key for anything a SECOND campaign could
+        raise at the same time: keyed on title alone, the first campaign's alert
+        silences every sibling's for the whole window, so you hear about one
+        broken position and never learn about the other three.
         """
         if not self.on_alert:
             return
         if dedupe_sec > 0:
             now = time.monotonic()
-            last = self._alert_state.get(title, 0.0)
+            key = dedupe_key or title
+            last = self._alert_state.get(key, 0.0)
             if now - last < dedupe_sec:
                 return
-            self._alert_state[title] = now
+            self._alert_state[key] = now
         try:
             self.on_alert(title, body, level)
         except Exception as exc:
@@ -1849,15 +1863,27 @@ class CascadeEngine:
             if status in {"CANCELED", "EXPIRED", "REJECTED"}:
                 campaign.tp_order_id = None
                 campaign.tp_order_price = None
+            else:
+                # Still resting (NEW / PARTIALLY_FILLED). The coin is accounted
+                # for — it is locked inside that very order — and the campaign
+                # will exit at target on its own. Nothing to check and nothing
+                # to warn about.
+                campaign.position_checked_at = _ist_now_str()
+                campaign.exchange_qty = _coerce_float(campaign.filled_base_qty, 0.0)
+                campaign.position_missing_notice = ""
+                return False
 
-        # No resting TP of ours to explain it. Is the coin actually there? The
-        # wallet balance is shared by every campaign on the symbol, so subtract
-        # what the others still claim before deciding any of it is ours.
-        free = await self._free_base_balance(campaign)
+        # No resting TP of ours to explain it. Is the coin actually there? Ask
+        # what the account HOLDS, not what is free: another campaign's resting
+        # sell locks its own coin, and free alone would call that gone. The
+        # balance is shared across the symbol, so subtract what the others still
+        # claim before deciding any of it is ours.
+        owned = await self._owned_base_balance(campaign)
         campaign.position_checked_at = _ist_now_str()
-        if free is None:
+        if owned is None:
             campaign.exchange_qty = None  # could not read — say nothing
             return False
+        free = owned
         claimed_by_others = sum(
             _coerce_float(c.filled_base_qty, 0.0) + _coerce_float(c.residual_base_qty, 0.0)
             for c in self.campaigns.values()
@@ -1867,7 +1893,17 @@ class CascadeEngine:
         campaign.exchange_qty = round(mine, 12)
         ours = _coerce_float(campaign.filled_base_qty, 0.0)
         if mine >= ours * 0.99:
+            campaign.position_missing_notice = ""
             return False  # the coin is there; nothing to do
+
+        # Say it ONCE. The sweep runs every two minutes and this condition stays
+        # true until someone settles it by hand, so logging on every pass buries
+        # the event log in the same paragraph forever — which is how a log stops
+        # being read at all. Re-armed only if the numbers actually change.
+        notice = f"{mine:.12f}/{ours:.12f}"
+        if campaign.position_missing_notice == notice:
+            return False
+        campaign.position_missing_notice = notice
 
         # It is gone, and no TP of ours accounts for it — sold by hand, by
         # another tool, or by a TP whose id we lost. Deliberately NOT booked as
@@ -1888,6 +1924,7 @@ class CascadeEngine:
             f"sale price is unknown.",
             level="warn",
             dedupe_sec=3600,
+            dedupe_key=f"position-missing:{campaign.campaign_id}",
         )
         return True
 
@@ -4102,6 +4139,31 @@ class CascadeEngine:
                 return _coerce_float(row.get("free_balance"), 0.0)
         return 0.0
 
+    async def _owned_base_balance(self, campaign: Campaign) -> Optional[float]:
+        """How much of the base asset the account HOLDS — free plus locked.
+
+        Different question from _free_base_balance, and the distinction matters.
+        `free` answers "what can I sell this second", which is the right basis
+        for sizing a sell. It is the wrong basis for "does this coin still
+        exist", because a resting sell order LOCKS the coin it offers: the
+        balance reads 0 free while the coin is sitting right there. Asking the
+        free balance whether a position still exists says "gone" about every
+        position that has a take-profit resting against it.
+        """
+        try:
+            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
+            wallet = await asyncio.to_thread(self.broker.get_wallet)
+        except Exception as exc:
+            _log.warning("[CASCADE] owned-balance lookup failed for %s: %s", campaign.symbol, exc)
+            return None
+        base = str((product or {}).get("base_asset") or "").upper()
+        if not base or not isinstance(wallet, list):
+            return None
+        for row in wallet:
+            if str(row.get("asset_symbol") or "").upper() == base:
+                return _coerce_float(row.get("free_balance"), 0.0) + _coerce_float(row.get("locked_balance"), 0.0)
+        return 0.0
+
     async def _sync_live_orders(self, campaign: Campaign) -> bool:
         """
         Desired-state reconciliation for a live campaign:
@@ -4181,6 +4243,7 @@ class CascadeEngine:
                             f"The money stays collected and a fresh order goes out on the next sync.",
                             level="warn",
                             dedupe_sec=900,
+                            dedupe_key=f"entry-cancelled:{campaign.campaign_id}",
                         )
                     campaign.pending_order_id = None
                     changed = True
@@ -4221,6 +4284,7 @@ class CascadeEngine:
                     f"{type(exc).__name__}: {exc}",
                     level="error",
                     dedupe_sec=900,
+                    dedupe_key=f"entry-not-placed:{campaign.campaign_id}",
                 )
 
         # 3) TP management.
@@ -4314,6 +4378,7 @@ class CascadeEngine:
                         f"an older mother candle.",
                         level="warn",
                         dedupe_sec=1800,
+                        dedupe_key=f"entry-held:{campaign.campaign_id}",
                     )
                 return False
             gap = limit - stop
@@ -4344,6 +4409,7 @@ class CascadeEngine:
                         f"Stopped retrying to protect the rate limit.",
                         level="error",
                         dedupe_sec=1800,
+                        dedupe_key=f"entry-churn:{campaign.campaign_id}",
                     )
                 return False
             self._place_attempts[campaign.campaign_id] = (attempts[0], attempts[1] + 1)
@@ -4436,6 +4502,7 @@ class CascadeEngine:
             f"The collected money is unarmed until this succeeds.",
             level="error",
             dedupe_sec=300,
+            dedupe_key=f"order-failed:{campaign.campaign_id}",
         )
         return False
 

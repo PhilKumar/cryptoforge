@@ -49,6 +49,9 @@ class FakeCascadeBroker:
         # back to its recorded quantity). Set to {asset: free_qty} to simulate a
         # real balance and exercise the fee-aware TP cap.
         self.free_balances = None
+        # Coin sitting inside a resting order: present in the account, but not
+        # free. The distinction is what tells "sold" apart from "locked in a TP".
+        self.locked_balances = None
 
     def _is_configured(self):
         return self.configured
@@ -66,7 +69,15 @@ class FakeCascadeBroker:
     def get_wallet(self):
         if self.free_balances is None:
             return {"error": "not simulated"}
-        return [{"asset_symbol": a, "free_balance": str(v)} for a, v in self.free_balances.items()]
+        locked = self.locked_balances or {}
+        return [
+            {
+                "asset_symbol": a,
+                "free_balance": str(v),
+                "locked_balance": str(locked.get(a, 0.0)),
+            }
+            for a, v in self.free_balances.items()
+        ]
 
     def get_ticker(self, symbol):
         return {"symbol": symbol, "last_price": 0.0, "mark_price": 0.0}
@@ -4681,3 +4692,101 @@ class CascadeEndedPositionTests(unittest.IsolatedAsyncioTestCase):
         result = await engine.liquidate_campaign(campaign.campaign_id)
         self.assertIn("already gone", result["error"])
         self.assertEqual(engine.broker.placed_orders, [])
+
+
+class CascadeMissingPositionFalseAlarmTests(unittest.IsolatedAsyncioTestCase):
+    """A resting sell LOCKS its coin, so the free balance reads zero while the
+    position is sitting right there. Asking `free` whether a position still
+    exists calls every take-profit-protected holding 'gone'."""
+
+    def _stopped(self, engine, qty=0.5, tp_id="tp-1"):
+        campaign = _mk_campaign(engine, mode="live")
+        campaign.state = "STOPPED"
+        campaign.close_reason = "stopped"
+        campaign.all_fills = [Fill(price=100.0, quantity=qty, level=2, leg_id=1, timestamp=1000)]
+        campaign.filled_base_qty = qty
+        campaign.avg_entry_price = 100.0
+        campaign.tp_order_id = tp_id
+        campaign.tp_order_price = 110.0
+        return campaign
+
+    async def test_a_resting_tp_locking_the_coin_is_not_reported_missing(self):
+        engine = _mk_engine()
+        campaign = self._stopped(engine)
+        engine.broker.order_lookup["tp-1"] = {"status": "NEW"}
+        engine.broker.free_balances = {"BTC": 0.0}  # all of it locked...
+        engine.broker.locked_balances = {"BTC": 0.5}  # ...inside our own TP
+        await engine.reconcile_ended_positions()
+        self.assertEqual(campaign.position_missing_notice, "")
+        self.assertEqual(campaign.filled_base_qty, 0.5)
+        self.assertAlmostEqual(campaign.exchange_qty, 0.5)
+
+    async def test_locked_coin_counts_as_owned_even_without_our_tp(self):
+        """Locked by something else — still in the account, still not sold."""
+        engine = _mk_engine()
+        campaign = self._stopped(engine, tp_id="")
+        engine.broker.free_balances = {"BTC": 0.0}
+        engine.broker.locked_balances = {"BTC": 0.5}
+        await engine.reconcile_ended_positions()
+        self.assertEqual(campaign.position_missing_notice, "")
+        self.assertAlmostEqual(campaign.exchange_qty, 0.5)
+
+    async def test_genuinely_gone_is_still_reported(self):
+        engine = _mk_engine()
+        campaign = self._stopped(engine, tp_id="")
+        engine.broker.free_balances = {"BTC": 0.0}
+        engine.broker.locked_balances = {"BTC": 0.0}
+        result = await engine.reconcile_ended_positions()
+        self.assertEqual(result["settled"], 1)
+        self.assertNotEqual(campaign.position_missing_notice, "")
+
+    async def test_the_warning_is_logged_once_not_every_sweep(self):
+        """It stays true until a human settles it; repeating it every two
+        minutes buries the event log in one paragraph forever."""
+        engine = _mk_engine()
+        campaign = self._stopped(engine, tp_id="")
+        engine.broker.free_balances = {"BTC": 0.0}
+        engine.broker.locked_balances = {"BTC": 0.0}
+        for _ in range(5):
+            await engine.reconcile_ended_positions()
+        warnings = [e for e in campaign.event_log if "The coin is gone" in str(e.get("message", ""))]
+        self.assertEqual(len(warnings), 1)
+
+    async def test_a_recovered_position_re_arms_the_warning(self):
+        engine = _mk_engine()
+        campaign = self._stopped(engine, tp_id="")
+        engine.broker.free_balances = {"BTC": 0.0}
+        engine.broker.locked_balances = {"BTC": 0.0}
+        await engine.reconcile_ended_positions()
+        engine.broker.free_balances = {"BTC": 0.5}  # it was there after all
+        await engine.reconcile_ended_positions()
+        self.assertEqual(campaign.position_missing_notice, "")
+
+
+class CascadeAlertDedupeTests(unittest.TestCase):
+    """Deduping on the title alone lets one campaign's alert mute its siblings."""
+
+    def test_two_campaigns_raising_the_same_title_both_get_through(self):
+        sent = []
+        engine = _mk_engine()
+        engine.on_alert = lambda t, b, lv: sent.append((t, b))
+        engine._alert("Cascade position missing", "campaign A", dedupe_sec=3600, dedupe_key="missing:A")
+        engine._alert("Cascade position missing", "campaign B", dedupe_sec=3600, dedupe_key="missing:B")
+        self.assertEqual(len(sent), 2)
+
+    def test_the_same_campaign_repeating_is_still_suppressed(self):
+        sent = []
+        engine = _mk_engine()
+        engine.on_alert = lambda t, b, lv: sent.append((t, b))
+        for _ in range(4):
+            engine._alert("Cascade position missing", "campaign A", dedupe_sec=3600, dedupe_key="missing:A")
+        self.assertEqual(len(sent), 1)
+
+    def test_without_a_key_it_still_dedupes_on_the_title(self):
+        """Engine-wide conditions — stalled, too many campaigns — want this."""
+        sent = []
+        engine = _mk_engine()
+        engine.on_alert = lambda t, b, lv: sent.append((t, b))
+        engine._alert("Cascade engine STALLED", "first", dedupe_sec=1800)
+        engine._alert("Cascade engine STALLED", "second", dedupe_sec=1800)
+        self.assertEqual(len(sent), 1)
