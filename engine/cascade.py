@@ -292,6 +292,25 @@ _CHART_TAIL_BUCKETS = 6
 # at the very least.
 _SIMULTANEOUS_BREAK_SEC = 900
 
+# Does the per-symbol capital group CAP what a new campaign may take, or is it
+# just a number on the screen?
+#
+# Off since 2026-07-28, at Phil's call. The cap reserved each campaign's full
+# nominal capital_usd for its whole life, but capital is a RATE — capital/100
+# goes out per 1% of fall — so a $2000 campaign 5% down has committed about
+# $100, not $2000. Reserving twenty times what a campaign will realistically use
+# meant the first one started swallowed the whole group and every later one was
+# refused with "capital group is exhausted", which is the fund-allocation
+# confusion that started all of this.
+#
+# What holds exposure down instead is Campaign.funded_floor_price: campaigns
+# overlapping in price fund the ground between them ONCE, so running several on
+# a symbol does not multiply the money at risk the way the nominal sum implied.
+#
+# Turn this back to True to restore the cap — nothing else needs changing, the
+# budgets are still stored, still summed and still displayed.
+GROUP_CAP_ENFORCED = False
+
 
 class CascadeModelError(Exception):
     pass
@@ -1570,9 +1589,11 @@ class CascadeEngine:
         # once, HERE, and fixed for the campaign's life. Typing less than the
         # remainder is allowed (holding some back for the next minor MC is a
         # reasonable thing to do); typing more is quietly capped to it.
+        #
+        # PARKED (2026-07-28) behind GROUP_CAP_ENFORCED — see the flag for why.
         group_budget = _coerce_float(self.capital_groups.get(symbol))
         group_note = ""
-        if group_budget > 0:
+        if GROUP_CAP_ENFORCED and group_budget > 0:
             available = group_budget - self.group_committed_usd(symbol)
             if available < min_notional * 2:
                 return {
@@ -1585,6 +1606,13 @@ class CascadeEngine:
             if capital_usd <= 0 or capital_usd > available:
                 capital_usd = available
             group_note = f" (capital group: ${capital_usd:,.2f} of ${available:,.2f} available)"
+        elif group_budget > 0:
+            # The budget is still tracked and still shown; it simply no longer
+            # gates. Every campaign takes the capital it was given.
+            group_note = (
+                f" (capital group ${group_budget:g} is informational only — the cap is off, "
+                f"so this campaign takes its full ${capital_usd:,.2f})"
+            )
         if capital_usd < min_notional * 2:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
         # Ground a running campaign on this symbol has already paid for. Its
@@ -3751,7 +3779,7 @@ class CascadeEngine:
         # full — the clamp only bites when siblings grabbed budget in between.
         child_capital = parent.capital_usd
         group_budget = _coerce_float(self.capital_groups.get(parent.symbol))
-        if group_budget > 0:
+        if GROUP_CAP_ENFORCED and group_budget > 0:
             available = group_budget - self.group_committed_usd(parent.symbol)
             child_capital = min(child_capital, available)
             if child_capital < parent.min_notional_usd * 2:

@@ -7,6 +7,7 @@ import unittest
 
 import pandas as pd
 
+from engine import cascade as cascade_module
 from engine.cascade import (
     ANCHOR_CLOSE_TOLERANCE_PCT,
     CAMPAIGN_START_TIMEFRAMES,
@@ -4058,7 +4059,19 @@ class CascadeCapitalGroupTests(unittest.IsolatedAsyncioTestCase):
     measured once at creation and fixed after. No group set = typed capital,
     unchanged — existing campaigns and flows must keep working exactly as
     before.
+
+    The cap is PARKED in production (cascade.GROUP_CAP_ENFORCED is False) — a
+    campaign's capital is a rate, not money spent, so reserving it whole starved
+    every later campaign. These tests switch it on so the behaviour stays proven
+    and ready the moment Phil wants it back.
     """
+
+    def setUp(self):
+        self._cap_was = cascade_module.GROUP_CAP_ENFORCED
+        cascade_module.GROUP_CAP_ENFORCED = True
+
+    def tearDown(self):
+        cascade_module.GROUP_CAP_ENFORCED = self._cap_was
 
     async def test_without_a_group_the_typed_capital_is_used_unchanged(self):
         engine = _mk_engine()
