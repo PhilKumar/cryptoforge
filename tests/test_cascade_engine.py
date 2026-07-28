@@ -1561,7 +1561,16 @@ class CascadeTpReplacedOnAveragingTests(unittest.IsolatedAsyncioTestCase):
         self.campaign.tp_order_price = first_tp
         # The order is genuinely resting on the exchange, exactly as it was placed.
         self.broker.open_orders = [
-            {"orderId": "TP-1", "clientOrderId": "cf-csc-eth1-tp-1", "price": str(first_tp), "status": "NEW"}
+            {
+                "orderId": "TP-1",
+                "clientOrderId": "cf-csc-eth1-tp-1",
+                "price": str(first_tp),
+                # A real Binance openOrders row always carries these, and the
+                # sync needs them to tell a correctly-sized TP from a short one.
+                "origQty": str(self.campaign.filled_base_qty),
+                "executedQty": "0",
+                "status": "NEW",
+            }
         ]
 
     async def test_a_second_fill_cancels_the_stale_tp_and_places_the_averaged_one(self):
@@ -1814,6 +1823,82 @@ class CascadeTpCoversTheWholePositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sells), 1)
         self.assertAlmostEqual(sells[0]["base_qty"], self.QTY1 + self.QTY2, places=8)
         self.assertEqual(broker.cancelled, [])
+
+    async def test_a_right_priced_but_undersized_tp_is_replaced(self):
+        """The live state found on the box after the first fix deployed.
+
+        BTCUSDT #16 had a TP resting at 64,098.61 — the correct averaged price —
+        but for origQty 0.00014 of a 0.00034865 position, leaving ~$13 with no
+        exit. The replacement had been gated on PRICE alone, so the sync
+        returned early every tick and never noticed the short quantity. Price
+        and size must both be judged.
+        """
+        broker = FakeCascadeBroker()
+        broker.get_product_by_symbol = lambda s: {
+            "symbol": s,
+            "base_asset": "BTC",
+            "min_notional": "5.0",
+            "tick_size": "0.01",
+            "step_size": "0.00001",
+        }
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine)
+        correct_price = compute_tp_price(campaign)
+        # Resting at exactly the right price, but only covering buy #2.
+        row = {
+            "orderId": "TP-SHORT",
+            "clientOrderId": "cf-csc-btc3-tp-2",
+            "price": str(correct_price),
+            "origQty": "0.00014000",
+            "executedQty": "0",
+        }
+        campaign.tp_order_id = "TP-SHORT"
+        campaign.tp_order_price = correct_price
+        campaign.tp_price = correct_price
+        broker.open_orders = [row]
+        broker.free_balances = {"BTC": self.QTY1 + self.QTY2 - 0.00014000}
+
+        changed = await engine._sync_tp_order(campaign, {"TP-SHORT": row})
+
+        self.assertTrue(changed)
+        self.assertIn("TP-SHORT", broker.cancelled, "an undersized TP must be replaced, not left")
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1)
+        self.assertAlmostEqual(sells[0]["base_qty"], 0.00034, places=8, msg="now covers the whole position")
+        self.assertAlmostEqual(sells[0]["limit_price"], correct_price, places=6, msg="price was already right")
+        noted = [e for e in campaign.event_log if "right price but covers" in e["message"]]
+        self.assertEqual(len(noted), 1, "the reason must be on the record")
+
+    async def test_a_correctly_sized_tp_is_not_churned(self):
+        """Hysteresis: the same position must not cancel/replace every tick."""
+        broker = FakeCascadeBroker()
+        broker.get_product_by_symbol = lambda s: {
+            "symbol": s,
+            "base_asset": "BTC",
+            "min_notional": "5.0",
+            "tick_size": "0.01",
+            "step_size": "0.00001",
+        }
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine)
+        correct_price = compute_tp_price(campaign)
+        row = {
+            "orderId": "TP-OK",
+            "clientOrderId": "cf-csc-btc3-tp-3",
+            "price": str(correct_price),
+            "origQty": "0.00034",  # the lot-floored whole position
+            "executedQty": "0",
+        }
+        campaign.tp_order_id = "TP-OK"
+        campaign.tp_order_price = correct_price
+        campaign.tp_price = correct_price
+        broker.open_orders = [row]
+        broker.free_balances = {"BTC": self.QTY1 + self.QTY2 - 0.00034}
+
+        for _ in range(3):
+            self.assertFalse(await engine._sync_tp_order(campaign, {"TP-OK": row}))
+        self.assertEqual(broker.cancelled, [], "a correct TP must never be churned")
+        self.assertEqual([o for o in broker.placed_orders if o["side"] == "sell"], [])
 
     async def test_lot_size_dust_is_carried_and_eventually_sold(self):
         """The residual half of the complaint, and the honest limit of it.

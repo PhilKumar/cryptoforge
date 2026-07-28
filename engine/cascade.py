@@ -109,6 +109,10 @@ STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
 # moves seen); the late-start bug that motivated this was 1.39% above.
 MAX_STOP_RAISE_PCT = 0.005
 DEFAULT_TICK_SIZE = 0.01
+# Fallback LOT_SIZE step when the exchange filter is unavailable. Shared by
+# _floor_to_step and the TP quantity-drift tolerance so the granularity used
+# to round a sell can never disagree with the granularity used to judge it.
+DEFAULT_LOT_STEP = "0.00000001"
 # A mother break rolls straight into a fresh campaign on the breaking candle.
 # If price simply rips upward, every candle would break its predecessor, so a
 # run of restarts that never draws a fib is capped rather than left unbounded.
@@ -296,7 +300,7 @@ def _floor_to_step(quantity: float, step_size) -> float:
     """Floor a base quantity exactly as the exchange will for LOT_SIZE."""
     try:
         qty = Decimal(str(quantity))
-        step = Decimal(str(step_size or "0.00000001"))
+        step = Decimal(str(step_size or DEFAULT_LOT_STEP))
         if qty <= 0 or step <= 0:
             return 0.0
         return float((qty / step).to_integral_value(rounding=ROUND_DOWN) * step)
@@ -3917,8 +3921,15 @@ class CascadeEngine:
         # had a chance to replace the order; comparing to it would compare the
         # desired price to itself and always report "already correct".
         current_price_ok = campaign.tp_order_price and abs((campaign.tp_order_price or 0.0) - desired_tp) < 1e-9
-        if campaign.tp_order_id and current_price_ok:
-            return changed
+        # Price alone is NOT enough to call a resting TP correct. A TP can sit at
+        # exactly the right averaged price while covering only part of the
+        # position — which is precisely what the locked-balance bug produced:
+        # BTCUSDT #16 rested at 64,098.61 (the correct average) for just
+        # 0.00014 of a 0.00034865 holding, leaving ~$13 with no exit. Gating the
+        # replacement on price alone meant the sync returned early every tick
+        # and never noticed. The quantity has to be checked too, so the desired
+        # sell size is computed BEFORE deciding there is nothing to do.
+        #
         # Sell what the exchange says is actually there, not the gross the books
         # recorded: the buy's commission came out of the coin, so the recorded
         # quantity over-asks by the fee and Binance rejects the whole sell -2010.
@@ -3972,7 +3983,8 @@ class CascadeEngine:
             _coerce_float(campaign.min_notional_usd, MIN_NOTIONAL_FLOOR_USD),
             MIN_NOTIONAL_FLOOR_USD,
         )
-        sell_qty = _floor_to_step(sell_qty, product.get("step_size"))
+        step = _coerce_float(product.get("step_size"), 0.0) or float(DEFAULT_LOT_STEP)
+        sell_qty = _floor_to_step(sell_qty, step)
         sell_notional = sell_qty * desired_tp
         if sell_qty <= 0 or sell_notional + 1e-10 < minimum:
             notice = f"{sell_qty:.12f}@{desired_tp:.12f}/{minimum:.12f}"
@@ -3986,6 +3998,27 @@ class CascadeEngine:
                 )
             return changed
         campaign.tp_min_notional_notice = None
+        # NOW both halves can be judged. A resting TP is only correct if it is at
+        # the right price AND offering the right amount. The tolerance is one
+        # whole lot step, which also supplies the hysteresis that stops a
+        # jittering free balance from cancelling and re-placing every tick.
+        if campaign.tp_order_id and current_price_ok:
+            resting = open_orders.get(str(campaign.tp_order_id)) or {}
+            resting_qty = _coerce_float(resting.get("origQty")) - _coerce_float(resting.get("executedQty"))
+            if resting_qty <= 0:
+                # The row carried no usable quantity. A missing field is a data
+                # gap, not evidence of a short order — cancelling a working sell
+                # on that basis would churn live orders for nothing. Price
+                # matches, so leave it and re-judge when the row is complete.
+                return changed
+            if abs(sell_qty - resting_qty) < step:
+                return changed  # right price, right size — nothing to do
+            self._log_event(
+                campaign,
+                "warn",
+                f"TP at {desired_tp:,.2f} is the right price but covers {resting_qty:.8f} of "
+                f"{sell_qty:.8f} — replacing it so the whole position has an exit.",
+            )
         # Only cancel a stale TP after proving the replacement meets the
         # exchange rules. Keeping an older target is safer than leaving the
         # position with no target at all.
