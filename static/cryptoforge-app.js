@@ -9372,6 +9372,12 @@ function _cfCascadeIst(ts) {
 // variables the way the rest of the page does. These two palettes are the same
 // hues at the two lightnesses each background needs: on white the pastels
 // vanish, and the near-white "avg entry" line disappears completely.
+// How many fibs and trendlines the chart draws. Everything the campaign built
+// is still kept, traded and listed in the tables below — this is purely how
+// many are painted, because past three they overlap into a mesh and the colour
+// cycle starts repeating hues on top of older lines.
+var _CF_CHART_MAX_STRUCTURES = 3;
+
 var _CF_CHART_DARK = {
   grid: 'rgba(148,163,184,0.12)', axis: 'rgba(148,163,184,0.55)',
   up: '#3fae56', down: '#d9534f', mother: '#a855f7', tp: '#10b981',
@@ -9400,14 +9406,29 @@ function _cfCascadeChartSvg(d) {
   // Labels sit in a gutter on the LEFT, the way they do on a TradingView
   // chart, so the eye reads level-then-price instead of hunting to the right
   // edge past all the candles. The narrow right margin is the price axis only.
-  var W = 1180, H = 520, padL = 168, padR = 58, padT = 14, padB = 30;
+  // Taller and wider than before, with more room top and bottom: the entry and
+  // exit arrows sit outside the candle they belong to, and at the old height
+  // they collided with the price axis and with each other.
+  var W = 1440, H = 660, padL = 150, padR = 62, padT = 26, padB = 34;
   var plotW = W - padL - padR, plotH = H - padT - padB;
   var n = candles.length, cw = plotW / n;
 
   var lo = candles[0].l, hi = candles[0].h;
   candles.forEach(function (c) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; });
   if (d.mother && d.mother.high) hi = Math.max(hi, d.mother.high);
-  var legs = Array.isArray(d.legs) ? d.legs : [];
+  // Only the three most recent fibs and trendlines are drawn. Every structure a
+  // campaign ever built stayed on the chart, and past three they overlap into
+  // an unreadable mesh — the colour cycle only has three hues, so the fourth
+  // fib repeated blue on top of the first. The engine still keeps and trades
+  // them all; this is what gets DRAWN.
+  var allLegs = Array.isArray(d.legs) ? d.legs : [];
+  var legs = allLegs.slice(-_CF_CHART_MAX_STRUCTURES);
+  var allTls = Array.isArray(d.trendlines) ? d.trendlines : [];
+  var tls = allTls.slice(-_CF_CHART_MAX_STRUCTURES);
+  // The active trendline is the one being traded against — never hide it, even
+  // if older structures pushed it out of the last three.
+  var activeTl = allTls.filter(function (t) { return t && t.active; })[0];
+  if (activeTl && tls.indexOf(activeTl) === -1) tls = [activeTl].concat(tls).slice(-_CF_CHART_MAX_STRUCTURES);
   legs.forEach(function (leg) {
     if (leg.touch_high) hi = Math.max(hi, leg.touch_high);
     if (leg.low) lo = Math.min(lo, leg.low);
@@ -9507,10 +9528,10 @@ function _cfCascadeChartSvg(d) {
 
   // every trendline, mother high -> its swing high
   var tlColors = PAL.fibs;
-  // Keep every line visible and colour in creation order: TL1 blue, TL2 green,
-  // TL3 red, TL4 blue. Hiding the older lines made the first visible line look
-  // red/green even though the requested sequence begins with blue.
-  (d.trendlines || []).forEach(function (tl) {
+  // Colour stays keyed to creation order — TL1 blue, TL2 green, TL3 red — so a
+  // line keeps its hue as others retire. Only the newest three are drawn (plus
+  // the active one); the tables below still list every structure.
+  tls.forEach(function (tl) {
     var a1 = tl.a1, a2 = tl.a2;
     if (!a1 || !a2 || a2.t === a1.t) return;
     var slope = (a2.p - a1.p) / (a2.t - a1.t);
@@ -9623,8 +9644,18 @@ function _cfCascadeChartSvg(d) {
       + '  ' + (pnl >= 0 ? '+' : '−') + '$' + _cfCascadeUsd(Math.abs(pnl)) + '</text>');
   });
 
-  return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:900px;display:block;" ' +
-    'xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
+  // The scale, carried on the element so the crosshair can invert a pointer
+  // position back into a price and a time without re-deriving any of it.
+  var scale = [padL, padT, plotW, plotH, minP, maxP, candles[0].t, candles[n - 1].t, cw].join(',');
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" preserveAspectRatio="xMidYMid meet"'
+    + ' data-scale="' + scale + '" data-w="' + W + '" data-h="' + H + '"'
+    // geometricPrecision, NOT crispEdges: the trendlines and fib rays are
+    // diagonal, and snapping those to the pixel grid makes them visibly
+    // stair-stepped. Precision keeps them smooth at any zoom.
+    + ' shape-rendering="geometricPrecision" text-rendering="optimizeLegibility"'
+    + ' style="min-width:900px;display:block;touch-action:none;"'
+    + ' xmlns="http://www.w3.org/2000/svg">' + parts.join('')
+    + '<g id="cf-chart-crosshair" style="display:none;pointer-events:none;"></g></svg>';
 }
 
 function _cfCascadeChartTables(d) {
@@ -9670,13 +9701,22 @@ function _cfCascadeChartHtml(d) {
   }
   var P = _cfChartPalette();
   var journal = _cfCascadeChartMode === 'journal';
+  var hidden = Math.max((d.legs || []).length - _CF_CHART_MAX_STRUCTURES, 0)
+    + Math.max((d.trendlines || []).length - _CF_CHART_MAX_STRUCTURES, 0);
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
     + '<span style="color:' + P.mother + ';">▣ MC / ┄ mother high</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— trendlines (TL)</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— fib levels 0, 1, 2, 4 and 8 (all drawn alike)</span> &nbsp; '
     + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
-    + '<span style="color:' + P.fill + ';">● entries</span> &nbsp; '
-    + '<span style="color:' + P.tp + ';">▼ exits</span>'
+    + '<span style="color:' + P.fill + ';">▲ buys</span> &nbsp; '
+    + '<span style="color:' + P.tp + ';">▼ sells</span>'
+    // Say plainly that older structures are hidden — a chart that quietly drops
+    // things is worse than a busy one, because you cannot tell it happened.
+    + (hidden > 0
+      ? ' &nbsp; <span class="table-meta" title="Only the three most recent fibs and trendlines are drawn, '
+        + 'so the active structure stays readable. Every one of them is still traded, and all are listed in '
+        + 'the table below.">showing the newest 3 · ' + hidden + ' older hidden</span>'
+      : '')
     // A frozen record must say so, or it reads as a live chart that has stopped
     // updating — which is the same picture with the opposite meaning.
     + (d.frozen || d.snapshot
@@ -9686,9 +9726,10 @@ function _cfCascadeChartHtml(d) {
       : '')
     // In journal mode this is a static trade record: skip the interaction hints
     // and the fib-colour key that only matter alongside the live detail tables.
-    + (journal ? '' : ('<br>TL/Fib 1 is blue, 2 green, 3 red, then the cycle repeats. The purple MC column is the mother candle. Labels are on the left,'
-      + ' and each funded buy level carries the dollars resting on it.'
-      + ' Scroll to move down the dialog; the +/&minus; buttons or Ctrl (&#8984;) + scroll zoom, and Expand lets you zoom with the wheel. Drag to pan.'))
+    + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
+      + ' Labels are on the left, and each funded buy level carries the dollars resting on it.'
+      + ' Move the pointer over the chart for a crosshair with the price and time. The wheel zooms about the cursor,'
+      + ' the +/&minus; buttons zoom about the centre, and dragging pans once zoomed in.'))
     + '</div>';
   var html = legend + _cfCascadeChartSvg(d);
   // The journal wants just the picture of how the trade was taken — the
@@ -9789,7 +9830,7 @@ function _cfChartApplyZoom() {
   if (label) label.textContent = Math.round(z.k * 100) + '%';
 }
 
-function cfCascadeZoom(factor, resetPan) {
+function cfCascadeZoom(factor, resetPan, anchor) {
   var svg = _cfChartSvg();
   if (!svg) return;
   if (!svg.dataset.baseViewbox) svg.dataset.baseViewbox = svg.getAttribute('viewBox') || '';
@@ -9809,12 +9850,61 @@ function cfCascadeZoom(factor, resetPan) {
   if (factor === 0 || resetPan || z.k === 1) {
     z.x = base[0]; z.y = base[1];
   } else if (base.length === 4) {
-    // Zoom about the centre of the current view so it doesn't drift.
-    var cx = z.x + (base[2] / prevK) / 2, cy = z.y + (base[3] / prevK) / 2;
-    z.x = cx - (base[2] / z.k) / 2;
-    z.y = cy - (base[3] / z.k) / 2;
+    // Zoom about the POINTER when there is one, the way every charting tool
+    // does it — the bar under the cursor stays under the cursor. Falls back to
+    // the centre for the +/- buttons, which have no pointer to anchor to.
+    var ax = (anchor && isFinite(anchor.x)) ? anchor.x : z.x + (base[2] / prevK) / 2;
+    var ay = (anchor && isFinite(anchor.y)) ? anchor.y : z.y + (base[3] / prevK) / 2;
+    z.x = ax - (ax - z.x) * (prevK / z.k);
+    z.y = ay - (ay - z.y) * (prevK / z.k);
   }
   _cfChartApplyZoom();
+}
+
+// Pointer position in the SVG's own coordinate space — what the crosshair and
+// the cursor-anchored zoom both need.
+function _cfChartPointAt(svg, evt) {
+  var box = svg.getBoundingClientRect();
+  if (!box.width || !box.height) return null;
+  var vb = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+  if (vb.length !== 4 || !isFinite(vb[2])) return null;
+  return {
+    x: vb[0] + ((evt.clientX - box.left) / box.width) * vb[2],
+    y: vb[1] + ((evt.clientY - box.top) / box.height) * vb[3]
+  };
+}
+
+// A crosshair with the price and time under the cursor, drawn into the SVG so
+// it inherits the same coordinate space as everything else.
+function _cfChartCrosshair(svg, pt) {
+  var g = svg.querySelector('#cf-chart-crosshair');
+  if (!g) return;
+  var s = (svg.dataset.scale || '').split(',').map(Number);
+  var W = Number(svg.dataset.w), H = Number(svg.dataset.h);
+  if (s.length !== 9 || !isFinite(s[2]) || !pt) { g.style.display = 'none'; return; }
+  var padL = s[0], padT = s[1], plotW = s[2], plotH = s[3];
+  var minP = s[4], maxP = s[5], t0 = s[6], t1 = s[7], cw = s[8];
+  if (pt.x < padL || pt.x > padL + plotW || pt.y < padT || pt.y > padT + plotH) {
+    g.style.display = 'none';
+    return;
+  }
+  var price = maxP - ((pt.y - padT) / plotH) * (maxP - minP);
+  var ts = t0 + ((pt.x - padL - cw / 2) / Math.max(plotW - cw, 1)) * (t1 - t0);
+  var P = _cfChartPalette();
+  var priceTxt = Number(price).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  g.style.display = '';
+  g.innerHTML =
+      '<line x1="' + padL + '" y1="' + pt.y.toFixed(1) + '" x2="' + (padL + plotW) + '" y2="' + pt.y.toFixed(1)
+        + '" stroke="' + P.axis + '" stroke-width="0.7" stroke-dasharray="4 3" opacity="0.8"/>'
+    + '<line x1="' + pt.x.toFixed(1) + '" y1="' + padT + '" x2="' + pt.x.toFixed(1) + '" y2="' + (padT + plotH)
+        + '" stroke="' + P.axis + '" stroke-width="0.7" stroke-dasharray="4 3" opacity="0.8"/>'
+    + '<rect x="' + (padL + plotW + 2) + '" y="' + (pt.y - 8).toFixed(1) + '" width="' + (W - padL - plotW - 4)
+        + '" height="16" rx="2" fill="' + P.axis + '"/>'
+    + '<text x="' + (padL + plotW + 6) + '" y="' + (pt.y + 3.5).toFixed(1)
+        + '" font-size="9.5" font-family="monospace" fill="' + P.fillRing + '">' + priceTxt + '</text>'
+    + '<rect x="' + (pt.x - 42).toFixed(1) + '" y="' + (H - 20) + '" width="84" height="15" rx="2" fill="' + P.axis + '"/>'
+    + '<text x="' + pt.x.toFixed(1) + '" y="' + (H - 9) + '" font-size="9" font-family="monospace"'
+        + ' text-anchor="middle" fill="' + P.fillRing + '">' + _cfCascadeIst(Math.round(ts)) + ' IST</text>';
 }
 
 // Named wrappers so the markup never has to contain an arithmetic expression.
@@ -9842,8 +9932,27 @@ function _cfChartBindZoom() {
     var wantsZoom = (e.ctrlKey || e.metaKey) || overChart;
     if (!wantsZoom) return;  // let the wheel scroll the dialog to the tables
     e.preventDefault();
-    cfCascadeZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
+    // Smaller step than before and anchored on the pointer, so the wheel feels
+    // continuous and the bar you are pointing at does not slide away.
+    cfCascadeZoom(e.deltaY < 0 ? 1.08 : 1 / 1.08, false, _cfChartPointAt(svg, e));
   }, { passive: false });
+
+  // Crosshair follows the pointer whenever it is over the plot.
+  body.addEventListener('pointermove', function(e) {
+    var svg = _cfChartSvg();
+    if (!svg) return;
+    if (!(svg === e.target || svg.contains(e.target))) {
+      var off = svg.querySelector('#cf-chart-crosshair');
+      if (off) off.style.display = 'none';
+      return;
+    }
+    _cfChartCrosshair(svg, _cfChartPointAt(svg, e));
+  });
+  body.addEventListener('pointerleave', function() {
+    var svg = _cfChartSvg();
+    var g = svg && svg.querySelector('#cf-chart-crosshair');
+    if (g) g.style.display = 'none';
+  });
 
   var drag = null;
   body.addEventListener('pointerdown', function(e) {
