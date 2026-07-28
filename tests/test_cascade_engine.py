@@ -4358,3 +4358,94 @@ class CascadeFrozenChartTests(unittest.IsolatedAsyncioTestCase):
         # The buys are gone from all_fills once the round closed; the record
         # still has to show what entered the trade.
         self.assertEqual([e["price"] for e in data["entries"]], [100.0])
+
+
+class CascadeBreakWindowMotherTests(unittest.TestCase):
+    """The successor's mother is the highest candle of the 15m break window."""
+
+    def _broken(self, engine, highs):
+        """Break the mother, then feed the confirmation candles with `highs`."""
+        campaign = _mk_campaign(engine)
+        campaign.state = "TRENDLINE_ACTIVE"
+        engine._mother_broken(campaign, Candle(3000, 104.0, highs[0], 103.0, 105.5))
+        for i, high in enumerate(highs[1:], start=1):
+            engine._advance_mother_break_confirmation(
+                campaign, Candle(3000 + 300 * i, 105.0, high, high - 2.0, high - 1.0)
+            )
+        return campaign
+
+    def test_a_later_higher_candle_becomes_the_mother(self):
+        engine = _mk_engine()
+        campaign = self._broken(engine, [106.0, 109.0, 107.0])
+        self.assertEqual(campaign.mother_break_top_candle["high"], 109.0)
+        # Its own low travels with it — never a synthetic 15m aggregate.
+        self.assertEqual(campaign.mother_break_top_candle["low"], 107.0)
+        child = next(c for c in engine.campaigns.values() if c.parent_campaign_id == campaign.campaign_id)
+        self.assertEqual(child.mother_high, 109.0)
+        self.assertEqual(child.mother_low, 107.0)
+
+    def test_the_breaking_candle_wins_when_nothing_beats_it(self):
+        engine = _mk_engine()
+        campaign = self._broken(engine, [110.0, 106.0, 107.0])
+        child = next(c for c in engine.campaigns.values() if c.parent_campaign_id == campaign.campaign_id)
+        self.assertEqual(child.mother_high, 110.0)
+        self.assertEqual(child.mother_low, 103.0)
+
+
+class CascadeMinorYieldsTests(unittest.TestCase):
+    """Major and minor broken by the same push leave only the major running."""
+
+    def _campaign(self, engine, cid, kind, break_ts, seq):
+        campaign = Campaign(
+            campaign_id=cid,
+            symbol="BTCUSDT",
+            capital_usd=500.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            seq=seq,
+            mc_kind=kind,
+        )
+        campaign.mother_break_candle = {"timestamp": break_ts, "high": 106.0, "low": 104.0}
+        campaign.close_reason = "mother_broken"
+        campaign.state = "MOTHER_BROKEN"
+        engine.campaigns[cid] = campaign
+        return campaign
+
+    def test_the_minor_does_not_restart_when_the_major_broke_with_it(self):
+        engine = _mk_engine()
+        self._campaign(engine, "major-1", "major", 3000, 1)
+        minor = self._campaign(engine, "minor-1", "minor", 3300, 2)
+        self.assertTrue(engine._minor_yields_to_major(minor))
+        self.assertIsNone(engine._auto_restart(minor, Candle(3300, 104.0, 106.0, 103.0, 105.0)))
+
+    def test_a_major_keeps_its_successor(self):
+        engine = _mk_engine()
+        major = self._campaign(engine, "major-1", "major", 3000, 1)
+        self._campaign(engine, "minor-1", "minor", 3000, 2)
+        self.assertFalse(engine._minor_yields_to_major(major))
+
+    def test_a_lone_minor_break_still_restarts(self):
+        """A minor breaking while the major runs on is an independent event."""
+        engine = _mk_engine()
+        major = self._campaign(engine, "major-1", "major", 3000, 1)
+        major.state = "TRENDLINE_ACTIVE"
+        major.close_reason = ""
+        major.mother_break_candle = None
+        minor = self._campaign(engine, "minor-1", "minor", 9000, 2)
+        self.assertFalse(engine._minor_yields_to_major(minor))
+
+    def test_breaks_far_apart_are_not_the_same_push(self):
+        engine = _mk_engine()
+        self._campaign(engine, "major-1", "major", 3000, 1)
+        minor = self._campaign(engine, "minor-1", "minor", 3000 + 4000, 2)
+        self.assertFalse(engine._minor_yields_to_major(minor))
+
+    def test_an_ancestor_never_blocks_its_own_descendant(self):
+        """Every successor of a major break is itself a minor, so matching on
+        'some major once broke' would strand the whole chain."""
+        engine = _mk_engine()
+        major = self._campaign(engine, "major-1", "major", 3000, 1)
+        child = self._campaign(engine, "child-1", "minor", 3200, 2)
+        child.parent_campaign_id = major.campaign_id
+        self.assertFalse(engine._minor_yields_to_major(child))

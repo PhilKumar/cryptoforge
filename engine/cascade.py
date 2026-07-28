@@ -286,6 +286,11 @@ RESTART_REASONS = {"mother_broken", "mother_retested"}
 # Candles kept to the right of a finished campaign's last action, so the exit
 # marker has room to breathe instead of sitting on the chart's right edge.
 _CHART_TAIL_BUCKETS = 6
+# How close two mother breaks must be to count as the same push. One 15-minute
+# break window: a major and a minor broken by the same move freeze within a
+# candle or two of each other, while genuinely separate breaks are minutes apart
+# at the very least.
+_SIMULTANEOUS_BREAK_SEC = 900
 
 
 class CascadeModelError(Exception):
@@ -679,6 +684,11 @@ class Campaign:
     # Saved rather than held only in memory: a process restart in the 10-minute
     # confirmation window must neither skip the wait nor invent a new mother.
     mother_break_candle: Optional[dict] = None
+    # The highest candle seen across the whole 15-minute break window (the
+    # breaking candle and the two that confirm it). This is what becomes the
+    # successor's mother — not the breaking candle, which is merely the first of
+    # the three and often not the one that reached furthest up.
+    mother_break_top_candle: Optional[dict] = None
     mother_break_wait_remaining: int = 0
     mother_break_last_5m_ts: int = 0
     # Once structure has escalated, it may be stepping 15m/1H candles; the
@@ -847,6 +857,7 @@ class Campaign:
             "created_at": self.created_at,
             "state": self.state,
             "mother_break_candle": self.mother_break_candle,
+            "mother_break_top_candle": self.mother_break_top_candle,
             "mother_break_wait_remaining": self.mother_break_wait_remaining,
             "mother_break_last_5m_ts": self.mother_break_last_5m_ts,
             "mother_watch_last_5m_ts": self.mother_watch_last_5m_ts,
@@ -914,6 +925,7 @@ class Campaign:
             "created_at",
             "state",
             "mother_break_candle",
+            "mother_break_top_candle",
             "mother_break_wait_remaining",
             "mother_break_last_5m_ts",
             "mother_watch_last_5m_ts",
@@ -3440,15 +3452,17 @@ class CascadeEngine:
     def _mother_broken(self, campaign: Campaign, candle: Optional[Candle] = None) -> None:
         """Freeze at the first break, then restart after two more 5m closes.
 
-        Deliberately retain the *breaking* candle's OHLC as the new mother.
-        The later candles confirm the reset but do not become a synthetic 15m
-        mother and cannot alter its high or low.
+        The successor's mother is the HIGHEST of the three candles in that
+        15-minute window, taken whole — its own high and its own low. The
+        breaking candle is only the first of the three, and a break usually
+        keeps running: anchoring on it left the new mother below price that had
+        already printed, so the successor started measuring its fall from a high
+        the market had beaten minutes earlier. Still a real candle, never a
+        synthetic 15m aggregate.
         """
         if candle is None:
             return
-        campaign.mother_broken_above = True
-        campaign.state = MOTHER_BREAK_PENDING
-        campaign.mother_break_candle = {
+        snapshot = {
             "timestamp": candle.timestamp,
             "open": candle.open,
             "high": candle.high,
@@ -3456,14 +3470,18 @@ class CascadeEngine:
             "close": candle.close,
             "timeframe": candle.timeframe,
         }
+        campaign.mother_broken_above = True
+        campaign.state = MOTHER_BREAK_PENDING
+        campaign.mother_break_candle = snapshot
+        campaign.mother_break_top_candle = dict(snapshot)
         campaign.mother_break_wait_remaining = 2
         campaign.mother_break_last_5m_ts = candle.timestamp
         self._log_event(
             campaign,
             "warn",
             f"Mother candle high {campaign.mother_high:g} broken above — campaign frozen. "
-            f"Keeping the breaking candle high {candle.high:,.2f} / low {candle.low:,.2f} as the next mother "
-            "after two further closed 5m candles. "
+            f"Two further 5m candles close before the restart; the highest of the three becomes the next "
+            f"mother. Leading so far: high {candle.high:,.2f} / low {candle.low:,.2f}. "
             + (
                 "Resting TP order left on the exchange to capture the exit."
                 if campaign.mode == "live" and campaign.filled_base_qty > 0
@@ -3479,19 +3497,36 @@ class CascadeEngine:
         source_ts = int(source.get("timestamp") or 0)
         if campaign.state != MOTHER_BREAK_PENDING or candle.timestamp <= source_ts:
             return
+        # Every candle in the window is a candidate for the next mother, so the
+        # comparison happens on the way through — by the time the countdown
+        # reaches zero these candles are gone from the step and cannot be
+        # revisited.
+        top = campaign.mother_break_top_candle or dict(source)
+        if candle.high > _coerce_float(top.get("high")):
+            campaign.mother_break_top_candle = {
+                "timestamp": candle.timestamp,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "timeframe": candle.timeframe,
+            }
         campaign.mother_break_wait_remaining = max(int(campaign.mother_break_wait_remaining) - 1, 0)
+        leader = campaign.mother_break_top_candle or {}
         if campaign.mother_break_wait_remaining:
             self._log_event(
                 campaign,
                 "wait",
-                "Mother-break freeze confirmed by one closed 5m candle — one more closes before the restart.",
+                f"Mother-break freeze confirmed by one closed 5m candle — one more closes before the restart. "
+                f"Highest so far: {_coerce_float(leader.get('high')):,.2f} / "
+                f"{_coerce_float(leader.get('low')):,.2f}.",
             )
             return
         self._finish_mother_break(campaign)
 
     def _finish_mother_break(self, campaign: Campaign) -> None:
-        """Archive the frozen parent and start from the original break candle."""
-        source = campaign.mother_break_candle or {}
+        """Archive the frozen parent and start from the window's highest candle."""
+        source = campaign.mother_break_top_candle or campaign.mother_break_candle or {}
         if not source:
             return
         break_candle = Candle(
@@ -3511,7 +3546,9 @@ class CascadeEngine:
         self._log_event(
             campaign,
             "warn",
-            "Mother-break confirmation complete — parent ended and successor starts from the original breaking candle.",
+            f"Mother-break confirmation complete — parent ended. The successor's mother is the highest of the "
+            f"three 5m candles in the break window: high {break_candle.high:,.2f} / low {break_candle.low:,.2f} "
+            f"at {break_candle.timestamp}.",
         )
         if campaign.mode == "paper" and campaign.filled_base_qty > 0:
             # Paper has no resting exchange TP.  At a mother break the target
@@ -3546,6 +3583,70 @@ class CascadeEngine:
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
 
+    def _ancestor_ids(self, campaign: Campaign) -> set:
+        """Every campaign this one descends from, walking parent links upward."""
+        seen = set()
+        current = campaign.parent_campaign_id
+        while current and current not in seen:
+            seen.add(current)
+            parent = self.campaigns.get(current)
+            current = parent.parent_campaign_id if parent else None
+        return seen
+
+    def _minor_yields_to_major(self, parent: Campaign) -> bool:
+        """When a major and a minor break together, only the major restarts.
+
+        A minor mother is a sub-structure marked *inside* the move the major is
+        already trading, so the same push upward breaks both. Restarting both
+        left two campaigns on one symbol re-anchored within minutes of each
+        other, chasing the same high with two lots of capital — and the minor's
+        successor is the redundant one, because the major's anchor is the
+        structure that actually defines the move.
+
+        Only a SIMULTANEOUS break counts, and simultaneity is judged on the two
+        break candles' timestamps. Two things made that necessary. A minor whose
+        mother breaks while the major is running quietly is an independent event
+        and must restart normally. And every successor of a major break is
+        itself a minor, so matching on "some major once broke" would have let a
+        long-archived ancestor block its own descendants forever.
+        """
+        if parent.mc_kind != "minor":
+            return False
+        own_break = int((parent.mother_break_candle or {}).get("timestamp") or 0)
+        if not own_break:
+            return False
+        ancestors = self._ancestor_ids(parent)
+        major = None
+        for c in self.campaigns.values():
+            if c.campaign_id == parent.campaign_id or c.campaign_id in ancestors:
+                continue
+            if c.symbol != parent.symbol or c.mc_kind != "major":
+                continue
+            if not (c.state == MOTHER_BREAK_PENDING or c.close_reason == "mother_broken"):
+                continue
+            their_break = int((c.mother_break_candle or {}).get("timestamp") or 0)
+            if their_break and abs(their_break - own_break) <= _SIMULTANEOUS_BREAK_SEC:
+                major = c
+                break
+        if major is None:
+            return False
+        self._log_event(
+            parent,
+            "warn",
+            f"Minor MC broke at the same time as the major (#{major.seq}) on {parent.symbol}. "
+            f"No successor started for the minor — the major re-anchors and carries the move, "
+            f"so only one campaign runs on from here. Its capital returns to the group.",
+        )
+        self._alert(
+            "Cascade minor MC retired at the break",
+            f"{parent.symbol} #{parent.seq} (MINOR MC, {parent.mode.upper()}) broke together with "
+            f"major campaign #{major.seq}.\n\n"
+            f"Only the major restarts. The minor ends here and its ${parent.capital_usd:,.2f} goes "
+            f"back to the {parent.symbol} group.",
+            level="warn",
+        )
+        return True
+
     def _auto_restart(self, parent: Campaign, candle: Candle) -> Optional[Campaign]:
         """
         A break does not end the cascade, it moves it. The candle that broke
@@ -3574,6 +3675,8 @@ class CascadeEngine:
             return None
         if self._active_duplicate(parent.symbol, candle.timestamp, candle.high) is not None:
             return None  # this candle already anchors a running campaign
+        if self._minor_yields_to_major(parent):
+            return None
 
         # The child wants the parent's capital, but never more than the capital
         # group has left. The parent is already archived (its state is final),
