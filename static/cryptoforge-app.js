@@ -9609,30 +9609,6 @@ function _cfCascadeChartSvg(d) {
     }
   });
 
-  // The LIVE working line: where the anchor search lands right now, on the
-  // latest low. A saved trendline belongs to the structure that cut it and is
-  // never re-anchored, so as price falls the saved line is left behind and the
-  // engine works a steeper one. Drawing only the saved line makes the engine
-  // look broken — it did on PAXG, where the chart showed 22:05 while the engine
-  // was on 23:40. Amber and dashed: geometry, not a committed structure.
-  var work = d.working_trendline;
-  if (work && work.same_as_saved !== true && work.a1 && work.a2 && work.a2.t !== work.a1.t) {
-    var wSlope = (work.a2.p - work.a1.p) / (work.a2.t - work.a1.t);
-    var wt0 = candles[0].t, wt1 = candles[n - 1].t;
-    var wp0 = work.a1.p + wSlope * (wt0 - work.a1.t), wp1 = work.a1.p + wSlope * (wt1 - work.a1.t);
-    parts.push('<line x1="' + Xt(wt0).toFixed(1) + '" y1="' + Y(wp0).toFixed(1) + '" x2="' + Xt(wt1).toFixed(1) +
-      '" y2="' + Y(wp1).toFixed(1) + '" stroke="' + pal.sellMark + '" stroke-width="1.1" opacity="0.75" stroke-dasharray="4 4"/>');
-    // Mark the red-candle open it is anchored on, so the rule is visible: going
-    // back from the latest low, this is the newest open the line clears.
-    parts.push('<circle cx="' + Xt(work.a2.t).toFixed(1) + '" cy="' + Y(work.a2.p).toFixed(1) +
-      '" r="2.6" fill="none" stroke="' + pal.sellMark + '" stroke-width="1.1" opacity="0.9"/>');
-    if (inView(wp1)) {
-      parts.push('<text x="' + (Xt(wt1) - 4).toFixed(1) + '" y="' + (Y(wp1) + 11).toFixed(1) + '" fill="' + pal.sellMark +
-        '" font-size="9.5" font-family="monospace" text-anchor="end" opacity="0.95">TL live · ' +
-        _cfCascadeFmt(work.a2.p) + ' @ ' + _escapeHtml(_cfCascadeIst(work.a2.t)) + '</text>');
-    }
-  }
-
   // every fib: 0/1 anchors solid, 2/4/8 buy levels dotted
   // Fixed three-colour cycle: fib 1 blue, 2 green, 3 red, then repeat.
   // Keyed off leg_id, not position, so a fib keeps its colour as others retire.
@@ -9800,17 +9776,6 @@ function _cfCascadeChartHtml(d) {
     + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
     + '<span style="color:' + P.buyMark + ';">▲ buys</span> &nbsp; '
     + '<span style="color:' + P.sellMark + ';">▼ target hit</span>'
-    + (d.working_trendline && d.working_trendline.same_as_saved !== true
-      ? ' &nbsp; <span style="color:' + P.sellMark + ';">┄ TL live</span>'
-      : '')
-    // A saved trendline never moves again; the engine re-runs the anchor search
-    // on every red candle. Without saying so, the gap between the two reads as
-    // the engine ignoring the latest low, which is exactly backwards.
-    + (d.working_trendline && d.working_trendline.same_as_saved !== true
-      ? '<br>The amber dashed line is where the anchor search lands on the LATEST low — the newest red '
-        + 'candle open the line still clears. Solid trendlines are frozen at the structure that cut them '
-        + 'and never re-anchor, so they fall behind as price drops. The engine works the amber one.'
-      : '')
     // Say plainly that older structures are hidden — a chart that quietly drops
     // things is worse than a busy one, because you cannot tell it happened.
     + (hidden > 0
