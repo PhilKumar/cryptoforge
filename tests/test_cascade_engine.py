@@ -4352,6 +4352,105 @@ class CascadeLiquidateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["filled_base_qty"], 0.0)
 
 
+class CascadeWorkingTrendlineTests(unittest.IsolatedAsyncioTestCase):
+    """The chart must show the line the ENGINE is on, not only the last saved one.
+
+    A saved trendline belongs to the structure that cut it and is never
+    re-anchored. Detection re-runs the anchor search on every red candle, so as
+    price makes new lows the working line steepens and the saved one is left
+    behind. On PAXGUSDT 2026-07-28 the chart drew a line anchored at 22:05 while
+    the engine was working one anchored at 23:40, and the gap read as a bug.
+    """
+
+    def _falling(self, engine):
+        """A steady fall of red candles below a mother high of 105."""
+        campaign = _mk_campaign(engine)
+        campaign.state = "TRENDLINE_ACTIVE"
+        campaign.mother_high = 105.0
+        campaign.mother_timestamp = 600
+        candles = [Candle(600, 104.0, 105.0, 103.0, 103.5)]
+        price = 103.0
+        for ts in range(900, 900 + 300 * 20, 300):
+            candles.append(Candle(ts, price, price + 0.1, price - 0.6, price - 0.5))
+            price -= 0.5
+        engine._candles[campaign.campaign_id] = candles
+        return campaign, candles
+
+    async def test_the_working_line_is_anchored_on_the_latest_valid_red_open(self):
+        engine = _mk_engine()
+        campaign, candles = self._falling(engine)
+        data = await engine.get_chart_data(campaign.campaign_id)
+        work = data.get("working_trendline")
+        self.assertIsNotNone(work, "a running campaign must report its live anchor")
+        expected_price, expected_ts = cascade_module.find_valid_anchor2(
+            campaign.mother_high,
+            campaign.mother_timestamp,
+            [c for c in candles if campaign.mother_timestamp < c.timestamp < candles[-1].timestamp],
+        )
+        self.assertAlmostEqual(work["a2"]["p"], expected_price)
+        self.assertEqual(work["a2"]["t"], int(expected_ts))
+        self.assertEqual(work["a1"]["p"], campaign.mother_high)
+
+    async def test_it_advances_as_price_makes_new_lows(self):
+        """The whole point: going back from the LATEST low, not the low at the
+        moment some structure happened to be cut."""
+        engine = _mk_engine()
+        campaign, candles = self._falling(engine)
+        early = await engine.get_chart_data(campaign.campaign_id)
+        early_anchor = early["working_trendline"]["a2"]
+
+        price = candles[-1].close
+        for ts in range(candles[-1].timestamp + 300, candles[-1].timestamp + 300 * 8, 300):
+            candles.append(Candle(ts, price, price + 0.1, price - 0.6, price - 0.5))
+            price -= 0.5
+        later = await engine.get_chart_data(campaign.campaign_id)
+        later_anchor = later["working_trendline"]["a2"]
+
+        self.assertGreater(later_anchor["t"], early_anchor["t"], "the anchor must move forward")
+        self.assertLess(later_anchor["p"], early_anchor["p"], "and down, with the fall")
+
+    async def test_it_says_when_the_saved_line_already_is_the_working_line(self):
+        """So the chart does not draw the same line twice."""
+        engine = _mk_engine()
+        campaign, candles = self._falling(engine)
+        data = await engine.get_chart_data(campaign.campaign_id)
+        work = data["working_trendline"]
+        campaign.trendlines.append(
+            cascade_module.Trendline(
+                trendline_id=1,
+                anchor1_price=campaign.mother_high,
+                anchor1_timestamp=campaign.mother_timestamp,
+                anchor2_price=work["a2"]["p"],
+                anchor2_timestamp=work["a2"]["t"],
+            )
+        )
+        again = await engine.get_chart_data(campaign.campaign_id)
+        self.assertTrue(again["working_trendline"]["same_as_saved"])
+
+    async def test_a_finished_trade_reports_no_working_line(self):
+        """A record is not live geometry — there is nothing left to re-anchor."""
+        engine = _mk_engine()
+        campaign, _ = self._falling(engine)
+        campaign.state = "COMPLETED"
+        campaign.closed_at = "x"
+        campaign.rounds = [
+            Round(
+                round_id=1,
+                leg_id=1,
+                avg_entry=100.0,
+                quantity=0.5,
+                invested_usd=50.0,
+                exit_price=110.0,
+                pnl=5.0,
+                opened_ts=1200,
+                closed_ts=1800,
+                fills=[],
+            )
+        ]
+        data = await engine.get_chart_data(campaign.campaign_id)
+        self.assertIsNone(data.get("working_trendline"))
+
+
 class CascadeFrozenChartTests(unittest.IsolatedAsyncioTestCase):
     """A finished trade is a record, and a record does not keep growing."""
 

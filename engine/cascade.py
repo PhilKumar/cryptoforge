@@ -2714,6 +2714,37 @@ class CascadeEngine:
             }
             for tl in campaign.trendlines
         ]
+        # The line the ENGINE is working with right now, which is NOT the last
+        # one it saved. A stored trendline belongs to the structure that cut it
+        # and is never re-anchored; detection, meanwhile, re-runs the anchor
+        # search on every red candle, so as price makes new lows the working
+        # line steepens and the saved one is left behind.
+        #
+        # Drawing only the saved line makes the engine look wrong: on PAXGUSDT
+        # 2026-07-28 the chart showed a line anchored at 22:05 while the engine
+        # was actually working one anchored at 23:40, and the gap read as a bug.
+        # Computed on the campaign's OWN stepping candles, not the chart's
+        # display buckets — a chart shown at 1H must not report an anchor the
+        # engine could never pick while it is stepping 5m.
+        step_history = [c for c in history if c.timestamp >= campaign.mother_timestamp]
+        working = None
+        if not trade_end_ts and len(step_history) > 1:
+            last = step_history[-1]
+            between = [c for c in step_history if campaign.mother_timestamp < c.timestamp < last.timestamp]
+            w_price, w_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
+            if w_price is not None and 0 < w_price < campaign.mother_high:
+                same_as_saved = any(
+                    tl.anchor2_timestamp == int(w_ts) and abs(tl.anchor2_price - w_price) < 1e-9
+                    for tl in campaign.trendlines
+                )
+                working = {
+                    "a1": {"t": campaign.mother_timestamp, "p": campaign.mother_high},
+                    "a2": {"t": int(w_ts), "p": w_price},
+                    # True when the newest saved line already IS this line, so
+                    # the chart can skip drawing it twice.
+                    "same_as_saved": same_as_saved,
+                }
+
         legs = []
         for leg in campaign.legs:
             levels = {}
@@ -2767,6 +2798,7 @@ class CascadeEngine:
             "campaign_timeframe": campaign.timeframe,
             "candles": candles,
             "trendlines": trendlines,
+            "working_trendline": working,
             "legs": legs,
             "fills": [f.to_dict() for f in campaign.all_fills],
             # Entries alone only tell half the trade. Each closed round carries
