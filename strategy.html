@@ -1363,14 +1363,26 @@
           </div>
         </div>
         <div class="input-group">
+          <label for="cf-cascade-mc-kind">Mother Candle Kind</label>
+          <select id="cf-cascade-mc-kind">
+            <option value="major" selected>Major — its own anchor</option>
+            <option value="minor">Minor — inside a move already running · forced to 5m</option>
+          </select>
+          <div class="cf-cascade-field-note" id="cf-cascade-mc-kind-note">
+            A fresh campaign is <strong>Major</strong> whatever chart you spotted it on. Pick Minor only
+            for a sub-mother marked inside a move that is already running — a Minor stands down if a
+            Major on the same symbol breaks at the same time.
+          </div>
+        </div>
+        <div class="input-group">
           <label for="cf-cascade-timeframe">Starting Mother Candle</label>
           <select id="cf-cascade-timeframe">
-            <option value="5m" selected>5m — Fresh / minor mother · auto-escalates</option>
-            <option value="15m">15m — Major mother · auto-escalates</option>
-            <option value="1h">1H — Major mother · auto-escalates</option>
-            <option value="4h">4H — Major mother · fixed at 4H</option>
-            <option value="1d">1D — Major mother · fixed</option>
-            <option value="1w">1W — Major mother · fixed</option>
+            <option value="5m" selected>5m — auto-escalates</option>
+            <option value="15m">15m — auto-escalates</option>
+            <option value="1h">1H — auto-escalates</option>
+            <option value="4h">4H — fixed at 4H</option>
+            <option value="1d">1D — fixed</option>
+            <option value="1w">1W — fixed</option>
           </select>
         </div>
         <div class="input-group">

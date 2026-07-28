@@ -5686,6 +5686,15 @@ h1, h2, h3, h4, h5, h6,
 .mission-mini-label,
 .overview-label,
 .admin-kicker,
+/* Helper text under a Cascade start field. The Mother Candle Kind picker
+   decides whether a campaign stands down for a major, so the rule has to be
+   readable at the moment of choosing, not discovered afterwards. */
+.cf-cascade-field-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
 .input-group label,
 .cf-scalp-kicker,
 .asset-switcher-label {

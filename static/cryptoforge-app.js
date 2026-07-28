@@ -9132,11 +9132,16 @@ async function cfCascadeStartCampaign() {
   var motherLow = Number((document.getElementById('cf-cascade-mother-low') || {}).value || 0);
   var motherTimeRaw = (document.getElementById('cf-cascade-mother-time') || {}).value || '';
   var mode = (document.getElementById('cf-cascade-mode') || {}).value || 'paper';
-  // One picker, because the kind and the timeframe say the same thing: 5m IS
-  // "initiate off a minor MC", anything higher IS "older MC". The server
-  // derives the kind the same way, so the two can never drift apart.
   var timeframe = (document.getElementById('cf-cascade-timeframe') || {}).value || '5m';
-  var mcKind = timeframe === '5m' ? 'minor' : 'major';
+  // ASKED, not inferred from the timeframe. It used to be derived — 5m meant
+  // minor — which labelled every fresh 5m campaign a minor. That is not a
+  // cosmetic label: a minor stands down when a major on the same symbol breaks
+  // at the same time, so a mislabelled fresh campaign could be dropped for a
+  // major it has nothing to do with. Major is the default; a campaign with its
+  // own anchor is major whatever chart it was spotted on.
+  var mcKind = (document.getElementById('cf-cascade-mc-kind') || {}).value || 'major';
+  // The server forces this too; saying it here keeps the confirm text honest.
+  if (mcKind === 'minor') timeframe = '5m';
 
   if (!symbol.trim()) return _cfCascadeSetError('Enter a symbol (e.g. BTCUSDT).');
   if (!(capital > 0)) return _cfCascadeSetError('Enter the campaign capital in USD.');

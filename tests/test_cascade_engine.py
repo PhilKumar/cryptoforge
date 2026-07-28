@@ -3948,6 +3948,28 @@ class CascadeMinorMotherCandleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["campaign"]["mc_kind"], "major")
         self.assertEqual(result["campaign"]["timeframe"], "1d")
 
+    async def test_a_fresh_5m_campaign_can_be_a_major(self):
+        """The UI used to DERIVE the kind from the timeframe, so every fresh 5m
+        campaign was labelled minor — and a minor stands down when a major on
+        the same symbol breaks. A campaign with its own anchor is major whatever
+        chart it was spotted on."""
+        engine = _mk_engine()
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe="5m", mc_kind="major"
+        )
+        engine.stop()
+        self.assertEqual(result["campaign"]["mc_kind"], "major")
+        self.assertEqual(result["campaign"]["timeframe"], "5m")
+        self.assertTrue(result["campaign"]["escalates"], "a 5m major still climbs the ladder")
+
+    async def test_a_5m_campaign_is_only_minor_when_it_is_asked_for(self):
+        engine = _mk_engine()
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 105, 99, mother_timestamp=_RECENT_TS, timeframe="5m", mc_kind="minor"
+        )
+        engine.stop()
+        self.assertEqual(result["campaign"]["mc_kind"], "minor")
+
     def test_the_kind_survives_a_snapshot_round_trip_and_a_recalc(self):
         engine = _mk_engine()
         campaign = _mk_campaign(engine)
