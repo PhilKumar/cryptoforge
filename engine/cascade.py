@@ -210,17 +210,18 @@ TIMEFRAME_SECONDS = {
 # is too big a change of character to happen by itself, which is also why 1D and
 # 1W are not on the ladder at all.
 ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
-# What may be picked when STARTING a campaign. There are only two situations,
-# and the timeframe IS the choice between them:
-#   5m                 — INITIATE, off a minor MC: a fresh campaign started at a
-#                        recent or minor high, including a sub-mother marked
-#                        inside a move that is already running. ALWAYS 5m,
-#                        whatever chart it was spotted on — viewing 1D or 1H and
-#                        marking a minor high does not make that high a 1D or 1H
-#                        structure, so a mc_kind of "minor" overrides any
-#                        timeframe sent with it.
-#   15m/1h/4h/1d/1w    — an OLDER MC, anchored deliberately to a bigger candle
-#                        from the left.
+# What may be picked when STARTING a campaign. The timeframe and the KIND are
+# two separate questions, and the form asks both:
+#   kind = minor       — a sub-mother marked inside a move that is already
+#                        running. ALWAYS 5m, whatever chart it was spotted on —
+#                        viewing 1D or 1H and marking a minor high does not make
+#                        that high a 1D or 1H structure, so a mc_kind of "minor"
+#                        overrides any timeframe sent with it.
+#   kind = major       — a campaign anchored to its own candle, on whichever of
+#                        these timeframes that candle belongs to. 5m included: a
+#                        fresh campaign off a recent high is a major, and used to
+#                        be mislabelled minor when the kind was inferred from
+#                        the timeframe alone.
 # Whether a campaign escalates is decided by the LADDER, not by which of those
 # two it is: start at 5m, 15m or 1H and it climbs toward the 4H cap. Start at
 # 4H, 1D or 1W and it is fixed — 4H because it is already the cap, 1D and 1W
