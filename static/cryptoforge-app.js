@@ -8222,8 +8222,11 @@ function _cfCascadeNettedNote(campaign) {
   var why = 'Netted ' + netted.toFixed(3) + '% of the fall: ' + ranges + ' was already funded by another '
     + 'campaign on this symbol when this one started, so this campaign funds only the free ground above '
     + 'and below it. Its capital is untouched — only the stretch of fall it pays for narrows.';
-  return ' <span class="admin-pill" data-state="warn" title="' + _escapeHtml(why) + '">−'
-    + netted.toFixed(2) + '% netted</span>';
+  // Plain inline text, NOT an admin-pill: these stat boxes are narrow enough
+  // that "$5.67 / $2,000" already had to be moved out of the value line, and a
+  // padded pill on the note line clips the same way.
+  return ' · <span style="color:var(--yellow,#f59e0b);font-weight:700;" title="'
+    + _escapeHtml(why) + '">−' + netted.toFixed(2) + '% netted</span>';
 }
 
 // How a campaign ended up on the timeframe it is running. "Started at 15m" and
