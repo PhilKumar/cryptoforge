@@ -4498,6 +4498,98 @@ class CascadeMinorYieldsTests(unittest.TestCase):
         self.assertFalse(engine._minor_yields_to_major(child))
 
 
+class CascadeFibSizeFloorTests(unittest.TestCase):
+    """The smallest swing that counts as structure, per instrument.
+
+    A flat percentage of price does not travel between instruments: 0.08% is
+    0.81x a median BTC 5m bar but 1.53x a PAXG one. PAXGUSDT on 2026-07-28 drew
+    nothing for 24 candles because a real swing — matching Phil's hand-drawn fib
+    to the cent — was $0.30 under this number.
+    """
+
+    _BTC_BAR = 0.000984  # median 5m bar, measured 2026-07-28
+    _PAXG_BAR = 0.000525
+    _ETH_BAR = 0.001579
+
+    def test_btc_is_unchanged(self):
+        """The whole point of clamping at MIN_FIB_RANGE_PCT: the days Phil
+        verified by hand must behave exactly as they did."""
+        self.assertEqual(
+            cascade_module.min_fib_range_for("BTCUSDT", self._BTC_BAR),
+            cascade_module.MIN_FIB_RANGE_PCT,
+        )
+
+    def test_a_noisier_instrument_is_not_tightened(self):
+        """ETH bars are 1.6x BTC's, so scaling alone would RAISE its floor.
+        The rule may only loosen — nothing that works today changes."""
+        self.assertEqual(
+            cascade_module.min_fib_range_for("ETHUSDT", self._ETH_BAR),
+            cascade_module.MIN_FIB_RANGE_PCT,
+        )
+
+    def test_a_quiet_instrument_gets_a_smaller_floor(self):
+        floor = cascade_module.min_fib_range_for("PAXGUSDT", self._PAXG_BAR)
+        self.assertLess(floor, cascade_module.MIN_FIB_RANGE_PCT)
+        self.assertAlmostEqual(floor, self._PAXG_BAR * cascade_module.FIB_RANGE_BAR_RATIO)
+
+    def test_the_paxg_swing_that_was_rejected_now_passes(self):
+        """The real numbers: 0=4042.80, 1=4039.87 — the fib Phil drew by hand."""
+        floor = cascade_module.min_fib_range_for("PAXGUSDT", self._PAXG_BAR)
+        self.assertGreaterEqual(4042.80 - 4039.87, 4042.80 * floor)
+        # ...and would still have been rejected by the old flat number.
+        self.assertLess(4042.80 - 4039.87, 4042.80 * cascade_module.MIN_FIB_RANGE_PCT)
+
+    def test_a_dead_market_cannot_drive_the_floor_to_nothing(self):
+        """Bars measuring near zero must not admit a two-tick wobble."""
+        floor = cascade_module.min_fib_range_for("DEADUSDT", 0.0000001)
+        self.assertEqual(floor, cascade_module.MIN_FIB_RANGE_FLOOR_PCT)
+
+    def test_an_unmeasurable_symbol_keeps_the_strict_default(self):
+        """A failed fetch must never quietly loosen a real filter."""
+        self.assertEqual(
+            cascade_module.min_fib_range_for("NEWUSDT", 0.0),
+            cascade_module.MIN_FIB_RANGE_PCT,
+        )
+
+    def test_an_explicit_override_wins(self):
+        cascade_module.MIN_FIB_RANGE_PCT_BY_SYMBOL["WEIRDUSDT"] = 0.005
+        try:
+            self.assertEqual(cascade_module.min_fib_range_for("WEIRDUSDT", self._PAXG_BAR), 0.005)
+        finally:
+            cascade_module.MIN_FIB_RANGE_PCT_BY_SYMBOL.pop("WEIRDUSDT", None)
+
+    def test_the_threshold_is_held_for_life_not_recomputed(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.min_fib_range_pct = 0.0004
+        campaign.median_bar_pct = 0.0005
+        restored = Campaign.from_dict(json.loads(json.dumps(campaign.to_dict())))
+        self.assertEqual(restored.min_fib_range_pct, 0.0004)
+        engine._reset_derived_state(campaign)
+        self.assertEqual(campaign.min_fib_range_pct, 0.0004, "measured at birth, not replay output")
+
+    def test_a_campaign_saved_before_the_field_existed_keeps_the_default(self):
+        legacy = Campaign.from_dict({"campaign_id": "old", "symbol": "BTCUSDT"})
+        self.assertEqual(legacy.min_fib_range_pct, cascade_module.MIN_FIB_RANGE_PCT)
+
+
+class CascadeFibSizeGateTests(unittest.IsolatedAsyncioTestCase):
+    """The gate reads the CAMPAIGN's threshold, not the module constant."""
+
+    async def test_a_quiet_campaign_draws_a_fib_the_flat_floor_would_reject(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.mother_high = 4044.01
+        campaign.min_fib_range_pct = 0.0004
+        leg = Leg(leg_id=1, trendline_id=1, low=4039.87, touch_high=4042.80, touch_timestamp=0)
+        campaign.legs.append(leg)
+        build_fib_ladder_and_pool(campaign, leg)
+        self.assertIsNotNone(leg.fib)
+        # The levels Phil drew by hand on 2026-07-28.
+        self.assertAlmostEqual(leg.fib.level_price(2), 4036.94, places=2)
+        self.assertAlmostEqual(leg.fib.level_price(4), 4031.08, places=2)
+
+
 class CascadeBandMathTests(unittest.TestCase):
     """The interval primitives the ledger is built on."""
 

@@ -130,7 +130,55 @@ MAX_BARREN_AUTO_RESTARTS = 10
 # verified against TradingView is 0.132% (2026-07-20 18:10), so 0.08% clears the
 # junk with room to spare. A fib may sit anywhere relative to the mother candle,
 # above or below its low; only the size matters.
+#
+# This is the CEILING, not the answer — see min_fib_range_for(). It was measured
+# on BTC, and as a flat percentage of price it does not travel: 0.08% is 0.81x a
+# median BTC 5m bar but 1.53x a PAXG one, so gold-backed pairs were being asked
+# for a swing half again bigger than their own bars. PAXGUSDT on 2026-07-28 drew
+# nothing for 24 candles while the fall was plain on the chart; the structure the
+# engine found matched Phil's hand-drawn fib to the cent (0=4042.80, 1=4039.87)
+# and was thrown away for being $0.30 short of this number.
 MIN_FIB_RANGE_PCT = 0.0008
+# A fib must be at least this many median 5m bars tall. One bar: a swing smaller
+# than the instrument's own typical candle is chop by definition, whatever that
+# is worth in percent. Measured once when the campaign starts and then held, so
+# a threshold never drifts underneath a running campaign.
+#
+# Deliberately NOT derived from BTC's ratio (0.81). Setting it there put BTC's
+# own scaled floor a hair UNDER the flat number, so the clamp below stopped
+# binding and BTC quietly loosened by 2% — the one thing this change promised
+# not to do. A test pins that.
+FIB_RANGE_BAR_RATIO = 1.0
+# ...but it may only ever LOOSEN. min() with the BTC number means every symbol
+# noisier than BTC — ETH and SOL sit at 0.5x a bar — keeps exactly the behaviour
+# it has today, and the verified BTC days are untouched. Only instruments quieter
+# than BTC get relief, which is the actual bug.
+#
+# The hard floor stops an illiquid or halted market, whose bars measure near
+# zero, from admitting a two-tick wobble as structure.
+MIN_FIB_RANGE_FLOOR_PCT = 0.0002
+# Explicit per-symbol overrides, for when a measurement has to be overruled by
+# hand. Empty by design: the automatic rule is meant to handle a symbol that has
+# never been traded here before, without anyone remembering to add a row.
+MIN_FIB_RANGE_PCT_BY_SYMBOL: Dict[str, float] = {}
+
+
+def min_fib_range_for(symbol: str, median_bar_pct: float) -> float:
+    """The smallest swing that counts as structure on this instrument.
+
+    `median_bar_pct` is the median 5m high-low range as a FRACTION of price.
+    0.0 means it could not be measured, in which case the BTC-calibrated
+    constant stands — a missing measurement must never loosen a real threshold.
+    """
+    override = MIN_FIB_RANGE_PCT_BY_SYMBOL.get(str(symbol or "").upper())
+    if override and override > 0:
+        return float(override)
+    if median_bar_pct <= 0:
+        return MIN_FIB_RANGE_PCT
+    scaled = median_bar_pct * FIB_RANGE_BAR_RATIO
+    return max(min(scaled, MIN_FIB_RANGE_PCT), MIN_FIB_RANGE_FLOOR_PCT)
+
+
 MOTHER_RETEST_PCT = 0.0005
 # Before a rise can count as a RETRACEMENT back to the mother high, price has to
 # have gone somewhere first. Arming on "traded below the mother candle's low"
@@ -803,6 +851,12 @@ class Campaign:
     # shallow dips at all. The rate stays whole; only the ground narrows.
     funded_bands: List[Band] = field(default_factory=list)
     min_notional_usd: float = MIN_NOTIONAL_FLOOR_USD
+    # Smallest swing that counts as a fib on THIS instrument, measured from its
+    # own bars when the campaign started. Held for life rather than recomputed:
+    # a threshold that drifted would silently change which swings count while a
+    # campaign is mid-fall. See min_fib_range_for().
+    min_fib_range_pct: float = MIN_FIB_RANGE_PCT
+    median_bar_pct: float = 0.0  # what it was measured from, for the record
     tick_size: float = DEFAULT_TICK_SIZE  # exchange price increment, for the stop/limit gap
     parent_campaign_id: Optional[str] = None  # set when a mother break auto-started this one
     generation: int = 1  # 1 = manually started; each auto-restart increments
@@ -1021,6 +1075,8 @@ class Campaign:
             "funded_floor_price": self.funded_floor_price,
             "funded_bands": [[low, high] for low, high in self.funded_bands],
             "min_notional_usd": self.min_notional_usd,
+            "min_fib_range_pct": self.min_fib_range_pct,
+            "median_bar_pct": self.median_bar_pct,
             "tick_size": self.tick_size,
             "parent_campaign_id": self.parent_campaign_id,
             "generation": self.generation,
@@ -1093,6 +1149,8 @@ class Campaign:
             "mc_kind",
             "funded_floor_price",
             "min_notional_usd",
+            "min_fib_range_pct",
+            "median_bar_pct",
             "tick_size",
             "parent_campaign_id",
             "generation",
@@ -1778,6 +1836,12 @@ class CascadeEngine:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
         # Ground a running campaign on this symbol has already paid for. Its
         # capital is untouched — only the stretch of fall it funds narrows.
+        # How loud this instrument is, in its own bars. The fib size filter is
+        # scaled from this, so a quiet market like PAXG is not asked for a swing
+        # bigger than it ever makes.
+        median_bar = await self._measure_median_bar_pct(symbol)
+        min_fib_range = min_fib_range_for(symbol, median_bar)
+
         funded_bands, funded_by = self._birth_bands_for(symbol, mother_high) if CROSS_CAMPAIGN_NETTING else ([], [])
         floor_note = ""
         if funded_bands:
@@ -1855,6 +1919,8 @@ class CascadeEngine:
             mc_kind=mc_kind,
             funded_bands=funded_bands,
             min_notional_usd=min_notional,
+            min_fib_range_pct=min_fib_range,
+            median_bar_pct=median_bar,
             tick_size=tick_size,
             model_version=MODEL_VERSION,
             created_at=_ist_now_str(),
@@ -1871,6 +1937,11 @@ class CascadeEngine:
             f"mother high {mother_high:g} / low {mother_low:g}"
             + (" — minor MC, so 5m regardless of the chart it was marked on" if mc_kind == "minor" else "")
             + (f" — climbs to {ESCALATION_LADDER[-1]}" if campaign.escalates else " — fixed timeframe, no escalation")
+            + (
+                f" — smallest fib {min_fib_range * 100:.3f}% (median 5m bar {median_bar * 100:.3f}%)"
+                if median_bar > 0
+                else f" — smallest fib {min_fib_range * 100:.3f}% (bars not measurable, using the default)"
+            )
             + group_note
             + floor_note,
         )
@@ -2276,6 +2347,8 @@ class CascadeEngine:
             # Ground a sibling had already funded when this campaign was born,
             # so the strip can say why its pools are smaller than the raw fall
             # implies. Empty for a campaign that started on clear ground.
+            payload["min_fib_range_pct"] = round(campaign.min_fib_range_pct * 100, 4)
+            payload["median_bar_pct"] = round(campaign.median_bar_pct * 100, 4)
             payload["funded_bands"] = [[low, high] for low, high in campaign.funded_bands]
             payload["netted_pct"] = (
                 round(
@@ -2369,6 +2442,9 @@ class CascadeEngine:
             "funded_bands",
             "funded_floor_price",
             "min_notional_usd",
+            # Measured at birth from the instrument's own bars, not replayed.
+            "min_fib_range_pct",
+            "median_bar_pct",
             "tick_size",
             "parent_campaign_id",
             "generation",
@@ -2916,6 +2992,25 @@ class CascadeEngine:
                 best_ts = ts
         return best_ts
 
+    async def _measure_median_bar_pct(self, symbol: str) -> float:
+        """Median 5m high-low range on this symbol, as a fraction of price.
+
+        How loud the instrument is in its own terms. Two days of bars is enough
+        to be stable without reaching back into a different regime. Returns 0.0
+        if it cannot be measured, which leaves the BTC-calibrated threshold
+        standing — a failed fetch must never quietly loosen a real filter.
+        """
+        try:
+            since = int(time.time()) - 2 * 86400
+            candles = await self._fetch_closed_candles(symbol, since, BASE_TIMEFRAME)
+        except Exception as exc:
+            _log.warning("[CASCADE] bar measurement failed for %s: %s", symbol, exc)
+            return 0.0
+        pcts = sorted((c.high - c.low) / c.close for c in candles if c.close > 0 and c.high >= c.low)
+        if len(pcts) < 30:
+            return 0.0  # too little history to call it a measurement
+        return pcts[len(pcts) // 2]
+
     async def _fetch_closed_candles(self, symbol: str, since_ts: int, timeframe: str = BASE_TIMEFRAME) -> List[Candle]:
         """Closed candles of `timeframe` with open ts > since_ts, paging as needed."""
         tf_sec = timeframe_seconds(timeframe)
@@ -3246,7 +3341,7 @@ class CascadeEngine:
 
         if first_cross_ts is None or frozen_dip is None or touch_high is None:
             return
-        if (touch_high - frozen_dip) < touch_high * MIN_FIB_RANGE_PCT:
+        if (touch_high - frozen_dip) < touch_high * campaign.min_fib_range_pct:
             return  # a few ticks of chop, not a swing — its levels would be noise
         if candle.close >= frozen_dip:
             return
@@ -4194,6 +4289,10 @@ class CascadeEngine:
             # has released its ground; only still-running siblings show up.
             funded_bands=(self._birth_bands_for(parent.symbol, candle.high)[0] if CROSS_CAMPAIGN_NETTING else []),
             min_notional_usd=parent.min_notional_usd,
+            # Same instrument, so the parent's measurement carries over rather
+            # than a fresh fetch on the mother-break path.
+            min_fib_range_pct=parent.min_fib_range_pct,
+            median_bar_pct=parent.median_bar_pct,
             tick_size=parent.tick_size,
             parent_campaign_id=parent.campaign_id,
             generation=parent.generation + 1,
