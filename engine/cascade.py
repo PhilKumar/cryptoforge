@@ -1554,8 +1554,33 @@ class CascadeEngine:
             if capital_usd <= 0 or capital_usd > available:
                 capital_usd = available
             group_note = f" (capital group: ${capital_usd:,.2f} of ${available:,.2f} available)"
+        # A minor mother marked inside a fall the major is already working sits
+        # on price ground that has already been funded. Paying full size for it
+        # buys the same shelf twice with two campaigns' money. Cut the minor's
+        # fund by however much of its own mother range the major's already
+        # covers, so only the NEW ground below is paid for.
+        overlap_pct, overlap_with = self._minor_overlap_pct(symbol, mc_kind, mother_high, mother_low)
+        overlap_note = ""
+        if overlap_pct > 0:
+            before = capital_usd
+            capital_usd = round(capital_usd * (1.0 - overlap_pct), 2)
+            overlap_note = (
+                f" (minor MC overlaps major #{overlap_with.seq} by {overlap_pct * 100:.1f}% — "
+                f"fund cut from ${before:,.2f} to ${capital_usd:,.2f}; only the new ground below is funded)"
+            )
         if capital_usd < min_notional * 2:
-            return {"error": f"Capital must be at least ${min_notional * 2:g}"}
+            return {
+                "error": (
+                    f"Capital must be at least ${min_notional * 2:g}"
+                    + (
+                        f". This minor MC overlaps major #{overlap_with.seq} by {overlap_pct * 100:.1f}%, "
+                        f"which leaves only ${capital_usd:,.2f} of new ground to fund — mark it lower, "
+                        f"or raise the fund."
+                        if overlap_pct > 0
+                        else ""
+                    )
+                )
+            }
 
         now_ts = int(time.time())
         if mother_timestamp:
@@ -1635,7 +1660,8 @@ class CascadeEngine:
             f"mother high {mother_high:g} / low {mother_low:g}"
             + (" — minor MC, so 5m regardless of the chart it was marked on" if mc_kind == "minor" else "")
             + (f" — climbs to {ESCALATION_LADDER[-1]}" if campaign.escalates else " — fixed timeframe, no escalation")
-            + group_note,
+            + group_note
+            + overlap_note,
         )
         self.start()
         self._emit_update()
@@ -3582,6 +3608,42 @@ class CascadeEngine:
         task = asyncio.ensure_future(coro)
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
+
+    def _minor_overlap_pct(self, symbol: str, mc_kind: str, mother_high: float, mother_low: float) -> tuple:
+        """How much of a new minor MC's range a running major has already funded.
+
+        Returns (fraction 0..1, the major campaign) — 0.0 and None when there is
+        nothing to net against.
+
+        The two structures may legitimately overlap in price; what must not
+        overlap is the MONEY. A minor marked three percent into a fall the major
+        is already laddered across would otherwise fund the same shelf twice,
+        from two campaigns, at the same prices. Netting by the overlapping
+        fraction of the minor's own range leaves it paying only for the ground
+        below the major's reach.
+
+        Measured on mother-candle ranges. The deepest fib a major will
+        eventually reach is not known when a minor is started, and sizing real
+        money off a projection would be worse than sizing it off the candle
+        actually on the chart.
+        """
+        if mc_kind != "minor" or mother_high <= mother_low:
+            return 0.0, None
+        span = mother_high - mother_low
+        worst_pct, worst_major = 0.0, None
+        for campaign in self.campaigns.values():
+            if campaign.symbol != symbol or campaign.mc_kind != "major":
+                continue
+            if campaign.state not in RUNNING_STATES:
+                continue
+            top = min(mother_high, campaign.mother_high)
+            bottom = max(mother_low, campaign.mother_low)
+            if top <= bottom:
+                continue  # the ranges do not touch — nothing already funded here
+            pct = (top - bottom) / span
+            if pct > worst_pct:
+                worst_pct, worst_major = min(pct, 1.0), campaign
+        return worst_pct, worst_major
 
     def _ancestor_ids(self, campaign: Campaign) -> set:
         """Every campaign this one descends from, walking parent links upward."""

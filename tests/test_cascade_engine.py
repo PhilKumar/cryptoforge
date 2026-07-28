@@ -4449,3 +4449,80 @@ class CascadeMinorYieldsTests(unittest.TestCase):
         child = self._campaign(engine, "child-1", "minor", 3200, 2)
         child.parent_campaign_id = major.campaign_id
         self.assertFalse(engine._minor_yields_to_major(child))
+
+
+class CascadeMinorFundNettingTests(unittest.IsolatedAsyncioTestCase):
+    """A minor MC pays only for price ground the major has not already funded."""
+
+    def _major(self, engine, high, low, state="TRENDLINE_ACTIVE"):
+        campaign = Campaign(
+            campaign_id="major-1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=high,
+            mother_low=low,
+            mother_timestamp=_RECENT_TS,
+            seq=1,
+            mc_kind="major",
+        )
+        campaign.state = state
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    def test_no_major_means_no_netting(self):
+        engine = _mk_engine()
+        pct, major = engine._minor_overlap_pct("BTCUSDT", "minor", 110.0, 100.0)
+        self.assertEqual(pct, 0.0)
+        self.assertIsNone(major)
+
+    def test_a_major_is_never_netted_against_anything(self):
+        engine = _mk_engine()
+        self._major(engine, 120.0, 100.0)
+        pct, _ = engine._minor_overlap_pct("BTCUSDT", "major", 110.0, 105.0)
+        self.assertEqual(pct, 0.0)
+
+    def test_a_minor_wholly_inside_the_major_overlaps_completely(self):
+        engine = _mk_engine()
+        self._major(engine, 120.0, 100.0)
+        pct, major = engine._minor_overlap_pct("BTCUSDT", "minor", 115.0, 105.0)
+        self.assertEqual(pct, 1.0)
+        self.assertEqual(major.campaign_id, "major-1")
+
+    def test_a_minor_hanging_below_overlaps_only_where_they_meet(self):
+        """The half above 100 is already funded; the half below is new ground."""
+        engine = _mk_engine()
+        self._major(engine, 120.0, 100.0)
+        pct, _ = engine._minor_overlap_pct("BTCUSDT", "minor", 105.0, 95.0)
+        self.assertAlmostEqual(pct, 0.5)
+
+    def test_ranges_that_do_not_touch_are_not_netted(self):
+        engine = _mk_engine()
+        self._major(engine, 120.0, 100.0)
+        pct, _ = engine._minor_overlap_pct("BTCUSDT", "minor", 95.0, 90.0)
+        self.assertEqual(pct, 0.0)
+
+    def test_an_ended_major_has_released_its_ground(self):
+        engine = _mk_engine()
+        self._major(engine, 120.0, 100.0, state="MOTHER_BROKEN")
+        pct, _ = engine._minor_overlap_pct("BTCUSDT", "minor", 115.0, 105.0)
+        self.assertEqual(pct, 0.0)
+
+    def test_another_symbols_major_is_irrelevant(self):
+        engine = _mk_engine()
+        major = self._major(engine, 120.0, 100.0)
+        major.symbol = "ETHUSDT"
+        pct, _ = engine._minor_overlap_pct("BTCUSDT", "minor", 115.0, 105.0)
+        self.assertEqual(pct, 0.0)
+
+    async def test_the_started_minor_gets_the_reduced_fund(self):
+        engine = _mk_engine()
+        self._major(engine, 120.0, 100.0)
+        result = await engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=1000.0,
+            mother_high=105.0,
+            mother_low=95.0,  # half of its range sits inside the major's
+            mother_timestamp=_RECENT_TS,
+            mc_kind="minor",
+        )
+        self.assertEqual(result["campaign"]["capital_usd"], 500.0)
