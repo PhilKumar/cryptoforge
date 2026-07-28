@@ -4581,3 +4581,103 @@ class CascadeFundedFloorTests(unittest.TestCase):
         campaign.legs.append(second)
         build_fib_ladder_and_pool(campaign, second)
         self.assertAlmostEqual(second.allocation_pct, (94.0 - 92.0) / 94.0 * 100)
+
+
+class CascadeEndedPositionTests(unittest.IsolatedAsyncioTestCase):
+    """A stopped campaign leaves ACTIVE_STATES, so nothing syncs it — but its
+    resting TP still fills, and the books go on claiming coin that is sold."""
+
+    def _stopped_holding(self, engine, qty=0.5, tp_id="tp-1"):
+        campaign = _mk_campaign(engine, mode="live")
+        campaign.state = "STOPPED"
+        campaign.close_reason = "stopped"
+        campaign.all_fills = [Fill(price=100.0, quantity=qty, level=2, leg_id=1, timestamp=1000)]
+        campaign.filled_base_qty = qty
+        campaign.avg_entry_price = 100.0
+        campaign.tp_order_id = tp_id
+        campaign.tp_order_price = 110.0
+        return campaign
+
+    async def test_a_tp_that_filled_after_the_stop_is_booked(self):
+        engine = _mk_engine()
+        campaign = self._stopped_holding(engine)
+        engine.broker.order_lookup["tp-1"] = {
+            "status": "FILLED",
+            "executedQty": "0.5",
+            "cummulativeQuoteQty": "55.0",
+        }
+        result = await engine.reconcile_ended_positions()
+        self.assertEqual(result["settled"], 1)
+        self.assertEqual(len(campaign.rounds), 1)
+        self.assertAlmostEqual(campaign.rounds[0].exit_price, 110.0)
+        self.assertEqual(campaign.filled_base_qty, 0.0)
+        self.assertEqual(campaign.exchange_qty, 0.0)
+
+    async def test_a_still_resting_tp_is_left_alone(self):
+        engine = _mk_engine()
+        campaign = self._stopped_holding(engine)
+        engine.broker.order_lookup["tp-1"] = {"status": "NEW"}
+        engine.broker.free_balances = {"BTC": 0.5}
+        result = await engine.reconcile_ended_positions()
+        self.assertEqual(result["settled"], 0)
+        self.assertEqual(campaign.filled_base_qty, 0.5)
+        self.assertAlmostEqual(campaign.exchange_qty, 0.5)
+
+    async def test_coin_gone_with_no_tp_is_flagged_not_invented(self):
+        """We do not know what it sold for, so booking a round would put a
+        fabricated price in the P&L."""
+        engine = _mk_engine()
+        campaign = self._stopped_holding(engine, tp_id="")
+        engine.broker.free_balances = {"BTC": 0.0}
+        result = await engine.reconcile_ended_positions()
+        self.assertEqual(result["settled"], 1)
+        self.assertEqual(campaign.rounds, [])  # nothing invented
+        self.assertEqual(campaign.exchange_qty, 0.0)  # but the UI can grey the button
+
+    async def test_a_siblings_coin_is_not_counted_as_ours(self):
+        """One wallet balance, several campaigns on the symbol."""
+        engine = _mk_engine()
+        campaign = self._stopped_holding(engine, tp_id="")
+        sibling = Campaign(
+            campaign_id="other",
+            symbol="BTCUSDT",
+            capital_usd=500.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            mode="live",
+        )
+        sibling.filled_base_qty = 0.5
+        sibling.state = "TRENDLINE_ACTIVE"
+        engine.campaigns["other"] = sibling
+        engine.broker.free_balances = {"BTC": 0.5}  # all of it is the sibling's
+        await engine.reconcile_ended_positions()
+        self.assertEqual(campaign.exchange_qty, 0.0)
+
+    async def test_an_unreadable_balance_claims_nothing(self):
+        engine = _mk_engine()
+        campaign = self._stopped_holding(engine, tp_id="")
+        engine.broker.free_balances = None  # broker returns an error
+        await engine.reconcile_ended_positions()
+        self.assertIsNone(campaign.exchange_qty)
+        self.assertEqual(campaign.filled_base_qty, 0.5)
+
+    async def test_running_campaigns_are_not_swept(self):
+        engine = _mk_engine()
+        campaign = self._stopped_holding(engine)
+        campaign.state = "TRENDLINE_ACTIVE"
+        result = await engine.reconcile_ended_positions()
+        self.assertEqual(result["checked"], 0)
+
+    async def test_market_sell_refuses_once_the_position_is_gone(self):
+        """The books can be minutes stale; the sell re-checks before it goes."""
+        engine = _mk_engine()
+        campaign = self._stopped_holding(engine)
+        engine.broker.order_lookup["tp-1"] = {
+            "status": "FILLED",
+            "executedQty": "0.5",
+            "cummulativeQuoteQty": "55.0",
+        }
+        result = await engine.liquidate_campaign(campaign.campaign_id)
+        self.assertIn("already gone", result["error"])
+        self.assertEqual(engine.broker.placed_orders, [])

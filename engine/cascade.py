@@ -291,6 +291,10 @@ _CHART_TAIL_BUCKETS = 6
 # candle or two of each other, while genuinely separate breaks are minutes apart
 # at the very least.
 _SIMULTANEOUS_BREAK_SEC = 900
+# How often ended-but-still-holding campaigns are re-checked against the
+# exchange. They place no orders, so there is nothing to be quick about — this
+# only has to notice a TP that filled after the campaign was stopped.
+_ENDED_POSITION_CHECK_SEC = 120
 
 # Does the per-symbol capital group CAP what a new campaign may take, or is it
 # just a number on the screen?
@@ -794,6 +798,14 @@ class Campaign:
     # The remainder is carried into the next round's sell instead of being
     # abandoned, so it clears as soon as the total reaches another whole step.
     residual_base_qty: float = 0.0
+    # What the exchange last said is actually sellable for THIS campaign, and
+    # when it was asked. Only ever set for an ended campaign that still shows a
+    # position on our books: those leave ACTIVE_STATES, so nothing syncs them
+    # again, and a TP that fills after the stop was never heard about. The books
+    # then claim coin that has been sold — and offer to sell it a second time.
+    # None means never checked; 0.0 means the exchange says there is nothing.
+    exchange_qty: Optional[float] = None
+    position_checked_at: str = ""
     realized_pnl: Optional[float] = None
     mother_broken_above: bool = False
     # The structure window: candles since the last cut (the cut candle seeds
@@ -949,6 +961,8 @@ class Campaign:
             "tp_filled": self.tp_filled,
             "filled_base_qty": self.filled_base_qty,
             "residual_base_qty": self.residual_base_qty,
+            "exchange_qty": self.exchange_qty,
+            "position_checked_at": self.position_checked_at,
             "realized_pnl": self.realized_pnl,
             "mother_broken_above": self.mother_broken_above,
             "window_start_ts": self.window_start_ts,
@@ -1014,6 +1028,8 @@ class Campaign:
             "tp_filled",
             "filled_base_qty",
             "residual_base_qty",
+            "exchange_qty",
+            "position_checked_at",
             "realized_pnl",
             "mother_broken_above",
             "window_start_ts",
@@ -1274,6 +1290,9 @@ class CascadeEngine:
         # In memory only, for one-shot logging — the hold itself is recomputed
         # from live price every tick, so a restart simply re-evaluates it.
         self._stale_pot_held: set = set()
+        # Ended campaigns are swept on their own slower clock — they have no
+        # orders to place, only a sold position to notice.
+        self._last_ended_check: float = 0.0
         # See _acquire_write_lock: only the holder places orders.
         self._lock_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cascade-writer.lock"
@@ -1764,6 +1783,114 @@ class CascadeEngine:
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict()}
 
+    async def reconcile_ended_positions(self) -> dict:
+        """Ask the exchange about ended campaigns our books still show holding.
+
+        A stopped campaign keeps its TP resting so it can still exit at target,
+        but stopping takes it out of ACTIVE_STATES and nothing syncs it again.
+        When that TP fills, the engine never hears: the campaign sits in Open
+        Trades claiming a position that was sold, and offers a Market Sell for
+        coin that is not there.
+
+        Cheap and safe to call often — it only reads, and only for the handful
+        of ended campaigns that still claim coin.
+        """
+        checked, settled = 0, 0
+        for campaign in list(self.campaigns.values()):
+            if campaign.state not in FINAL_STATES or campaign.mode != "live":
+                continue
+            if _coerce_float(campaign.filled_base_qty, 0.0) <= 0:
+                continue
+            checked += 1
+            try:
+                if await self._settle_ended_position(campaign):
+                    settled += 1
+            except Exception as exc:
+                _log.warning("[CASCADE] ended-position check failed for %s: %s", campaign.campaign_id, exc)
+        if settled:
+            self._emit_update()
+        return {"status": "ok", "checked": checked, "settled": settled}
+
+    async def _settle_ended_position(self, campaign: Campaign) -> bool:
+        """One ended campaign, reconciled against the exchange. True if it moved."""
+        # Our own TP is the best evidence there is: if it filled, the exchange
+        # tells us the quantity AND the price, so the round books properly with
+        # real P&L instead of being guessed at.
+        if campaign.tp_order_id:
+            row = await self._safe_get_order(campaign, campaign.tp_order_id)
+            status = str((row or {}).get("status") or "").upper()
+            if status == "FILLED":
+                offered = campaign.filled_base_qty + campaign.residual_base_qty
+                executed = _coerce_float(row.get("executedQty"), offered)
+                quote = _coerce_float(row.get("cummulativeQuoteQty"))
+                exit_price = (
+                    quote / executed
+                    if executed > 0 and quote > 0
+                    else _coerce_float(campaign.tp_order_price or campaign.tp_price, 0.0)
+                )
+                campaign.residual_base_qty = max(round(offered - executed, 12), 0.0)
+                self._close_round(campaign, exit_price, sold_qty=executed)
+                campaign.exchange_qty = 0.0
+                campaign.position_checked_at = _ist_now_str()
+                self._log_event(
+                    campaign,
+                    "fill",
+                    f"Take-profit filled at {exit_price:,.2f} after the campaign had already ended — "
+                    f"booked now. The position is closed and nothing is held.",
+                )
+                self._alert(
+                    "Cascade TARGET hit (ended campaign)",
+                    f"{campaign.symbol} #{campaign.seq} had been stopped, but its resting take-profit "
+                    f"filled at {exit_price:,.2f}.\n\nBooked now — the position is closed.",
+                    level="info",
+                )
+                self._archive_campaign(campaign)
+                return True
+            if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                campaign.tp_order_id = None
+                campaign.tp_order_price = None
+
+        # No resting TP of ours to explain it. Is the coin actually there? The
+        # wallet balance is shared by every campaign on the symbol, so subtract
+        # what the others still claim before deciding any of it is ours.
+        free = await self._free_base_balance(campaign)
+        campaign.position_checked_at = _ist_now_str()
+        if free is None:
+            campaign.exchange_qty = None  # could not read — say nothing
+            return False
+        claimed_by_others = sum(
+            _coerce_float(c.filled_base_qty, 0.0) + _coerce_float(c.residual_base_qty, 0.0)
+            for c in self.campaigns.values()
+            if c.campaign_id != campaign.campaign_id and c.symbol == campaign.symbol and c.filled_base_qty > 0
+        )
+        mine = max(free - claimed_by_others, 0.0)
+        campaign.exchange_qty = round(mine, 12)
+        ours = _coerce_float(campaign.filled_base_qty, 0.0)
+        if mine >= ours * 0.99:
+            return False  # the coin is there; nothing to do
+
+        # It is gone, and no TP of ours accounts for it — sold by hand, by
+        # another tool, or by a TP whose id we lost. Deliberately NOT booked as
+        # a round: we do not know what it sold for, and inventing a price would
+        # put a fabricated number in the P&L. Say so loudly and let it be
+        # settled by hand.
+        self._log_event(
+            campaign,
+            "warn",
+            f"The exchange shows {mine:.8f} available but this campaign's books claim {ours:.8f}. "
+            f"The coin is gone and no take-profit of ours accounts for it. Not booking a round — "
+            f"the sale price is unknown. Market Sell is disabled; settle this one by hand.",
+        )
+        self._alert(
+            "Cascade position missing on the exchange",
+            f"{campaign.symbol} #{campaign.seq} (ended) claims {ours:.8f} but the exchange has "
+            f"{mine:.8f} free.\n\nNo take-profit of ours explains it. Nothing was booked — the "
+            f"sale price is unknown.",
+            level="warn",
+            dedupe_sec=3600,
+        )
+        return True
+
     async def liquidate_campaign(self, campaign_id: str) -> dict:
         """Sell a stopped campaign's remaining position at market, now.
 
@@ -1786,6 +1913,21 @@ class CascadeEngine:
         desired_qty = _coerce_float(campaign.filled_base_qty, 0.0) + _coerce_float(campaign.residual_base_qty, 0.0)
         if desired_qty <= 0:
             return {"error": "This campaign is not holding anything"}
+        if campaign.mode == "live":
+            # Ask the exchange BEFORE selling. Our books can be stale by minutes
+            # — a TP that filled after the stop is the normal case — and a sell
+            # placed on a stale position either fails outright or, worse, sells
+            # coin belonging to another campaign on the same symbol.
+            if await self._settle_ended_position(campaign):
+                return {
+                    "error": (
+                        "The exchange says this position is already gone — it has just been "
+                        "reconciled, so there is nothing to sell. Refresh to see the updated row."
+                    )
+                }
+            desired_qty = _coerce_float(campaign.filled_base_qty, 0.0) + _coerce_float(campaign.residual_base_qty, 0.0)
+            if desired_qty <= 0:
+                return {"error": "This campaign is not holding anything"}
 
         if campaign.mode != "live":
             # Paper: there is nothing on an exchange to cancel or sell, so book
@@ -2407,8 +2549,22 @@ class CascadeEngine:
                 for r in campaign.rounds
                 if r.closed_ts and r.exit_price
             ],
-            "avg_entry_price": campaign.avg_entry_price,
-            "tp_price": compute_tp_price(campaign),
+            # On a FROZEN record these must describe the trade that happened,
+            # not the campaign's live fields. A stopped campaign still carries a
+            # live average and a target recomputed from it, so the frozen chart
+            # was drawing today's numbers over a finished trade; and a campaign
+            # that closed at TP has both cleared to None, so it drew no lines at
+            # all. The last round is the truth in both cases.
+            "avg_entry_price": (
+                (campaign.rounds[-1].avg_entry if campaign.rounds else campaign.avg_entry_price)
+                if trade_end_ts
+                else campaign.avg_entry_price
+            ),
+            "tp_price": (
+                (campaign.rounds[-1].exit_price if campaign.rounds else compute_tp_price(campaign))
+                if trade_end_ts
+                else compute_tp_price(campaign)
+            ),
             "last_price": price_meta[0] if price_meta else None,
             # Set once the campaign is over: the client renders a frozen record
             # rather than a live chart, and stops offering the timeframe toggle.
@@ -2501,6 +2657,16 @@ class CascadeEngine:
                         _log.warning("[CASCADE] tick failed for %s: %s", campaign.campaign_id, exc)
                 if changed:
                     self._emit_update()
+                # Ended campaigns are not in active_campaigns, so nothing above
+                # ever looks at them again. Their resting TPs still fill though,
+                # and until we ask, the books go on claiming coin that is sold.
+                now = time.monotonic()
+                if now - self._last_ended_check >= _ENDED_POSITION_CHECK_SEC:
+                    self._last_ended_check = now
+                    try:
+                        await self.reconcile_ended_positions()
+                    except Exception as exc:
+                        _log.warning("[CASCADE] ended-position sweep failed: %s", exc)
                 self._check_watchdogs()
             except asyncio.CancelledError:
                 return

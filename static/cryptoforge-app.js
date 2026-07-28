@@ -8478,6 +8478,32 @@ function _cfCascadeMarkClippedLabels(root) {
 // Every campaign currently holding coin, as one table. The campaign cards below
 // each tell their own story; this answers the only question you have when you
 // open the page — am I up or down, and on what.
+// Whether this row can actually be sold, and what to show if it cannot.
+//
+// A stopped campaign leaves ACTIVE_STATES, so nothing syncs it — its resting TP
+// can fill and the books go on claiming coin that is gone. Offering Market Sell
+// on that is offering to sell something that is not there. The engine sweeps
+// these against Binance and records what it found in exchange_qty: null means
+// never asked, 0 means the exchange says nothing is left.
+function _cfCascadeTradeAction(c) {
+  if (!_cfCascadeCampaignHasEnded(c)) return '<span class="table-meta">running</span>';
+  var cid = _escapeHtml(String(c.campaign_id || ''));
+  var onExchange = c.exchange_qty;
+  var checked = c.position_checked_at ? ' Last checked ' + _escapeHtml(String(c.position_checked_at)) + '.' : '';
+  if (onExchange !== null && onExchange !== undefined && Number(onExchange) <= 0) {
+    return '<button class="btn btn-outline btn-sm" disabled'
+      + ' title="Binance shows nothing left for this campaign — it has already been sold.'
+      + checked + ' Nothing to sell.">Already sold</button>';
+  }
+  var unverified = (onExchange === null || onExchange === undefined);
+  return '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeLiquidate(\'' + cid + '\')"'
+    + ' title="Cancel any resting sell and sell this position at market, now.'
+    + (unverified
+        ? ' Not yet confirmed against Binance — the sell re-checks before it goes out.'
+        : ' Binance confirms ' + Number(onExchange).toFixed(8) + ' is there.')
+    + checked + '">Market Sell</button>';
+}
+
 function cfRenderCascadeTrades(campaigns) {
   var mount = document.getElementById('cf-cascade-trades');
   var meta = document.getElementById('cf-cascade-trades-meta');
@@ -8541,12 +8567,7 @@ function cfRenderCascadeTrades(campaigns) {
       // to act on: its engine is gone, so nothing will manage this position
       // again. Give it the way out rather than leaving the coin orphaned under
       // a dead campaign's name.
-      + '<td>' + (_cfCascadeCampaignHasEnded(c)
-        ? '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeLiquidate(\''
-          + _escapeHtml(String(c.campaign_id || '')) + '\')"'
-          + ' title="Cancel any resting sell and sell this position at market, now.">Market Sell</button>'
-        : '<span class="table-meta">running</span>')
-      + '</td>'
+      + '<td>' + _cfCascadeTradeAction(c) + '</td>'
       + '</tr>';
   }).join('');
 
@@ -9539,8 +9560,10 @@ function _cfCascadeChartSvg(d) {
       if (p == null) return;
       var order = (leg.orders || []).find(function (o) { return o.level === lv; }) || {};
       var usd = Number(order.usd_notional) || 0;
+      // No "L" prefix. The gutter is narrow and every character in it competes
+      // with the price, which is the thing actually being read off the line.
       hline(Number(p), col,
-        'L' + lv + ' (' + fmt(p) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
+        lv + ' (' + fmt(p) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
         null, 1.1, 0.9);
     });
     if (leg.touch_timestamp && inView(leg.touch_high)) {
@@ -9560,27 +9583,44 @@ function _cfCascadeChartSvg(d) {
   var entryPts = (d.entries && d.entries.length) ? d.entries : (d.fills || []).map(function (f) {
     return { t: f && f.timestamp, price: f && f.price };
   });
+  // Buys get an arrow pointing UP, sitting BELOW the candle — the way an entry
+  // is marked on a real chart. A dot on the price line was invisible against
+  // the candles and said nothing about direction.
   entryPts.forEach(function (f) {
     if (!f || !f.price || !inView(f.price)) return;
-    parts.push('<circle cx="' + Xt(f.t).toFixed(1) + '" cy="' + Y(f.price).toFixed(1) +
-      '" r="3.5" fill="' + PAL.fill + '" stroke="' + PAL.fillRing + '" stroke-width="1"/>');
+    var x = Xt(f.t), y = Y(f.price) + 10;
+    parts.push('<path d="M' + x.toFixed(1) + ' ' + (y - 9).toFixed(1)
+      + 'L' + (x - 5).toFixed(1) + ' ' + y.toFixed(1)
+      + 'L' + (x - 2).toFixed(1) + ' ' + y.toFixed(1)
+      + 'L' + (x - 2).toFixed(1) + ' ' + (y + 6).toFixed(1)
+      + 'L' + (x + 2).toFixed(1) + ' ' + (y + 6).toFixed(1)
+      + 'L' + (x + 2).toFixed(1) + ' ' + y.toFixed(1)
+      + 'L' + (x + 5).toFixed(1) + ' ' + y.toFixed(1)
+      + 'Z" fill="' + PAL.fill + '" stroke="' + PAL.fillRing + '" stroke-width="0.8"/>');
   });
 
   // Exits. Drawn as a downward triangle so an entry and an exit sitting at
   // similar prices are still told apart at a glance, and labelled with the
   // round's P&L — the one number the record is kept for.
+  // The sell gets an arrow pointing DOWN, sitting ABOVE the candle it closed
+  // on — mirror image of the buy, so entry and exit read at a glance even when
+  // they sit at similar prices.
   (d.exits || []).forEach(function (x) {
     if (!x || !x.price || !inView(x.price)) return;
-    var cx = Xt(x.t), cy = Y(x.price);
+    var cx = Xt(x.t), cy = Y(x.price) - 10;
     var pnl = Number(x.pnl) || 0;
     var col = pnl >= 0 ? PAL.tp : PAL.down;
-    parts.push('<path d="M' + (cx - 5).toFixed(1) + ' ' + (cy - 5).toFixed(1)
-      + 'L' + (cx + 5).toFixed(1) + ' ' + (cy - 5).toFixed(1)
-      + 'L' + cx.toFixed(1) + ' ' + (cy + 4).toFixed(1) + 'Z" fill="' + col
-      + '" stroke="' + PAL.fillRing + '" stroke-width="1"/>');
-    parts.push('<text x="' + (cx + 8).toFixed(1) + '" y="' + (cy - 6).toFixed(1) + '" fill="' + col
-      + '" font-size="9.5" font-family="monospace">EXIT ' + fmt(x.price)
-      + '  ' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeUsd(Math.abs(pnl)) + '</text>');
+    parts.push('<path d="M' + cx.toFixed(1) + ' ' + (cy + 9).toFixed(1)
+      + 'L' + (cx - 5).toFixed(1) + ' ' + cy.toFixed(1)
+      + 'L' + (cx - 2).toFixed(1) + ' ' + cy.toFixed(1)
+      + 'L' + (cx - 2).toFixed(1) + ' ' + (cy - 6).toFixed(1)
+      + 'L' + (cx + 2).toFixed(1) + ' ' + (cy - 6).toFixed(1)
+      + 'L' + (cx + 2).toFixed(1) + ' ' + cy.toFixed(1)
+      + 'L' + (cx + 5).toFixed(1) + ' ' + cy.toFixed(1)
+      + 'Z" fill="' + col + '" stroke="' + PAL.fillRing + '" stroke-width="0.8"/>');
+    parts.push('<text x="' + cx.toFixed(1) + '" y="' + (cy - 9).toFixed(1) + '" fill="' + col
+      + '" font-size="9.5" font-family="monospace" text-anchor="middle">SELL ' + fmt(x.price)
+      + '  ' + (pnl >= 0 ? '+' : '−') + '$' + _cfCascadeUsd(Math.abs(pnl)) + '</text>');
   });
 
   return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:900px;display:block;" ' +

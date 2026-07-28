@@ -7236,6 +7236,23 @@ async def cascade_stop_campaign(campaign_id: str, request: Request):
     return result
 
 
+@app.post("/api/cascade/reconcile-ended")
+async def cascade_reconcile_ended():
+    """Re-check ended campaigns that still show a position against Binance.
+
+    Read-only against the exchange: it books a take-profit that filled after the
+    campaign was stopped, and flags a position that has vanished. Runs on its
+    own timer too; this is the "check now" button.
+    """
+    check_rate_limit("cascade_reconcile_ended", max_calls=4, window_sec=30)
+    eng = _get_cascade_engine()
+    if not eng.campaigns:
+        _restore_cascade_runtime(eng)
+    result = await eng.reconcile_ended_positions()
+    _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
 @app.post("/api/cascade/campaigns/{campaign_id}/liquidate")
 async def cascade_liquidate_campaign(campaign_id: str):
     """Market-sell a stopped campaign's leftover position.
