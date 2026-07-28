@@ -3890,6 +3890,27 @@ class CascadeEngine:
                 # exchange row (including its actual price) and can replace it
                 # only if its target is genuinely stale.
                 return changed
+        # Exactly ONE TP may rest against a position. Ownership is settled by
+        # now (adoption returns above), so any other TP of ours on the book is a
+        # duplicate — from a cancel that failed, or a placement whose reply was
+        # lost and got retried. The entry sweep deliberately skips -tp- ids, so
+        # this is the only place that can clear one, and leaving it would let
+        # the same coin be sold twice.
+        if campaign.tp_order_id:
+            mine = f"cf-csc-{campaign.campaign_id}-tp-"
+            for other_id, row in list(open_orders.items()):
+                if str(other_id) == str(campaign.tp_order_id):
+                    continue
+                if not str(row.get("clientOrderId") or "").startswith(mine):
+                    continue
+                self._log_event(
+                    campaign,
+                    "warn",
+                    f"A duplicate TP ({other_id}) was resting against the same position; cancelling it and "
+                    f"keeping {campaign.tp_order_id}.",
+                )
+                if await self._safe_cancel(campaign, other_id):
+                    changed = True
         # Compare against tp_order_price — the price ACTUALLY resting on the
         # exchange — never against tp_price. tp_price is updated by the fill
         # handlers the instant a fill moves the average, before this sync has
@@ -3905,6 +3926,26 @@ class CascadeEngine:
         # that; it is a no-op when fees are paid in BNB and the balance is full.
         desired_qty = campaign.filled_base_qty + campaign.residual_base_qty
         free_qty = await self._free_base_balance(campaign)
+        # Our own resting TP LOCKS the coin it offers, so the exchange reports
+        # that quantity as unavailable — `free` excludes `locked`. We are about
+        # to cancel that very order, so its unfilled quantity is genuinely ours
+        # to re-offer and has to be added back before capping.
+        #
+        # Without this the replacement sell only covers coin that arrived AFTER
+        # the old TP was placed. That is the live "TP sells only the last buy"
+        # bug: buy #1's 0.00020818 BTC sat locked in the resting TP, `free`
+        # reported just buy #2's 0.00014048, and min(desired, free) silently
+        # shrank the sell to the newest fill alone — leaving 60% of the position
+        # with no target at all. The averaged PRICE was right the whole time,
+        # which is exactly why it read as "averaging only the last buy".
+        #
+        # Only OUR order's quantity is added back, never the wallet's whole
+        # `locked` figure: another campaign on this symbol may have its own sell
+        # resting, and that coin is not ours to offer.
+        if free_qty is not None and campaign.tp_order_id:
+            resting = open_orders.get(str(campaign.tp_order_id)) or {}
+            reclaimable = _coerce_float(resting.get("origQty")) - _coerce_float(resting.get("executedQty"))
+            free_qty += max(reclaimable, 0.0)
         sell_qty = desired_qty if free_qty is None else min(desired_qty, free_qty)
         if sell_qty <= 0:
             self._log_event(
@@ -3949,7 +3990,20 @@ class CascadeEngine:
         # exchange rules. Keeping an older target is safer than leaving the
         # position with no target at all.
         if campaign.tp_order_id:
-            await self._safe_cancel(campaign, campaign.tp_order_id)
+            # And only place the replacement once the old one is PROVEN gone.
+            # A swallowed cancel failure used to be followed by a second sell
+            # anyway — two orders against one position, both able to fill, and
+            # the entry sweep skips -tp- ids so nothing would clear the orphan.
+            # A cancel can also fail because it just filled, which the next
+            # sync's fill branch books properly; either way, waiting is right.
+            if not await self._safe_cancel(campaign, campaign.tp_order_id):
+                self._log_event(
+                    campaign,
+                    "warn",
+                    f"Stale TP {campaign.tp_order_id} could not be cancelled — keeping it and retrying "
+                    f"next sync rather than resting a second sell against the same position.",
+                )
+                return changed
             campaign.tp_order_id = None
             campaign.tp_order_price = None
         campaign.tp_rev += 1
@@ -4019,11 +4073,23 @@ class CascadeEngine:
             _log.warning("[CASCADE] get_order failed for %s: %s", order_id, exc)
             return {}
 
-    async def _safe_cancel(self, campaign: Campaign, order_id) -> None:
+    async def _safe_cancel(self, campaign: Campaign, order_id) -> bool:
+        """Cancel an order, reporting whether it actually went through.
+
+        The return value matters for the TP: a silently-swallowed failure used
+        to be followed by placing the replacement anyway, leaving TWO sells
+        resting against one position. Callers that are merely tidying up can
+        keep ignoring it.
+        """
         try:
-            await asyncio.to_thread(self.broker.cancel_order, order_id, campaign.symbol)
+            result = await asyncio.to_thread(self.broker.cancel_order, order_id, campaign.symbol)
         except Exception as exc:
             _log.warning("[CASCADE] cancel failed for %s: %s", order_id, exc)
+            return False
+        if isinstance(result, dict) and result.get("error"):
+            _log.warning("[CASCADE] cancel refused for %s: %s", order_id, result.get("error"))
+            return False
+        return True
 
     async def _cancel_all_live_orders(self, campaign: Campaign, include_tp: bool) -> None:
         """Pull every working order this campaign owns.

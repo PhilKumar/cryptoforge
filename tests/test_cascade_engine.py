@@ -19,12 +19,14 @@ from engine.cascade import (
     Leg,
     PendingOrder,
     Round,
+    _floor_to_step,
     build_fib_ladder_and_pool,
     chart_timeframes_for,
     compute_tp_price,
     find_valid_anchor2,
     ladders_overlap,
     plan_leg_orders,
+    recompute_avg_entry_price,
 )
 
 _RECENT_TS = (int(time.time()) - 3600) // 300 * 300  # a truthy, in-window mother timestamp
@@ -1662,6 +1664,304 @@ class CascadeTpReplacedOnAveragingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messages), 1)
         self.assertIn("99.00", messages[0])
         self.assertNotIn("90.00", messages[0])
+
+
+class CascadeTpCoversTheWholePositionTests(unittest.IsolatedAsyncioTestCase):
+    """Live bug (BTCUSDT, 2026-07-28): the TP sold only the LAST buy.
+
+    Reported as two separate faults — "the TP is not averaging all the buys,
+    only the last one" and "the TP leaves quantities unsold" — which turned out
+    to be one bug. The averaged PRICE was always right; the QUANTITY was not.
+
+    A resting sell LOCKS the coin it offers, and Binance's `free` excludes
+    `locked`. Commit 57b3aa2 moved the "cancel the stale TP" step to AFTER the
+    min-notional validation (correctly: never cancel a good TP until the
+    replacement is known to be placeable) — but that put the free-balance read
+    BEFORE the cancel. So the old TP's own quantity was reported as
+    unavailable, min(desired, free) shrank the replacement to only the coin
+    that arrived after the old TP was placed, and the rest of the position was
+    left with no target at all.
+
+    Real figures from the live campaign:
+        buy #1  0.00020818 BTC @ 63,792.05   ($13.28)
+        buy #2  0.00014048 BTC @ 63,213.20   ($8.88)
+        position 0.00034866, weighted avg 63,558.82, target 64,098.62
+    Buy #1 sat locked in the resting TP, so `free` reported only buy #2 and the
+    replacement sell offered 0.00014048 — 40% of the position.
+    """
+
+    QTY1, PRICE1 = 0.00020818, 63792.05
+    QTY2, PRICE2 = 0.00014048, 63213.20
+    MOTHER_HIGH = 65718.01  # the high that makes the observed 64,098.62 target
+
+    def _campaign(self, engine):
+        campaign = Campaign(
+            campaign_id="btc3",
+            symbol="BTCUSDT",
+            capital_usd=1000.0,
+            mother_high=self.MOTHER_HIGH,
+            mother_low=65000.0,
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        engine.campaigns[campaign.campaign_id] = campaign
+        leg = Leg(leg_id=1, trendline_id=1, low=63000.0, touch_high=65000.0, touch_timestamp=1)
+        campaign.legs.append(leg)
+        # Both buys are on the books, so the average — and the target — are right.
+        campaign.all_fills.append(Fill(price=self.PRICE1, quantity=self.QTY1, level=2, leg_id=1, timestamp=1))
+        campaign.all_fills.append(Fill(price=self.PRICE2, quantity=self.QTY2, level=8, leg_id=1, timestamp=2))
+        recompute_avg_entry_price(campaign)
+        return campaign
+
+    def _resting_tp(self, campaign, qty, price):
+        """The TP placed after buy #1, still working and locking `qty`."""
+        campaign.tp_order_id = "TP-1"
+        campaign.tp_order_price = price
+        campaign.tp_price = price
+        return {
+            "orderId": "TP-1",
+            "clientOrderId": f"cf-csc-{campaign.campaign_id}-tp-1",
+            "price": str(price),
+            "origQty": str(qty),
+            "executedQty": "0",
+            "status": "NEW",
+        }
+
+    async def test_the_replacement_tp_offers_the_whole_position(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine)
+        # The old TP (from buy #1 alone) rests at the pre-averaging target.
+        old_tp_price = self.PRICE1 + 0.25 * (self.MOTHER_HIGH - self.PRICE1)
+        row = self._resting_tp(campaign, self.QTY1, old_tp_price)
+        broker.open_orders = [row]
+        # Binance reports only the UNLOCKED coin: buy #1 is locked in that TP.
+        broker.free_balances = {"BTC": self.QTY2}
+
+        await engine._sync_tp_order(campaign, {"TP-1": row})
+
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1, "the stale TP must be replaced by exactly one sell")
+        self.assertIn("TP-1", broker.cancelled, "the stale TP must be cancelled")
+        # The whole position, not just the newest fill.
+        self.assertAlmostEqual(sells[0]["base_qty"], self.QTY1 + self.QTY2, places=8)
+        self.assertGreater(
+            sells[0]["base_qty"],
+            self.QTY2 * 2,
+            "offering only the last buy is the bug — it must cover both",
+        )
+        # And the price was always the averaged one; assert it stays correct.
+        self.assertAlmostEqual(sells[0]["limit_price"], compute_tp_price(campaign), places=6)
+        self.assertAlmostEqual(sells[0]["limit_price"], 64098.62, places=1)
+
+    async def test_another_campaigns_locked_coin_is_never_offered(self):
+        """Only OUR resting order's quantity is reclaimed. A sibling campaign's
+        sell also shows up as `locked`, and offering that coin would oversell
+        the wallet and be rejected -2010."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine)
+        old_tp_price = self.PRICE1 + 0.25 * (self.MOTHER_HIGH - self.PRICE1)
+        row = self._resting_tp(campaign, self.QTY1, old_tp_price)
+        # A sibling campaign holds 5 BTC locked in its own sell. `free` sees
+        # neither that nor our own TP's coin.
+        broker.open_orders = [
+            row,
+            {"orderId": "OTHER-9", "clientOrderId": "cf-csc-someoneelse-tp-1", "origQty": "5", "executedQty": "0"},
+        ]
+        broker.free_balances = {"BTC": self.QTY2}
+
+        await engine._sync_tp_order(campaign, {"TP-1": row})
+
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1)
+        self.assertAlmostEqual(sells[0]["base_qty"], self.QTY1 + self.QTY2, places=8)
+        self.assertLess(sells[0]["base_qty"], 1.0, "the sibling's 5 BTC must never be offered")
+
+    async def test_fee_dust_is_still_capped_to_the_real_balance(self):
+        """The original -2010 guard must survive: when the coin genuinely is not
+        there (commission taken from the base asset), still cap to what is."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine)
+        old_tp_price = self.PRICE1 + 0.25 * (self.MOTHER_HIGH - self.PRICE1)
+        row = self._resting_tp(campaign, self.QTY1, old_tp_price)
+        broker.open_orders = [row]
+        # 0.1% commission was taken out of the coin on both buys.
+        short_by = (self.QTY1 + self.QTY2) * 0.001
+        broker.free_balances = {"BTC": self.QTY2 - short_by}
+
+        await engine._sync_tp_order(campaign, {"TP-1": row})
+
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1)
+        self.assertAlmostEqual(sells[0]["base_qty"], self.QTY1 + self.QTY2 - short_by, places=8)
+        self.assertLess(sells[0]["base_qty"], self.QTY1 + self.QTY2, "must not over-ask past the real balance")
+
+    async def test_the_first_tp_with_nothing_resting_is_unaffected(self):
+        """No TP yet means nothing of ours is locked — the reclaim must not
+        invent quantity out of an empty open-orders map."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine)
+        broker.free_balances = {"BTC": self.QTY1 + self.QTY2}
+
+        await engine._sync_tp_order(campaign, {})
+
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1)
+        self.assertAlmostEqual(sells[0]["base_qty"], self.QTY1 + self.QTY2, places=8)
+        self.assertEqual(broker.cancelled, [])
+
+    async def test_lot_size_dust_is_carried_and_eventually_sold(self):
+        """The residual half of the complaint, and the honest limit of it.
+
+        Real BTCUSDT LOT_SIZE is 0.00001, so a 0.00034866 position can only be
+        OFFERED as 0.00034 — 0.00000866 is not expressible as a valid quantity
+        and no order can sell it. That much is the exchange's rule, not ours.
+        What must never happen is losing it: it is carried in
+        residual_base_qty and rides along with the next round's sell, so it
+        clears as soon as the combined total crosses another whole step.
+        """
+        broker = FakeCascadeBroker()
+        broker.get_product_by_symbol = lambda s: {
+            "symbol": s,
+            "base_asset": "BTC",
+            "min_notional": "5.0",
+            "tick_size": "0.01",
+            "step_size": "0.00001",  # the real Binance BTCUSDT filter
+        }
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine)
+        broker.free_balances = {"BTC": self.QTY1 + self.QTY2}
+
+        await engine._sync_tp_order(campaign, {})
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        offered = sells[0]["base_qty"]
+        self.assertAlmostEqual(offered, 0.00034, places=8, msg="floored to the exchange step")
+        expected_dust = round(self.QTY1 + self.QTY2 - offered, 12)
+
+        # That sell fills completely; the un-offerable remainder becomes residue.
+        broker.order_lookup[str(campaign.tp_order_id)] = {
+            "status": "FILLED",
+            "executedQty": str(offered),
+            "cummulativeQuoteQty": str(offered * campaign.tp_order_price),
+        }
+        await engine._sync_tp_order(campaign, {})
+
+        self.assertEqual(len(campaign.rounds), 1, "the round closed on the fill")
+        self.assertAlmostEqual(campaign.residual_base_qty, expected_dust, places=10)
+        self.assertGreater(campaign.residual_base_qty, 0.0, "the dust is kept, not written off")
+
+        # A later buy combines with the carried dust. Once the COMBINED total
+        # crosses another whole step the dust is finally offered: this buy alone
+        # would floor to 0.00009, but with the carried 0.00000866 it reaches
+        # 0.00010066 and sells 0.00010 — a full step more than the buy itself.
+        next_buy = 0.00009200
+        campaign.all_fills.append(Fill(price=63000.0, quantity=next_buy, level=4, leg_id=1, timestamp=9))
+        recompute_avg_entry_price(campaign)
+        broker.free_balances = {"BTC": campaign.filled_base_qty + campaign.residual_base_qty}
+        broker.placed_orders.clear()
+
+        await engine._sync_tp_order(campaign, {})
+
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1)
+        self.assertAlmostEqual(sells[0]["base_qty"], 0.00010, places=8)
+        self.assertGreater(
+            sells[0]["base_qty"],
+            _floor_to_step(next_buy, "0.00001"),
+            "the carried dust must add a step the new buy could not reach alone",
+        )
+
+
+class CascadeSingleTpOnlyTests(unittest.IsolatedAsyncioTestCase):
+    """Exactly ONE take-profit may ever rest against a position.
+
+    Found while verifying f076a9f: that commit correctly stopped the generic
+    entry sweep from cancelling TP client ids (it was causing a false
+    Adopted/CANCELED loop after a handover) — but the sweep was the only thing
+    that would ever clear an untracked TP. Combined with `_safe_cancel`
+    swallowing failures, a cancel that did not go through was followed by
+    placing the replacement anyway: two sells resting against one position,
+    both able to fill, and nothing left to clean up the orphan.
+    """
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+        self.campaign = Campaign(
+            campaign_id="dup1",
+            symbol="BTCUSDT",
+            capital_usd=1000.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            state="TRENDLINE_ACTIVE",
+        )
+        self.engine.campaigns[self.campaign.campaign_id] = self.campaign
+        self.campaign.legs.append(Leg(leg_id=1, trendline_id=1, low=90.0, touch_high=98.0, touch_timestamp=1))
+        self.campaign.all_fills.append(Fill(price=97.0, quantity=1.0, level=2, leg_id=1, timestamp=1))
+        recompute_avg_entry_price(self.campaign)
+        self.broker.free_balances = {"BTC": 1.0}
+        # A TP is tracked and resting, but at a now-stale price.
+        self.campaign.tp_order_id = "TP-1"
+        self.campaign.tp_order_price = 104.0  # stale: desired is 99.0
+        self.campaign.tp_price = 104.0
+        self.row = {
+            "orderId": "TP-1",
+            "clientOrderId": "cf-csc-dup1-tp-1",
+            "price": "104.0",
+            "origQty": "1.0",
+            "executedQty": "0",
+        }
+
+    async def test_a_failed_cancel_does_not_leave_two_sells_resting(self):
+        self.broker.cancel_order = lambda order_id, product_id="": {"error": "Unknown order sent."}
+
+        await self.engine._sync_tp_order(self.campaign, {"TP-1": self.row})
+
+        sells = [o for o in self.broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(sells, [], "no replacement may be placed while the old TP is still working")
+        self.assertEqual(self.campaign.tp_order_id, "TP-1", "the surviving order stays tracked, not orphaned")
+        self.assertAlmostEqual(self.campaign.tp_order_price, 104.0)
+        warned = [e for e in self.campaign.event_log if "could not be cancelled" in e["message"]]
+        self.assertEqual(len(warned), 1)
+
+    async def test_a_successful_cancel_still_replaces_normally(self):
+        await self.engine._sync_tp_order(self.campaign, {"TP-1": self.row})
+
+        sells = [o for o in self.broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(sells), 1)
+        self.assertIn("TP-1", self.broker.cancelled)
+        self.assertAlmostEqual(sells[0]["limit_price"], 99.0)
+
+    async def test_an_already_leaked_duplicate_tp_is_cancelled(self):
+        """Recovery for a position that already has two sells on the book."""
+        self.campaign.tp_order_price = 99.0  # tracked one is CORRECT, so no replace
+        self.campaign.tp_price = 99.0
+        orphan = {"orderId": "TP-OLD", "clientOrderId": "cf-csc-dup1-tp-0", "price": "104.0", "origQty": "1.0"}
+
+        await self.engine._sync_tp_order(self.campaign, {"TP-1": self.row, "TP-OLD": orphan})
+
+        self.assertIn("TP-OLD", self.broker.cancelled, "the duplicate must be cancelled")
+        self.assertEqual(self.campaign.tp_order_id, "TP-1", "the tracked one is kept")
+        self.assertEqual(
+            [o for o in self.broker.placed_orders if o["side"] == "sell"], [], "nothing new needed to be placed"
+        )
+
+    async def test_another_campaigns_tp_is_never_cancelled(self):
+        self.campaign.tp_order_price = 99.0
+        self.campaign.tp_price = 99.0
+        sibling = {"orderId": "TP-SIB", "clientOrderId": "cf-csc-someoneelse-tp-1", "price": "104.0", "origQty": "1.0"}
+
+        await self.engine._sync_tp_order(self.campaign, {"TP-1": self.row, "TP-SIB": sibling})
+
+        self.assertNotIn("TP-SIB", self.broker.cancelled, "another campaign's exit must be left alone")
 
 
 class CascadeClosedChartTests(unittest.IsolatedAsyncioTestCase):
