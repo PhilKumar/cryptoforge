@@ -8485,12 +8485,19 @@ function _cfCascadeMarkClippedLabels(root) {
 // on that is offering to sell something that is not there. The engine sweeps
 // these against Binance and records what it found in exchange_qty: null means
 // never asked, 0 means the exchange says nothing is left.
+// Has the exchange positively confirmed there is nothing left? Only an actual
+// number that is zero counts — null/undefined mean "not asked yet".
+function _cfCascadeConfirmedGone(c) {
+  var q = c && c.exchange_qty;
+  return q !== null && q !== undefined && q !== '' && Number(q) <= 0;
+}
+
 function _cfCascadeTradeAction(c) {
   if (!_cfCascadeCampaignHasEnded(c)) return '<span class="table-meta">running</span>';
   var cid = _escapeHtml(String(c.campaign_id || ''));
   var onExchange = c.exchange_qty;
   var checked = c.position_checked_at ? ' Last checked ' + _escapeHtml(String(c.position_checked_at)) + '.' : '';
-  if (onExchange !== null && onExchange !== undefined && Number(onExchange) <= 0) {
+  if (_cfCascadeConfirmedGone(c)) {
     return '<button class="btn btn-outline btn-sm" disabled'
       + ' title="Binance shows nothing left for this campaign — it has already been sold.'
       + checked + ' Nothing to sell.">Already sold</button>';
@@ -8510,7 +8517,16 @@ function cfRenderCascadeTrades(campaigns) {
   if (!mount) return;
 
   var open = campaigns.filter(function (c) {
-    return Number(c.filled_base_qty) > 0 && (c.all_fills || []).length;
+    if (!(Number(c.filled_base_qty) > 0 && (c.all_fills || []).length)) return false;
+    // Our books can be wrong about an ended campaign — nothing syncs one after
+    // it stops — so once the exchange has confirmed there is nothing left, the
+    // row is not an open trade whatever the books say. It stays in Closed
+    // Campaigns with its event log; it just stops claiming to be a position.
+    // Only a CONFIRMED zero hides the row. Not null/undefined, which mean the
+    // exchange has not been asked yet — Number(null) is 0, and treating that as
+    // "sold" would quietly hide every position the sweep had not reached.
+    if (_cfCascadeCampaignHasEnded(c) && _cfCascadeConfirmedGone(c)) return false;
+    return true;
   });
   if (!open.length) {
     mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:14px;">'
@@ -9378,16 +9394,22 @@ function _cfCascadeIst(ts) {
 // cycle starts repeating hues on top of older lines.
 var _CF_CHART_MAX_STRUCTURES = 3;
 
+// buyMark / sellMark are deliberately OFF the candle palette. Green buy arrows
+// vanished against green candles and red sell arrows against red ones — the two
+// marks you most need to find were camouflaged by the bars they sat on. Amber
+// and white appear nowhere else on the chart.
 var _CF_CHART_DARK = {
   grid: 'rgba(148,163,184,0.12)', axis: 'rgba(148,163,184,0.55)',
   up: '#3fae56', down: '#d9534f', mother: '#a855f7', tp: '#10b981',
   avg: '#e2e8f0', fill: '#22c55e', fillRing: '#0b1220',
+  buyMark: '#ffffff', sellMark: '#fbbf24', markRing: '#0b1220',
   fibs: ['#3b82f6', '#22c55e', '#ef4444']
 };
 var _CF_CHART_LIGHT = {
   grid: 'rgba(15,23,42,0.10)', axis: 'rgba(51,65,85,0.75)',
   up: '#0f766e', down: '#be123c', mother: '#7c3aed', tp: '#047857',
   avg: '#334155', fill: '#15803d', fillRing: '#ffffff',
+  buyMark: '#1e293b', sellMark: '#b45309', markRing: '#ffffff',
   fibs: ['#1d4ed8', '#15803d', '#be123c']
 };
 
@@ -9594,8 +9616,20 @@ function _cfCascadeChartSvg(d) {
   });
 
   // take profit (only exists once an entry has filled)
-  if (d.tp_price) hline(Number(d.tp_price), PAL.tp, 'TARGET (' + fmt(d.tp_price) + ')', '6,3', 1.2);
-  if (d.avg_entry_price) hline(Number(d.avg_entry_price), PAL.avg, 'AVG ENTRY (' + fmt(d.avg_entry_price) + ')', '4,4', 1.1);
+  // These two lines and the arrows describe DIFFERENT things on a live chart,
+  // which is why they sit apart and why that looked like a bug: the lines are
+  // the position open right now, the arrows are rounds already closed. Say so
+  // in the label rather than leaving it to be guessed. On a frozen record there
+  // is no "now", so both come from the round and line up with their arrows.
+  var frozen = !!(d.frozen || d.snapshot);
+  if (d.tp_price) {
+    hline(Number(d.tp_price), frozen ? PAL.sellMark : PAL.tp,
+      (frozen ? 'SOLD AT (' : 'TARGET · open (') + fmt(d.tp_price) + ')', '6,3', 1.2);
+  }
+  if (d.avg_entry_price) {
+    hline(Number(d.avg_entry_price), PAL.avg,
+      (frozen ? 'AVG ENTRY (' : 'AVG ENTRY · open (') + fmt(d.avg_entry_price) + ')', '4,4', 1.1);
+  }
 
   // Entries. On a finished trade these come from `entries`, which also carries
   // the buys of rounds that already closed — campaign.all_fills is emptied the
@@ -9617,7 +9651,7 @@ function _cfCascadeChartSvg(d) {
       + 'L' + (x + 2).toFixed(1) + ' ' + (y + 6).toFixed(1)
       + 'L' + (x + 2).toFixed(1) + ' ' + y.toFixed(1)
       + 'L' + (x + 5).toFixed(1) + ' ' + y.toFixed(1)
-      + 'Z" fill="' + PAL.fill + '" stroke="' + PAL.fillRing + '" stroke-width="0.8"/>');
+      + 'Z" fill="' + PAL.buyMark + '" stroke="' + PAL.markRing + '" stroke-width="0.9"/>');
   });
 
   // Exits. Drawn as a downward triangle so an entry and an exit sitting at
@@ -9630,7 +9664,7 @@ function _cfCascadeChartSvg(d) {
     if (!x || !x.price || !inView(x.price)) return;
     var cx = Xt(x.t), cy = Y(x.price) - 10;
     var pnl = Number(x.pnl) || 0;
-    var col = pnl >= 0 ? PAL.tp : PAL.down;
+    var col = PAL.sellMark;
     parts.push('<path d="M' + cx.toFixed(1) + ' ' + (cy + 9).toFixed(1)
       + 'L' + (cx - 5).toFixed(1) + ' ' + cy.toFixed(1)
       + 'L' + (cx - 2).toFixed(1) + ' ' + cy.toFixed(1)
@@ -9638,7 +9672,7 @@ function _cfCascadeChartSvg(d) {
       + 'L' + (cx + 2).toFixed(1) + ' ' + (cy - 6).toFixed(1)
       + 'L' + (cx + 2).toFixed(1) + ' ' + cy.toFixed(1)
       + 'L' + (cx + 5).toFixed(1) + ' ' + cy.toFixed(1)
-      + 'Z" fill="' + col + '" stroke="' + PAL.fillRing + '" stroke-width="0.8"/>');
+      + 'Z" fill="' + col + '" stroke="' + PAL.markRing + '" stroke-width="0.9"/>');
     parts.push('<text x="' + cx.toFixed(1) + '" y="' + (cy - 9).toFixed(1) + '" fill="' + col
       + '" font-size="9.5" font-family="monospace" text-anchor="middle">SELL ' + fmt(x.price)
       + '  ' + (pnl >= 0 ? '+' : '−') + '$' + _cfCascadeUsd(Math.abs(pnl)) + '</text>');
@@ -9708,8 +9742,8 @@ function _cfCascadeChartHtml(d) {
     + '<span style="color:' + P.fibs[0] + ';">— trendlines (TL)</span> &nbsp; '
     + '<span style="color:' + P.fibs[0] + ';">— fib levels 0, 1, 2, 4 and 8 (all drawn alike)</span> &nbsp; '
     + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
-    + '<span style="color:' + P.fill + ';">▲ buys</span> &nbsp; '
-    + '<span style="color:' + P.tp + ';">▼ sells</span>'
+    + '<span style="color:' + P.buyMark + ';">▲ buys</span> &nbsp; '
+    + '<span style="color:' + P.sellMark + ';">▼ target hit</span>'
     // Say plainly that older structures are hidden — a chart that quietly drops
     // things is worse than a busy one, because you cannot tell it happened.
     + (hidden > 0

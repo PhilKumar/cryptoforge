@@ -283,9 +283,11 @@ RUNNING_STATES = ACTIVE_STATES | {MOTHER_BREAK_PENDING}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
 # Endings that roll straight into a fresh campaign. A deliberate stop does not.
 RESTART_REASONS = {"mother_broken", "mother_retested"}
-# Candles kept to the right of a finished campaign's last action, so the exit
-# marker has room to breathe instead of sitting on the chart's right edge.
-_CHART_TAIL_BUCKETS = 6
+# Candles kept to the right of a finished campaign's last action. ONE, so the
+# sell arrow is not clipped by the frame — the record ends at the candle the
+# target hit on, not minutes or hours of price that had nothing to do with the
+# trade.
+_CHART_TAIL_BUCKETS = 1
 # How close two mother breaks must be to count as the same push. One 15-minute
 # break window: a major and a minor broken by the same move freeze within a
 # candle or two of each other, while genuinely separate breaks are minutes apart

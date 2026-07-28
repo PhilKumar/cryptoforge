@@ -6781,11 +6781,25 @@ def _cascade_persist_closed_list(engine: "CascadeEngine") -> None:
         _logger.error("[CASCADE] Failed to persist closed campaigns: %s", exc)
 
 
+# Bump when the chart PAYLOAD changes shape or meaning. A frozen snapshot is
+# served verbatim and never re-rendered, which is the whole point — but it also
+# means a payload bug is frozen into every record captured before the fix, and
+# no amount of fixing the renderer reaches them. On a version mismatch the
+# record is rebuilt once from the campaign, then frozen again.
+#
+# v2 (2026-07-28): v1 stored the campaign's LIVE average and target, so a
+# finished trade's chart drew today's numbers — or, for one closed at TP where
+# both fields are cleared, drew no lines at all. v2 takes them from the round.
+_CHART_SNAPSHOT_VERSION = 2
+
+
 def _persist_chart_snapshot(campaign_id, payload) -> None:
     """Freeze one campaign's chart payload as its permanent trade record."""
     try:
         if campaign_id and isinstance(payload, dict) and not payload.get("error"):
-            _get_state_store().put(_BUCKET_CASCADE_CHART_SNAP, str(campaign_id), dict(payload))
+            payload = dict(payload)
+            payload["snapshot_version"] = _CHART_SNAPSHOT_VERSION
+            _get_state_store().put(_BUCKET_CASCADE_CHART_SNAP, str(campaign_id), payload)
     except Exception as exc:
         _logger.warning("[CASCADE] chart snapshot persist failed for %s: %s", campaign_id, exc)
 
@@ -7315,11 +7329,21 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
     # live, ever-lengthening chart of price long after the trade was over —
     # which is exactly what the snapshot exists to prevent.
     snapshot = _load_chart_snapshot(campaign_id)
-    if snapshot:
+    if snapshot and int(snapshot.get("snapshot_version") or 1) >= _CHART_SNAPSHOT_VERSION:
         snapshot = dict(snapshot)
         snapshot["snapshot"] = True
         return snapshot
+    # Either never frozen, or frozen by an older payload version whose numbers
+    # are wrong. Rebuild once from the campaign and re-freeze — the candles are
+    # cut at the trade's own end either way, so the rebuilt record covers the
+    # same window as the original.
     result = await eng.get_chart_data(campaign_id, timeframe=timeframe)
+    if result.get("error") and snapshot:
+        # The campaign is gone from memory, so a stale record is all there is.
+        # Better an outdated chart than none.
+        snapshot = dict(snapshot)
+        snapshot["snapshot"] = True
+        return snapshot
     if not result.get("error"):
         # First view after it ended, if the close capture did not get there
         # first: freeze it now, and serve that same frozen payload.

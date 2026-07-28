@@ -223,6 +223,52 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data.get("campaign_id"), "gone-123")
         self.assertEqual(len(data.get("candles") or []), 1)
 
+    async def test_a_stale_snapshot_is_still_served_when_the_campaign_is_gone(self):
+        """An outdated record beats no record. The campaign has rotated out of
+        memory, so there is nothing left to rebuild it from."""
+        self.app_module._persist_chart_snapshot(
+            "stale-1",
+            {
+                "status": "ok",
+                "campaign_id": "stale-1",
+                "state": "COMPLETED",
+                "candles": [{"t": 1, "o": 1.0, "h": 2.0, "l": 1.0, "c": 1.5}],
+                "legs": [],
+                "trendlines": [],
+            },
+        )
+        # Force it to look like an older payload version.
+        store = self.app_module._get_state_store()
+        raw = store.get(self.app_module._BUCKET_CASCADE_CHART_SNAP, "stale-1", default={})
+        raw["snapshot_version"] = 1
+        store.put(self.app_module._BUCKET_CASCADE_CHART_SNAP, "stale-1", raw)
+
+        async with self._client() as client:
+            resp = await client.get("/api/cascade/campaigns/stale-1/chart")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json().get("snapshot"))
+
+    async def test_a_current_snapshot_is_served_verbatim(self):
+        """A record at the current version must NOT be re-rendered — that is the
+        whole point of freezing it."""
+        self.app_module._persist_chart_snapshot(
+            "fresh-1",
+            {
+                "status": "ok",
+                "campaign_id": "fresh-1",
+                "state": "COMPLETED",
+                "candles": [{"t": 1, "o": 1.0, "h": 2.0, "l": 1.0, "c": 1.5}],
+                "avg_entry_price": 42.0,
+                "legs": [],
+                "trendlines": [],
+            },
+        )
+        async with self._client() as client:
+            resp = await client.get("/api/cascade/campaigns/fresh-1/chart")
+        data = resp.json()
+        self.assertEqual(data.get("avg_entry_price"), 42.0)
+        self.assertEqual(data.get("snapshot_version"), self.app_module._CHART_SNAPSHOT_VERSION)
+
     async def test_chart_missing_and_unfrozen_is_404(self):
         async with self._client() as client:
             resp = await client.get("/api/cascade/campaigns/never-existed/chart")
