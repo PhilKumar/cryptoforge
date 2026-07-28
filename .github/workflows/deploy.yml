@@ -1,11 +1,31 @@
 # ═══════════════════════════════════════════════════════════════
-#  CryptoForge — Push-to-Deploy (Zero Downtime, Blue-Green)
+#  CryptoForge — Manual Deploy / Retry (Zero Downtime, Blue-Green)
 # ═══════════════════════════════════════════════════════════════
+#
+#  MANUAL ONLY. The automatic deploy lives in playwright.yml, gated on the
+#  E2E suite passing. This workflow is the fallback you trigger by hand.
+#
+#  It used to run on every push to main as well, which was wrong twice over:
+#
+#   1. It deployed IMMEDIATELY, without waiting for E2E — so a push whose
+#      tests were about to fail still reached the live trading engine. The
+#      gate in playwright.yml was decorative.
+#   2. Both workflows deploying meant TWO blue-green cycles per push. Each
+#      cycle runs the old and new engine together for ~30-60s and hands over
+#      the .cascade-writer.lock, then reconciles live orders — which can
+#      cancel and re-place a resting TP. On 2026-07-28 the second cycle did
+#      exactly that, replacing a TP that had just been placed correctly.
+#
+#  Kept (rather than deleted) because the redundancy genuinely helped once:
+#  on 2026-07-28 this workflow hit a transient Azure -> ap-south-1 SSH
+#  timeout while the E2E-gated deploy, on a different runner, succeeded. As
+#  a manual trigger it is still that fallback — re-run it when the automatic
+#  deploy fails for reasons unrelated to the code, or to ship an emergency
+#  fix without waiting for E2E.
+#
 name: Deploy CryptoForge
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
