@@ -4470,7 +4470,19 @@ class CascadeFundedFloorTests(unittest.TestCase):
     The netting is on the PERCENT of fall, never on the capital: capital_usd is
     a rate (capital/100 per 1% of fall), so cutting it would shrink every rung
     and push the pot under Binance's minimum.
+
+    SHIPPED OFF (cascade.CROSS_CAMPAIGN_NETTING is False): the floor cannot
+    express taken ground that is a band in the MIDDLE, so a campaign starting
+    above another's range would skip ground nobody funded. These tests switch it
+    on to keep the piece that does work covered until the band ledger lands.
     """
+
+    def setUp(self):
+        self._netting_was = cascade_module.CROSS_CAMPAIGN_NETTING
+        cascade_module.CROSS_CAMPAIGN_NETTING = True
+
+    def tearDown(self):
+        cascade_module.CROSS_CAMPAIGN_NETTING = self._netting_was
 
     def _running(self, engine, cid, mother_high, lows, symbol="BTCUSDT"):
         campaign = Campaign(

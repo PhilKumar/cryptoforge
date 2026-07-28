@@ -311,6 +311,26 @@ _SIMULTANEOUS_BREAK_SEC = 900
 # budgets are still stored, still summed and still displayed.
 GROUP_CAP_ENFORCED = False
 
+# Does a new campaign born inside ground another has already funded skip that
+# ground?
+#
+# OFF, deliberately, and shipped that way on 2026-07-28. The implementation
+# behind it is a single FLOOR — it takes the lowest price any running campaign
+# has funded down to and funds only below that. That is right when the new
+# campaign starts at or under the other's mother high (a minor MC inside a
+# major), and wrong when it starts ABOVE.
+#
+# Phil's case: a 15m runs 95 -> 92 while a 4H starts at 100. The floor is 92, so
+# the 4H would fund only below 92 — silently skipping 100 -> 95, which NO
+# campaign has funded. About $100 of allocation at $2000 capital, gone. The
+# taken ground is a BAND in the middle, and a single floor cannot express that.
+#
+# The replacement is a per-symbol band ledger: track which stretches of price
+# are funded, and let a new campaign fund whatever is free, above and below.
+# Until that exists this stays False and every campaign funds its whole fall,
+# exactly as it always has.
+CROSS_CAMPAIGN_NETTING = False
+
 
 class CascadeModelError(Exception):
     pass
@@ -1081,7 +1101,7 @@ def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
     prior_leg = campaign.legs[-2] if len(campaign.legs) >= 2 else None
     if prior_leg is not None and prior_leg.low:
         allocation_pct = (prior_leg.low - leg.low) / prior_leg.low * 100
-    elif campaign.funded_floor_price > 0:
+    elif CROSS_CAMPAIGN_NETTING and campaign.funded_floor_price > 0:
         # First fib, but this campaign started inside ground another campaign
         # had already funded. Measure from where that one stopped paying, not
         # from this mother high — the stretch between them is bought once
@@ -1617,7 +1637,7 @@ class CascadeEngine:
             return {"error": f"Capital must be at least ${min_notional * 2:g}"}
         # Ground a running campaign on this symbol has already paid for. Its
         # capital is untouched — only the stretch of fall it funds narrows.
-        funded_floor, funded_by = self._funded_floor_for(symbol, mother_high)
+        funded_floor, funded_by = self._funded_floor_for(symbol, mother_high) if CROSS_CAMPAIGN_NETTING else (0.0, None)
         floor_note = ""
         if funded_floor > 0:
             floor_note = (
