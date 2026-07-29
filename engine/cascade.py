@@ -163,6 +163,43 @@ MIN_FIB_RANGE_FLOOR_PCT = 0.0002
 MIN_FIB_RANGE_PCT_BY_SYMBOL: Dict[str, float] = {}
 
 
+def repair_scaled_fib_range(min_fib_range_pct: float, median_bar_pct: float) -> Tuple[float, float]:
+    """Undo the ×100-per-restart inflation of a restored fib-size gate.
+
+    Every value min_fib_range_for can return is clamped into
+    [MIN_FIB_RANGE_FLOOR_PCT, MIN_FIB_RANGE_PCT], so a stored number outside
+    that window is not a threshold anyone chose — it is a display percent that
+    was persisted and read back as a fraction, once per restart. Prod carried
+    0.0008 recorded as 8,000,000: five round trips, and a gate demanding a fib
+    8,000,000% tall, which no swing on any instrument can ever clear. Those
+    campaigns stopped drawing fibs and trendlines entirely while still holding
+    their funded band, so every sibling born under them netted to zero too.
+
+    Dividing back by 100 until it lands in the window recovers the original
+    exactly, because the corruption is exactly ×100 and the window is narrower
+    than that step. `median_bar_pct` rode along in the same payload and took
+    the same number of round trips, so it is corrected by the same count rather
+    than guessed at from its own range.
+
+    Returns the pair unchanged when the gate is already sane, which is the
+    normal case and the case for anything saved after the write side was fixed.
+    """
+    gate = _coerce_float(min_fib_range_pct)
+    bar = _coerce_float(median_bar_pct)
+    if gate <= 0:
+        return MIN_FIB_RANGE_PCT, bar
+    steps = 0
+    while gate > MIN_FIB_RANGE_PCT and steps < 12:
+        gate /= 100.0
+        steps += 1
+    if not (MIN_FIB_RANGE_FLOOR_PCT <= gate <= MIN_FIB_RANGE_PCT):
+        # Not a clean multiple of the corruption — refuse to invent a
+        # threshold and fall back to the calibrated one, which is what a
+        # campaign with no measurement gets anyway.
+        return MIN_FIB_RANGE_PCT, (bar / (100.0**steps) if steps else bar)
+    return gate, (bar / (100.0**steps) if steps else bar)
+
+
 def min_fib_range_for(symbol: str, median_bar_pct: float) -> float:
     """The smallest swing that counts as structure on this instrument.
 
@@ -1200,6 +1237,13 @@ class Campaign:
         ):
             if key in data:
                 setattr(campaign, key, data[key])
+        # Heal a gate inflated by the old persist path before anything reads it.
+        # Campaigns restored from a snapshot written before that was fixed carry
+        # a ×100-per-restart number that silently stops them ever drawing
+        # structure again — see repair_scaled_fib_range.
+        campaign.min_fib_range_pct, campaign.median_bar_pct = repair_scaled_fib_range(
+            campaign.min_fib_range_pct, campaign.median_bar_pct
+        )
         campaign.funded_bands = merge_bands(
             (_coerce_float(band[0]), _coerce_float(band[1]))
             for band in data.get("funded_bands") or []
@@ -2344,11 +2388,19 @@ class CascadeEngine:
                 else None
             )
             payload["allocated_pct"] = round(campaign.cumulative_used_pct, 4)
+            # These two are FRACTIONS on the campaign and stay fractions here.
+            # They used to be rewritten as `* 100` for display under the same
+            # keys to_dict already uses — and this payload is what gets
+            # persisted (app._snapshot_cascade_runtime), so from_dict read the
+            # display number straight back as a fraction and every restart
+            # multiplied the fib-size gate by another 100. Nothing rendered
+            # them; the only thing the scaling ever did was corrupt the state.
+            # Anything that wants percent multiplies at the point it prints.
+            payload["min_fib_range_pct_display"] = round(campaign.min_fib_range_pct * 100, 4)
+            payload["median_bar_pct_display"] = round(campaign.median_bar_pct * 100, 4)
             # Ground a sibling had already funded when this campaign was born,
             # so the strip can say why its pools are smaller than the raw fall
             # implies. Empty for a campaign that started on clear ground.
-            payload["min_fib_range_pct"] = round(campaign.min_fib_range_pct * 100, 4)
-            payload["median_bar_pct"] = round(campaign.median_bar_pct * 100, 4)
             payload["funded_bands"] = [[low, high] for low, high in campaign.funded_bands]
             payload["netted_pct"] = (
                 round(

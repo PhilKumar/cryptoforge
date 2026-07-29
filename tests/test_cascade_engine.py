@@ -4572,6 +4572,65 @@ class CascadeFibSizeFloorTests(unittest.TestCase):
         legacy = Campaign.from_dict({"campaign_id": "old", "symbol": "BTCUSDT"})
         self.assertEqual(legacy.min_fib_range_pct, cascade_module.MIN_FIB_RANGE_PCT)
 
+    def test_the_persisted_payload_keeps_the_threshold_a_fraction(self):
+        """The snapshot that gets saved is get_status()'s payload, so anything
+        it rewrites into display units is read straight back as a fraction.
+        Persisting a percent under this key multiplied the gate by 100 on every
+        restart until no swing could clear it: 0.0008 reached prod as 8,000,000
+        and three live campaigns stopped drawing structure altogether."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.min_fib_range_pct = 0.0005
+        campaign.median_bar_pct = 0.0005
+        payload = next(row for row in engine.get_status()["campaigns"] if row["campaign_id"] == campaign.campaign_id)
+        self.assertEqual(payload["min_fib_range_pct"], 0.0005)
+        self.assertEqual(payload["median_bar_pct"], 0.0005)
+        self.assertEqual(payload["min_fib_range_pct_display"], 0.05, "percent lives under its own key")
+
+        # Ten save/restore cycles through the persisted payload, which is what a
+        # week of deploys is. The gate must not drift by so much as a factor.
+        restored = campaign
+        for _ in range(10):
+            snapshot = next(
+                row for row in engine.get_status()["campaigns"] if row["campaign_id"] == restored.campaign_id
+            )
+            restored = Campaign.from_dict(json.loads(json.dumps(snapshot)))
+            engine.campaigns[restored.campaign_id] = restored
+        self.assertEqual(restored.min_fib_range_pct, 0.0005)
+        self.assertEqual(restored.median_bar_pct, 0.0005)
+
+    def test_an_already_inflated_snapshot_is_repaired_on_restore(self):
+        """The fix to the write side cannot reach state already on disk, so the
+        read side undoes the inflation. These are the exact pairs prod carried
+        on 2026-07-29."""
+        for stored_gate, stored_bar, gate, bar in (
+            (8000000.0, 0.0, 0.0008, 0.0),  # #1, #2, #21 — five restarts
+            (8000000.0, 9920000.0, 0.0008, 0.000992),  # the BTC auto-restart chain
+            (5250000.0, 5250000.0, 0.000525, 0.000525),  # #25
+            (527.0, 527.0, 0.000527, 0.000527),  # #27, #33, #35 — three restarts
+            (0.0512, 0.0512, 0.000512, 0.000512),  # #40, #41, #42 — one restart
+        ):
+            with self.subTest(stored=stored_gate):
+                restored = Campaign.from_dict(
+                    {
+                        "campaign_id": "x",
+                        "symbol": "PAXGUSDT",
+                        "min_fib_range_pct": stored_gate,
+                        "median_bar_pct": stored_bar,
+                    }
+                )
+                self.assertAlmostEqual(restored.min_fib_range_pct, gate, places=12)
+                self.assertAlmostEqual(restored.median_bar_pct, bar, places=12)
+
+    def test_a_healthy_threshold_is_never_touched_by_the_repair(self):
+        for gate in (cascade_module.MIN_FIB_RANGE_FLOOR_PCT, 0.0005, cascade_module.MIN_FIB_RANGE_PCT):
+            with self.subTest(gate=gate):
+                restored = Campaign.from_dict(
+                    {"campaign_id": "x", "symbol": "BTCUSDT", "min_fib_range_pct": gate, "median_bar_pct": 0.00099}
+                )
+                self.assertEqual(restored.min_fib_range_pct, gate)
+                self.assertEqual(restored.median_bar_pct, 0.00099)
+
 
 class CascadeFibSizeGateTests(unittest.IsolatedAsyncioTestCase):
     """The gate reads the CAMPAIGN's threshold, not the module constant."""
