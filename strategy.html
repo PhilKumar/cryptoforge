@@ -1463,7 +1463,17 @@
           <button type="button" class="cf-tf-option is-active" data-tf="auto" role="radio" aria-checked="true"
                   data-cf-click="cfCascadeSetTimeframe('auto')" title="Pick the timeframe that fits the whole campaign">Auto</button>
         </div>
-        <div class="cf-tf-toggle" role="group" aria-label="Chart zoom">
+        <!-- Classic is the SVG chart that has always drawn this; Canvas is the
+             device-pixel rewrite being built up phase by phase. Classic stays
+             the default and the pick sticks in localStorage, so flipping back
+             is one click and needs no deploy. -->
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Chart renderer" id="cf-cascade-chart-engine">
+          <button type="button" class="cf-tf-option is-active" data-engine="classic" role="radio" aria-checked="true"
+                  data-cf-click="cfCascadeSetEngine('classic')" title="The SVG chart (default)">Classic</button>
+          <button type="button" class="cf-tf-option" data-engine="canvas" role="radio" aria-checked="false"
+                  data-cf-click="cfCascadeSetEngine('canvas')" title="The canvas rewrite — in progress">Canvas</button>
+        </div>
+        <div class="cf-tf-toggle" role="group" aria-label="Chart zoom" id="cf-cascade-zoom-group">
           <!-- Named functions, not an expression. data-cf-click only parses plain
                numbers, so `cfCascadeZoom(1/1.4)` passed the STRING "1/1.4" and
                `z.k * "1/1.4"` was NaN — one click of minus killed the control. -->

@@ -7340,6 +7340,33 @@ html[data-theme="light"] .journal-entry-notes section {
   }
   .cf-chart-chrome-hidden .cf-cascade-chart-tables { display: none; }
 
+  /* ── Canvas renderer ──
+     Fills the panel instead of being pinned to the SVG's fixed 1440×660. The
+     aspect ratio matches the old drawing so the compact view keeps its shape;
+     expanded, it takes the whole height it is given. The two canvases stack:
+     the chart on the bottom, the crosshair on its own layer above it. */
+  .cf-chart-canvas-host {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1440 / 660;
+    min-height: 260px;
+    touch-action: none;   /* pan and pinch belong to the chart, not the page */
+    user-select: none;
+  }
+  .cf-chart-canvas-host canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .cf-chart-canvas-host canvas + canvas { pointer-events: none; }
+  .cf-cascade-chart-fs #cf-cascade-chart-body .cf-chart-canvas-host {
+    flex: 1 1 auto;
+    height: 100%;
+    aspect-ratio: auto;
+  }
+
   /* ── Campaign cards: collapsible, with ended ones dimmed ── */
   .cf-cascade-card .cf-cascade-head {
     cursor: pointer;

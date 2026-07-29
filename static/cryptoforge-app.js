@@ -9453,6 +9453,73 @@ function _cfChartPalette() {
   return theme === 'light' ? _CF_CHART_LIGHT : _CF_CHART_DARK;
 }
 
+// ── Chart engine: Classic (SVG) or Canvas ────────────────────
+// Two renderers live side by side and take the identical payload. Classic is
+// the fixed-viewBox SVG that has always drawn this chart; Canvas is the
+// device-pixel-ratio-aware rewrite, built up phase by phase. Nothing is shared
+// between them but the payload and the palette.
+//
+// Classic stays the default, and Canvas is opt-in: the toggle is in the chart
+// toolbar and the choice sticks in localStorage, so switching either way is
+// instant — no redeploy, no server round-trip, and no waiting on anyone.
+var _CF_CHART_ENGINES = ['classic', 'canvas'];
+var _CF_CHART_ENGINE_KEY = 'cf-chart-engine';
+var _CF_CHART_ENGINE = (function () {
+  try {
+    var saved = localStorage.getItem(_CF_CHART_ENGINE_KEY);
+    if (_CF_CHART_ENGINES.indexOf(saved) >= 0) return saved;
+  } catch (err) { /* Safari private mode throws on localStorage */ }
+  return 'classic';
+})();
+
+// The payload of the chart currently on screen. Flipping the engine redraws
+// from this rather than refetching: the two renderers have to be compared on
+// the SAME data, and a fresh fetch between them would defeat the comparison.
+var _cfCascadeChartData = null;
+
+function cfCascadeSetEngine(engine) {
+  var picked = _CF_CHART_ENGINES.indexOf(engine) >= 0 ? engine : 'classic';
+  _CF_CHART_ENGINE = picked;
+  try { localStorage.setItem(_CF_CHART_ENGINE_KEY, picked); } catch (err) {}
+  _cfCascadeMarkEngine();
+  _cfCascadeRedrawChart();
+}
+
+function _cfCascadeMarkEngine() {
+  var options = document.querySelectorAll('#cf-cascade-chart-engine .cf-tf-option[data-engine]');
+  for (var i = 0; i < options.length; i++) {
+    var on = options[i].getAttribute('data-engine') === _CF_CHART_ENGINE;
+    options[i].classList.toggle('is-active', on);
+    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+  // The +/−/reset buttons drive the SVG's viewBox and mean nothing to the
+  // canvas, which gets its own interaction model. Hide them in Canvas rather
+  // than leave three dead controls sitting in the toolbar.
+  var zoom = document.getElementById('cf-cascade-zoom-group');
+  if (zoom) zoom.style.display = _CF_CHART_ENGINE === 'canvas' ? 'none' : '';
+}
+
+// Redraw what is already on screen with whatever renderer is selected.
+function _cfCascadeRedrawChart() {
+  var body = document.getElementById('cf-cascade-chart-body');
+  if (!body || !_cfCascadeChartData) return;
+  _cfChartCanvasTeardown();
+  body.innerHTML = _cfCascadeChartHtml(_cfCascadeChartData);
+  _cfChartMountRenderer(_cfCascadeChartData);
+}
+
+// Everything a renderer needs done AFTER its markup is in the DOM. Every path
+// that writes the chart body goes through here, so neither engine can be left
+// half-wired by a code path that forgot one of its setup calls.
+function _cfChartMountRenderer(d) {
+  if (_CF_CHART_ENGINE === 'canvas') {
+    _cfChartCanvasMount(d);
+    return;
+  }
+  _cfChartBindZoom();
+  cfCascadeZoomReset();
+}
+
 function _cfCascadeChartSvg(d) {
   var PAL = _cfChartPalette();
   var candles = (d.candles || []).slice();
@@ -9724,6 +9791,116 @@ function _cfCascadeChartSvg(d) {
     + '<g id="cf-chart-crosshair" style="display:none;pointer-events:none;"></g></svg>';
 }
 
+// ── Canvas renderer ─────────────────────────────────────────
+// Phase 1 is the harness only: two stacked surfaces, device-pixel-ratio
+// sizing, responsive fill, and a mount/teardown lifecycle. The draw pipeline
+// (grid → mother column → candles → trendlines → fibs → markers → labels) and
+// the pan / wheel-zoom / axis-drag interaction land in the phases after this.
+//
+// What this phase proves is that the payload reaches a correctly sized
+// surface. It draws no geometry, and it says so on the canvas instead of
+// painting a partial chart that could be mistaken for the real one.
+//
+// Two canvases, not one: the crosshair belongs on its own layer, so moving the
+// pointer repaints one cheap surface instead of the whole chart.
+function _cfCascadeChartCanvasHtml() {
+  return '<div class="cf-chart-canvas-host" id="cf-chart-canvas-host">'
+    + '<canvas id="cf-chart-canvas-main"></canvas>'
+    + '<canvas id="cf-chart-canvas-overlay"></canvas>'
+    + '</div>';
+}
+
+// Live canvas state, or null when no canvas chart is mounted. Holding the
+// ResizeObserver here is what makes teardown possible — without it, every
+// refresh would leave another observer watching a detached element.
+var _cfChartCanvas = null;
+
+function _cfChartCanvasMount(d) {
+  _cfChartCanvasTeardown();
+  var host = document.getElementById('cf-chart-canvas-host');
+  var main = document.getElementById('cf-chart-canvas-main');
+  var overlay = document.getElementById('cf-chart-canvas-overlay');
+  if (!host || !main || !overlay) return;
+  _cfChartCanvas = {
+    host: host, main: main, overlay: overlay,
+    ctx: main.getContext('2d'), octx: overlay.getContext('2d'),
+    data: d, w: 0, h: 0, dpr: 0, ro: null
+  };
+  _cfChartCanvasResize();
+  // The host is sized entirely by CSS, and the things that change it — going
+  // fullscreen, rotating a phone, dragging the window edge — do not all fire a
+  // resize event on window. Observe the element itself.
+  if (window.ResizeObserver) {
+    _cfChartCanvas.ro = new ResizeObserver(function () { _cfChartCanvasResize(); });
+    _cfChartCanvas.ro.observe(host);
+  } else {
+    window.addEventListener('resize', _cfChartCanvasResize);
+  }
+}
+
+function _cfChartCanvasTeardown() {
+  var c = _cfChartCanvas;
+  _cfChartCanvas = null;
+  if (!c) return;
+  if (c.ro) { try { c.ro.disconnect(); } catch (err) {} }
+  else window.removeEventListener('resize', _cfChartCanvasResize);
+}
+
+// The actual "high definition" fix. The backing store is sized in DEVICE
+// pixels and the context scaled by the ratio, so a 1px line is one real pixel
+// on a retina screen. The SVG cannot do this: it is laid out once at a fixed
+// 1440×660 and then stretched to whatever width the panel happens to be.
+function _cfChartCanvasResize() {
+  var c = _cfChartCanvas;
+  if (!c || !c.host.isConnected) return;
+  var box = c.host.getBoundingClientRect();
+  var cssW = Math.max(Math.round(box.width), 1);
+  var cssH = Math.max(Math.round(box.height), 1);
+  var dpr = Math.max(window.devicePixelRatio || 1, 1);
+  if (cssW === c.w && cssH === c.h && dpr === c.dpr) return;
+  c.w = cssW; c.h = cssH; c.dpr = dpr;
+  [c.main, c.overlay].forEach(function (cv) {
+    cv.width = Math.round(cssW * dpr);
+    cv.height = Math.round(cssH * dpr);
+    cv.style.width = cssW + 'px';
+    cv.style.height = cssH + 'px';
+  });
+  // Setting width/height resets the context, so the DPR transform has to be
+  // reapplied every time — after which everything downstream draws in plain
+  // CSS pixels and never has to think about the ratio again.
+  c.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  _cfChartCanvasDraw();
+}
+
+function _cfChartCanvasDraw() {
+  var c = _cfChartCanvas;
+  if (!c) return;
+  var PAL = _cfChartPalette();
+  var ctx = c.ctx;
+  ctx.clearRect(0, 0, c.w, c.h);
+  ctx.strokeStyle = PAL.grid;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, c.w - 1, c.h - 1);
+
+  // A notice, on purpose — see the note above the renderer. The size and DPR
+  // are on it because they are the thing this phase actually delivers, and
+  // reading them off the chart beats taking them on trust.
+  var d = c.data || {};
+  var n = (d.candles || []).length;
+  var mid = c.h / 2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = PAL.axis;
+  ctx.font = '700 13px monospace';
+  ctx.fillText('CANVAS ENGINE · surface ready', c.w / 2, mid - 20);
+  ctx.font = '11px monospace';
+  ctx.fillText((d.symbol || '--') + ' · ' + n + ' candles · '
+    + c.w + '×' + c.h + ' css @ ' + c.dpr + '× device pixels', c.w / 2, mid + 2);
+  ctx.fillText('Drawing lands in the next phase — switch to Classic for the working chart.',
+    c.w / 2, mid + 22);
+}
+
 function _cfCascadeChartTables(d) {
   var rows = [];
   (d.trendlines || []).forEach(function (tl) {
@@ -9792,12 +9969,17 @@ function _cfCascadeChartHtml(d) {
       : '')
     // In journal mode this is a static trade record: skip the interaction hints
     // and the fib-colour key that only matter alongside the live detail tables.
-    + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
-      + ' Labels are on the left, and each funded buy level carries the dollars resting on it.'
-      + ' Move the pointer over the chart for a crosshair with the price and time. The wheel zooms about the cursor,'
-      + ' the +/&minus; buttons zoom about the centre, and dragging pans once zoomed in.'))
+    + (journal ? '' : (_CF_CHART_ENGINE === 'canvas'
+      // Say what the Canvas engine can and cannot do yet. A blurb describing
+      // fib colours over a surface that draws none would be a lie.
+      ? '<br>Canvas engine: the surface is live and scaled to your screen’s device pixels, but the drawing'
+        + ' pipeline lands in the next phase. Switch to Classic for the working chart.'
+      : ('<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
+        + ' Labels are on the left, and each funded buy level carries the dollars resting on it.'
+        + ' Move the pointer over the chart for a crosshair with the price and time. The wheel zooms about the cursor,'
+        + ' the +/&minus; buttons zoom about the centre, and dragging pans once zoomed in.')))
     + '</div>';
-  var html = legend + _cfCascadeChartSvg(d);
+  var html = legend + (_CF_CHART_ENGINE === 'canvas' ? _cfCascadeChartCanvasHtml() : _cfCascadeChartSvg(d));
   // The journal wants just the picture of how the trade was taken — the
   // trendline / leg / order tables belong to the live cascade view only.
   if (!journal) html += '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
@@ -10101,15 +10283,19 @@ async function cfCascadeShowChart(campaignId, mode) {
   _cfCascadeChartId = campaignId;
   overlay.style.display = '';
   document.body.classList.add('cf-chart-fs-open');
+  // Anything the previous render left watching the DOM has to go before the
+  // body is replaced, or its ResizeObserver keeps firing on detached nodes.
+  _cfChartCanvasTeardown();
+  _cfCascadeMarkEngine();
   body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
   try {
     var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId)
       + '/chart?timeframe=' + encodeURIComponent(_cfCascadeChartTf), { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
+    _cfCascadeChartData = data;
     body.innerHTML = _cfCascadeChartHtml(data);
-    _cfChartBindZoom();
-    cfCascadeZoomReset();
+    _cfChartMountRenderer(data);
     _cfCascadeRenderTimeframeOptions(data.timeframe_options);
     // The API protects the mother candle from being pushed off screen.  Reflect
     // a forced wider view in the selector so the visible chart and its control
@@ -10131,6 +10317,7 @@ async function cfCascadeShowChart(campaignId, mode) {
         ;
     }
   } catch (error) {
+    _cfCascadeChartData = null;
     body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(error.message) + '</div>';
   }
 }
@@ -10144,7 +10331,9 @@ function cfCascadeHideChart() {
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   if (overlay) overlay.style.display = 'none';
   document.body.classList.remove('cf-chart-fs-open');
+  _cfChartCanvasTeardown();
   _cfCascadeChartId = '';
+  _cfCascadeChartData = null;
 }
 
 // Clicking the dim area behind the dialog closes it; clicks inside do not.
