@@ -7054,6 +7054,41 @@ def _coerce_float_safe(value, default: float = 0.0) -> float:
         return default
 
 
+def _cascade_traded_symbols() -> list:
+    """Every symbol Cascade has a campaign on, running or archived.
+
+    Deliberately not "symbols with fills": a campaign that traded and had its
+    round wiped, or one whose fills live only in the exchange's history, still
+    needs its symbol scanned. The list is small — one entry per instrument
+    ever traded — and the broker caps the scan.
+    """
+    engine = globals().get("_cascade_engine")
+    if engine is None:
+        return []
+    symbols = {str(getattr(c, "symbol", "") or "").upper() for c in getattr(engine, "campaigns", {}).values()}
+    for row in getattr(engine, "closed_campaigns", None) or []:
+        if isinstance(row, dict):
+            symbols.add(str(row.get("symbol") or "").upper())
+    symbols.discard("")
+    return sorted(symbols)
+
+
+def _broker_history_call(symbols: list) -> list:
+    """get_order_history, naming symbols only to brokers that accept them.
+
+    Binance Spot is the adapter that scans per symbol; the others read one
+    account-wide history and have no such parameter. Checking the signature
+    keeps this working for whichever broker is configured instead of assuming
+    the Binance shape.
+    """
+    fn = delta.get_order_history
+    try:
+        accepts = "extra_symbols" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        accepts = False
+    return fn(extra_symbols=symbols) if (accepts and symbols) else fn()
+
+
 async def _broker_journal_trades(converts: Optional[list] = None) -> tuple[list, str]:
     """Round trips paired from the account's own fills, including Convert exits.
 
@@ -7065,11 +7100,17 @@ async def _broker_journal_trades(converts: Optional[list] = None) -> tuple[list,
     Convert trades are passed in (already fetched for their own section) because
     an exit done via Convert is invisible to the spot trade history — leaving
     them out made closed positions read as permanently open.
+
+    Cascade's own symbols are named explicitly. The broker scans the majors plus
+    whatever the account currently HOLDS, so a coin outside the majors dropped
+    out of the journal the moment its position closed: PAXGUSDT traded four live
+    rounds and appeared nowhere — no rows, no P&L, and no PAXG in the coin
+    filter, which is built from the trades that made it through.
     """
     if not _broker_is_configured():
         return [], "Broker API keys are not configured."
     try:
-        fills = await asyncio.to_thread(delta.get_order_history)
+        fills = await asyncio.to_thread(_broker_history_call, _cascade_traded_symbols())
     except Exception as exc:
         _logger.warning("[JOURNAL] broker fill history unavailable: %s", exc)
         return [], str(exc)

@@ -3364,6 +3364,41 @@ class BinanceOrderHistoryScanTests(unittest.TestCase):
         client = self._client(many, listed=tuple(listed))
         self.assertLessEqual(len(client._order_history_symbols()), client._MAX_HISTORY_SYMBOLS)
 
+    def test_a_named_symbol_is_scanned_even_when_nothing_is_held(self):
+        """The journal names every symbol Cascade traded.
+
+        Without this the scan was the majors plus what the account still HOLDS,
+        so PAXGUSDT — traded live for four rounds — vanished from the journal
+        the moment its position closed, taking its P&L and its coin filter with
+        it. A named symbol is not a wallet guess, so it skips the listed-pair
+        check the guesses need.
+        """
+        client = self._client([{"asset_symbol": "USDT"}])
+        symbols = client._order_history_symbols(["paxgusdt"])
+        self.assertIn("PAXGUSDT", symbols)
+        self.assertIn("BTCUSDT", symbols, "the majors are still scanned")
+        # Named twice, or naming a major, must not scan it twice.
+        self.assertEqual(
+            client._order_history_symbols(["PAXGUSDT", "PAXGUSDT", "BTCUSDT", "", None]).count("PAXGUSDT"), 1
+        )
+        self.assertEqual(client._order_history_symbols(["BTCUSDT"]).count("BTCUSDT"), 1)
+
+    def test_the_history_cache_remembers_which_symbols_it_scanned(self):
+        """Keyed on age alone, the first caller to ask without extras would
+        serve its narrower result to the journal for the rest of the TTL."""
+        client = self._client([{"asset_symbol": "USDT"}])
+        scanned = []
+        client._signed_request = lambda method, path, params=None: scanned.append(params["symbol"]) or []
+
+        client.get_order_history()
+        self.assertNotIn("PAXGUSDT", scanned)
+        scanned.clear()
+        client.get_order_history(extra_symbols=["PAXGUSDT"])
+        self.assertIn("PAXGUSDT", scanned, "a different symbol set must not hit the cache")
+        scanned.clear()
+        client.get_order_history(extra_symbols=["PAXGUSDT"])
+        self.assertEqual(scanned, [], "the same set inside the TTL still caches")
+
     def test_missing_product_list_falls_back_to_majors(self):
         """If exchangeInfo fails we cannot tell listed pairs from junk, so scan
         only the majors rather than replaying the unbounded guess."""

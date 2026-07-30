@@ -12,6 +12,7 @@ import logging
 import time as _time
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
+from typing import Iterable, Optional
 from urllib.parse import urlencode
 
 import pandas as pd
@@ -126,6 +127,7 @@ class BinanceSpotClient(BaseBroker):
         self._products_ts = 0.0
         self._CACHE_TTL = 3600
         self._history_cache = None
+        self._history_cache_key: tuple = ()
         self._history_ts = 0.0
         self._HISTORY_TTL = 30
         # Binance rejects a signed request whose timestamp drifts outside
@@ -815,9 +817,16 @@ class BinanceSpotClient(BaseBroker):
             _binance_log.warning("[BINANCE SPOT] product list unavailable for history scan: %s", exc)
         return pairs
 
-    def _order_history_symbols(self) -> list[str]:
-        """Symbols to pull trade history for: the majors plus every asset the
-        account currently holds, so trades in any held coin are included.
+    def _order_history_symbols(self, extra: Optional[Iterable[str]] = None) -> list[str]:
+        """Symbols to pull trade history for: the majors, anything the caller
+        names, and every asset the account currently holds.
+
+        `extra` is for symbols the caller KNOWS were traded — the journal passes
+        every symbol Cascade has a campaign on. Without it a coin outside the
+        majors was only scanned while the account still held some: PAXGUSDT
+        traded four live rounds and vanished from the journal the moment it went
+        flat, taking its P&L and its coin filter with it. Named symbols skip the
+        listed-pair check the wallet guesses need — they are not guesses.
 
         Held assets are only included when {asset}{quote} is a symbol the
         exchange actually lists. Deriving the pair blindly is fine on a mainnet
@@ -829,6 +838,12 @@ class BinanceSpotClient(BaseBroker):
         """
         symbols = [f"{asset}{self.quote_asset}" for asset in self._MAJOR_ASSETS]
         seen = set(symbols)
+        for name in extra or []:
+            pair = str(name or "").strip().upper()
+            if not pair or pair in seen or len(symbols) >= self._MAX_HISTORY_SYMBOLS:
+                continue
+            seen.add(pair)
+            symbols.append(pair)
         listed = self._tradable_pairs()
         try:
             wallet = self.get_wallet()
@@ -858,16 +873,26 @@ class BinanceSpotClient(BaseBroker):
             symbols.append(pair)
         return symbols
 
-    def get_order_history(self, force_refresh: bool = False) -> list:
+    def get_order_history(self, force_refresh: bool = False, extra_symbols: Optional[Iterable[str]] = None) -> list:
         if not self._is_configured():
             return []
+        # The cache has to remember WHICH symbols it scanned. Keyed on age
+        # alone, the first caller to ask without extras would hand its narrower
+        # result to the journal for the rest of the TTL — the journal would drop
+        # PAXG again, intermittently, which is worse than always.
+        requested = tuple(sorted({str(s or "").strip().upper() for s in (extra_symbols or [])} - {""}))
         # One scan costs weight 20 per symbol, and the portfolio endpoints call
         # this on every poll. Uncached, a few open browser tabs alone can spend
         # the whole 6000/minute budget. Fills only feed display and cost basis
         # here — order reconciliation uses get_order/get_orders — so a short TTL
         # is safe.
         now = _time.time()
-        if self._history_cache is not None and not force_refresh and (now - self._history_ts) < self._HISTORY_TTL:
+        if (
+            self._history_cache is not None
+            and not force_refresh
+            and requested == self._history_cache_key
+            and (now - self._history_ts) < self._HISTORY_TTL
+        ):
             return list(self._history_cache)
         # NOTE: Binance /api/v3/myTrades rejects any startTime/endTime window
         # longer than 24h. Omit the window entirely and fetch the most recent
@@ -875,7 +900,7 @@ class BinanceSpotClient(BaseBroker):
         per_symbol_limit = int(getattr(config, "BINANCE_SPOT_TRADE_LIMIT", 0) or 500)
         per_symbol_limit = max(1, min(per_symbol_limit, 1000))
         trades = []
-        for symbol in self._order_history_symbols():
+        for symbol in self._order_history_symbols(requested):
             try:
                 rows = self._signed_request(
                     "GET",
@@ -923,6 +948,7 @@ class BinanceSpotClient(BaseBroker):
                 trades.append(row)
         trades.sort(key=lambda item: item.get("time") or 0, reverse=True)
         self._history_cache = trades
+        self._history_cache_key = requested
         self._history_ts = now
         return list(trades)
 
