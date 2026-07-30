@@ -8208,8 +8208,9 @@ function _cfCascadeMcKindPill(campaign) {
   var minor = kind === 'minor';
   var why = minor
     ? 'MINOR MC — a sub-mother marked inside a move that is already running. Always stepped on 5m, '
-      + 'whatever chart it was spotted on.'
-    : 'MAJOR MC — this campaign’s own anchor, on the timeframe you chose when you started it.';
+      + 'whatever chart it was spotted on. Only ever started by hand.'
+    : 'MAJOR MC — this campaign’s own anchor. A campaign that restarted off a break is still the '
+      + 'major: it re-anchors the same move and carries it on, even though it comes back on 5m.';
   return '<span class="admin-pill" data-state="' + (minor ? 'warn' : 'ok') + '" title="' + why + '">'
     + (minor ? 'MINOR MC' : 'MAJOR MC') + '</span>';
 }
@@ -8251,7 +8252,8 @@ function _cfCascadeTimeframePill(campaign) {
       : 'Off the escalation ladder by design — 1D and 1W keep their timeframe for life.';
   } else if (tf === '5m') {
     note = 'initiate';
-    why = 'Started on 5m off a recent or minor MC. Climbs 5m to 15m to 1H to 4H as it outgrows the screen.';
+    why = 'Started on 5m — a recent mother, a sub-mother, or a restart off a break. Climbs 5m to 15m '
+      + 'to 1H to 4H as it outgrows the screen.';
   } else {
     note = 'older MC · climbs';
     why = 'Anchored to an older mother candle at ' + tf + ', and still climbs toward the 4H cap.';

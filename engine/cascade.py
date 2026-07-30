@@ -2880,8 +2880,65 @@ class CascadeEngine:
                 continue
             self.campaigns[campaign.campaign_id] = campaign
             restored += 1
+        self._repair_inherited_mc_kind()
         self._backfill_closed_history()
         return restored
+
+    def _repair_inherited_mc_kind(self) -> int:
+        """Relabel successors that the old restart rule stamped as minors.
+
+        Every auto-restart used to be born mc_kind="minor" purely because it
+        comes back on 5m. A break or a retest restarts a campaign as soon as
+        price climbs back to the mother, so within a round or two every chain
+        on the page read MINOR MC — including campaigns alone on their symbol
+        with no major anywhere near them. The kind is inherited now, but the
+        campaigns already on disk still carry the old label, so they are walked
+        back to the campaign Phil actually started and given its kind.
+
+        Only a chain whose root is still on hand is touched. A parent pruned out
+        of history says nothing about where the chain began, and guessing
+        "major" there would strip a genuine minor of its stand-down.
+        """
+        kinds = {c.campaign_id: str(c.mc_kind or "major").lower() for c in self.campaigns.values()}
+        parents = {c.campaign_id: str(c.parent_campaign_id or "") for c in self.campaigns.values()}
+        for row in self.closed_campaigns:
+            cid = str(row.get("campaign_id") or "")
+            if cid and cid not in kinds:
+                kinds[cid] = str(row.get("mc_kind") or "major").lower()
+                parents[cid] = str(row.get("parent_campaign_id") or "")
+
+        repaired = 0
+        for campaign in self.campaigns.values():
+            if campaign.mc_kind != "minor" or not campaign.parent_campaign_id:
+                continue
+            seen = {campaign.campaign_id}
+            current = campaign.parent_campaign_id
+            root = ""
+            while current and current not in seen:
+                if current not in kinds:
+                    root = ""
+                    break
+                seen.add(current)
+                root = current
+                current = parents.get(current) or ""
+            if kinds.get(root) != "major":
+                continue
+            campaign.mc_kind = "major"
+            kinds[campaign.campaign_id] = "major"
+            for row in self.closed_campaigns:
+                if row.get("campaign_id") == campaign.campaign_id:
+                    row["mc_kind"] = "major"
+            self._log_event(
+                campaign,
+                "info",
+                "Relabelled MAJOR MC. It was marked minor only because it restarted on 5m — "
+                "it carries on the major move it descends from, and a minor is now only ever "
+                "a sub-mother started by hand.",
+            )
+            repaired += 1
+        if repaired:
+            _log.info("[CASCADE] relabelled %s successor campaign(s) back to major", repaired)
+        return repaired
 
     def _backfill_closed_history(self) -> int:
         """
@@ -4220,9 +4277,9 @@ class CascadeEngine:
         Only a SIMULTANEOUS break counts, and simultaneity is judged on the two
         break candles' timestamps. Two things made that necessary. A minor whose
         mother breaks while the major is running quietly is an independent event
-        and must restart normally. And every successor of a major break is
-        itself a minor, so matching on "some major once broke" would have let a
-        long-archived ancestor block its own descendants forever.
+        and must restart normally. And a successor inherits its parent's kind,
+        so matching on "some major once broke" would have let a long-archived
+        ancestor block its own descendants forever.
         """
         if parent.mc_kind != "minor":
             return False
@@ -4330,12 +4387,21 @@ class CascadeEngine:
             # ALWAYS 5m, whatever the parent was running. Phil's rule: when the
             # major mother candle breaks above, the whole campaign stops and
             # restarts from that high on 5m. A 1D campaign does not spawn
-            # another 1D campaign — the break is a fresh start at a new high,
-            # and a fresh start is an initiate, which is a 5m minor MC.
+            # another 1D campaign — the break is a fresh start at a new high.
             timeframe=BASE_TIMEFRAME,
             start_timeframe=BASE_TIMEFRAME,
             escalates=True,
-            mc_kind="minor",
+            # The KIND is inherited, not derived from that 5m. Restarting on 5m
+            # used to mean "minor", so every successor was labelled a minor —
+            # and since a break or a retest restarts a campaign the moment price
+            # climbs back (which is exactly what a closed round leaves behind),
+            # every campaign on the page drifted to MINOR MC within a round or
+            # two, alone on its symbol with no major anywhere near it. The kind
+            # is a statement about structure: a major's successor re-anchors the
+            # same move and carries it on, so it is still the major. Only a
+            # genuine sub-mother marked inside someone else's move is a minor,
+            # and that only ever comes from Phil starting one by hand.
+            mc_kind=parent.mc_kind,
             # A successor is a newly-born MC like any other, so it takes the
             # band ledger as it stands now. The parent is already archived and
             # has released its ground; only still-running siblings show up.

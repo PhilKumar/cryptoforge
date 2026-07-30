@@ -3835,8 +3835,7 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
     def test_an_auto_restart_always_comes_back_on_5m(self):
         """Phil's rule: when the major mother candle breaks above, the whole
         campaign stops and restarts from that high on 5m. A 1D campaign does not
-        spawn another 1D campaign — a fresh start is an initiate, and an
-        initiate is a 5m minor MC."""
+        spawn another 1D campaign — a fresh start is an initiate."""
         engine = _mk_engine()
         parent = _mk_campaign(engine)
         parent.timeframe = "1d"
@@ -3848,11 +3847,29 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(child)
         self.assertEqual(child.timeframe, "5m")
         self.assertTrue(child.escalates)
-        self.assertEqual(child.mc_kind, "minor")
         self.assertEqual(child.mother_high, 110.0, "the new mother is that breaking high")
         # The daily breaking candle must NOT be seeded into a 5m history — the
         # next step fetches the real 5m candles from the mother forward.
         self.assertEqual(engine._candles[child.campaign_id], [])
+
+    def test_a_successor_keeps_its_parents_mc_kind(self):
+        """The restart timeframe is 5m; the KIND is inherited.
+
+        Deriving it from that 5m labelled every successor a minor, and since a
+        break or a retest restarts a campaign as soon as price climbs back, the
+        whole page drifted to MINOR MC within a round or two — campaigns alone
+        on their symbol with no major anywhere near them.
+        """
+        for kind in ("major", "minor"):
+            engine = _mk_engine()
+            parent = _mk_campaign(engine)
+            parent.mc_kind = kind
+            parent.close_reason = "mother_broken"
+            candle = Candle(timestamp=_RECENT_TS + 300, open=106.0, high=110.0, low=105.0, close=109.0)
+            child = engine._auto_restart(parent, candle)
+            self.assertIsNotNone(child)
+            self.assertEqual(child.timeframe, "5m")
+            self.assertEqual(child.mc_kind, kind)
 
     def test_a_5m_break_still_seeds_the_breaking_candle(self):
         """Same-size candle, so it belongs in the child's history as-is."""
@@ -5151,3 +5168,56 @@ class CascadeAlertDedupeTests(unittest.TestCase):
         engine._alert("Cascade engine STALLED", "first", dedupe_sec=1800)
         engine._alert("Cascade engine STALLED", "second", dedupe_sec=1800)
         self.assertEqual(len(sent), 1)
+
+
+class CascadeMcKindRepairTests(unittest.TestCase):
+    """Successors on disk still carry the label the old restart rule gave them."""
+
+    def _snapshot(self, cid, kind, parent=""):
+        campaign = Campaign(
+            campaign_id=cid,
+            symbol="BTCUSDT",
+            capital_usd=500.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            seq=1,
+            mc_kind=kind,
+            parent_campaign_id=parent,
+        )
+        return campaign.to_dict()
+
+    def test_a_chain_off_a_major_is_relabelled_major(self):
+        engine = _mk_engine()
+        engine.restore_campaigns(
+            [
+                self._snapshot("root", "major"),
+                self._snapshot("kid", "minor", "root"),
+                self._snapshot("grandkid", "minor", "kid"),
+            ]
+        )
+        self.assertEqual(engine.campaigns["root"].mc_kind, "major")
+        self.assertEqual(engine.campaigns["kid"].mc_kind, "major")
+        self.assertEqual(engine.campaigns["grandkid"].mc_kind, "major")
+
+    def test_a_chain_off_a_hand_started_minor_stays_minor(self):
+        engine = _mk_engine()
+        engine.restore_campaigns(
+            [
+                self._snapshot("root", "minor"),
+                self._snapshot("kid", "minor", "root"),
+            ]
+        )
+        self.assertEqual(engine.campaigns["kid"].mc_kind, "minor")
+
+    def test_an_orphan_is_left_alone(self):
+        """A parent pruned out of history says nothing about where it began."""
+        engine = _mk_engine()
+        engine.restore_campaigns([self._snapshot("kid", "minor", "gone")])
+        self.assertEqual(engine.campaigns["kid"].mc_kind, "minor")
+
+    def test_the_root_of_a_chain_the_archive_remembers_still_counts(self):
+        engine = _mk_engine()
+        engine.load_closed_campaigns([self._snapshot("root", "major")])
+        engine.restore_campaigns([self._snapshot("kid", "minor", "root")])
+        self.assertEqual(engine.campaigns["kid"].mc_kind, "major")
