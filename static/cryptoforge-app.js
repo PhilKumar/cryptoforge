@@ -10412,7 +10412,10 @@ function _cfChartCanvasBindInteraction(c) {
       var dp = (point.y - drag.y) / p.plotH * pSpan;
       _cfChartCanvasSetViewport(c, { tMin: start.tMin + dt, tMax: start.tMax + dt, pMin: start.pMin + dp, pMax: start.pMax + dp });
     } else if (drag.kind === 'price') {
-      var priceSpan = pSpan * Math.exp((drag.y - point.y) / 160);
+      // Pulling the price axis upward zooms in (a tighter price range); pulling
+      // it downward zooms out. This is intentionally opposite to screen Y,
+      // which increases downward.
+      var priceSpan = pSpan * Math.exp((point.y - drag.y) / 160);
       var priceRatio = (drag.anchorPrice - start.pMin) / pSpan;
       _cfChartCanvasSetViewport(c, {
         tMin: start.tMin, tMax: start.tMax,

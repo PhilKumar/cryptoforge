@@ -502,14 +502,26 @@ test.describe('Cascade chart', () => {
     await page.mouse.up();
     const afterPrice = await state();
     expect(afterPrice, 'Canvas remains mounted after price-axis drag').not.toHaveProperty('missing');
-    expect(afterPrice.viewport.pMax - afterPrice.viewport.pMin, 'price axis changes price span')
-      .not.toBe(afterToolbar.viewport.pMax - afterToolbar.viewport.pMin);
+    expect(afterPrice.viewport.pMax - afterPrice.viewport.pMin, 'upward price-axis drag zooms in')
+      .toBeLessThan(afterToolbar.viewport.pMax - afterToolbar.viewport.pMin);
     expect(afterPrice.viewport.tMin, 'price axis leaves time minimum').toBe(afterToolbar.viewport.tMin);
     expect(afterPrice.viewport.tMax, 'price axis leaves time maximum').toBe(afterToolbar.viewport.tMax);
 
+    // The reverse motion must be the inverse operation, not merely a different
+    // price scale: dragging down expands the range and still leaves time alone.
+    await page.mouse.move(priceX, axisY);
+    await page.mouse.down();
+    await page.mouse.move(priceX, axisY + 55);
+    await page.mouse.up();
+    const afterPriceDown = await state();
+    expect(afterPriceDown.viewport.pMax - afterPriceDown.viewport.pMin, 'downward price-axis drag zooms out')
+      .toBeGreaterThan(afterPrice.viewport.pMax - afterPrice.viewport.pMin);
+    expect(afterPriceDown.viewport.tMin, 'price-axis direction leaves time minimum').toBe(afterPrice.viewport.tMin);
+    expect(afterPriceDown.viewport.tMax, 'price-axis direction leaves time maximum').toBe(afterPrice.viewport.tMax);
+
     // Dragging the time gutter changes time scale only.
-    const timeX = box!.x + afterPrice.projection.padL + afterPrice.projection.plotW / 2;
-    const timeY = box!.y + afterPrice.projection.padT + afterPrice.projection.plotH + 2;
+    const timeX = box!.x + afterPriceDown.projection.padL + afterPriceDown.projection.plotW / 2;
+    const timeY = box!.y + afterPriceDown.projection.padT + afterPriceDown.projection.plotH + 2;
     await page.mouse.move(timeX, timeY);
     await page.mouse.down();
     await page.mouse.move(timeX - 55, timeY);
@@ -518,8 +530,8 @@ test.describe('Cascade chart', () => {
     expect(afterTime, 'Canvas remains mounted after time-axis drag').not.toHaveProperty('missing');
     expect(afterTime.viewport.tMax - afterTime.viewport.tMin, 'time axis changes time span')
       .not.toBe(afterPrice.viewport.tMax - afterPrice.viewport.tMin);
-    expect(afterTime.viewport.pMin, 'time axis leaves price minimum').toBe(afterPrice.viewport.pMin);
-    expect(afterTime.viewport.pMax, 'time axis leaves price maximum').toBe(afterPrice.viewport.pMax);
+    expect(afterTime.viewport.pMin, 'time axis leaves price minimum').toBe(afterPriceDown.viewport.pMin);
+    expect(afterTime.viewport.pMax, 'time axis leaves price maximum').toBe(afterPriceDown.viewport.pMax);
 
     // Each axis has an independent double-click reset; the plot reset is full fit.
     const fit = await page.evaluate(() => (window as any)._cfChartCanvasFit((window as any)._cfChartCanvas));
