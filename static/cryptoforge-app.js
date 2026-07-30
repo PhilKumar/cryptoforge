@@ -8203,16 +8203,34 @@ var _CF_CASCADE_REASONS = {
 // implies it (5m means minor), but two campaigns can run on the same symbol at
 // once and the one thing you need to read off the strip is which structure each
 // is trading — so it gets said outright rather than inferred from the candle.
+//
+// The pill TEXT stays two words. This row is already tight enough that the
+// badges clip on a narrow window, so everything the label cannot say lives in
+// the tooltip instead of widening the pill.
 function _cfCascadeMcKindPill(campaign) {
   var kind = String(campaign.mc_kind || 'major').toLowerCase();
   var minor = kind === 'minor';
+  var gen = Number(campaign.generation) || 0;
   var why = minor
     ? 'MINOR MC — a sub-mother marked inside a move that is already running. Always stepped on 5m, '
       + 'whatever chart it was spotted on. Only ever started by hand.'
     : 'MAJOR MC — this campaign’s own anchor. A campaign that restarted off a break is still the '
       + 'major: it re-anchors the same move and carries it on, even though it comes back on 5m.';
-  return '<span class="admin-pill" data-state="' + (minor ? 'warn' : 'ok') + '" title="' + why + '">'
-    + (minor ? 'MINOR MC' : 'MAJOR MC') + '</span>';
+  // A campaign that never restarted is the one you started, and its kind is
+  // simply what you picked. Once a chain has run for a few generations the kind
+  // is inherited, and a lone MINOR with no major anywhere on the symbol reads
+  // like a mislabel unless the pill says where it came from.
+  if (gen > 0) {
+    why += ' This is generation ' + gen + ' of a chain: the campaign you started has broken and '
+      + 'restarted ' + gen + ' time' + (gen === 1 ? '' : 's') + ', and each successor re-anchors on '
+      + '5m but keeps the kind it inherited.';
+    if (minor) {
+      why += ' It stands down only if a major on this symbol breaks in the same moment — with no '
+        + 'major running, the label costs it nothing.';
+    }
+  }
+  return '<span class="admin-pill" data-state="' + (minor ? 'warn' : 'ok') + '" title="'
+    + _escapeHtml(why) + '">' + (minor ? 'MINOR MC' : 'MAJOR MC') + '</span>';
 }
 
 // Ground a sibling campaign on the same symbol had already funded when this one
