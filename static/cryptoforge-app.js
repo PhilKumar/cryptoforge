@@ -9468,17 +9468,25 @@ function _cfChartPalette() {
 // device-pixel-ratio-aware rewrite, built up phase by phase. Nothing is shared
 // between them but the payload and the palette.
 //
-// Classic stays the default, and Canvas is opt-in: the toggle is in the chart
-// toolbar and the choice sticks in localStorage, so switching either way is
-// instant — no redeploy, no server round-trip, and no waiting on anyone.
+// Canvas is THE chart as of 2026-07-30, after Phil accepted it on production.
+// Classic is kept — not as a fallback anyone should need, but because a chart
+// is how the engine's geometry gets verified against the real market, and
+// having a second opinion one click away costs nothing.
+//
+// The storage key is deliberately versioned. While Canvas was opt-in, choosing
+// Classic wrote 'classic' under the v1 key — and that stored choice would have
+// silently outranked this new default, leaving anyone who had ever pressed
+// Classic pinned to it with no sign that anything had changed. Bumping the key
+// retires those answers to a question that is no longer being asked; a Classic
+// pick made from here on is stored under v2 and is honoured.
 var _CF_CHART_ENGINES = ['classic', 'canvas'];
-var _CF_CHART_ENGINE_KEY = 'cf-chart-engine';
+var _CF_CHART_ENGINE_KEY = 'cf-chart-engine-v2';
 var _CF_CHART_ENGINE = (function () {
   try {
     var saved = localStorage.getItem(_CF_CHART_ENGINE_KEY);
     if (_CF_CHART_ENGINES.indexOf(saved) >= 0) return saved;
   } catch (err) { /* Safari private mode throws on localStorage */ }
-  return 'classic';
+  return 'canvas';
 })();
 
 // The payload of the chart currently on screen. Flipping the engine redraws
@@ -10529,14 +10537,16 @@ function _cfCascadeChartHtml(d) {
       : '')
     // In journal mode this is a static trade record: skip the interaction hints
     // and the fib-colour key that only matter alongside the live detail tables.
-    + (journal ? '' : (_CF_CHART_ENGINE === 'canvas'
-      ? '<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
-        + ' Labels are on the left, and each funded buy level carries the dollars resting on it. Canvas supports'
-        + ' crosshair, pan, cursor-time zoom, independent axis controls and viewport-safe refreshes. Classic remains the default.'
-      : ('<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
-        + ' Labels are on the left, and each funded buy level carries the dollars resting on it.'
-        + ' Move the pointer over the chart for a crosshair with the price and time. The wheel zooms about the cursor,'
-        + ' the +/&minus; buttons zoom about the centre, and dragging pans once zoomed in.')))
+    + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
+      + ' Labels are on the left, and each funded buy level carries the dollars resting on it.'
+      + (_CF_CHART_ENGINE === 'canvas'
+        // Canvas is the chart now, so its controls are described as the way the
+        // chart works — not as a feature list for an alternative renderer.
+        ? ' Drag to pan and the wheel zooms time about the cursor. Drag the price or time axis to stretch that'
+          + ' axis alone; double-click an axis to reset it, or the chart to fit everything. Live refreshes keep'
+          + ' wherever you have panned to, and only follow the latest bar if you were already at the right edge.'
+        : ' Classic (SVG): the wheel zooms about the cursor, the +/&minus; buttons zoom about the centre, and'
+          + ' dragging pans once zoomed in. Every refresh resets the view — Canvas is the one that does not.')))
     + '</div>';
   var html = legend + (_CF_CHART_ENGINE === 'canvas' ? _cfCascadeChartCanvasHtml() : _cfCascadeChartSvg(d));
   // The journal wants just the picture of how the trade was taken — the

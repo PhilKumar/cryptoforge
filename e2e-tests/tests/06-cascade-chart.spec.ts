@@ -442,6 +442,11 @@ test.describe('Cascade chart', () => {
         const path = testInfo.outputPath(`cascade-${theme}-${engine}.png`);
         await body.screenshot({ path });
         await testInfo.attach(`cascade ${theme} ${engine}`, { path, contentType: 'image/png' });
+        // Assert, do not merely photograph. Without this the test passed while
+        // the Canvas renderer was crashing — it captured four pictures of a
+        // blank panel and reported success, which is worse than no test at all.
+        if (engine === 'canvas') await canvasIsPainted(page, `${theme} canvas`);
+        else await svgIsPainted(page, 80, `${theme} classic`);
         await page.evaluate(() => (window as any).cfCascadeHideChart());
       }
     }
@@ -697,7 +702,7 @@ test.describe('Cascade chart', () => {
     // Canvas owns compatible centre zoom and fit actions, so the shared
     // controls stay available rather than sitting there dead.
     await expect(page.locator('#cf-cascade-zoom-group')).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem('cf-chart-engine'))).toBe('canvas');
+    expect(await page.evaluate(() => localStorage.getItem('cf-chart-engine-v2'))).toBe('canvas');
 
     // Closing must release the canvas, or every open leaks a ResizeObserver
     // onto a detached node.
@@ -714,6 +719,50 @@ test.describe('Cascade chart', () => {
     await page.waitForFunction(() => typeof (window as any).cfCascadeShowChart === 'function');
     expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('canvas');
     await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
+  });
+
+  test('Canvas is the default, and a stale Classic pick cannot pin you to it', async ({ page }) => {
+    const watch = watchErrors(page);
+    await serveFixture(page, chartPayload());
+
+    // This test is built out of reloads, and a navigation aborts whatever the
+    // app had in flight — its loaders log those rejections. Discard the buffer
+    // after each reload so the assertion at the end covers the CHART, which is
+    // what this test is about, rather than this test moving the page.
+    async function reload() {
+      await page.reload();
+      await page.waitForFunction(() => typeof (window as any).cfCascadeShowChart === 'function');
+      watch.take();
+    }
+
+    // Fresh session, nothing stored: Canvas draws the chart.
+    await page.evaluate(() => { localStorage.removeItem('cf-chart-engine-v2'); });
+    await reload();
+    expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('canvas');
+    await openChart(page);
+    await canvasIsPainted(page, 'default engine');
+    await expect(page.locator('#cf-cascade-chart-body svg')).toHaveCount(0);
+    await page.evaluate(() => (window as any).cfCascadeHideChart());
+
+    // The whole reason the key is versioned: 'classic' stored under the old v1
+    // key was an answer to "do you want to opt in?", a question no longer being
+    // asked. It must not outrank the new default and strand someone on Classic.
+    await page.evaluate(() => {
+      localStorage.setItem('cf-chart-engine', 'classic');
+      localStorage.removeItem('cf-chart-engine-v2');
+    });
+    await reload();
+    expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('canvas');
+
+    // A Classic pick made from here on is stored under v2 and IS honoured —
+    // the escape hatch has to keep working, or the toggle is decoration.
+    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
+    await reload();
+    expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('classic');
+    await openChart(page);
+    await svgIsPainted(page, 80, 'explicit Classic pick');
+
+    expect(watch.take()).toEqual([]);
   });
 
   test('refresh and timeframe changes redraw cleanly', async ({ page }) => {
