@@ -8303,6 +8303,15 @@ function _cfCascadeCampaignCard(campaign) {
   var num = Number(campaign.seq) > 0 ? '#' + campaign.seq : '#' + cid;
   var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
   var realised = rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0);
+  // The engine refuses to replay a live campaign that has traded: its fills and
+  // closed rounds came from the exchange, and the replay would erase them.
+  // Shown as a dead button rather than hidden, so the OLD RULES · RECALC badge
+  // never points at a control that has quietly disappeared.
+  var recalc = mode === 'LIVE' && (fills.length || rounds.length)
+    ? '<button class="btn btn-outline btn-sm" disabled title="This campaign has traded live —'
+      + ' its fills and closed rounds came from the exchange, not from the replay, so rebuilding'
+      + ' would erase them. Stop it and start a fresh one.">Recalc</button>'
+    : '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRecalculate(\'' + cid + '\')">Recalc</button>';
   // A one-line summary so a collapsed card still says how it is doing.
   var gist = fills.length
     ? fills.length + ' open entr' + (fills.length === 1 ? 'y' : 'ies')
@@ -8349,7 +8358,7 @@ function _cfCascadeCampaignCard(campaign) {
     // Buttons live inside the header but must not toggle it.
     + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
-    + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRecalculate(\'' + cid + '\')">Recalc</button>'
+    + recalc
     + goLive
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
     + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'

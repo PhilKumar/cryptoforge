@@ -2261,6 +2261,37 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         engine.campaigns[campaign.campaign_id] = campaign
         return campaign
 
+    async def test_a_live_campaign_that_closed_a_round_refuses_to_recalculate(self):
+        """A closed round leaves the campaign FLAT, so all_fills is empty.
+
+        The old guard only checked all_fills, so a live campaign that had
+        already taken profit sailed through — and the replay wiped its rounds,
+        which nothing regenerates for a live campaign (fills are simulated for
+        paper only). SOLUSDT lost two closed rounds and +$0.45 that way.
+        """
+        engine = _mk_engine()
+        campaign = self._stale_campaign(engine)
+        campaign.mode = "live"
+        campaign.rounds.append(
+            Round(round_id=1, leg_id=1, avg_entry=100.0, quantity=0.1, invested_usd=10.0, exit_price=101.0, pnl=0.45)
+        )
+        self.assertEqual(campaign.all_fills, [], "a closed round leaves nothing held")
+
+        result = await engine.recalculate_campaign("stale")
+        self.assertIn("cannot be recalculated", result.get("error", ""))
+        self.assertEqual(len(campaign.rounds), 1, "the traded record survives")
+        self.assertAlmostEqual(campaign.realized_pnl_total, 0.45)
+
+    async def test_a_paper_campaign_with_rounds_still_recalculates(self):
+        """Paper rounds ARE replay output — the replay rebuilds them."""
+        engine = _mk_engine()
+        campaign = self._stale_campaign(engine)
+        campaign.rounds.append(
+            Round(round_id=1, leg_id=1, avg_entry=100.0, quantity=0.1, invested_usd=10.0, exit_price=101.0, pnl=0.45)
+        )
+        result = await engine.recalculate_campaign("stale")
+        self.assertNotIn("cannot be recalculated", result.get("error", ""))
+
     async def test_stale_campaign_is_flagged_and_recalculates(self):
         broker = FakeCascadeBroker()
         broker.candles_df = pd.DataFrame(

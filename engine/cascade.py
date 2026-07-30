@@ -2551,14 +2551,39 @@ class CascadeEngine:
         keep whatever geometry the rules produced when they ran, so a campaign
         created under older rules keeps stale fibs until this is run.
 
-        Refused when real money is involved: a live campaign that has filled
-        cannot have its ladder rewritten underneath its resting orders.
+        Refused when real money is involved: a live campaign that has TRADED
+        cannot have its ladder rewritten underneath it. That means holding coin
+        (all_fills) or having closed a round (rounds) — the second half of that
+        was missing and cost real history.
+
+        A replay only regenerates what it can derive from candles, and fills are
+        simulated for PAPER campaigns alone (_paper_fill_check). So a paper
+        campaign's rounds are replay output and are correctly rebuilt, while a
+        live campaign's rounds are what the exchange actually did: nothing
+        regenerates them, and _reset_derived_state wiping them is permanent.
+        A live campaign that closed a round is flat, so all_fills is empty and
+        the old guard waved it straight through — SOLUSDT lost two closed rounds
+        and the +$0.45 realised against them, and the Closed Rounds ledger has
+        never shown a round belonging to a running campaign since.
+
+        Refusing is the fix rather than preserving the rounds across the reset,
+        because the rest of that campaign's traded state cannot be rebuilt
+        either: the levels a closed round bought are marked CLOSED on their
+        legs, the replay rebuilds every leg PENDING, and the ladder would go
+        back and re-buy the shelf it just sold — the new-low rule relies on
+        exactly those markings.
         """
         campaign = self.campaigns.get(campaign_id)
         if campaign is None:
             return {"error": f"Campaign {campaign_id} not found"}
-        if campaign.mode == "live" and campaign.all_fills:
-            return {"error": "Live campaign with fills cannot be recalculated — stop it and start a fresh one"}
+        if campaign.mode == "live" and (campaign.all_fills or campaign.rounds):
+            return {
+                "error": (
+                    "Live campaign that has traded cannot be recalculated — its fills and closed "
+                    "rounds came from the exchange, not from the replay, so rebuilding would erase "
+                    "them for good. Stop it and start a fresh one."
+                )
+            }
 
         candles = await self._chart_candles(campaign, max_candles=100000)
         if not candles:
