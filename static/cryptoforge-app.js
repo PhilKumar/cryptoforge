@@ -9492,11 +9492,11 @@ function _cfCascadeMarkEngine() {
     options[i].classList.toggle('is-active', on);
     options[i].setAttribute('aria-checked', on ? 'true' : 'false');
   }
-  // The +/−/reset buttons drive the SVG's viewBox and mean nothing to the
-  // canvas, which gets its own interaction model. Hide them in Canvas rather
-  // than leave three dead controls sitting in the toolbar.
+  // Canvas now owns compatible centre-zoom / fit actions, so keep the shared
+  // controls visible. The implementation below dispatches by engine; neither
+  // renderer receives the other's viewport logic.
   var zoom = document.getElementById('cf-cascade-zoom-group');
-  if (zoom) zoom.style.display = _CF_CHART_ENGINE === 'canvas' ? 'none' : '';
+  if (zoom) zoom.style.display = '';
 }
 
 // Redraw what is already on screen with whatever renderer is selected.
@@ -9792,17 +9792,13 @@ function _cfCascadeChartSvg(d) {
 }
 
 // ── Canvas renderer ─────────────────────────────────────────
-// Phase 1 is the harness only: two stacked surfaces, device-pixel-ratio
-// sizing, responsive fill, and a mount/teardown lifecycle. The draw pipeline
-// (grid → mother column → candles → trendlines → fibs → markers → labels) and
-// the pan / wheel-zoom / axis-drag interaction land in the phases after this.
-//
-// What this phase proves is that the payload reaches a correctly sized
-// surface. It draws no geometry, and it says so on the canvas instead of
-// painting a partial chart that could be mistaken for the real one.
+// The Canvas renderer deliberately has its own viewport and projection rather
+// than borrowing the SVG viewBox. The payload and palette are the only shared
+// inputs: changing the Canvas must never change what the established renderer
+// means, nor anything the engine trades from.
 //
 // Two canvases, not one: the crosshair belongs on its own layer, so moving the
-// pointer repaints one cheap surface instead of the whole chart.
+// pointer in Phase 3 repaints one cheap surface instead of the whole chart.
 function _cfCascadeChartCanvasHtml() {
   return '<div class="cf-chart-canvas-host" id="cf-chart-canvas-host">'
     + '<canvas id="cf-chart-canvas-main"></canvas>'
@@ -9824,9 +9820,23 @@ function _cfChartCanvasMount(d) {
   _cfChartCanvas = {
     host: host, main: main, overlay: overlay,
     ctx: main.getContext('2d'), octx: overlay.getContext('2d'),
-    data: d, w: 0, h: 0, dpr: 0, ro: null
+    data: d, w: 0, h: 0, dpr: 0, ro: null, themeObserver: null,
+    // Phase 2 owns this model. Phase 3 changes it through pan/zoom/axis-drag;
+    // Phase 4 preserves it across a live refresh.
+    viewport: null, projection: null, paint: null, paintKey: '', handlers: [], drag: null
   };
+  var c = _cfChartCanvas;
   _cfChartCanvasResize();
+  _cfChartCanvasBindInteraction(_cfChartCanvas);
+  // Canvas pixels do not inherit CSS colours. Watch the single theme attribute
+  // and repaint from the same payload/viewport when it changes; SVG gets this
+  // for free through a fresh DOM render, Canvas must do it explicitly.
+  if (window.MutationObserver) {
+    _cfChartCanvas.themeObserver = new MutationObserver(function () {
+      if (_cfChartCanvas && _cfChartCanvas === c) _cfChartCanvasDraw();
+    });
+    _cfChartCanvas.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
   // The host is sized entirely by CSS, and the things that change it — going
   // fullscreen, rotating a phone, dragging the window edge — do not all fire a
   // resize event on window. Observe the element itself.
@@ -9842,8 +9852,10 @@ function _cfChartCanvasTeardown() {
   var c = _cfChartCanvas;
   _cfChartCanvas = null;
   if (!c) return;
+  (c.handlers || []).forEach(function (row) { c.host.removeEventListener(row[0], row[1], row[2]); });
   if (c.ro) { try { c.ro.disconnect(); } catch (err) {} }
   else window.removeEventListener('resize', _cfChartCanvasResize);
+  if (c.themeObserver) { try { c.themeObserver.disconnect(); } catch (err) {} }
 }
 
 // The actual "high definition" fix. The backing store is sized in DEVICE
@@ -9873,32 +9885,568 @@ function _cfChartCanvasResize() {
   _cfChartCanvasDraw();
 }
 
+function _cfChartCanvasStructures(d) {
+  var allLegs = Array.isArray(d.legs) ? d.legs : [];
+  var legs = allLegs.slice(-_CF_CHART_MAX_STRUCTURES);
+  var allTls = Array.isArray(d.trendlines) ? d.trendlines : [];
+  var tls = allTls.slice(-_CF_CHART_MAX_STRUCTURES);
+  // Preserve Classic's one important exception: the active line is never
+  // hidden just because later, retired structures filled the three-line cap.
+  var active = allTls.filter(function (tl) { return tl && tl.active; })[0];
+  if (active && tls.indexOf(active) === -1) tls = [active].concat(tls).slice(-_CF_CHART_MAX_STRUCTURES);
+  return { legs: legs, trendlines: tls };
+}
+
+function _cfChartCanvasBarSeconds(d, candles) {
+  if (candles.length > 1) {
+    var span = Number(candles[candles.length - 1].t) - Number(candles[0].t);
+    if (isFinite(span) && span > 0) return span / (candles.length - 1);
+  }
+  var tf = String(d.timeframe || d.campaign_timeframe || '5m').toLowerCase();
+  var match = tf.match(/^(\d+)(m|h|d|w)$/);
+  if (!match) return 300;
+  var units = { m: 60, h: 3600, d: 86400, w: 604800 };
+  return Math.max(Number(match[1]) * units[match[2]], 1);
+}
+
+// Initial fit is intentionally the same price rule as Classic: candles,
+// mother high, displayed leg touch highs/lows and target, then 6% breathing
+// room. Price and time are stored separately so later axis dragging is real,
+// independent scaling rather than a viewBox trick.
+function _cfChartCanvasFit(c) {
+  var d = c.data || {};
+  var candles = (d.candles || []).slice();
+  if (!candles.length) return null;
+  var lo = Number(candles[0].l), hi = Number(candles[0].h);
+  candles.forEach(function (bar) {
+    lo = Math.min(lo, Number(bar.l));
+    hi = Math.max(hi, Number(bar.h));
+  });
+  if (d.mother && d.mother.high) hi = Math.max(hi, Number(d.mother.high));
+  var structures = _cfChartCanvasStructures(d);
+  structures.legs.forEach(function (leg) {
+    if (leg.touch_high) hi = Math.max(hi, Number(leg.touch_high));
+    if (leg.low) lo = Math.min(lo, Number(leg.low));
+  });
+  if (d.tp_price) {
+    hi = Math.max(hi, Number(d.tp_price));
+    lo = Math.min(lo, Number(d.tp_price));
+  }
+  var priceSpan = (hi - lo) || Math.max(Math.abs(hi) * 0.02, 1);
+  var padP = priceSpan * 0.06;
+  var first = Number(candles[0].t), last = Number(candles[candles.length - 1].t);
+  var barSec = _cfChartCanvasBarSeconds(d, candles);
+  return {
+    tMin: first - barSec / 2,
+    tMax: last + barSec / 2,
+    pMin: lo - padP,
+    pMax: hi + padP
+  };
+}
+
+// Only fields that can change Canvas pixels belong in this key. A refresh that
+// merely changes table/status data can keep the already-painted surface; a new
+// candle, level or marker asks the normal draw pipeline to repaint coherently.
+function _cfChartCanvasPaintKey(d) {
+  d = d || {};
+  return JSON.stringify({
+    candles: d.candles || [], mother: d.mother || null,
+    legs: d.legs || [], trendlines: d.trendlines || [],
+    fills: d.fills || [], entries: d.entries || [], exits: d.exits || [],
+    avg_entry_price: d.avg_entry_price, tp_price: d.tp_price,
+    frozen: !!d.frozen, snapshot: !!d.snapshot, timeframe: d.timeframe
+  });
+}
+
+function _cfChartCanvasSameViewport(a, b) {
+  return !!a && !!b && a.tMin === b.tMin && a.tMax === b.tMax && a.pMin === b.pMin && a.pMax === b.pMax;
+}
+
+// Captured before the chart API refresh begins. At the right edge means the
+// view is following the latest bar; a panned-back research view is never
+// allowed to jump just because a poll returned a newer payload.
+function _cfChartCanvasRefreshState() {
+  var c = _cfChartCanvas, fit = c && _cfChartCanvasFit(c);
+  if (!c || !c.viewport || !fit) return null;
+  var bar = _cfChartCanvasBarSeconds(c.data || {}, (c.data || {}).candles || []);
+  var tolerance = Math.max(bar / 2, (c.viewport.tMax - c.viewport.tMin) * 0.001);
+  return {
+    viewport: { tMin: c.viewport.tMin, tMax: c.viewport.tMax, pMin: c.viewport.pMin, pMax: c.viewport.pMax },
+    followRight: Math.abs(c.viewport.tMax - fit.tMax) <= tolerance
+  };
+}
+
+// Update the existing two Canvas surfaces instead of destroying/recreating
+// them. This retains pointer bindings and DPR backing stores, and it gives the
+// renderer a chance to skip paint work when the chart-specific payload did not
+// actually change.
+function _cfChartCanvasRefresh(d, saved) {
+  var c = _cfChartCanvas;
+  if (!c || !c.host || !c.host.isConnected) return false;
+  var oldKey = c.paintKey, oldViewport = c.viewport;
+  c.data = d;
+  var fit = _cfChartCanvasFit(c);
+  if (!fit) return false;
+  var next = saved && saved.viewport ? {
+    tMin: saved.viewport.tMin, tMax: saved.viewport.tMax,
+    pMin: saved.viewport.pMin, pMax: saved.viewport.pMax
+  } : fit;
+  if (saved && saved.followRight) {
+    var span = saved.viewport.tMax - saved.viewport.tMin;
+    next.tMax = fit.tMax;
+    next.tMin = fit.tMax - span;
+  }
+  c.viewport = next;
+  var nextKey = _cfChartCanvasPaintKey(d);
+  // A changed viewport moves every projected pixel, so it must repaint as a
+  // whole. With an unchanged viewport, this intentionally skips paint if none
+  // of the independent draw layers received new data.
+  if (!_cfChartCanvasSameViewport(oldViewport, next) || oldKey !== nextKey) _cfChartCanvasDraw();
+  return true;
+}
+
+// The text/table chrome can be replaced on a refresh without replacing the
+// live canvas element itself. Moving the host through a detached staging node
+// preserves its event handlers, ResizeObserver and user viewport.
+function _cfCascadeRefreshCanvasBody(d, saved) {
+  var c = _cfChartCanvas, body = document.getElementById('cf-cascade-chart-body');
+  if (!c || !body || !c.host || !c.host.isConnected) return false;
+  var stage = document.createElement('div');
+  stage.innerHTML = _cfCascadeChartHtml(d);
+  var replacement = stage.querySelector('#cf-chart-canvas-host');
+  if (!replacement) return false;
+  replacement.replaceWith(c.host);
+  body.replaceChildren.apply(body, Array.prototype.slice.call(stage.childNodes));
+  return _cfChartCanvasRefresh(d, saved);
+}
+
+// xOf/yOf and their inverses are kept together and exposed on canvas state.
+// Phase 3 uses the inverse pair for cursor-anchored zoom and the crosshair.
+function _cfChartCanvasProjection(c) {
+  var v = c.viewport;
+  if (!v) return null;
+  // Classic's 150/62/26/34 gutters live in a 1440×660 viewBox. Scale that
+  // exact geometry to the real Canvas surface (rather than retaining 150 CSS
+  // pixels at every width), so both engines put the same payload in the same
+  // horizontal lane. The floors keep labels readable on a narrow screen.
+  var padL = Math.max(86, 150 * c.w / 1440);
+  var padR = Math.max(42, 62 * c.w / 1440);
+  var padT = Math.max(18, 26 * c.h / 660);
+  var padB = Math.max(26, 34 * c.h / 660);
+  var plotW = Math.max(c.w - padL - padR, 1);
+  var plotH = Math.max(c.h - padT - padB, 1);
+  var tSpan = Math.max(v.tMax - v.tMin, 1);
+  var pSpan = Math.max(v.pMax - v.pMin, Number.EPSILON);
+  var p = {
+    padL: padL, padR: padR, padT: padT, padB: padB, plotW: plotW, plotH: plotH,
+    fontScale: Math.max(0.75, Math.min(1, c.w / 1440, c.h / 660)),
+    xOf: function (t) { return padL + ((Number(t) - v.tMin) / tSpan) * plotW; },
+    yOf: function (price) { return padT + ((v.pMax - Number(price)) / pSpan) * plotH; },
+    tAt: function (x) { return v.tMin + ((Number(x) - padL) / plotW) * tSpan; },
+    pAt: function (y) { return v.pMax - ((Number(y) - padT) / plotH) * pSpan; },
+    inPrice: function (price) { return Number(price) >= v.pMin && Number(price) <= v.pMax; }
+  };
+  c.projection = p;
+  return p;
+}
+
+function _cfChartCanvasText(ctx, text, x, y, color, size, align, weight, scale) {
+  ctx.fillStyle = color;
+  ctx.font = (weight || '400') + ' ' + ((size || 10) * (scale || 1)) + 'px monospace';
+  ctx.textAlign = align || 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(text), x, y);
+}
+
+function _cfChartCanvasClip(ctx, p, draw) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(p.padL, p.padT, p.plotW, p.plotH);
+  ctx.clip();
+  draw();
+  ctx.restore();
+}
+
+function _cfChartCanvasGridAxes(c, p, PAL) {
+  var ctx = c.ctx, d = c.data || {}, candles = d.candles || [];
+  var labels = 0;
+  ctx.lineWidth = 1;
+  for (var g = 0; g <= 4; g++) {
+    var price = c.viewport.pMin + (c.viewport.pMax - c.viewport.pMin) * (g / 4);
+    var y = p.yOf(price);
+    ctx.strokeStyle = PAL.grid;
+    ctx.beginPath(); ctx.moveTo(p.padL, y); ctx.lineTo(p.padL + p.plotW, y); ctx.stroke();
+    _cfChartCanvasText(ctx, Number(price).toLocaleString('en-US', { maximumFractionDigits: 2 }),
+      p.padL + p.plotW + 6, y, PAL.axis, 9.5, 'left', null, p.fontScale);
+    labels++;
+  }
+  var ticks = Math.min(6, candles.length);
+  for (var i = 0; i < ticks; i++) {
+    var ci = Math.round((candles.length - 1) * (i / Math.max(ticks - 1, 1)));
+    _cfChartCanvasText(ctx, _cfCascadeIst(candles[ci].t), p.xOf(candles[ci].t), c.h - 8,
+      PAL.axis, 9.5, 'center', null, p.fontScale);
+    labels++;
+  }
+  return labels;
+}
+
+function _cfChartCanvasCandleWidth(d, p) {
+  var candles = d.candles || [];
+  if (candles.length < 2) return p.plotW;
+  return Math.abs(p.xOf(candles[1].t) - p.xOf(candles[0].t));
+}
+
+function _cfChartCanvasMotherColumn(c, p, PAL) {
+  var ctx = c.ctx, d = c.data || {}, bodyW = Math.max(Math.min(_cfChartCanvasCandleWidth(d, p) * 0.65, 9), 1);
+  _cfChartCanvasClip(ctx, p, function () {
+    (d.candles || []).forEach(function (bar) {
+      if (!bar.is_mother) return;
+      var x = p.xOf(bar.t);
+      ctx.fillStyle = PAL.mother;
+      ctx.globalAlpha = 0.09;
+      ctx.fillRect(x - Math.max(bodyW, 6) / 2 - 3, p.padT + 1, Math.max(bodyW, 6) + 6, p.plotH - 2);
+      ctx.globalAlpha = 1;
+    });
+  });
+}
+
+function _cfChartCanvasCandles(c, p, PAL) {
+  var ctx = c.ctx, d = c.data || {}, bodyW = Math.max(Math.min(_cfChartCanvasCandleWidth(d, p) * 0.65, 9), 1);
+  var count = 0;
+  _cfChartCanvasClip(ctx, p, function () {
+    (d.candles || []).forEach(function (bar) {
+      var x = p.xOf(bar.t), up = Number(bar.c) >= Number(bar.o), color = up ? PAL.up : PAL.down;
+      ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, p.yOf(bar.h)); ctx.lineTo(x, p.yOf(bar.l)); ctx.stroke();
+      var top = p.yOf(Math.max(Number(bar.o), Number(bar.c)));
+      var bottom = p.yOf(Math.min(Number(bar.o), Number(bar.c)));
+      ctx.fillStyle = color;
+      ctx.fillRect(x - bodyW / 2, top, bodyW, Math.max(bottom - top, 1));
+      if (bar.is_mother) {
+        ctx.strokeStyle = PAL.mother; ctx.lineWidth = 1.4;
+        ctx.strokeRect(x - bodyW / 2 - 1, p.yOf(bar.h) - 1, bodyW + 2,
+          Math.max(p.yOf(bar.l) - p.yOf(bar.h) + 2, 4));
+        _cfChartCanvasText(ctx, 'MC', x, Math.max(p.yOf(bar.h) - 8, p.padT + 10), PAL.mother, 9.5, 'center', '700', p.fontScale);
+      }
+      count++;
+    });
+  });
+  return count;
+}
+
+function _cfChartCanvasTrendlines(c, p, PAL, labels) {
+  var d = c.data || {}, ctx = c.ctx, drawn = 0;
+  _cfChartCanvasClip(ctx, p, function () {
+    _cfChartCanvasStructures(d).trendlines.forEach(function (tl) {
+      var a1 = tl.a1, a2 = tl.a2;
+      if (!a1 || !a2 || Number(a2.t) === Number(a1.t)) return;
+      var slope = (Number(a2.p) - Number(a1.p)) / (Number(a2.t) - Number(a1.t));
+      var p0 = Number(a1.p) + slope * (c.viewport.tMin - Number(a1.t));
+      var p1 = Number(a1.p) + slope * (c.viewport.tMax - Number(a1.t));
+      var color = PAL.fibs[(Math.max(1, Number(tl.id) || 1) - 1) % PAL.fibs.length];
+      var noFib = tl.bears_fib === false;
+      ctx.strokeStyle = color; ctx.lineWidth = tl.active ? 1.3 : 0.9;
+      ctx.globalAlpha = noFib ? 0.35 : (tl.active ? 0.95 : 0.5);
+      ctx.setLineDash(noFib ? [6, 4] : []);
+      ctx.beginPath(); ctx.moveTo(p.xOf(c.viewport.tMin), p.yOf(p0)); ctx.lineTo(p.xOf(c.viewport.tMax), p.yOf(p1)); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      if (p.inPrice(p1)) labels.push({ kind: 'right', x: p.xOf(c.viewport.tMax) - 4, y: p.yOf(p1) - 5,
+        text: 'TL' + tl.id + (noFib ? ' (no fib)' : (tl.active ? ' ★' : '')), color: color });
+      drawn++;
+    });
+  });
+  return drawn;
+}
+
+function _cfChartCanvasHline(c, p, labels, price, color, text, dash, width, opacity) {
+  if (!p.inPrice(price)) return false;
+  var ctx = c.ctx, y = p.yOf(price);
+  _cfChartCanvasClip(ctx, p, function () {
+    ctx.strokeStyle = color; ctx.lineWidth = width || 0.9; ctx.globalAlpha = opacity || 1;
+    ctx.setLineDash(dash || []);
+    ctx.beginPath(); ctx.moveTo(p.padL, y); ctx.lineTo(p.padL + p.plotW, y); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+  });
+  if (text) labels.push({ kind: 'gutter', y: y, text: text, color: color });
+  return true;
+}
+
+function _cfChartCanvasFibs(c, p, PAL, labels) {
+  var d = c.data || {}, count = 0;
+  function fmt(v) { return Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+  if (d.mother && d.mother.high) count += _cfChartCanvasHline(c, p, labels, Number(d.mother.high), PAL.mother,
+    'MOTHER (' + fmt(d.mother.high) + ')', [5, 3], 1.1) ? 1 : 0;
+  _cfChartCanvasStructures(d).legs.forEach(function (leg) {
+    var color = PAL.fibs[(Math.max(1, Number(leg.leg_id) || 1) - 1) % PAL.fibs.length];
+    count += _cfChartCanvasHline(c, p, labels, Number(leg.touch_high), color,
+      '0 (' + fmt(leg.touch_high) + ')', [], 0.8, 0.4) ? 1 : 0;
+    count += _cfChartCanvasHline(c, p, labels, Number(leg.low), color,
+      '1 (' + fmt(leg.low) + ')', [], 0.8, 0.4) ? 1 : 0;
+    [2, 4, 8].forEach(function (level) {
+      var price = leg.levels ? leg.levels[String(level)] : null;
+      if (price == null) return;
+      var order = (leg.orders || []).find(function (o) { return o.level === level; }) || {};
+      var usd = Number(order.usd_notional) || 0;
+      count += _cfChartCanvasHline(c, p, labels, Number(price), color,
+        level + ' (' + fmt(price) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''), [], 1.1, 0.9) ? 1 : 0;
+    });
+    if (leg.touch_timestamp && p.inPrice(leg.touch_high)) {
+      var ctx = c.ctx;
+      _cfChartCanvasClip(ctx, p, function () {
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(p.xOf(leg.touch_timestamp), p.yOf(leg.touch_high), 3.5, 0, Math.PI * 2); ctx.stroke();
+      });
+    }
+  });
+  var frozen = !!(d.frozen || d.snapshot);
+  if (d.tp_price) count += _cfChartCanvasHline(c, p, labels, Number(d.tp_price), frozen ? PAL.sellMark : PAL.tp,
+    (frozen ? 'SOLD AT (' : 'TARGET · open (') + fmt(d.tp_price) + ')', [6, 3], 1.2) ? 1 : 0;
+  if (d.avg_entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.avg_entry_price), PAL.avg,
+    (frozen ? 'AVG ENTRY (' : 'AVG ENTRY · open (') + fmt(d.avg_entry_price) + ')', [4, 4], 1.1) ? 1 : 0;
+  return count;
+}
+
+function _cfChartCanvasMarkers(c, p, PAL, labels) {
+  var d = c.data || {}, ctx = c.ctx, count = 0;
+  var entries = (d.entries && d.entries.length) ? d.entries : (d.fills || []).map(function (fill) {
+    return { t: fill && fill.timestamp, price: fill && fill.price };
+  });
+  _cfChartCanvasClip(ctx, p, function () {
+    entries.forEach(function (fill) {
+      if (!fill || !fill.price || !p.inPrice(fill.price)) return;
+      var x = p.xOf(fill.t), y = p.yOf(fill.price) + 10;
+      ctx.fillStyle = PAL.buyMark; ctx.strokeStyle = PAL.markRing; ctx.lineWidth = 0.9;
+      ctx.beginPath(); ctx.moveTo(x, y - 9); ctx.lineTo(x - 5, y); ctx.lineTo(x - 2, y); ctx.lineTo(x - 2, y + 6);
+      ctx.lineTo(x + 2, y + 6); ctx.lineTo(x + 2, y); ctx.lineTo(x + 5, y); ctx.closePath(); ctx.fill(); ctx.stroke();
+      count++;
+    });
+    (d.exits || []).forEach(function (exit) {
+      if (!exit || !exit.price || !p.inPrice(exit.price)) return;
+      var x = p.xOf(exit.t), y = p.yOf(exit.price) - 10;
+      ctx.fillStyle = PAL.sellMark; ctx.strokeStyle = PAL.markRing; ctx.lineWidth = 0.9;
+      ctx.beginPath(); ctx.moveTo(x, y + 9); ctx.lineTo(x - 5, y); ctx.lineTo(x - 2, y); ctx.lineTo(x - 2, y - 6);
+      ctx.lineTo(x + 2, y - 6); ctx.lineTo(x + 2, y); ctx.lineTo(x + 5, y); ctx.closePath(); ctx.fill(); ctx.stroke();
+      var pnl = Number(exit.pnl) || 0;
+      labels.push({ kind: 'marker', x: x, y: y - 9, text: 'SELL ' + Number(exit.price).toLocaleString('en-US', { maximumFractionDigits: 2 })
+        + '  ' + (pnl >= 0 ? '+' : '−') + '$' + _cfCascadeUsd(Math.abs(pnl)), color: PAL.sellMark });
+      count++;
+    });
+  });
+  return count;
+}
+
+function _cfChartCanvasLabels(c, p, labels) {
+  var ctx = c.ctx, slots = [], count = 0;
+  labels.forEach(function (label) {
+    if (label.kind === 'gutter') {
+      var y = label.y;
+      // Do not "clean this up" into an exact 10px shift. The 0.5px overshoot
+      // is the Classic ETH-freeze fix: exact 10 can remain 9.9999999998 apart
+      // in floating point and loop forever in the next collision check.
+      for (var pass = 0, moved = true; moved && pass <= slots.length; pass++) {
+        moved = false;
+        for (var k = 0; k < slots.length; k++) {
+          if (Math.abs(slots[k] - y) < 10) { y = slots[k] + 10.5; moved = true; break; }
+        }
+      }
+      slots.push(y);
+      _cfChartCanvasText(ctx, label.text, p.padL - 6, y + 3, label.color, 10, 'right', null, p.fontScale);
+    } else if (label.kind === 'right') {
+      _cfChartCanvasText(ctx, label.text, label.x, label.y, label.color, 9.5, 'right', null, p.fontScale);
+    } else {
+      _cfChartCanvasText(ctx, label.text, label.x, label.y, label.color, 9.5, 'center', null, p.fontScale);
+    }
+    count++;
+  });
+  return count;
+}
+
 function _cfChartCanvasDraw() {
   var c = _cfChartCanvas;
-  if (!c) return;
-  var PAL = _cfChartPalette();
-  var ctx = c.ctx;
+  if (!c || !c.ctx) return;
+  var d = c.data || {}, candles = d.candles || [];
+  var ctx = c.ctx, PAL = _cfChartPalette();
   ctx.clearRect(0, 0, c.w, c.h);
-  ctx.strokeStyle = PAL.grid;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, c.w - 1, c.h - 1);
+  if (!candles.length) return;
+  if (!c.viewport) c.viewport = _cfChartCanvasFit(c);
+  var p = _cfChartCanvasProjection(c);
+  if (!p) return;
+  var labels = [];
+  // Keep these independently callable layers in this exact order. Later live
+  // refreshes can redraw only changed layers without changing the model.
+  var axisLabelCount = _cfChartCanvasGridAxes(c, p, PAL);
+  _cfChartCanvasMotherColumn(c, p, PAL);
+  var candleCount = _cfChartCanvasCandles(c, p, PAL);
+  var trendlineCount = _cfChartCanvasTrendlines(c, p, PAL, labels);
+  var fibCount = _cfChartCanvasFibs(c, p, PAL, labels);
+  var markerCount = _cfChartCanvasMarkers(c, p, PAL, labels);
+  var labelCount = _cfChartCanvasLabels(c, p, labels);
+  // E2E reads this small semantic paint record in addition to real pixels. It
+  // is a test seam, not payload state, and catches a canvas that draws a frame
+  // but silently loses candles/labels/geometry.
+  c.paint = {
+    candles: candleCount, trendlines: trendlineCount, fibs: fibCount, markers: markerCount,
+    labels: axisLabelCount + labelCount,
+    labelTexts: labels.map(function (label) { return label.text; }),
+    theme: document.documentElement.getAttribute('data-theme') || 'auto'
+  };
+  c.paintKey = _cfChartCanvasPaintKey(d);
+}
 
-  // A notice, on purpose — see the note above the renderer. The size and DPR
-  // are on it because they are the thing this phase actually delivers, and
-  // reading them off the chart beats taking them on trust.
-  var d = c.data || {};
-  var n = (d.candles || []).length;
-  var mid = c.h / 2;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+function _cfChartCanvasPoint(c, event) {
+  var p = c && c.projection;
+  if (!p) return null;
+  var box = c.host.getBoundingClientRect();
+  if (!box.width || !box.height) return null;
+  var x = event.clientX - box.left, y = event.clientY - box.top;
+  return {
+    x: x, y: y,
+    plot: x >= p.padL && x <= p.padL + p.plotW && y >= p.padT && y <= p.padT + p.plotH,
+    priceAxis: x > p.padL + p.plotW && y >= p.padT && y <= p.padT + p.plotH,
+    timeAxis: y > p.padT + p.plotH && x >= p.padL && x <= p.padL + p.plotW
+  };
+}
+
+function _cfChartCanvasSetViewport(c, next) {
+  if (!c || !next) return;
+  var v = c.viewport || {};
+  var tSpan = Number(next.tMax) - Number(next.tMin);
+  var pSpan = Number(next.pMax) - Number(next.pMin);
+  if (!isFinite(tSpan) || !isFinite(pSpan) || tSpan <= 0 || pSpan <= 0) return;
+  c.viewport = { tMin: Number(next.tMin), tMax: Number(next.tMax), pMin: Number(next.pMin), pMax: Number(next.pMax) };
+  var fit = _cfChartCanvasFit(c), label = document.getElementById('cf-cascade-zoom-level');
+  if (fit && label) label.textContent = Math.round((fit.tMax - fit.tMin) / tSpan * 100) + '%';
+  _cfChartCanvasDraw();
+}
+
+function _cfChartCanvasZoom(factor, reset, anchor) {
+  var c = _cfChartCanvas;
+  if (!c || !c.viewport) return;
+  if (reset || factor === 0) {
+    _cfChartCanvasSetViewport(c, _cfChartCanvasFit(c));
+    return;
+  }
+  var step = Number(factor);
+  if (!isFinite(step) || step <= 0) return;
+  var p = c.projection || _cfChartCanvasProjection(c);
+  if (!p) return;
+  var oldSpan = c.viewport.tMax - c.viewport.tMin;
+  var minSpan = _cfChartCanvasBarSeconds(c.data || {}, (c.data || {}).candles || []) / 2;
+  var newSpan = Math.max(minSpan, Math.min(oldSpan * 60, oldSpan * step));
+  var x = anchor && isFinite(anchor.x) ? anchor.x : p.padL + p.plotW / 2;
+  var at = p.tAt(x), ratio = (at - c.viewport.tMin) / oldSpan;
+  _cfChartCanvasSetViewport(c, {
+    tMin: at - ratio * newSpan,
+    tMax: at + (1 - ratio) * newSpan,
+    pMin: c.viewport.pMin, pMax: c.viewport.pMax
+  });
+}
+
+function _cfChartCanvasDrawCrosshair(c, point) {
+  var ctx = c.octx, p = c.projection;
+  if (!ctx || !p) return;
+  ctx.clearRect(0, 0, c.w, c.h);
+  if (!point || !point.plot) return;
+  var PAL = _cfChartPalette(), price = p.pAt(point.y), when = p.tAt(point.x);
+  ctx.save();
+  ctx.strokeStyle = PAL.axis; ctx.lineWidth = 0.7; ctx.globalAlpha = 0.8; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(p.padL, point.y); ctx.lineTo(p.padL + p.plotW, point.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(point.x, p.padT); ctx.lineTo(point.x, p.padT + p.plotH); ctx.stroke();
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+  var priceText = Number(price).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  ctx.font = '9.5px monospace';
+  var priceW = Math.max(ctx.measureText(priceText).width + 10, 42), timeText = _cfCascadeIst(Math.round(when)) + ' IST';
+  var timeW = Math.max(ctx.measureText(timeText).width + 10, 84);
   ctx.fillStyle = PAL.axis;
-  ctx.font = '700 13px monospace';
-  ctx.fillText('CANVAS ENGINE · surface ready', c.w / 2, mid - 20);
-  ctx.font = '11px monospace';
-  ctx.fillText((d.symbol || '--') + ' · ' + n + ' candles · '
-    + c.w + '×' + c.h + ' css @ ' + c.dpr + '× device pixels', c.w / 2, mid + 2);
-  ctx.fillText('Drawing lands in the next phase — switch to Classic for the working chart.',
-    c.w / 2, mid + 22);
+  ctx.fillRect(p.padL + p.plotW + 2, point.y - 8, priceW, 16);
+  ctx.fillRect(point.x - timeW / 2, c.h - 20, timeW, 15);
+  _cfChartCanvasText(ctx, priceText, p.padL + p.plotW + 6, point.y + 0.5, PAL.fillRing, 9.5, 'left');
+  _cfChartCanvasText(ctx, timeText, point.x, c.h - 12, PAL.fillRing, 9, 'center');
+  ctx.restore();
+}
+
+function _cfChartCanvasClearCrosshair(c) {
+  if (c && c.octx) c.octx.clearRect(0, 0, c.w, c.h);
+}
+
+// Phase 3 interaction model. Plot drag pans both axes; the axis gutters are
+// deliberately separate so price stretching can never move time and vice versa.
+function _cfChartCanvasBindInteraction(c) {
+  if (!c || !c.host) return;
+  function bind(name, fn, opts) {
+    c.host.addEventListener(name, fn, opts);
+    c.handlers.push([name, fn, opts]);
+  }
+  function endDrag(event) {
+    if (!c.drag) return;
+    c.drag = null;
+    c.host.style.cursor = '';
+    try { c.host.releasePointerCapture(event.pointerId); } catch (err) {}
+  }
+  bind('pointerdown', function (event) {
+    var point = _cfChartCanvasPoint(c, event), v = c.viewport;
+    if (!point || !v || (!point.plot && !point.priceAxis && !point.timeAxis)) return;
+    c.drag = {
+      kind: point.plot ? 'pan' : (point.priceAxis ? 'price' : 'time'),
+      x: point.x, y: point.y,
+      viewport: { tMin: v.tMin, tMax: v.tMax, pMin: v.pMin, pMax: v.pMax },
+      anchorTime: c.projection.tAt(point.x), anchorPrice: c.projection.pAt(point.y)
+    };
+    c.host.style.cursor = point.plot ? 'grabbing' : 'ns-resize';
+    if (point.timeAxis) c.host.style.cursor = 'ew-resize';
+    try { c.host.setPointerCapture(event.pointerId); } catch (err) {}
+    _cfChartCanvasClearCrosshair(c);
+  });
+  bind('pointermove', function (event) {
+    var point = _cfChartCanvasPoint(c, event);
+    if (!point) return;
+    if (!c.drag) {
+      c.host.style.cursor = point.plot ? 'crosshair' : (point.priceAxis ? 'ns-resize' : (point.timeAxis ? 'ew-resize' : ''));
+      _cfChartCanvasDrawCrosshair(c, point);
+      return;
+    }
+    var drag = c.drag, start = drag.viewport, p = c.projection;
+    var tSpan = start.tMax - start.tMin, pSpan = start.pMax - start.pMin;
+    if (drag.kind === 'pan') {
+      var dt = -(point.x - drag.x) / p.plotW * tSpan;
+      var dp = (point.y - drag.y) / p.plotH * pSpan;
+      _cfChartCanvasSetViewport(c, { tMin: start.tMin + dt, tMax: start.tMax + dt, pMin: start.pMin + dp, pMax: start.pMax + dp });
+    } else if (drag.kind === 'price') {
+      var priceSpan = pSpan * Math.exp((drag.y - point.y) / 160);
+      var priceRatio = (drag.anchorPrice - start.pMin) / pSpan;
+      _cfChartCanvasSetViewport(c, {
+        tMin: start.tMin, tMax: start.tMax,
+        pMin: drag.anchorPrice - priceRatio * priceSpan,
+        pMax: drag.anchorPrice + (1 - priceRatio) * priceSpan
+      });
+    } else {
+      var timeSpan = Math.max(_cfChartCanvasBarSeconds(c.data || {}, (c.data || {}).candles || []) / 2,
+        tSpan * Math.exp((drag.x - point.x) / 160));
+      var timeRatio = (drag.anchorTime - start.tMin) / tSpan;
+      _cfChartCanvasSetViewport(c, {
+        tMin: drag.anchorTime - timeRatio * timeSpan,
+        tMax: drag.anchorTime + (1 - timeRatio) * timeSpan,
+        pMin: start.pMin, pMax: start.pMax
+      });
+    }
+  });
+  bind('pointerup', endDrag);
+  bind('pointercancel', endDrag);
+  bind('pointerleave', function () { if (!c.drag) _cfChartCanvasClearCrosshair(c); });
+  bind('wheel', function (event) {
+    var point = _cfChartCanvasPoint(c, event);
+    if (!point || !point.plot) return;
+    event.preventDefault();
+    // Time only: vertical scale is reserved for deliberate price-axis drags.
+    _cfChartCanvasZoom(event.deltaY < 0 ? 1 / 1.08 : 1.08, false, point);
+  }, { passive: false });
+  bind('dblclick', function (event) {
+    var point = _cfChartCanvasPoint(c, event), fit = _cfChartCanvasFit(c);
+    if (!point || !fit || !c.viewport) return;
+    if (point.priceAxis) _cfChartCanvasSetViewport(c, { tMin: c.viewport.tMin, tMax: c.viewport.tMax, pMin: fit.pMin, pMax: fit.pMax });
+    else if (point.timeAxis) _cfChartCanvasSetViewport(c, { tMin: fit.tMin, tMax: fit.tMax, pMin: c.viewport.pMin, pMax: c.viewport.pMax });
+    else if (point.plot) _cfChartCanvasSetViewport(c, fit);
+  });
 }
 
 function _cfCascadeChartTables(d) {
@@ -9970,10 +10518,9 @@ function _cfCascadeChartHtml(d) {
     // In journal mode this is a static trade record: skip the interaction hints
     // and the fib-colour key that only matter alongside the live detail tables.
     + (journal ? '' : (_CF_CHART_ENGINE === 'canvas'
-      // Say what the Canvas engine can and cannot do yet. A blurb describing
-      // fib colours over a surface that draws none would be a lie.
-      ? '<br>Canvas engine: the surface is live and scaled to your screen’s device pixels, but the drawing'
-        + ' pipeline lands in the next phase. Switch to Classic for the working chart.'
+      ? '<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
+        + ' Labels are on the left, and each funded buy level carries the dollars resting on it. Canvas supports'
+        + ' crosshair, pan, cursor-time zoom, independent axis controls and viewport-safe refreshes. Classic remains the default.'
       : ('<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
         + ' Labels are on the left, and each funded buy level carries the dollars resting on it.'
         + ' Move the pointer over the chart for a crosshair with the price and time. The wheel zooms about the cursor,'
@@ -10079,6 +10626,14 @@ function _cfChartApplyZoom() {
 }
 
 function cfCascadeZoom(factor, resetPan, anchor) {
+  if (_CF_CHART_ENGINE === 'canvas') {
+    // Classic stores a magnification (1.4 means a smaller viewBox); Canvas
+    // stores the visible time span (so the same action is its reciprocal).
+    // Convert at this shared-control boundary and leave cursor-wheel Canvas
+    // factors in their native time-span convention below.
+    _cfChartCanvasZoom(factor === 0 ? 0 : 1 / Number(factor), resetPan, anchor);
+    return;
+  }
   var svg = _cfChartSvg();
   if (!svg) return;
   if (!svg.dataset.baseViewbox) svg.dataset.baseViewbox = svg.getAttribute('viewBox') || '';
@@ -10267,7 +10822,7 @@ document.addEventListener('keydown', function(event) {
   }
 });
 
-async function cfCascadeShowChart(campaignId, mode) {
+async function cfCascadeShowChart(campaignId, mode, canvasRefreshState) {
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   var body = document.getElementById('cf-cascade-chart-body');
   if (!overlay || !body) return;
@@ -10283,19 +10838,26 @@ async function cfCascadeShowChart(campaignId, mode) {
   _cfCascadeChartId = campaignId;
   overlay.style.display = '';
   document.body.classList.add('cf-chart-fs-open');
-  // Anything the previous render left watching the DOM has to go before the
-  // body is replaced, or its ResizeObserver keeps firing on detached nodes.
-  _cfChartCanvasTeardown();
+  // A Canvas refresh keeps its real host mounted through the fetch. Every other
+  // open/re-render retains the established teardown-before-replace behaviour.
+  var keepCanvas = !!(canvasRefreshState && _CF_CHART_ENGINE === 'canvas'
+    && _cfChartCanvas && _cfChartCanvas.host && _cfChartCanvas.host.isConnected);
+  if (!keepCanvas) _cfChartCanvasTeardown();
   _cfCascadeMarkEngine();
-  body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
+  if (!keepCanvas) body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
   try {
     var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId)
       + '/chart?timeframe=' + encodeURIComponent(_cfCascadeChartTf), { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
     _cfCascadeChartData = data;
-    body.innerHTML = _cfCascadeChartHtml(data);
-    _cfChartMountRenderer(data);
+    // No-candle/error responses deliberately fall back to the ordinary mount:
+    // there is no Canvas surface to retain in that state.
+    if (!(keepCanvas && (data.candles || []).length && _cfCascadeRefreshCanvasBody(data, canvasRefreshState))) {
+      _cfChartCanvasTeardown();
+      body.innerHTML = _cfCascadeChartHtml(data);
+      _cfChartMountRenderer(data);
+    }
     _cfCascadeRenderTimeframeOptions(data.timeframe_options);
     // The API protects the mother candle from being pushed off screen.  Reflect
     // a forced wider view in the selector so the visible chart and its control
@@ -10318,12 +10880,17 @@ async function cfCascadeShowChart(campaignId, mode) {
     }
   } catch (error) {
     _cfCascadeChartData = null;
+    _cfChartCanvasTeardown();
     body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(error.message) + '</div>';
   }
 }
 
 function cfCascadeRefreshChart() {
-  if (_cfCascadeChartId) cfCascadeShowChart(_cfCascadeChartId, _cfCascadeChartMode);
+  if (!_cfCascadeChartId) return;
+  // Classic keeps its established refresh semantics. Canvas refreshes capture
+  // only view state, never payload/engine state, before fetching the new chart.
+  var saved = _CF_CHART_ENGINE === 'canvas' ? _cfChartCanvasRefreshState() : null;
+  return cfCascadeShowChart(_cfCascadeChartId, _cfCascadeChartMode, saved);
 }
 
 function cfCascadeHideChart() {
