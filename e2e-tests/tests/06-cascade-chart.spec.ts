@@ -633,6 +633,55 @@ test.describe('Cascade chart', () => {
     expect(afterEdgeRefresh.viewport.pMax, 'follow leaves price maximum alone').toBe(edgeBefore.viewport.pMax);
   });
 
+  test('canvas status poll refreshes an open full chart without moving a research view', async ({ page }) => {
+    const initial = chartPayload();
+    const serve = await serveFixture(page, initial);
+    await page.route('**/api/cascade/status', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ok', running: false, active_count: 0,
+        campaigns: [], closed_campaigns: [], instruments: {}, capital_groups: {},
+      }),
+    }));
+    await page.evaluate(() => (window as any).cfCascadeSetEngine('canvas'));
+    await openChart(page);
+
+    const extend = (payload: Record<string, unknown>) => {
+      const bars = payload.candles as Array<Record<string, number | boolean>>;
+      const last = bars[bars.length - 1];
+      return { ...payload, candles: [...bars, { ...last, t: Number(last.t) + STEP, is_mother: false }] };
+    };
+    await page.evaluate((step) => {
+      const c = (window as any)._cfChartCanvas;
+      const v = c.viewport;
+      (window as any)._cfChartCanvasSetViewport(c, {
+        tMin: v.tMin - step * 4, tMax: v.tMax - step * 4, pMin: v.pMin, pMax: v.pMax,
+      });
+    }, STEP);
+    const before = await page.evaluate(() => ({ ...(window as any)._cfChartCanvas.viewport }));
+    serve(extend(initial));
+
+    // Awaiting the status load proves the refresh is part of the actual 3s
+    // poll path, not merely the chart toolbar's manual Refresh action.
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+    const after = await page.evaluate(() => {
+      const c = (window as any)._cfChartCanvas;
+      return { viewport: { ...c.viewport }, candleCount: c.data.candles.length };
+    });
+    expect(after.viewport, 'poll keeps a panned-back research view').toEqual(before);
+    expect(after.candleCount, 'poll delivers the new chart payload').toBe(81);
+
+    // Journal charts are immutable trade records and must never be rewritten
+    // by the live Cascade status poll.
+    await page.evaluate(() => (window as any).cfCascadeShowChart('e2e-chart-fixture', 'journal'));
+    const journalBefore = await page.evaluate(() => (window as any)._cfChartCanvas.data.candles.length);
+    serve(extend(extend(initial)));
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+    expect(await page.evaluate(() => (window as any)._cfChartCanvas.data.candles.length),
+      'poll leaves journal snapshot untouched').toBe(journalBefore);
+  });
+
   test('the engine toggle switches renderers and sticks', async ({ page }) => {
     const watch = watchErrors(page);
     await serveFixture(page, chartPayload());

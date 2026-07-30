@@ -7962,6 +7962,11 @@ async function cfLoadCascadeStatus(showToast) {
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Cascade status unavailable'));
     _cfCascadeLastStatus = data;
     cfRenderCascadeStatus(data);
+    // The status poll is the source of live Cascade changes. Canvas is the
+    // only renderer whose refresh preserves its own viewport, so refresh an
+    // open full chart from this same poll without altering Classic's established
+    // SVG behaviour or journal snapshots.
+    await _cfCascadeRefreshOpenCanvasChartFromPoll();
     if (showToast) cfToast('Cascade status refreshed', 'success');
   } catch (error) {
     if (showToast) cfToast('Cascade refresh failed: ' + error.message, 'danger');
@@ -9405,6 +9410,10 @@ var _cfCascadeChartId = '';
 // 'full' = the live cascade view (chart + trendline/leg/order tables). 'journal'
 // = a clean static snapshot of just the chart, for the trade record — no tables.
 var _cfCascadeChartMode = 'full';
+// A chart request can take longer than the 3s status interval. One in-flight
+// poll refresh is enough: skipping the next tick avoids racing stale payloads
+// back over a newer Canvas view.
+var _cfCascadePollChartRefreshInFlight = false;
 
 // Every candle time on this site reads in IST. Binance hands us epoch seconds;
 // shift by +5:30 and format off the UTC getters so the result is IST no matter
@@ -10894,6 +10903,27 @@ function cfCascadeRefreshChart() {
   // only view state, never payload/engine state, before fetching the new chart.
   var saved = _CF_CHART_ENGINE === 'canvas' ? _cfChartCanvasRefreshState() : null;
   return cfCascadeShowChart(_cfCascadeChartId, _cfCascadeChartMode, saved);
+}
+
+function _cfCascadeRefreshOpenCanvasChartFromPoll() {
+  var overlay = document.getElementById('cf-cascade-chart-overlay');
+  var canvas = _cfChartCanvas;
+  if (_cfCascadePollChartRefreshInFlight || _CF_CHART_ENGINE !== 'canvas'
+    || !_cfCascadeChartId || _cfCascadeChartMode === 'journal'
+    || !overlay || overlay.style.display === 'none'
+    || !canvas || !canvas.host || !canvas.host.isConnected) {
+    return Promise.resolve(false);
+  }
+  _cfCascadePollChartRefreshInFlight = true;
+  return Promise.resolve(cfCascadeRefreshChart()).then(function() {
+    _cfCascadePollChartRefreshInFlight = false;
+    return true;
+  }, function() {
+    // Chart fetch failures already render their own safe panel. The status
+    // poll must keep running and retry on its next normal interval.
+    _cfCascadePollChartRefreshInFlight = false;
+    return false;
+  });
 }
 
 function cfCascadeHideChart() {
