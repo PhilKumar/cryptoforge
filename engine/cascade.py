@@ -1882,6 +1882,34 @@ class CascadeEngine:
                 )
             }
         tf_sec = timeframe_seconds(timeframe)
+        # Prices are optional when the TIME is given: the candle at that moment
+        # on the chosen timeframe IS the mother, and reading its high/low off
+        # the exchange beats retyping them — one candle out changes every fib
+        # downstream, and a typo looks exactly like a rule bug. Explicit prices
+        # still win when both are sent (cross-exchange charts quote differently).
+        if mother_timestamp and (mother_high <= 0 or mother_low <= 0):
+            bucket = (int(mother_timestamp) // tf_sec) * tf_sec
+            try:
+                df = await self.broker.async_get_candles(symbol, resolution=timeframe)
+            except Exception as exc:
+                return {"error": f"Could not fetch the mother candle at that time: {exc}"}
+            row = None
+            if df is not None and len(df):
+                for ts, r in df.iterrows():
+                    if int(ts.timestamp()) == bucket:
+                        row = r
+                        break
+            if row is None:
+                return {
+                    "error": (
+                        f"No {timeframe} candle found at that time for {symbol} — the exchange "
+                        "returns recent candles only, so give the high and low by hand for an "
+                        "older mother."
+                    )
+                }
+            mother_high = _coerce_float(row.get("high"))
+            mother_low = _coerce_float(row.get("low"))
+            mother_timestamp = bucket
         if mother_high <= 0 or mother_low <= 0 or mother_high <= mother_low:
             return {"error": "Mother candle high must be greater than mother candle low (both > 0)"}
         min_notional = MIN_NOTIONAL_FLOOR_USD
@@ -2754,7 +2782,9 @@ class CascadeEngine:
         # window is anchored somewhere real rather than collapsing to nothing.
         return latest or int(campaign.mother_timestamp or 0)
 
-    async def get_chart_data(self, campaign_id: str, max_candles: int = 200, timeframe: str = "auto") -> dict:
+    async def get_chart_data(
+        self, campaign_id: str, max_candles: int = 200, timeframe: str = "auto", end_ts: int = 0
+    ) -> dict:
         """
         Candles plus the geometry the engine actually used — trendline anchors,
         each leg's fib anchors/levels, ladder order prices and fills — so the
@@ -2762,10 +2792,33 @@ class CascadeEngine:
 
         Ended campaigns work too — they are read back out of the closed history,
         which is the whole point of the Chart button on that table.
+
+        `end_ts` freezes the view at that moment even for a RUNNING campaign —
+        the journal opens a completed round's chart this way. Legs, trendlines
+        and rounds never mutate after they are drawn, so filtering them by
+        timestamp reproduces the geometry exactly as it stood at the exit; the
+        campaign then keeps trading without its history redrawing itself.
         """
         campaign = self.campaigns.get(campaign_id) or self._closed_campaign(campaign_id)
         if campaign is None:
             return {"error": f"Campaign {campaign_id} not found"}
+        if end_ts:
+            frozen = Campaign.from_dict(campaign.to_dict())
+            frozen.trendlines = [tl for tl in frozen.trendlines if tl.anchor2_timestamp <= end_ts]
+            frozen.legs = [
+                leg
+                for leg in frozen.legs
+                if int(leg.touch_timestamp or 0) <= end_ts and leg.trendline_id <= len(frozen.trendlines)
+            ]
+            frozen.rounds = [r for r in frozen.rounds if int(r.closed_ts or 0) <= end_ts or not r.closed_ts]
+            frozen.pending_fibs = []
+            frozen.all_fills = [f for f in frozen.all_fills if int(f.timestamp or 0) <= end_ts]
+            # A frozen round view is flat by definition: the trade the journal
+            # row records has closed. The last round in the window carries the
+            # exit the chart marks.
+            frozen.state = "COMPLETED"
+            frozen.close_reason = frozen.close_reason or "tp_filled"
+            campaign = frozen
 
         # Always pull a full window straight from the broker rather than the
         # engine's in-memory list: that list is only what this process has
@@ -2775,7 +2828,7 @@ class CascadeEngine:
         base_sec = campaign.timeframe_sec
         requested_input = str(timeframe).lower()
         requested = requested_input
-        trade_end_ts = self._campaign_end_ts(campaign)
+        trade_end_ts = int(end_ts) or self._campaign_end_ts(campaign)
         auto_timeframe = self._auto_chart_timeframe(campaign, max_candles, end_ts=trade_end_ts)
         mother_forced_visible = False
         if requested == "auto" or requested not in options:

@@ -7356,7 +7356,7 @@ async def cascade_recalculate_campaign(campaign_id: str):
 
 
 @app.get("/api/cascade/campaigns/{campaign_id}/chart")
-async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
+async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto", end_ts: int = 0):
     eng = _get_cascade_engine()
     if not eng.campaigns:
         _restore_cascade_runtime(eng)
@@ -7369,7 +7369,7 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
     # memory for days after it closed, and re-rendering it each view redrew a
     # live, ever-lengthening chart of price long after the trade was over —
     # which is exactly what the snapshot exists to prevent.
-    snapshot = _load_chart_snapshot(campaign_id)
+    snapshot = None if end_ts else _load_chart_snapshot(campaign_id)
     if snapshot and int(snapshot.get("snapshot_version") or 1) >= _CHART_SNAPSHOT_VERSION:
         snapshot = dict(snapshot)
         snapshot["snapshot"] = True
@@ -7378,7 +7378,7 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
     # are wrong. Rebuild once from the campaign and re-freeze — the candles are
     # cut at the trade's own end either way, so the rebuilt record covers the
     # same window as the original.
-    result = await eng.get_chart_data(campaign_id, timeframe=timeframe)
+    result = await eng.get_chart_data(campaign_id, timeframe=timeframe, end_ts=max(0, int(end_ts)))
     if result.get("error") and snapshot:
         # The campaign is gone from memory, so a stale record is all there is.
         # Better an outdated chart than none.
@@ -7387,8 +7387,10 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto"):
         return snapshot
     if not result.get("error"):
         # First view after it ended, if the close capture did not get there
-        # first: freeze it now, and serve that same frozen payload.
-        if result.get("state") in CASCADE_FINAL_STATES:
+        # first: freeze it now, and serve that same frozen payload. A view
+        # frozen at a requested end_ts is already its own snapshot and must
+        # never be persisted as the campaign's final record.
+        if not end_ts and result.get("state") in CASCADE_FINAL_STATES:
             _persist_chart_snapshot(campaign_id, result)
             result = dict(result)
             result["snapshot"] = True

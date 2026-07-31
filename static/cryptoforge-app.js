@@ -5652,10 +5652,12 @@ function _cfJournalChartBtn(t) {
   var cid = t && t.campaign_id;
   if (!cid) return '';
   var seq = t.campaign_seq ? ' #' + _escapeHtml(String(t.campaign_seq)) : '';
+  var endSec = Math.floor((Number(t.closed_ts) || 0) / 1000);
   return ' <button type="button" class="btn btn-outline btn-sm cf-journal-chartbtn"'
     + ' title="See how this trade was taken — campaign chart' + seq + '"'
     + ' aria-label="View trade chart"'
-    + ' data-cf-click="event.stopPropagation();cfCascadeShowChart(\'' + _escapeHtml(String(cid)) + '\',\'journal\')">'
+    + ' data-cf-click="event.stopPropagation();cfCascadeShowChart(\'' + _escapeHtml(String(cid))
+      + '\',\'journal\',undefined,' + endSec + ')">'
     + '<svg class="cf-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
     + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
     + '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></button>';
@@ -8513,9 +8515,30 @@ function _cfCascadePositionPanel(campaign, fills) {
             + '>Log' + (buys ? ' (' + buys + ')' : '') + '</button></td>'
           + '</tr>';
       }).join('')
-      + '</tbody></table></div>';
+      + '</tbody></table>'
+      + (rPages > 1
+        ? '<div class="cf-cascade-pager" data-cf-stop="1" onclick="event.stopPropagation()">'
+          + '<span class="table-meta">' + (rFrom + 1) + '\u2013'
+            + Math.min(rFrom + _CF_ROUNDS_PAGE_SIZE, rounds.length) + ' of ' + rounds.length + '</span>'
+          + '<button class="btn btn-outline btn-sm" ' + (rPage === 0 ? 'disabled' : '')
+            + ' data-cf-click="cfCascadeRoundsPage(\'' + _escapeHtml(String(campaign.campaign_id)) + '\',-1)">Newer</button>'
+          + '<button class="btn btn-outline btn-sm" ' + (rPage >= rPages - 1 ? 'disabled' : '')
+            + ' data-cf-click="cfCascadeRoundsPage(\'' + _escapeHtml(String(campaign.campaign_id)) + '\',1)">Older</button>'
+          + '</div>'
+        : '')
+      + '</div>';
   }
   return out;
+}
+
+// Per-campaign page of its closed-rounds table, keyed by campaign id so a
+// status poll re-render keeps the page you were reading.
+var _CF_ROUNDS_PAGE_SIZE = 8;
+var _cfCascadeRoundsPage = {};
+
+function cfCascadeRoundsPage(campaignId, step) {
+  _cfCascadeRoundsPage[campaignId] = (_cfCascadeRoundsPage[campaignId] || 0) + step;
+  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
 }
 
 function _cfCascadeMarkClippedLabels(root) {
@@ -9179,7 +9202,15 @@ async function cfCascadeStartCampaign() {
 
   if (!symbol.trim()) return _cfCascadeSetError('Enter a symbol (e.g. BTCUSDT).');
   if (!(capital > 0)) return _cfCascadeSetError('Enter the campaign capital in USD.');
-  if (!(motherHigh > 0) || !(motherLow > 0) || motherHigh <= motherLow) {
+  // With an MC time the server reads the candle's own high/low off the
+  // exchange — safer than retyping them, since one candle out changes every
+  // fib downstream. Typed prices still override (cross-exchange charts).
+  var hasTime = !!motherTimeRaw;
+  var hasPrices = motherHigh > 0 && motherLow > 0;
+  if (!hasTime && !hasPrices) {
+    return _cfCascadeSetError('Give the MC time (the candle is read off the exchange), or its high and low.');
+  }
+  if (hasPrices && motherHigh <= motherLow) {
     return _cfCascadeSetError('Mother candle high must be greater than mother candle low.');
   }
   if (mode === 'live') {
@@ -9439,6 +9470,7 @@ var _cfCascadeChartId = '';
 // 'full' = the live cascade view (chart + trendline/leg/order tables). 'journal'
 // = a clean static snapshot of just the chart, for the trade record — no tables.
 var _cfCascadeChartMode = 'full';
+var _cfCascadeChartEndTs = 0;
 // A chart request can take longer than the 3s status interval. One in-flight
 // poll refresh is enough: skipping the next tick avoids racing stale payloads
 // back over a newer Canvas view.
@@ -10873,13 +10905,18 @@ document.addEventListener('keydown', function(event) {
   }
 });
 
-async function cfCascadeShowChart(campaignId, mode, canvasRefreshState) {
+async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   var body = document.getElementById('cf-cascade-chart-body');
   if (!overlay || !body) return;
   // Openers pass the mode ('journal' from a journal row, nothing = 'full' from
   // the cascade tab); internal re-renders pass the current mode to preserve it.
   _cfCascadeChartMode = mode || 'full';
+  // A journal row is a finished trade: its chart freezes at the trade's own
+  // exit even while the campaign runs on. Openers pass the exit epoch;
+  // re-renders and timeframe switches reuse the stored one.
+  if (endTs !== undefined) _cfCascadeChartEndTs = Number(endTs) || 0;
+  if (_cfCascadeChartMode !== 'journal') _cfCascadeChartEndTs = 0;
   overlay.classList.toggle('cf-chart-journal', _cfCascadeChartMode === 'journal');
   // The overlay markup lives inside the Cascade page section, which is
   // display:none on every other tab — so opening it from a Journal row set its
@@ -10898,7 +10935,8 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState) {
   if (!keepCanvas) body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
   try {
     var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId)
-      + '/chart?timeframe=' + encodeURIComponent(_cfCascadeChartTf), { cache: 'no-store' });
+      + '/chart?timeframe=' + encodeURIComponent(_cfCascadeChartTf)
+      + (_cfCascadeChartEndTs ? '&end_ts=' + _cfCascadeChartEndTs : ''), { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
     _cfCascadeChartData = data;

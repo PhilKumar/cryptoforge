@@ -5451,3 +5451,140 @@ class CascadeTrendlineReferenceTests(unittest.TestCase):
         last_ts = self._PHIL_0731[-1][0]
         heights = [trendline_price(tl, last_ts) for tl in campaign.trendlines]
         self.assertEqual(heights, sorted(heights), "each line must sit at or above the one before it")
+
+
+class CascadeStartFromTimestampTests(unittest.IsolatedAsyncioTestCase):
+    """The mother candle's prices can come from its TIME — the candle at that
+    moment on the chosen timeframe is read off the exchange. Retyping a high
+    that is one candle out changes every fib downstream and looks exactly like
+    a rule bug, which is how campaign #36 got started on the wrong mother."""
+
+    def _engine_with_candles(self):
+        broker = FakeCascadeBroker()
+        broker.candles_df = pd.DataFrame(
+            {
+                "open": [row[1] for row in _REAL],
+                "high": [row[2] for row in _REAL],
+                "low": [row[3] for row in _REAL],
+                "close": [row[4] for row in _REAL],
+            },
+            index=pd.to_datetime([_RECENT_TS + row[0] * 300 for row in _REAL], unit="s", utc=True),
+        )
+        return _mk_engine(broker)
+
+    async def test_time_only_reads_the_candle_off_the_exchange(self):
+        engine = self._engine_with_candles()
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 0, 0, mother_timestamp=_RECENT_TS, timeframe="5m", mc_kind="major"
+        )
+        self.assertNotIn("error", result)
+        campaign = result["campaign"]
+        self.assertAlmostEqual(campaign["mother_high"], _REAL[0][2])
+        self.assertAlmostEqual(campaign["mother_low"], _REAL[0][3])
+
+    async def test_typed_prices_still_override_the_fetch(self):
+        """A chart quoted on another exchange prints different prices — the
+        typed values must win over the Binance candle."""
+        engine = self._engine_with_candles()
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 65200.0, 65100.0, mother_timestamp=_RECENT_TS, timeframe="5m", mc_kind="major"
+        )
+        self.assertNotIn("error", result)
+        self.assertAlmostEqual(result["campaign"]["mother_high"], 65200.0)
+
+    async def test_a_time_with_no_candle_is_refused_plainly(self):
+        engine = self._engine_with_candles()
+        result = await engine.start_campaign(
+            "BTCUSDT", 2000, 0, 0, mother_timestamp=_RECENT_TS - 86400 * 30, timeframe="5m", mc_kind="major"
+        )
+        self.assertIn("No 5m candle found", result.get("error", ""))
+
+
+class CascadeFrozenJournalChartTests(unittest.IsolatedAsyncioTestCase):
+    """A journal row is a finished trade: its chart freezes at the trade's own
+    exit even while the campaign runs on — later fibs, lines and rounds must
+    not redraw a record."""
+
+    async def test_end_ts_filters_geometry_and_marks_frozen(self):
+        broker = FakeCascadeBroker()
+        broker.candles_df = pd.DataFrame(
+            {
+                "open": [row[1] for row in _REAL],
+                "high": [row[2] for row in _REAL],
+                "low": [row[3] for row in _REAL],
+                "close": [row[4] for row in _REAL],
+            },
+            index=pd.to_datetime([_RECENT_TS + row[0] * 300 for row in _REAL], unit="s", utc=True),
+        )
+        engine = _mk_engine(broker)
+        campaign = Campaign(
+            campaign_id="fz",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65107.99,
+            mother_low=65002.00,
+            mother_timestamp=_RECENT_TS,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        engine.campaigns["fz"] = campaign
+        cut = _RECENT_TS + 8 * 300
+        campaign.state = "TRENDLINE_ACTIVE"
+        campaign.trendlines.append(
+            Trendline(
+                trendline_id=1,
+                anchor1_price=65107.99,
+                anchor1_timestamp=_RECENT_TS,
+                anchor2_price=64904.00,
+                anchor2_timestamp=_RECENT_TS + 5 * 300,
+            )
+        )
+        campaign.trendlines.append(
+            Trendline(
+                trendline_id=2,
+                anchor1_price=65107.99,
+                anchor1_timestamp=_RECENT_TS,
+                anchor2_price=64700.00,
+                anchor2_timestamp=_RECENT_TS + 40 * 300,
+            )
+        )
+        early = Leg(leg_id=1, trendline_id=1, low=64790.01, touch_high=64928.00, touch_timestamp=_RECENT_TS + 5 * 300)
+        early.fib = FibLadder(high_anchor=64928.00, low_anchor=64790.01)
+        late = Leg(leg_id=2, trendline_id=2, low=64416.00, touch_high=64964.00, touch_timestamp=_RECENT_TS + 30 * 300)
+        late.fib = FibLadder(high_anchor=64964.00, low_anchor=64416.00)
+        campaign.legs.extend([early, late])
+        campaign.rounds.append(
+            Round(
+                round_id=1,
+                leg_id=1,
+                avg_entry=64650.0,
+                quantity=0.001,
+                invested_usd=64.65,
+                exit_price=64800.0,
+                pnl=0.15,
+                closed_ts=cut,
+            )
+        )
+        campaign.rounds.append(
+            Round(
+                round_id=2,
+                leg_id=2,
+                avg_entry=64500.0,
+                quantity=0.001,
+                invested_usd=64.5,
+                exit_price=64700.0,
+                pnl=0.2,
+                closed_ts=_RECENT_TS + 45 * 300,
+            )
+        )
+
+        data = await engine.get_chart_data("fz", timeframe="5m", end_ts=cut)
+        self.assertTrue(data.get("frozen"))
+        self.assertEqual(data.get("trade_end_ts"), cut)
+        self.assertEqual(len(data.get("trendlines") or []), 1, "the later line is after the exit")
+        self.assertEqual(len(data.get("legs") or []), 1)
+        self.assertEqual(len(data.get("exits") or []), 1, "only the frozen round's exit is marked")
+        self.assertTrue(all(c["t"] <= cut + 6 * 300 for c in data.get("candles") or []))
+        # ...and the live campaign object is untouched.
+        self.assertEqual(len(campaign.legs), 2)
+        self.assertEqual(campaign.state, "TRENDLINE_ACTIVE")
