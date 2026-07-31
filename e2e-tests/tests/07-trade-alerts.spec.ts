@@ -120,6 +120,33 @@ test.describe('Trade alerts', () => {
     await expect(page.locator('.cf-alert-card')).toHaveCount(3);
   });
 
+  test('a dismissed alert does not come back on the next inbox read', async ({ page }) => {
+    // The inbox is re-read on every socket connect, on tab focus and every 45s,
+    // and the server here keeps answering with the alert you just cleared —
+    // exactly what a read already in flight when you clicked would return. The
+    // dismissal is the deliberate act; a stale read must not undo it. This
+    // raced in CI as "Got it leaves 2 cards standing" before it was fixed.
+    await stubInbox(page, [alert(7), alert(8)]);
+    await login(page);
+    await expect(page.locator('.cf-alert-card')).toHaveCount(2);
+
+    await page.locator('.cf-alert-card-ack').first().click();
+    await expect(page.locator('.cf-alert-card')).toHaveCount(1);
+
+    // Two more reads of the unchanged server inbox, the way a reconnect does.
+    await page.evaluate(() => (window as any).cfLoadAlerts());
+    await page.evaluate(() => (window as any).cfLoadAlerts());
+    await expect(page.locator('.cf-alert-card')).toHaveCount(1);
+    await expect(page.locator('.cf-alert-card-title')).toHaveText(
+      'BTCUSDT — Entry filled #8');
+
+    // Same promise for Dismiss all: the whole stack stays down.
+    await page.click('#cf-alert-dismiss-all');
+    await expect(page.locator('#cf-alert-stack')).toBeHidden();
+    await page.evaluate(() => (window as any).cfLoadAlerts());
+    await expect(page.locator('#cf-alert-stack')).toBeHidden();
+  });
+
   test('an empty inbox shows nothing at all', async ({ page }) => {
     await stubInbox(page, []);
     await login(page);

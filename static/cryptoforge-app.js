@@ -761,6 +761,25 @@ function cfToast(msg, type) {
 // only goes away when it is dismissed by hand.
 var _cfAlerts = [];
 var _cfAlertsLoading = false;
+// Ids dismissed in this tab. A load already in flight when you click "Got it"
+// — the socket fires one on every connect — answers with the server's older
+// view and would put the card straight back. Dismissing is the one thing the
+// user did on purpose, so it wins over any inbox read until the server agrees.
+var _cfAlertsAcked = Object.create(null);
+
+// Drop what this tab has already dismissed, and forget an ack once the server
+// has stopped sending that alert — which keeps the list from growing forever.
+function _cfKeepUnacked(items) {
+  var kept = [];
+  var stillPending = Object.create(null);
+  for (var i = 0; i < items.length; i++) {
+    var id = items[i] && items[i].id;
+    if (_cfAlertsAcked[id]) { stillPending[id] = true; continue; }
+    kept.push(items[i]);
+  }
+  _cfAlertsAcked = stillPending;
+  return kept;
+}
 
 function cfAlertIcon(level) {
   return ({ success: '🎯', error: '⛔', warn: '⚠️', info: '⚡' })[level] || '⚡';
@@ -826,7 +845,7 @@ async function cfLoadAlerts() {
     var r = await cfApiFetch('/api/notifications');
     if (!r.ok) return;
     var d = await r.json();
-    _cfAlerts = Array.isArray(d.items) ? d.items : [];
+    _cfAlerts = _cfKeepUnacked(Array.isArray(d.items) ? d.items : []);
     cfRenderAlerts();
   } catch (e) {
     // Offline or mid-reconnect — the stack keeps whatever it already shows.
@@ -837,6 +856,7 @@ async function cfLoadAlerts() {
 
 function cfPushAlert(item) {
   if (!item || item.seen) return;
+  if (_cfAlertsAcked[item.id]) return;
   if (_cfAlerts.some(function(row) { return row.id === item.id; })) return;
   _cfAlerts.unshift(item);
   cfRenderAlerts();
@@ -862,12 +882,15 @@ async function cfAckAlerts(payload) {
 
 async function cfAckAlert(id) {
   if (!(await cfAckAlerts({ ids: [id] }))) return;
+  _cfAlertsAcked[id] = true;
   _cfAlerts = _cfAlerts.filter(function(row) { return row.id !== id; });
   cfRenderAlerts();
 }
 
 async function cfAckAllAlerts() {
+  var showing = _cfAlerts.slice();
   if (!(await cfAckAlerts({ all: true }))) return;
+  for (var i = 0; i < showing.length; i++) _cfAlertsAcked[showing[i].id] = true;
   _cfAlerts = [];
   cfRenderAlerts();
 }
