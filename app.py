@@ -7211,6 +7211,16 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
             fee_assets[str(asset).upper()] = round(
                 fee_assets.get(str(asset).upper(), 0.0) + _coerce_float_safe(amount), 6
             )
+    # The verdict comes from the LATEST closed trade, not from the whole
+    # history. The setting is a switch with a date: the day it is turned on,
+    # every trade before it still shows a fee paid in the coin, and an
+    # all-history reading would report "partly applied" — which sounds like a
+    # fault rather than like yesterday.
+    latest = max(
+        (t for t in closed if t.get("fee_assets")),
+        key=lambda t: _coerce_float_safe(t.get("closed_ts")),
+        default=None,
+    )
     wins = [t for t in closed if _coerce_float_safe(t.get("pnl_usd")) > 0]
     losses = [t for t in closed if _coerce_float_safe(t.get("pnl_usd")) < 0]
     rois = [_coerce_float_safe(t.get("roi_pct")) for t in closed]
@@ -7256,6 +7266,7 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
         "gross_pnl_usd": round(gross, 2),
         "fees_usd": round(fees, 4),
         "fee_assets": dict(sorted(fee_assets.items(), key=lambda kv: -kv[1])),
+        "latest_fee_assets": dict((latest or {}).get("fee_assets") or {}),
         "fee_drag_pct": round(fees / gross * 100, 1) if gross > 0 else 0.0,
         "open_trade_count": len(open_trades),
         "open_invested_usd": round(sum(_coerce_float_safe(t.get("invested_usd")) for t in open_trades), 2),

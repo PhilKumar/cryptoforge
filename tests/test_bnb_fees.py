@@ -127,3 +127,51 @@ class JournalFeeAssetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SummaryVerdictTests(unittest.TestCase):
+    """Which trade the "is the discount on?" verdict is read from."""
+
+    def setUp(self):
+        from importlib import import_module
+
+        self.app = import_module("app")
+
+    def _summary(self, trades):
+        return self.app._journal_summary(trades, capital_base=2000.0)
+
+    @staticmethod
+    def _trade(closed_ts, fee_assets, fee=0.02):
+        return {
+            "status": "Closed",
+            "closed_ts": closed_ts,
+            "invested_usd": 12.0,
+            "pnl_usd": 0.1,
+            "pnl_gross_usd": 0.12,
+            "fees_usd": fee,
+            "fee_assets": fee_assets,
+            "coin": "SOLUSDT",
+            "date": "2026-07-31",
+            "roi_pct": 0.8,
+        }
+
+    def test_the_verdict_follows_the_newest_trade_not_the_pile_of_old_ones(self):
+        # The day BNB is switched on: months of coin-paid fees, one BNB trade.
+        trades = [self._trade(1_000 + i, {"SOL": 0.02}) for i in range(20)]
+        trades.append(self._trade(9_999, {"BNB": 0.015}))
+        summary = self._summary(trades)
+        self.assertEqual(summary["latest_fee_assets"], {"BNB": 0.015})
+        # The totals still cover everything — only the verdict is time-sensitive.
+        self.assertEqual(sorted(summary["fee_assets"]), ["BNB", "SOL"])
+
+    def test_switching_the_setting_off_shows_up_immediately(self):
+        trades = [self._trade(1_000, {"BNB": 0.015}), self._trade(2_000, {"SOL": 0.02})]
+        self.assertEqual(self._summary(trades)["latest_fee_assets"], {"SOL": 0.02})
+
+    def test_trades_with_no_recorded_fee_asset_do_not_hide_the_verdict(self):
+        # A sheet-imported row carries no fee asset; it must not win on recency.
+        trades = [self._trade(5_000, {"BNB": 0.015}), self._trade(9_000, {})]
+        self.assertEqual(self._summary(trades)["latest_fee_assets"], {"BNB": 0.015})
+
+    def test_no_fee_history_at_all_is_reported_as_empty(self):
+        self.assertEqual(self._summary([self._trade(1_000, {})])["latest_fee_assets"], {})

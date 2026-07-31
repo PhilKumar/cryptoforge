@@ -5805,6 +5805,11 @@ function _cfJournalChartBtn(t) {
 // Which asset the exchange took the commission in. Binance charges fees in BNB
 // only while "pay fees with BNB" is on, so this line is how you can tell from
 // the app whether the 25% discount is actually being applied to your trades.
+//
+// Read from the LATEST closed trade, not from all of history: the setting is a
+// switch with a date, and on the day it is turned on every earlier trade still
+// shows a fee paid in the coin. Averaged, that reads "partly applied", which
+// sounds like a fault instead of like yesterday.
 function _cfJournalFeeAssetNote(feeAssets) {
   var entries = Object.keys(feeAssets || {}).map(function(k) { return [k, Number(feeAssets[k]) || 0]; })
     .filter(function(e) { return e[1] > 0; })
@@ -5813,11 +5818,11 @@ function _cfJournalFeeAssetNote(feeAssets) {
   var total = entries.reduce(function(sum, e) { return sum + e[1]; }, 0);
   var bnb = entries.filter(function(e) { return e[0] === 'BNB'; })
     .reduce(function(sum, e) { return sum + e[1]; }, 0);
-  if (bnb <= 0) return 'paid in ' + entries.map(function(e) { return e[0]; }).join('/') + ' — BNB discount OFF';
-  if (bnb >= total - 1e-9) return 'paid in BNB — 25% discount ON';
-  // Part-way: the usual cause is the BNB balance running dry mid-run, which
-  // Binance does silently, falling back to charging the coin.
-  return 'paid ' + Math.round(bnb / total * 100) + '% in BNB — discount partly applied';
+  if (bnb <= 0) return 'last trade paid in ' + entries.map(function(e) { return e[0]; }).join('/') + ' — BNB discount OFF';
+  if (bnb >= total - 1e-9) return 'last trade paid in BNB — 25% discount ON';
+  // Part-way within a single trade means the BNB balance ran dry mid-round,
+  // which Binance does silently, falling back to charging the coin.
+  return 'last trade paid ' + Math.round(bnb / total * 100) + '% in BNB — BNB balance may have run dry';
 }
 
 function _cfJournalKpiHtml(summary) {
@@ -5831,7 +5836,7 @@ function _cfJournalKpiHtml(summary) {
     // share of the result, and it was invisible before.
     { label: 'Fees Paid', value: _cfJournalUsd(fees, 2), tone: fees ? -1 : 0,
       note: fees ? 'gross was ' + _cfJournalUsd(gross, 2) + ' · ' + _cfJournalPct(summary.fee_drag_pct, 1)
-                     + ' drag · ' + _cfJournalFeeAssetNote(summary.fee_assets)
+                     + ' drag · ' + _cfJournalFeeAssetNote(summary.latest_fee_assets || summary.fee_assets)
                  : 'no exchange fees recorded' },
     { label: 'Capital Deployed', value: _cfJournalUsd(summary.invested_usd),
       note: 'across ' + summary.trade_count + ' closed trade' + (summary.trade_count === 1 ? '' : 's')
