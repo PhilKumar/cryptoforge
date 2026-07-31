@@ -3438,6 +3438,26 @@ class CascadeEngine:
             anchor2_timestamp=int(anchor_ts),
         )
 
+        # A NEW LINE MAY NOT SIT BELOW THE ONE ALREADY DRAWN. Phil's rule: the
+        # line that is standing stays the reference until price breaks it and
+        # CLOSES ABOVE it; only then has anything happened that a new line
+        # describes.
+        #
+        # Left alone, find_valid_anchor2 re-derives the line from scratch on
+        # every red candle, with no memory of the line already on the chart. It
+        # walks backward from the most recent red candle and takes the first
+        # anchor no EARLIER close has crossed — so as the fall goes on it keeps
+        # finding a later, lower anchor, and every line it draws is steeper than
+        # the last. That is why each one came out below its predecessor, and why
+        # the answer changed every time: nothing was holding it to what it had
+        # already said.
+        reference = campaign.trendlines[-1] if campaign.trendlines else None
+        kept_reference = False
+        if reference is not None and self._trendline_still_stands(campaign, reference, candle.timestamp):
+            if trendline_price(tl, candle.timestamp) < trendline_price(reference, candle.timestamp):
+                tl = reference
+                kept_reference = True
+
         # Level 1 is the ultimate low since the MOTHER candle, not merely the
         # low of this structure's own window. A later fib sits below an earlier
         # one, and its level 1 has to reflect everything the fall has managed so
@@ -3554,7 +3574,13 @@ class CascadeEngine:
                     anchor2_timestamp=int(d_ts),
                     bears_fib=False,
                 )
-                if self._duplicate_trendline(campaign, ghost, candle.timestamp) is None:
+                # Same rule as a fib-bearing line: while the standing line is
+                # unbroken, a chart-only line beneath it is the extra line Phil
+                # is objecting to, not a second structure.
+                below_reference = kept_reference and trendline_price(ghost, candle.timestamp) < trendline_price(
+                    tl, candle.timestamp
+                )
+                if not below_reference and self._duplicate_trendline(campaign, ghost, candle.timestamp) is None:
                     campaign.trendlines.append(ghost)
                 self._log_event(
                     campaign,
@@ -3594,6 +3620,28 @@ class CascadeEngine:
             return
         # This cut candle opens the next window; its low seeds the next dip.
         campaign.window_start_ts = candle.timestamp
+
+    def _trendline_still_stands(self, campaign: Campaign, tl: Trendline, at_ts: int) -> bool:
+        """Has price NOT yet closed above this line since it was anchored?
+
+        A descending line from the mother high is the ceiling on the fall. While
+        every close stays under it the line is still describing the market, and
+        a second line drawn beneath it describes nothing new — it is the same
+        fall, measured again from a later candle. A close above is the event
+        that spends it: that is the market breaking the line, and only then does
+        the next structure get a line of its own.
+
+        The same tolerance the anchor search uses: a close is allowed to poke
+        ANCHOR_CLOSE_TOLERANCE_PCT above before it counts, so a one-cent
+        overshoot does not retire a line that is plainly still holding.
+        """
+        for c in self._candles.get(campaign.campaign_id, []):
+            if c.timestamp <= tl.anchor2_timestamp or c.timestamp > at_ts:
+                continue
+            line = trendline_price(tl, c.timestamp)
+            if line > 0 and c.close > line * (1 + ANCHOR_CLOSE_TOLERANCE_PCT):
+                return False
+        return True
 
     def _duplicate_trendline(self, campaign: Campaign, candidate: Trendline, at_ts: int) -> Optional[Trendline]:
         """The existing line this one would sit on top of, if there is one.

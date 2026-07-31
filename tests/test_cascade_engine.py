@@ -21,6 +21,7 @@ from engine.cascade import (
     Leg,
     PendingOrder,
     Round,
+    Trendline,
     _floor_to_step,
     build_fib_ladder_and_pool,
     chart_timeframes_for,
@@ -29,6 +30,7 @@ from engine.cascade import (
     ladders_overlap,
     plan_leg_orders,
     recompute_avg_entry_price,
+    trendline_price,
 )
 
 _RECENT_TS = (int(time.time()) - 3600) // 300 * 300  # a truthy, in-window mother timestamp
@@ -5252,3 +5254,161 @@ class CascadeMcKindRepairTests(unittest.TestCase):
         engine.load_closed_campaigns([self._snapshot("root", "major")])
         engine.restore_campaigns([self._snapshot("kid", "minor", "root")])
         self.assertEqual(engine.campaigns["kid"].mc_kind, "major")
+
+
+class CascadeTrendlineReferenceTests(unittest.TestCase):
+    """A new line may not sit below the one already standing.
+
+    Phil's rule: the line that is drawn stays the reference until price breaks
+    it and CLOSES ABOVE it. find_valid_anchor2 re-derives the line from scratch
+    on every red candle — walking back from the newest red candle and checking
+    only EARLIER closes — so as a fall goes on it keeps finding a later, lower
+    anchor and every line came out steeper than the last.
+    """
+
+    def _campaign(self, engine):
+        campaign = Campaign(
+            campaign_id="tl",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65409.56,
+            mother_low=65177.62,
+            mother_timestamp=1_000_000,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        engine.campaigns["tl"] = campaign
+        engine._candles["tl"] = []
+        return campaign
+
+    def _line(self, mother_high, mother_ts, anchor_price, anchor_ts):
+        return Trendline(
+            trendline_id=1,
+            anchor1_price=mother_high,
+            anchor1_timestamp=mother_ts,
+            anchor2_price=anchor_price,
+            anchor2_timestamp=anchor_ts,
+        )
+
+    def _feed(self, engine, campaign, bars):
+        for ts, o, h, low, c in bars:
+            candle = Candle(timestamp=ts, open=o, high=h, low=low, close=c)
+            engine._candles["tl"].append(candle)
+            engine._process_candle(campaign, candle)
+
+    def test_a_line_stands_until_a_close_goes_above_it(self):
+        engine = _mk_engine()
+        campaign = self._campaign(engine)
+        tl = self._line(65409.56, 1_000_000, 65184.09, 1_001_200)
+        campaign.trendlines.append(tl)
+        # Everything under the line: it is still describing the fall.
+        engine._candles["tl"] = [
+            Candle(timestamp=1_002_000, open=64900.0, high=64950.0, low=64800.0, close=64850.0),
+        ]
+        self.assertTrue(engine._trendline_still_stands(campaign, tl, 1_002_000))
+        # A close above spends it.
+        above = trendline_price(tl, 1_003_000) * 1.01
+        engine._candles["tl"].append(
+            Candle(timestamp=1_003_000, open=above - 10, high=above + 10, low=above - 20, close=above)
+        )
+        self.assertFalse(engine._trendline_still_stands(campaign, tl, 1_003_000))
+
+    def test_a_one_tick_poke_does_not_retire_a_line(self):
+        """Same tolerance the anchor search uses — a line plainly still holding
+        must not be spent by a close a cent over it."""
+        engine = _mk_engine()
+        campaign = self._campaign(engine)
+        tl = self._line(65409.56, 1_000_000, 65184.09, 1_001_200)
+        campaign.trendlines.append(tl)
+        poke = trendline_price(tl, 1_002_000) + 0.01
+        engine._candles["tl"] = [Candle(timestamp=1_002_000, open=poke - 5, high=poke + 1, low=poke - 10, close=poke)]
+        self.assertTrue(engine._trendline_still_stands(campaign, tl, 1_002_000))
+
+    def test_a_close_before_the_anchor_is_not_a_break(self):
+        """The line only exists from its own anchor forward; candles behind it
+        are the action it was drawn through."""
+        engine = _mk_engine()
+        campaign = self._campaign(engine)
+        tl = self._line(65409.56, 1_000_000, 65184.09, 1_001_200)
+        campaign.trendlines.append(tl)
+        engine._candles["tl"] = [
+            Candle(timestamp=1_000_600, open=65390.0, high=65400.0, low=65300.0, close=65395.0),
+        ]
+        self.assertTrue(engine._trendline_still_stands(campaign, tl, 1_001_500))
+
+    # Phil's 2026-07-31 BTCUSDT chart, mother 65,409.56 at 06:40 IST — the
+    # screenshot where he said the green line "cannot be below blue". Real
+    # Binance 5m candles, mother candle first.
+    _PHIL_0731 = [
+        (1785460200, 65339.38, 65409.56, 65177.62, 65189.32),
+        (1785460500, 65189.32, 65194.37, 65084.65, 65086.57),
+        (1785460800, 65086.56, 65122.0, 65026.8, 65108.88),
+        (1785461100, 65108.89, 65225.74, 65102.0, 65184.08),
+        (1785461400, 65184.09, 65184.09, 65042.19, 65042.19),
+        (1785461700, 65042.2, 65050.42, 64900.0, 64922.39),
+        (1785462000, 64922.39, 64944.0, 64824.58, 64824.61),
+        (1785462300, 64824.61, 64894.0, 64585.42, 64613.79),
+        (1785462600, 64613.79, 64657.27, 64538.0, 64572.01),
+        (1785462900, 64572.0, 64614.41, 64480.44, 64564.01),
+        (1785463200, 64564.0, 64588.0, 64467.0, 64522.98),
+        (1785463500, 64522.97, 64614.0, 64514.01, 64602.29),
+        (1785463800, 64602.28, 64602.28, 64484.93, 64484.93),
+        (1785464100, 64484.93, 64484.93, 64384.37, 64416.01),
+        (1785464400, 64416.0, 64428.0, 64380.24, 64383.78),
+    ]
+
+    def test_phils_0731_chart_draws_one_line_not_two(self):
+        """The reported chart, replayed candle by candle.
+
+        Before the rule it drew TL1 (anchor 65,184.09 @ 07:00) and then TL2
+        (anchor 64,602.28 @ 07:40) — 174 dollars BELOW TL1 on the last bar,
+        carrying fib 2 at 0=64,602.28 / 1=64,467.00, which is what the screenshot
+        shows. Price never closed above TL1, so TL1 is still the reference and
+        TL2 describes nothing new.
+        """
+        engine = _mk_engine()
+        mother = self._PHIL_0731[0]
+        campaign = Campaign(
+            campaign_id="tl",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=mother[0],
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        engine.campaigns["tl"] = campaign
+        engine._candles["tl"] = []
+        self._feed(engine, campaign, self._PHIL_0731[1:])
+
+        self.assertEqual(len(campaign.trendlines), 1, "the standing line was never broken")
+        self.assertAlmostEqual(campaign.trendlines[0].anchor2_price, 65184.09)
+        self.assertEqual(len(campaign.legs), 1)
+        self.assertAlmostEqual(campaign.legs[0].touch_high, 65184.09)
+        self.assertAlmostEqual(campaign.legs[0].low, 65026.80)
+
+    def test_no_line_is_ever_drawn_below_the_one_before_it(self):
+        """The invariant itself, over the same real candles."""
+        engine = _mk_engine()
+        mother = self._PHIL_0731[0]
+        campaign = Campaign(
+            campaign_id="tl",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother[2],
+            mother_low=mother[3],
+            mother_timestamp=mother[0],
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        engine.campaigns["tl"] = campaign
+        engine._candles["tl"] = []
+        self._feed(engine, campaign, self._PHIL_0731[1:])
+
+        last_ts = self._PHIL_0731[-1][0]
+        heights = [trendline_price(tl, last_ts) for tl in campaign.trendlines]
+        self.assertEqual(heights, sorted(heights), "each line must sit at or above the one before it")
