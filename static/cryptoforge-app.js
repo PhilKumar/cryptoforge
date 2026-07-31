@@ -753,6 +753,139 @@ function cfToast(msg, type) {
   setTimeout(function() { if (toast.parentNode) toast.remove(); }, 4200);
 }
 
+// ── Trade Alerts ───────────────────────────────────────────
+// Everything that moves money — an entry filling, a target paying out, a
+// campaign closing, the engine stalling — raises a card here. Unlike a toast,
+// nothing on this stack times out: the server keeps the unseen list, so an
+// alert raised while the tab was closed is still waiting on the next load and
+// only goes away when it is dismissed by hand.
+var _cfAlerts = [];
+var _cfAlertsLoading = false;
+
+function cfAlertIcon(level) {
+  return ({ success: '🎯', error: '⛔', warn: '⚠️', info: '⚡' })[level] || '⚡';
+}
+
+function cfRenderAlerts() {
+  var stack = document.getElementById('cf-alert-stack');
+  var body = document.getElementById('cf-alert-stack-body');
+  var count = document.getElementById('cf-alert-count');
+  if (!stack || !body) return;
+  if (!_cfAlerts.length) {
+    stack.hidden = true;
+    body.replaceChildren();
+    return;
+  }
+  if (count) count.textContent = String(_cfAlerts.length);
+  var frag = document.createDocumentFragment();
+  _cfAlerts.forEach(function(item) {
+    var level = String(item.level || 'info');
+    var card = document.createElement('div');
+    card.className = 'cf-alert-card ' + level;
+
+    var icon = document.createElement('span');
+    icon.className = 'cf-toast-icon';
+    icon.textContent = cfAlertIcon(level);
+
+    var main = document.createElement('div');
+    main.className = 'cf-alert-card-main';
+    var title = document.createElement('div');
+    title.className = 'cf-alert-card-title';
+    title.textContent = item.title || 'Trade alert';   // textContent: engine text can't inject markup
+    main.appendChild(title);
+    if (item.body) {
+      var msg = document.createElement('div');
+      msg.className = 'cf-alert-card-body';
+      msg.textContent = item.body;
+      main.appendChild(msg);
+    }
+    var when = document.createElement('div');
+    when.className = 'cf-alert-card-time';
+    when.textContent = (item.ts || '') + ' IST' + (item.mode ? ' · ' + item.mode : '');
+    main.appendChild(when);
+
+    var ack = document.createElement('button');
+    ack.type = 'button';
+    ack.className = 'cf-alert-card-ack';
+    ack.textContent = 'Got it';
+    ack.addEventListener('click', function() { cfAckAlert(item.id); });
+
+    card.appendChild(icon);
+    card.appendChild(main);
+    card.appendChild(ack);
+    frag.appendChild(card);
+  });
+  body.replaceChildren(frag);
+  stack.hidden = false;
+}
+
+async function cfLoadAlerts() {
+  if (_cfAlertsLoading) return;
+  _cfAlertsLoading = true;
+  try {
+    var r = await cfApiFetch('/api/notifications');
+    if (!r.ok) return;
+    var d = await r.json();
+    _cfAlerts = Array.isArray(d.items) ? d.items : [];
+    cfRenderAlerts();
+  } catch (e) {
+    // Offline or mid-reconnect — the stack keeps whatever it already shows.
+  } finally {
+    _cfAlertsLoading = false;
+  }
+}
+
+function cfPushAlert(item) {
+  if (!item || item.seen) return;
+  if (_cfAlerts.some(function(row) { return row.id === item.id; })) return;
+  _cfAlerts.unshift(item);
+  cfRenderAlerts();
+  // The browser notification is the away-from-the-tab copy; the card is the
+  // one that persists.
+  sendTradeNotification(item.title || 'Trade alert', item.body || '');
+}
+
+async function cfAckAlerts(payload) {
+  try {
+    var r = await cfApiFetch('/api/notifications/ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) { cfToast('Could not clear the alert — it stays until the server confirms', 'warning'); return false; }
+    return true;
+  } catch (e) {
+    cfToast('Could not clear the alert: ' + e.message, 'warning');
+    return false;
+  }
+}
+
+async function cfAckAlert(id) {
+  if (!(await cfAckAlerts({ ids: [id] }))) return;
+  _cfAlerts = _cfAlerts.filter(function(row) { return row.id !== id; });
+  cfRenderAlerts();
+}
+
+async function cfAckAllAlerts() {
+  if (!(await cfAckAlerts({ all: true }))) return;
+  _cfAlerts = [];
+  cfRenderAlerts();
+}
+
+function cfInitAlerts() {
+  var all = document.getElementById('cf-alert-dismiss-all');
+  if (all) all.addEventListener('click', cfAckAllAlerts);
+  // Out of the first-paint burst on purpose: the socket opening usually beats
+  // this to it, and a cold server has a dozen more urgent requests to answer.
+  setTimeout(cfLoadAlerts, 1200);
+  // The WebSocket delivers alerts live; this catches the ones raised while the
+  // socket was down, the laptop asleep or the tab in the background.
+  setInterval(cfLoadAlerts, 45000);
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) cfLoadAlerts();
+  });
+}
+
 // ── Session Expiry Interceptor ─────────────────────────────
 (function() {
   const _fetch = window.fetch;
@@ -3263,6 +3396,8 @@ function connectWS() {
     _cfAppSocket = ws;
     ws.onopen = () => {
       _cfAppSocketConnected = true;
+      // Anything raised during the outage was never pushed to this tab.
+      if (typeof cfLoadAlerts === 'function') cfLoadAlerts();
     };
     ws.onmessage = (e) => {
       let data;
@@ -3287,6 +3422,10 @@ function connectWS() {
         _cfScalpLastWsUpdateAt = Date.now();
         cfMergeScalpStatusPatch(data.status || {});
         cfApplyScalpStatus(_cfLatestScalpStatus);
+        return;
+      }
+      if (data.source === 'notify' && data.type === 'trade_alert') {
+        cfPushAlert(data.item);
         return;
       }
       if (data.source === 'cascade' && data.type === 'cascade_status') {
@@ -6127,6 +6266,7 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshTopbarTicker();
   connectWS();
   requestNotificationPermission();
+  cfInitAlerts();
   fetchStrategies();
   cfApplyScalpDefaults();
   cfUpdateSLTPHints();

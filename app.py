@@ -18,10 +18,11 @@ import shutil
 import struct
 import sys
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from urllib import error as urllib_error
 from urllib.parse import urlparse
@@ -434,6 +435,16 @@ def _check_trade_alerts(run_id: str, mode_label: str, event: dict):
             price = p.get("entry_price", 0)
             pos_lines.append(f"  {side} {sym} @ ${price:,.2f}")
         body = f"Strategy: {run_id}\nMode: {mode_label}\n" + "\n".join(pos_lines)
+        first_symbol = (open_trades[0].get("symbol", "") if open_trades else "") or ""
+        _notify_push(
+            "trade_entry",
+            f"{mode_label} entry — {first_symbol}" if first_symbol else f"{mode_label} entry",
+            f"{run_id}: " + ", ".join(line.strip() for line in pos_lines),
+            level="info",
+            symbol=first_symbol,
+            mode=mode_label.lower(),
+            dedupe_key=f"entry|{run_id}|{closed_count}|" + "|".join(pos_lines),
+        )
         alerter.alert("Trade Entry", body, level="info")
 
     # Detect exit
@@ -448,6 +459,15 @@ def _check_trade_alerts(run_id: str, mode_label: str, event: dict):
                 f"Strategy: {run_id}\nMode: {mode_label}\n"
                 f"Symbol: {sym}\nP&L: ${pnl:,.2f}\nReason: {reason}\n"
                 f"Total P&L: ${round(total_pnl, 2):,.2f}"
+            )
+            _notify_push(
+                "trade_exit",
+                f"{mode_label} exit — {sym}",
+                f"{run_id}: P&L ${pnl:,.2f} ({reason}). Total P&L ${round(total_pnl, 2):,.2f}.",
+                level="success" if pnl >= 0 else "warn",
+                symbol=str(sym),
+                mode=mode_label.lower(),
+                dedupe_key=f"exit|{run_id}|{t.get('id', '')}|{t.get('exit_time', '')}|{sym}|{pnl}",
             )
             alerter.alert("Trade Exit", body, level=level)
 
@@ -629,6 +649,132 @@ def _current_state_db_file() -> str:
 
 def _get_state_store():
     return get_json_store(_current_state_db_file())
+
+
+# ── Trade alert inbox ─────────────────────────────────────────────
+# A toast fades after four seconds and a browser notification is gone the
+# instant it is swiped away, so the events that actually move money — a buy
+# filling, a target paying out, a campaign closing, the engine stalling — were
+# only ever seen by whoever happened to be looking at the screen at that
+# second. These records outlive the tab: an alert is stored unseen, pushed to
+# every open browser, re-shown on the next page load, and goes quiet only when
+# it is acknowledged from the UI.
+_BUCKET_NOTIFICATIONS = "notifications"
+_NOTIFY_KEY = "inbox"
+_NOTIFY_MAX = 120
+# The engine callbacks that raise alerts run from the event loop, the API
+# handlers that acknowledge them can run in a worker thread, and both do a
+# read-modify-write of one stored list.
+_notify_lock = threading.RLock()
+
+_IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def _ist_now_str() -> str:
+    return datetime.now(_IST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _notify_load() -> list:
+    try:
+        data = _get_state_store().get(_BUCKET_NOTIFICATIONS, _NOTIFY_KEY, default=[])
+    except Exception as exc:
+        _logger.error("[NOTIFY] Failed to read the alert inbox: %s", exc)
+        return []
+    return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+
+def _notify_save(items: list) -> None:
+    _get_state_store().put(_BUCKET_NOTIFICATIONS, _NOTIFY_KEY, list(items)[-_NOTIFY_MAX:])
+
+
+def _notify_broadcast(item: dict) -> None:
+    async def _push():
+        payload = {"source": "notify", "type": "trade_alert", "item": item}
+        for ws in ws_clients.copy():
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                if ws in ws_clients:
+                    ws_clients.remove(ws)
+
+    try:
+        # Held until it completes: the loop keeps only a weak reference, and a
+        # collected broadcast is an alert nobody is told about.
+        task = asyncio.get_running_loop().create_task(_push())
+        _inflight_tasks.add(task)
+        task.add_done_callback(_inflight_tasks.discard)
+    except RuntimeError:
+        pass  # no running loop — the record is stored and will show on next load
+
+
+def _notify_push(
+    kind: str,
+    title: str,
+    body: str,
+    *,
+    level: str = "info",
+    symbol: str = "",
+    mode: str = "",
+    dedupe_key: str = "",
+) -> Optional[dict]:
+    """Record something worth interrupting for, and push it to every open tab.
+
+    `dedupe_key` is what keeps the inbox honest across a restart: recovery
+    replays candles and re-logs events that already happened, and the same fill
+    arriving twice must not queue two identical alerts to dismiss.
+    """
+    title = str(title or "").strip() or "Trade alert"
+    body = str(body or "").strip()
+    key = str(dedupe_key or "").strip() or f"{kind}|{title}|{body}"
+    try:
+        with _notify_lock:
+            items = _notify_load()
+            if any(row.get("dedupe_key") == key for row in items):
+                return None
+            item = {
+                "id": max([int(row.get("id") or 0) for row in items] or [0]) + 1,
+                "ts": _ist_now_str(),
+                "epoch": time.time(),
+                "kind": str(kind or "event"),
+                "title": title,
+                "body": body,
+                "level": str(level or "info"),
+                "symbol": str(symbol or ""),
+                "mode": str(mode or ""),
+                "dedupe_key": key,
+                "seen": False,
+            }
+            items.append(item)
+            _notify_save(items)
+    except Exception as exc:
+        _logger.error("[NOTIFY] Failed to record alert %r: %s", title, exc)
+        return None
+    _notify_broadcast(item)
+    return item
+
+
+def _notify_ack(ids=None, ack_all: bool = False) -> dict:
+    wanted = set()
+    for raw in ids or []:
+        try:
+            wanted.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    with _notify_lock:
+        items = _notify_load()
+        acked = 0
+        stamp = _ist_now_str()
+        for row in items:
+            if row.get("seen"):
+                continue
+            if ack_all or int(row.get("id") or 0) in wanted:
+                row["seen"] = True
+                row["seen_at"] = stamp
+                acked += 1
+        if acked:
+            _notify_save(items)
+        unseen = sum(1 for row in items if not row.get("seen"))
+    return {"acknowledged": acked, "unseen": unseen}
 
 
 def _candidate_state_paths(*paths: str) -> list[str]:
@@ -2643,6 +2789,7 @@ def _production_readiness_payload() -> dict:
         "app_refresh": 'id="topbar-refresh-btn"',
         "scalp_buy": 'id="cf-scalp-buy-btn"',
         "scalp_sell": 'id="cf-scalp-sell-btn"',
+        "trade_alerts": 'id="cf-alert-stack"',
     }
     missing_controls = [name for name, marker in required_shell_controls.items() if marker not in strategy_html]
     login_controls = {"login_pin": 'data-val="', "login_appearance": 'id="login-appearance-toggle"'}
@@ -2660,6 +2807,7 @@ def _production_readiness_payload() -> dict:
         "/api/scalp/diagnostics",
         "/api/market/top25",
         "/api/cascade/status",
+        "/api/notifications",
         "/api/journal/trades",
         "/api/admin/config",
         "/api/broker/settings",
@@ -6297,6 +6445,16 @@ def _scalp_action_error_response(
 
 
 def _scalp_persist_event(event: dict) -> None:
+    level = str((event or {}).get("level") or "").lower()
+    if level in {"entry", "exit"}:
+        _notify_push(
+            f"scalp_{level}",
+            "Scalp entry" if level == "entry" else "Scalp exit",
+            str(event.get("msg") or ""),
+            level="info" if level == "entry" else "success",
+            mode="scalp",
+            dedupe_key=f"scalp|{level}|{event.get('msg')}",
+        )
     try:
         events = _load_scalp_events()
         key = (event.get("ts"), event.get("level"), event.get("msg"))
@@ -6764,7 +6922,42 @@ def _load_cascade_events() -> list:
     return data if isinstance(data, list) else []
 
 
+# Which Cascade log lines are worth stopping to read. The event log carries
+# every step of the geometry; only the ones where money actually moves — or
+# where it failed to — earn a pop-up that has to be dismissed by hand.
+_CASCADE_NOTIFY_LEVELS = {
+    "fill": ("Entry filled", "success"),
+    "round": ("Target hit", "success"),
+    "error": ("Cascade error", "error"),
+    "stop": ("Campaign stopped", "warn"),
+    "start": ("Campaign started", "info"),
+}
+
+
+def _cascade_notify(event: dict) -> None:
+    level = str((event or {}).get("level") or "").lower()
+    mapped = _CASCADE_NOTIFY_LEVELS.get(level)
+    if not mapped:
+        return
+    title, severity = mapped
+    symbol = str(event.get("symbol") or "")
+    message = str(event.get("message") or "")
+    campaign_id = str(event.get("campaign_id") or "")
+    _notify_push(
+        f"cascade_{level}",
+        f"{symbol} — {title}" if symbol else title,
+        message,
+        level=severity,
+        symbol=symbol,
+        mode="cascade",
+        # No timestamp in the key: a restart re-logs the same line at a new
+        # second, and that is precisely the repeat worth swallowing.
+        dedupe_key=f"cascade|{campaign_id}|{level}|{message}",
+    )
+
+
 def _cascade_persist_event(event: dict) -> None:
+    _cascade_notify(event)
     try:
         events = _load_cascade_events()
         events.append(dict(event or {}))
@@ -6853,6 +7046,21 @@ def _cascade_persist_closed(campaign: dict) -> None:
     # another device and you are not the one who did it.
     if reason in {"tp_filled", "mother_broken", "stopped"}:
         pnl = campaign.get("realized_pnl")
+        symbol = str(campaign.get("symbol") or "")
+        try:
+            pnl_text = f"P&L ${float(pnl):,.2f}. " if pnl is not None else ""
+        except (TypeError, ValueError):
+            pnl_text = ""
+        _notify_push(
+            "cascade_closed",
+            f"{symbol} — Campaign closed" if symbol else "Campaign closed",
+            f"{pnl_text}Reason: {reason}. Avg entry {campaign.get('avg_entry_price') or '—'}, "
+            f"TP {campaign.get('tp_price') or '—'} ({campaign.get('mode', '')}).",
+            level="success" if reason == "tp_filled" else "warn",
+            symbol=symbol,
+            mode="cascade",
+            dedupe_key=f"cascade-closed|{cid}|{reason}",
+        )
         alerter.alert(
             "Cascade Campaign Closed",
             f"Symbol: {campaign.get('symbol', '—')}\nMode: {campaign.get('mode', '')}\n"
@@ -6931,6 +7139,17 @@ def _restore_cascade_runtime(engine: "CascadeEngine") -> bool:
 def _cascade_alert(title: str, body: str, level: str = "warn") -> None:
     """Cascade watchdogs and failures go to Telegram, not just the event log —
     the whole point is that they fire while nobody is looking at the screen."""
+    # The engine already de-duplicates these on its own timer, so the key here
+    # carries the timestamp: a stall that is still unresolved an hour later is
+    # a second thing to be told about, not a repeat to swallow.
+    _notify_push(
+        "cascade_alert",
+        title,
+        body,
+        level="error" if level == "error" else "warn",
+        mode="cascade",
+        dedupe_key=f"cascade-alert|{title}|{_ist_now_str()}",
+    )
     try:
         alerter.alert(title, body, level=level)
     except Exception as exc:
@@ -7224,6 +7443,30 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
         "sheet_trade_count": len(sheet_trades),
         "broker_error": broker_error,
     }
+
+
+@app.get("/api/notifications")
+async def notifications_list(include_seen: bool = False, limit: int = 50):
+    """Alerts waiting to be seen — newest first.
+
+    The unacknowledged ones are the whole point: the UI re-raises them on every
+    page load, so an entry that filled while the tab was closed is still on
+    screen when it is next opened.
+    """
+    try:
+        limit = max(1, min(int(limit), _NOTIFY_MAX))
+    except (TypeError, ValueError):
+        limit = 50
+    items = _notify_load()
+    unseen = [row for row in items if not row.get("seen")]
+    shown = items[-limit:] if include_seen else unseen[-limit:]
+    return {"items": list(reversed(shown)), "unseen": len(unseen), "total": len(items)}
+
+
+@app.post("/api/notifications/ack")
+async def notifications_ack(request: Request):
+    body = await _read_json_body(request)
+    return _notify_ack(ids=body.get("ids"), ack_all=bool(body.get("all")))
 
 
 @app.get("/api/cascade/status")

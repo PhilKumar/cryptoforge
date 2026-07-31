@@ -25,6 +25,15 @@
 <!-- TOAST CONTAINER -->
 <div class="cf-toast-container" id="toast-container"></div>
 
+<!-- TRADE ALERTS — stay on screen until acknowledged, survive a reload -->
+<div class="cf-alert-stack" id="cf-alert-stack" role="alert" aria-live="assertive" hidden>
+  <div class="cf-alert-stack-head">
+    <span class="cf-alert-stack-title">Trade alerts <span class="cf-alert-count" id="cf-alert-count">0</span></span>
+    <button type="button" class="cf-alert-dismiss-all" id="cf-alert-dismiss-all">Dismiss all</button>
+  </div>
+  <div class="cf-alert-stack-body" id="cf-alert-stack-body"></div>
+</div>
+
 <!-- KILL SWITCH -->
 <button class="kill-switch hidden" id="kill-switch-btn" data-cf-click="emergencyStop()">
   🛑 <span>KILL ALL</span>
