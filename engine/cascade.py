@@ -986,6 +986,26 @@ class Campaign:
     # from the candle history inside this window at evaluation time, so there
     # is no swing state to corrupt or restart.
     window_start_ts: int = 0
+    # ── the geometry state machine (Phil's rule, adjudicated 2026-07-31) ──
+    # The standing LOW: runs down while the market falls, LOCKS when a candle
+    # closes back above the low candle's close, and once locked only a decisive
+    # red CLOSE below it moves anything — wicks under a locked low are noise.
+    geo_low: Optional[float] = None
+    geo_low_ts: int = 0
+    geo_low_close: Optional[float] = None
+    geo_low_locked: bool = False
+    # Whether a NEW trendline may be drawn. True at birth (the first line needs
+    # no permission); False while a line stands; True again once a close breaks
+    # above the standing line. "The previous trendline has to be the reference
+    # till market doesn't break and closes above."
+    geo_armed: bool = True
+    # Ultimate low since the mother candle — a fib's level 1 is this value as it
+    # stood at the fib's touch.
+    geo_ult_low: Optional[float] = None
+    # Touches waiting for their level-1 to break: {touch_high, touch_ts, fib1,
+    # trendline_id}. A fib is DRAWN only when its own fib1 is decisively closed
+    # below — the levels exist for the way down, never while the market rises.
+    pending_fibs: List[dict] = field(default_factory=list)
     broken_above: bool = False  # active trendline has been closed above
     last_processed_ts: int = 0  # open ts of the last closed candle stepped
     closed_at: str = ""
@@ -1160,6 +1180,17 @@ class Campaign:
             "realized_pnl": self.realized_pnl,
             "mother_broken_above": self.mother_broken_above,
             "window_start_ts": self.window_start_ts,
+            # Geometry machine state. Persisted because a live engine restart
+            # replays only the candles it missed — a campaign restored without
+            # its locked low or pending touches would draw different lines than
+            # the one that went down.
+            "geo_low": self.geo_low,
+            "geo_low_ts": self.geo_low_ts,
+            "geo_low_close": self.geo_low_close,
+            "geo_low_locked": self.geo_low_locked,
+            "geo_armed": self.geo_armed,
+            "geo_ult_low": self.geo_ult_low,
+            "pending_fibs": [dict(p) for p in self.pending_fibs],
             "broken_above": self.broken_above,
             "last_processed_ts": self.last_processed_ts,
             "closed_at": self.closed_at,
@@ -1230,6 +1261,12 @@ class Campaign:
             "realized_pnl",
             "mother_broken_above",
             "window_start_ts",
+            "geo_low",
+            "geo_low_ts",
+            "geo_low_close",
+            "geo_low_locked",
+            "geo_armed",
+            "geo_ult_low",
             "broken_above",
             "last_processed_ts",
             "closed_at",
@@ -1237,6 +1274,13 @@ class Campaign:
         ):
             if key in data:
                 setattr(campaign, key, data[key])
+        # A snapshot written before the geometry machine existed has no armed
+        # flag; loading its default (True) next to already-drawn trendlines
+        # would let a second line onto an unbroken chart. If lines exist and
+        # the snapshot is silent, assume the last line still stands.
+        if "geo_armed" not in data and (data.get("trendlines") or []):
+            campaign.geo_armed = False
+        campaign.pending_fibs = [dict(p) for p in data.get("pending_fibs") or [] if isinstance(p, dict)]
         # Heal a gate inflated by the old persist path before anything reads it.
         # Campaigns restored from a snapshot written before that was fixed carry
         # a ×100-per-restart number that silently stops them ever drawing
@@ -3374,11 +3418,9 @@ class CascadeEngine:
             return
         if not campaign.window_start_ts:
             campaign.window_start_ts = campaign.mother_timestamp
-        # Only a red candle can cut a dip; everything else just extends the
-        # window. All structure — dip, touch, fib anchors — is derived from the
-        # candle history at evaluation time, so nothing is ever discarded.
-        if candle.close < candle.open:
-            self._evaluate_cut(campaign, candle)
+        # Every candle feeds the geometry machine: green candles lock lows and
+        # break lines above, red candles cut lows and draw structure.
+        self._advance_geometry(campaign, candle)
         if campaign.state in ACTIVE_STATES:
             # Fill against the trigger that was resting while this candle formed,
             # THEN let the candle walk it down. The trigger sits a body above the
@@ -3395,253 +3437,302 @@ class CascadeEngine:
             self._collect_crossed_levels(campaign, candle)
             self._advance_stop_entries(campaign, candle)
 
-    def _evaluate_cut(self, campaign: Campaign, candle: Candle) -> None:
-        """
-        Try to finalize a structure on this red candle. The window is every
-        candle since the last cut (the cut candle seeds the next window).
+    def _advance_geometry(self, campaign: Campaign, candle: Candle) -> None:
+        """Phil's two-stage geometry, adjudicated from his charts 2026-07-31.
 
-        1. Anchor: find_valid_anchor2 over mother -> this candle — the tightest
-           descending line from the mother high no close has crossed (what the
-           magnet tool gives when dragging from the mother candle).
-        2. Crossings: candles in the window that TOUCH that line close-based —
-           high >= line while the close stays below it. A crossing needs at
-           least one earlier window candle, and the candle currently holding
-           the running dip low cannot be its own rise.
-        3. The dip freezes at the first crossing: fib 1 = the lowest low before
-           it. Lows after the touch belong to the next structure.
-        4. Cut: this candle's close DECISIVELY below the frozen dip (>= 0.02%
-           of price). Indecisive probes a few dollars under the dip are the
-           fall resuming, not a completed swing.
-        5. fib 0 = the highest crossing high (running max over the up-swing,
-           per cascade_lib's running_max_high).
+        TRENDLINES and FIBS are different objects with different triggers.
+
+        The LOW runs down while the market falls and LOCKS when a candle closes
+        back above the low candle's close. Once locked, wicks under it move
+        nothing — only a red candle CLOSING decisively below it. That close
+        draws the next TRENDLINE if one is armed, and starts the next low
+        either way. A line stands until some close breaks ABOVE it; only that
+        arms the next line: "the previous trendline has to be the reference
+        till market doesn't break and closes above."
+
+        A FIB lives on a line. Its touch is a candle testing the line from
+        below after a low exists; fib 0 = the touch high, fib 1 = the ultimate
+        low since the mother as it stood at the touch. The fib is DRAWN —
+        ladder, orders, money — only when its own level 1 is decisively closed
+        below: the levels exist for the way down, and nothing is drawn while
+        the market rises.
+        """
+        # 1. Arming: a close above the standing line spends it.
+        line = campaign.active_trendline
+        if line is not None and not campaign.geo_armed:
+            lv = trendline_price(line, candle.timestamp)
+            if lv > 0 and candle.close > lv * (1 + ANCHOR_CLOSE_TOLERANCE_PCT):
+                campaign.geo_armed = True
+                campaign.broken_above = True
+                self._log_event(
+                    campaign,
+                    "info",
+                    f"Close {candle.close:g} broke above trendline {line.trendline_id} "
+                    f"({lv:,.2f}). The line is spent — the next one is armed and waits "
+                    f"for the low to break.",
+                )
+
+        # 2. Pending fibs whose level 1 this red close decisively breaks are
+        #    drawn now — the fall has reached the ground their levels fund.
+        if candle.close < candle.open:
+            self._draw_due_fibs(campaign, candle)
+
+        # 3. A decisive red close below the LOCKED low.
+        if (
+            campaign.geo_low_locked
+            and campaign.geo_low is not None
+            and candle.close < candle.open
+            and candle.close < campaign.geo_low - campaign.geo_low * DECISIVE_BREAK_PCT
+        ):
+            if campaign.geo_armed:
+                self._geo_draw_trendline(campaign, candle)
+            # Armed or not, this fall owns the next low.
+            campaign.geo_low = candle.low
+            campaign.geo_low_ts = candle.timestamp
+            campaign.geo_low_close = candle.close
+            campaign.geo_low_locked = False
+            campaign.geo_ult_low = candle.low if campaign.geo_ult_low is None else min(campaign.geo_ult_low, candle.low)
+            return
+
+        # 4. A live touch on the STANDING line files a pending fib. Touches on
+        #    a broken line count for nothing — SOL's 78.37 "pause" fib came
+        #    from exactly that — and a touch needs a low before it: the V is
+        #    dip first, rise second. A high AT the mother is a double top, not
+        #    a touch.
+        if (
+            line is not None
+            and not campaign.geo_armed
+            and campaign.geo_low_ts
+            and candle.timestamp > campaign.geo_low_ts
+            and candle.high < campaign.mother_high
+        ):
+            lv = trendline_price(line, candle.timestamp)
+            if lv > 0 and candle.high >= lv and candle.close < lv:
+                fib1 = candle.low if campaign.geo_ult_low is None else min(campaign.geo_ult_low, candle.low)
+                self._file_pending_fib(campaign, candle.high, candle.timestamp, fib1, line.trendline_id)
+
+        # 5. Low tracking: run down while falling, lock on the rise, ignore
+        #    wicks once locked. A GREEN candle that sets the low locks it
+        #    itself — a bar that spikes down and rallies back inside five
+        #    minutes is the whole V in one candle, and waiting for a later
+        #    close to confirm it missed the user-verified 64,790.01 dip whose
+        #    candle closed 114 points off its own low.
+        campaign.geo_ult_low = candle.low if campaign.geo_ult_low is None else min(campaign.geo_ult_low, candle.low)
+        if campaign.geo_low is None or candle.low < campaign.geo_low:
+            if not campaign.geo_low_locked:
+                campaign.geo_low = candle.low
+                campaign.geo_low_ts = candle.timestamp
+                campaign.geo_low_close = candle.close
+                # Only a structure-sized recovery is the whole V — a candle
+                # green by a few ticks locking a few-tick wiggle handed TL1 to
+                # noise on the steady-fall day.
+                if (
+                    candle.close > candle.open
+                    and (candle.close - candle.low) >= candle.close * campaign.min_fib_range_pct
+                ):
+                    campaign.geo_low_locked = True
+        elif (
+            not campaign.geo_low_locked and campaign.geo_low_close is not None and candle.close > campaign.geo_low_close
+        ):
+            campaign.geo_low_locked = True
+
+    def _file_pending_fib(
+        self, campaign: Campaign, touch_high: float, touch_ts: int, fib1: float, trendline_id: int
+    ) -> None:
+        """Record a touch; the fib itself waits for its level 1 to break.
+
+        The FIRST touch on a level holds as fib 0 — on the 07-20 second-day
+        chart Phil paired 64,753.77, the first test of the line, with the
+        64,599.89 dip, not the lower re-test that came after. Structures too
+        small to ladder are dropped here, the same size gate the old engine
+        applied at the cut.
+        """
+        if fib1 is None or touch_high <= fib1:
+            return
+        if (touch_high - fib1) < touch_high * campaign.min_fib_range_pct:
+            return  # a few ticks of chop, not a swing — its levels would be noise
+        for p in campaign.pending_fibs:
+            if abs(p["fib1"] - fib1) <= fib1 * 1e-9:
+                # Same structure grazing the line again: the TOP graze is fib 0
+                # — "the next fib is only drawn if it breaks the previous low,
+                # hence we can take the top it grazed the TL".
+                if touch_high > p["touch_high"]:
+                    p["touch_high"], p["touch_ts"], p["trendline_id"] = touch_high, int(touch_ts), trendline_id
+                return
+        # A pending whose level the market has now fallen BELOW (this touch
+        # froze a deeper ultimate low, and no decisive close ever confirmed the
+        # shallower level) was not where the swing turned — the deeper
+        # structure supersedes it. The 07-20 00:40 wick pending gives way to
+        # the 00:45 touch exactly like this.
+        campaign.pending_fibs = [p for p in campaign.pending_fibs if p["fib1"] <= fib1 + fib1 * 1e-9]
+        campaign.pending_fibs.append(
+            {"touch_high": touch_high, "touch_ts": int(touch_ts), "fib1": fib1, "trendline_id": trendline_id}
+        )
+
+    def _draw_due_fibs(self, campaign: Campaign, candle: Candle) -> None:
+        """Draw every pending fib whose level 1 this red close decisively broke."""
+        due = [
+            p
+            for p in campaign.pending_fibs
+            if candle.timestamp > p["touch_ts"] and candle.close < p["fib1"] - p["fib1"] * DECISIVE_BREAK_PCT
+        ]
+        for p in due:
+            campaign.pending_fibs.remove(p)
+            self._draw_fib(campaign, p)
+
+    def _draw_fib(self, campaign: Campaign, pending: dict) -> None:
+        """The cut has landed: the structure becomes a leg with a ladder.
+
+        Two structures touched at essentially the same price are the same
+        shelf; the second adds nothing but a cancellation of orders that were
+        about to fill — unless the ladders do not actually overlap, in which
+        case it is a different swing that starts from the same high (BTC #36's
+        fib 3 hangs 0.010% from fib 2's touch with a far deeper ladder).
+        """
+        touch_high, fib1 = pending["touch_high"], pending["fib1"]
+        for leg in campaign.legs:
+            if not leg.touch_high or not leg.low:
+                continue
+            if not ladders_overlap(touch_high, fib1, leg.touch_high, leg.low):
+                continue
+            if abs(touch_high - leg.touch_high) / leg.touch_high >= MIN_LEG_SEPARATION_PCT:
+                continue
+            # Same shelf — but only a newcomer that is NOT deeper is a
+            # duplicate. A structure from the same high whose level 1 sits
+            # decisively below the incumbent's is the next swing down and
+            # funds ground the incumbent never reaches (#36's fib 3, Phil:
+            # "TL3 has to be drawn for the levels to fund below"). On the
+            # 07-20 second day the user's 64,753.77/64,599.89 was nearly the
+            # small 64,758.24/64,680's twin on top but 80 dollars deeper.
+            if fib1 < leg.low - leg.low * DECISIVE_BREAK_PCT:
+                continue
+            self._log_event(
+                campaign,
+                "skip",
+                f"Fib skipped: its touch {touch_high:,.2f} is on fib {leg.leg_id}'s shelf "
+                f"({leg.touch_high:,.2f}), no deeper, and their ladders overlap — fib "
+                f"{leg.leg_id}'s ladder stays resting.",
+            )
+            return
+        legs_before = len(campaign.legs)
+        self._draw_leg(campaign, touch_high, fib1, pending["touch_ts"], pending["trendline_id"])
+        if len(campaign.legs) > legs_before:
+            campaign.state = "TRENDLINE_ACTIVE"
+
+    def _geo_draw_trendline(self, campaign: Campaign, candle: Candle) -> None:
+        """The locked low broke and a line is armed: draw it if the chart allows.
+
+        Anchor = the red candle with the highest OPEN strictly after the low's
+        candle — the break candle itself is a candidate, since on 5m the swing
+        top's red is often the breaker. The line from the mother high through
+        that open must clear every close from the mother to now, on BOTH sides
+        of the anchor; if anything closed across it, NO line is drawn — there
+        is no second-best anchor. That is what keeps a chart at two or three
+        clean lines instead of a fan, and why PAXG 07-31 has no third line.
         """
         history = self._candles.get(campaign.campaign_id, [])
-        window = [
-            c
-            for c in history
-            if c.timestamp >= campaign.window_start_ts
-            and c.timestamp > campaign.mother_timestamp
-            and c.timestamp <= candle.timestamp
-        ]
-        if len(window) < 2:
+        window = [c for c in history if campaign.mother_timestamp < c.timestamp <= candle.timestamp]
+        cands = [c for c in window if c.timestamp > campaign.geo_low_ts and c.is_red and c.open < campaign.mother_high]
+        if not cands:
             return
-
-        between = [c for c in history if campaign.mother_timestamp < c.timestamp < candle.timestamp]
-        anchor_price, anchor_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, between)
-        if anchor_price is None or anchor_price >= campaign.mother_high:
+        anchor = max(cands, key=lambda c: c.open)
+        ap, ats = anchor.open, anchor.timestamp
+        if ats == campaign.mother_timestamp:
             return
+        for c in window:
+            if c.timestamp == ats:
+                continue
+            lv = campaign.mother_high + (ap - campaign.mother_high) * (
+                (c.timestamp - campaign.mother_timestamp) / (ats - campaign.mother_timestamp)
+            )
+            if c.close > lv + abs(lv) * ANCHOR_CLOSE_TOLERANCE_PCT:
+                self._log_event(
+                    campaign,
+                    "skip",
+                    f"Low {campaign.geo_low:g} broke, but the line to {ap:g} would cut through "
+                    f"the close {c.close:g} — no trendline. The market has not offered a clean "
+                    f"line yet.",
+                )
+                return
         tl = Trendline(
             trendline_id=len(campaign.trendlines) + 1,
             anchor1_price=campaign.mother_high,
             anchor1_timestamp=campaign.mother_timestamp,
-            anchor2_price=anchor_price,
-            anchor2_timestamp=int(anchor_ts),
+            anchor2_price=ap,
+            anchor2_timestamp=int(ats),
         )
-
-        # A NEW LINE MAY NOT SIT BELOW THE ONE ALREADY DRAWN. Phil's rule: the
-        # line that is standing stays the reference until price breaks it and
-        # CLOSES ABOVE it; only then has anything happened that a new line
-        # describes.
-        #
-        # Left alone, find_valid_anchor2 re-derives the line from scratch on
-        # every red candle, with no memory of the line already on the chart. It
-        # walks backward from the most recent red candle and takes the first
-        # anchor no EARLIER close has crossed — so as the fall goes on it keeps
-        # finding a later, lower anchor, and every line it draws is steeper than
-        # the last. That is why each one came out below its predecessor, and why
-        # the answer changed every time: nothing was holding it to what it had
-        # already said.
-        reference = campaign.trendlines[-1] if campaign.trendlines else None
-        kept_reference = False
-        if reference is not None and self._trendline_still_stands(campaign, reference, candle.timestamp):
-            if trendline_price(tl, candle.timestamp) < trendline_price(reference, candle.timestamp):
-                tl = reference
-                kept_reference = True
-
-        # Level 1 is the ultimate low since the MOTHER candle, not merely the
-        # low of this structure's own window. A later fib sits below an earlier
-        # one, and its level 1 has to reflect everything the fall has managed so
-        # far — otherwise fib 2 measures from a shelf that fib 1 already broke.
-        prior_low = min(
-            (c.low for c in history if campaign.mother_timestamp < c.timestamp <= candle.timestamp),
-            default=None,
-        )
-        frozen_dip = None
-        run_min = None
-        run_min_ts = None
-        first_cross_ts = None
-        touch_high = None
-        touch_ts = None
-        for c in window:
-            line = trendline_price(tl, c.timestamp)
-            crossed = c.high >= line and c.close < line and c.high < campaign.mother_high
-            # One candle CAN be both the low of the swing and the touch on the
-            # line: a bar that spikes down to make the dip and rallies back up
-            # into the trendline in the same five minutes is one event, and its
-            # high is fib 0 while its low is fib 1. Requiring the touch to come
-            # strictly after the dip candle pushed fib 0 onto the wrong bar —
-            # on the 07-20 steady fall the verified anchors are the 00:45
-            # candle's own high and low.
-            if crossed and run_min_ts is not None and c.timestamp >= run_min_ts:
-                if first_cross_ts is None:
-                    first_cross_ts = c.timestamp
-                    frozen_dip = run_min
-                if touch_high is None or c.high > touch_high:
-                    touch_high = c.high
-                    touch_ts = c.timestamp
-            if first_cross_ts is None and (run_min is None or c.low < run_min):
-                run_min = c.low
-                run_min_ts = c.timestamp
-
-        if first_cross_ts is None or frozen_dip is None or touch_high is None:
-            return
-        if (touch_high - frozen_dip) < touch_high * campaign.min_fib_range_pct:
-            return  # a few ticks of chop, not a swing — its levels would be noise
-        if candle.close >= frozen_dip:
-            return
-        if (frozen_dip - candle.close) < candle.close * DECISIVE_BREAK_PCT:
-            return  # not a decisive break of the dip
-
-        # A new structure needs the PREVIOUS fib's low to break first. Until it
-        # does, the last fib is still the live one and nothing new has happened
-        # — the market is just moving around inside a swing that already has a
-        # line and a ladder on it.
-        #
-        # This is what stopped the engine drawing its lines too early. On the
-        # 07-21 PAXG day fib 1's low was 4,055.67 at 14:20; the engine drew a
-        # second trendline at 14:20 off a shallow dip that had broken nothing,
-        # and anchored it at 14:05. The low did not actually break until the
-        # 16:30 close at 4,053.18 — and a line drawn from there anchors at
-        # 16:10, which is where it belongs.
-        last_fib = campaign.legs[-1] if campaign.legs else None
-        if last_fib is not None and last_fib.low and candle.close >= last_fib.low:
-            return
-        if touch_high <= frozen_dip:
-            return
-
-        # Two structures touched at essentially the same price are the same
-        # shelf. The second one adds nothing but a cancellation of orders that
-        # were about to fill, so it is dropped ENTIRELY — no trendline, no fib.
-        # The previous structure stays active with its ladder resting.
-        # Checked against EVERY fib drawn so far, not just the last one. Price
-        # wanders away from a shelf and comes back to it hours later, so the
-        # duplicate is usually two or three fibs back: one campaign drew fib 1
-        # and fib 3 with the identical touch high of 78.75 because fib 3 was
-        # only ever compared against fib 2. That matters more now that every
-        # fib keeps its ladder resting — a same-shelf fib puts a second set of
-        # orders a few ticks from the first and splits the money between them.
-        #
-        # The touch high alone does NOT settle it. A structure can start from
-        # the same high and fall very much further, and then it is a different
-        # swing with a different ladder, not a duplicate of the shelf. On
-        # BTCUSDT 07-21 the engine found 0=66,739.89 / 1=66,052.63 — a 687-point
-        # range against fib 1's 93 — and dropped it because the two highs were
-        # 0.010% apart. Its shallowest rung (65,365) sat BELOW fib 1's deepest
-        # (65,997): the ladders did not share a single price, so there was no
-        # money to split and nothing to cancel. So the ladders have to actually
-        # overlap before the second structure counts as the same shelf.
-        prior = None
-        separation = 0.0
-        for leg in campaign.legs:
-            if not leg.touch_high or not leg.low:
-                continue
-            if not ladders_overlap(touch_high, frozen_dip, leg.touch_high, leg.low):
-                continue
-            gap = abs(touch_high - leg.touch_high) / leg.touch_high
-            if prior is None or gap < separation:
-                prior, separation = leg, gap
-        if prior is not None:
-            if separation < MIN_LEG_SEPARATION_PCT:
-                # Geometry only: the line is real and belongs on the chart, but
-                # it carries no fib and places no orders, so the previous fib
-                # keeps its resting ladder.
-                #
-                # Because nothing downstream depends on this anchor, it is found
-                # the way the line gets drawn by hand — dragging from the mother
-                # candle with the magnet on, which snaps to the open of the very
-                # candle that made the break. Fib-bearing anchors must keep
-                # excluding that candle: including it moves fib 0 on both
-                # verified days.
-                display = [c for c in history if campaign.mother_timestamp < c.timestamp <= candle.timestamp]
-                d_price, d_ts = find_valid_anchor2(campaign.mother_high, campaign.mother_timestamp, display)
-                if d_price is None or d_price >= campaign.mother_high:
-                    d_price, d_ts = anchor_price, anchor_ts
-                ghost = Trendline(
-                    trendline_id=len(campaign.trendlines) + 1,
-                    anchor1_price=campaign.mother_high,
-                    anchor1_timestamp=campaign.mother_timestamp,
-                    anchor2_price=d_price,
-                    anchor2_timestamp=int(d_ts),
-                    bears_fib=False,
-                )
-                # Same rule as a fib-bearing line: while the standing line is
-                # unbroken, a chart-only line beneath it is the extra line Phil
-                # is objecting to, not a second structure.
-                below_reference = kept_reference and trendline_price(ghost, candle.timestamp) < trendline_price(
-                    tl, candle.timestamp
-                )
-                if not below_reference and self._duplicate_trendline(campaign, ghost, candle.timestamp) is None:
-                    campaign.trendlines.append(ghost)
-                self._log_event(
-                    campaign,
-                    "skip",
-                    f"Trendline {len(campaign.trendlines)} drawn (geometry only) to red "
-                    f"candle open {d_price:,.2f}. Its touch {touch_high:,.2f} is just "
-                    f"{separation * 100:.3f}% from fib {prior.leg_id}'s "
-                    f"{prior.touch_high:,.2f} — same shelf, so no fib is drawn and fib "
-                    f"{prior.leg_id}'s ladder stays resting.",
-                )
-                campaign.window_start_ts = candle.timestamp
-                return
-
-        # A line that runs where one already runs is not a new line. The fib it
-        # carries is real and gets drawn; it just hangs off the existing line
-        # rather than adding a near-identical twin to the chart.
-        twin = self._duplicate_trendline(campaign, tl, candle.timestamp)
-        added_trendline = twin is None
-        if twin is not None:
-            tl = twin
-        else:
-            campaign.trendlines.append(tl)
-            self._log_event(
-                campaign,
-                "trendline",
-                f"Trendline {tl.trendline_id} drawn: mother high {campaign.mother_high:g} -> "
-                f"red candle open {anchor_price:g}",
-            )
+        campaign.trendlines.append(tl)
         campaign.active_trendline_id = tl.trendline_id
+        campaign.geo_armed = False
+        campaign.broken_above = False
         campaign.state = "TRENDLINE_ACTIVE"
-        legs_before = len(campaign.legs)
-        self._draw_leg(campaign, touch_high, frozen_dip, touch_ts, tl.trendline_id)
-        if len(campaign.legs) == legs_before:
-            if added_trendline:
-                campaign.trendlines.pop()
-            campaign.active_trendline_id = campaign.trendlines[-1].trendline_id if campaign.trendlines else None
-            return
-        # This cut candle opens the next window; its low seeds the next dip.
-        campaign.window_start_ts = candle.timestamp
+        self._log_event(
+            campaign,
+            "trendline",
+            f"Trendline {tl.trendline_id} drawn: mother high {campaign.mother_high:g} -> "
+            f"red candle open {ap:g}, on the break of the low {campaign.geo_low:g}",
+        )
+        # The touch may already have happened — the anchor candle usually IS
+        # the touch — so the new line's history is read back for it. The break
+        # that drew the line can be the fib's own cut in the same breath.
+        touch = self._geo_retro_touch(campaign, tl, candle, window)
+        if touch is None:
+            # Nothing genuine has tested the line: the anchor candle itself is
+            # the only touch there is — the line passes through its open, and
+            # its high is fib 0 (BTC 07-31's 07:00, where open and high are
+            # the same price and no later candle ever reached the line).
+            ult = None
+            for c in window:
+                if c.timestamp >= tl.anchor2_timestamp:
+                    break
+                ult = c.low if ult is None else min(ult, c.low)
+            anchor_candle = next((c for c in window if c.timestamp == tl.anchor2_timestamp), None)
+            if ult is not None and anchor_candle is not None and anchor_candle.high < campaign.mother_high:
+                fib1 = min(ult, anchor_candle.low)
+                if (anchor_candle.high - fib1) >= anchor_candle.high * campaign.min_fib_range_pct:
+                    touch = (anchor_candle.high, int(anchor_candle.timestamp), fib1)
+        if touch is not None:
+            th, tts, fib1 = touch
+            pending = {"touch_high": th, "touch_ts": tts, "fib1": fib1, "trendline_id": tl.trendline_id}
+            if candle.timestamp > tts and candle.close < fib1 - fib1 * DECISIVE_BREAK_PCT:
+                self._draw_fib(campaign, pending)
+            else:
+                self._file_pending_fib(campaign, th, tts, fib1, tl.trendline_id)
 
-    def _trendline_still_stands(self, campaign: Campaign, tl: Trendline, at_ts: int) -> bool:
-        """Has price NOT yet closed above this line since it was anchored?
+    def _geo_retro_touch(self, campaign: Campaign, tl: Trendline, cut_candle: Candle, window: List[Candle]):
+        """The FIRST touch on a just-drawn line, read from the candles behind it.
 
-        A descending line from the mother high is the ceiling on the fall. While
-        every close stays under it the line is still describing the market, and
-        a second line drawn beneath it describes nothing new — it is the same
-        fall, measured again from a later candle. A close above is the event
-        that spends it: that is the market breaking the line, and only then does
-        the next structure get a line of its own.
-
-        The same tolerance the anchor search uses: a close is allowed to poke
-        ANCHOR_CLOSE_TOLERANCE_PCT above before it counts, so a one-cent
-        overshoot does not retire a line that is plainly still holding.
+        The cut candle is excluded — it is the cut, never its own touch (#36's
+        20:30 breaker would otherwise displace the 20:25 touch Phil confirmed).
+        A touch needs a low before it, so the first candle after the mother can
+        never touch: the V is dip first, rise second.
         """
-        for c in self._candles.get(campaign.campaign_id, []):
-            if c.timestamp <= tl.anchor2_timestamp or c.timestamp > at_ts:
-                continue
-            line = trendline_price(tl, c.timestamp)
-            if line > 0 and c.close > line * (1 + ANCHOR_CLOSE_TOLERANCE_PCT):
-                return False
-        return True
+        best = None
+        ult = None
+        for c in window:
+            if (
+                ult is not None
+                and c.timestamp != cut_candle.timestamp
+                and c.high < campaign.mother_high
+                # The anchor candle with no wick above its open never TESTED
+                # the line — the line merely passes through its open. Only a
+                # high poking above counts as the market trying the line.
+                and not (c.timestamp == tl.anchor2_timestamp and c.high <= tl.anchor2_price)
+            ):
+                lv = trendline_price(tl, c.timestamp)
+                if lv > 0 and c.high >= lv and c.close < lv:
+                    fib1 = min(ult, c.low)
+                    if (c.high - fib1) >= c.high * campaign.min_fib_range_pct:
+                        if best is None or fib1 < best[2] - best[2] * 1e-9:
+                            # a deeper low: the swing has grown — this level
+                            # supersedes the shallower one entirely
+                            best = (c.high, int(c.timestamp), fib1)
+                        elif c.high > best[0]:
+                            # same structure grazing again: the TOP graze is
+                            # fib 0
+                            best = (c.high, int(c.timestamp), best[2])
+            ult = c.low if ult is None else min(ult, c.low)
+        return best
 
     def _duplicate_trendline(self, campaign: Campaign, candidate: Trendline, at_ts: int) -> Optional[Trendline]:
         """The existing line this one would sit on top of, if there is one.

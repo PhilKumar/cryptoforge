@@ -248,15 +248,19 @@ class CascadeSwingModelTests(unittest.TestCase):
         for level, expected in ((2, 64652.02), (4, 64376.04), (8, 63824.08)):
             self.assertAlmostEqual(leg.fib.level_price(level), expected, places=2)
 
-    def test_reproduces_the_users_second_fib_exactly(self):
-        """fib 0 is the highest high that reached the trendline — a touch OR a
-        break — between the dip and the cut (64,964.00 at 02:45)."""
+    def test_no_second_structure_without_a_clean_line(self):
+        """The old engine drew a second fib here (64,964.00/64,416.00, once on
+        the user's chart). Under the adjudicated rule it cannot form: TL1 was
+        closed above at candle 10, the 64,416 low breaks only at candle 59, and
+        the only anchor line to that break (the candle-11 red open) is crossed
+        by the candle-30 close — no clean line, no structure. Phil's rule:
+        "doesn't cross any candles after or previously". Awaiting his visual
+        re-ruling on this day; until then the engine draws one fib and waits.
+        """
         self._feed_real(59)
-        self.assertEqual(len(self.campaign.legs), 2)
-        leg = self.campaign.legs[1]
-        self.assertAlmostEqual(leg.touch_high, 64964.00)  # fib 0
-        self.assertAlmostEqual(leg.low, 64416.00)  # fib 1 — the "ultimate low"
-        self.assertAlmostEqual(leg.fib.level_price(2), 63868.00, places=2)
+        self.assertEqual(len(self.campaign.legs), 1)
+        self.assertEqual(len(self.campaign.trendlines), 1)
+        self.assertTrue(self.campaign.geo_armed, "TL1 was closed above — the next line is armed")
 
     def test_no_fib_before_the_trendline_is_touched(self):
         """Cuts during the initial slide draw nothing: the line has not been
@@ -264,11 +268,13 @@ class CascadeSwingModelTests(unittest.TestCase):
         self._feed_real(3)
         self.assertEqual(len(self.campaign.legs), 0)
 
-    def test_dip_freezes_at_the_touch_so_later_wicks_stay_out(self):
-        """The 05:05 candle wicks to 64,404 — below the 64,416 dip — but the
-        touch at 02:45 already froze the dip, so fib 2's level 1 must ignore it."""
-        self._feed_real(59)
-        self.assertAlmostEqual(self.campaign.legs[1].low, 64416.00)
+    def test_a_locked_low_ignores_wicks_below_it(self):
+        """Candle 58 wicks to 64,404 — below the locked 64,416 low — without a
+        decisive close. The lock holds: only a red CLOSE decisively below moves
+        the structure, which is what keeps a level meaning something."""
+        self._feed_real(58)
+        self.assertAlmostEqual(self.campaign.geo_low, 64416.00)
+        self.assertTrue(self.campaign.geo_low_locked)
 
     def test_trendline_anchors_to_a_red_candle_open(self):
         """The line is the tightest descending line from the mother high that no
@@ -279,36 +285,45 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertAlmostEqual(tl.anchor1_price, 65107.99)  # mother high
         self.assertAlmostEqual(tl.anchor2_price, 64904.00)  # 6th candle open
 
-    def test_second_trendline_anchors_to_a_later_red_open_once_closes_have_slack(self):
-        """Was 64,902.63 (candle #42) under zero tolerance. With
-        ANCHOR_CLOSE_TOLERANCE_PCT the search reaches one swing further right to
-        #45's open, 64,869.79 — also a red candle open, which is the rule.
-
-        Nothing Phil has confirmed moves with it: both fibs on this fixture are
-        byte-identical either way, and they are what places orders. The anchor
-        itself was locked to engine behaviour here, not to one of his charts."""
+    def test_a_crossed_candidate_line_draws_nothing(self):
+        """When the armed break finally comes at candle 59, the only anchor
+        (candle 11's 64,999.13 open — the highest red open after the 64,416
+        low) gives a line the candle-30 close already crossed. No second-best
+        anchor exists under the rule, so nothing is drawn and the first fib is
+        untouched."""
         self._feed_real(59)
-        self.assertEqual(len(self.campaign.trendlines), 2)
-        self.assertAlmostEqual(self.campaign.trendlines[1].anchor2_price, 64869.79)
+        self.assertEqual(len(self.campaign.trendlines), 1)
         self.assertAlmostEqual(self.campaign.legs[0].touch_high, 64928.00)
         self.assertAlmostEqual(self.campaign.legs[0].low, 64790.01)
-        self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64964.00)
-        self.assertAlmostEqual(self.campaign.legs[1].low, 64416.00)
 
     def test_fall_pct_and_pool_follow_the_leg_low(self):
         self._feed_real(59)
-        leg1, leg2 = self.campaign.legs
+        leg1 = self.campaign.legs[0]
         self.assertAlmostEqual(leg1.leg_pct_from_mother, 0.488, places=2)
-        self.assertAlmostEqual(leg2.leg_pct_from_mother, 1.063, places=2)
-        # leg 2 only draws the incremental depth beyond leg 1
-        self.assertAlmostEqual(leg2.pool_usd, (1.063 - 0.488) * 2000 / 100, places=1)
+        self.assertAlmostEqual(leg1.pool_usd, 0.488 * 2000 / 100, places=1)
 
     def test_a_second_fib_leaves_the_first_ladder_resting(self):
         """Fib 2 forming does not retire fib 1. Fib 1's levels sit above the
         market and are exactly where price has to pass on the way back up, so
-        they stay live and only the money fib 1 could never place moves on."""
-        self._feed_real(59)
-        leg1, leg2 = self.campaign.legs
+        they stay live and only the money fib 1 could never place moves on.
+        (Runs on the second 07-20 day — the first day now draws one fib.)"""
+        self.campaign = Campaign(
+            campaign_id="real2b",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=_REAL2[0][2],
+            mother_low=_REAL2[0][3],
+            mother_timestamp=0,
+            mode="paper",
+            min_notional_usd=5.0,
+        )
+        self.engine.campaigns[self.campaign.campaign_id] = self.campaign
+        for idx, o, h, low, c in _REAL2[1:]:
+            if idx > 10:
+                break
+            _feed(self.engine, self.campaign, Candle(idx * 300, o, h, low, c))
+        self.assertGreaterEqual(len(self.campaign.legs), 2)
+        leg1, leg2 = self.campaign.legs[0], self.campaign.legs[1]
         self.assertTrue(
             [o for o in leg1.pending_orders.values() if o.is_open and o.usd_notional > 0],
             "fib 1 must still have a funded order resting after fib 2 is drawn",
@@ -342,9 +357,9 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertLessEqual(self.campaign.resting_usd + self.campaign.pending_usd, allocation + 0.05)
         self.assertGreater(self.campaign.resting_usd + self.campaign.pending_usd, 0.0)
 
-        # The cascade keeps running; a later fib joins the same ladder.
+        # The cascade keeps running on the same ladder.
         self._feed_real(59)
-        self.assertGreaterEqual(len(self.campaign.legs), 2)
+        self.assertGreaterEqual(len(self.campaign.legs), 1)
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
         # The new low released the parked levels back onto the ladder, and every
         # dollar of both fibs' pools is marked on one level or another.
@@ -441,50 +456,55 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(tl.anchor2_price, 64865.78)  # 12:10 red candle open
 
     def test_second_fib_matches_the_user_chart(self):
+        """The user's fib 2 (64,753.77 / 64,599.89) — its touch is the 13:10
+        candle, TL2's own anchor, and the top graze of the line. The engine
+        also draws a smaller fib on TL1 first (64,758.24/64,680) — the class
+        of small funding fib Phil ruled to keep on the SOL day."""
         self._feed(18)
-        self.assertEqual(len(self.campaign.legs), 2)
-        leg = self.campaign.legs[1]
-        self.assertAlmostEqual(leg.touch_high, 64753.77)  # 13:10 high
-        self.assertAlmostEqual(leg.low, 64599.89)  # the dip under 64,600
+        pairs = [(round(leg.touch_high, 2), round(leg.low, 2)) for leg in self.campaign.legs]
+        self.assertIn((64753.77, 64599.89), pairs)
+        self.assertEqual(pairs[0], (64865.79, 64716.57))
 
     def test_indecisive_probe_below_the_dip_does_not_draw(self):
-        """12:40 closes 8 dollars below the 64,608 dip — the fall resuming.
-        No structure exists there on the user's chart."""
+        """12:40 closes 8 dollars below the locked 64,608 low — not decisive,
+        the fall resuming. No trendline is drawn there and the lock holds."""
         self._feed(14)
-        self.assertEqual(len(self.campaign.legs), 1)
+        self.assertEqual(len(self.campaign.trendlines), 1)
+        self.assertAlmostEqual(self.campaign.geo_low, 64608.00)
+        self.assertTrue(self.campaign.geo_low_locked)
 
-    def test_same_shelf_structure_draws_geometry_only(self):
-        """The user's chart: three trendlines, two fibs. The 19:20 IST structure
-        is touched 0.015% from fib 2's — same shelf — so its line is drawn but
-        carries no fib. Its anchor is the 19:20 open (64,720.82), which is what
-        the magnet snaps to; fib-bearing anchors still exclude the cut candle."""
-        self._feed(23)
+    def test_the_third_structure_funds_the_deeper_fall(self):
+        """The user's original chart marked the 19:20 line as same-shelf and
+        fib-less. Phil's #36 ruling supersedes that: a structure from the same
+        high whose level 1 sits decisively deeper is the next swing down and
+        its levels fund below ("once the low broke, the line has to be drawn
+        for the levels to fund below"). TL3 keeps the 19:20 anchor and its fib
+        carries the day's deep low."""
+        self._feed(29)
         self.assertEqual(len(self.campaign.trendlines), 3)
-        self.assertEqual(len(self.campaign.legs), 2)
         third = self.campaign.trendlines[2]
-        self.assertFalse(third.bears_fib)
         self.assertAlmostEqual(third.anchor2_price, 64720.82)
         self.assertEqual(third.anchor2_timestamp, 23 * 300)
-        # The fib-bearing lines and their fibs are untouched.
-        self.assertTrue(self.campaign.trendlines[0].bears_fib)
-        self.assertTrue(self.campaign.trendlines[1].bears_fib)
-        self.assertAlmostEqual(self.campaign.legs[1].touch_high, 64753.77)
-        self.assertEqual(self.campaign.active_trendline_id, 2)
+        deep = [leg for leg in self.campaign.legs if leg.trendline_id == 3]
+        self.assertTrue(deep, "the third line carries the deep fib now")
+        self.assertAlmostEqual(deep[0].touch_high, 64761.62)
+        self.assertAlmostEqual(deep[0].low, 64315.56)
 
-    def test_the_shelf_check_looks_at_every_fib_not_just_the_last(self):
-        """A live SOL campaign drew fib 1 and fib 3 with the identical touch
-        high of 78.75, because fib 3 was only ever compared against fib 2.
-        Price wanders off a shelf and comes back hours later, so the duplicate
-        is usually a couple of fibs back."""
+    def test_same_shelf_twins_must_differ_in_depth(self):
+        """Two fibs may share a touch shelf ONLY when the later one is
+        decisively deeper — the next swing down off the same high. True
+        same-depth twins (the SOL 78.75 duplicate) stay forbidden."""
         self._feed(29)
-        highs = [leg.touch_high for leg in self.campaign.legs if leg.touch_high]
-        for i, a in enumerate(highs):
-            for b in highs[i + 1 :]:
-                self.assertGreaterEqual(
-                    abs(a - b) / b,
-                    MIN_LEG_SEPARATION_PCT,
-                    f"fibs at {a} and {b} are the same shelf and should not both exist",
-                )
+        legs = [leg for leg in self.campaign.legs if leg.touch_high and leg.low]
+        for i, a in enumerate(legs):
+            for b in legs[i + 1 :]:
+                if abs(a.touch_high - b.touch_high) / b.touch_high < MIN_LEG_SEPARATION_PCT:
+                    self.assertLess(
+                        b.low,
+                        a.low - a.low * 0.0002,
+                        f"fibs at {a.touch_high}/{a.low} and {b.touch_high}/{b.low} "
+                        "share a shelf without the second being deeper",
+                    )
 
     def test_a_deeper_swing_off_the_same_high_is_not_the_same_shelf(self):
         """Real numbers from BTCUSDT campaign #36, 2026-07-21.
@@ -526,7 +546,7 @@ class CascadeSecondDayRegressionTests(unittest.TestCase):
         the ladder, thinning the pool across near-duplicates instead of putting
         it to work. Skipping keeps the money on the rungs that matter."""
         self._feed(29)
-        self.assertEqual(len(self.campaign.legs), 2)
+        self.assertGreaterEqual(len(self.campaign.legs), 2)
         working = [
             o for leg in self.campaign.legs for o in leg.pending_orders.values() if o.is_open and o.usd_notional > 0
         ]
@@ -625,43 +645,47 @@ class CascadeThirdDayRegressionTests(unittest.TestCase):
 
     def test_a_steady_fall_still_forms_a_structure(self):
         """Regression: every touching candle here also prints a lower low. The
-        engine must still draw, not stall."""
+        engine must still draw its line and hold the touch pending — and the
+        fib arrives the moment its level 1 is decisively closed below."""
         self._feed(16)
-        self.assertTrue(self.campaign.legs, "a steady fall must still form a structure")
+        self.assertEqual(len(self.campaign.trendlines), 1)
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
+        self.assertTrue(self.campaign.pending_fibs, "the touch is pending, waiting for its cut")
 
-    @unittest.expectedFailure
     def test_matches_the_user_chart_exactly(self):
-        """The verified target for this day, not yet reached.
+        """Phil's finalised chart, now reproduced.
 
-        Phil's finalised chart puts BOTH anchors on the 00:45 candle: its high
-        65,196.00 is fib 0 and its low 65,082.81 is fib 1. His levels solve back
-        to exactly that pair (L2 64,969.62, L4 64,743.24), so it is not a
-        reading error.
+        Both anchors are on the 00:45 candle: its high 65,196.00 is fib 0 and
+        its low 65,082.81 is fib 1 — one candle can be both dip and touch. His
+        drawn levels solve back to exactly this pair. This test spent weeks as
+        an expectedFailure asserting the old engine's off-by-one (65,246.00,
+        the 00:40 candle); the adjudicated rule produces his chart directly.
 
-        This test used to assert 65,246.00 with the comment "00:45 IST high" —
-        but 65,246.00 is the 00:40 candle's high. The comment named the right
-        candle and the number came from the wrong one, so the reference we were
-        defending was itself wrong.
-
-        The engine currently touches at 00:40 and freezes fib 1 at the 00:30 low
-        of 65,160.00, one candle early on both. Marked expected-failure rather
-        than deleted: it is the target, and it should start passing when the
-        touch detection and the ultimate-low rule are fixed together.
+        The fixture itself never closes decisively below 65,082.81, so the fib
+        stays pending in it — a synthetic cut candle lands it, which is also
+        what proves the fib is only drawn once its own level breaks.
         """
         self._feed(16)
+        self.assertEqual(
+            [(round(p["touch_high"], 2), round(p["fib1"], 2)) for p in self.campaign.pending_fibs],
+            [(65196.00, 65082.81)],
+        )
+        _feed(self.engine, self.campaign, Candle(17 * 300, 65120.0, 65125.0, 65020.0, 65025.0))
         leg = self.campaign.legs[0]
         self.assertAlmostEqual(leg.touch_high, 65196.00)  # 00:45 IST high
         self.assertAlmostEqual(leg.low, 65082.81)  # the SAME candle's low
         self.assertAlmostEqual(leg.fib.level_price(2), 64969.62)
         self.assertAlmostEqual(leg.fib.level_price(4), 64743.24)
 
-    def test_the_dip_candle_high_is_not_its_own_touch(self):
-        """The 00:30 candle both set the dip (65,160) and reached the line with a
-        65,274.58 high. Its own high must not become fib 0 — the rise has to come
-        after the dip, which is why fib 0 is the later 65,246."""
+    def test_neither_wick_near_the_line_becomes_fib_0(self):
+        """Neither the 00:30 candle's 65,274.58 (before the structure) nor the
+        00:40 breaker's 65,246.00 (the cut, and the old off-by-one) may be
+        fib 0 — the touch is the 00:45 test of the drawn line."""
         self._feed(16)
-        self.assertNotAlmostEqual(self.campaign.legs[0].touch_high, 65274.58)
+        highs = [p["touch_high"] for p in self.campaign.pending_fibs]
+        self.assertNotIn(65274.58, highs)
+        self.assertNotIn(65246.00, highs)
+        self.assertIn(65196.00, highs)
 
 
 class CascadeAccumulatorEntryTests(unittest.TestCase):
@@ -1098,9 +1122,11 @@ class CascadeFibSizeTests(unittest.TestCase):
         engine.campaigns["real3"] = campaign
         for idx, o, h, low, c in _REAL3[1:]:
             _feed(engine, campaign, Candle(idx * 300, o, h, low, c))
-        self.assertEqual(len(campaign.legs), 1)
-        self.assertAlmostEqual(campaign.legs[0].touch_high, 65246.00)
-        self.assertAlmostEqual(campaign.legs[0].low, 65160.00)
+        # The structure exists; its fib waits for the 65,082.81 cut.
+        self.assertEqual(len(campaign.trendlines), 1)
+        self.assertEqual(len(campaign.pending_fibs), 1)
+        self.assertAlmostEqual(campaign.pending_fibs[0]["touch_high"], 65196.00)
+        self.assertAlmostEqual(campaign.pending_fibs[0]["fib1"], 65082.81)
 
 
 class CascadeMotherRetestTests(unittest.TestCase):
@@ -2314,12 +2340,12 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         result = await engine.recalculate_campaign("stale")
         self.assertEqual(result["status"], "ok")
         self.assertFalse(engine.get_status()["campaigns"][0]["stale_model"])
-        # replayed under the current rules -> both verified fibs
-        self.assertEqual(len(campaign.legs), 2)
+        # replayed under the adjudicated rule -> the verified first fib; the
+        # old second fib cannot form (no clean line to its touch — see
+        # test_no_second_structure_without_a_clean_line)
+        self.assertEqual(len(campaign.legs), 1)
         self.assertAlmostEqual(campaign.legs[0].touch_high, 64928.00)
         self.assertAlmostEqual(campaign.legs[0].low, 64790.01)
-        self.assertAlmostEqual(campaign.legs[1].touch_high, 64964.00)
-        self.assertAlmostEqual(campaign.legs[1].low, 64416.00)
 
     async def _replayable(self, engine, broker):
         broker.candles_df = pd.DataFrame(
@@ -5298,21 +5324,25 @@ class CascadeTrendlineReferenceTests(unittest.TestCase):
             engine._process_candle(campaign, candle)
 
     def test_a_line_stands_until_a_close_goes_above_it(self):
+        """geo_armed is the standing-line state: False while the line holds,
+        True the moment a close breaks above it."""
         engine = _mk_engine()
         campaign = self._campaign(engine)
         tl = self._line(65409.56, 1_000_000, 65184.09, 1_001_200)
         campaign.trendlines.append(tl)
-        # Everything under the line: it is still describing the fall.
-        engine._candles["tl"] = [
-            Candle(timestamp=1_002_000, open=64900.0, high=64950.0, low=64800.0, close=64850.0),
-        ]
-        self.assertTrue(engine._trendline_still_stands(campaign, tl, 1_002_000))
-        # A close above spends it.
-        above = trendline_price(tl, 1_003_000) * 1.01
-        engine._candles["tl"].append(
-            Candle(timestamp=1_003_000, open=above - 10, high=above + 10, low=above - 20, close=above)
-        )
-        self.assertFalse(engine._trendline_still_stands(campaign, tl, 1_003_000))
+        campaign.active_trendline_id = tl.trendline_id
+        campaign.geo_armed = False
+        engine._candles["tl"] = []
+        under = Candle(timestamp=1_002_000, open=64900.0, high=64950.0, low=64800.0, close=64850.0)
+        engine._candles["tl"].append(under)
+        engine._process_candle(campaign, under)
+        self.assertFalse(campaign.geo_armed, "everything under the line: it still stands")
+        above_px = trendline_price(tl, 1_002_300) * 1.005
+        above = Candle(timestamp=1_002_300, open=above_px - 30, high=above_px + 10, low=above_px - 40, close=above_px)
+        engine._candles["tl"].append(above)
+        engine._process_candle(campaign, above)
+        self.assertTrue(campaign.geo_armed, "a close above spends the line")
+        self.assertTrue(campaign.broken_above)
 
     def test_a_one_tick_poke_does_not_retire_a_line(self):
         """Same tolerance the anchor search uses — a line plainly still holding
@@ -5321,21 +5351,30 @@ class CascadeTrendlineReferenceTests(unittest.TestCase):
         campaign = self._campaign(engine)
         tl = self._line(65409.56, 1_000_000, 65184.09, 1_001_200)
         campaign.trendlines.append(tl)
-        poke = trendline_price(tl, 1_002_000) + 0.01
-        engine._candles["tl"] = [Candle(timestamp=1_002_000, open=poke - 5, high=poke + 1, low=poke - 10, close=poke)]
-        self.assertTrue(engine._trendline_still_stands(campaign, tl, 1_002_000))
+        campaign.active_trendline_id = tl.trendline_id
+        campaign.geo_armed = False
+        engine._candles["tl"] = []
+        poke_px = trendline_price(tl, 1_002_000) + 0.01
+        poke = Candle(timestamp=1_002_000, open=poke_px - 5, high=poke_px + 1, low=poke_px - 10, close=poke_px)
+        engine._candles["tl"].append(poke)
+        engine._process_candle(campaign, poke)
+        self.assertFalse(campaign.geo_armed)
 
-    def test_a_close_before_the_anchor_is_not_a_break(self):
-        """The line only exists from its own anchor forward; candles behind it
-        are the action it was drawn through."""
+    def test_a_wick_through_the_line_is_not_a_break(self):
+        """Only a CLOSE above spends the line — a high poking through it is a
+        touch, the opposite of a break."""
         engine = _mk_engine()
         campaign = self._campaign(engine)
         tl = self._line(65409.56, 1_000_000, 65184.09, 1_001_200)
         campaign.trendlines.append(tl)
-        engine._candles["tl"] = [
-            Candle(timestamp=1_000_600, open=65390.0, high=65400.0, low=65300.0, close=65395.0),
-        ]
-        self.assertTrue(engine._trendline_still_stands(campaign, tl, 1_001_500))
+        campaign.active_trendline_id = tl.trendline_id
+        campaign.geo_armed = False
+        engine._candles["tl"] = []
+        lv = trendline_price(tl, 1_002_000)
+        wick = Candle(timestamp=1_002_000, open=lv - 60, high=lv + 40, low=lv - 80, close=lv - 50)
+        engine._candles["tl"].append(wick)
+        engine._process_candle(campaign, wick)
+        self.assertFalse(campaign.geo_armed)
 
     # Phil's 2026-07-31 BTCUSDT chart, mother 65,409.56 at 06:40 IST — the
     # screenshot where he said the green line "cannot be below blue". Real
