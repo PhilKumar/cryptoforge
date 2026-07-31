@@ -6951,7 +6951,8 @@ html[data-theme="light"] .journal-entry-notes section {
   /* Only labels too wide for their box get the animation, flagged in JS. */
   .cf-cascade-stats .stat-box:hover .stat-label.is-clipped > span,
   .cf-cascade-stats .stat-box:focus-within .stat-label.is-clipped > span {
-    animation: cfStatMarquee var(--cf-marquee-time, 7s) linear infinite;
+    animation: cfStatMarquee var(--cf-marquee-time, 5s) linear infinite;
+    animation-delay: var(--cf-marquee-delay, 0s);
   }
   @keyframes cfStatMarquee {
     0%, 12%   { transform: translateX(0); }
@@ -7512,12 +7513,15 @@ html[data-theme="light"] .journal-entry-notes section {
     max-width: none;
     will-change: transform;
   }
-  /* The duration is set per strip in JS from how far it has to travel, so a
-     long strip does not race past at the same seconds as a short one — the
-     text moves at one readable speed everywhere. */
+  /* Duration is set per strip in JS from how far it has to travel, so a long
+     strip does not race past at the same seconds as a short one — the text
+     moves at one readable speed everywhere. The negative delay is the shared
+     clock: the panel rebuilds this element every 3s, and without it the slide
+     would restart from the beginning each time and never get anywhere. */
   .cf-cascade-title.is-clipped:hover > .cf-cascade-title-track,
   .cf-cascade-title.is-clipped:focus-within > .cf-cascade-title-track {
-    animation: cfStripMarquee var(--cf-marquee-time, 12s) linear infinite;
+    animation: cfStripMarquee var(--cf-marquee-time, 9s) linear infinite;
+    animation-delay: var(--cf-marquee-delay, 0s);
   }
   /* A clipped strip says so: the last thing visible fades out rather than
      ending in a hard cut, so a half-word reads as "there is more here". */
@@ -7530,11 +7534,13 @@ html[data-theme="light"] .journal-entry-notes section {
     -webkit-mask-image: none;
     mask-image: none;
   }
-  /* Read the head, slide, read the tail, slide back — the two pauses are what
-     make it legible; travel is 34% of the cycle out and 28% back. */
+  /* Read the head, slide, read the tail, slide back. The pauses are what make
+     it legible, but the opening one has to stay short — a long one reads as
+     "nothing is happening". Out is 38% of the cycle (_CF_STRIP_TRAVEL in JS
+     must match), back is 32%. */
   @keyframes cfStripMarquee {
-    0%, 12%   { transform: translateX(0); }
-    46%, 66%  { transform: translateX(var(--cf-marquee-shift, -50%)); }
+    0%, 8%    { transform: translateX(0); }
+    46%, 62%  { transform: translateX(var(--cf-marquee-shift, -50%)); }
     94%, 100% { transform: translateX(0); }
   }
   @media (prefers-reduced-motion: reduce) {

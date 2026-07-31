@@ -8741,12 +8741,31 @@ function cfCascadeRoundsPage(campaignId, step) {
 // How long a marquee cycle should last so the text always crawls at the same
 // readable speed. A fixed duration means the longest strips — the ones that
 // most need reading — move fastest, which is backwards. `travelFraction` is
-// how much of the keyframe cycle is spent moving rather than paused.
-var _CF_MARQUEE_PX_PER_SEC = 42;
-function _cfMarqueeSeconds(distance, travelFraction, minSec, maxSec) {
+// how much of the keyframe cycle is spent moving rather than paused, and has
+// to match the outbound leg of the keyframes below.
+var _CF_MARQUEE_PX_PER_SEC = 85;
+var _CF_STRIP_TRAVEL = 0.38;
+// Every marquee runs off one clock. The Cascade panel rewrites its whole HTML
+// on the 3s status poll, so the element under your cursor is a new one every
+// three seconds and its animation would restart from the beginning — you would
+// wait through the opening pause, catch a twitch of movement, and lose it. A
+// negative animation-delay measured from this shared epoch puts each rebuilt
+// element back at the phase the old one had reached, so the repaint is
+// invisible and the strip just keeps sliding.
+var _CF_MARQUEE_EPOCH = Date.now();
+
+function _cfMarqueeTune(el, distance, travelFraction, minSec, maxSec) {
   var seconds = (distance / _CF_MARQUEE_PX_PER_SEC) / travelFraction;
   seconds = Math.max(minSec, Math.min(maxSec, seconds));
-  return seconds.toFixed(1) + 's';
+  var phase = ((Date.now() - _CF_MARQUEE_EPOCH) / 1000) % seconds;
+  el.style.setProperty('--cf-marquee-time', seconds.toFixed(2) + 's');
+  el.style.setProperty('--cf-marquee-delay', (-phase).toFixed(2) + 's');
+}
+
+function _cfMarqueeClear(el) {
+  el.style.removeProperty('--cf-marquee-shift');
+  el.style.removeProperty('--cf-marquee-time');
+  el.style.removeProperty('--cf-marquee-delay');
 }
 
 // The campaign strip carries a state pill, PAPER/LIVE, the MC kind, the
@@ -8764,8 +8783,7 @@ function _cfCascadeMarkClippedStrips(root) {
     if (overflow > 1) {
       title.classList.add('is-clipped');
       title.style.setProperty('--cf-marquee-shift', '-' + (overflow + 8) + 'px');
-      title.style.setProperty(
-        '--cf-marquee-time', _cfMarqueeSeconds(overflow + 8, 0.34, 7, 26));
+      _cfMarqueeTune(title, overflow + 8, _CF_STRIP_TRAVEL, 5, 20);
       if (!title.title) {
         // textContent runs the pills together ("BTCUSDTTRENDLINE_ACTIVEPAPER"),
         // so the tooltip is built element by element with separators.
@@ -8778,8 +8796,7 @@ function _cfCascadeMarkClippedStrips(root) {
       }
     } else {
       title.classList.remove('is-clipped');
-      title.style.removeProperty('--cf-marquee-shift');
-      title.style.removeProperty('--cf-marquee-time');
+      _cfMarqueeClear(title);
       title.removeAttribute('title');
     }
   }
@@ -8796,12 +8813,10 @@ function _cfCascadeMarkClippedLabels(root) {
       label.classList.add('is-clipped');
       // Slide by exactly the hidden amount plus a small tail.
       label.style.setProperty('--cf-marquee-shift', '-' + (overflow + 4) + 'px');
-      label.style.setProperty(
-        '--cf-marquee-time', _cfMarqueeSeconds(overflow + 4, 0.76, 4.5, 14));
+      _cfMarqueeTune(label, overflow + 4, 0.76, 3.5, 12);
     } else {
       label.classList.remove('is-clipped');
-      label.style.removeProperty('--cf-marquee-shift');
-      label.style.removeProperty('--cf-marquee-time');
+      _cfMarqueeClear(label);
     }
   }
 }
