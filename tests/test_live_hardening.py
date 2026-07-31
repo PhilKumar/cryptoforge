@@ -19,6 +19,7 @@ import config
 from broker import get_broker_client
 from broker.binance import BinanceSpotClient
 from broker.coindcx import CoinDCXClient
+from broker.coindcx_spot import CoinDCXSpotClient
 from broker.delta import DeltaClient, _CircuitBreaker, _normalize_result_list
 from engine.live import LiveEngine
 from engine.live import _select_signal_rows as select_live_signal_rows
@@ -224,10 +225,22 @@ class BrokerFactoryTests(unittest.TestCase):
         self.assertIsInstance(client, DeltaClient)
         self.assertEqual(client.broker_name, "delta")
 
-    def test_factory_selects_coindcx(self):
+    def test_factory_selects_coindcx_spot(self):
         client = get_broker_client("coindcx")
-        self.assertIsInstance(client, CoinDCXClient)
+        self.assertIsInstance(client, CoinDCXSpotClient)
         self.assertEqual(client.broker_name, "coindcx")
+        self.assertEqual(client.to_broker_symbol("BTCUSD"), "BTCUSDT")
+        self.assertEqual(client.from_broker_symbol("BTCUSDT"), "BTCUSDT")
+
+    def test_factory_maps_coindcx_spot_alias(self):
+        client = get_broker_client("coindcx_spot")
+        self.assertIsInstance(client, CoinDCXSpotClient)
+        self.assertEqual(client.broker_name, "coindcx")
+
+    def test_factory_selects_coindcx_futures_by_explicit_name(self):
+        client = get_broker_client("coindcx_futures")
+        self.assertIsInstance(client, CoinDCXClient)
+        self.assertEqual(client.broker_name, "coindcx_futures")
         self.assertEqual(client.to_broker_symbol("BTCUSDT"), "B-BTC_USDT")
         self.assertEqual(client.from_broker_symbol("B-BTC_USDT"), "BTCUSDT")
 
@@ -3661,3 +3674,146 @@ class BinanceMarketDataHostTests(unittest.TestCase):
         client._server_time_offset_ms()
         self.assertIn("/api/v3/exchangeInfo", seen)
         self.assertIn("/api/v3/time", seen)
+
+
+class CoinDCXSpotClientTests(unittest.TestCase):
+    """The spot adapter must speak Binance's dialect to the engine while
+    translating CoinDCX's inverted market vocabulary underneath."""
+
+    _MARKET = {
+        "coindcx_name": "BTCUSDT",
+        "base_currency_short_name": "USDT",
+        "target_currency_short_name": "BTC",
+        "base_currency_precision": 2,
+        "target_currency_precision": 5,
+        "min_quantity": 1e-05,
+        "max_quantity": 9000,
+        "min_notional": 5,
+        "step": 1e-05,
+        "order_types": ["limit_order", "market_order", "stop_limit"],
+        "symbol": "BTCUSDT",
+        "ecode": "B",
+        "pair": "B-BTC_USDT",
+        "status": "active",
+    }
+
+    def _client(self):
+        client = CoinDCXSpotClient()
+        client._products_cache = [client._normalize_product(self._MARKET)]
+        client._products_ts = time.time()
+        return client
+
+    def test_product_flips_coindcx_base_and_target_into_app_vocabulary(self):
+        product = self._client().get_product_by_symbol("BTCUSDT")
+        self.assertEqual(product["base_asset"], "BTC")
+        self.assertEqual(product["quote_asset"], "USDT")
+        self.assertEqual(product["tick_size"], "0.01")
+        self.assertEqual(product["candle_pair"], "B-BTC_USDT")
+        self.assertEqual(product["contract_type"], "spot")
+
+    def test_stop_limit_order_builds_native_coindcx_payload(self):
+        client = self._client()
+        captured = {}
+
+        def fake_post(path, payload=None):
+            captured["path"] = path
+            captured["payload"] = payload
+            return {
+                "orders": [
+                    {
+                        "id": "ord-1",
+                        "market": "BTCUSDT",
+                        "status": "open",
+                        "total_quantity": 0.002,
+                        "remaining_quantity": 0.002,
+                        "price_per_unit": 63000.0,
+                        "client_order_id": "cf-csc-x-buy-1",
+                    }
+                ]
+            }
+
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(client, "get_ticker", return_value={"last_price": 63000.0}),
+            patch.object(client, "_private_post", side_effect=fake_post),
+        ):
+            result = client.place_order(
+                "BTCUSDT",
+                126.0,
+                "buy",
+                order_type="stop_limit",
+                limit_price=63000.129,
+                stop_price=62990.567,
+                client_order_id="cf-csc-x-buy-1",
+            )
+
+        self.assertEqual(captured["path"], "/exchange/v1/orders/create")
+        payload = captured["payload"]
+        self.assertEqual(payload["order_type"], "stop_limit")
+        self.assertEqual(payload["price_per_unit"], 63000.12)
+        self.assertEqual(payload["stop_price"], 62990.56)
+        self.assertEqual(payload["client_order_id"], "cf-csc-x-buy-1")
+        self.assertEqual(result["status"], "NEW")
+        self.assertEqual(result["clientOrderId"], "cf-csc-x-buy-1")
+        self.assertEqual(result["orderId"], "ord-1")
+
+    def test_order_normalization_exposes_binance_shaped_fill_fields(self):
+        row = self._client()._normalize_order(
+            {
+                "id": "ord-2",
+                "market": "BTCUSDT",
+                "status": "partially_filled",
+                "total_quantity": 1.0,
+                "remaining_quantity": 0.25,
+                "avg_price": 100.0,
+                "price_per_unit": 101.0,
+                "fee_amount": 0.05,
+            }
+        )
+        self.assertEqual(row["status"], "PARTIALLY_FILLED")
+        self.assertEqual(float(row["executedQty"]), 0.75)
+        self.assertEqual(float(row["cummulativeQuoteQty"]), 75.0)
+        self.assertEqual(row["paid_commission"], 0.05)
+
+    def test_wallet_maps_currency_rows_to_free_and_locked_balances(self):
+        client = self._client()
+        with (
+            patch.object(client, "_is_configured", return_value=True),
+            patch.object(
+                client,
+                "_private_post",
+                return_value=[
+                    {"currency": "BTC", "balance": "0.5", "locked_balance": "0.1"},
+                    {"currency": "USDT", "balance": "20", "locked_balance": "0"},
+                    {"currency": "XRP", "balance": "0", "locked_balance": "0"},
+                ],
+            ),
+        ):
+            rows = client.get_wallet()
+        by_asset = {row["asset_symbol"]: row for row in rows}
+        self.assertNotIn("XRP", by_asset)
+        self.assertEqual(by_asset["BTC"]["free_balance"], "0.5")
+        self.assertEqual(by_asset["BTC"]["locked_balance"], "0.1")
+        self.assertEqual(rows[0]["asset_symbol"], "USDT")
+
+    def test_five_minute_candles_resample_from_one_minute_pages(self):
+        client = self._client()
+        base_ms = 1785400000 * 1000 - (1785400000 % 300) * 1000
+        one_minute = [
+            {"time": base_ms + i * 60_000, "open": 10 + i, "high": 20 + i, "low": 5 + i, "close": 15 + i, "volume": 1}
+            for i in range(10)
+        ]
+        with patch.object(client, "_fetch_candle_page", return_value=one_minute):
+            df = client.get_candles("BTCUSDT", resolution="5m")
+        self.assertEqual(len(df), 2)
+        first = df.iloc[0]
+        self.assertEqual(first["open"], 10)
+        self.assertEqual(first["high"], 24)
+        self.assertEqual(first["low"], 5)
+        self.assertEqual(first["close"], 19)
+        self.assertEqual(first["volume"], 5)
+
+    def test_closed_order_listing_is_empty_not_an_error(self):
+        client = self._client()
+        with patch.object(client, "_is_configured", return_value=True):
+            self.assertEqual(client.get_orders("BTCUSDT", "closed"), [])

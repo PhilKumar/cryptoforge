@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "coindcx-paper",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["/Users/philipkumar/Documents/CryptoForge/tools/run_coindcx_paper.sh"],
+      "port": 9001
+    }
+  ]
+}

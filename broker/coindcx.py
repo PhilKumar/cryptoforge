@@ -99,8 +99,10 @@ def _request_with_retry(
 
 
 class CoinDCXClient(BaseBroker):
-    broker_name = "coindcx"
-    display_name = "CoinDCX"
+    # "coindcx" now selects the spot adapter; this futures client keeps its
+    # own explicit name so nothing picks it up by accident.
+    broker_name = "coindcx_futures"
+    display_name = "CoinDCX Futures"
 
     def __init__(self):
         self.api_key = config.COINDCX_API_KEY
@@ -220,7 +222,9 @@ class CoinDCXClient(BaseBroker):
             "/exchange/v1/derivatives/futures/data/active_instruments",
             params={"margin_currency_short_name[]": self.margin_currency},
         )
-        pairs = payload.get("active_instruments", [])
+        # The live endpoint returns a bare JSON array of pair strings; older
+        # docs wrapped it in {"active_instruments": [...]}. Accept both.
+        pairs = payload if isinstance(payload, list) else payload.get("active_instruments", [])
         products = [self._normalize_product(pair) for pair in pairs]
         self._products_cache = products
         self._products_ts = now
@@ -274,29 +278,44 @@ class CoinDCXClient(BaseBroker):
             "maintenance_margin": self.coerce_float(product.get("maintenance_margin"), 0.0),
         }
 
+    # TradingView-style resolutions the endpoint accepts, plus each bar's span
+    # so a sensible default window can be computed when no start is given.
+    _CANDLE_RESOLUTIONS = {
+        "1m": ("1", 60),
+        "3m": ("3", 180),
+        "5m": ("5", 300),
+        "15m": ("15", 900),
+        "30m": ("30", 1800),
+        "1h": ("60", 3600),
+        "2h": ("120", 7200),
+        "4h": ("240", 14400),
+        "6h": ("360", 21600),
+        "1d": ("1D", 86400),
+        "1D": ("1D", 86400),
+        "1w": ("1W", 604800),
+        "1W": ("1W", 604800),
+    }
+    _CANDLE_DEFAULT_BARS = 1000
+
     def get_candles(self, symbol: str, resolution: str = "5m", start: str = None, end: str = None) -> pd.DataFrame:
         pair = self._app_symbol_to_pair(symbol)
-        interval_map = {
-            "1m": "1m",
-            "3m": "3m",
-            "5m": "5m",
-            "15m": "15m",
-            "30m": "30m",
-            "1h": "1h",
-            "2h": "2h",
-            "4h": "4h",
-            "6h": "6h",
-            "1d": "1d",
-            "1D": "1d",
-            "1w": "1w",
-            "1W": "1w",
-        }
-        interval = interval_map.get(resolution, "5m")
-        payload = {"pair": pair, "interval": interval}
-        if start:
-            payload["from_time"] = int(datetime.strptime(start, "%Y-%m-%d").timestamp())
+        api_resolution, bar_seconds = self._CANDLE_RESOLUTIONS.get(resolution, ("5", 300))
+        to_ts = int(_time.time())
         if end:
-            payload["to_time"] = int(datetime.strptime(end, "%Y-%m-%d").timestamp())
+            to_ts = int(datetime.strptime(end, "%Y-%m-%d").timestamp())
+        if start:
+            from_ts = int(datetime.strptime(start, "%Y-%m-%d").timestamp())
+        else:
+            from_ts = to_ts - bar_seconds * self._CANDLE_DEFAULT_BARS
+        # The endpoint 400s without explicit bounds: epoch SECONDS in from/to,
+        # numeric resolution, pcode "f" for futures pairs.
+        payload = {
+            "pair": pair,
+            "from": from_ts,
+            "to": to_ts,
+            "resolution": api_resolution,
+            "pcode": "f",
+        }
         data = self._public_get("/market_data/candlesticks", params=payload, use_public_host=True)
         candles = data if isinstance(data, list) else data.get("data", [])
         if not candles:

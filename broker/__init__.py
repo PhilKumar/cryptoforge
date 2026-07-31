@@ -3,13 +3,18 @@ import os
 from .base import BaseBroker
 from .binance import BinanceSpotClient
 from .coindcx import CoinDCXClient
+from .coindcx_spot import CoinDCXSpotClient
 from .delta import DeltaClient
 
 DEFAULT_BROKER = "binance"
 
 _BROKER_FACTORIES = {
     "delta": DeltaClient,
-    "coindcx": CoinDCXClient,
+    # "coindcx" means SPOT (Phil's call, 2026-07-31): Cascade buys real coins
+    # there exactly as on Binance. The futures adapter stays reachable under
+    # its own explicit name.
+    "coindcx": CoinDCXSpotClient,
+    "coindcx_futures": CoinDCXClient,
     "binance": BinanceSpotClient,
 }
 
@@ -17,6 +22,7 @@ _BROKER_FACTORIES = {
 _BROKER_NAME_ALIASES = {
     "binance_spot": "binance",
     "binance_futures": "binance",
+    "coindcx_spot": "coindcx",
 }
 
 
@@ -44,6 +50,7 @@ __all__ = [
     "BaseBroker",
     "BinanceSpotClient",
     "CoinDCXClient",
+    "CoinDCXSpotClient",
     "DEFAULT_BROKER",
     "DeltaClient",
     "get_broker_client",
