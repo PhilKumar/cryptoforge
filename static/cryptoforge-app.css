@@ -7495,12 +7495,45 @@ html[data-theme="light"] .journal-entry-notes section {
   /* Title and buttons share one row: the title takes the slack and clips its
      gist, the buttons never wrap down to a second line. */
   .cf-cascade-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
     min-width: 0;
     flex: 1 1 auto;
     overflow: hidden;
+  }
+  /* The title is a viewport; the track inside it slides. The strip carries a
+     state pill, PAPER/LIVE, the MC kind, the timeframe, sometimes OLD RULES
+     and a summary — more than fits once the buttons beside it grew, so what
+     did not fit was simply cut off mid-word. Hovering marquees the whole
+     strip instead, the same way the stat labels do. */
+  .cf-cascade-title-track {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: max-content;
+    max-width: none;
+    will-change: transform;
+  }
+  .cf-cascade-title.is-clipped:hover > .cf-cascade-title-track,
+  .cf-cascade-title.is-clipped:focus-within > .cf-cascade-title-track {
+    animation: cfStripMarquee 6s linear infinite;
+  }
+  /* A clipped strip says so: the last thing visible fades out rather than
+     ending in a hard cut, so a half-word reads as "there is more here". */
+  .cf-cascade-title.is-clipped {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
+  }
+  .cf-cascade-title.is-clipped:hover,
+  .cf-cascade-title.is-clipped:focus-within {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  @keyframes cfStripMarquee {
+    0%, 10%   { transform: translateX(0); }
+    45%, 62%  { transform: translateX(var(--cf-marquee-shift, -50%)); }
+    97%, 100% { transform: translateX(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cf-cascade-title.is-clipped:hover > .cf-cascade-title-track { animation: none; }
   }
   .cf-cascade-actions {
     display: flex;

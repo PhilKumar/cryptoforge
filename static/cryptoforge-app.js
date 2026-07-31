@@ -8511,7 +8511,7 @@ function _cfCascadeCampaignCard(campaign) {
       + ' aria-expanded="' + (open ? 'true' : 'false') + '"'
       + ' title="Click to ' + (open ? 'collapse' : 'expand') + '"'
       + ' data-cf-click="cfCascadeToggleCard(\'' + cid + '\')">'
-    + '<div class="cf-cascade-title">'
+    + '<div class="cf-cascade-title"><div class="cf-cascade-title-track">'
     + '<span class="cf-cascade-caret" aria-hidden="true">&#9656;</span>'
     + '<span class="cf-cascade-num">' + _escapeHtml(num) + '</span>'
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
@@ -8529,7 +8529,7 @@ function _cfCascadeCampaignCard(campaign) {
         + 'and it keeps trading — press Recalc to redraw it under the current rules.">OLD RULES · RECALC</span>'
       : '')
     + '<span class="table-meta cf-cascade-gist">' + _escapeHtml(gist) + '</span>'
-    + '</div>'
+    + '</div></div>'
     // Buttons live inside the header but must not toggle it.
     + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
@@ -8713,6 +8713,39 @@ var _cfCascadeRoundsPage = {};
 function cfCascadeRoundsPage(campaignId, step) {
   _cfCascadeRoundsPage[campaignId] = (_cfCascadeRoundsPage[campaignId] || 0) + step;
   if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+}
+
+// The campaign strip carries a state pill, PAPER/LIVE, the MC kind, the
+// timeframe, sometimes OLD RULES, and a summary — and the buttons beside it
+// only grew with Restructure. Whatever will not fit was simply cut off at the
+// edge ("MAJO", "MIN"). Hovering the strip now marquees it, exactly like the
+// stat labels above.
+function _cfCascadeMarkClippedStrips(root) {
+  var titles = (root || document).querySelectorAll('.cf-cascade-title');
+  for (var i = 0; i < titles.length; i++) {
+    var title = titles[i];
+    var track = title.firstElementChild;
+    if (!track || !track.classList.contains('cf-cascade-title-track')) continue;
+    var overflow = track.scrollWidth - title.clientWidth;
+    if (overflow > 1) {
+      title.classList.add('is-clipped');
+      title.style.setProperty('--cf-marquee-shift', '-' + (overflow + 8) + 'px');
+      if (!title.title) {
+        // textContent runs the pills together ("BTCUSDTTRENDLINE_ACTIVEPAPER"),
+        // so the tooltip is built element by element with separators.
+        var parts = [];
+        for (var k = 0; k < track.children.length; k++) {
+          var text = (track.children[k].textContent || '').replace(/\s+/g, ' ').trim();
+          if (text && text !== '\u25b8') parts.push(text);
+        }
+        title.title = parts.join(' · ');
+      }
+    } else {
+      title.classList.remove('is-clipped');
+      title.style.removeProperty('--cf-marquee-shift');
+      title.removeAttribute('title');
+    }
+  }
 }
 
 function _cfCascadeMarkClippedLabels(root) {
@@ -8929,6 +8962,7 @@ function cfRenderCascadeCampaigns(campaigns, instruments) {
     mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
       + 'No live campaigns — ended ones are in Closed Campaigns below.</div>';
     _cfCascadeMarkClippedLabels(mount);
+    _cfCascadeMarkClippedStrips(mount);
     return;
   }
   // Group the sorted cards under one stack header per instrument. The sort
@@ -8966,6 +9000,7 @@ function cfRenderCascadeCampaigns(campaigns, instruments) {
     _renderTablePager('cf-rounds-' + safe, 'cf-rounds-' + safe, 'cf-rounds-pg-' + safe);
   });
   _cfCascadeMarkClippedLabels(mount);
+  _cfCascadeMarkClippedStrips(mount);
 }
 
 // The campaigns behind the log as it currently stands, so paging can re-render
@@ -11492,3 +11527,9 @@ async function cfCascadeRestructure(campaignId) {
   if (!ok) return;
   _cfCascadeAction(url + '?apply=true', { method: 'POST' }, 'Campaign restructured');
 }
+
+// What fits changes with the window, so the strips are re-measured on resize.
+window.addEventListener('resize', function () {
+  if (typeof _cfCascadeMarkClippedStrips === 'function') _cfCascadeMarkClippedStrips(document);
+  if (typeof _cfCascadeMarkClippedLabels === 'function') _cfCascadeMarkClippedLabels(document);
+});
