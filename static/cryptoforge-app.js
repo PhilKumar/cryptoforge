@@ -8534,10 +8534,14 @@ function _cfCascadeCampaignCard(campaign) {
       + ' aria-expanded="' + (open ? 'true' : 'false') + '"'
       + ' title="Click to ' + (open ? 'collapse' : 'expand') + '"'
       + ' data-cf-click="cfCascadeToggleCard(\'' + cid + '\')">'
-    + '<div class="cf-cascade-title"><div class="cf-cascade-title-track">'
+    // Which campaign this is never moves — you have to be able to read the
+    // number and the symbol at a glance while the rest of the strip scrolls.
+    + '<div class="cf-cascade-title">'
     + '<span class="cf-cascade-caret" aria-hidden="true">&#9656;</span>'
     + '<span class="cf-cascade-num">' + _escapeHtml(num) + '</span>'
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
+    + '<div class="cf-cascade-title-view"><div class="cf-cascade-title-track">'
+    + '<span class="cf-cascade-title-group">'
     + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(stateLabel) + '</span>'
     + modeBadge
     // The timeframe the engine steps this campaign on, and how it got there.
@@ -8552,7 +8556,7 @@ function _cfCascadeCampaignCard(campaign) {
         + 'and it keeps trading — press Recalc to redraw it under the current rules.">OLD RULES · RECALC</span>'
       : '')
     + '<span class="table-meta cf-cascade-gist">' + _escapeHtml(gist) + '</span>'
-    + '</div></div>'
+    + '</span></div></div></div>'
     // Buttons live inside the header but must not toggle it.
     + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
@@ -8744,7 +8748,6 @@ function cfCascadeRoundsPage(campaignId, step) {
 // how much of the keyframe cycle is spent moving rather than paused, and has
 // to match the outbound leg of the keyframes below.
 var _CF_MARQUEE_PX_PER_SEC = 85;
-var _CF_STRIP_TRAVEL = 0.38;
 // Every marquee runs off one clock. The Cascade panel rewrites its whole HTML
 // on the 3s status poll, so the element under your cursor is a new one every
 // three seconds and its animation would restart from the beginning — you would
@@ -8771,25 +8774,42 @@ function _cfMarqueeClear(el) {
 // The campaign strip carries a state pill, PAPER/LIVE, the MC kind, the
 // timeframe, sometimes OLD RULES, and a summary — and the buttons beside it
 // only grew with Restructure. Whatever will not fit was simply cut off at the
-// edge ("MAJO", "MIN"). Hovering the strip now marquees it, exactly like the
-// stat labels above.
+// edge ("MAJO", "MIN"). It now scrolls on its own, continuously, like a
+// ticker: the group of pills is duplicated and the track slides exactly one
+// copy's width, so the wrap is seamless and it never reverses. Sliding out and
+// back, only on hover, read as sticking.
 function _cfCascadeMarkClippedStrips(root) {
-  var titles = (root || document).querySelectorAll('.cf-cascade-title');
-  for (var i = 0; i < titles.length; i++) {
-    var title = titles[i];
+  var views = (root || document).querySelectorAll('.cf-cascade-title-view');
+  for (var i = 0; i < views.length; i++) {
+    var title = views[i];
     var track = title.firstElementChild;
     if (!track || !track.classList.contains('cf-cascade-title-track')) continue;
-    var overflow = track.scrollWidth - title.clientWidth;
-    if (overflow > 1) {
+    var group = track.firstElementChild;
+    if (!group) continue;
+    // The clone is measurement noise, so drop it before measuring anything.
+    while (track.children.length > 1) track.removeChild(track.lastElementChild);
+    // Whitespace between two inline-blocks renders as a space, which would put
+    // the copies a few pixels further apart than one copy's width — a seam on
+    // every wrap. Cheaper to delete the text nodes than to fight it in CSS.
+    for (var n = track.childNodes.length - 1; n >= 0; n--) {
+      if (track.childNodes[n].nodeType === 3) track.removeChild(track.childNodes[n]);
+    }
+    // An inline-block in a nowrap block is shrink-to-fit, so this is genuinely
+    // one copy's width — which is exactly how far the track travels, and any
+    // error in it shows up as a seam in the loop.
+    var width = group.getBoundingClientRect().width;
+    if (width - title.clientWidth > 1) {
       title.classList.add('is-clipped');
-      title.style.setProperty('--cf-marquee-shift', '-' + (overflow + 8) + 'px');
-      _cfMarqueeTune(title, overflow + 8, _CF_STRIP_TRAVEL, 5, 20);
+      var copy = group.cloneNode(true);
+      copy.setAttribute('aria-hidden', 'true');
+      track.appendChild(copy);
+      _cfMarqueeTune(title, width, 1, 3, 40);
       if (!title.title) {
-        // textContent runs the pills together ("BTCUSDTTRENDLINE_ACTIVEPAPER"),
-        // so the tooltip is built element by element with separators.
+        // textContent runs the pills together ("TRENDLINE_ACTIVEPAPER"), so the
+        // tooltip is built element by element with separators.
         var parts = [];
-        for (var k = 0; k < track.children.length; k++) {
-          var text = (track.children[k].textContent || '').replace(/\s+/g, ' ').trim();
+        for (var k = 0; k < group.children.length; k++) {
+          var text = (group.children[k].textContent || '').replace(/\s+/g, ' ').trim();
           if (text && text !== '\u25b8') parts.push(text);
         }
         title.title = parts.join(' · ');

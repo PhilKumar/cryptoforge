@@ -7498,53 +7498,83 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-cascade-title {
     min-width: 0;
     flex: 1 1 auto;
-    overflow: hidden;
-  }
-  /* The title is a viewport; the track inside it slides. The strip carries a
-     state pill, PAPER/LIVE, the MC kind, the timeframe, sometimes OLD RULES
-     and a summary — more than fits once the buttons beside it grew, so what
-     did not fit was simply cut off mid-word. Hovering marquees the whole
-     strip instead, the same way the stat labels do. */
-  .cf-cascade-title-track {
     display: flex;
     align-items: center;
     gap: 8px;
+    overflow: hidden;
+  }
+  /* Which campaign this is has to stay put and stay readable — only what comes
+     after the symbol scrolls. */
+  .cf-cascade-title > .cf-cascade-caret,
+  .cf-cascade-title > .cf-cascade-num,
+  .cf-cascade-title > strong { flex: 0 0 auto; }
+  /* The view is the window; the track inside it slides. The strip carries a
+     state pill, PAPER/LIVE, the MC kind, the timeframe, sometimes OLD RULES
+     and a summary — more than fits once the buttons beside it grew, so what
+     did not fit was simply cut off mid-word. It now scrolls by itself. */
+  .cf-cascade-title-view {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+  /* Deliberately not flex. A flex item resolves its width against the line,
+     so each copy came out narrower than its own contents and the travel
+     distance stopped matching one copy. Inline-block inside a nowrap block is
+     shrink-to-fit: the copy is exactly as wide as what it holds. */
+  .cf-cascade-title-track {
+    display: block;
+    white-space: nowrap;
     width: max-content;
     max-width: none;
     will-change: transform;
+  }
+  /* Each copy carries its own trailing gap, so one copy's width is exactly the
+     distance the track travels and the wrap lands seamlessly. */
+  .cf-cascade-title-group {
+    display: inline-block;
+    white-space: nowrap;
+    padding-right: 26px;
+  }
+  .cf-cascade-title-group > * {
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  .cf-cascade-title-group > :last-child { margin-right: 0; }
+  /* The gist clips itself with an ellipsis when the row is tight; inside the
+     scrolling group there is no tight row, and an ellipsis would scroll past
+     as "…" instead of the words. */
+  .cf-cascade-title-group > .cf-cascade-gist {
+    overflow: visible;
+    text-overflow: clip;
+    /* The narrow-window rule gives the gist width:100%, which inside a
+       shrink-to-fit copy resolves against the copy it is supposed to be
+       sizing. It has to be its own text's width here. */
+    width: auto;
   }
   /* Duration is set per strip in JS from how far it has to travel, so a long
      strip does not race past at the same seconds as a short one — the text
      moves at one readable speed everywhere. The negative delay is the shared
      clock: the panel rebuilds this element every 3s, and without it the slide
      would restart from the beginning each time and never get anywhere. */
-  .cf-cascade-title.is-clipped:hover > .cf-cascade-title-track,
-  .cf-cascade-title.is-clipped:focus-within > .cf-cascade-title-track {
+  .cf-cascade-title-view.is-clipped > .cf-cascade-title-track {
     animation: cfStripMarquee var(--cf-marquee-time, 9s) linear infinite;
     animation-delay: var(--cf-marquee-delay, 0s);
   }
-  /* A clipped strip says so: the last thing visible fades out rather than
-     ending in a hard cut, so a half-word reads as "there is more here". */
-  .cf-cascade-title.is-clipped {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
-  }
-  .cf-cascade-title.is-clipped:hover,
-  .cf-cascade-title.is-clipped:focus-within {
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
-  /* Read the head, slide, read the tail, slide back. The pauses are what make
-     it legible, but the opening one has to stay short — a long one reads as
-     "nothing is happening". Out is 38% of the cycle (_CF_STRIP_TRAVEL in JS
-     must match), back is 32%. */
+  /* Exactly one copy's width — the second copy is then sitting where the first
+     started, so the loop has no seam and nothing ever slides backwards. */
   @keyframes cfStripMarquee {
-    0%, 8%    { transform: translateX(0); }
-    46%, 62%  { transform: translateX(var(--cf-marquee-shift, -50%)); }
-    94%, 100% { transform: translateX(0); }
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
   }
+  /* Motion off means the old behaviour: parked, with the tail faded to say
+     there is more, and the full text on the tooltip. */
   @media (prefers-reduced-motion: reduce) {
-    .cf-cascade-title.is-clipped:hover > .cf-cascade-title-track { animation: none; }
+    .cf-cascade-title-view.is-clipped > .cf-cascade-title-track { animation: none; }
+    .cf-cascade-title-view.is-clipped {
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
+      mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
+    }
   }
   .cf-cascade-actions {
     display: flex;
