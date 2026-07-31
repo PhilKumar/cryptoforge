@@ -249,19 +249,20 @@ class CascadeSwingModelTests(unittest.TestCase):
         for level, expected in ((2, 64652.02), (4, 64376.04), (8, 63824.08)):
             self.assertAlmostEqual(leg.fib.level_price(level), expected, places=2)
 
-    def test_no_second_structure_without_a_clean_line(self):
-        """The old engine drew a second fib here (64,964.00/64,416.00, once on
-        the user's chart). Under the adjudicated rule it cannot form: TL1 was
-        closed above at candle 10, the 64,416 low breaks only at candle 59, and
-        the only anchor line to that break (the candle-11 red open) is crossed
-        by the candle-30 close — no clean line, no structure. Phil's rule:
-        "doesn't cross any candles after or previously". Awaiting his visual
-        re-ruling on this day; until then the engine draws one fib and waits.
-        """
+    def test_reproduces_the_users_second_fib_exactly(self):
+        """fib 0 = 64,964.00, fib 1 = 64,416.00 — the second structure the user
+        verified on TradingView for this day.
+
+        It needs the fallback anchor to exist at all: the highest red open after
+        the low gives a line a later close cuts, so the search hands over to the
+        next one down (64,902.63) and that line is clean. Requiring the highest
+        open outright drew nothing here and lost a fib he had confirmed."""
         self._feed_real(59)
-        self.assertEqual(len(self.campaign.legs), 1)
-        self.assertEqual(len(self.campaign.trendlines), 1)
-        self.assertTrue(self.campaign.geo_armed, "TL1 was closed above — the next line is armed")
+        self.assertEqual(len(self.campaign.legs), 2)
+        leg = self.campaign.legs[1]
+        self.assertAlmostEqual(leg.touch_high, 64964.00)  # fib 0
+        self.assertAlmostEqual(leg.low, 64416.00)  # fib 1 — the "ultimate low"
+        self.assertAlmostEqual(leg.fib.level_price(2), 63868.00, places=2)
 
     def test_no_fib_before_the_trendline_is_touched(self):
         """Cuts during the initial slide draw nothing: the line has not been
@@ -286,22 +287,24 @@ class CascadeSwingModelTests(unittest.TestCase):
         self.assertAlmostEqual(tl.anchor1_price, 65107.99)  # mother high
         self.assertAlmostEqual(tl.anchor2_price, 64904.00)  # 6th candle open
 
-    def test_a_crossed_candidate_line_draws_nothing(self):
-        """When the armed break finally comes at candle 59, the only anchor
-        (candle 11's 64,999.13 open — the highest red open after the 64,416
-        low) gives a line the candle-30 close already crossed. No second-best
-        anchor exists under the rule, so nothing is drawn and the first fib is
-        untouched."""
+    def test_the_anchor_falls_back_when_the_top_candidate_is_cut(self):
+        """Phil's rule is both halves at once: the HIGHEST red open whose line
+        does not cross anything. The top candidate here is cut by a later
+        close, so the second line anchors one swing further right — at another
+        red open, which is what the rule asks for."""
         self._feed_real(59)
-        self.assertEqual(len(self.campaign.trendlines), 1)
+        self.assertEqual(len(self.campaign.trendlines), 2)
+        self.assertAlmostEqual(self.campaign.trendlines[1].anchor2_price, 64902.63)
         self.assertAlmostEqual(self.campaign.legs[0].touch_high, 64928.00)
         self.assertAlmostEqual(self.campaign.legs[0].low, 64790.01)
 
     def test_fall_pct_and_pool_follow_the_leg_low(self):
         self._feed_real(59)
-        leg1 = self.campaign.legs[0]
+        leg1, leg2 = self.campaign.legs
         self.assertAlmostEqual(leg1.leg_pct_from_mother, 0.488, places=2)
-        self.assertAlmostEqual(leg1.pool_usd, 0.488 * 2000 / 100, places=1)
+        self.assertAlmostEqual(leg2.leg_pct_from_mother, 1.063, places=2)
+        # leg 2 only draws the incremental depth beyond leg 1
+        self.assertAlmostEqual(leg2.pool_usd, (1.063 - 0.488) * 2000 / 100, places=1)
 
     def test_a_second_fib_leaves_the_first_ladder_resting(self):
         """Fib 2 forming does not retire fib 1. Fib 1's levels sit above the
@@ -2341,12 +2344,12 @@ class CascadeRecalculateTests(unittest.IsolatedAsyncioTestCase):
         result = await engine.recalculate_campaign("stale")
         self.assertEqual(result["status"], "ok")
         self.assertFalse(engine.get_status()["campaigns"][0]["stale_model"])
-        # replayed under the adjudicated rule -> the verified first fib; the
-        # old second fib cannot form (no clean line to its touch — see
-        # test_no_second_structure_without_a_clean_line)
-        self.assertEqual(len(campaign.legs), 1)
+        # replayed under the adjudicated rule -> both fibs the user verified
+        self.assertEqual(len(campaign.legs), 2)
         self.assertAlmostEqual(campaign.legs[0].touch_high, 64928.00)
         self.assertAlmostEqual(campaign.legs[0].low, 64790.01)
+        self.assertAlmostEqual(campaign.legs[1].touch_high, 64964.00)
+        self.assertAlmostEqual(campaign.legs[1].low, 64416.00)
 
     async def _replayable(self, engine, broker):
         broker.candles_df = pd.DataFrame(
@@ -5718,3 +5721,97 @@ class CascadeRestructureTests(unittest.IsolatedAsyncioTestCase):
         campaign.state = "MOTHER_BROKEN"
         result = await engine.restructure_campaign("rs", apply=True)
         self.assertIn("Only a running campaign", result.get("error", ""))
+
+
+class CascadeAnchorFallbackTests(unittest.TestCase):
+    """Phil's rule reads as one sentence with two halves: the anchor is the
+    HIGHEST red open after the low AND its line must not cross any candle,
+    before or after. Taking the highest and refusing when it is cut is only
+    half of it — on 2026-07-31 that left BTCUSDT with no third line for hours
+    while price fell past unmarked ground, where he had drawn one by hand.
+    """
+
+    # BTCUSDT 5m 2026-07-31, the 16:35 → 19:10 stretch of the campaign Phil
+    # was watching: the highest red open after the low (63,999.00 at 16:35)
+    # gives a line the 18:30 close cuts, and the next one down is clean.
+    _BARS = [
+        (1785459000, 64150.00, 64180.00, 63980.00, 63999.00),
+        (1785459300, 63999.00, 64020.00, 63900.00, 63910.00),
+        (1785459600, 63910.00, 63960.00, 63860.00, 63950.00),
+        (1785459900, 63950.00, 63990.00, 63700.00, 63758.00),
+        (1785460200, 63758.00, 63800.00, 63638.18, 63700.00),
+        (1785460500, 63700.00, 63720.00, 63600.00, 63620.01),
+    ]
+
+    def test_a_cut_top_candidate_hands_over_to_the_next(self):
+        engine = _mk_engine()
+        campaign = Campaign(
+            campaign_id="fb",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65409.56,
+            mother_low=65177.62,
+            mother_timestamp=1785458400,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        engine.campaigns["fb"] = campaign
+        engine._candles["fb"] = []
+        campaign.geo_armed = True
+        for ts, o, h, low, c in self._BARS:
+            candle = Candle(timestamp=ts, open=o, high=h, low=low, close=c)
+            engine._candles["fb"].append(candle)
+            engine._process_candle(campaign, candle)
+        self.assertTrue(campaign.trendlines, "a clean anchor exists below the cut one — draw it")
+        tl = campaign.trendlines[0]
+        self.assertLess(tl.anchor2_price, 63999.00, "the cut top candidate must not be the anchor")
+        # The line must be clean against everything that existed when it was
+        # drawn. Closes AFTER that are not a defect — a close above a standing
+        # line is the break that arms the next one.
+        for candle in engine._candles["fb"]:
+            if candle.timestamp >= tl.anchor2_timestamp:
+                continue
+            line = trendline_price(tl, candle.timestamp)
+            self.assertLessEqual(
+                candle.close,
+                line * (1 + ANCHOR_CLOSE_TOLERANCE_PCT) + 1e-9,
+                f"the drawn line is cut by the earlier {candle.timestamp} close",
+            )
+
+    def test_no_clean_anchor_still_draws_nothing(self):
+        """The fallback is not a licence to draw any line: when every
+        candidate is cut, the chart genuinely has no line to offer yet."""
+        engine = _mk_engine()
+        campaign = Campaign(
+            campaign_id="fb2",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65409.56,
+            mother_low=65177.62,
+            mother_timestamp=1785458400,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        engine.campaigns["fb2"] = campaign
+        engine._candles["fb2"] = []
+        campaign.geo_armed = True
+        # Every candle closes near the mother, so any line drawn down to a
+        # later red open is cut by the closes that came before it.
+        bars = [
+            (1785459000, 65400.00, 65405.00, 65200.00, 65390.00),
+            (1785459300, 65390.00, 65400.00, 65100.00, 65380.00),
+            (1785459600, 65380.00, 65395.00, 64000.00, 64100.00),
+            (1785459900, 64100.00, 64120.00, 63500.00, 63550.00),
+        ]
+        for ts, o, h, low, c in bars:
+            candle = Candle(timestamp=ts, open=o, high=h, low=low, close=c)
+            engine._candles["fb2"].append(candle)
+            engine._process_candle(campaign, candle)
+        for tl in campaign.trendlines:
+            for candle in engine._candles["fb2"]:
+                if candle.timestamp >= tl.anchor2_timestamp:
+                    continue
+                line = trendline_price(tl, candle.timestamp)
+                self.assertLessEqual(candle.close, line * (1 + ANCHOR_CLOSE_TOLERANCE_PCT) + 1e-9)

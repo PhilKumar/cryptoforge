@@ -3909,28 +3909,56 @@ class CascadeEngine:
         """
         history = self._candles.get(campaign.campaign_id, [])
         window = [c for c in history if campaign.mother_timestamp < c.timestamp <= candle.timestamp]
-        cands = [c for c in window if c.timestamp > campaign.geo_low_ts and c.is_red and c.open < campaign.mother_high]
+        cands = [
+            c
+            for c in window
+            if c.timestamp > campaign.geo_low_ts
+            and c.is_red
+            and c.open < campaign.mother_high
+            and c.timestamp != campaign.mother_timestamp
+        ]
         if not cands:
             return
-        anchor = max(cands, key=lambda c: c.open)
-        ap, ats = anchor.open, anchor.timestamp
-        if ats == campaign.mother_timestamp:
-            return
-        for c in window:
-            if c.timestamp == ats:
+        # "The red candle has to be the HIGHEST from the dip AND doesn't cross
+        # any candles after or previously" — both halves at once, so it is the
+        # highest open whose line comes out CLEAN, not the highest open full
+        # stop. A blocked top candidate hands over to the next one down, which
+        # is the line that gets drawn by hand. Refusing outright instead left
+        # the chart with no line for hours while price fell past unmarked
+        # ground: on 07-31 the 16:35 open was cut by one 18:30 close and the
+        # engine drew nothing, where Phil drew his third line.
+        anchor = None
+        blocked = None
+        for candidate in sorted(cands, key=lambda c: -c.open):
+            span = candidate.timestamp - campaign.mother_timestamp
+            if span <= 0:
                 continue
-            lv = campaign.mother_high + (ap - campaign.mother_high) * (
-                (c.timestamp - campaign.mother_timestamp) / (ats - campaign.mother_timestamp)
-            )
-            if c.close > lv + abs(lv) * ANCHOR_CLOSE_TOLERANCE_PCT:
-                self._log_event(
-                    campaign,
-                    "skip",
-                    f"Low {campaign.geo_low:g} broke, but the line to {ap:g} would cut through "
-                    f"the close {c.close:g} — no trendline. The market has not offered a clean "
-                    f"line yet.",
+            crossed = None
+            for c in window:
+                if c.timestamp == candidate.timestamp:
+                    continue
+                lv = campaign.mother_high + (candidate.open - campaign.mother_high) * (
+                    (c.timestamp - campaign.mother_timestamp) / span
                 )
-                return
+                if c.close > lv + abs(lv) * ANCHOR_CLOSE_TOLERANCE_PCT:
+                    crossed = (c, lv)
+                    break
+            if crossed is None:
+                anchor = candidate
+                break
+            if blocked is None:
+                blocked = (candidate, crossed)
+        if anchor is None:
+            top, (c, lv) = blocked
+            self._log_event(
+                campaign,
+                "skip",
+                f"Low {campaign.geo_low:g} broke, but no red open above it gives a clean line — "
+                f"the highest ({top.open:g}) is cut by the close {c.close:g} against {lv:,.2f}, "
+                f"and so is every lower one. No trendline yet.",
+            )
+            return
+        ap, ats = anchor.open, anchor.timestamp
         tl = Trendline(
             trendline_id=len(campaign.trendlines) + 1,
             anchor1_price=campaign.mother_high,
