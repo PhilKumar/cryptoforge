@@ -5802,6 +5802,24 @@ function _cfJournalChartBtn(t) {
     + '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></button>';
 }
 
+// Which asset the exchange took the commission in. Binance charges fees in BNB
+// only while "pay fees with BNB" is on, so this line is how you can tell from
+// the app whether the 25% discount is actually being applied to your trades.
+function _cfJournalFeeAssetNote(feeAssets) {
+  var entries = Object.keys(feeAssets || {}).map(function(k) { return [k, Number(feeAssets[k]) || 0]; })
+    .filter(function(e) { return e[1] > 0; })
+    .sort(function(a, b) { return b[1] - a[1]; });
+  if (!entries.length) return 'fee asset not recorded';
+  var total = entries.reduce(function(sum, e) { return sum + e[1]; }, 0);
+  var bnb = entries.filter(function(e) { return e[0] === 'BNB'; })
+    .reduce(function(sum, e) { return sum + e[1]; }, 0);
+  if (bnb <= 0) return 'paid in ' + entries.map(function(e) { return e[0]; }).join('/') + ' — BNB discount OFF';
+  if (bnb >= total - 1e-9) return 'paid in BNB — 25% discount ON';
+  // Part-way: the usual cause is the BNB balance running dry mid-run, which
+  // Binance does silently, falling back to charging the coin.
+  return 'paid ' + Math.round(bnb / total * 100) + '% in BNB — discount partly applied';
+}
+
 function _cfJournalKpiHtml(summary) {
   var gross = Number(summary.gross_pnl_usd);
   var fees = Number(summary.fees_usd) || 0;
@@ -5812,7 +5830,8 @@ function _cfJournalKpiHtml(summary) {
     // Fees earn their own tile: on these small rounds the commission is a large
     // share of the result, and it was invisible before.
     { label: 'Fees Paid', value: _cfJournalUsd(fees, 2), tone: fees ? -1 : 0,
-      note: fees ? 'gross was ' + _cfJournalUsd(gross, 2) + ' · ' + _cfJournalPct(summary.fee_drag_pct, 1) + ' drag'
+      note: fees ? 'gross was ' + _cfJournalUsd(gross, 2) + ' · ' + _cfJournalPct(summary.fee_drag_pct, 1)
+                     + ' drag · ' + _cfJournalFeeAssetNote(summary.fee_assets)
                  : 'no exchange fees recorded' },
     { label: 'Capital Deployed', value: _cfJournalUsd(summary.invested_usd),
       note: 'across ' + summary.trade_count + ' closed trade' + (summary.trade_count === 1 ? '' : 's')

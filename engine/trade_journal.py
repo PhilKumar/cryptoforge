@@ -68,9 +68,11 @@ def _ist_date(ms: int) -> str:
 def _fee_usd(fill: dict) -> float:
     """Commission in quote currency.
 
-    The broker layer already converts BNB-paid commission for us; prefer that
-    over the raw native figure, which would otherwise be added as if it were
-    dollars.
+    Prefer the broker's converted figure over the raw native one, which would
+    otherwise be added as if it were dollars. The fallback below handles only
+    commissions charged in the quote asset — a BNB-paid fee reaching it has no
+    rate to convert with and is counted as zero, which is what the whole
+    broker-side conversion exists to prevent.
     """
     fee = fill.get("paid_commission")
     if fee is not None:
@@ -97,6 +99,10 @@ class _OpenPosition:
         self.qty = 0.0
         self.cost = 0.0  # gross spent on base, excluding fees
         self.fees = 0.0
+        # Which asset the exchange actually took the commission in, per fill.
+        # This is how "am I really getting the BNB discount?" is answerable
+        # from the app instead of from Binance's order history by eye.
+        self.fee_assets: dict[str, float] = {}
         self.sell_qty = 0.0
         self.sell_proceeds = 0.0
         self.opened_ms = 0
@@ -120,7 +126,7 @@ class _OpenPosition:
             self.opened_ms = _fill_time_ms(fill)
         self.qty += qty
         self.cost += quote
-        self.fees += _fee_usd(fill)
+        self._record_fee(fill)
         first_price = _f(self.buys[0]["buy_price"]) if self.buys else price
         oid = str(fill.get("order_id") or fill.get("orderId") or "").strip()
         if oid and oid not in self.buy_order_ids:
@@ -148,8 +154,15 @@ class _OpenPosition:
         self.qty -= qty
         self.sell_qty += qty
         self.sell_proceeds += quote
-        self.fees += _fee_usd(fill)
+        self._record_fee(fill)
         self.closed_ms = _fill_time_ms(fill)
+
+    def _record_fee(self, fill: dict) -> None:
+        paid = _fee_usd(fill)
+        self.fees += paid
+        asset = str(fill.get("commissionAsset") or fill.get("commission_asset") or "").upper()
+        if asset and paid:
+            self.fee_assets[asset] = round(self.fee_assets.get(asset, 0.0) + paid, 8)
 
     def is_flat(self) -> bool:
         bought = self.bought_qty
@@ -188,6 +201,7 @@ class _OpenPosition:
             "pnl_usd": round(net, 4),
             "pnl_gross_usd": round(gross, 4),
             "fees_usd": round(self.fees, 4),
+            "fee_assets": {k: round(v, 6) for k, v in self.fee_assets.items()},
             "roi_pct": round(net / matched_cost * 100, 3) if matched_cost > 0 else 0.0,
             "status": "Closed" if closed else "Open",
             "buy_count": len(self.buys),

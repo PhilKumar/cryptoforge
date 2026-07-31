@@ -7201,6 +7201,16 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
     # actually charged, never a guess.
     gross = sum(_coerce_float_safe(t.get("pnl_gross_usd"), _coerce_float_safe(t.get("pnl_usd"))) for t in closed)
     fees = sum(_coerce_float_safe(t.get("fees_usd")) for t in closed)
+    # Which asset the commission was actually taken in. Binance charges the fee
+    # in BNB only while "pay fees with BNB" is switched on, so this is the
+    # account's own answer to whether the 25% discount is really in effect —
+    # readable from the app rather than from the exchange's order history.
+    fee_assets: Dict[str, float] = {}
+    for t in closed:
+        for asset, amount in (t.get("fee_assets") or {}).items():
+            fee_assets[str(asset).upper()] = round(
+                fee_assets.get(str(asset).upper(), 0.0) + _coerce_float_safe(amount), 6
+            )
     wins = [t for t in closed if _coerce_float_safe(t.get("pnl_usd")) > 0]
     losses = [t for t in closed if _coerce_float_safe(t.get("pnl_usd")) < 0]
     rois = [_coerce_float_safe(t.get("roi_pct")) for t in closed]
@@ -7245,6 +7255,7 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
         # difference is a large share of the result.
         "gross_pnl_usd": round(gross, 2),
         "fees_usd": round(fees, 4),
+        "fee_assets": dict(sorted(fee_assets.items(), key=lambda kv: -kv[1])),
         "fee_drag_pct": round(fees / gross * 100, 1) if gross > 0 else 0.0,
         "open_trade_count": len(open_trades),
         "open_invested_usd": round(sum(_coerce_float_safe(t.get("invested_usd")) for t in open_trades), 2),

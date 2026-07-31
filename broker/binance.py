@@ -130,6 +130,10 @@ class BinanceSpotClient(BaseBroker):
         self._history_cache_key: tuple = ()
         self._history_ts = 0.0
         self._HISTORY_TTL = 30
+        # Prices for assets a commission was charged in but which are neither
+        # side of the pair traded — BNB, when fee discounting is switched on.
+        self._fee_price_cache: dict = {}
+        self._FEE_PRICE_TTL = 300
         # Binance rejects a signed request whose timestamp drifts outside
         # recvWindow of *its* clock (-1021). Track the offset to our own clock
         # and re-sync periodically so a drifting host doesn't start failing orders.
@@ -743,6 +747,65 @@ class BinanceSpotClient(BaseBroker):
             _binance_log.warning("[BINANCE SPOT] Orders error: %s", exc)
             return []
 
+    # Stable quote assets are worth a dollar; pricing them would be a pointless
+    # round trip and a needless dependency on a ticker being reachable.
+    _STABLE_ASSETS = frozenset({"USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"})
+
+    def _fee_asset_price_usd(self, asset: str) -> float:
+        """What one unit of a fee-paying asset is worth in the quote currency.
+
+        This exists for BNB. With "pay fees with BNB" switched on, Binance
+        charges the commission in BNB — neither side of the pair traded — and
+        every fee read that only understood the base and quote assets reported
+        it as ZERO. Fees silently vanished from the books the moment the
+        discount was enabled, which flatters every P&L that subtracts them.
+
+        Priced at read time, not at fill time: BNB drift over months is worth a
+        fraction of a cent on fees this size, and per-fill historical pricing
+        would cost one kline call per trade. The native amount and asset stay
+        on the row, so anything needing exactness can re-price from those.
+        """
+        asset = str(asset or "").upper()
+        if not asset:
+            return 0.0
+        if asset in self._STABLE_ASSETS:
+            return 1.0
+        cached = self._fee_price_cache.get(asset)
+        now = _time.time()
+        if cached and (now - cached[1]) < self._FEE_PRICE_TTL:
+            return cached[0]
+        price = 0.0
+        try:
+            pair = f"{asset}{self.quote_asset}"
+            payload = self._market_get("/api/v3/ticker/price", params={"symbol": pair})
+            price = self.coerce_float((payload or {}).get("price"), 0.0)
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Fee-asset price lookup failed for %s: %s", asset, exc)
+        if price > 0:
+            self._fee_price_cache[asset] = (price, now)
+            return price
+        # Keep serving the last good price rather than reporting a zero fee —
+        # a stale rate is wrong by cents, a zero is wrong by the whole fee.
+        return cached[0] if cached else 0.0
+
+    def _commission_in_quote(
+        self,
+        commission: float,
+        commission_asset: str,
+        base_asset: str,
+        quote_asset: str,
+        fill_price: float,
+    ) -> float:
+        """One commission, converted to the quote currency however it was paid."""
+        if commission <= 0 or not commission_asset:
+            return 0.0
+        if commission_asset == quote_asset:
+            return round(commission, 8)
+        if commission_asset == base_asset and fill_price > 0:
+            return round(commission * fill_price, 8)
+        rate = self._fee_asset_price_usd(commission_asset)
+        return round(commission * rate, 8) if rate > 0 else 0.0
+
     def _trade_fee_in_quote(self, row: dict) -> float:
         commission = self.coerce_float(row.get("commission"), 0.0)
         commission_asset = str(row.get("commissionAsset") or "").upper()
@@ -751,11 +814,7 @@ class BinanceSpotClient(BaseBroker):
         base_asset = str(product.get("base_asset") or "").upper()
         quote_asset = str(product.get("quote_asset") or self.quote_asset).upper()
         price = self.coerce_float(row.get("price"), 0.0)
-        if commission_asset == quote_asset:
-            return round(commission, 8)
-        if commission_asset == base_asset and price > 0:
-            return round(commission * price, 8)
-        return 0.0
+        return self._commission_in_quote(commission, commission_asset, base_asset, quote_asset, price)
 
     def _attach_spot_order_fill_fields(self, result: dict, pair: str) -> dict:
         if not isinstance(result, dict):
@@ -776,10 +835,9 @@ class BinanceSpotClient(BaseBroker):
             commission_asset = str(fill.get("commissionAsset") or "").upper()
             weighted_quote += price * qty
             fill_qty += qty
-            if commission_asset == quote_asset:
-                fee_quote += commission
-            elif commission_asset == base_asset and price > 0:
-                fee_quote += commission * price
+            # Same conversion as the history path, BNB commissions included —
+            # this is the number an order's own result reports back.
+            fee_quote += self._commission_in_quote(commission, commission_asset, base_asset, quote_asset, price)
 
         avg_price = weighted_quote / fill_qty if fill_qty > 0 else 0.0
         if avg_price <= 0 and executed_qty > 0 and quote_qty > 0:
