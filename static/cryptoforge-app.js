@@ -8715,6 +8715,17 @@ function cfCascadeRoundsPage(campaignId, step) {
   if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
 }
 
+// How long a marquee cycle should last so the text always crawls at the same
+// readable speed. A fixed duration means the longest strips — the ones that
+// most need reading — move fastest, which is backwards. `travelFraction` is
+// how much of the keyframe cycle is spent moving rather than paused.
+var _CF_MARQUEE_PX_PER_SEC = 42;
+function _cfMarqueeSeconds(distance, travelFraction, minSec, maxSec) {
+  var seconds = (distance / _CF_MARQUEE_PX_PER_SEC) / travelFraction;
+  seconds = Math.max(minSec, Math.min(maxSec, seconds));
+  return seconds.toFixed(1) + 's';
+}
+
 // The campaign strip carries a state pill, PAPER/LIVE, the MC kind, the
 // timeframe, sometimes OLD RULES, and a summary — and the buttons beside it
 // only grew with Restructure. Whatever will not fit was simply cut off at the
@@ -8730,6 +8741,8 @@ function _cfCascadeMarkClippedStrips(root) {
     if (overflow > 1) {
       title.classList.add('is-clipped');
       title.style.setProperty('--cf-marquee-shift', '-' + (overflow + 8) + 'px');
+      title.style.setProperty(
+        '--cf-marquee-time', _cfMarqueeSeconds(overflow + 8, 0.34, 7, 26));
       if (!title.title) {
         // textContent runs the pills together ("BTCUSDTTRENDLINE_ACTIVEPAPER"),
         // so the tooltip is built element by element with separators.
@@ -8743,6 +8756,7 @@ function _cfCascadeMarkClippedStrips(root) {
     } else {
       title.classList.remove('is-clipped');
       title.style.removeProperty('--cf-marquee-shift');
+      title.style.removeProperty('--cf-marquee-time');
       title.removeAttribute('title');
     }
   }
@@ -8759,9 +8773,12 @@ function _cfCascadeMarkClippedLabels(root) {
       label.classList.add('is-clipped');
       // Slide by exactly the hidden amount plus a small tail.
       label.style.setProperty('--cf-marquee-shift', '-' + (overflow + 4) + 'px');
+      label.style.setProperty(
+        '--cf-marquee-time', _cfMarqueeSeconds(overflow + 4, 0.76, 4.5, 14));
     } else {
       label.classList.remove('is-clipped');
       label.style.removeProperty('--cf-marquee-shift');
+      label.style.removeProperty('--cf-marquee-time');
     }
   }
 }

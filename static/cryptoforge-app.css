@@ -6951,7 +6951,7 @@ html[data-theme="light"] .journal-entry-notes section {
   /* Only labels too wide for their box get the animation, flagged in JS. */
   .cf-cascade-stats .stat-box:hover .stat-label.is-clipped > span,
   .cf-cascade-stats .stat-box:focus-within .stat-label.is-clipped > span {
-    animation: cfStatMarquee 4.5s linear infinite;
+    animation: cfStatMarquee var(--cf-marquee-time, 7s) linear infinite;
   }
   @keyframes cfStatMarquee {
     0%, 12%   { transform: translateX(0); }
@@ -7512,9 +7512,12 @@ html[data-theme="light"] .journal-entry-notes section {
     max-width: none;
     will-change: transform;
   }
+  /* The duration is set per strip in JS from how far it has to travel, so a
+     long strip does not race past at the same seconds as a short one — the
+     text moves at one readable speed everywhere. */
   .cf-cascade-title.is-clipped:hover > .cf-cascade-title-track,
   .cf-cascade-title.is-clipped:focus-within > .cf-cascade-title-track {
-    animation: cfStripMarquee 6s linear infinite;
+    animation: cfStripMarquee var(--cf-marquee-time, 12s) linear infinite;
   }
   /* A clipped strip says so: the last thing visible fades out rather than
      ending in a hard cut, so a half-word reads as "there is more here". */
@@ -7527,10 +7530,12 @@ html[data-theme="light"] .journal-entry-notes section {
     -webkit-mask-image: none;
     mask-image: none;
   }
+  /* Read the head, slide, read the tail, slide back — the two pauses are what
+     make it legible; travel is 34% of the cycle out and 28% back. */
   @keyframes cfStripMarquee {
-    0%, 10%   { transform: translateX(0); }
-    45%, 62%  { transform: translateX(var(--cf-marquee-shift, -50%)); }
-    97%, 100% { transform: translateX(0); }
+    0%, 12%   { transform: translateX(0); }
+    46%, 66%  { transform: translateX(var(--cf-marquee-shift, -50%)); }
+    94%, 100% { transform: translateX(0); }
   }
   @media (prefers-reduced-motion: reduce) {
     .cf-cascade-title.is-clipped:hover > .cf-cascade-title-track { animation: none; }
