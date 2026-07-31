@@ -7663,6 +7663,22 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto", end_
     raise HTTPException(status_code=404, detail=result["error"])
 
 
+@app.post("/api/cascade/campaigns/{campaign_id}/restructure")
+async def cascade_restructure_campaign(campaign_id: str, apply: bool = False):
+    """Redraw a running campaign's geometry under the current rules, keeping
+    every trade it has taken. Defaults to a DRY RUN: the report is meant to be
+    read before anything moves, because this touches a live ladder."""
+    if apply:
+        check_rate_limit("cascade_restructure", max_calls=4, window_sec=30)
+    eng = _get_cascade_engine()
+    result = await eng.restructure_campaign(campaign_id, apply=apply)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    if apply:
+        _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
 @app.get("/api/cascade/campaigns/{campaign_id}/events")
 async def cascade_campaign_events(campaign_id: str):
     eng = _get_cascade_engine()

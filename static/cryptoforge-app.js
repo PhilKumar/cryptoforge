@@ -8473,6 +8473,15 @@ function _cfCascadeCampaignCard(campaign) {
   // closed rounds came from the exchange, and the replay would erase them.
   // Shown as a dead button rather than hidden, so the OLD RULES · RECALC badge
   // never points at a control that has quietly disappeared.
+  // Restructure is the safe half of Recalc for a campaign that has traded:
+  // it redraws the geometry under the current rules and carries every fill,
+  // round and dollar of realised P&L across. Offered on running campaigns
+  // only — an ended one is history.
+  var restructure = !ended
+    ? '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRestructure(\'' + cid + '\')"'
+      + ' title="Redraw this campaign\'s trendlines and fibs under the current rules, keeping every'
+      + ' trade it has already taken. Shows you what would change before anything moves.">Restructure</button>'
+    : '';
   var recalc = mode === 'LIVE' && (fills.length || rounds.length)
     ? '<button class="btn btn-outline btn-sm" disabled title="This campaign has traded live —'
       + ' its fills and closed rounds came from the exchange, not from the replay, so rebuilding'
@@ -8524,6 +8533,7 @@ function _cfCascadeCampaignCard(campaign) {
     // Buttons live inside the header but must not toggle it.
     + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
+    + restructure
     + recalc
     + goLive
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
@@ -11435,3 +11445,50 @@ function cfCascadeTogglePriceFields() {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAll);
   else setupAll();
 })();
+
+
+// Restructure: dry-run first, always. The report says what would change on a
+// ladder that is holding real money, and nothing moves until it is read.
+async function cfCascadeRestructure(campaignId) {
+  var url = '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/restructure';
+  var preview;
+  try {
+    var response = await cfApiFetch(url, { method: 'POST', cache: 'no-store' });
+    preview = await cfReadApiPayload(response);
+    if (!response.ok || preview.status === 'error') {
+      throw new Error(cfApiErrorDetail(preview, 'Restructure preview failed'));
+    }
+  } catch (error) {
+    cfToast('Restructure preview failed: ' + error.message, 'danger');
+    return;
+  }
+
+  var before = preview.before || {}, after = preview.after || {};
+  var kept = preview.kept_trades || {};
+  function levelList(rows) {
+    if (!rows || !rows.length) return '<em>none</em>';
+    return rows.slice(0, 12).map(function (lv) {
+      return 'F' + lv.leg_id + ' L' + lv.level + ' @ ' + _cfCascadeFmt(lv.price) + ' · $' + lv.usd;
+    }).join('<br>') + (rows.length > 12 ? '<br><em>+' + (rows.length - 12) + ' more</em>' : '');
+  }
+  var html =
+    '<p><strong>' + _escapeHtml(preview.symbol || '') + ' #' + _escapeHtml(String(preview.seq || ''))
+      + '</strong> replayed over ' + preview.candles_replayed + ' candles under the current rules.</p>'
+    + '<p><strong>Structure</strong><br>'
+      + (before.trendlines || []).length + ' trendline(s), ' + (before.legs || []).length + ' fib(s)'
+      + ' &rarr; <strong>' + (after.trendlines || []).length + ' trendline(s), '
+      + (after.legs || []).length + ' fib(s)</strong></p>'
+    + '<p><strong>Fresh levels that would rest below the market</strong><br>'
+      + levelList(preview.new_levels) + '</p>'
+    + '<p><strong>Levels that would stop resting</strong><br>'
+      + levelList(preview.dropped_levels) + '</p>'
+    + '<p><strong>Carried across untouched:</strong> ' + (kept.fills || 0) + ' open fill(s), '
+      + (kept.rounds || 0) + ' closed round(s), $' + (kept.realised_usd || 0) + ' realised, position '
+      + (kept.position_qty || 0) + '.<br>'
+      + preview.retired_levels + ' level(s) price has already traded through are retired rather than '
+      + 're-funded — this can add buying below the market, never repeat buying above it.</p>';
+
+  var ok = await cfConfirm(html, 'Restructure campaign?', '\u21bb', true);
+  if (!ok) return;
+  _cfCascadeAction(url + '?apply=true', { method: 'POST' }, 'Campaign restructured');
+}

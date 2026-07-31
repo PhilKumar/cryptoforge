@@ -2619,6 +2619,227 @@ class CascadeEngine:
             )
         return cancelled
 
+    # Geometry and ladder are rebuilt by a restructure; everything else — the
+    # traded record, the position, the identity — is carried across untouched.
+    _RESTRUCTURE_RESET = (
+        "trendlines",
+        "legs",
+        "active_trendline_id",
+        "window_start_ts",
+        "geo_low",
+        "geo_low_ts",
+        "geo_low_close",
+        "geo_low_locked",
+        "geo_armed",
+        "geo_ult_low",
+        "pending_fibs",
+        "collected",
+        "pending_usd",
+        "pending_line",
+        "pending_last_red",
+        "pending_stop_price",
+        "pending_limit_price",
+        "pending_stop_ts",
+        "cumulative_used_pct",
+        "carry_forward_usd",
+        "left_mother_range",
+        "broken_above",
+        "reuse_below",
+    )
+
+    async def restructure_campaign(self, campaign_id: str, apply: bool = False) -> dict:
+        """Redraw a RUNNING campaign's geometry under the current rules, keeping
+        every trade it has already taken.
+
+        This is the safe half of Recalc. Recalc rebuilds a campaign from its
+        candles and throws the traded record away with it, which is why it is
+        refused for a live campaign that has traded. A restructure rebuilds the
+        same geometry but carries the fills, the rounds, the realised P&L and
+        the open position across — so a campaign whose structure predates a rule
+        change gets the levels the rule says it should have, without pretending
+        its history did not happen.
+
+        The money is reconciled conservatively. Every level the replay says
+        price has ALREADY crossed is marked spent rather than re-funded: that
+        ground has been traded once, and the fills and rounds carried across are
+        the record of it. Only levels price has not yet reached come back as
+        live, funded rungs — the "orders yet to take". A restructure can
+        therefore add buying below the market, never repeat buying above it.
+
+        Nothing is written unless apply=True; the default is a dry run whose
+        report is meant to be read before anything moves.
+        """
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            return {"error": f"Campaign {campaign_id} not found"}
+        if campaign.state not in ACTIVE_STATES:
+            return {"error": "Only a running campaign can be restructured — an ended one is history"}
+
+        candles = await self._chart_candles(campaign, max_candles=100000)
+        if not candles:
+            return {"error": "No candles available to replay"}
+
+        before = self._ladder_snapshot(campaign)
+
+        # Replay into a CLONE. A failed or surprising replay must not be able to
+        # touch the campaign that is holding real coin.
+        clone = Campaign.from_dict(campaign.to_dict())
+        for spec in dataclass_fields(Campaign):
+            if spec.name not in self._RESTRUCTURE_RESET:
+                continue
+            if spec.default is not MISSING:
+                setattr(clone, spec.name, spec.default)
+            elif spec.default_factory is not MISSING:  # type: ignore[misc]
+                setattr(clone, spec.name, spec.default_factory())  # type: ignore[misc]
+        clone.window_start_ts = clone.mother_timestamp
+        clone.model_version = MODEL_VERSION
+        # The replay must not simulate fills: this campaign's fills are real and
+        # are carried across whole. Paper campaigns would otherwise book a
+        # second, imaginary set on top of them.
+        clone_mode, clone.mode = clone.mode, "live"
+        replay_id = f"__restructure__{campaign_id}"
+        clone.campaign_id = replay_id
+        self._candles[replay_id] = []
+        try:
+            for candle in candles:
+                if candle.timestamp <= clone.mother_timestamp:
+                    continue
+                self._candles[replay_id].append(candle)
+                self._process_candle(clone, candle)
+                clone.last_processed_ts = candle.timestamp
+                if clone.state in FINAL_STATES:
+                    break
+        finally:
+            self._candles.pop(replay_id, None)
+        clone.campaign_id = campaign_id
+        clone.mode = clone_mode
+
+        if clone.state in FINAL_STATES:
+            return {
+                "error": (
+                    f"Replaying this campaign under the current rules ends it ({clone.state}) — "
+                    "the mother candle it is anchored to no longer holds. Stop it and start a "
+                    "fresh one rather than restructuring."
+                )
+            }
+
+        # Ground already crossed is ground already traded. Retire those levels
+        # instead of re-funding them, and clear the pot the replay rebuilt —
+        # the real fills and rounds are what actually happened on that ground.
+        retired = 0
+        for leg in clone.legs:
+            for order in leg.pending_orders.values():
+                if order.status in {"COLLECTED", "FILLED"}:
+                    order.status = "CLOSED"
+                    order.usd_notional = 0.0
+                    order.quantity = 0.0
+                    retired += 1
+        clone.collected = []
+        clone.pending_usd = 0.0
+        clone.pending_line = None
+        clone.pending_last_red = None
+        clone.pending_stop_price = None
+        clone.pending_limit_price = None
+        clone.pending_stop_ts = None
+        clone.pending_order_id = None
+        # The traded record and the live position ride across exactly as they
+        # are — a restructure changes where the campaign will buy NEXT, never
+        # what it already did.
+        clone.all_fills = list(campaign.all_fills)
+        clone.rounds = list(campaign.rounds)
+        clone.realized_pnl = campaign.realized_pnl
+        clone.filled_base_qty = campaign.filled_base_qty
+        clone.residual_base_qty = campaign.residual_base_qty
+        clone.avg_entry_price = campaign.avg_entry_price
+        clone.tp_price = campaign.tp_price
+        clone.tp_order_id = campaign.tp_order_id
+        clone.tp_order_price = campaign.tp_order_price
+        clone.tp_rev = campaign.tp_rev
+        clone.pending_rev = campaign.pending_rev
+        clone.event_log = list(campaign.event_log)
+        replan_ladder(clone)
+
+        after = self._ladder_snapshot(clone)
+        report = {
+            "status": "ok",
+            "applied": bool(apply),
+            "campaign_id": campaign_id,
+            "symbol": campaign.symbol,
+            "seq": campaign.seq,
+            "candles_replayed": len(candles),
+            "retired_levels": retired,
+            "before": before,
+            "after": after,
+            "new_levels": [lv for lv in after["levels"] if lv["price"] not in {x["price"] for x in before["levels"]}],
+            "dropped_levels": [
+                lv for lv in before["levels"] if lv["price"] not in {x["price"] for x in after["levels"]}
+            ],
+            "kept_trades": {
+                "fills": len(campaign.all_fills),
+                "rounds": len(campaign.rounds),
+                "realised_usd": round(campaign.realized_pnl_total, 2),
+                "position_qty": campaign.filled_base_qty,
+            },
+        }
+        if not apply:
+            return report
+
+        for name in (spec.name for spec in dataclass_fields(Campaign)):
+            if name == "campaign_id":
+                continue
+            setattr(campaign, name, getattr(clone, name))
+        self._log_event(
+            campaign,
+            "recalc",
+            f"Restructured under model v{MODEL_VERSION}: replayed {len(candles)} candles -> "
+            f"{len(campaign.trendlines)} trendline(s), {len(campaign.legs)} fib(s). "
+            f"{retired} level(s) already traded through were retired; "
+            f"{len(report['new_levels'])} fresh level(s) now rest below the market. "
+            f"{len(campaign.all_fills)} open fill(s), {len(campaign.rounds)} closed round(s) "
+            f"and ${campaign.realized_pnl_total:,.2f} realised carried across untouched.",
+        )
+        # A live campaign's resting BUY orders belong to the old ladder. Drop
+        # them so the loop places fresh ones off the new plan; the TP is left
+        # alone because it is selling coin the campaign actually holds.
+        if campaign.mode == "live":
+            self._schedule(self._cancel_all_live_orders(campaign, include_tp=False))
+        self._emit_update()
+        return report
+
+    @staticmethod
+    def _ladder_snapshot(campaign: Campaign) -> dict:
+        """What this campaign currently marks and where — the shape a
+        restructure is judged by."""
+        levels = []
+        for leg in campaign.legs:
+            for level, order in sorted(leg.pending_orders.items()):
+                if order.status not in {"PENDING", "PLACED", "COLLECTED"} or order.usd_notional <= 0:
+                    continue
+                levels.append(
+                    {
+                        "leg_id": leg.leg_id,
+                        "level": level,
+                        "price": round(_coerce_float(order.price), 8),
+                        "usd": round(_coerce_float(order.usd_notional), 2),
+                        "status": order.status,
+                    }
+                )
+        levels.sort(key=lambda row: -row["price"])
+        return {
+            "trendlines": [
+                {"id": tl.trendline_id, "anchor": tl.anchor2_price, "anchor_ts": tl.anchor2_timestamp}
+                for tl in campaign.trendlines
+            ],
+            "legs": [
+                {"leg_id": leg.leg_id, "trendline_id": leg.trendline_id, "high": leg.touch_high, "low": leg.low}
+                for leg in campaign.legs
+            ],
+            "levels": levels,
+            "resting_usd": round(sum(lv["usd"] for lv in levels), 2),
+            "pending_usd": round(_coerce_float(campaign.pending_usd), 2),
+            "pending_stop_price": campaign.pending_stop_price,
+        }
+
     async def recalculate_campaign(self, campaign_id: str) -> dict:
         """
         Rebuild a campaign's trendlines and fibs from scratch under the current

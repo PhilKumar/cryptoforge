@@ -13,6 +13,7 @@ from engine.cascade import (
     ANCHOR_CLOSE_TOLERANCE_PCT,
     CAMPAIGN_START_TIMEFRAMES,
     MIN_LEG_SEPARATION_PCT,
+    MODEL_VERSION,
     Campaign,
     Candle,
     CascadeEngine,
@@ -5588,3 +5589,132 @@ class CascadeFrozenJournalChartTests(unittest.IsolatedAsyncioTestCase):
         # ...and the live campaign object is untouched.
         self.assertEqual(len(campaign.legs), 2)
         self.assertEqual(campaign.state, "TRENDLINE_ACTIVE")
+
+
+class CascadeRestructureTests(unittest.IsolatedAsyncioTestCase):
+    """Redraw the geometry of a RUNNING campaign without losing what it traded.
+
+    Recalc rebuilds a campaign from its candles and takes the traded record
+    with it, which is why it is refused for a live campaign that has traded. A
+    restructure exists for the case that refusal leaves open: a campaign whose
+    structure predates a rule change still needs the levels the rule says it
+    should have, below the market, or a fall walks past ground nothing is
+    marked on.
+    """
+
+    def _campaign(self, engine, mode="live"):
+        broker = engine.broker
+        broker.candles_df = pd.DataFrame(
+            {
+                "open": [row[1] for row in _REAL],
+                "high": [row[2] for row in _REAL],
+                "low": [row[3] for row in _REAL],
+                "close": [row[4] for row in _REAL],
+            },
+            index=pd.to_datetime([_RECENT_TS + row[0] * 300 for row in _REAL], unit="s", utc=True),
+        )
+        campaign = Campaign(
+            campaign_id="rs",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=_REAL[0][2],
+            mother_low=_REAL[0][3],
+            mother_timestamp=_RECENT_TS,
+            mode=mode,
+            min_notional_usd=5.0,
+            tick_size=0.01,
+            state="TRENDLINE_ACTIVE",
+        )
+        # A campaign mid-life: one round closed, one position open, and a
+        # stale hand-built structure standing in for pre-rule-change geometry.
+        campaign.rounds.append(
+            Round(
+                round_id=1,
+                leg_id=1,
+                avg_entry=64700.0,
+                quantity=0.001,
+                invested_usd=64.7,
+                exit_price=64850.0,
+                pnl=0.15,
+                closed_ts=_RECENT_TS + 20 * 300,
+            )
+        )
+        campaign.all_fills.append(
+            Fill(price=64500.0, quantity=0.0005, timestamp=_RECENT_TS + 40 * 300, level=4, leg_id=1, order_id="X1")
+        )
+        campaign.filled_base_qty = 0.0005
+        campaign.avg_entry_price = 64500.0
+        campaign.realized_pnl = 0.15
+        stale = Leg(leg_id=1, trendline_id=1, low=64000.0, touch_high=65000.0, touch_timestamp=_RECENT_TS + 300)
+        stale.fib = FibLadder(high_anchor=65000.0, low_anchor=64000.0)
+        campaign.legs.append(stale)
+        campaign.trendlines.append(
+            Trendline(
+                trendline_id=1,
+                anchor1_price=_REAL[0][2],
+                anchor1_timestamp=_RECENT_TS,
+                anchor2_price=64900.0,
+                anchor2_timestamp=_RECENT_TS + 300,
+            )
+        )
+        engine.campaigns["rs"] = campaign
+        return campaign
+
+    async def test_dry_run_changes_nothing(self):
+        engine = _mk_engine(FakeCascadeBroker())
+        campaign = self._campaign(engine)
+        before = campaign.to_dict()
+        report = await engine.restructure_campaign("rs")
+        self.assertEqual(report["status"], "ok")
+        self.assertFalse(report["applied"])
+        self.assertEqual(campaign.to_dict(), before, "a dry run must not touch the campaign")
+        self.assertIn("before", report)
+        self.assertIn("after", report)
+
+    async def test_apply_keeps_every_trade_and_redraws_the_geometry(self):
+        engine = _mk_engine(FakeCascadeBroker())
+        campaign = self._campaign(engine)
+        report = await engine.restructure_campaign("rs", apply=True)
+        self.assertTrue(report["applied"])
+        # The traded record is untouched...
+        self.assertEqual(len(campaign.rounds), 1)
+        self.assertEqual(len(campaign.all_fills), 1)
+        self.assertAlmostEqual(campaign.realized_pnl_total, 0.15)
+        self.assertAlmostEqual(campaign.filled_base_qty, 0.0005)
+        self.assertAlmostEqual(campaign.avg_entry_price, 64500.0)
+        # ...and the geometry is the engine's, not the hand-built stale one.
+        self.assertAlmostEqual(campaign.legs[0].touch_high, 64928.00)
+        self.assertAlmostEqual(campaign.legs[0].low, 64790.01)
+        self.assertEqual(campaign.model_version, MODEL_VERSION)
+
+    async def test_ground_already_crossed_is_never_refunded(self):
+        """The whole safety of this: price has traded through those levels
+        once, and the fills carried across are the record of it."""
+        engine = _mk_engine(FakeCascadeBroker())
+        campaign = self._campaign(engine)
+        report = await engine.restructure_campaign("rs", apply=True)
+        self.assertGreater(report["retired_levels"], 0, "crossed levels must be retired, not re-funded")
+        # Every level left resting must sit BELOW the deepest the fall has
+        # reached: that is the definition of ground not yet traded.
+        floor = campaign.geo_ult_low
+        self.assertIsNotNone(floor)
+        resting = []
+        for leg in campaign.legs:
+            for level, order in leg.pending_orders.items():
+                if order.status in {"PENDING", "PLACED"} and order.usd_notional > 0:
+                    resting.append((leg.leg_id, level, order.price))
+                    self.assertLess(
+                        order.price,
+                        floor + 1e-9,
+                        f"F{leg.leg_id} L{level} rests at {order.price} — above the {floor} already traded",
+                    )
+        self.assertTrue(resting, "a restructure must leave fresh levels below the market")
+        self.assertEqual(campaign.pending_usd, 0.0)
+        self.assertIsNone(campaign.pending_stop_price)
+
+    async def test_an_ended_campaign_is_refused(self):
+        engine = _mk_engine(FakeCascadeBroker())
+        campaign = self._campaign(engine)
+        campaign.state = "MOTHER_BROKEN"
+        result = await engine.restructure_campaign("rs", apply=True)
+        self.assertIn("Only a running campaign", result.get("error", ""))
