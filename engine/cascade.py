@@ -233,7 +233,10 @@ STALL_ALERT_SEC = 15 * 60
 # campaigns the rest of the system was trying to keep, and the panel lost
 # history that was still in the database. One name, one number.
 CLOSED_HISTORY_LIMIT = 100
-MODEL_VERSION = 20  # bump when the fib/trendline rules change; older campaigns are flagged stale
+# 21 = the adjudicated two-stage geometry (2026-07-31): trendlines drawn on
+# locked-low breaks with highest-red-open anchors and stand until closed above;
+# fibs drawn only when their own level 1 breaks, fib 0 = the top graze.
+MODEL_VERSION = 21  # bump when the fib/trendline rules change; older campaigns are flagged stale
 # A cut must close below the frozen dip by at least this fraction of price.
 # "Decisive break" (cascade_lib's own term): probes a few dollars under the
 # dip are the fall resuming, not a completed swing being cut.
