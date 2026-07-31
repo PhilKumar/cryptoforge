@@ -9123,7 +9123,7 @@ function cfCascadeClosedPage(step) {
 // Rounds are read from BOTH pools. A running campaign that has already banked
 // three rounds is history as much as an ended one, and leaving it out would
 // make the ledger disagree with the totals on the cards above it.
-var _CF_LEDGER_PAGE_SIZE = 10;
+var _CF_LEDGER_PAGE_SIZE = 5;
 var _cfCascadeLedgerPage = 0;
 var _cfCascadeLedgerCoin = 'ALL';
 var _cfCascadeLedgerAll = [];
