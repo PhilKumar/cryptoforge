@@ -5815,3 +5815,72 @@ class CascadeAnchorFallbackTests(unittest.TestCase):
                     continue
                 line = trendline_price(tl, candle.timestamp)
                 self.assertLessEqual(candle.close, line * (1 + ANCHOR_CLOSE_TOLERANCE_PCT) + 1e-9)
+
+
+class CascadeRestructureLiveOrderingTests(unittest.IsolatedAsyncioTestCase):
+    """The first live restructure (campaign #69, real money) came out of
+    surgery with no future buys: the new ladder was installed, then the
+    old-order cleanup ran over it and marked every fresh PENDING rung
+    CANCELLED — a terminal state nothing re-funds. The cancel must run
+    BEFORE the install, on the old ladder it belongs to."""
+
+    async def test_fresh_rungs_survive_a_live_apply(self):
+        broker = FakeCascadeBroker()
+        broker.candles_df = pd.DataFrame(
+            {
+                "open": [row[1] for row in _REAL],
+                "high": [row[2] for row in _REAL],
+                "low": [row[3] for row in _REAL],
+                "close": [row[4] for row in _REAL],
+            },
+            index=pd.to_datetime([_RECENT_TS + row[0] * 300 for row in _REAL], unit="s", utc=True),
+        )
+        engine = _mk_engine(broker)
+        campaign = Campaign(
+            campaign_id="lv",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=_REAL[0][2],
+            mother_low=_REAL[0][3],
+            mother_timestamp=_RECENT_TS,
+            mode="live",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+            state="TRENDLINE_ACTIVE",
+        )
+        campaign.all_fills.append(
+            Fill(price=64500.0, quantity=0.0005, timestamp=_RECENT_TS + 10 * 300, level=4, leg_id=1, order_id="B1")
+        )
+        campaign.filled_base_qty = 0.0005
+        campaign.avg_entry_price = 64500.0
+        campaign.tp_price = 64800.0
+        campaign.tp_order_id = "TP1"
+        # An old resting buy stop that must be pulled exactly once.
+        campaign.pending_order_id = "STOP1"
+        stale = Leg(leg_id=1, trendline_id=1, low=64000.0, touch_high=65000.0, touch_timestamp=_RECENT_TS + 300)
+        stale.fib = FibLadder(high_anchor=65000.0, low_anchor=64000.0)
+        campaign.legs.append(stale)
+        engine.campaigns["lv"] = campaign
+
+        report = await engine.restructure_campaign("lv", apply=True)
+        self.assertTrue(report["applied"])
+
+        statuses = [
+            (leg.leg_id, level, order.status, order.usd_notional)
+            for leg in campaign.legs
+            for level, order in leg.pending_orders.items()
+        ]
+        self.assertFalse(
+            any(status == "CANCELLED" for _, _, status, _ in statuses),
+            f"the cleanup ran over the NEW ladder: {statuses}",
+        )
+        live_rungs = [row for row in statuses if row[2] == "PENDING" and row[3] > 0]
+        self.assertTrue(live_rungs, f"a live restructure must leave funded rungs waiting: {statuses}")
+        # The old stop was pulled; the TP was not.
+        self.assertIn("STOP1", broker.cancelled)
+        self.assertNotIn("TP1", broker.cancelled)
+        self.assertEqual(campaign.tp_order_id, "TP1")
+        # And the report's "after" matches what is actually installed.
+        installed = {(lv["leg_id"], lv["level"]): lv["usd"] for lv in engine._ladder_snapshot(campaign)["levels"]}
+        reported = {(lv["leg_id"], lv["level"]): lv["usd"] for lv in report["after"]["levels"]}
+        self.assertEqual(installed, reported, "the preview must describe the ladder that ends up live")

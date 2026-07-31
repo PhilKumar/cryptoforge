@@ -2784,6 +2784,13 @@ class CascadeEngine:
         if not apply:
             return report
 
+        # Cancel the OLD plan's exchange orders FIRST, while the old campaign
+        # still owns them. Running this after the install marked the freshly
+        # funded rungs CANCELLED — a terminal state — so the first live
+        # restructure came out of surgery with no future buys at all: the new
+        # ladder was built, then immediately killed by its own cleanup.
+        if campaign.mode == "live":
+            await self._cancel_all_live_orders(campaign, include_tp=False)
         for name in (spec.name for spec in dataclass_fields(Campaign)):
             if name == "campaign_id":
                 continue
@@ -2798,11 +2805,6 @@ class CascadeEngine:
             f"{len(campaign.all_fills)} open fill(s), {len(campaign.rounds)} closed round(s) "
             f"and ${campaign.realized_pnl_total:,.2f} realised carried across untouched.",
         )
-        # A live campaign's resting BUY orders belong to the old ladder. Drop
-        # them so the loop places fresh ones off the new plan; the TP is left
-        # alone because it is selling coin the campaign actually holds.
-        if campaign.mode == "live":
-            self._schedule(self._cancel_all_live_orders(campaign, include_tp=False))
         self._emit_update()
         return report
 
