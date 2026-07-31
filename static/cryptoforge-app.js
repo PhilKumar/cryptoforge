@@ -8516,7 +8516,7 @@ function _cfCascadePositionPanel(campaign, fills) {
           + '</tr>';
       }).join('')
       + '</tbody></table>'
-      + (rPages > 1
+      + (rounds.length
         ? '<div class="cf-cascade-pager" data-cf-stop="1" onclick="event.stopPropagation()">'
           + '<span class="table-meta">' + (rFrom + 1) + '\u2013'
             + Math.min(rFrom + _CF_ROUNDS_PAGE_SIZE, rounds.length) + ' of ' + rounds.length + '</span>'
@@ -8959,7 +8959,7 @@ var _cfCascadeClosedPage = 0;
 function _cfRenderClosedPager(pages, total) {
   var host = document.getElementById('cf-cascade-closed-pager');
   if (!host) return;
-  if (pages <= 1) { host.innerHTML = ''; return; }
+  if (!total) { host.innerHTML = ''; return; }
   var from = _cfCascadeClosedPage * _CF_CLOSED_PAGE_SIZE + 1;
   var to = Math.min(from + _CF_CLOSED_PAGE_SIZE - 1, total);
   host.innerHTML = '<span class="table-meta">' + from + '\u2013' + to + ' of ' + total + '</span>'
@@ -8983,7 +8983,7 @@ function cfCascadeClosedPage(step) {
 // Rounds are read from BOTH pools. A running campaign that has already banked
 // three rounds is history as much as an ended one, and leaving it out would
 // make the ledger disagree with the totals on the cards above it.
-var _CF_LEDGER_PAGE_SIZE = 15;
+var _CF_LEDGER_PAGE_SIZE = 10;
 var _cfCascadeLedgerPage = 0;
 var _cfCascadeLedgerCoin = 'ALL';
 var _cfCascadeLedgerAll = [];
@@ -9157,7 +9157,7 @@ function _cfCascadeRenderLedgerRows() {
 function _cfCascadeRenderLedgerPager(pages, total) {
   var host = document.getElementById('cf-cascade-ledger-pager');
   if (!host) return;
-  if (pages <= 1) { host.innerHTML = ''; return; }
+  if (!total) { host.innerHTML = ''; return; }
   var from = _cfCascadeLedgerPage * _CF_LEDGER_PAGE_SIZE + 1;
   var to = Math.min(from + _CF_LEDGER_PAGE_SIZE - 1, total);
   host.innerHTML = '<span class="table-meta">' + from + '–' + to + ' of ' + total + '</span>'
@@ -11019,3 +11019,255 @@ function cfCascadeChartBackdrop(event) {
     cfCascadeHideChart();
   }
 }
+
+// ── Info icon tooltips ────────────────────────────────────────────
+// The Cascade start form used to carry three paragraphs of rules under the
+// fields. Every one of them mattered exactly once — at the moment of choosing
+// that field — so they live behind an (i) on the label instead, on hover and
+// on click/focus for touch and keyboard.
+function _cfInfoBubble() {
+  var el = document.getElementById('cf-info-bubble');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'cf-info-bubble';
+    el.className = 'cf-info-bubble';
+    el.setAttribute('role', 'tooltip');
+    el.hidden = true;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function cfInfoShow(trigger) {
+  var text = trigger && trigger.getAttribute('data-cf-info');
+  if (!text) return;
+  var bubble = _cfInfoBubble();
+  bubble.textContent = text;
+  bubble.hidden = false;
+  var rect = trigger.getBoundingClientRect();
+  var width = Math.min(320, window.innerWidth - 24);
+  bubble.style.width = width + 'px';
+  bubble.style.left = Math.max(12, Math.min(rect.left - 8, window.innerWidth - width - 12)) + 'px';
+  // Prefer below; flip above when the bubble would run off the bottom.
+  var below = rect.bottom + 8;
+  bubble.style.top = below + 'px';
+  var overflow = below + bubble.offsetHeight - window.innerHeight + 12;
+  if (overflow > 0) bubble.style.top = Math.max(12, rect.top - bubble.offsetHeight - 8) + 'px';
+}
+
+function cfInfoHide() {
+  var bubble = document.getElementById('cf-info-bubble');
+  if (bubble) bubble.hidden = true;
+}
+
+document.addEventListener('mouseover', function (event) {
+  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
+  if (trigger) cfInfoShow(trigger);
+});
+document.addEventListener('mouseout', function (event) {
+  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
+  if (trigger) cfInfoHide();
+});
+document.addEventListener('click', function (event) {
+  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
+  if (trigger) {
+    event.preventDefault();
+    var bubble = document.getElementById('cf-info-bubble');
+    if (bubble && !bubble.hidden && bubble.textContent === trigger.getAttribute('data-cf-info')) cfInfoHide();
+    else cfInfoShow(trigger);
+    return;
+  }
+  cfInfoHide();
+});
+document.addEventListener('focusin', function (event) {
+  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
+  if (trigger) cfInfoShow(trigger);
+});
+document.addEventListener('keydown', function (event) { if (event.key === 'Escape') cfInfoHide(); });
+
+// Show/hide the typed mother high & low. Hidden by default: the MC time is the
+// safer path, and two blank number boxes labelled "optional" only invited the
+// typo the timestamp exists to prevent.
+function cfCascadeTogglePriceFields() {
+  var fields = document.getElementById('cf-cascade-price-fields');
+  var toggle = document.getElementById('cf-cascade-price-toggle');
+  if (!fields || !toggle) return;
+  var open = fields.hasAttribute('hidden');
+  if (open) fields.removeAttribute('hidden');
+  else {
+    fields.setAttribute('hidden', '');
+    // Collapsing means "let the exchange decide" — clear the values so a
+    // stale number cannot silently override the candle.
+    ['cf-cascade-mother-high', 'cf-cascade-mother-low'].forEach(function (id) {
+      var input = document.getElementById(id);
+      if (input) input.value = '';
+    });
+  }
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  toggle.classList.toggle('is-open', open);
+}
+
+// ── Site-styled date/time picker ──────────────────────────────────
+// The native datetime-local popup cannot take the site's colours and reads as
+// a browser artefact dropped into the panel. This keeps the ISO value the form
+// already expects while giving the field a calendar that belongs here — the
+// same control PhilForge uses.
+(function initCfDatePicker() {
+  var popover = null;
+  var activeInput = null;
+  var visibleMonth = null;
+  var selected = null;
+
+  function pad(v) { return String(v).padStart(2, '0'); }
+  function parseValue(value) {
+    var m = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0));
+    var now = new Date();
+    now.setSeconds(0, 0);
+    return now;
+  }
+  function iso(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+      + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function sameDay(a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  }
+  function close() { if (popover) popover.hidden = true; activeInput = null; }
+
+  function render() {
+    if (!popover || !activeInput || !visibleMonth || !selected) return;
+    var year = visibleMonth.getFullYear(), month = visibleMonth.getMonth();
+    var gridStart = new Date(year, month, 1 - new Date(year, month, 1).getDay());
+    var now = new Date();
+    // The minute list follows the campaign's own timeframe: a 5m mother can
+    // only open on a 5-minute boundary, and offering all sixty is 55 wrong
+    // answers. Read live so switching the timeframe re-offers the right ones.
+    var tfEl = document.getElementById('cf-cascade-timeframe');
+    var tf = (tfEl && tfEl.value) || '5m';
+    var stepMin = ({ '5m': 5, '15m': 15, '1h': 60, '4h': 60, '1d': 60, '1w': 60 })[tf] || 5;
+    if (stepMin >= 60) stepMin = 15;
+    var minutes = [];
+    for (var mm = 0; mm < 60; mm += stepMin) minutes.push(mm);
+    if (minutes.indexOf(selected.getMinutes()) === -1) {
+      minutes = minutes.concat([selected.getMinutes()]).sort(function (a, b) { return a - b; });
+    }
+    var monthName = new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' }).format(visibleMonth);
+    var weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(function (d) {
+      return '<span>' + d + '</span>';
+    }).join('');
+    var days = '';
+    for (var i = 0; i < 42; i++) {
+      var day = new Date(gridStart);
+      day.setDate(gridStart.getDate() + i);
+      var cls = ['cf-cal-day'];
+      if (day.getMonth() !== month) cls.push('is-outside');
+      if (sameDay(day, now)) cls.push('is-today');
+      if (sameDay(day, selected)) cls.push('is-selected');
+      days += '<button type="button" class="' + cls.join(' ') + '" data-cf-cal-day="'
+        + day.getFullYear() + '-' + day.getMonth() + '-' + day.getDate() + '">' + day.getDate() + '</button>';
+    }
+    var hours = '';
+    for (var h = 0; h < 24; h++) {
+      hours += '<option value="' + h + '"' + (h === selected.getHours() ? ' selected' : '') + '>' + pad(h) + '</option>';
+    }
+    var mins = minutes.map(function (m) {
+      return '<option value="' + m + '"' + (m === selected.getMinutes() ? ' selected' : '') + '>' + pad(m) + '</option>';
+    }).join('');
+    popover.innerHTML =
+      '<div class="cf-cal-head">'
+        + '<button class="cf-cal-nav" type="button" data-cf-cal-nav="-1" aria-label="Previous month">&#8249;</button>'
+        + '<span>' + _escapeHtml(monthName) + '</span>'
+        + '<button class="cf-cal-nav" type="button" data-cf-cal-nav="1" aria-label="Next month">&#8250;</button>'
+      + '</div>'
+      + '<div class="cf-cal-weekdays">' + weekdays + '</div>'
+      + '<div class="cf-cal-days">' + days + '</div>'
+      + '<div class="cf-cal-time">'
+        + '<select aria-label="Hour" data-cf-cal-hour>' + hours + '</select>'
+        + '<select aria-label="Minute" data-cf-cal-minute>' + mins + '</select>'
+      + '</div>'
+      + '<div class="cf-cal-foot"><span class="table-meta">IST · ' + _escapeHtml(tf.toUpperCase()) + ' candle opens</span>'
+        + '<span><button class="btn btn-outline btn-sm" type="button" data-cf-cal-clear>Clear</button>'
+        + '<button class="btn btn-primary btn-sm" type="button" data-cf-cal-apply>Apply</button></span></div>';
+  }
+
+  function open(input) {
+    if (!popover) {
+      popover = document.createElement('div');
+      popover.className = 'cf-cal';
+      popover.hidden = true;
+      popover.setAttribute('role', 'dialog');
+      popover.setAttribute('aria-label', 'Choose the mother candle date and time');
+      document.body.appendChild(popover);
+    }
+    activeInput = input;
+    selected = parseValue(input.value);
+    visibleMonth = new Date(selected.getFullYear(), selected.getMonth(), 1);
+    render();
+    popover.hidden = false;
+    var rect = input.getBoundingClientRect();
+    var width = Math.min(320, window.innerWidth - 24);
+    popover.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)) + 'px';
+    popover.style.top = Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 420)) + 'px';
+  }
+
+  function setup(input) {
+    if (input.dataset.cfCalReady) return;
+    input.dataset.cfCalReady = '1';
+    var initial = input.value;
+    input.type = 'text';
+    input.value = initial;
+    input.readOnly = true;
+    input.classList.add('cf-datetime');
+    if (!input.placeholder) input.placeholder = 'Pick the candle · IST';
+    input.setAttribute('aria-haspopup', 'dialog');
+    input.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); open(input); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(input); }
+    });
+  }
+
+  document.addEventListener('click', function (event) {
+    if (popover && !popover.hidden && !popover.contains(event.target)
+        && !(event.target.closest && event.target.closest('.cf-datetime'))) {
+      close();
+      return;
+    }
+    var action = event.target.closest && event.target.closest(
+      '[data-cf-cal-nav], [data-cf-cal-day], [data-cf-cal-apply], [data-cf-cal-clear]');
+    if (!action || !activeInput) return;
+    event.preventDefault();
+    if (action.dataset.cfCalNav) {
+      visibleMonth.setMonth(visibleMonth.getMonth() + Number(action.dataset.cfCalNav));
+      render();
+    } else if (action.dataset.cfCalDay) {
+      var parts = action.dataset.cfCalDay.split('-').map(Number);
+      selected.setFullYear(parts[0], parts[1], parts[2]);
+      visibleMonth = new Date(parts[0], parts[1], 1);
+      render();
+    } else if (action.hasAttribute('data-cf-cal-apply')) {
+      var hEl = popover.querySelector('[data-cf-cal-hour]');
+      var mEl = popover.querySelector('[data-cf-cal-minute]');
+      selected.setHours(Number(hEl.value), Number(mEl.value), 0, 0);
+      activeInput.value = iso(selected);
+      activeInput.dispatchEvent(new Event('change', { bubbles: true }));
+      close();
+    } else if (action.hasAttribute('data-cf-cal-clear')) {
+      activeInput.value = '';
+      activeInput.dispatchEvent(new Event('change', { bubbles: true }));
+      close();
+    }
+  });
+  document.addEventListener('change', function (event) {
+    if (!popover || !activeInput || !event.target.matches('[data-cf-cal-hour], [data-cf-cal-minute]')) return;
+    selected.setHours(
+      Number(popover.querySelector('[data-cf-cal-hour]').value),
+      Number(popover.querySelector('[data-cf-cal-minute]').value), 0, 0);
+  });
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape') close(); });
+  function setupAll() {
+    document.querySelectorAll('input[type="datetime-local"], .cf-datetime').forEach(setup);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAll);
+  else setupAll();
+})();

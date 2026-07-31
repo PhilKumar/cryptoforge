@@ -1356,26 +1356,28 @@
           <input type="number" id="cf-cascade-capital" min="10" step="1" inputmode="decimal" value="2000">
         </div>
         <div class="input-group">
-          <label for="cf-cascade-group-budget">Group Fund (USD, per symbol)</label>
+          <label for="cf-cascade-group-budget">Group Fund (USD, per symbol)<button type="button" class="cf-info" tabindex="0"
+            data-cf-info="An optional shared cap for one symbol. Each campaign receives its allocation when it starts; minor and major campaigns still calculate their own ladders independently. Set it to 0 to remove the cap."
+            aria-label="What is a group fund?">i</button></label>
           <div class="cf-cascade-group-control">
             <input type="number" id="cf-cascade-group-budget" min="0" step="1" inputmode="decimal" placeholder="Optional — e.g. 1000">
             <button type="button" class="btn btn-outline btn-sm" data-cf-click="cfCascadeSaveCapitalGroup()">Set</button>
           </div>
         </div>
         <div class="input-group">
-          <label for="cf-cascade-mc-kind">Mother Candle Kind</label>
+          <label for="cf-cascade-mc-kind">Mother Candle Kind<button type="button" class="cf-info" tabindex="0"
+            data-cf-info="A fresh campaign is MAJOR whatever chart you spotted it on. Pick Minor only for a sub-mother marked inside a move that is already running — a Minor stands down if a Major on the same symbol breaks at the same moment."
+            aria-label="What is a mother candle kind?">i</button></label>
           <select id="cf-cascade-mc-kind">
             <option value="major" selected>Major — its own anchor</option>
             <option value="minor">Minor — inside a move already running · forced to 5m</option>
           </select>
-          <div class="cf-cascade-field-note" id="cf-cascade-mc-kind-note">
-            A fresh campaign is <strong>Major</strong> whatever chart you spotted it on. Pick Minor only
-            for a sub-mother marked inside a move that is already running — a Minor stands down if a
-            Major on the same symbol breaks at the same time.
-          </div>
+
         </div>
         <div class="input-group">
-          <label for="cf-cascade-timeframe">Starting Mother Candle</label>
+          <label for="cf-cascade-timeframe">Starting Mother Candle<button type="button" class="cf-info" tabindex="0"
+            data-cf-info="5m — Initiate is a fresh campaign off a recent or minor MC; it stays 5m whatever chart you spotted it on. Older MC anchors deliberately to a bigger candle from the left. Either way the LADDER decides escalation, not the kind: 5m, 15m and 1H all climb to the next rung as they outgrow the screen (5m → 15m → 1H → 4H). 4H, 1D and 1W are fixed — 4H is the cap, 1D and 1W are off the ladder. A mother candle breaking above always restarts on 5m."
+            aria-label="How the starting timeframe works">i</button></label>
           <select id="cf-cascade-timeframe">
             <option value="5m" selected>5m — auto-escalates</option>
             <option value="15m">15m — auto-escalates</option>
@@ -1386,16 +1388,29 @@
           </select>
         </div>
         <div class="input-group">
-          <label for="cf-cascade-mother-high">Mother Candle High $ <span class="table-meta">(optional with MC time)</span></label>
-          <input type="number" id="cf-cascade-mother-high" min="0" step="0.01" inputmode="decimal" placeholder="auto from MC time">
+          <label for="cf-cascade-mother-time">MC Time<button type="button" class="cf-info" tabindex="0"
+            data-cf-info="Pick the mother candle by its time and the exchange gives its own high and low, on the timeframe chosen above. This is the safer way in: a high typed from the wrong candle changes every fib below it and looks exactly like a rule bug. Leave it blank only if you are typing the prices instead — then the time is found from the high (5m looks back ~3.5 days)."
+            aria-label="How the MC time works">i</button></label>
+          <input type="datetime-local" id="cf-cascade-mother-time" step="300" class="cf-datetime">
         </div>
-        <div class="input-group">
-          <label for="cf-cascade-mother-low">Mother Candle Low $ <span class="table-meta">(optional with MC time)</span></label>
-          <input type="number" id="cf-cascade-mother-low" min="0" step="0.01" inputmode="decimal" placeholder="auto from MC time">
+        <div class="input-group cf-cascade-price-toggle-group">
+          <button type="button" class="cf-cascade-price-toggle" id="cf-cascade-price-toggle"
+                  aria-expanded="false" aria-controls="cf-cascade-price-fields"
+                  data-cf-click="cfCascadeTogglePriceFields()">
+            <span class="cf-cascade-price-toggle-caret" aria-hidden="true">&#9656;</span>
+            Type the high &amp; low myself
+          </button>
         </div>
-        <div class="input-group">
-          <label for="cf-cascade-mother-time">MC Time</label>
-          <input type="datetime-local" id="cf-cascade-mother-time">
+        <div class="cf-cascade-price-fields" id="cf-cascade-price-fields" hidden>
+          <div class="input-group">
+            <label for="cf-cascade-mother-high">Mother Candle High $</label>
+            <input type="number" id="cf-cascade-mother-high" min="0" step="0.01" inputmode="decimal" placeholder="e.g. 105000">
+          </div>
+          <div class="input-group">
+            <label for="cf-cascade-mother-low">Mother Candle Low $</label>
+            <input type="number" id="cf-cascade-mother-low" min="0" step="0.01" inputmode="decimal" placeholder="e.g. 103000">
+          </div>
+          <div class="cf-cascade-form-note">Typed prices override the exchange candle — use them for a chart quoted somewhere else (Coinbase, Kraken) or a mother older than the exchange's candle window.</div>
         </div>
         <div class="input-group">
           <label id="cf-cascade-mode-label">Mode</label>
@@ -1407,9 +1422,6 @@
                     data-cf-click="cfCascadeSetMode('live')">Live</button>
           </div>
         </div>
-        <div class="cf-cascade-form-note">Give either side: with an <b>MC time</b> the candle's high and low are read off the exchange on the timeframe picked above (typed prices override — e.g. a chart quoted on another exchange). With only a <b>high</b>, the time is auto-detected from it (5m looks back ~3.5 days).</div>
-        <div class="cf-cascade-form-note"><strong>5m — Initiate</strong> is a fresh campaign off a recent or minor MC, including a sub-mother marked inside a move already running; it stays 5m whatever chart you spotted it on. <strong>Older MC</strong> anchors deliberately to a bigger candle from the left. Either way the ladder decides escalation, not the kind: <strong>5m, 15m and 1H all climb</strong> to the next rung as they outgrow the screen (5m → 15m → 1H → 4H), and <strong>4H, 1D and 1W are fixed</strong> — 4H because it is the cap, 1D and 1W because they are off the ladder. A mother candle breaking above always restarts on 5m.</div>
-        <div class="cf-cascade-form-note">A <strong>group fund</strong> is an optional shared cap for one symbol. Each campaign receives its allocation when it starts; minor and major campaigns still calculate their own ladders independently. Set it to 0 to remove the cap.</div>
         <div id="cf-cascade-groups" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;"></div>
       </div>
       <div class="allocator-actions">
