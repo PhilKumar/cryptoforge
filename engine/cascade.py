@@ -440,6 +440,35 @@ def _coerce_float(value, default: float = 0.0) -> float:
         return default
 
 
+def exchange_fill_ts(row: dict, now_ts: Optional[int] = None) -> int:
+    """When the exchange says an order last moved, in epoch SECONDS.
+
+    Recovered fills used to be stamped with the moment we noticed them
+    (`time.time()`), which is the same instant during a 30-second deploy and
+    hours out after any longer outage. Nothing about a live trading decision
+    reads a fill timestamp — the live TP is a resting order on the exchange —
+    but the record does: chart entry markers land where the engine restarted
+    instead of where the buy happened, the round snapshot carries the wrong
+    time, and a journal chart frozen at the round's exit drops the fill
+    entirely for appearing to have happened after it.
+
+    Binance reports these in milliseconds; the magnitude test keeps a broker
+    that reports seconds working too. A value far enough in the future to be
+    nonsense is refused rather than written into the books.
+    """
+    now = int(now_ts if now_ts is not None else time.time())
+    for key in ("updateTime", "transactTime", "time"):
+        raw = _coerce_float(row.get(key)) if isinstance(row, dict) else 0.0
+        if raw <= 0:
+            continue
+        stamp = int(raw / 1000) if raw > 1e11 else int(raw)
+        # Clock skew between us and the exchange is seconds, not minutes.
+        if stamp > now + 300:
+            continue
+        return stamp
+    return now
+
+
 def _floor_to_step(quantity: float, step_size) -> float:
     """Floor a base quantity exactly as the exchange will for LOT_SIZE."""
     try:
@@ -5037,7 +5066,7 @@ class CascadeEngine:
                         else (campaign.pending_limit_price or campaign.pending_stop_price or 0.0)
                     )
                     campaign.pending_filled_qty = executed
-                    self._fill_pending_part(campaign, price, delta_qty, int(time.time()))
+                    self._fill_pending_part(campaign, price, delta_qty, exchange_fill_ts(row))
                     changed = True
             if row is None:
                 status_row = await self._safe_get_order(campaign, campaign.pending_order_id)
@@ -5050,7 +5079,7 @@ class CascadeEngine:
                         if executed > 0 and quote > 0
                         else (campaign.pending_limit_price or campaign.pending_stop_price or 0.0)
                     )
-                    self._fill_pending(campaign, price, int(time.time()), campaign.pending_order_id)
+                    self._fill_pending(campaign, price, exchange_fill_ts(status_row), campaign.pending_order_id)
                     changed = True
                 elif status in {"CANCELED", "EXPIRED", "REJECTED"}:
                     # Say WHICH. The three mean very different things — EXPIRED

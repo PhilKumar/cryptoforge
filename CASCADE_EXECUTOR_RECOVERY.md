@@ -179,24 +179,29 @@ length.
 
 The 6-hour threshold is a starting number, not a measured one.
 
-## Two bugs that only bite on long gaps
+## What long gaps break in the server engine
 
-Inherited from the server engine, where the only gap is a ~30s deploy. Both are
-live today, masked by short gaps.
+**Fixed.** Recovered fills were stamped `time.time()` rather than the exchange's
+fill time, in both branches of `_sync_live_orders`. Immaterial for a 30-second
+deploy; wrong for an 8-hour sleep, which recorded a 3am fill as having happened
+at 11am. Now read from the order row via `exchange_fill_ts`.
 
-**Recovered fills are stamped `time.time()`, not the exchange's fill time**
-([engine/cascade.py:4802](engine/cascade.py:4802)). Immaterial for a deploy;
-wrong for an 8-hour sleep, which records a 3am fill as having happened at 11am.
-The exchange supplies the real time in the order row and in `myTrades`.
+No live trading decision reads a fill timestamp — the live TP is a resting order
+on the exchange — so this was a record-keeping fault, not a money fault. What it
+corrupted: chart entry markers, the fills snapshotted into a closed round, and
+journal charts frozen at a round's exit, which drop a fill that appears to have
+happened after the exit.
 
-It also trips the TP guard at
-[engine/cascade.py:3896](engine/cascade.py:3896), which skips the target check
-for any candle at or before a fill's timestamp. A fill misdated forward
-suppresses that check across every replayed candle in the gap.
+**Not a bug, retracted.** An earlier draft claimed this also tripped the TP
+guard in `_paper_tp_check`. It cannot: `_sync_live_orders` runs only for live
+campaigns and `_paper_tp_check` only for paper ones, so the two never meet.
+Paper fills are stamped with their own candle's timestamp, and recalc clears
+`all_fills` before replaying, so the guard sees only a fill from the candle it
+is currently judging — which is exactly its intent.
 
-**`MAX_REPLAY_BARS` is 5000** — ~17 days on 5m. Fine for normal gaps, but it
-should fail loudly rather than silently truncating and leaving geometry subtly
-wrong.
+**Still open.** `MAX_REPLAY_BARS` is 5000 — ~17 days on 5m. Fine for normal
+gaps, but it should fail loudly rather than silently truncating and leaving
+geometry subtly wrong.
 
 ## What the buyer sees
 

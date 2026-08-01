@@ -11,6 +11,7 @@ from engine.cascade import (
     Trendline,
     build_fib_ladder_and_pool,
     compute_tp_price,
+    exchange_fill_ts,
     leg_broken,
     plan_leg_orders,
     recompute_avg_entry_price,
@@ -225,6 +226,45 @@ class SerializationTests(unittest.TestCase):
         self.assertAlmostEqual(restored.legs[0].pending_orders[4].price, leg.pending_orders[4].price)
         self.assertAlmostEqual(restored.avg_entry_price, campaign.avg_entry_price)
         self.assertEqual(restored.all_fills[0].order_id, "77")
+
+
+class ExchangeFillTimestampTests(unittest.TestCase):
+    """A recovered fill must be dated when it filled, not when we noticed."""
+
+    NOW = 1_785_500_000
+
+    def test_prefers_update_time_in_milliseconds(self):
+        row = {"updateTime": 1_785_470_000_000, "time": 1_785_460_000_000}
+        self.assertEqual(exchange_fill_ts(row, now_ts=self.NOW), 1_785_470_000)
+
+    def test_accepts_a_broker_that_reports_seconds(self):
+        self.assertEqual(exchange_fill_ts({"updateTime": 1_785_470_000}, now_ts=self.NOW), 1_785_470_000)
+
+    def test_falls_back_through_the_key_order(self):
+        self.assertEqual(
+            exchange_fill_ts({"transactTime": 1_785_470_000_000}, now_ts=self.NOW),
+            1_785_470_000,
+        )
+        self.assertEqual(exchange_fill_ts({"time": 1_785_470_000_000}, now_ts=self.NOW), 1_785_470_000)
+
+    def test_missing_or_empty_falls_back_to_now(self):
+        self.assertEqual(exchange_fill_ts({}, now_ts=self.NOW), self.NOW)
+        self.assertEqual(exchange_fill_ts({"updateTime": 0}, now_ts=self.NOW), self.NOW)
+        self.assertEqual(exchange_fill_ts(None, now_ts=self.NOW), self.NOW)
+
+    def test_nonsense_future_stamp_is_refused(self):
+        row = {"updateTime": (self.NOW + 86_400) * 1000}
+        self.assertEqual(exchange_fill_ts(row, now_ts=self.NOW), self.NOW)
+
+    def test_small_clock_skew_is_accepted(self):
+        row = {"updateTime": (self.NOW + 30) * 1000}
+        self.assertEqual(exchange_fill_ts(row, now_ts=self.NOW), self.NOW + 30)
+
+    def test_an_hours_old_fill_keeps_its_own_time(self):
+        """The whole point: an outage must not drag the fill forward to now."""
+        filled_at = self.NOW - 8 * 3600
+        row = {"updateTime": filled_at * 1000, "status": "FILLED"}
+        self.assertEqual(exchange_fill_ts(row, now_ts=self.NOW), filled_at)
 
 
 if __name__ == "__main__":
