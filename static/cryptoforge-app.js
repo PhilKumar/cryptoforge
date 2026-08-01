@@ -935,7 +935,8 @@ function cfInitAlerts() {
     redirectingForSession = true;
     cfToast('Session expired - returning to unlock screen', 'warning');
     setTimeout(function() {
-      if (window.location.pathname !== '/' || window.location.hash) window.location.assign('/');
+      // The unlock screen is served at /app; / is the public landing page.
+      if (window.location.pathname !== '/app' || window.location.hash) window.location.assign('/app');
       else window.location.reload();
     }, 900);
   }

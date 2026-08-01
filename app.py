@@ -48,7 +48,13 @@ os.chdir(_HERE)
 from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1914,6 +1920,23 @@ def _version_static_assets(html: str) -> str:
 
 # ── Serve Frontend ────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
+async def serve_landing():
+    """Public front door. No session, no secrets — marketing only.
+
+    The terminal lives at /app; every CTA on this page points there.
+    """
+    landing_path = os.path.join(_HERE, "static", "landing", "index.html")
+    if os.path.exists(landing_path):
+        with open(landing_path, encoding="utf-8") as f:
+            resp = HTMLResponse(_version_static_assets(f.read()))
+            # Short, revalidated: the page is public but changes with deploys.
+            resp.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
+            return resp
+    # Losing the landing file must not lock anyone out of the terminal.
+    return RedirectResponse("/app", status_code=307)
+
+
+@app.get("/app", response_class=HTMLResponse)
 async def serve_frontend(request: Request):
     token = _get_session_token(request)
     if not _validate_session(token, request=request):

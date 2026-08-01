@@ -308,7 +308,7 @@
 
   <nav class="nav">
     <div class="logo"><div class="logo-mark">CF</div><div class="logo-text">CRYPTO<br>FORGE</div></div>
-    <div class="nav-links"><a href="#story">The Story</a><a href="#chart">The Chart</a><a href="#enter">Enter</a></div>
+    <div class="nav-links"><a href="#story">The Story</a><a href="#chart">The Chart</a><a href="https://crypto.philforge.in/app">Enter</a></div>
   </nav>
 
   <div class="hero-copy">
@@ -319,7 +319,7 @@
     </h1>
     <p class="hero-sub">The oldest way of reading markets — candle by candle — executed by software that never sleeps, never hopes, and never forgets.</p>
     <div class="cta-row">
-      <a class="pill" href="#enter">Enter the Terminal</a>
+      <a class="pill" href="https://crypto.philforge.in/app">Enter the Terminal</a>
       <a class="ghost" href="#story">The lineage ↓</a>
     </div>
   </div>
@@ -475,7 +475,7 @@
   <div class="chapter-tag">The hand that never blinks</div>
   <h2 class="display">Homma read one market.<br>This one reads them all.</h2>
   <p>Same shapes. Same crowd. Every timeframe, around the clock, acted on in milliseconds — with the discipline he had to hold in his own head.</p>
-  <a class="pill" href="#">Enter the Terminal</a>
+  <a class="pill" href="https://crypto.philforge.in/app">Enter the Terminal</a>
 </section>
 
 <footer>
@@ -484,6 +484,16 @@
 </footer>
 
 <script>
+  // The terminal used to live at "/", so old bookmarks and PWA shortcuts point
+  // at /#cascade and friends. Hand those straight through to /app rather than
+  // dropping someone on the marketing page.
+  var APP_TABS = ['journal', 'portfolio', 'cascade', 'dashboard', 'scalp',
+                  'live', 'builder', 'market', 'results'];
+  var hash = (window.location.hash || '').replace('#', '');
+  if (APP_TABS.indexOf(hash) !== -1) {
+    window.location.replace('/app#' + hash);
+  }
+
   document.documentElement.classList.remove('no-js');
   var io = new IntersectionObserver(function(entries) {
     entries.forEach(function(e) {

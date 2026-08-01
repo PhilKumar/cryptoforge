@@ -1,9 +1,9 @@
 {
-  "id": "/",
+  "id": "/app",
   "name": "CryptoForge",
   "short_name": "CryptoForge",
   "description": "CryptoForge trading workspace for crypto futures, scalping, live execution, and strategy analysis.",
-  "start_url": "/",
+  "start_url": "/app",
   "scope": "/",
   "display": "minimal-ui",
   "orientation": "portrait-primary",

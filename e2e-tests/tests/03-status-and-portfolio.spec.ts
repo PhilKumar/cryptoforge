@@ -14,7 +14,7 @@ async function apiWrite(page: Page, url: string, options: Record<string, unknown
 }
 
 async function login(page: Page) {
-  await page.goto('/');
+  await page.goto('/app');
   for (const digit of PIN.split('')) {
     await page.click(`button.key[data-val="${digit}"]`);
   }

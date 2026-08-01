@@ -3,7 +3,7 @@ import { expect, Page, test } from '@playwright/test';
 const PIN = process.env.E2E_PIN || '123456';
 
 async function login(page: Page) {
-  await page.goto('/');
+  await page.goto('/app');
   for (const digit of PIN.split('')) {
     await page.click(`button.key[data-val="${digit}"]`);
   }
@@ -68,7 +68,7 @@ test.describe('App Shell Navigation', () => {
     await expect.poll(() => page.evaluate(() => location.hash)).toBe('#live');
 
     await page.evaluate(() => localStorage.setItem('cf_active_tab', 'portfolio'));
-    await page.goto('/');
+    await page.goto('/app');
     await expectActivePage(page, 'portfolio-page', 'nav-portfolio');
     await expect.poll(() => page.evaluate(() => location.hash)).toBe('#portfolio');
   });

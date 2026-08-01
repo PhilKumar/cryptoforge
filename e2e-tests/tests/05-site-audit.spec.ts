@@ -3,7 +3,7 @@ import { expect, Page, test } from '@playwright/test';
 const PIN = process.env.E2E_PIN || '123456';
 
 async function login(page: Page) {
-  await page.goto('/');
+  await page.goto('/app');
   for (const digit of PIN.split('')) {
     await page.click(`[data-val="${digit}"]`);
   }
@@ -103,7 +103,7 @@ test.describe('Comprehensive Site Audit', () => {
     });
 
     for (const shellPage of shellPages) {
-      await page.goto('/' + shellPage.hash, { waitUntil: 'domcontentloaded' });
+      await page.goto('/app' + shellPage.hash, { waitUntil: 'domcontentloaded' });
       await expectActivePage(page, shellPage.section, shellPage.nav.slice(1));
       await expect(page.locator(shellPage.probe)).toBeVisible({ timeout: 15_000 });
       await page.waitForTimeout(250);

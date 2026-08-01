@@ -27,7 +27,7 @@ const PIN = process.env.E2E_PIN || '123456';
 const T0 = 1750000000;
 
 async function login(page: Page) {
-  await page.goto('/');
+  await page.goto('/app');
   for (const digit of PIN.split('')) {
     await page.click(`button.key[data-val="${digit}"]`);
   }

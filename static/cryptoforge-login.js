@@ -131,7 +131,7 @@ async function tryUnlock() {
     });
     if (res.ok) {
       setSuccess();
-      setTimeout(() => { window.location.href = '/'; }, 400);
+      setTimeout(() => { window.location.href = '/app'; }, 400);
       return;
     }
     // The lockout now escalates, so "try again in 6 hours" is real information.

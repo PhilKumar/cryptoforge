@@ -25,12 +25,12 @@ async function apiWrite(page: Page, url: string, options: Record<string, unknown
 }
 
 // ── Auth helper ─────────────────────────────────────────────
-// Login page is a PIN-pad served at GET /. There is no text input —
+// Login page is a PIN-pad served at GET /app (/ is the public landing page). There is no text input —
 // each digit is a <button class="key" data-val="N">.
 // After the 6th digit the page POSTs /api/auth/login and replaces
 // itself with strategy.html (same URL, different content).
 async function login(page: Page) {
-  await page.goto('/');
+  await page.goto('/app');
   // Click each digit of the PIN in order
   for (const digit of PIN.split('')) {
     await page.click(`button.key[data-val="${digit}"]`);
