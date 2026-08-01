@@ -178,6 +178,16 @@ function _cfBindLegacyAttrBridge() {
   document.addEventListener('keydown', function(event) {
     const el = _cfFindLegacyTarget(event, _CF_LEGACY_ATTRS.keydown);
     if (el) _cfRunLegacyScript(el.getAttribute(_CF_LEGACY_ATTRS.keydown), el, event);
+    // Divs acting as buttons (role="button") must also respond to Enter/Space.
+    if (event.key === 'Enter' || event.key === ' ') {
+      const btn = event.target && event.target.closest
+        ? event.target.closest('[role="button"][' + _CF_LEGACY_ATTRS.click + ']')
+        : null;
+      if (btn) {
+        event.preventDefault();
+        _cfRunLegacyScript(btn.getAttribute(_CF_LEGACY_ATTRS.click), btn, event);
+      }
+    }
   });
   document.addEventListener('mouseover', function(event) {
     const el = _cfFindLegacyTarget(event, _CF_LEGACY_ATTRS.mouseover);
@@ -1021,6 +1031,9 @@ function showPage(pageId, btn, options) {
     return;
   }
   cfSetActivePageShell(pageId, btn);
+  // A tab switch always lands at the top of the new page — pages have very
+  // different heights, so an inherited scroll offset strands the user mid-void.
+  window.scrollTo(0, 0);
   // Persist active tab
   localStorage.setItem('cf_active_tab', tabName);
   cfSyncPageHistory(pageId, opts);
@@ -1590,7 +1603,7 @@ function renderIndicators() {
   list.innerHTML = indicators.map(function(ind, i) {
     var isCPR = ind.startsWith('CPR');
     var display = isCPR ? _formatCPRBadge(ind) : ind.replace(/_/g, ' ');
-    var bgStyle = isCPR ? 'background:linear-gradient(135deg, var(--accent2), #7c3aed);' : '';
+    var bgStyle = isCPR ? 'background:linear-gradient(135deg, var(--accent2), var(--accent2));' : '';
     return '<span class="tag tag-purple" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;' + bgStyle + '" data-cf-click="removeIndicator(' + i + ')">' +
       display + ' <span style="color:#ffb3b3;font-size:14px;">\u00d7</span></span>';
   }).join('');
@@ -1992,7 +2005,7 @@ async function loadDashboard() {
         const symbol = _escapeHtml(r.symbol || '—');
         const dt = _getTradeDateParts(r.created_at || r.started_at || '');
         const tradeCount = r.trade_count || 0;
-        return `<tr style="cursor:pointer;" data-cf-click="viewRun(${r.id})" data-cf-mouseover="this.style.background='rgba(139,92,246,0.04)'" data-cf-mouseout="this.style.background=''">
+        return `<tr style="cursor:pointer;" data-cf-click="viewRun(${r.id})" data-cf-mouseover="this.style.background='rgba(var(--tint-primary-rgb),0.04)'" data-cf-mouseout="this.style.background=''">
           <td>${_getModeBadge(r.mode)}</td>
           <td><div class="table-row-label">${runName}</div><div class="table-note">${symbol} • ${tradeCount} trades</div></td>
           <td><div class="table-row-label">${symbol}</div><div class="table-note">${_escapeHtml(String(r.side || 'Both'))}</div></td>
@@ -2052,6 +2065,9 @@ function fmtINR(usd, decimals) {
   if (usd === null || usd === undefined || isNaN(usd)) return '$0.00';
   const d = (decimals !== undefined) ? decimals : 2;
   const val = parseFloat(usd);
+  // Values this size only come from paper-mode artifacts; full precision makes
+  // them read like real balances, so switch to compact notation past $1M.
+  if (Math.abs(val) >= 1e6) return fmtINRLarge(val);
   return (val < 0 ? '-$' : '$') + Math.abs(val).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
@@ -2103,8 +2119,18 @@ function fmtPortfolioRateLabel() {
   if (_cfUsdInrMeta.kind === 'broker_settlement') {
     return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$ ' + (_cfUsdInrMeta.label || 'broker settlement');
   }
-  var provider = _cfUsdInrSource ? ' ' + _cfUsdInrSource : '';
-  var date = _cfUsdInrMeta.providerDate ? ' ' + _cfUsdInrMeta.providerDate : '';
+  // Show the bare provider host and an IST-clock time — the raw URL and the
+  // provider's +0000 timestamp belong in a tooltip, not the strip.
+  var provider = _cfUsdInrSource
+    ? ' ' + String(_cfUsdInrSource).replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '')
+    : '';
+  var date = '';
+  if (_cfUsdInrMeta.providerDate) {
+    var parsed = Date.parse(_cfUsdInrMeta.providerDate);
+    date = isFinite(parsed)
+      ? ' · updated ' + new Date(parsed).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }) + ' IST'
+      : '';
+  }
   return '@ ₹' + _cfUsdInrRate.toFixed(2) + '/$ live' + provider + date;
 }
 
@@ -2684,7 +2710,7 @@ function _renderPortfolioPaperRuns(runs) {
     const runName = _escapeHtml(r.run_name || ('Run #' + r.id));
     const symbol = _escapeHtml(r.symbol || '—');
     const dt = _getTradeDateParts(r.created_at || r.started_at || '');
-    return `<tr style="cursor:pointer;" data-cf-click="viewRun(${r.id})" data-cf-mouseover="this.style.background='rgba(139,92,246,0.04)'" data-cf-mouseout="this.style.background=''">
+    return `<tr style="cursor:pointer;" data-cf-click="viewRun(${r.id})" data-cf-mouseover="this.style.background='rgba(var(--tint-primary-rgb),0.04)'" data-cf-mouseout="this.style.background=''">
       <td><div class="table-row-label">${runName}</div><div class="table-note">${symbol} • paper run</div></td>
       <td><div class="table-row-label">${symbol}</div><div class="table-note">${_escapeHtml(String(r.side || 'Both'))}</div></td>
       <td class="num"><div class="table-value-stack"><div class="table-value-main">${r.leverage || 1}x</div><div class="table-value-sub">leverage</div></div></td>
@@ -2992,7 +3018,7 @@ function _renderMarketRows(coins) {
     var btnClass = tradeable ? 'btn-live' : 'btn-bt';
     var btnLabel = tradeable ? '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M13 2 3 14h9l-1 8 10-12h-9l1-8z\"/></svg> Trade' : '<svg class=\"cf-ico\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 3v18h18\"/><path d=\"m19 9-5 5-4-4-3 3\"/></svg> Backtest';
     var tradeBtn = '<button class="mkt-trade-btn ' + btnClass + '" data-cf-click="selectCryptoFromMarket(\'' + tradeSym + '\',\'' + safeName + '\')">' + btnLabel + '</button>';
-    return '<tr style="cursor:pointer;" data-cf-mouseover="this.style.background=\'rgba(139,92,246,0.04)\'" data-cf-mouseout="this.style.background=\'\'">' +
+    return '<tr style="cursor:pointer;" data-cf-mouseover="this.style.background=\'rgba(var(--tint-primary-rgb),0.04)\'" data-cf-mouseout="this.style.background=\'\'">' +
       '<td style="padding-left:16px;"><div class="table-value-stack"><div class="table-value-main">#' + c.rank + '</div><div class="table-value-sub">rank</div></div></td>' +
       '<td><div style="display:flex;align-items:center;gap:10px;">' +
         '<img src="' + c.image + '" alt="' + safeSymbol + '" width="28" height="28" style="border-radius:50%;" data-cf-error="this.style.display=\'none\'">' +
@@ -3002,7 +3028,7 @@ function _renderMarketRows(coins) {
       '<td class="num"><div class="table-value-stack"><div class="table-value-main" style="color:' + chgColor + ';">' + chgSign + c.change_24h.toFixed(2) + '%</div><div class="table-value-sub">24h move</div></div></td>' +
       '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtNum(c.volume_24h) + '</div><div class="table-value-sub">24h volume</div></div></td>' +
       '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtNum(c.market_cap) + '</div><div class="table-value-sub">market cap</div></div></td>' +
-      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtPrice(c.ath) + '</div><div class="table-value-sub" style="color:' + (athPct > -20 ? 'var(--green)' : 'var(--red)') + '">' + athPct.toFixed(1) + '% vs ATH</div></div></td>' +
+      '<td class="num"><div class="table-value-stack"><div class="table-value-main">' + fmtPrice(c.ath) + '</div><div class="table-value-sub" style="color:var(--text-dim, #8b8b93)">' + athPct.toFixed(1) + '% vs ATH</div></div></td>' +
       '<td style="text-align:center;">' + tradeBtn + '</td></tr>';
   }).join('');
   _renderTablePager('market-table', 'market-table', 'market-table-pagination');
