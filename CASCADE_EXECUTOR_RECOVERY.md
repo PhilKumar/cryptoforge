@@ -199,9 +199,26 @@ Paper fills are stamped with their own candle's timestamp, and recalc clears
 `all_fills` before replaying, so the guard sees only a fill from the candle it
 is currently judging — which is exactly its intent.
 
-**Still open.** `MAX_REPLAY_BARS` is 5000 — ~17 days on 5m. Fine for normal
-gaps, but it should fail loudly rather than silently truncating and leaving
-geometry subtly wrong.
+**Fixed, and misattributed in an earlier draft.** `MAX_REPLAY_BARS` was never
+the truncation — it guards how far back a mother may be anchored and already
+fails loudly at campaign creation. The silent truncation was in two other
+places:
+
+- `_chart_candles` made a single klines call, which returns the most *recent*
+  1000 bars and nothing older. A replay asks for the whole campaign, so any
+  campaign older than one page — ~3.5 days on 5m — was rebuilt from a window
+  that started in the middle of it, without the mother candle in view. It now
+  pages when the span needs it, and a view-sized request still takes one call.
+- `_fetch_closed_candles` returned quietly when it ran out of pages, so "ran
+  out of budget" and "there is no more data" produced the same short list.
+  Exhaustion now logs at error level and raises an alert naming how far behind
+  it stopped. The page budget also went from 30 to 60, because 90 days of 5m is
+  ~26k bars and a page only advances by the part of it after the cursor.
+
+The general shape is worth remembering for the executor: a truncated replay is
+not a smaller replay. The geometry machine reads structure out of whatever
+candles it is handed, so a short window produces confident, wrong fibs with
+nothing on screen to suggest anything was missing.
 
 ## What the buyer sees
 

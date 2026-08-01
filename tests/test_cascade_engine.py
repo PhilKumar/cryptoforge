@@ -5884,3 +5884,130 @@ class CascadeRestructureLiveOrderingTests(unittest.IsolatedAsyncioTestCase):
         installed = {(lv["leg_id"], lv["level"]): lv["usd"] for lv in engine._ladder_snapshot(campaign)["levels"]}
         reported = {(lv["leg_id"], lv["level"]): lv["usd"] for lv in report["after"]["levels"]}
         self.assertEqual(installed, reported, "the preview must describe the ladder that ends up live")
+
+
+class PagingCandleBroker(FakeCascadeBroker):
+    """Serves fixed-size pages out of a synthetic history, the way klines does.
+
+    The real failure this exists to reproduce is a single call returning the
+    most RECENT page and nothing older: the list looks healthy and simply
+    starts in the wrong place.
+    """
+
+    def __init__(self, first_ts, last_ts, tf_sec=300, page=1000):
+        super().__init__()
+        self.first_ts = first_ts
+        self.last_ts = last_ts
+        self.tf_sec = tf_sec
+        self.page = page
+
+    async def async_get_candles(self, symbol, **kwargs):
+        self.candle_requests.append(kwargs)
+        start = kwargs.get("start")
+        if start:
+            begin = int(pd.Timestamp(start, tz="UTC").timestamp())
+            begin = max(begin, self.first_ts)
+        else:
+            # No start: the most recent page, exactly like a bare klines call.
+            span = self.page * self.tf_sec
+            begin = max(self.first_ts, self.last_ts - span + self.tf_sec)
+        stamps = []
+        ts = begin - (begin % self.tf_sec)
+        while ts <= self.last_ts and len(stamps) < self.page:
+            if ts >= self.first_ts:
+                stamps.append(ts)
+            ts += self.tf_sec
+        if not stamps:
+            return pd.DataFrame()
+        index = pd.to_datetime(stamps, unit="s", utc=True)
+        return pd.DataFrame(
+            {
+                "open": [100.0] * len(stamps),
+                "high": [101.0] * len(stamps),
+                "low": [99.0] * len(stamps),
+                "close": [100.5] * len(stamps),
+                "volume": [1.0] * len(stamps),
+            },
+            index=index,
+        )
+
+
+class CascadeReplayTruncationTests(unittest.IsolatedAsyncioTestCase):
+    """A replay that stops early must say so — it cannot look like a short one."""
+
+    TF_SEC = 300
+
+    def _campaign(self, engine, mother_ts):
+        campaign = Campaign(
+            campaign_id="old",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=mother_ts,
+            timeframe="5m",
+        )
+        engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
+
+    async def test_a_campaign_older_than_one_page_is_replayed_in_full(self):
+        """The bug: one klines call returns the newest 1000 bars, so a Recalc on
+        a campaign older than that rebuilt geometry from a window starting in
+        the middle of it, without the mother candle in view."""
+        now = int(time.time())
+        mother_ts = (now - 20 * 86400) // self.TF_SEC * self.TF_SEC  # 20 days: ~5760 bars
+        broker = PagingCandleBroker(first_ts=mother_ts - 10 * self.TF_SEC, last_ts=now)
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine, mother_ts)
+
+        candles = await engine._chart_candles(campaign, max_candles=100000)
+
+        self.assertGreater(len(candles), 1000, "one page is not a 20-day history")
+        self.assertLessEqual(candles[0].timestamp, mother_ts + self.TF_SEC, "replay must start at the mother")
+        self.assertGreater(len(broker.candle_requests), 1, "spanning more than a page requires paging")
+        engine.stop()
+
+    async def test_a_view_sized_request_still_takes_one_call(self):
+        """Paging is for replays. A chart asking for a screenful wants the most
+        recent page, which is exactly what a single call returns."""
+        now = int(time.time())
+        mother_ts = (now - 20 * 86400) // self.TF_SEC * self.TF_SEC
+        broker = PagingCandleBroker(first_ts=mother_ts, last_ts=now)
+        engine = _mk_engine(broker)
+        campaign = self._campaign(engine, mother_ts)
+
+        await engine._chart_candles(campaign, max_candles=400)
+
+        self.assertEqual(len(broker.candle_requests), 1)
+        engine.stop()
+
+    async def test_running_out_of_pages_raises_a_loud_alert(self):
+        """Truncation is not a smaller replay: the geometry machine reads
+        structure out of whatever it is handed."""
+        now = int(time.time())
+        alerts = []
+        # A history far longer than MAX_FETCH_PAGES can walk at one page a go.
+        first = now - (cascade_module.MAX_FETCH_PAGES + 40) * 1000 * self.TF_SEC
+        broker = PagingCandleBroker(first_ts=first, last_ts=now)
+        engine = CascadeEngine(broker, on_alert=lambda t, b, lv: alerts.append((t, b, lv)))
+
+        await engine._fetch_closed_candles("BTCUSDT", first, "5m")
+
+        self.assertTrue(alerts, "a truncated replay must alert")
+        title, body, level = alerts[-1]
+        self.assertIn("truncated", title.lower())
+        self.assertEqual(level, "error")
+        self.assertIn("INCOMPLETE", body)
+        engine.stop()
+
+    async def test_reaching_the_present_alerts_nobody(self):
+        now = int(time.time())
+        alerts = []
+        broker = PagingCandleBroker(first_ts=now - 300 * self.TF_SEC, last_ts=now)
+        engine = CascadeEngine(broker, on_alert=lambda t, b, lv: alerts.append((t, b, lv)))
+
+        candles = await engine._fetch_closed_candles("BTCUSDT", now - 300 * self.TF_SEC, "5m")
+
+        self.assertTrue(candles)
+        self.assertEqual(alerts, [])
+        engine.stop()

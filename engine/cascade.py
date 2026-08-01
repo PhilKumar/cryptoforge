@@ -329,6 +329,15 @@ MINOR_MC_TIMEFRAME = BASE_TIMEFRAME
 # campaign's own timeframe rather than in days. 5000 bars is 30 pages of the
 # broker's 1000-bar klines with room to spare.
 MAX_REPLAY_BARS = 5000
+# One Binance klines call returns at most this many bars. Anything that has to
+# span more than one page must page for it — and a single call that silently
+# returns the most RECENT page is the dangerous shape, because the result looks
+# like a full history right up until you check where it starts.
+KLINE_PAGE_BARS = 1000
+# Page budget for one catch-up fetch. Ninety days of 5m is ~26k bars and a page
+# only advances by however much of it falls after the cursor, so 30 pages could
+# come up short on a legitimately old campaign — and used to do it silently.
+MAX_FETCH_PAGES = 60
 # Roll-ups offered on the campaign chart: the campaign's own timeframe plus the
 # next two above it. View-only — the geometry is always computed on the
 # campaign's engine timeframe, whatever the chart is being read at.
@@ -2537,6 +2546,22 @@ class CascadeEngine:
         timeframe — the same candles the engine stepped, so the chart and the
         geometry can never disagree."""
         tf_sec = campaign.timeframe_sec
+        now = int(time.time())
+        # One klines call returns the most RECENT page and nothing older. A
+        # caller asking for the whole campaign (a replay passes 100000) on a
+        # campaign older than one page therefore used to get a history that
+        # began in the middle of it — the mother candle not even present — and
+        # Recalc rebuilt geometry from a window that never contained the
+        # structure it was supposed to reproduce. On 5m one page is only ~3.5
+        # days, so this was reachable by any campaign that ran a long weekend.
+        # Page for it instead. A view-sized request still takes one call,
+        # because the most recent page is exactly what it wanted.
+        span_bars = (now - campaign.mother_timestamp) // max(tf_sec, 1)
+        if span_bars > KLINE_PAGE_BARS and max_candles > KLINE_PAGE_BARS:
+            paged = await self._fetch_closed_candles(
+                campaign.symbol, campaign.mother_timestamp - tf_sec, campaign.timeframe
+            )
+            return paged[-max_candles:]
         try:
             df = await self.broker.async_get_candles(campaign.symbol, resolution=campaign.timeframe)
         except Exception as exc:
@@ -2544,7 +2569,6 @@ class CascadeEngine:
             return []
         if df is None or getattr(df, "empty", True):
             return []
-        now = int(time.time())
         rows = []
         for index, row in df.iterrows():
             ts = int(index.timestamp())
@@ -3503,14 +3527,21 @@ class CascadeEngine:
         now = int(time.time())
         candles: List[Candle] = []
         cursor = since_ts
-        for _ in range(30):  # safety cap: 30 pages of 1000 bars
+        # True only if we fall out of the loop having used every page without
+        # reaching the present. Every other exit is a legitimate stop and says
+        # so, because "ran out of pages" and "there was no more data" produce
+        # the same short list and mean opposite things.
+        hit_page_cap = True
+        for _ in range(MAX_FETCH_PAGES):
             start = datetime.utcfromtimestamp(max(cursor - tf_sec, 0)).strftime("%Y-%m-%d")
             try:
                 df = await self.broker.async_get_candles(symbol, resolution=timeframe, start=start)
             except Exception as exc:
                 _log.warning("[CASCADE] candle fetch failed for %s: %s", symbol, exc)
+                hit_page_cap = False
                 break
             if df is None or df.empty:
+                hit_page_cap = False
                 break
             batch = []
             for index, row in df.iterrows():
@@ -3528,11 +3559,35 @@ class CascadeEngine:
                     )
                 )
             if not batch:
+                hit_page_cap = False
                 break
             candles.extend(batch)
             cursor = batch[-1].timestamp
             if cursor + 2 * tf_sec > now:
+                hit_page_cap = False
                 break
+        if hit_page_cap:
+            # Say it, loudly. A truncated replay is not a smaller replay: the
+            # geometry machine reads structure out of the candles it is given,
+            # so a window that stops early produces confident, wrong fibs with
+            # nothing on screen to suggest anything was missing.
+            behind_sec = max(now - cursor, 0)
+            _log.error(
+                "[CASCADE] candle replay for %s %s TRUNCATED after %d pages — still %.1f hours behind",
+                symbol,
+                timeframe,
+                MAX_FETCH_PAGES,
+                behind_sec / 3600.0,
+            )
+            self._alert(
+                "Cascade candle replay truncated",
+                f"{symbol} {timeframe} ran out of fetch pages {behind_sec / 3600.0:,.1f} hours short of now.\n"
+                f"Geometry built from this window is INCOMPLETE — do not trust fibs or trendlines "
+                f"on this campaign until it has caught up.",
+                level="error",
+                dedupe_sec=900,
+                dedupe_key=f"replay-truncated|{symbol}|{timeframe}",
+            )
         return candles
 
     async def _candle_step(self, campaign: Campaign) -> bool:
