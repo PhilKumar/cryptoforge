@@ -33,8 +33,34 @@
     pointer-events: none; z-index: -1;
   }
 
+  /* ── Blurred landing hero behind the unlock card ── */
+  .unlock-backdrop {
+    position: fixed; inset: 0; z-index: -2; overflow: hidden;
+    pointer-events: none;
+  }
+  .unlock-backdrop img {
+    width: 100%; height: 100%; object-fit: cover; object-position: center 45%;
+    /* Scaled up because a blur samples past the edges and would otherwise
+       leave a soft grey frame around the viewport. */
+    transform: scale(1.12);
+    filter: blur(20px) saturate(1.12) brightness(0.66);
+  }
+  .unlock-backdrop::after {
+    content: ''; position: absolute; inset: 0;
+    /* Darkest directly behind the card, so the PIN stays legible while the
+       painting still reads as the front door around it. */
+    background:
+      radial-gradient(46% 44% at 50% 50%, rgba(5,6,10,0.58) 0%, rgba(5,6,10,0.3) 60%, transparent 100%),
+      linear-gradient(180deg, rgba(5,6,10,0.42), rgba(5,6,10,0.16) 45%, rgba(5,6,10,0.55));
+  }
+  [data-theme="light"] .unlock-backdrop img { filter: blur(26px) saturate(1.02) brightness(0.92); }
+  [data-theme="light"] .unlock-backdrop::after {
+    background:
+      radial-gradient(58% 50% at 50% 50%, rgba(245,248,252,0.72) 0%, rgba(245,248,252,0.55) 55%, rgba(245,248,252,0.4) 100%);
+  }
+
   .unlock-card {
-    background: radial-gradient(circle at top right, rgba(34,211,238,0.13), transparent 34%), linear-gradient(160deg, rgba(14,25,45,0.96), rgba(7,14,28,0.94), rgba(4,10,22,0.96));
+    background: radial-gradient(circle at top right, rgba(34,211,238,0.13), transparent 34%), linear-gradient(160deg, rgba(14,25,45,0.82), rgba(7,14,28,0.78), rgba(4,10,22,0.84));
     border: 1px solid rgba(148,178,211,0.13);
     border-top: 1px solid rgba(255,255,255,0.15);
     border-radius: 28px;
@@ -293,7 +319,7 @@ body::before {
   background-size: auto, auto, 52px 52px, 52px 52px;
 }
 .unlock-card {
-  background: radial-gradient(circle at top right, rgba(var(--tint-primary-rgb),0.14), transparent 34%), linear-gradient(160deg, rgba(14,25,45,0.96), rgba(7,14,28,0.94), rgba(4,10,22,0.96));
+  background: radial-gradient(circle at top right, rgba(var(--tint-primary-rgb),0.14), transparent 34%), linear-gradient(160deg, rgba(14,25,45,0.82), rgba(7,14,28,0.78), rgba(4,10,22,0.84));
   border-color: rgba(var(--tint-primary-rgb),0.18);
   box-shadow: 0 0 1px rgba(255,255,255,0.1), 0 0 70px rgba(var(--tint-primary-rgb),0.09), 0 30px 80px rgba(0,0,0,0.5);
 }
