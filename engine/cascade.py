@@ -377,6 +377,24 @@ ACTIVE_STATES = {"WAITING_FIRST_DEPTH", "TRENDLINE_ACTIVE"}
 # closed 5m candles confirm the reset.  It remains a running campaign during
 # that short window so its capital stays reserved and a live TP can be watched.
 MOTHER_BREAK_PENDING = "MOTHER_BREAK_PENDING"
+# "A break is a break right even if it is a 1m candle" — Phil, 2026-08-01.
+# EVERY campaign watches 1m for the first wick above its mother high, whatever
+# timeframe it draws structure on. Before this a 1D campaign only noticed when
+# its own daily bar closed, so it could spend a whole day trading a mother that
+# was already gone — the one deferred item that was actually costing money.
+MOTHER_BREAK_WATCH_TIMEFRAME = "1m"
+# How far back the 1m watcher will look when it starts cold (fresh campaign with
+# an older mother, or a restart after an outage). Unbounded, a 90-day mother
+# would ask for 130k one-minute bars. A day is two pages and still catches a
+# break that happened while the engine was down, which is the case that matters.
+MOTHER_WATCH_MAX_LOOKBACK_SEC = 86400
+# A 1m bar is far too narrow to anchor the successor: its high-to-low range is a
+# fraction of the structure a mother is supposed to describe. So a 1m break
+# FREEZES the campaign at once — that is the part that saves money — and then
+# waits three closed 5m candles, fifteen minutes, the same window a 5m-detected
+# break already gets. The highest of those three becomes the next mother and the
+# 1m candle that did the breaking is never itself a candidate.
+MOTHER_BREAK_CONFIRM_5M_CANDLES = 3
 RUNNING_STATES = ACTIVE_STATES | {MOTHER_BREAK_PENDING}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
 # Endings that roll straight into a fresh campaign. A deliberate stop does not.
@@ -3595,17 +3613,13 @@ class CascadeEngine:
             return await self._mother_break_confirmation_step(campaign)
         if campaign.state not in ACTIVE_STATES:
             return False
-        # The structure timeframe can climb, but a mother break is always
-        # judged by closed 5m candles.  Without this watcher a campaign that
-        # reached 1H would reset on an hour bar and lose the precise 5m candle
-        # the user selected as the new mother.
-        if (
-            campaign.timeframe != BASE_TIMEFRAME
-            and campaign.timeframe in ESCALATION_LADDER
-            and campaign.escalates
-            and campaign.start_timeframe == BASE_TIMEFRAME
-            and await self._mother_break_watch_step(campaign)
-        ):
+        # A mother break is judged on 1m, for every campaign, however coarse the
+        # timeframe it draws structure on. This used to be gated to campaigns
+        # that had escalated up from 5m, which left a campaign STARTED on 1D or
+        # 1W with no fast watcher at all — exactly the ones whose own bar takes
+        # longest to close. Only a real break returns early; merely advancing
+        # the watch cursor must not starve the campaign's own stepping.
+        if await self._mother_break_watch_step(campaign):
             return True
         now = int(time.time())
         tf = campaign.timeframe
@@ -3640,17 +3654,37 @@ class CascadeEngine:
         return changed
 
     async def _mother_break_watch_step(self, campaign: Campaign) -> bool:
-        """Detect the first closed 5m wick above an escalated campaign's MC."""
-        after_ts = max(int(campaign.mother_watch_last_5m_ts or 0), int(campaign.mother_timestamp or 0))
-        candles = await self._fetch_closed_candles(campaign.symbol, after_ts, BASE_TIMEFRAME)
+        """Detect the first closed 1m wick above this campaign's mother high.
+
+        True ONLY when a break was found. Returning True merely for having seen
+        candles would make the caller skip the campaign's own timeframe step on
+        every tick that advanced the cursor.
+
+        The field is still named ..._5m_ts because it is a live campaign's
+        serialized state and renaming it mid-flight would strand every restored
+        snapshot. It is the watch cursor, in the watch timeframe.
+        """
+        now = int(time.time())
+        watch_sec = timeframe_seconds(MOTHER_BREAK_WATCH_TIMEFRAME)
+        cursor = max(int(campaign.mother_watch_last_5m_ts or 0), int(campaign.mother_timestamp or 0))
+        # Cold start on an older mother would otherwise ask for months of 1m
+        # bars. Anything before this window was already judged by the
+        # campaign's own candles, which run from the mother forward.
+        cursor = max(cursor, now - MOTHER_WATCH_MAX_LOOKBACK_SEC)
+        # The loop ticks every five seconds; a 1m bar closes once a minute.
+        # Fetch only when one we have not seen has actually closed.
+        newest_closed = (now // watch_sec) * watch_sec - watch_sec
+        if cursor >= newest_closed:
+            return False
+        candles = await self._fetch_closed_candles(campaign.symbol, cursor, MOTHER_BREAK_WATCH_TIMEFRAME)
         for candle in candles:
-            if candle.timestamp <= after_ts:
+            if candle.timestamp <= cursor:
                 continue
             campaign.mother_watch_last_5m_ts = candle.timestamp
             if candle.high > campaign.mother_high:
                 self._mother_broken(campaign, candle)
                 return True
-        return bool(candles)
+        return False
 
     async def _mother_break_confirmation_step(self, campaign: Campaign) -> bool:
         """Count the two 5m candles after a break while the parent is frozen.
@@ -4658,21 +4692,43 @@ class CascadeEngine:
         campaign.mother_broken_above = True
         campaign.state = MOTHER_BREAK_PENDING
         campaign.mother_break_candle = snapshot
-        campaign.mother_break_top_candle = dict(snapshot)
-        campaign.mother_break_wait_remaining = 2
-        campaign.mother_break_last_5m_ts = candle.timestamp
-        self._log_event(
-            campaign,
-            "warn",
-            f"Mother candle high {campaign.mother_high:g} broken above — campaign frozen. "
-            f"Two further 5m candles close before the restart; the highest of the three becomes the next "
-            f"mother. Leading so far: high {candle.high:,.2f} / low {candle.low:,.2f}. "
-            + (
-                "Resting TP order left on the exchange to capture the exit."
-                if campaign.mode == "live" and campaign.filled_base_qty > 0
-                else ""
-            ),
+        tail = (
+            "Resting TP order left on the exchange to capture the exit."
+            if campaign.mode == "live" and campaign.filled_base_qty > 0
+            else ""
         )
+        broke_on_sub_5m = timeframe_seconds(candle.timeframe or BASE_TIMEFRAME) < FIVE_MIN_SEC
+        if broke_on_sub_5m:
+            # The 1m bar is a detector, not a mother. Leave the candidate EMPTY
+            # so the first 5m candle takes it outright — seeding the 1m snapshot
+            # here would leave it standing whenever the containing 5m candle
+            # merely equals its high rather than exceeding it, which is exactly
+            # the case where the 1m bar made the bucket's high.
+            bucket = candle.timestamp - (candle.timestamp % FIVE_MIN_SEC)
+            campaign.mother_break_top_candle = None
+            campaign.mother_break_wait_remaining = MOTHER_BREAK_CONFIRM_5M_CANDLES
+            # One tick under the bucket, so the 5m candle CONTAINING the break
+            # is the first candidate rather than being skipped as already seen.
+            campaign.mother_break_last_5m_ts = bucket - 1
+            self._log_event(
+                campaign,
+                "warn",
+                f"Mother candle high {campaign.mother_high:g} broken above by a "
+                f"{candle.timeframe or MOTHER_BREAK_WATCH_TIMEFRAME} candle at {candle.high:,.2f} — campaign "
+                f"frozen now. Three closed 5m candles (15 minutes) settle the restart; the highest of them "
+                f"becomes the next mother. " + tail,
+            )
+        else:
+            campaign.mother_break_top_candle = dict(snapshot)
+            campaign.mother_break_wait_remaining = 2
+            campaign.mother_break_last_5m_ts = candle.timestamp
+            self._log_event(
+                campaign,
+                "warn",
+                f"Mother candle high {campaign.mother_high:g} broken above — campaign frozen. "
+                f"Two further 5m candles close before the restart; the highest of the three becomes the next "
+                f"mother. Leading so far: high {candle.high:,.2f} / low {candle.low:,.2f}. " + tail,
+            )
         if campaign.mode == "live":
             self._schedule(self._cancel_all_live_orders(campaign, include_tp=False))
 
@@ -4680,14 +4736,23 @@ class CascadeEngine:
         """Use a closed post-break 5m candle to advance the frozen reset."""
         source = campaign.mother_break_candle or {}
         source_ts = int(source.get("timestamp") or 0)
-        if campaign.state != MOTHER_BREAK_PENDING or candle.timestamp <= source_ts:
+        if campaign.state != MOTHER_BREAK_PENDING:
+            return
+        # A break detected on 1m sits INSIDE the first 5m candidate, so that
+        # candidate's timestamp is legitimately at or before the breaking bar's.
+        # Only a same-or-coarser break owns its own timestamp and must not count
+        # itself twice. The fetch cursor is what actually prevents re-processing.
+        # The break snapshot already carries its timeframe, so this needs no new
+        # field on a campaign whose shape is serialized into live state.
+        broke_on_sub_5m = timeframe_seconds(str(source.get("timeframe") or BASE_TIMEFRAME)) < FIVE_MIN_SEC
+        if not broke_on_sub_5m and candle.timestamp <= source_ts:
             return
         # Every candle in the window is a candidate for the next mother, so the
         # comparison happens on the way through — by the time the countdown
         # reaches zero these candles are gone from the step and cannot be
         # revisited.
-        top = campaign.mother_break_top_candle or dict(source)
-        if candle.high > _coerce_float(top.get("high")):
+        top = campaign.mother_break_top_candle
+        if not top or candle.high > _coerce_float(top.get("high")):
             campaign.mother_break_top_candle = {
                 "timestamp": candle.timestamp,
                 "open": candle.open,

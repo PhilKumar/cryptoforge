@@ -964,33 +964,101 @@ class CascadeAutoRestartTests(unittest.TestCase):
 
 
 class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
-    """The MC remains a 5m reference after the structure climbs to 15m/1H."""
+    """A break is judged on 1m however coarse the structure timeframe is."""
 
-    async def test_an_escalated_campaign_freezes_on_the_first_5m_break(self):
-        engine = _mk_engine()
+    def _campaign(self, engine, timeframe, start_timeframe="5m", escalates=True):
         campaign = Campaign(
-            campaign_id="watch-1",
+            campaign_id=f"watch-{timeframe}",
             symbol="BTCUSDT",
             capital_usd=2000.0,
             mother_high=105.0,
             mother_low=99.0,
             mother_timestamp=0,
-            timeframe="1h",
-            start_timeframe="5m",
+            timeframe=timeframe,
+            start_timeframe=start_timeframe,
+            escalates=escalates,
             mode="paper",
         )
         engine.campaigns[campaign.campaign_id] = campaign
+        return campaign
 
-        async def _five_minute_break(symbol, since_ts, timeframe):
-            self.assertEqual(timeframe, "5m")
-            return [Candle(300, 100.0, 106.0, 99.5, 104.0, timeframe="5m")]
+    # A 1m bar three minutes old: recent enough to clear the watcher's cold-start
+    # lookback clamp, and aligned so its 5m bucket is unambiguous.
+    BREAK_TS = (int(time.time()) - 180) // 60 * 60
+    BUCKET_TS = BREAK_TS - (BREAK_TS % 300)
 
-        engine._fetch_closed_candles = _five_minute_break
+    def _breaks_on(self, timeframe, ts, high=106.0):
+        async def _fetch(symbol, since_ts, tf):
+            if tf != timeframe:
+                return []  # the campaign's own timeframe has nothing new
+            return [Candle(ts, 100.0, high, 99.5, 104.0, timeframe=timeframe)]
+
+        return _fetch
+
+    async def test_an_escalated_campaign_freezes_on_the_first_1m_break(self):
+        engine = _mk_engine()
+        campaign = self._campaign(engine, "1h")
+        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS)
+
         self.assertTrue(await engine._candle_step(campaign))
         self.assertEqual(campaign.state, "MOTHER_BREAK_PENDING")
-        self.assertEqual(campaign.mother_break_candle["timestamp"], 300)
-        self.assertEqual(campaign.mother_break_candle["high"], 106.0)
-        self.assertEqual(campaign.mother_break_candle["low"], 99.5)
+        self.assertEqual(campaign.mother_break_candle["timestamp"], self.BREAK_TS)
+        self.assertEqual(campaign.mother_break_candle["timeframe"], "1m")
+
+    async def test_a_campaign_started_on_1d_gets_the_watcher_too(self):
+        """The gate used to require escalates + start_timeframe == 5m, so a
+        campaign anchored deliberately to a daily mother had no fast watcher at
+        all — and those are the ones whose own bar takes longest to close."""
+        engine = _mk_engine()
+        campaign = self._campaign(engine, "1d", start_timeframe="1d", escalates=False)
+        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS)
+
+        self.assertTrue(await engine._candle_step(campaign))
+        self.assertEqual(campaign.state, "MOTHER_BREAK_PENDING")
+
+    async def test_the_1m_bar_never_becomes_the_successors_mother(self):
+        """Phil, 2026-08-01: freeze on the 1m break, then wait 15 minutes and
+        take the highest of the three 5m candles, same as today."""
+        engine = _mk_engine()
+        campaign = self._campaign(engine, "1h")
+        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS)
+        await engine._candle_step(campaign)
+
+        self.assertIsNone(campaign.mother_break_top_candle, "the 1m bar is a detector, not a candidate")
+        self.assertEqual(campaign.mother_break_wait_remaining, cascade_module.MOTHER_BREAK_CONFIRM_5M_CANDLES)
+        # Cursor sits one tick under the containing 5m bucket, so that candle is
+        # the first candidate rather than being skipped as already seen.
+        self.assertEqual(campaign.mother_break_last_5m_ts, self.BUCKET_TS - 1)
+
+    async def test_the_containing_5m_candle_wins_even_on_an_equal_high(self):
+        """The 1m bar often IS the bucket's high. Seeding it as the leader would
+        leave it standing, because the containing candle only ties."""
+        engine = _mk_engine()
+        campaign = self._campaign(engine, "1h")
+        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS, high=106.0)
+        await engine._candle_step(campaign)
+
+        containing = Candle(self.BUCKET_TS, 100.0, 106.0, 98.0, 105.0, timeframe="5m")
+        engine._advance_mother_break_confirmation(campaign, containing)
+
+        top = campaign.mother_break_top_candle
+        self.assertEqual(top["timeframe"], "5m")
+        self.assertEqual(top["timestamp"], self.BUCKET_TS)
+        self.assertEqual(campaign.mother_break_wait_remaining, cascade_module.MOTHER_BREAK_CONFIRM_5M_CANDLES - 1)
+
+    async def test_a_5m_break_still_counts_itself_and_waits_two(self):
+        """The coarser path is untouched: the breaking candle is its own first
+        candidate and two more close behind it."""
+        engine = _mk_engine()
+        campaign = self._campaign(engine, "1h")
+        engine._mother_broken(campaign, Candle(300, 100.0, 106.0, 99.5, 104.0, timeframe="5m"))
+
+        self.assertEqual(campaign.mother_break_top_candle["timestamp"], 300)
+        self.assertEqual(campaign.mother_break_wait_remaining, 2)
+        self.assertEqual(campaign.mother_break_last_5m_ts, 300)
+        # And it must not advance its own countdown.
+        engine._advance_mother_break_confirmation(campaign, Candle(300, 100.0, 106.0, 99.5, 104.0, timeframe="5m"))
+        self.assertEqual(campaign.mother_break_wait_remaining, 2)
 
 
 class CascadeDuplicateTests(unittest.IsolatedAsyncioTestCase):
@@ -3843,7 +3911,9 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         await engine._candle_step(campaign)
         engine.stop()
         self.assertTrue(broker.candle_requests)
-        self.assertEqual({r.get("resolution") for r in broker.candle_requests}, {"4h"})
+        # 1m rides along for every campaign now — the mother-break watcher. What
+        # matters here is that the campaign's OWN candles are still fetched.
+        self.assertIn("4h", {r.get("resolution") for r in broker.candle_requests})
 
     async def test_a_slow_campaign_is_not_re_fetched_every_tick(self):
         """The step gate is two bars of the campaign's own timeframe. On 1D that
@@ -3857,7 +3927,9 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         stepped = await engine._candle_step(campaign)
         engine.stop()
         self.assertFalse(stepped)
-        self.assertEqual(broker.candle_requests, [], "no fetch is due yet on 1D")
+        # The 1m mother-break watcher is allowed to look; the campaign's own
+        # daily klines are what must not be re-paged every five seconds.
+        self.assertNotIn("1d", {r.get("resolution") for r in broker.candle_requests}, "no 1D fetch is due yet")
 
     def test_the_chart_never_offers_a_finer_timeframe_than_the_engine(self):
         """A 4H campaign has no 5m history behind it, so 5m is not a view it
