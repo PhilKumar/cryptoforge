@@ -385,9 +385,13 @@ MOTHER_BREAK_PENDING = "MOTHER_BREAK_PENDING"
 MOTHER_BREAK_WATCH_TIMEFRAME = "1m"
 # How far back the 1m watcher will look when it starts cold (fresh campaign with
 # an older mother, or a restart after an outage). Unbounded, a 90-day mother
-# would ask for 130k one-minute bars. A day is two pages and still catches a
-# break that happened while the engine was down, which is the case that matters.
-MOTHER_WATCH_MAX_LOOKBACK_SEC = 86400
+# would ask for 130k one-minute bars.
+#
+# Twelve hours, not a day, and the number is load-bearing: the watcher reads ONE
+# page of the newest klines, and a page is 1000 bars — 16h40m of 1m candles. The
+# lookback has to stay comfortably inside that or the cursor falls off the back
+# of the page and the watcher goes blind without saying so.
+MOTHER_WATCH_MAX_LOOKBACK_SEC = 12 * 3600
 # A 1m bar is far too narrow to anchor the successor: its high-to-low range is a
 # fraction of the structure a mother is supposed to describe. So a 1m break
 # FREEZES the campaign at once — that is the part that saves money — and then
@@ -3653,6 +3657,49 @@ class CascadeEngine:
                 break
         return changed
 
+    async def _recent_closed_candles(self, symbol: str, timeframe: str, after_ts: int) -> List[Candle]:
+        """The newest page of closed candles, filtered to those after `after_ts`.
+
+        Deliberately NOT _fetch_closed_candles. That one pages from a DATE
+        string, and one 1000-bar page of 1m candles only reaches 16h40m past
+        midnight — so any cursor later in the UTC day filters the entire page
+        away, the batch comes back empty, and the pager treats "empty" as "no
+        more data" and stops. The 1m mother-break watcher went blind for the
+        back seven hours of every UTC day, silently, and stayed stuck there.
+
+        It never showed on 5m because a page of 5m bars reaches 83 hours, which
+        is why the watcher survived being 5m-only for so long.
+
+        A single newest page is the right shape for a watcher anyway: it only
+        ever cares about bars close to now, and MOTHER_WATCH_MAX_LOOKBACK_SEC is
+        kept well inside one page so the cursor is always covered.
+        """
+        now = int(time.time())
+        tf_sec = timeframe_seconds(timeframe)
+        try:
+            df = await self.broker.async_get_candles(symbol, resolution=timeframe)
+        except Exception as exc:
+            _log.warning("[CASCADE] %s candle fetch failed for %s: %s", timeframe, symbol, exc)
+            return []
+        if df is None or getattr(df, "empty", True):
+            return []
+        out: List[Candle] = []
+        for index, row in df.iterrows():
+            ts = int(index.timestamp())
+            if ts <= after_ts or ts + tf_sec > now:
+                continue
+            out.append(
+                Candle(
+                    timestamp=ts,
+                    open=_coerce_float(row.get("open")),
+                    high=_coerce_float(row.get("high")),
+                    low=_coerce_float(row.get("low")),
+                    close=_coerce_float(row.get("close")),
+                    timeframe=timeframe,
+                )
+            )
+        return out
+
     async def _mother_break_watch_step(self, campaign: Campaign) -> bool:
         """Detect the first closed 1m wick above this campaign's mother high.
 
@@ -3676,7 +3723,7 @@ class CascadeEngine:
         newest_closed = (now // watch_sec) * watch_sec - watch_sec
         if cursor >= newest_closed:
             return False
-        candles = await self._fetch_closed_candles(campaign.symbol, cursor, MOTHER_BREAK_WATCH_TIMEFRAME)
+        candles = await self._recent_closed_candles(campaign.symbol, MOTHER_BREAK_WATCH_TIMEFRAME, cursor)
         for candle in candles:
             if candle.timestamp <= cursor:
                 continue

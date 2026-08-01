@@ -29,3 +29,4 @@ node_modules/
 runs.json
 strategies.json
 tools/.backtest_cache/
+tools/.paper_prove_cache/

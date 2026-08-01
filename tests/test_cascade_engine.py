@@ -987,18 +987,26 @@ class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
     BREAK_TS = (int(time.time()) - 180) // 60 * 60
     BUCKET_TS = BREAK_TS - (BREAK_TS % 300)
 
-    def _breaks_on(self, timeframe, ts, high=106.0):
-        async def _fetch(symbol, since_ts, tf):
+    def _arm(self, engine, timeframe, ts, high=106.0):
+        """Stub both fetch seams: the watcher reads a single newest page via
+        _recent_closed_candles, the campaign's own stepping pages via
+        _fetch_closed_candles."""
+
+        async def _recent(symbol, tf, after_ts):
             if tf != timeframe:
-                return []  # the campaign's own timeframe has nothing new
+                return []
             return [Candle(ts, 100.0, high, 99.5, 104.0, timeframe=timeframe)]
 
-        return _fetch
+        async def _paged(symbol, since_ts, tf=None):
+            return []
+
+        engine._recent_closed_candles = _recent
+        engine._fetch_closed_candles = _paged
 
     async def test_an_escalated_campaign_freezes_on_the_first_1m_break(self):
         engine = _mk_engine()
         campaign = self._campaign(engine, "1h")
-        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS)
+        self._arm(engine, "1m", self.BREAK_TS)
 
         self.assertTrue(await engine._candle_step(campaign))
         self.assertEqual(campaign.state, "MOTHER_BREAK_PENDING")
@@ -1011,7 +1019,7 @@ class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
         all — and those are the ones whose own bar takes longest to close."""
         engine = _mk_engine()
         campaign = self._campaign(engine, "1d", start_timeframe="1d", escalates=False)
-        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS)
+        self._arm(engine, "1m", self.BREAK_TS)
 
         self.assertTrue(await engine._candle_step(campaign))
         self.assertEqual(campaign.state, "MOTHER_BREAK_PENDING")
@@ -1021,7 +1029,7 @@ class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
         take the highest of the three 5m candles, same as today."""
         engine = _mk_engine()
         campaign = self._campaign(engine, "1h")
-        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS)
+        self._arm(engine, "1m", self.BREAK_TS)
         await engine._candle_step(campaign)
 
         self.assertIsNone(campaign.mother_break_top_candle, "the 1m bar is a detector, not a candidate")
@@ -1035,7 +1043,7 @@ class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
         leave it standing, because the containing candle only ties."""
         engine = _mk_engine()
         campaign = self._campaign(engine, "1h")
-        engine._fetch_closed_candles = self._breaks_on("1m", self.BREAK_TS, high=106.0)
+        self._arm(engine, "1m", self.BREAK_TS, high=106.0)
         await engine._candle_step(campaign)
 
         containing = Candle(self.BUCKET_TS, 100.0, 106.0, 98.0, 105.0, timeframe="5m")
@@ -1045,6 +1053,41 @@ class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(top["timeframe"], "5m")
         self.assertEqual(top["timestamp"], self.BUCKET_TS)
         self.assertEqual(campaign.mother_break_wait_remaining, cascade_module.MOTHER_BREAK_CONFIRM_5M_CANDLES - 1)
+
+    async def test_the_watcher_reads_the_newest_page_not_a_dated_one(self):
+        """Caught by tools/cascade_paper_prove.py, not by a unit test.
+
+        _fetch_closed_candles pages from a DATE, and one 1000-bar page of 1m
+        candles reaches only 16h40m past midnight. Any cursor later in the UTC
+        day filtered the whole page away, the pager read "empty" as "no more
+        data", and the watcher went blind for the back seven hours of every day
+        — silently. It never showed on 5m because a page of those reaches 83
+        hours.
+        """
+        now = int(time.time())
+        broker = PagingCandleBroker(first_ts=now - 3 * 86400, last_ts=now, tf_sec=60)
+        engine = _mk_engine(broker)
+
+        out = await engine._recent_closed_candles("BTCUSDT", "1m", now - 3600)
+
+        self.assertTrue(out, "the newest page must reach the last hour")
+        self.assertTrue(all(c.timeframe == "1m" for c in out))
+        self.assertTrue(all(c.timestamp > now - 3600 for c in out))
+        self.assertEqual(
+            [r.get("start") for r in broker.candle_requests],
+            [None],
+            "a dated start is what put the cursor off the back of the page",
+        )
+        engine.stop()
+
+    async def test_the_watch_lookback_stays_inside_one_page(self):
+        """The clamp and the page size are coupled: if the lookback ever exceeds
+        what one page of watch-timeframe candles covers, the cursor falls off
+        the back of it and the watcher silently sees nothing."""
+        page_span = cascade_module.KLINE_PAGE_BARS * cascade_module.timeframe_seconds(
+            cascade_module.MOTHER_BREAK_WATCH_TIMEFRAME
+        )
+        self.assertLess(cascade_module.MOTHER_WATCH_MAX_LOOKBACK_SEC, page_span)
 
     async def test_a_5m_break_still_counts_itself_and_waits_two(self):
         """The coarser path is untouched: the breaking candle is its own first
