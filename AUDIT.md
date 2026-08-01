@@ -67,6 +67,10 @@ output and no behaviour change.
 
 ### 1.2 Cascade P&L ignores exchange fees — every other engine models them
 
+> **Closed 2026-08-01.** Fees are modelled now — see item 12 in §5 for what was
+> done and for the break-even rule it exposed. The description below is kept as
+> the record of what was wrong.
+
 `engine/backtest.py:388` takes `fee_pct` per side and subtracts entry and exit
 fees from every trade (`line 667`). `engine/paper_trading.py:310` does the same.
 
@@ -418,7 +422,7 @@ change:
 | 9 | `/health` 404 + stale port (§2.5) | **fixed** — real liveness route; port note corrected |
 | 10 | Closed-campaign cap 50 vs 100 (§2.1) | **fixed** — one `CLOSED_HISTORY_LIMIT` |
 | 11 | Restart-safety coverage | **added** — 6 tests, mutation-checked |
-| 12 | Fee accounting (§1.2) | **open** — deliberate decision, see below |
+| 12 | Fee accounting (§1.2) | **fixed** 2026-08-01 — `FEE_PCT_PER_SIDE`, both sides, gross kept alongside |
 | 13 | Residual attribution (§1.3) | **open** — needs care |
 | 14 | `visibilitychange` gating (§2.6) | **open** — steady background load only |
 
@@ -426,12 +430,23 @@ Everything marked fixed is behaviour-preserving except the two security
 additions, which are opt-in: with `CRYPTOFORGE_TOTP_SECRET` unset the login flow
 is byte-for-byte what it was.
 
-**Item 12 is the one still worth a decision.** It changes displayed numbers on
-purpose, so it should not be slipped in quietly — most likely a configurable
-`fee_pct` defaulting to your real Binance rate, with the gross figure kept
-alongside so historical rounds stay comparable. Until then, read every Cascade
-P&L as gross: on a ~$22 round at 0.1%/side the true figure is about $0.044
-lower, which on SOL #10's +$0.08 is more than half of it.
+**Item 12 was taken 2026-08-01 and is closed.** `FEE_PCT_PER_SIDE = 0.1`
+(engine/cascade.py) is charged on both sides at `_close_round`; `Round.pnl` is
+now NET, with `pnl_gross` and `fees_usd` stored beside it so a round closed
+before this stays comparable — those restore with `fees_usd = 0.0` and the two
+P&L figures equal, which is exactly what was true of them. Rounds are never
+re-priced at today's rate; a stored round is a record of what happened. Set the
+constant to 0.075 if the BNB fee discount is on.
+
+**What it surfaced.** The take-profit does not account for the fee. TP sits at
+`TP_FIB_LEVEL` (0.25) of the way back from the average entry to the mother high,
+so the gross gain is `0.25 x fall`, while the round trip costs about `2 x rate`.
+They cross at a fall of `8 x rate` — **0.80%** at 0.1% a side, 0.60% at 0.075%.
+A round whose average entry is nearer the mother high than that **closes at
+target and still loses money**. Nothing in the engine prevents it; only sizing
+does. Pinned by `CascadeFeeAccountingTests` so it cannot drift silently.
+Changing the target to clear its own fee is a strategy decision and was NOT
+made here.
 
 ---
 

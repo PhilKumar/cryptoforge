@@ -108,6 +108,20 @@ STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
 # trigger. A live cross lands within a tick or two (well under 0.1% on the
 # moves seen); the late-start bug that motivated this was 1.39% above.
 MAX_STOP_RAISE_PCT = 0.005
+# Exchange commission, percent per side, charged on both the buy and the sell.
+#
+# Every other engine here models fees (backtest.py and paper_trading.py both
+# take a `fee_pct`); this one — the only one placing real orders — did not, so
+# every round, campaign and realised total on screen was gross while the
+# backtest it was being compared against was net. On the small rungs this
+# ladder trades that is not a rounding detail: a round-trip on ~$22 costs about
+# $0.044, which was more than half of one real SOL round's reported profit.
+#
+# 0.1% is Binance spot standard with no discount — the conservative choice,
+# since over-stating the fee under-states the profit. With "pay fees with BNB"
+# switched on the true rate is 0.075%; the Journal's fee tile reports which is
+# actually being charged, and this constant is the one place to change it.
+FEE_PCT_PER_SIDE = 0.1
 DEFAULT_TICK_SIZE = 0.01
 # Fallback LOT_SIZE step when the exchange filter is unavailable. Shared by
 # _floor_to_step and the TP quantity-drift tolerance so the granularity used
@@ -810,8 +824,15 @@ class Round:
     quantity: float
     invested_usd: float
     exit_price: float
+    # NET of exchange commission — the money that actually landed. `pnl_gross`
+    # keeps the old price-difference-only figure alongside it so a round closed
+    # before fees were modelled stays comparable with one closed after: rounds
+    # written by the older code restore with `fees_usd = 0.0` and the two P&L
+    # numbers equal, which is exactly what was true of them.
     pnl: float
     closed_at: str = ""
+    fees_usd: float = 0.0
+    pnl_gross: float = 0.0
     # Closing a round flattens the position and clears campaign.all_fills, so
     # the individual buys that made up the average are gone the moment the TP
     # lands. Snapshot them here: an average entry alone cannot tell you when
@@ -834,6 +855,11 @@ class Round:
             exit_price=_coerce_float(data.get("exit_price")),
             pnl=_coerce_float(data.get("pnl")),
             closed_at=data.get("closed_at") or "",
+            fees_usd=_coerce_float(data.get("fees_usd")),
+            # A pre-fee round has no gross field of its own; its `pnl` WAS the
+            # gross figure, so that is what it restores as. Never recomputed
+            # from today's rate — a stored round is a record of what happened.
+            pnl_gross=_coerce_float(data.get("pnl_gross")) or _coerce_float(data.get("pnl")),
             fills=[dict(row) for row in (data.get("fills") or []) if isinstance(row, dict)],
             opened_ts=int(data.get("opened_ts") or 0),
             closed_ts=int(data.get("closed_ts") or 0),
@@ -1140,7 +1166,14 @@ class Campaign:
 
     @property
     def realized_pnl_total(self) -> float:
+        """Net of commission. Rounds closed before fees were modelled carry
+        `fees_usd = 0.0` and contribute their old gross figure, so this total
+        can straddle both — which is honest about the rounds it is made of."""
         return sum(r.pnl for r in self.rounds)
+
+    @property
+    def fees_total(self) -> float:
+        return sum(r.fees_usd for r in self.rounds)
 
     def leg_open_usd(self, leg_id: int) -> float:
         """Notional from this leg that is still held (not yet closed at TP)."""
@@ -1394,6 +1427,25 @@ def recompute_avg_entry_price(campaign: Campaign) -> Optional[float]:
     campaign.avg_entry_price = (total_cost / total_qty) if total_qty > 0 else None
     campaign.filled_base_qty = total_qty
     return campaign.avg_entry_price
+
+
+def round_trip_fee(cost_basis_usd: float, proceeds_usd: float) -> float:
+    """
+    Commission on both sides of one round: what was paid to get in, plus what
+    was paid to get out.
+
+    The buy side is charged on the COST BASIS of the quantity actually sold
+    (`avg_entry * qty`), not on everything `all_fills` bought. That keeps the
+    fee symmetric with the gross P&L, which is also measured against the
+    average entry — otherwise a LOT_SIZE residual carried between rounds would
+    put the buy notional and the fee on different quantities and land the
+    mismatch in the fee instead of leaving it where AUDIT §1.3 already tracks
+    it.
+    """
+    rate = FEE_PCT_PER_SIDE / 100.0
+    if rate <= 0:
+        return 0.0
+    return round((max(cost_basis_usd, 0.0) + max(proceeds_usd, 0.0)) * rate, 8)
 
 
 def compute_tp_price(campaign: Campaign) -> Optional[float]:
@@ -1867,6 +1919,7 @@ class CascadeEngine:
                 "resting_usd": 0.0,
                 "pending_usd": 0.0,
                 "realized_pnl_usd": 0.0,
+                "fees_usd": 0.0,
                 "rounds_closed": 0,
                 "timeframes": [],
                 "budget_usd": None,
@@ -1885,6 +1938,7 @@ class CascadeEngine:
             stack["resting_usd"] += campaign.resting_usd
             stack["pending_usd"] += campaign.pending_usd
             stack["realized_pnl_usd"] += campaign.realized_pnl_total
+            stack["fees_usd"] += campaign.fees_total
             stack["rounds_closed"] += len(campaign.rounds)
             if campaign.timeframe not in stack["timeframes"]:
                 stack["timeframes"].append(campaign.timeframe)
@@ -1895,7 +1949,14 @@ class CascadeEngine:
             stack["budget_usd"] = budget
             stack["available_usd"] = round(budget - stack["committed_usd"], 2)
         for stack in stacks.values():
-            for key in ("committed_usd", "in_position_usd", "resting_usd", "pending_usd", "realized_pnl_usd"):
+            for key in (
+                "committed_usd",
+                "in_position_usd",
+                "resting_usd",
+                "pending_usd",
+                "realized_pnl_usd",
+                "fees_usd",
+            ):
                 stack[key] = round(stack[key], 2)
         return dict(sorted(stacks.items()))
 
@@ -2547,6 +2608,7 @@ class CascadeEngine:
             )
             payload["rounds_closed"] = len(campaign.rounds)
             payload["realized_pnl_total"] = round(campaign.realized_pnl_total, 2)
+            payload["fees_total"] = round(campaign.fees_total, 4)
             payload["carry_forward_usd"] = round(campaign.carry_forward_usd, 2)
             payload["stale_model"] = campaign.model_version != MODEL_VERSION
             payload["model_version"] = campaign.model_version
@@ -4619,6 +4681,8 @@ class CascadeEngine:
         # and the UI reads every cascade timestamp as a candle in IST.
         seen = self._candles.get(campaign.campaign_id) or []
         closed_ts = int(seen[-1].timestamp) if seen else 0
+        gross = round((exit_price - avg) * qty, 8)
+        fees = round_trip_fee(avg * qty, exit_price * qty)
         rnd = Round(
             round_id=len(campaign.rounds) + 1,
             leg_id=leg.leg_id if leg else 0,
@@ -4626,8 +4690,10 @@ class CascadeEngine:
             quantity=qty,
             invested_usd=round(invested, 8),
             exit_price=exit_price,
-            pnl=round((exit_price - avg) * qty, 8),
+            pnl=round(gross - fees, 8),
             closed_at=_ist_now_str(),
+            fees_usd=fees,
+            pnl_gross=gross,
             fills=fill_log,
             opened_ts=int(ordered_fills[0].timestamp or 0) if ordered_fills else 0,
             closed_ts=closed_ts,
@@ -4643,7 +4709,8 @@ class CascadeEngine:
             f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()}) — {campaign.mc_kind.upper()} MC\n"
             f"Round {rnd.round_id} closed at {exit_price:,.2f}\n"
             f"Average entry: {avg:,.2f}  ·  Qty: {qty:g}\n"
-            f"P&L: {'+' if rnd.pnl >= 0 else ''}${rnd.pnl:,.2f}\n\n"
+            f"P&L: {'+' if rnd.pnl >= 0 else ''}${rnd.pnl:,.2f} "
+            f"(${rnd.pnl_gross:,.2f} less ${rnd.fees_usd:,.2f} fees)\n\n"
             f"Campaign realised so far: ${campaign.realized_pnl_total:,.2f}. "
             f"The campaign keeps running — only a mother break or a stop ends it.",
             level="info",
@@ -4683,7 +4750,8 @@ class CascadeEngine:
             campaign,
             "round",
             f"Round {rnd.round_id} closed at TP {exit_price:,.2f} — sold {qty:.8f} "
-            f"(avg entry {avg:,.2f}), PnL ${rnd.pnl:,.2f}. ${invested:,.2f} principal "
+            f"(avg entry {avg:,.2f}), PnL ${rnd.pnl:,.2f} net of ${rnd.fees_usd:,.2f} "
+            f"fees at {FEE_PCT_PER_SIDE}%/side. ${invested:,.2f} principal "
             f"returned to the pool; campaign continues until the mother high breaks.",
         )
 

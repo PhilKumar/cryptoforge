@@ -353,7 +353,15 @@ class CascadeSwingModelTests(unittest.TestCase):
 
         self.engine._close_round(self.campaign, self.campaign.tp_price)
         self.assertEqual(len(self.campaign.rounds), 1)
-        self.assertGreater(self.campaign.rounds[0].pnl, 0.0)
+        # Gross, not net: this rung is small and its target is close, so the
+        # commission eats the whole gain — see CascadeFeeAccountingTests for the
+        # rule that governs when a TP clears its own fees. What this test is
+        # about is the principal, which comes back whole either way.
+        self.assertGreater(self.campaign.rounds[0].pnl_gross, 0.0)
+        # Commission comes out of the round; the principal returned is untouched
+        # by it, which is why spent_usd still lands exactly on zero.
+        self.assertGreater(self.campaign.rounds[0].fees_usd, 0.0)
+        self.assertLess(self.campaign.rounds[0].pnl, self.campaign.rounds[0].pnl_gross)
         self.assertAlmostEqual(self.campaign.spent_usd, 0.0)  # principal is back
 
         # The principal is back in the pool and the levels still waiting cover
@@ -1745,8 +1753,12 @@ class CascadeLiveSyncTests(unittest.IsolatedAsyncioTestCase):
         # The campaign lives on — only a mother-high breach ends it.
         self.assertEqual(self.campaign.state, "TRENDLINE_ACTIVE")
         self.assertEqual(len(self.campaign.rounds), 1)
-        self.assertAlmostEqual(self.campaign.rounds[0].pnl, (99.0 - 97.0) * qty_before, places=6)
-        self.assertAlmostEqual(self.campaign.realized_pnl_total, (99.0 - 97.0) * qty_before, places=6)
+        gross = (99.0 - 97.0) * qty_before
+        fees = (97.0 * qty_before + 99.0 * qty_before) * cascade_module.FEE_PCT_PER_SIDE / 100
+        self.assertAlmostEqual(self.campaign.rounds[0].pnl_gross, gross, places=6)
+        self.assertAlmostEqual(self.campaign.rounds[0].fees_usd, fees, places=6)
+        self.assertAlmostEqual(self.campaign.rounds[0].pnl, gross - fees, places=6)
+        self.assertAlmostEqual(self.campaign.realized_pnl_total, gross - fees, places=6)
         # Position is flat, so the principal is back in available capital.
         self.assertEqual(self.campaign.filled_base_qty, 0.0)
         self.assertAlmostEqual(self.campaign.spent_usd, 0.0)
@@ -3055,7 +3067,8 @@ class CascadeLotSizeResidueTests(unittest.IsolatedAsyncioTestCase):
 
         rnd = campaign.rounds[0]
         expected = round((rnd.exit_price - 65844.03) * 0.00011, 8)
-        self.assertAlmostEqual(rnd.pnl, expected, places=8)
+        self.assertAlmostEqual(rnd.pnl_gross, expected, places=8)
+        self.assertAlmostEqual(rnd.pnl, expected - rnd.fees_usd, places=8)
         self.assertLess(rnd.quantity, 0.00011542, "booked the bought quantity, not the sold one")
 
     async def test_residue_clears_once_it_reaches_a_whole_step(self):
@@ -4620,7 +4633,10 @@ class CascadeLiquidateTests(unittest.IsolatedAsyncioTestCase):
         await engine.liquidate_campaign(campaign.campaign_id)
         self.assertEqual(len(campaign.rounds), 1)
         self.assertAlmostEqual(campaign.rounds[0].exit_price, 110.0)
-        self.assertAlmostEqual(campaign.rounds[0].pnl, 5.0)
+        self.assertAlmostEqual(campaign.rounds[0].pnl_gross, 5.0)
+        # 0.5 @ 100 in, 0.5 @ 110 out — 0.1% of each side.
+        self.assertAlmostEqual(campaign.rounds[0].fees_usd, 0.105, places=6)
+        self.assertAlmostEqual(campaign.rounds[0].pnl, 4.895, places=6)
         self.assertEqual(campaign.filled_base_qty, 0.0)
 
     async def test_selling_after_a_stop_does_not_duplicate_the_history_row(self):

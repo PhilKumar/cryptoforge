@@ -8688,27 +8688,41 @@ function _cfCascadePositionPanel(campaign, fills) {
 
   if (rounds.length) {
     var total = rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0);
+    var feeTotal = rounds.reduce(function(sum, r) { return sum + (Number(r.fees_usd) || 0); }, 0);
     out += '<div class="cf-cascade-position is-closed">'
       + '<div class="cf-cascade-position-head">'
         + '<strong>' + rounds.length + ' round' + (rounds.length === 1 ? '' : 's') + ' closed at target</strong>'
         + '<span style="color:' + (total >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)') + ';">'
-        + (total >= 0 ? '+' : '') + '$' + _cfCascadeFmt(total) + ' realised</span>'
+        + (total >= 0 ? '+' : '') + '$' + _cfCascadeFmt(total) + ' realised'
+        + (feeTotal > 0 ? '<span class="table-meta"> after $' + _cfCascadeUsd(feeTotal) + ' fees</span>' : '')
+        + '</span>'
       + '</div>'
       + '<table class="trade-table cf-cascade-rounds" id="cf-rounds-' + _safeDomId(campaign.campaign_id) + '"><thead><tr>'
         + '<th>Round</th><th>Fib</th><th class="num">Avg Entry</th><th class="num">Exit</th>'
-        + '<th class="num">Qty</th><th class="num">P&amp;L</th><th class="num">ROI</th><th></th>'
+        + '<th class="num">Qty</th><th class="num" title="Exchange commission, both sides">Fees</th>'
+        + '<th class="num" title="After fees">P&amp;L</th><th class="num">ROI</th><th></th>'
       + '</tr></thead><tbody>'
       + rounds.slice().reverse().map(function(r) {
         var pnl = Number(r.pnl) || 0;
         var inv = Number(r.invested_usd) || 0;
+        var fee = Number(r.fees_usd) || 0;
         var tone = pnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
         var buys = (r.fills || []).length;
+        // A round closed before fees were modelled has no fee of its own. Show
+        // it as unknown rather than as zero — it did pay commission, we just
+        // never recorded it, and a "$0.00" would claim otherwise.
+        var feeCell = fee > 0
+          ? '-$' + _cfCascadeUsd(fee)
+          : '<span class="table-meta" title="Closed before fees were recorded">--</span>';
         return '<tr><td>#' + _escapeHtml(String(r.round_id)) + '</td>'
           + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'
           + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
           + '<td class="num">' + _cfCascadeFmt(r.exit_price) + '</td>'
           + '<td class="num">' + Number(r.quantity || 0).toFixed(8) + '</td>'
-          + '<td class="num" style="color:' + tone + ';">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeUsd(pnl) + '</td>'
+          + '<td class="num">' + feeCell + '</td>'
+          + '<td class="num" style="color:' + tone + ';" title="'
+            + (fee > 0 ? 'Gross $' + _cfCascadeUsd(Number(r.pnl_gross) || 0) + ' less $' + _cfCascadeUsd(fee) + ' fees' : 'Gross — fees not recorded for this round')
+            + '">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeUsd(pnl) + '</td>'
           + '<td class="num" style="color:' + tone + ';">' + (inv > 0 ? (pnl / inv * 100).toFixed(2) + '%' : '--') + '</td>'
           + '<td class="num"><button type="button" class="btn btn-outline btn-sm"'
             + ' data-cf-click="cfCascadeShowRoundLog(\'' + _escapeHtml(String(campaign.campaign_id)) + '\',' + Number(r.round_id) + ')"'
@@ -8717,29 +8731,18 @@ function _cfCascadePositionPanel(campaign, fills) {
           + '</tr>';
       }).join('')
       + '</tbody></table>'
-      + (rounds.length
-        ? '<div class="cf-cascade-pager" data-cf-stop="1" onclick="event.stopPropagation()">'
-          + '<span class="table-meta">' + (rFrom + 1) + '\u2013'
-            + Math.min(rFrom + _CF_ROUNDS_PAGE_SIZE, rounds.length) + ' of ' + rounds.length + '</span>'
-          + '<button class="btn btn-outline btn-sm" ' + (rPage === 0 ? 'disabled' : '')
-            + ' data-cf-click="cfCascadeRoundsPage(\'' + _escapeHtml(String(campaign.campaign_id)) + '\',-1)">Newer</button>'
-          + '<button class="btn btn-outline btn-sm" ' + (rPage >= rPages - 1 ? 'disabled' : '')
-            + ' data-cf-click="cfCascadeRoundsPage(\'' + _escapeHtml(String(campaign.campaign_id)) + '\',1)">Older</button>'
-          + '</div>'
-        : '')
+      // No hand-built pager here. One was added with the paging work and read
+      // `rFrom`/`rPage`/`rPages`, none of which were ever declared \u2014 so this
+      // whole function threw ReferenceError for any campaign holding a closed
+      // round, and `mount.innerHTML` below it never ran: the entire live
+      // campaign list rendered blank. It stayed invisible only because no
+      // active campaign had a closed round at the time; the first TP to land
+      // would have blanked the panel. The rounds table is already paged from
+      // the DOM by `_renderTablePager('cf-rounds-\u2026')` after the mount, which is
+      // what the pager under the table actually is.
       + '</div>';
   }
   return out;
-}
-
-// Per-campaign page of its closed-rounds table, keyed by campaign id so a
-// status poll re-render keeps the page you were reading.
-var _CF_ROUNDS_PAGE_SIZE = 8;
-var _cfCascadeRoundsPage = {};
-
-function cfCascadeRoundsPage(campaignId, step) {
-  _cfCascadeRoundsPage[campaignId] = (_cfCascadeRoundsPage[campaignId] || 0) + step;
-  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
 }
 
 // How long a marquee cycle should last so the text always crawls at the same

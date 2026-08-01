@@ -3,11 +3,14 @@
 import unittest
 
 from engine.cascade import (
+    FEE_PCT_PER_SIDE,
+    TP_FIB_LEVEL,
     Campaign,
     Candle,
     FibLadder,
     Fill,
     Leg,
+    Round,
     Trendline,
     build_fib_ladder_and_pool,
     compute_tp_price,
@@ -15,6 +18,7 @@ from engine.cascade import (
     leg_broken,
     plan_leg_orders,
     recompute_avg_entry_price,
+    round_trip_fee,
     timeframe_for_level,
     trendline_price,
 )
@@ -265,6 +269,116 @@ class ExchangeFillTimestampTests(unittest.TestCase):
         filled_at = self.NOW - 8 * 3600
         row = {"updateTime": filled_at * 1000, "status": "FILLED"}
         self.assertEqual(exchange_fill_ts(row, now_ts=self.NOW), filled_at)
+
+
+class CascadeFeeAccountingTests(unittest.TestCase):
+    """Commission on both sides of a round, and what it costs the ladder.
+
+    Every other engine here models fees; this one did not, so every round,
+    campaign and realised total on screen was gross while the backtest it was
+    compared against was net (AUDIT §1.2).
+    """
+
+    def test_fee_is_charged_on_both_sides(self):
+        # $100 in, $110 out, 0.1% each side.
+        self.assertAlmostEqual(round_trip_fee(100.0, 110.0), 0.21, places=8)
+
+    def test_a_zero_rate_costs_nothing(self):
+        import engine.cascade as c
+
+        original = c.FEE_PCT_PER_SIDE
+        try:
+            c.FEE_PCT_PER_SIDE = 0.0
+            self.assertEqual(c.round_trip_fee(100.0, 110.0), 0.0)
+        finally:
+            c.FEE_PCT_PER_SIDE = original
+
+    def test_negative_notionals_never_pay_a_negative_fee(self):
+        """A fee that could go negative would be a credit — it cannot."""
+        self.assertEqual(round_trip_fee(-100.0, -110.0), 0.0)
+        self.assertAlmostEqual(round_trip_fee(-100.0, 110.0), 0.11, places=8)
+
+    def test_a_round_written_before_fees_restores_as_its_own_gross(self):
+        """`pnl` was the gross figure then, and stays it — never back-dated to
+        today's rate, because a stored round is a record of what happened."""
+        legacy = Round.from_dict(
+            {
+                "round_id": 1,
+                "leg_id": 1,
+                "avg_entry": 100.0,
+                "quantity": 1.0,
+                "invested_usd": 100.0,
+                "exit_price": 110.0,
+                "pnl": 10.0,
+            }
+        )
+        self.assertEqual(legacy.pnl, 10.0)
+        self.assertEqual(legacy.pnl_gross, 10.0)
+        self.assertEqual(legacy.fees_usd, 0.0)
+
+    def test_a_round_written_after_fees_round_trips(self):
+        rnd = Round(
+            round_id=1,
+            leg_id=1,
+            avg_entry=100.0,
+            quantity=1.0,
+            invested_usd=100.0,
+            exit_price=110.0,
+            pnl=9.79,
+            fees_usd=0.21,
+            pnl_gross=10.0,
+        )
+        restored = Round.from_dict(rnd.to_dict())
+        self.assertAlmostEqual(restored.pnl, 9.79)
+        self.assertAlmostEqual(restored.pnl_gross, 10.0)
+        self.assertAlmostEqual(restored.fees_usd, 0.21)
+
+    def test_campaign_totals_are_net_and_fees_are_visible(self):
+        campaign = _campaign()
+        campaign.rounds = [
+            Round(
+                round_id=i,
+                leg_id=1,
+                avg_entry=100.0,
+                quantity=1.0,
+                invested_usd=100.0,
+                exit_price=110.0,
+                pnl=9.79,
+                fees_usd=0.21,
+                pnl_gross=10.0,
+            )
+            for i in (1, 2)
+        ]
+        self.assertAlmostEqual(campaign.realized_pnl_total, 19.58)
+        self.assertAlmostEqual(campaign.fees_total, 0.42)
+
+    def test_a_target_only_clears_its_fees_past_a_known_fall(self):
+        """The finding this work surfaced, pinned so it cannot drift silently.
+
+        TP sits at TP_FIB_LEVEL of the way back from the average entry to the
+        mother high, so the gross gain is `0.25 x fall`. The round-trip fee is
+        about `2 x rate` of the same notional. They cross at a fall of
+        `8 x rate` — 0.80% at 0.1% a side. A round whose average entry is
+        nearer the mother high than that closes AT TARGET and still loses
+        money. Nothing in the engine prevents it; sizing does.
+        """
+        rate = FEE_PCT_PER_SIDE / 100.0
+        breakeven_fall = 2 * rate / TP_FIB_LEVEL
+        mother_high = 100.0
+
+        shallow_entry = mother_high * (1 - breakeven_fall / 2)
+        deep_entry = mother_high * (1 - breakeven_fall * 2)
+
+        for entry, expect_profit in ((shallow_entry, False), (deep_entry, True)):
+            qty = 100.0 / entry
+            tp = entry + TP_FIB_LEVEL * (mother_high - entry)
+            gross = (tp - entry) * qty
+            net = gross - round_trip_fee(entry * qty, tp * qty)
+            self.assertGreater(gross, 0.0, "the target is always above the entry")
+            self.assertEqual(net > 0, expect_profit, f"entry {entry:.4f}, net {net:.6f}")
+
+    def test_the_breakeven_fall_is_the_documented_number(self):
+        self.assertAlmostEqual(2 * (FEE_PCT_PER_SIDE / 100.0) / TP_FIB_LEVEL * 100, 0.8, places=6)
 
 
 if __name__ == "__main__":
