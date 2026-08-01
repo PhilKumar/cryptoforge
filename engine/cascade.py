@@ -5000,13 +5000,34 @@ class CascadeEngine:
             return None
         # A straight rip upward breaks a mother candle every bar. Chains that
         # never manage to draw a fib are cut off rather than multiplying forever.
-        barren = 0 if parent.legs else parent.barren_chain + 1
+        # "Ended without drawing a fib", which is what barren_chain has always
+        # said it counts — not "without creating a leg". A leg is appended
+        # BEFORE build_fib_ladder_and_pool, and that call can fail the size gate
+        # and leave the leg standing with fib=None. Testing `parent.legs` reset
+        # the counter for exactly those campaigns: no fib means no ladder, no
+        # orders and no money, yet the chain read as productive, so the cap
+        # could fail to cut a genuine runaway and every link kept alerting.
+        drew_structure = any(leg.fib is not None for leg in parent.legs)
+        barren = 0 if drew_structure else parent.barren_chain + 1
         if barren > MAX_BARREN_AUTO_RESTARTS:
             self._log_event(
                 parent,
                 "warn",
                 f"{barren - 1} auto-restarts in a row drew no fib — chain stopped. "
                 f"Start a new campaign by hand when the move settles.",
+            )
+            # This one DOES need a person: the engine has stopped restarting on
+            # this move, so nothing is watching that break until someone starts
+            # a campaign by hand. It is the opposite of the noise suppressed
+            # below — rare, terminal, and actionable.
+            self._alert(
+                "Cascade restart chain stopped",
+                f"{parent.symbol} — {barren - 1} auto-restarts in a row drew no fib, so the chain was cut "
+                f"instead of multiplying.\n\nNothing is running on this break now. Start a campaign by hand "
+                f"once the move settles.",
+                level="warn",
+                dedupe_sec=3600,
+                dedupe_key=f"barren-chain-cut|{parent.symbol}|{parent.mode}",
             )
             return None
         if candle.high <= candle.low:
@@ -5108,15 +5129,34 @@ class CascadeEngine:
             + ". Nothing carried over.",
         )
         why = "broke above" if parent.close_reason == "mother_broken" else "was retested from below"
-        self._alert(
-            "Cascade auto-restarted",
-            f"{child.symbol} — campaign #{parent.seq}'s mother candle {why}.\n\n"
-            f"New campaign #{child.seq} ({child.mode.upper()}, generation {child.generation})\n"
-            f"New mother candle: high {candle.high:,.2f} / low {candle.low:,.2f}\n"
-            f"Capital: ${child.capital_usd:,.2f}\n\n"
-            f"Nothing was carried over — it starts from scratch.",
-            level="warn" if child.mode == "live" else "info",
-        )
+        # A barren chain is ONE event, not N of them. On a rip upward every
+        # candle breaks its predecessor and the engine restarts on each — the
+        # 08-01 paper-prove run saw nine on BTC inside five hours, each firing
+        # its own alert, which is how a real restart stops being read at all.
+        #
+        # Silence is safe here precisely because the links are barren: no legs
+        # means no fib, which means no ladder, no orders and no money. Announce
+        # the head of the chain, log the rest, and speak up again if the cap
+        # cuts it (above) or a link finally draws structure (barren resets to 0
+        # and this alert fires normally again).
+        if barren < 2:
+            trailer = "\n\nFurther restarts on this move are logged only, until one draws a fib." if barren == 1 else ""
+            self._alert(
+                "Cascade auto-restarted",
+                f"{child.symbol} — campaign #{parent.seq}'s mother candle {why}.\n\n"
+                f"New campaign #{child.seq} ({child.mode.upper()}, generation {child.generation})\n"
+                f"New mother candle: high {candle.high:,.2f} / low {candle.low:,.2f}\n"
+                f"Capital: ${child.capital_usd:,.2f}\n\n"
+                f"Nothing was carried over — it starts from scratch." + trailer,
+                level="warn" if child.mode == "live" else "info",
+            )
+        else:
+            self._log_event(
+                child,
+                "start",
+                f"Restart {barren} of a barren chain on this move — alert suppressed; "
+                f"nothing has drawn a fib since campaign #{child.seq - barren + 1}.",
+            )
         return child
 
     def _archive_campaign(self, campaign: Campaign) -> None:

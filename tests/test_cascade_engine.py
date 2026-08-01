@@ -957,10 +957,99 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self._break()
         child = self._child()
         self.assertEqual(child.barren_chain, 1)
-        child.legs.append(Leg(leg_id=1, trendline_id=1, low=1.0, touch_high=2.0, touch_timestamp=0))
+        # A leg alone is not structure — build_fib_ladder_and_pool can fail the
+        # size gate and leave one standing with fib=None. A campaign that traded
+        # necessarily drew a fib, so the fixture has to carry one.
+        drew = Leg(leg_id=1, trendline_id=1, low=1.0, touch_high=2.0, touch_timestamp=0)
+        drew.fib = FibLadder(high_anchor=2.0, low_anchor=1.0)
+        child.legs.append(drew)
         child.close_reason = "mother_broken"
         grandchild = self.engine._auto_restart(child, Candle(6000, 1.0, 2.0, 0.5, 1.5))
         self.assertEqual(grandchild.barren_chain, 0)
+
+
+class CascadeRestartAlertNoiseTests(unittest.TestCase):
+    """A barren chain is one event, not N.
+
+    The 08-01 paper-prove run saw nine restarts on BTC inside five hours, each
+    firing its own alert. Suppression is safe because a barren link has no legs,
+    so no fib, no ladder, no orders and no money.
+    """
+
+    def setUp(self):
+        self.alerts = []
+        self.engine = CascadeEngine(
+            FakeCascadeBroker(), on_alert=lambda title, body, level: self.alerts.append((title, body))
+        )
+        self.parent = Campaign(
+            campaign_id="p1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            seq=1,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+        )
+        self.engine.campaigns["p1"] = self.parent
+
+    def _chain(self, links):
+        parent = self.parent
+        for i in range(links):
+            parent.close_reason = "mother_broken"
+            child = self.engine._auto_restart(parent, Candle(3000 + i * 300, 1.0, 2.0, 0.5, 1.5))
+            if child is None:
+                return parent
+            parent = child
+        return parent
+
+    def _titles(self):
+        return [t for t, _ in self.alerts]
+
+    def test_nine_barren_restarts_raise_one_alert(self):
+        self._chain(9)
+        self.assertEqual(
+            self._titles().count("Cascade auto-restarted"), 1, f"expected one head-of-chain alert, got {self._titles()}"
+        )
+
+    def test_the_head_of_the_chain_says_the_rest_will_be_quiet(self):
+        self._chain(3)
+        body = next(b for t, b in self.alerts if t == "Cascade auto-restarted")
+        self.assertIn("logged only", body)
+
+    def test_a_restart_after_real_structure_still_alerts(self):
+        """Only barren links are suppressed. A campaign that drew a fib and then
+        broke is a genuine ending and must still be announced."""
+        traded = self._chain(4)
+        self.alerts.clear()
+        drew = Leg(leg_id=1, trendline_id=1, low=1.0, touch_high=2.0, touch_timestamp=0)
+        drew.fib = FibLadder(high_anchor=2.0, low_anchor=1.0)
+        traded.legs.append(drew)
+        traded.close_reason = "mother_broken"
+        self.engine._auto_restart(traded, Candle(9000, 1.0, 2.0, 0.5, 1.5))
+        self.assertEqual(self._titles().count("Cascade auto-restarted"), 1)
+
+    def test_a_leg_with_no_fib_is_not_structure(self):
+        """barren_chain has always documented itself as counting restarts that
+        ended "without drawing a fib". A leg is appended BEFORE its fib is
+        built, and that build can fail the size gate — so testing legs alone
+        reset the counter on campaigns that never drew anything, never traded,
+        and never spent a cent."""
+        parent = self._chain(3)
+        self.assertGreaterEqual(parent.barren_chain, 2)
+        parent.legs.append(Leg(leg_id=1, trendline_id=1, low=1.0, touch_high=2.0, touch_timestamp=0))
+        parent.close_reason = "mother_broken"
+        child = self.engine._auto_restart(parent, Candle(9000, 1.0, 2.0, 0.5, 1.5))
+        self.assertGreater(child.barren_chain, 0, "a fib-less leg must not reset the chain")
+
+    def test_cutting_the_chain_is_announced_because_it_needs_a_person(self):
+        """The opposite of noise: the engine has stopped restarting, so nothing
+        is watching that break until someone starts one by hand."""
+        self._chain(cascade_module.MAX_BARREN_AUTO_RESTARTS + 3)
+        self.assertIn("Cascade restart chain stopped", self._titles())
+        self.assertEqual(self._titles().count("Cascade restart chain stopped"), 1)
 
 
 class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
