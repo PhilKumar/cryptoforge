@@ -6948,9 +6948,11 @@ def _load_cascade_events() -> list:
 # Which Cascade log lines are worth stopping to read. The event log carries
 # every step of the geometry; only the ones where money actually moves — or
 # where it failed to — earn a pop-up that has to be dismissed by hand.
+# `fill` and `round` are deliberately absent: the engine raises its own alert
+# for both, carrying the campaign number, LIVE/PAPER, and the MC kind that this
+# generic one-liner cannot know. Listing them here announced every entry and
+# every target twice.
 _CASCADE_NOTIFY_LEVELS = {
-    "fill": ("Entry filled", "success"),
-    "round": ("Target hit", "success"),
     "error": ("Cascade error", "error"),
     "stop": ("Campaign stopped", "warn"),
     "start": ("Campaign started", "info"),
@@ -7165,11 +7167,15 @@ def _cascade_alert(title: str, body: str, level: str = "warn") -> None:
     # The engine already de-duplicates these on its own timer, so the key here
     # carries the timestamp: a stall that is still unresolved an hour later is
     # a second thing to be told about, not a repeat to swallow.
+    # Pass the engine's own severity through. Flattening everything to "warn"
+    # put a warning triangle on a filled entry and a hit target, which are the
+    # two things that went right.
+    severity = level if level in ("error", "success", "info") else "warn"
     _notify_push(
         "cascade_alert",
         title,
         body,
-        level="error" if level == "error" else "warn",
+        level=severity,
         mode="cascade",
         dedupe_key=f"cascade-alert|{title}|{_ist_now_str()}",
     )

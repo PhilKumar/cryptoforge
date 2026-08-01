@@ -2281,7 +2281,7 @@ class CascadeEngine:
                     "Cascade TARGET hit (ended campaign)",
                     f"{campaign.symbol} #{campaign.seq} had been stopped, but its resting take-profit "
                     f"filled at {exit_price:,.2f}.\n\nBooked now — the position is closed.",
-                    level="info",
+                    level="success",
                 )
                 self._archive_campaign(campaign)
                 return True
@@ -4607,7 +4607,7 @@ class CascadeEngine:
             f"{len(levels)} level(s) collected down to {deepest:,.2f}\n"
             f"Average entry: {campaign.avg_entry_price:,.2f}\n"
             f"Target: {campaign.tp_price:,.2f}",
-            level="info",
+            level="success",
         )
 
     def _record_fill(
@@ -4713,7 +4713,7 @@ class CascadeEngine:
             f"(${rnd.pnl_gross:,.2f} less ${rnd.fees_usd:,.2f} fees)\n\n"
             f"Campaign realised so far: ${campaign.realized_pnl_total:,.2f}. "
             f"The campaign keeps running — only a mother break or a stop ends it.",
-            level="info",
+            level="success",
         )
 
         # Flatten the position: principal returns to available capital.

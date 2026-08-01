@@ -85,21 +85,42 @@ class NotificationInboxTests(unittest.IsolatedAsyncioTestCase):
     async def test_cascade_event_levels_that_raise_an_alert(self):
         app = self.app_module
         app._cascade_persist_event(
-            {"level": "fill", "message": "Bought $200 at 61,000", "symbol": "BTCUSDT", "campaign_id": "c1"}
+            {"level": "stop", "message": "Campaign stopped by hand", "symbol": "BTCUSDT", "campaign_id": "c1"}
         )
         app._cascade_persist_event(
-            {"level": "round", "message": "Round 1 closed at TP", "symbol": "BTCUSDT", "campaign_id": "c1"}
+            {"level": "error", "message": "Broker rejected the order", "symbol": "BTCUSDT", "campaign_id": "c1"}
         )
         # Geometry chatter is not worth a card that has to be dismissed by hand.
         app._cascade_persist_event(
             {"level": "trendline", "message": "New trendline drawn", "symbol": "BTCUSDT", "campaign_id": "c1"}
         )
         titles = [row["title"] for row in app._notify_load()]
-        self.assertEqual(titles, ["BTCUSDT — Entry filled", "BTCUSDT — Target hit"])
+        self.assertEqual(titles, ["BTCUSDT — Campaign stopped", "BTCUSDT — Cascade error"])
+
+    async def test_money_moving_events_are_announced_once(self):
+        """A fill and a target already raise a richer engine alert of their own.
+
+        Mapping them here too put two cards on screen for one entry — same
+        numbers, same second, different wording.
+        """
+        app = self.app_module
+        app._cascade_persist_event(
+            {"level": "fill", "message": "Bought $200 at 61,000", "symbol": "BTCUSDT", "campaign_id": "c1"}
+        )
+        app._cascade_persist_event(
+            {"level": "round", "message": "Round 1 closed at TP", "symbol": "BTCUSDT", "campaign_id": "c1"}
+        )
+        self.assertEqual(app._notify_load(), [])
+        # The engine's own alert is what the operator sees, and it carries the
+        # campaign number and LIVE/PAPER that the event log line cannot.
+        app._cascade_alert("Cascade ENTRY filled", "SOLUSDT #72 (LIVE) — MAJOR MC", level="success")
+        rows = app._notify_load()
+        self.assertEqual([row["title"] for row in rows], ["Cascade ENTRY filled"])
+        self.assertEqual(rows[0]["level"], "success")
 
     async def test_replayed_cascade_event_does_not_queue_twice(self):
         app = self.app_module
-        event = {"level": "fill", "message": "Bought $200 at 61,000", "symbol": "BTCUSDT", "campaign_id": "c1"}
+        event = {"level": "stop", "message": "Campaign stopped", "symbol": "BTCUSDT", "campaign_id": "c1"}
         app._cascade_persist_event(dict(event, timestamp="2026-07-31 10:00:00"))
         # Recovery replays the candle and re-logs the line at a new second.
         app._cascade_persist_event(dict(event, timestamp="2026-07-31 10:04:00"))
