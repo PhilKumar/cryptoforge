@@ -8738,8 +8738,14 @@ function _cfCascadePositionPanel(campaign, fills) {
         // A round closed before fees were modelled has no fee of its own. Show
         // it as unknown rather than as zero — it did pay commission, we just
         // never recorded it, and a "$0.00" would claim otherwise.
+        // A "~" marks a modelled fee. The model runs at the standard rate and
+        // cannot see the BNB discount or a VIP tier, so it is an approximation;
+        // an unmarked figure is the commission Binance actually charged.
         var feeCell = fee > 0
-          ? '-$' + _cfCascadeUsd(fee)
+          ? (r.fees_estimated === false
+              ? '-$' + _cfCascadeUsd(fee)
+              : '<span title="Estimated at the standard rate — not the commission the exchange reported">~-$'
+                  + _cfCascadeUsd(fee) + '</span>')
           : '<span class="table-meta" title="Closed before fees were recorded">--</span>';
         return '<tr><td>#' + _escapeHtml(String(r.round_id)) + '</td>'
           + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'

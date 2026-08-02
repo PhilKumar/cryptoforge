@@ -23,6 +23,15 @@ class BaseBroker:
         keeps every caller free of hasattr checks."""
         return []
 
+    def get_order_commission(self, symbol: str, order_id) -> float | None:
+        """What one order actually cost in commission, in quote currency.
+
+        None means "could not be established" and must never be read as zero —
+        a missing figure is not a free trade. Callers fall back to their own
+        modelled rate and mark the result as an estimate.
+        """
+        return None
+
     _SYMBOL_ALIASES = {
         "GOLD": "PAXGUSD",
         "GOLDUSDT": "PAXGUSD",

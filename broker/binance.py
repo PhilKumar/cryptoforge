@@ -724,6 +724,38 @@ class BinanceSpotClient(BaseBroker):
             params["origClientOrderId"] = client_order_id
         return self._signed_request("GET", "/api/v3/order", params=params)
 
+    def get_order_commission(self, symbol: str, order_id) -> Optional[float]:
+        """Commission actually charged for one order, converted to quote currency.
+
+        `/api/v3/order` — what fill detection polls — carries no commission at
+        all. Only `myTrades` does, and only per trade, so the real figure needs
+        this second, targeted call. Returns None when it cannot be established,
+        which is not the same as zero: the caller must fall back to a modelled
+        rate rather than book the trade as free.
+        """
+        if not self._is_configured() or order_id in (None, ""):
+            return None
+        try:
+            numeric_id = int(str(order_id).strip())
+        except (TypeError, ValueError):
+            # A client order id, or a paper marker. myTrades only accepts the
+            # exchange's numeric id, so there is nothing to look up.
+            return None
+        pair = self.to_broker_symbol(symbol)
+        try:
+            rows = self._signed_request("GET", "/api/v3/myTrades", params={"symbol": pair, "orderId": numeric_id})
+        except Exception as exc:
+            _binance_log.warning("[BINANCE SPOT] Commission lookup failed for order %s: %s", order_id, exc)
+            return None
+        if not rows:
+            return None
+        total = 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            total += self._trade_fee_in_quote({**row, "symbol": row.get("symbol") or pair})
+        return round(total, 8)
+
     def cancel_order(self, order_id: str, product_id: str = "") -> dict:
         if not self._is_configured():
             return {"error": "API not configured"}

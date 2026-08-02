@@ -794,12 +794,19 @@ class Fill:
     leg_id: int
     timestamp: int
     order_id: Optional[str] = None
+    # What the exchange actually charged to acquire this coin, in quote
+    # currency. None means "not established" — a paper fill, a broker that
+    # cannot report it, or a lookup that failed — and is deliberately NOT zero,
+    # which would book the trade as free. A round with any unpriced fill falls
+    # back to the modelled rate and says so.
+    fee_usd: Optional[float] = None
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Fill":
+        fee = data.get("fee_usd")
         return cls(
             price=_coerce_float(data.get("price")),
             quantity=_coerce_float(data.get("quantity")),
@@ -807,6 +814,9 @@ class Fill:
             leg_id=int(data.get("leg_id", 0)),
             timestamp=int(data.get("timestamp", 0)),
             order_id=data.get("order_id"),
+            # Absent stays absent. Coercing a missing fee to 0.0 would turn
+            # every fill written before this existed into a free one.
+            fee_usd=None if fee is None else _coerce_float(fee),
         )
 
 
@@ -833,6 +843,12 @@ class Round:
     closed_at: str = ""
     fees_usd: float = 0.0
     pnl_gross: float = 0.0
+    # True when `fees_usd` is a modelled figure at FEE_PCT_PER_SIDE rather than
+    # the commission the exchange reported. The model cannot know about the BNB
+    # discount, a VIP tier or a maker rebate, so a round that says "estimated"
+    # is telling you its P&L is approximate — and one that does not is telling
+    # you the number came from Binance.
+    fees_estimated: bool = True
     # Closing a round flattens the position and clears campaign.all_fills, so
     # the individual buys that made up the average are gone the moment the TP
     # lands. Snapshot them here: an average entry alone cannot tell you when
@@ -860,6 +876,9 @@ class Round:
             # gross figure, so that is what it restores as. Never recomputed
             # from today's rate — a stored round is a record of what happened.
             pnl_gross=_coerce_float(data.get("pnl_gross")) or _coerce_float(data.get("pnl")),
+            # Every round written before the exchange's own figure was read is
+            # a modelled one, so absent means estimated.
+            fees_estimated=bool(data.get("fees_estimated", True)),
             fills=[dict(row) for row in (data.get("fills") or []) if isinstance(row, dict)],
             opened_ts=int(data.get("opened_ts") or 0),
             closed_ts=int(data.get("closed_ts") or 0),
@@ -2268,7 +2287,8 @@ class CascadeEngine:
                     else _coerce_float(campaign.tp_order_price or campaign.tp_price, 0.0)
                 )
                 campaign.residual_base_qty = max(round(offered - executed, 12), 0.0)
-                self._close_round(campaign, exit_price, sold_qty=executed)
+                sell_fee = await self._order_commission(campaign, campaign.tp_order_id)
+                self._close_round(campaign, exit_price, sold_qty=executed, sell_fee=sell_fee)
                 campaign.exchange_qty = 0.0
                 campaign.position_checked_at = _ist_now_str()
                 self._log_event(
@@ -2461,7 +2481,10 @@ class CascadeEngine:
             quote / executed if executed > 0 and quote > 0 else _coerce_float(price_meta[0] if price_meta else 0.0)
         )
         campaign.residual_base_qty = max(round(desired_qty - executed, 12), 0.0)
-        self._close_round(campaign, exit_price, sold_qty=executed)
+        # A market sell reports its own fills, so its commission is known
+        # without a second call — but only when the exchange returned one.
+        sell_fee = _coerce_float(result.get("paid_commission"), -1.0)
+        self._close_round(campaign, exit_price, sold_qty=executed, sell_fee=sell_fee if sell_fee >= 0 else None)
         self._log_event(
             campaign,
             "stop",
@@ -4523,6 +4546,47 @@ class CascadeEngine:
             ),
         )
 
+    async def _order_commission(self, campaign: Campaign, order_id) -> Optional[float]:
+        """What the exchange charged for one order, or None if it cannot say.
+
+        Paper campaigns have no exchange to ask, and a broker that cannot
+        report a per-order commission returns None from the base contract —
+        both fall back to the modelled rate rather than booking a free trade.
+        """
+        if campaign.mode != "live" or not order_id or str(order_id).upper() == "PAPER":
+            return None
+        getter = getattr(self.broker, "get_order_commission", None)
+        if getter is None:
+            return None
+        try:
+            return await asyncio.to_thread(getter, campaign.symbol, order_id)
+        except Exception as exc:
+            _log.warning("[CASCADE] commission lookup failed for order %s: %s", order_id, exc)
+            return None
+
+    async def _attribute_buy_commission(self, campaign: Campaign, order_id) -> None:
+        """Price the fills one buy order produced, using its real commission.
+
+        myTrades reports the running total for an order, so a stop-limit that
+        fills in pieces is handled by attributing only what is not already on
+        the earlier fills — split across the new ones by notional, which is how
+        the exchange charges it.
+        """
+        total = await self._order_commission(campaign, order_id)
+        if total is None:
+            return
+        mine = [f for f in campaign.all_fills if str(f.order_id or "") == str(order_id)]
+        unpriced = [f for f in mine if f.fee_usd is None]
+        if not unpriced:
+            return
+        already = sum(f.fee_usd or 0.0 for f in mine if f.fee_usd is not None)
+        remainder = max(total - already, 0.0)
+        notional = sum(f.price * f.quantity for f in unpriced)
+        if notional <= 0:
+            return
+        for fill in unpriced:
+            fill.fee_usd = round(remainder * (fill.price * fill.quantity) / notional, 10)
+
     def _fill_pending_part(self, campaign: Campaign, price: float, qty: float, timestamp: int) -> None:
         """A stop-limit can execute in pieces. Book the part that traded and
         leave the rest of the total working — the levels stay collected until
@@ -4649,7 +4713,13 @@ class CascadeEngine:
         # so the next buy is planned from the money actually still available.
         replan_ladder(campaign)
 
-    def _close_round(self, campaign: Campaign, exit_price: float, sold_qty: Optional[float] = None) -> None:
+    def _close_round(
+        self,
+        campaign: Campaign,
+        exit_price: float,
+        sold_qty: Optional[float] = None,
+        sell_fee: Optional[float] = None,
+    ) -> None:
         """
         A TP fill closes the current open-to-TP round, not the campaign. The
         principal comes back into available capital and the position resets to
@@ -4682,7 +4752,17 @@ class CascadeEngine:
         seen = self._candles.get(campaign.campaign_id) or []
         closed_ts = int(seen[-1].timestamp) if seen else 0
         gross = round((exit_price - avg) * qty, 8)
-        fees = round_trip_fee(avg * qty, exit_price * qty)
+        # What the exchange charged beats what the model predicts. The model
+        # cannot see the BNB discount, a VIP tier or a maker rebate, so a
+        # measured round trip is the only figure that survives a change to any
+        # of them. It takes BOTH sides to be known: half measured and half
+        # modelled is a third number that describes no actual trade.
+        buy_fees = [f.fee_usd for f in ordered_fills]
+        measured = bool(ordered_fills) and all(fee is not None for fee in buy_fees) and sell_fee is not None
+        if measured:
+            fees = round(sum(buy_fees) + sell_fee, 8)
+        else:
+            fees = round_trip_fee(avg * qty, exit_price * qty)
         rnd = Round(
             round_id=len(campaign.rounds) + 1,
             leg_id=leg.leg_id if leg else 0,
@@ -4693,6 +4773,7 @@ class CascadeEngine:
             pnl=round(gross - fees, 8),
             closed_at=_ist_now_str(),
             fees_usd=fees,
+            fees_estimated=not measured,
             pnl_gross=gross,
             fills=fill_log,
             opened_ts=int(ordered_fills[0].timestamp or 0) if ordered_fills else 0,
@@ -4751,7 +4832,12 @@ class CascadeEngine:
             "round",
             f"Round {rnd.round_id} closed at TP {exit_price:,.2f} — sold {qty:.8f} "
             f"(avg entry {avg:,.2f}), PnL ${rnd.pnl:,.2f} net of ${rnd.fees_usd:,.2f} "
-            f"fees at {FEE_PCT_PER_SIDE}%/side. ${invested:,.2f} principal "
+            + (
+                f"fees estimated at {FEE_PCT_PER_SIDE}%/side. "
+                if rnd.fees_estimated
+                else "fees, as charged by the exchange. "
+            )
+            + f"${invested:,.2f} principal "
             f"returned to the pool; campaign continues until the mother high breaks.",
         )
 
@@ -5342,6 +5428,7 @@ class CascadeEngine:
                     )
                     campaign.pending_filled_qty = executed
                     self._fill_pending_part(campaign, price, delta_qty, exchange_fill_ts(row))
+                    await self._attribute_buy_commission(campaign, campaign.pending_order_id)
                     changed = True
             if row is None:
                 status_row = await self._safe_get_order(campaign, campaign.pending_order_id)
@@ -5354,7 +5441,11 @@ class CascadeEngine:
                         if executed > 0 and quote > 0
                         else (campaign.pending_limit_price or campaign.pending_stop_price or 0.0)
                     )
-                    self._fill_pending(campaign, price, exchange_fill_ts(status_row), campaign.pending_order_id)
+                    filled_order_id = campaign.pending_order_id
+                    self._fill_pending(campaign, price, exchange_fill_ts(status_row), filled_order_id)
+                    # After the fill is booked, not before: the fill it prices
+                    # has to exist for the commission to land on it.
+                    await self._attribute_buy_commission(campaign, filled_order_id)
                     changed = True
                 elif status in {"CANCELED", "EXPIRED", "REJECTED"}:
                     # Say WHICH. The three mean very different things — EXPIRED
@@ -5679,9 +5770,12 @@ class CascadeEngine:
                 # so the next round's sell clears it once the total reaches
                 # another whole step, rather than stranding it forever.
                 campaign.residual_base_qty = max(round(offered - executed, 12), 0.0)
+                # Ask what the sell actually cost before the round is booked —
+                # afterwards the fills are gone and the order id is cleared.
+                sell_fee = await self._order_commission(campaign, campaign.tp_order_id)
                 # Entry buys that never filled stay resting — the campaign is
                 # still live and price can come back down to them.
-                self._close_round(campaign, exit_price, sold_qty=executed)
+                self._close_round(campaign, exit_price, sold_qty=executed, sell_fee=sell_fee)
                 return True
             campaign.tp_order_id = None
             campaign.tp_order_price = None
