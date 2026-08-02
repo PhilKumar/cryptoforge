@@ -8503,8 +8503,35 @@ function _cfCascadeMcKindPill(campaign) {
         + 'major running, the label costs it nothing.';
     }
   }
-  return '<span class="admin-pill" data-state="' + (minor ? 'warn' : 'ok') + '" title="'
-    + _escapeHtml(why) + '">' + (minor ? 'MINOR MC' : 'MAJOR MC') + '</span>';
+  // The kind is only ever chosen at birth, and an inherited or mis-picked label
+  // changes what happens at the next break — so the pill is the control for
+  // fixing it, rather than a read-only badge you have to restart to correct.
+  why += ' Click to relabel this campaign.';
+  return '<button type="button" class="admin-pill cf-mckind-pill" data-state="' + (minor ? 'warn' : 'ok')
+    + '" title="' + _escapeHtml(why) + '" aria-label="Relabel mother candle kind"'
+    + ' data-cf-click="event.stopPropagation();cfCascadeSetMcKind(\'' + _escapeHtml(String(campaign.campaign_id))
+      + '\',\'' + (minor ? 'major' : 'minor') + '\')">'
+    + (minor ? 'MINOR MC' : 'MAJOR MC') + '</button>';
+}
+
+async function cfCascadeSetMcKind(campaignId, kind) {
+  var toMajor = kind === 'major';
+  var ok = await cfConfirm(
+    '<p>Relabel this campaign as <strong>' + (toMajor ? 'MAJOR' : 'MINOR') + '</strong>?</p>'
+    + '<p>' + (toMajor
+        ? 'It will no longer stand down when another major on this symbol breaks on the same candle.'
+        : 'It will stand down if a major on this symbol breaks on the same candle.')
+      + '</p>'
+    + '<p>No geometry is redrawn and the timeframe does not move — this changes what happens at the '
+      + 'next mother break.</p>',
+    'Relabel mother candle', '🏷️', true
+  );
+  if (!ok) return;
+  _cfCascadeAction(
+    '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/mc-kind',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mc_kind: kind }) },
+    'Campaign relabelled ' + kind.toUpperCase()
+  );
 }
 
 // Ground a sibling campaign on the same symbol had already funded when this one

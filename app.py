@@ -7642,6 +7642,18 @@ async def cascade_set_mode(campaign_id: str, request: Request):
     return result
 
 
+@app.post("/api/cascade/campaigns/{campaign_id}/mc-kind")
+async def cascade_set_mc_kind(campaign_id: str, request: Request):
+    check_rate_limit("cascade_mc_kind", max_calls=6, window_sec=10)
+    body = await _read_json_body(request)
+    eng = _get_cascade_engine()
+    result = eng.set_mc_kind(campaign_id, str(body.get("mc_kind") or ""))
+    if result.get("error"):
+        raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
+    _persist_cascade_runtime_snapshot(eng)
+    return result
+
+
 @app.post("/api/cascade/campaigns/{campaign_id}/recalculate")
 async def cascade_recalculate_campaign(campaign_id: str):
     check_rate_limit("cascade_recalc", max_calls=4, window_sec=10)

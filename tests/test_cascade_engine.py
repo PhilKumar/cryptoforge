@@ -6231,3 +6231,42 @@ class CascadeReplayTruncationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(candles)
         self.assertEqual(alerts, [])
         engine.stop()
+
+
+class CascadeMcKindRelabelTests(unittest.TestCase):
+    """A mother-candle kind chosen at birth, or inherited, can be wrong.
+
+    It decides only whether a campaign stands down when a major on the same
+    symbol breaks on the same candle, so relabelling is a pure label change —
+    and it must stay that way.
+    """
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = _mk_campaign(self.engine)
+        self.campaign.mc_kind = "minor"
+        self.campaign.timeframe = "5m"
+        self.campaign.state = "TRENDLINE_ACTIVE"
+
+    def test_relabel_minor_to_major_leaves_the_timeframe_alone(self):
+        """ "minor implies 5m" is not "5m implies minor" — a 5m major is legal."""
+        result = self.engine.set_mc_kind("camp1", "major")
+        self.assertEqual(result.get("status"), "ok")
+        self.assertEqual(self.campaign.mc_kind, "major")
+        self.assertEqual(self.campaign.timeframe, "5m")
+
+    def test_relabelling_to_the_same_kind_is_a_no_op(self):
+        self.assertEqual(self.engine.set_mc_kind("camp1", "minor").get("status"), "ok")
+        self.assertEqual(self.campaign.mc_kind, "minor")
+
+    def test_an_unknown_kind_is_refused(self):
+        self.assertIn("major", self.engine.set_mc_kind("camp1", "sideways").get("error", ""))
+        self.assertEqual(self.campaign.mc_kind, "minor")
+
+    def test_a_missing_campaign_is_refused(self):
+        self.assertIn("not found", self.engine.set_mc_kind("nope", "major").get("error", ""))
+
+    def test_an_ended_campaign_cannot_be_relabelled(self):
+        self.campaign.state = "COMPLETED"
+        self.assertIn("ended", self.engine.set_mc_kind("camp1", "major").get("error", ""))
+        self.assertEqual(self.campaign.mc_kind, "minor")

@@ -5532,6 +5532,20 @@ body.admin-console-open { overflow: hidden; }
   padding: 5px 9px;
   white-space: nowrap;
 }
+/* The MC-kind pill is a real button so the label can be corrected in place.
+   It must still read as the badge it has always been, not as a form control. */
+button.cf-mckind-pill {
+  font-family: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  transition: filter .15s ease, box-shadow .15s ease;
+}
+button.cf-mckind-pill:hover { filter: brightness(1.25); }
+button.cf-mckind-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(var(--tint-primary-rgb),0.55);
+}
+
 .admin-pill[data-state="ok"] {
   border-color: rgba(52,211,153,0.35);
   color: var(--green);

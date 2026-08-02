@@ -2534,6 +2534,41 @@ class CascadeEngine:
             "residual": campaign.residual_base_qty,
         }
 
+    def set_mc_kind(self, campaign_id: str, kind: str) -> dict:
+        """Relabel a running campaign major <-> minor.
+
+        The kind is read at decision time, not baked into anything at birth:
+        `_minor_stood_down_with_major` is the only behaviour that consults it,
+        so relabelling changes what happens at the NEXT mother break and
+        rewrites no geometry. The timeframe is deliberately left alone — the
+        rule is "minor implies 5m", not "5m implies minor", so a 5m campaign is
+        free to be a major and calling this must not silently move its chart.
+        """
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            return {"error": f"Campaign {campaign_id} not found"}
+        kind = str(kind or "").strip().lower()
+        if kind not in ("major", "minor"):
+            return {"error": "mc_kind must be 'major' or 'minor'"}
+        if campaign.state in FINAL_STATES:
+            return {"error": "Campaign has ended — its kind can no longer matter"}
+        previous = str(campaign.mc_kind or "major").lower()
+        if previous == kind:
+            return {"status": "ok", "campaign": campaign.to_dict()}
+        campaign.mc_kind = kind
+        self._log_event(
+            campaign,
+            "mode",
+            f"Mother candle relabelled {previous.upper()} -> {kind.upper()} by hand. "
+            + (
+                "It will no longer stand down when another major breaks alongside it."
+                if kind == "major"
+                else "It will now stand down if a major on this symbol breaks on the same candle."
+            ),
+        )
+        self._emit_update()
+        return {"status": "ok", "campaign": campaign.to_dict()}
+
     async def set_mode(self, campaign_id: str, mode: str) -> dict:
         campaign = self.campaigns.get(campaign_id)
         if campaign is None:
