@@ -4957,6 +4957,58 @@
   padding: 30px;
   color: var(--muted);
 }
+
+/* Scalp positions carry six zero-filled inputs per row, which triples the row
+   height and buries the ladder. Collapsed by default; "Edit exits" brings the
+   TP / SL / Scale In columns back when there is actually an exit to set. */
+.cf-scalp-active-trade-table.exits-collapsed th:nth-child(7),
+.cf-scalp-active-trade-table.exits-collapsed th:nth-child(8),
+.cf-scalp-active-trade-table.exits-collapsed th:nth-child(9),
+.cf-scalp-active-trade-table.exits-collapsed td:nth-child(7),
+.cf-scalp-active-trade-table.exits-collapsed td:nth-child(8),
+.cf-scalp-active-trade-table.exits-collapsed td:nth-child(9) {
+  display: none;
+}
+
+/* A status that needs action wears a chip, so it is not read past as caption. */
+.cf-state-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+.cf-state-chip-warn {
+  color: #fcd34d;
+  background: rgba(245,158,11,0.12);
+  border: 1px solid rgba(245,158,11,0.38);
+}
+
+/* Loading state. A centred "Loading…" in an otherwise empty frame reads as a
+   void; bars the shape of the rows that are coming read as work in progress
+   and stop the layout jumping when the data lands. */
+.cf-skel {
+  display: block;
+  height: 11px;
+  border-radius: 5px;
+  background: linear-gradient(90deg,
+    rgba(148,163,184,0.07) 0%,
+    rgba(148,163,184,0.16) 45%,
+    rgba(148,163,184,0.07) 90%);
+  background-size: 220% 100%;
+  animation: cfSkelSweep 1.25s ease-in-out infinite;
+}
+.cf-skel-tile { height: 34px; border-radius: 10px; }
+@keyframes cfSkelSweep {
+  from { background-position: 140% 0; }
+  to   { background-position: -40% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cf-skel { animation: none; }
+}
 .cf-scalp-live-safety-copy {
   display: flex;
   gap: 8px;

@@ -847,6 +847,8 @@
   <!-- Bulk action bar -->
   <div id="runs-bulk-bar" class="bulk-bar" style="display:none;">
     <span class="bulk-count" id="runs-bulk-count">0 selected</span>
+    <button class="btn btn-primary btn-sm" data-cf-click="toggleCompare()">⚖️ Compare</button>
+    <button class="btn btn-outline btn-sm" data-cf-click="clearRunsSelection()">Clear</button>
     <button class="btn btn-danger btn-sm" data-cf-click="bulkDeleteRuns()">🗑 Delete Selected</button>
   </div>
 
@@ -961,7 +963,12 @@
           </tr>
         </thead>
         <tbody id="cf-journal-body">
-          <tr><td colspan="11" class="cf-table-empty-cell">Loading journal&hellip;</td></tr>
+          <tr class="cf-skel-row"><td colspan="11" style="padding:14px 16px;"><span class="cf-skel" style="width:92%"></span></td></tr>
+          <tr class="cf-skel-row"><td colspan="11" style="padding:14px 16px;"><span class="cf-skel" style="width:78%"></span></td></tr>
+          <tr class="cf-skel-row"><td colspan="11" style="padding:14px 16px;"><span class="cf-skel" style="width:85%"></span></td></tr>
+          <tr class="cf-skel-row"><td colspan="11" style="padding:14px 16px;"><span class="cf-skel" style="width:70%"></span></td></tr>
+          <tr class="cf-skel-row"><td colspan="11" style="padding:14px 16px;"><span class="cf-skel" style="width:88%"></span></td></tr>
+          <tr class="cf-skel-row"><td colspan="11" style="padding:14px 16px;"><span class="cf-skel" style="width:64%"></span></td></tr>
         </tbody>
       </table>
     </div>
@@ -1639,6 +1646,10 @@
       </div>
       <div class="table-actions">
         <span class="table-meta" id="cf-scalp-active-count">0 open</span>
+      </div>
+      <div class="table-actions">
+        <button class="btn btn-outline btn-sm" id="cf-scalp-exits-btn"
+          data-cf-click="cfToggleScalpExitEditors()">Edit exits</button>
       </div>
     </div>
     <div class="table-surface">

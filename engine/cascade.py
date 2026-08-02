@@ -82,6 +82,14 @@ LEVEL_ALLOCATION = {2: 0.20, 4: 0.30, 8: 0.50}
 BASE_TIMEFRAME = "5m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
+# A target that does not clear its own commission is not a target. Measured
+# falls run 2.8-4.6%, well past the 0.80% crossing point, so this floor is
+# dormant on real geometry — it exists to stop the pathological shallow round,
+# not to move the target. Set False to restore the bare geometric TP.
+TP_MUST_CLEAR_FEES = True
+# What a floored round must keep after both fees, as a percent of cost basis.
+# Small on purpose: the floor should rescue a round, not re-price the strategy.
+TP_MIN_NET_PCT = 0.05
 # Levels 2 and 4 are shallow: resting a limit there buys a knife price is still
 # falling through. They instead go in as BUY STOPS above a falling market, which
 # only fill once the market turns back up. Level 8 is the level worth owning at
@@ -1467,6 +1475,19 @@ def round_trip_fee(cost_basis_usd: float, proceeds_usd: float) -> float:
     return round((max(cost_basis_usd, 0.0) + max(proceeds_usd, 0.0)) * rate, 8)
 
 
+def tp_breakeven_price(avg_entry: float) -> float:
+    """The lowest exit that does not lose money once both commissions are paid.
+
+    Selling `q` bought at `a` for `p` keeps `q*(p*(1-r) - a*(1+r))`, so the
+    round breaks even at `a * (1+r) / (1-r)` — slightly more than `a * (1+2r)`,
+    because the sell fee is charged on the larger proceeds.
+    """
+    rate = FEE_PCT_PER_SIDE / 100.0
+    if rate <= 0:
+        return avg_entry
+    return avg_entry * (1.0 + rate) / (1.0 - rate)
+
+
 def compute_tp_price(campaign: Campaign) -> Optional[float]:
     """
     TP is measured FROM the average entry back toward the mother high, taking
@@ -1476,13 +1497,25 @@ def compute_tp_price(campaign: Campaign) -> Optional[float]:
 
     Returns None until an entry actually fills — there is no target before
     there is a position, and it moves with the average as more levels fill.
+
+    The geometric target is then floored so it cannot sell at a loss. Gross
+    gain is `0.25 x fall` while the round trip costs about `2 x rate`, so they
+    cross at a fall of `8 x rate` — 0.80% at 0.1% a side. An average entry
+    nearer the mother high than that used to close AT TARGET and still lose
+    money. Replayed rounds put real falls at 2.8-4.6%, so this floor is a guard
+    rail that does not bind in practice, not a change of strategy: above the
+    crossing point the geometric target is already the larger number and wins.
     """
     anchor = campaign.avg_entry_price
     if not anchor or anchor <= 0:
         # No entry yet — there is no target to speak of. The TP only exists
         # once the position does, measured from the actual average entry.
         return None
-    return anchor + TP_FIB_LEVEL * (campaign.mother_high - anchor)
+    geometric = anchor + TP_FIB_LEVEL * (campaign.mother_high - anchor)
+    if not TP_MUST_CLEAR_FEES:
+        return geometric
+    floor = tp_breakeven_price(anchor) * (1.0 + TP_MIN_NET_PCT / 100.0)
+    return max(geometric, floor)
 
 
 def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:

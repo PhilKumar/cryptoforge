@@ -1295,7 +1295,20 @@ function _applyBrokerState(connected, message) {
     btn.textContent = _brokerConnected ? '🔌 Disconnect Broker' : '🔗 Connect Broker';
   });
   var brokerCard = document.getElementById('dash-broker-state');
-  if (brokerCard) brokerCard.textContent = message || (_brokerConnected ? (_brokerLabel() + ' connected') : (_brokerLabel() + ' disconnected'));
+  if (brokerCard) {
+    var text = message || (_brokerConnected ? (_brokerLabel() + ' connected') : (_brokerLabel() + ' disconnected'));
+    // A broker that is not wired up is a problem to fix, not a caption to read
+    // past — it gets the warning chip treatment rather than muted body text.
+    brokerCard.textContent = '';
+    if (!_brokerConnected) {
+      var chip = document.createElement('span');
+      chip.className = 'cf-state-chip cf-state-chip-warn';
+      chip.textContent = '⚠ Not connected';
+      brokerCard.appendChild(chip);
+      brokerCard.appendChild(document.createTextNode(' '));
+    }
+    brokerCard.appendChild(document.createTextNode(text));
+  }
 }
 
 async function loadBrokerSettings(silent) {
@@ -2142,7 +2155,9 @@ function fmtPrice(p) { return fmtINRPrice(p); }
 
 async function refreshMarket() {
   const tbody = document.getElementById('market-tbody');
-  tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--muted);">Loading top 25...</td></tr>';
+  tbody.innerHTML = [92, 80, 86, 74, 90, 68, 82, 76].map(function (w) {
+    return '<tr><td colspan="8" style="padding:14px 16px;"><span class="cf-skel" style="width:' + w + '%"></span></td></tr>';
+  }).join('');
 
   try {
     // Fetch top 25 from CoinGecko via backend
@@ -2626,6 +2641,13 @@ function sortRunsTable(col) {
 function toggleAllRunsCb(master) {
   if (_resultsUsesTradeView()) return;
   document.querySelectorAll('.run-cb').forEach(cb => { cb.checked = master.checked; });
+  updateRunsBulk();
+}
+
+function clearRunsSelection() {
+  document.querySelectorAll('.run-cb:checked').forEach(function (cb) { cb.checked = false; });
+  var all = document.getElementById('runs-check-all');
+  if (all) all.checked = false;
   updateRunsBulk();
 }
 
@@ -4372,6 +4394,27 @@ function _renderPortfolioOrdersTable() {
   _renderTablePager('pf-orders-table', 'pf-orders-table', 'pf-orders-pagination');
 }
 
+// Exit editors start collapsed so the open ladder is scannable, and the choice
+// is remembered — someone who works with the fields open should not have to
+// reopen them after every reload.
+var _cfScalpExitsOpen = localStorage.getItem('cf_scalp_exits_open') === '1';
+
+function cfApplyScalpExitEditors() {
+  var table = document.getElementById('cf-scalp-active-table');
+  if (table) table.classList.toggle('exits-collapsed', !_cfScalpExitsOpen);
+  var btn = document.getElementById('cf-scalp-exits-btn');
+  if (btn) {
+    btn.textContent = _cfScalpExitsOpen ? 'Hide exits' : 'Edit exits';
+    btn.setAttribute('aria-pressed', _cfScalpExitsOpen ? 'true' : 'false');
+  }
+}
+
+function cfToggleScalpExitEditors() {
+  _cfScalpExitsOpen = !_cfScalpExitsOpen;
+  localStorage.setItem('cf_scalp_exits_open', _cfScalpExitsOpen ? '1' : '0');
+  cfApplyScalpExitEditors();
+}
+
 function togglePortfolioOrderDensity() {
   _portfolioOrderDense = !_portfolioOrderDense;
   _renderPortfolioOrdersTable();
@@ -5898,10 +5941,22 @@ function _cfJournalKpiHtml(summary) {
     { label: 'Avg Win', value: _cfJournalUsd(summary.avg_win_usd, 2), tone: 1,
       note: summary.loss_count ? 'avg loss ' + _cfJournalUsd(summary.avg_loss_usd, 2) : 'no losing trades yet' }
   ];
+  var TIPS = {
+    'Realised P&L': "Profit actually banked on closed trades, after exchange commission. Open positions are not counted, however far up they are.",
+    'Fees Paid': "Total commission charged by the exchange on these trades. The drag figure is what share of the gross profit it took.",
+    'Capital Deployed': "The sum invested across closed trades \u2014 money put to work, not your account balance. The same dollar redeployed twice counts twice.",
+    'Win Rate': "Closed trades that finished green, as a share of all closed trades. Open positions do not count either way.",
+    'Average ROI': "Mean return per closed trade, so a large trade and a small one weigh the same. It is not the return on your account.",
+    'Avg Win': "Average profit of the trades that won. Read it next to the average loss to see whether the wins are big enough to pay for the losses."
+  };
   return cards.map(function(c) {
     var colour = c.tone === undefined ? '' : ' style="color:' + _cfJournalTone(c.tone) + ';"';
+    var tip = TIPS[c.label]
+      ? '<button type="button" class="cf-info" tabindex="0" data-cf-info="' + _escapeHtml(TIPS[c.label])
+        + '" aria-label="What is ' + _escapeHtml(c.label) + '?">i</button>'
+      : '';
     return '<div class="cf-journal-kpi">'
-      + '<div class="cf-journal-kpi-label">' + _escapeHtml(c.label) + '</div>'
+      + '<div class="cf-journal-kpi-label">' + _escapeHtml(c.label) + tip + '</div>'
       + '<div class="cf-journal-kpi-value"' + colour + '>' + _escapeHtml(c.value) + '</div>'
       + '<div class="cf-journal-kpi-note">' + _escapeHtml(c.note) + '</div>'
       + '</div>';
@@ -7094,6 +7149,7 @@ function cfOperatorNextRead() {
 }
 
 function cfInitScalpPage() {
+  cfApplyScalpExitEditors();
   cfRefreshScalpWorkspace({ reconcile: 'auto' }).finally(cfSyncScalpLogPanelHeight);
   cfRefreshScalpEntryLaneFromState();
   cfSyncScalpLogPanelHeight();
@@ -8207,12 +8263,14 @@ function cfRenderCascadeStatus(data) {
     });
     dot.classList.toggle('active', !!data.running && live);
   }
-  cfRenderCascadeTrades(Array.isArray(data.campaigns) ? data.campaigns : []);
-  cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : [], data.instruments || {});
-  cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
-  cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
-  cfRenderCascadeGroups(data.capital_groups || {});
-  cfRenderCascadeLedger(data);
+  _cfWithScrollPreserved(document.getElementById('cascade-page'), function () {
+    cfRenderCascadeTrades(Array.isArray(data.campaigns) ? data.campaigns : []);
+    cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : [], data.instruments || {});
+    cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
+    cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
+    cfRenderCascadeGroups(data.capital_groups || {});
+    cfRenderCascadeLedger(data);
+  });
 }
 
 // One line per capital group: budget, what running campaigns hold, what a new
@@ -9039,6 +9097,49 @@ function _cfCascadeStackHeader(symbol, stack, count) {
         + (stack.rounds_closed === 1 ? '' : 's')
       : '')
     + '</span></div>';
+}
+
+// Every wide table on this page is rewritten wholesale by the 3s status poll,
+// so a horizontal scroll you were in the middle of reading snapped back to the
+// first column. Campaign cards handled this themselves; Open Trades, Closed
+// Rounds and the rest did not. Capture every scrollable box under `root`, run
+// the repaint, then put the offsets back.
+//
+// The key is the owning campaign (or the nearest identified ancestor) plus the
+// box's ordinal inside it, so a card opening or closing shifts nobody else.
+function _cfScrollOwnerId(box, root) {
+  var owner = box.closest('[data-campaign]');
+  if (owner) return 'c:' + owner.getAttribute('data-campaign');
+  var named = box.closest('[id]');
+  if (named && named !== root) return '#' + named.id;
+  return '';
+}
+
+function _cfWithScrollPreserved(root, render) {
+  if (!root) { render(); return; }
+  // Walk the boxes the same way before and after, so the nth box of a given
+  // owner is matched to the nth box of that same owner.
+  var walk = function (fn) {
+    var counts = Object.create(null);
+    root.querySelectorAll('.table-scroll').forEach(function (box) {
+      var owner = _cfScrollOwnerId(box, root);
+      counts[owner] = counts[owner] === undefined ? 0 : counts[owner] + 1;
+      fn(box, owner + '|' + counts[owner]);
+    });
+  };
+  var saved = Object.create(null);
+  var any = false;
+  walk(function (box, key) {
+    if (box.scrollLeft || box.scrollTop) { saved[key] = [box.scrollLeft, box.scrollTop]; any = true; }
+  });
+  render();
+  if (!any) return;
+  walk(function (box, key) {
+    var at = saved[key];
+    if (!at) return;
+    if (at[0]) box.scrollLeft = at[0];
+    if (at[1]) box.scrollTop = at[1];
+  });
 }
 
 function cfRenderCascadeCampaigns(campaigns, instruments) {

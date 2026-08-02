@@ -380,6 +380,32 @@ class CascadeFeeAccountingTests(unittest.TestCase):
     def test_the_breakeven_fall_is_the_documented_number(self):
         self.assertAlmostEqual(2 * (FEE_PCT_PER_SIDE / 100.0) / TP_FIB_LEVEL * 100, 0.8, places=6)
 
+    def test_the_fee_floor_is_dormant_on_a_real_fall(self):
+        """Measured falls run 2.8-4.6%, far past the 0.80% crossing point.
+
+        The floor must not move the target there, or it would be re-pricing
+        the strategy rather than guarding the pathological case.
+        """
+        campaign = _campaign(mother_high=100.0, mother_low=90.0)
+        campaign.avg_entry_price = 96.5  # a 3.5% fall
+        geometric = campaign.avg_entry_price + TP_FIB_LEVEL * (100.0 - campaign.avg_entry_price)
+        self.assertAlmostEqual(compute_tp_price(campaign), geometric, places=10)
+
+    def test_a_shallow_round_is_floored_above_its_own_commission(self):
+        """The case the 0.80% line describes: geometry alone would sell at a loss."""
+        campaign = _campaign(mother_high=100.0, mother_low=90.0)
+        campaign.avg_entry_price = 99.8  # a 0.2% fall — deep inside the losing zone
+        geometric = campaign.avg_entry_price + TP_FIB_LEVEL * (100.0 - campaign.avg_entry_price)
+        tp = compute_tp_price(campaign)
+        self.assertGreater(tp, geometric, "the floor has to lift a shallow target")
+
+        qty = 100.0 / campaign.avg_entry_price
+        cost = campaign.avg_entry_price * qty
+        net_geometric = (geometric - campaign.avg_entry_price) * qty - round_trip_fee(cost, geometric * qty)
+        net_floored = (tp - campaign.avg_entry_price) * qty - round_trip_fee(cost, tp * qty)
+        self.assertLess(net_geometric, 0.0, "this is the round that used to lose money")
+        self.assertGreater(net_floored, 0.0, "and it must not any more")
+
 
 if __name__ == "__main__":
     unittest.main()
