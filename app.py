@@ -64,8 +64,8 @@ from broker import get_broker_client, get_supported_brokers
 from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
 from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
+from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine
 from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
-from engine.cascade import CascadeEngine
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade, normalize_scalp_order_type
@@ -6925,10 +6925,16 @@ def _save_cascade_runtime(runtime_state: dict) -> None:
 
 
 def _snapshot_cascade_runtime(status: dict) -> dict:
+    # Keep exactly what the engine keeps. Persisting only the last 20 while the
+    # engine held CLOSED_HISTORY_LIMIT meant every restart quietly threw the
+    # older ones away — and a deploy restarts the engine. Journal rows link to a
+    # campaign by matching their buy order ids against the fills the engine
+    # still holds, so a dropped campaign silently took its trades' chart button
+    # with it, permanently.
     return {
         "saved_at": str(datetime.now()),
         "campaigns": list(status.get("campaigns") or []),
-        "closed_campaigns": list(status.get("closed_campaigns") or [])[-20:],
+        "closed_campaigns": list(status.get("closed_campaigns") or [])[-CLOSED_HISTORY_LIMIT:],
         "capital_groups": dict(status.get("capital_groups") or {}),
     }
 
