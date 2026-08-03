@@ -7667,7 +7667,13 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-cascade-title-view.is-clipped > .cf-cascade-title-track {
     animation: cfStripMarquee var(--cf-marquee-time, 9s) linear infinite;
     animation-delay: var(--cf-marquee-delay, 0s);
+    /* Hovering holds it still so it can be read. Driven from JS rather than a
+       :hover rule because the paused phase has to be frozen in the shared
+       clock too — otherwise the 3s repaint recomputes a later delay and the
+       "stopped" text jumps forward every three seconds. */
+    animation-play-state: var(--cf-marquee-play, running);
   }
+  .cf-cascade-title-view.is-clipped { cursor: default; }
   /* Exactly one copy's width — the second copy is then sitting where the first
      started, so the loop has no seam and nothing ever slides backwards. */
   @keyframes cfStripMarquee {

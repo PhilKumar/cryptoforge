@@ -176,3 +176,106 @@ test.describe('Cascade closed-rounds table', () => {
       .not.toContainText('fees');
   });
 });
+
+/**
+ * The strip's own controls.
+ *
+ * These are here because the "⋯" menu shipped to production completely dead
+ * and every check I ran said it worked — because every check called
+ * cfCascadeToggleMenu() directly. The button is wired through data-cf-click,
+ * which is ONE listener on document, and the outside-click handler that closes
+ * the menu is another. Calling the function skips both. Only a real click that
+ * bubbles to document exercises the order they run in, which is where the bug
+ * was: the menu opened and the closer shut it again in the same tick.
+ *
+ * So: no page.evaluate shortcuts in here. Clicks only.
+ */
+test.describe('Cascade strip controls', () => {
+  test('the ⋯ menu opens on a real click and stays open', async ({ page }) => {
+    await login(page);
+    await serveStatus(page, statusWith([round_(1)]));
+    await showCampaign(page);
+
+    const menu = page.locator('.cf-cascade-card .cf-cascade-menu');
+    await expect(menu).toBeHidden();
+
+    await page.click('.cf-cascade-card .cf-cascade-more-btn');
+    await expect(menu, 'a click that bubbles to document must leave it open').toBeVisible();
+
+    // It also has to survive the 3s status poll rebuilding the whole panel.
+    await page.waitForTimeout(3500);
+    await expect(menu, 'the repaint must not close it').toBeVisible();
+  });
+
+  test('the menu closes on a second click, on an outside click, and on Escape', async ({ page }) => {
+    await login(page);
+    await serveStatus(page, statusWith([round_(1)]));
+    await showCampaign(page);
+    const menu = page.locator('.cf-cascade-card .cf-cascade-menu');
+    const more = '.cf-cascade-card .cf-cascade-more-btn';
+
+    await page.click(more);
+    await page.click(more);
+    await expect(menu, 'second click toggles it shut').toBeHidden();
+
+    await page.click(more);
+    // Anywhere that is not the actions strip counts as outside — the stats row
+    // inside the same card is the closest such place, so it is the strictest
+    // check of where the guard draws the line.
+    await page.locator('.cf-cascade-card .cf-cascade-stats').first().click();
+    await expect(menu, 'a click elsewhere puts it away').toBeHidden();
+
+    await page.click(more);
+    await page.keyboard.press('Escape');
+    await expect(menu, 'Escape puts it away').toBeHidden();
+  });
+
+  test('only Chart and Stop ride on the strip', async ({ page }) => {
+    await login(page);
+    await serveStatus(page, statusWith([round_(1)]));
+    await showCampaign(page);
+
+    const stripButtons = page.locator('.cf-cascade-card .cf-cascade-actions > button');
+    await expect(stripButtons).toHaveCount(2);
+    await expect(stripButtons.nth(0)).toHaveText('Chart');
+    await expect(stripButtons.nth(1)).toHaveText('Stop');
+    // Delete is reachable, but never one stray click away.
+    await expect(page.locator('.cf-cascade-card .cf-cascade-menu-item.is-danger')).toHaveText('Delete');
+  });
+
+  test('the state pill says a word, not the engine constant', async ({ page }) => {
+    await login(page);
+    await serveStatus(page, statusWith([round_(1)]));
+    await showCampaign(page);
+
+    const pill = page.locator('.cf-cascade-card .cf-cascade-title .admin-pill').first();
+    await expect(pill).toHaveText('Active');
+    await expect(pill).toHaveAttribute('title', /TRENDLINE_ACTIVE/);
+  });
+
+  test('hovering the strip stops it scrolling, and letting go resumes in place', async ({ page }) => {
+    await login(page);
+    await serveStatus(page, statusWith([round_(1)]));
+    await showCampaign(page);
+
+    const view = page.locator('.cf-cascade-card .cf-cascade-title-view');
+    const playState = () => view.evaluate((el) => (el as HTMLElement).style.getPropertyValue('--cf-marquee-play').trim());
+    const delay = () => view.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--cf-marquee-delay')));
+
+    // Only a clipped strip scrolls; a short one has nothing to pause.
+    const clipped = await view.evaluate((el) => el.classList.contains('is-clipped'));
+    test.skip(!clipped, 'this fixture’s strip fits, so there is no marquee to pause');
+
+    await view.hover();
+    expect(await playState()).toBe('paused');
+    const held = await delay();
+    // Frozen has to mean frozen ACROSS the repaint — the shared clock keeps
+    // running, so a naive :hover rule would jump the text every three seconds.
+    await page.waitForTimeout(3500);
+    expect(await delay(), 'a held strip must not advance').toBeCloseTo(held, 1);
+
+    await page.mouse.move(0, 0);
+    expect(await playState()).toBe('running');
+    expect(await delay(), 'it resumes where it stopped, not where the clock got to').toBeCloseTo(held, 0);
+  });
+});

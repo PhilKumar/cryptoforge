@@ -8803,9 +8803,20 @@ function cfCascadeMenuPick(cid, what) {
   if (what === 'delete') return cfCascadeDeleteCampaign(cid);
 }
 
-// Clicking anywhere else, or Escape, puts it away. Clicks inside the actions
-// strip never reach here — it stops propagation so they cannot toggle the card.
-document.addEventListener('click', function() { cfCascadeCloseMenu(); });
+// Clicking anywhere else, or Escape, puts it away.
+//
+// The guard is load-bearing. `data-cf-click` is dispatched by ONE listener on
+// document, so this listener sees the same click a moment later — without the
+// check it closed the menu in the same tick the button opened it, and the "⋯"
+// looked completely dead. The strip's own inline onclick does not save us:
+// CSP blocks inline handlers here, which is why every control on this page is
+// wired through data-cf-click in the first place.
+document.addEventListener('click', function(event) {
+  var inside = event.target && typeof event.target.closest === 'function'
+    && event.target.closest('.cf-cascade-actions');
+  if (inside) return;
+  cfCascadeCloseMenu();
+});
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') cfCascadeCloseMenu();
 });
@@ -8951,19 +8962,72 @@ var _CF_MARQUEE_PX_PER_SEC = 85;
 // invisible and the strip just keeps sliding.
 var _CF_MARQUEE_EPOCH = Date.now();
 
-function _cfMarqueeTune(el, distance, travelFraction, minSec, maxSec) {
+// Hovering a strip stops it so you can read it. Two books are kept per strip
+// because the shared clock never stops: `_cfStripHoverAt` is when the pointer
+// arrived, and `_cfStripPausedMs` is how long it has been held still in total.
+// Subtracting both gives an elapsed time that simply does not advance while
+// you hover — so the 3s repaint recomputes the same phase instead of jumping
+// the text forward, and letting go resumes exactly where it stopped rather
+// than snapping to wherever the clock got to meanwhile.
+var _cfStripHoverAt = {};
+var _cfStripPausedMs = {};
+
+function _cfMarqueeElapsedMs(key) {
+  var elapsed = Date.now() - _CF_MARQUEE_EPOCH - (_cfStripPausedMs[key] || 0);
+  if (key && _cfStripHoverAt[key]) elapsed -= (Date.now() - _cfStripHoverAt[key]);
+  return elapsed;
+}
+
+function _cfMarqueeTune(el, distance, travelFraction, minSec, maxSec, key) {
   var seconds = (distance / _CF_MARQUEE_PX_PER_SEC) / travelFraction;
   seconds = Math.max(minSec, Math.min(maxSec, seconds));
-  var phase = ((Date.now() - _CF_MARQUEE_EPOCH) / 1000) % seconds;
+  var phase = (_cfMarqueeElapsedMs(key) / 1000) % seconds;
   el.style.setProperty('--cf-marquee-time', seconds.toFixed(2) + 's');
   el.style.setProperty('--cf-marquee-delay', (-phase).toFixed(2) + 's');
+  el.style.setProperty('--cf-marquee-play', key && _cfStripHoverAt[key] ? 'paused' : 'running');
 }
 
 function _cfMarqueeClear(el) {
   el.style.removeProperty('--cf-marquee-shift');
   el.style.removeProperty('--cf-marquee-time');
   el.style.removeProperty('--cf-marquee-delay');
+  el.style.removeProperty('--cf-marquee-play');
 }
+
+// Which campaign a strip belongs to — the elements themselves are replaced
+// every 3s, so the pause has to be remembered against something that is not.
+function _cfStripKey(node) {
+  var card = node && typeof node.closest === 'function' ? node.closest('.cf-cascade-card') : null;
+  return card ? String(card.getAttribute('data-campaign') || '') : '';
+}
+
+// Delegated, for the same reason: a listener bound to the strip would be
+// thrown away with it on the next status poll.
+document.addEventListener('mouseover', function(event) {
+  var view = event.target && typeof event.target.closest === 'function'
+    ? event.target.closest('.cf-cascade-title-view') : null;
+  if (!view) return;
+  // Moving between children of the same strip is not a fresh arrival.
+  if (event.relatedTarget && view.contains(event.relatedTarget)) return;
+  var key = _cfStripKey(view);
+  if (!key || _cfStripHoverAt[key]) return;
+  _cfStripHoverAt[key] = Date.now();
+  _cfCascadeMarkClippedStrips(view.closest('.cf-cascade-card') || document);
+});
+
+document.addEventListener('mouseout', function(event) {
+  var view = event.target && typeof event.target.closest === 'function'
+    ? event.target.closest('.cf-cascade-title-view') : null;
+  if (!view) return;
+  if (event.relatedTarget && view.contains(event.relatedTarget)) return;
+  var key = _cfStripKey(view);
+  if (!key || !_cfStripHoverAt[key]) return;
+  _cfStripPausedMs[key] = (_cfStripPausedMs[key] || 0) + (Date.now() - _cfStripHoverAt[key]);
+  delete _cfStripHoverAt[key];
+  // Re-tune now rather than waiting up to 3s for the next poll, or the strip
+  // would sit frozen for a beat after the pointer has already left.
+  _cfCascadeMarkClippedStrips(view.closest('.cf-cascade-card') || document);
+});
 
 // The campaign strip carries a state pill, PAPER/LIVE, the MC kind, the
 // timeframe, sometimes OLD RULES, and a summary — and the buttons beside it
@@ -8997,7 +9061,7 @@ function _cfCascadeMarkClippedStrips(root) {
       var copy = group.cloneNode(true);
       copy.setAttribute('aria-hidden', 'true');
       track.appendChild(copy);
-      _cfMarqueeTune(title, width, 1, 3, 40);
+      _cfMarqueeTune(title, width, 1, 3, 40, _cfStripKey(title));
       if (!title.title) {
         // textContent runs the pills together ("TRENDLINE_ACTIVEPAPER"), so the
         // tooltip is built element by element with separators.
