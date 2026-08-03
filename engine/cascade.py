@@ -1018,6 +1018,12 @@ class Campaign:
     # "minor" = a sub-mother marked inside a move that is already running, which
     # is always 5m no matter what chart it was spotted on.
     mc_kind: str = "major"
+    # Which exchange this campaign's money and orders live on. Empty means "the
+    # one this engine was started with", which is what every campaign saved
+    # before exchanges were a concept will read as — so nothing existing moves
+    # venue by upgrading. It is a birth setting: a campaign never migrates, and
+    # a successor inherits it, because its parent's position is on that venue.
+    exchange: str = ""
     # Superseded by funded_bands. Kept so campaigns saved before the band
     # ledger still load; nothing reads it any more.
     funded_floor_price: float = 0.0
@@ -1286,6 +1292,7 @@ class Campaign:
             "start_timeframe": self.start_timeframe,
             "escalates": self.escalates,
             "mc_kind": self.mc_kind,
+            "exchange": self.exchange,
             "funded_floor_price": self.funded_floor_price,
             "funded_bands": [[low, high] for low, high in self.funded_bands],
             "min_notional_usd": self.min_notional_usd,
@@ -1372,6 +1379,7 @@ class Campaign:
             "start_timeframe",
             "escalates",
             "mc_kind",
+            "exchange",
             "funded_floor_price",
             "min_notional_usd",
             "min_fib_range_pct",
@@ -1713,8 +1721,18 @@ class CascadeEngine:
         on_event: Optional[Callable] = None,
         on_update: Optional[Callable] = None,
         on_alert: Optional[Callable] = None,
+        brokers: Optional[Dict[str, object]] = None,
     ):
+        # `broker` stays the default and is what every existing campaign uses.
+        # `brokers` is the optional registry for additional venues; a campaign
+        # reaches one only by naming it, so passing nothing changes nothing.
         self.broker = broker
+        self.primary_broker_name = str(getattr(broker, "broker_name", "") or "").lower()
+        self.brokers: Dict[str, object] = {
+            str(name or "").lower(): client for name, client in (brokers or {}).items() if name and client
+        }
+        if self.primary_broker_name:
+            self.brokers.setdefault(self.primary_broker_name, broker)
         self.on_campaign_closed = on_campaign_closed
         self.on_event = on_event
         self.on_update = on_update
@@ -1937,6 +1955,29 @@ class CascadeEngine:
 
     # ── capital groups ───────────────────────────────────────────
 
+    def broker_for(self, campaign: "Campaign"):
+        """The exchange client this campaign's orders and balances belong to.
+
+        Deliberately strict. An empty `exchange` means the campaign predates
+        multi-venue support, or was started on the engine's own default, and
+        resolves to that default — which is exactly where its position already
+        is. But a campaign naming a venue this engine was not given raises
+        instead of falling back: quietly substituting the default would read a
+        balance from one exchange and send the order to another, or place a
+        real order on the wrong book entirely. A campaign that cannot reach its
+        venue must stop, not improvise.
+        """
+        name = str(getattr(campaign, "exchange", "") or "").strip().lower()
+        if not name or name == self.primary_broker_name:
+            return self.broker
+        client = self.brokers.get(name)
+        if client is None:
+            raise LookupError(
+                f"Campaign {getattr(campaign, 'campaign_id', '?')} is on exchange '{name}', "
+                f"which this engine has no client for (has: {', '.join(sorted(self.brokers)) or 'none'})"
+            )
+        return client
+
     def set_capital_group(self, symbol: str, budget_usd) -> dict:
         """Set (or clear, with 0/blank) the one budget a symbol's campaigns share."""
         symbol = str(symbol or "").strip().upper()
@@ -2058,9 +2099,18 @@ class CascadeEngine:
         mode: str = "paper",
         timeframe: str = BASE_TIMEFRAME,
         mc_kind: str = "",
+        exchange: str = "",
     ) -> dict:
         symbol = str(symbol or "").strip().upper()
         mode = "live" if str(mode or "").strip().lower() == "live" else "paper"
+        # Empty means the engine's own default, which is what every caller sent
+        # before venues were selectable. Resolve the client ONCE here so the
+        # symbol, its lot rules and its mother candle are all read from the
+        # exchange the campaign will actually trade on.
+        exchange = str(exchange or "").strip().lower()
+        if exchange and exchange not in self.brokers:
+            return {"error": f"Unknown exchange '{exchange}' — this engine has: {', '.join(sorted(self.brokers))}"}
+        venue = self.brokers.get(exchange, self.broker) if exchange else self.broker
         timeframe = str(timeframe or BASE_TIMEFRAME).strip().lower() or BASE_TIMEFRAME
         # The kind and the timeframe say the same thing, so the UI only asks
         # once: picking 5m IS picking "initiate / minor MC", and picking
@@ -2097,7 +2147,7 @@ class CascadeEngine:
         if mother_timestamp and (mother_high <= 0 or mother_low <= 0):
             bucket = (int(mother_timestamp) // tf_sec) * tf_sec
             try:
-                df = await self.broker.async_get_candles(symbol, resolution=timeframe)
+                df = await venue.async_get_candles(symbol, resolution=timeframe)
             except Exception as exc:
                 return {"error": f"Could not fetch the mother candle at that time: {exc}"}
             row = None
@@ -2122,11 +2172,11 @@ class CascadeEngine:
         min_notional = MIN_NOTIONAL_FLOOR_USD
         product = None
         try:
-            product = await asyncio.to_thread(self.broker.get_product_by_symbol, symbol)
+            product = await asyncio.to_thread(venue.get_product_by_symbol, symbol)
         except Exception as exc:
             _log.warning("[CASCADE] product lookup failed for %s: %s", symbol, exc)
         if product is None:
-            return {"error": f"Symbol {symbol} not found on {getattr(self.broker, 'display_name', 'broker')}"}
+            return {"error": f"Symbol {symbol} not found on {getattr(venue, 'display_name', 'broker')}"}
         min_notional = max(_coerce_float(product.get("min_notional"), min_notional), MIN_NOTIONAL_FLOOR_USD)
         tick_size = _coerce_float(product.get("tick_size"), DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
         # Capital group: when the symbol has a budget, a new campaign may only
@@ -2243,6 +2293,10 @@ class CascadeEngine:
             # escalate toward the 4H cap. 4H/1D/1W stay put for life.
             escalates=timeframe in ESCALATING_START_TIMEFRAMES,
             mc_kind=mc_kind,
+            # Stamped only when a venue was named. Left empty for the default
+            # so existing campaigns and new ones are stored identically, and
+            # an engine started on a different broker keeps behaving as before.
+            exchange=exchange,
             funded_bands=funded_bands,
             min_notional_usd=min_notional,
             min_fib_range_pct=min_fib_range,
@@ -2503,7 +2557,7 @@ class CascadeEngine:
         free_qty = await self._free_base_balance(campaign)
         sell_qty = desired_qty if free_qty is None else min(desired_qty, free_qty)
         try:
-            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
+            product = await asyncio.to_thread(self.broker_for(campaign).get_product_by_symbol, campaign.symbol)
         except Exception as exc:
             _log.warning("[CASCADE] liquidate product lookup failed for %s: %s", campaign.symbol, exc)
             product = {}
@@ -2518,7 +2572,7 @@ class CascadeEngine:
         client_id = f"cf-csc-{campaign.campaign_id}-liq-{int(time.time())}"
         try:
             result = await asyncio.to_thread(
-                lambda: self.broker.place_order(
+                lambda: self.broker_for(campaign).place_order(
                     campaign.symbol,
                     0.0,
                     "sell",
@@ -2614,9 +2668,17 @@ class CascadeEngine:
             return {"status": "ok", "campaign": campaign.to_dict()}
         if campaign.all_fills:
             return {"error": "Campaign already has paper fills — start a fresh live campaign instead"}
-        checker = getattr(self.broker, "_is_configured", None)
+        # Check the keys of the venue THIS campaign would trade on, not the
+        # engine default — going live on an exchange whose keys are missing is
+        # exactly the failure this guard exists to catch.
+        try:
+            client = self.broker_for(campaign)
+        except LookupError as exc:
+            return {"error": str(exc)}
+        checker = getattr(client, "_is_configured", None)
         if not (callable(checker) and checker()):
-            return {"error": "Broker API keys are not configured — cannot go live"}
+            venue = str(getattr(client, "display_name", "") or "Broker")
+            return {"error": f"{venue} API keys are not configured — cannot go live"}
         campaign.mode = "live"
         self._log_event(campaign, "mode", f"Campaign {campaign_id} switched to LIVE")
         await self._sync_live_orders(campaign)
@@ -2772,7 +2834,7 @@ class CascadeEngine:
             )
             return paged[-max_candles:]
         try:
-            df = await self.broker.async_get_candles(campaign.symbol, resolution=campaign.timeframe)
+            df = await self.broker_for(campaign).async_get_candles(campaign.symbol, resolution=campaign.timeframe)
         except Exception as exc:
             _log.warning("[CASCADE] chart candle fetch failed for %s: %s", campaign.symbol, exc)
             return []
@@ -2825,6 +2887,10 @@ class CascadeEngine:
             "start_timeframe",
             "escalates",
             "mc_kind",
+            # The venue a campaign's position actually sits on. A recalc that
+            # cleared it would silently hand the campaign back to the engine's
+            # default exchange and point its next order at the wrong book.
+            "exchange",
             # Birth settings, not replay output. The ledger a campaign was born
             # against is fixed for its life, and a recalc that cleared it would
             # replay every leg funding ground a sibling had already paid for.
@@ -4657,7 +4723,7 @@ class CascadeEngine:
         """
         if campaign.mode != "live" or not order_id or str(order_id).upper() == "PAPER":
             return None
-        getter = getattr(self.broker, "get_order_commission", None)
+        getter = getattr(self.broker_for(campaign), "get_order_commission", None)
         if getter is None:
             return None
         try:
@@ -5346,6 +5412,9 @@ class CascadeEngine:
             # genuine sub-mother marked inside someone else's move is a minor,
             # and that only ever comes from Phil starting one by hand.
             mc_kind=parent.mc_kind,
+            # A successor carries on the parent's move on the parent's venue.
+            # Inheriting this is what stops a restart from crossing exchanges.
+            exchange=parent.exchange,
             # A successor is a newly-born MC like any other, so it takes the
             # band ledger as it stands now. The parent is already archived and
             # has released its ground; only still-running siblings show up.
@@ -5440,7 +5509,7 @@ class CascadeEngine:
     # ── live order sync ──────────────────────────────────────────
 
     async def _open_orders_by_id(self, campaign: Campaign) -> Dict[str, dict]:
-        rows = await asyncio.to_thread(self.broker.get_orders, campaign.symbol, "open")
+        rows = await asyncio.to_thread(self.broker_for(campaign).get_orders, campaign.symbol, "open")
         result = {}
         for row in rows or []:
             if isinstance(row, dict) and row.get("orderId") is not None:
@@ -5459,8 +5528,8 @@ class CascadeEngine:
         case the caller falls back to the recorded quantity and retries.
         """
         try:
-            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
-            wallet = await asyncio.to_thread(self.broker.get_wallet)
+            product = await asyncio.to_thread(self.broker_for(campaign).get_product_by_symbol, campaign.symbol)
+            wallet = await asyncio.to_thread(self.broker_for(campaign).get_wallet)
         except Exception as exc:
             _log.warning("[CASCADE] free-balance lookup failed for %s: %s", campaign.symbol, exc)
             return None
@@ -5484,8 +5553,8 @@ class CascadeEngine:
         position that has a take-profit resting against it.
         """
         try:
-            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
-            wallet = await asyncio.to_thread(self.broker.get_wallet)
+            product = await asyncio.to_thread(self.broker_for(campaign).get_product_by_symbol, campaign.symbol)
+            wallet = await asyncio.to_thread(self.broker_for(campaign).get_wallet)
         except Exception as exc:
             _log.warning("[CASCADE] owned-balance lookup failed for %s: %s", campaign.symbol, exc)
             return None
@@ -5770,7 +5839,7 @@ class CascadeEngine:
             # cross, so it can never buy into a fall. When raised, eff_stop sits
             # just above the current price; otherwise it is the original trigger.
             result = await asyncio.to_thread(
-                lambda: self.broker.place_order(
+                lambda: self.broker_for(campaign).place_order(
                     campaign.symbol,
                     campaign.pending_usd,
                     "buy",
@@ -6012,7 +6081,7 @@ class CascadeEngine:
         # later fill can combine with it, and retain an existing TP while this
         # smaller replacement is impossible.
         try:
-            product = await asyncio.to_thread(self.broker.get_product_by_symbol, campaign.symbol)
+            product = await asyncio.to_thread(self.broker_for(campaign).get_product_by_symbol, campaign.symbol)
         except Exception as exc:
             _log.warning("[CASCADE] TP product lookup failed for %s: %s", campaign.symbol, exc)
             product = {}
@@ -6082,7 +6151,7 @@ class CascadeEngine:
         tp_client_id = f"cf-csc-{campaign.campaign_id}-tp-{campaign.tp_rev}"
         try:
             result = await asyncio.to_thread(
-                lambda: self.broker.place_order(
+                lambda: self.broker_for(campaign).place_order(
                     campaign.symbol,
                     0.0,
                     "sell",
@@ -6140,7 +6209,7 @@ class CascadeEngine:
 
     async def _safe_get_order(self, campaign: Campaign, order_id) -> dict:
         try:
-            return await asyncio.to_thread(self.broker.get_order, campaign.symbol, order_id) or {}
+            return await asyncio.to_thread(self.broker_for(campaign).get_order, campaign.symbol, order_id) or {}
         except Exception as exc:
             _log.warning("[CASCADE] get_order failed for %s: %s", order_id, exc)
             return {}
@@ -6154,7 +6223,7 @@ class CascadeEngine:
         keep ignoring it.
         """
         try:
-            result = await asyncio.to_thread(self.broker.cancel_order, order_id, campaign.symbol)
+            result = await asyncio.to_thread(self.broker_for(campaign).cancel_order, order_id, campaign.symbol)
         except Exception as exc:
             _log.warning("[CASCADE] cancel failed for %s: %s", order_id, exc)
             return False

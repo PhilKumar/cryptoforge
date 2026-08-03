@@ -6301,3 +6301,85 @@ class CascadeMcKindRelabelTests(unittest.TestCase):
         self.campaign.state = "COMPLETED"
         self.assertIn("ended", self.engine.set_mc_kind("camp1", "major").get("error", ""))
         self.assertEqual(self.campaign.mc_kind, "minor")
+
+
+class CascadeExchangeRoutingTests(unittest.IsolatedAsyncioTestCase):
+    """Stage one of multi-venue Cascade: a campaign remembers which exchange
+    it belongs to, and its orders can only ever reach that exchange."""
+
+    def _two_venue_engine(self):
+        primary = FakeCascadeBroker()
+        primary.broker_name = "binance"
+        primary.display_name = "Binance Spot"
+        second = FakeCascadeBroker()
+        second.broker_name = "coindcx"
+        second.display_name = "CoinDCX Spot"
+        engine = CascadeEngine(primary, brokers={"coindcx": second})
+        return engine, primary, second
+
+    def test_blank_exchange_uses_the_engine_default(self):
+        # Every campaign saved before venues existed has an empty exchange and
+        # must keep trading exactly where its position already is.
+        engine, primary, _ = self._two_venue_engine()
+        campaign = _mk_campaign(engine)
+        self.assertEqual(campaign.exchange, "")
+        self.assertIs(engine.broker_for(campaign), primary)
+
+    def test_named_exchange_routes_to_that_client(self):
+        engine, primary, second = self._two_venue_engine()
+        campaign = _mk_campaign(engine)
+        campaign.exchange = "coindcx"
+        self.assertIs(engine.broker_for(campaign), second)
+        self.assertIsNot(engine.broker_for(campaign), primary)
+
+    def test_naming_the_primary_explicitly_still_resolves(self):
+        engine, primary, _ = self._two_venue_engine()
+        campaign = _mk_campaign(engine)
+        campaign.exchange = "binance"
+        self.assertIs(engine.broker_for(campaign), primary)
+
+    def test_unknown_exchange_raises_instead_of_falling_back(self):
+        # The whole point of the strictness: silently substituting the default
+        # would place a real order on the wrong exchange's book.
+        engine, _, _ = self._two_venue_engine()
+        campaign = _mk_campaign(engine)
+        campaign.exchange = "kraken"
+        with self.assertRaises(LookupError) as ctx:
+            engine.broker_for(campaign)
+        self.assertIn("kraken", str(ctx.exception))
+
+    def test_single_broker_engine_is_unchanged(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        self.assertIs(engine.broker_for(campaign), engine.broker)
+
+    def test_exchange_survives_save_and_reload(self):
+        engine, _, _ = self._two_venue_engine()
+        campaign = _mk_campaign(engine)
+        campaign.exchange = "coindcx"
+        restored = Campaign.from_dict(campaign.to_dict())
+        self.assertEqual(restored.exchange, "coindcx")
+
+    def test_campaign_saved_before_exchanges_loads_blank(self):
+        engine, primary, _ = self._two_venue_engine()
+        payload = _mk_campaign(engine).to_dict()
+        payload.pop("exchange", None)
+        restored = Campaign.from_dict(payload)
+        self.assertEqual(restored.exchange, "")
+        self.assertIs(engine.broker_for(restored), primary)
+
+    def test_recalc_keeps_the_exchange(self):
+        # A recalc replays geometry. If it cleared the venue, the campaign's
+        # next order would go to the engine default instead of its own book.
+        self.assertIn("exchange", CascadeEngine._RECALC_KEEP)
+
+    async def test_going_live_checks_the_campaign_s_own_venue_keys(self):
+        engine, primary, second = self._two_venue_engine()
+        primary.configured = True
+        second.configured = False
+        campaign = _mk_campaign(engine)
+        campaign.exchange = "coindcx"
+        result = await engine.set_mode(campaign.campaign_id, "live")
+        self.assertIn("error", result)
+        self.assertIn("CoinDCX", result["error"])
+        self.assertEqual(campaign.mode, "paper")
