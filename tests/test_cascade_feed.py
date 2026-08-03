@@ -37,9 +37,12 @@ from engine.cascade_feed import (
     FeedLeak,
     FeedLog,
     FeedSigner,
+    FeedSubscribers,
+    NotEntitled,
     active_public_keys,
     build_envelope,
     build_key_set,
+    build_snapshot,
     campaign_closed_payload,
     campaign_opened_payload,
     campaign_state_payload,
@@ -48,10 +51,12 @@ from engine.cascade_feed import (
     key_set_expiry_warning,
     leg_finalized_payload,
     leg_opened_payload,
+    sign_handshake,
     sign_key_set,
     trendline_set_payload,
     verify_frame,
     verify_key_set,
+    verify_subscriber_handshake,
 )
 
 
@@ -757,3 +762,130 @@ def _walk_values(value):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubscriberTests(unittest.TestCase):
+    """Who may listen, and how they prove it."""
+
+    def setUp(self):
+        self.store = FakeStore()
+        self.now = [1785770000.0]
+        self.subs = FeedSubscribers(self.store, now_fn=lambda: self.now[0])
+        self.buyer = FeedSigner.generate("buyer-7")
+        self.subs.add("buyer-7", self.buyer.public_key_b64(), label="Phil's laptop")
+
+    def _handshake(self, **overrides):
+        payload = sign_handshake("buyer-7", self.buyer, nonce="n1", timestamp=self.now[0])
+        payload.update(overrides)
+        return payload
+
+    def test_we_store_only_the_public_half(self):
+        """The same principle as not holding their exchange keys."""
+        record = self.subs.get("buyer-7")
+        self.assertEqual(record["public_key"], self.buyer.public_key_b64())
+        self.assertNotIn("private_key", record)
+
+    def test_a_good_handshake_is_accepted(self):
+        result = verify_subscriber_handshake(self._handshake(), self.subs, now=self.now[0])
+        self.assertEqual(result["subscriber"]["buyer_id"], "buyer-7")
+        self.assertFalse(result["join_risk"])
+
+    def test_an_unregistered_machine_is_refused(self):
+        stranger = FeedSigner.generate("buyer-99")
+        with self.assertRaises(NotEntitled):
+            verify_subscriber_handshake(
+                sign_handshake("buyer-99", stranger, nonce="n1", timestamp=self.now[0]),
+                self.subs,
+                now=self.now[0],
+            )
+
+    def test_a_forged_signature_is_refused(self):
+        """Someone who knows a buyer id but not their key."""
+        impostor = FeedSigner.generate("buyer-7")
+        with self.assertRaises(NotEntitled):
+            verify_subscriber_handshake(
+                sign_handshake("buyer-7", impostor, nonce="n1", timestamp=self.now[0]),
+                self.subs,
+                now=self.now[0],
+            )
+
+    def test_a_lapsed_subscription_cannot_connect(self):
+        self.subs.set_status("buyer-7", "lapsed")
+        with self.assertRaises(NotEntitled) as caught:
+            verify_subscriber_handshake(self._handshake(), self.subs, now=self.now[0])
+        self.assertIn("lapsed", str(caught.exception))
+
+    def test_an_expired_subscription_cannot_connect(self):
+        self.subs.add("buyer-7", self.buyer.public_key_b64(), expires_at=int(self.now[0]) - 1)
+        ok, reason = self.subs.entitled("buyer-7", now=self.now[0])
+        self.assertFalse(ok)
+        self.assertIn("expired", reason)
+
+    def test_a_captured_handshake_cannot_be_replayed(self):
+        seen = {}
+        handshake = self._handshake()
+        verify_subscriber_handshake(handshake, self.subs, now=self.now[0], seen_nonces=seen)
+        with self.assertRaises(NotEntitled):
+            verify_subscriber_handshake(handshake, self.subs, now=self.now[0], seen_nonces=seen)
+
+    def test_a_stale_handshake_is_refused_even_with_a_fresh_nonce(self):
+        old = sign_handshake("buyer-7", self.buyer, nonce="n2", timestamp=self.now[0] - 600)
+        with self.assertRaises(NotEntitled):
+            verify_subscriber_handshake(old, self.subs, now=self.now[0])
+
+    def test_a_skewed_clock_is_measured_not_just_tolerated(self):
+        """The silent failure: a fast clock makes join-at-start skip everything.
+
+        max_join_age_sec is 300 seconds, judged against the executor's own
+        clock. A machine 90 seconds fast still connects fine and still looks
+        healthy — it just quietly decides every campaign is too old. The buyer
+        has no way to tell that from a market where nothing is happening.
+        """
+        skewed = sign_handshake("buyer-7", self.buyer, nonce="n3", timestamp=self.now[0] + 90)
+        result = verify_subscriber_handshake(skewed, self.subs, now=self.now[0])
+        self.assertTrue(result["join_risk"])
+        self.assertAlmostEqual(result["clock_skew_sec"], 90, places=3)
+
+    def test_the_handshake_identity_cannot_disagree_with_its_signature(self):
+        with self.assertRaises(ValueError):
+            sign_handshake("someone-else", self.buyer, nonce="n1")
+
+
+class SnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.signer = FeedSigner.generate("cf-feed-2026a")
+        self.keys = {self.signer.kid: self.signer.public_key_b64()}
+
+    def test_a_cold_executor_gets_the_whole_current_picture(self):
+        campaign = _loaded_campaign()
+        frames = build_snapshot(
+            [campaign.to_dict()], self.signer, model_version=MODEL_VERSION, head_by_symbol={"SOLUSDT": 42}
+        )
+        messages = [verify_frame(frame, self.keys) for frame in frames]
+        self.assertEqual(
+            [m["type"] for m in messages],
+            ["campaign.opened", "trendline.set", "leg.opened", "campaign.state"],
+        )
+
+    def test_snapshot_frames_carry_the_head_so_the_cursor_lands_right(self):
+        campaign = _loaded_campaign()
+        frames = build_snapshot(
+            [campaign.to_dict()], self.signer, model_version=MODEL_VERSION, head_by_symbol={"SOLUSDT": 42}
+        )
+        self.assertTrue(all(verify_frame(f, self.keys)["seq"] == 42 for f in frames))
+
+    def test_a_snapshot_leaks_nothing_either(self):
+        campaign = _loaded_campaign()
+        frames = build_snapshot(
+            [campaign.to_dict()], self.signer, model_version=MODEL_VERSION, head_by_symbol={"SOLUSDT": 1}
+        )
+        for frame in frames:
+            for key in _walk_keys(verify_frame(frame, self.keys)["payload"]):
+                self.assertNotIn(key, NEVER_PUBLISH)
+
+    def test_paper_campaigns_are_absent_from_a_snapshot_too(self):
+        campaign = _loaded_campaign()
+        campaign.mode = "paper"
+        self.assertEqual(
+            build_snapshot([campaign.to_dict()], self.signer, model_version=MODEL_VERSION, head_by_symbol={}), []
+        )

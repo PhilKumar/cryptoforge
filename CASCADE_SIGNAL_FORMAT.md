@@ -80,14 +80,27 @@ band ledger.
 
 ## Transport
 
-A signed, append-only event stream per symbol. The executor holds a durable
-cursor and replays from it on reconnect.
+A signed, append-only event stream per symbol, served over a WebSocket at
+`/ws/cascade-feed`. The executor holds a durable cursor and replays from it on
+reconnect.
 
+- **Handshake first** — the executor signs `{buyer_id, nonce, timestamp}` with
+  its own key. Ten-second budget, then the socket closes.
 - **Snapshot on subscribe** — full current geometry for every running campaign,
-  so a cold executor doesn't have to replay history.
+  so a cold executor doesn't have to replay history. Snapshot frames carry the
+  symbol's current head as their `seq`; they are a rendering of the present,
+  not entries in the log, so they consume no sequence number and the executor
+  sets its cursor straight from them.
 - **Events thereafter** — one message per geometry change.
 - **Heartbeat every 30s** — silence must be distinguishable from "nothing
-  happened", or a dead feed reads as a calm market.
+  happened", or a dead feed reads as a calm market. Entitlement is re-checked
+  on every beat.
+
+The `welcome` frame reports the measured clock skew, and warns when it is over
+a minute. That is not politeness: `max_join_age_sec` is judged against the
+executor's own clock, so a machine a few minutes fast decides every campaign is
+already too old and joins nothing — silently, indefinitely, on a stream that
+looks perfectly healthy. A buyer has no way to tell that from a quiet market.
 
 ## Envelope
 
@@ -459,6 +472,9 @@ optimization that can be subtly wrong. Take the boring one.
 
 - **Snapshot delivery under load.** A cold executor asks for full geometry on
   every running campaign. Fine at our scale; needs a bound before it isn't.
-- **Buyer-side clock skew.** `max_join_age_sec` is judged against the
-  executor's clock. A machine 10 minutes fast silently skips every campaign.
-  Detect the skew at connect and say so, rather than failing quietly.
+- **Which venue the geometry came from.** Campaigns are gaining an `exchange`
+  field. `symbol` alone does not say whose candles a fib was drawn on, and
+  Binance SOLUSDT and CoinDCX SOLUSDT are not the same series. Unpublished for
+  now, which is the safe default; decide before a second venue goes live.
+- **The executor itself.** Everything above is the server half. Nothing has
+  been built that connects to it and trades.

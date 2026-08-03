@@ -599,6 +599,208 @@ def _derived_levels(high_anchor: Optional[float], low_anchor: Optional[float]) -
 # ── the durable log ──────────────────────────────────────────────────
 
 
+# ── who may listen ───────────────────────────────────────────────────
+
+SUBSCRIBER_BUCKET = "cascade_feed_subscribers"
+
+# How far a handshake's clock may be from ours. Wide enough for an ordinary
+# unsynchronised laptop, narrow enough that a captured handshake is not
+# replayable for long. Nonces close the rest of that window.
+HANDSHAKE_MAX_SKEW_SEC = 120
+
+# The skew that makes join-at-start silently useless. max_join_age_sec is 300,
+# so a machine more than a few minutes fast reads every campaign as already
+# too old and joins nothing — with no error, ever. Tell them at connect.
+JOIN_RISK_SKEW_SEC = 60
+
+
+class NotEntitled(Exception):
+    """The connection is refused. The message is meant to be read by a human."""
+
+
+class FeedSubscribers:
+    """
+    The register of who may receive the feed.
+
+    We store a buyer's PUBLIC key and nothing else that matters. The private
+    half is generated on their machine at install and never sent, so there is
+    no secret here that can leak from our side — the same principle that keeps
+    us from holding their exchange credentials.
+    """
+
+    def __init__(self, store, *, bucket: str = SUBSCRIBER_BUCKET, now_fn: Callable[[], float] = time.time):
+        self._store = store
+        self._bucket = bucket
+        self._now = now_fn
+
+    def add(self, buyer_id: str, public_key_b64: str, *, label: str = "", expires_at: Optional[int] = None) -> dict:
+        record = {
+            "buyer_id": buyer_id,
+            "public_key": public_key_b64,
+            "label": label,
+            "status": "active",
+            "created_at": int(self._now()),
+            "expires_at": int(expires_at) if expires_at else None,
+        }
+        self._store.put(self._bucket, buyer_id, record)
+        return record
+
+    def get(self, buyer_id: str) -> Optional[dict]:
+        record = self._store.get(self._bucket, buyer_id, default=None)
+        return record if isinstance(record, dict) else None
+
+    def set_status(self, buyer_id: str, status: str) -> dict:
+        record = self.get(buyer_id)
+        if not record:
+            raise KeyError(buyer_id)
+        record["status"] = status
+        self._store.put(self._bucket, buyer_id, record)
+        return record
+
+    def entitled(self, buyer_id: str, *, now: Optional[float] = None) -> tuple[bool, str]:
+        """(ok, reason). The reason is shown to the buyer, so it has to be plain."""
+        record = self.get(buyer_id)
+        stamp = self._now() if now is None else now
+        if not record:
+            return False, "This machine is not registered."
+        if record.get("status") != "active":
+            return False, f"This subscription is {record.get('status')}."
+        expires = record.get("expires_at")
+        if expires and int(expires) <= stamp:
+            return False, "This subscription has expired."
+        return True, ""
+
+
+def verify_subscriber_handshake(
+    handshake: dict,
+    subscribers: FeedSubscribers,
+    *,
+    now: Optional[float] = None,
+    seen_nonces: Optional[Dict[str, float]] = None,
+) -> dict:
+    """
+    Check that a connecting executor is who it says and is paid up.
+
+    Returns `{"subscriber":..., "clock_skew_sec":..., "join_risk": bool}`.
+
+    The skew is measured and returned rather than merely tolerated, because of
+    a failure this design would otherwise have: `max_join_age_sec` is judged
+    against the executor's own clock, so a machine a few minutes fast decides
+    every campaign is already too old and joins nothing at all — silently,
+    indefinitely, with a stream that looks perfectly healthy. A buyer would
+    have no way to tell that from a quiet market.
+    """
+    stamp = time.time() if now is None else now
+    buyer_id = str(handshake.get("buyer_id") or "")
+    nonce = str(handshake.get("nonce") or "")
+    if not buyer_id or not nonce:
+        raise NotEntitled("Handshake is missing its buyer id or nonce.")
+
+    try:
+        timestamp = float(handshake.get("timestamp"))
+    except (TypeError, ValueError):
+        raise NotEntitled("Handshake timestamp is not a number.")
+    skew = timestamp - stamp
+    if abs(skew) > HANDSHAKE_MAX_SKEW_SEC:
+        raise NotEntitled(
+            f"This machine's clock is {abs(skew):.0f}s "
+            f"{'ahead of' if skew > 0 else 'behind'} the server. Sync it and reconnect."
+        )
+
+    if seen_nonces is not None:
+        for old, when in list(seen_nonces.items()):
+            if stamp - when > HANDSHAKE_MAX_SKEW_SEC * 2:
+                seen_nonces.pop(old, None)
+        if nonce in seen_nonces:
+            raise NotEntitled("This handshake has already been used.")
+
+    record = subscribers.get(buyer_id)
+    if not record:
+        raise NotEntitled("This machine is not registered.")
+
+    signed = {"buyer_id": buyer_id, "nonce": nonce, "timestamp": handshake.get("timestamp")}
+    frame = {"msg": _frame_bytes(signed).decode("utf-8"), "sig": handshake.get("sig") or ""}
+    try:
+        verify_frame(frame, {buyer_id: record.get("public_key")})
+    except Exception:
+        raise NotEntitled("Handshake signature did not verify.")
+
+    ok, reason = subscribers.entitled(buyer_id, now=stamp)
+    if not ok:
+        raise NotEntitled(reason)
+
+    if seen_nonces is not None:
+        seen_nonces[nonce] = stamp
+    return {"subscriber": record, "clock_skew_sec": skew, "join_risk": abs(skew) > JOIN_RISK_SKEW_SEC}
+
+
+def sign_handshake(buyer_id: str, signer: FeedSigner, *, nonce: str, timestamp: Optional[float] = None) -> dict:
+    """
+    The executor's half of the handshake, written here so the two sides are
+    read and tested together rather than reimplemented apart.
+
+    `signer` must carry the buyer's own key, whose kid IS the buyer id — the
+    signature and the claimed identity cannot then disagree.
+    """
+    if signer.kid != buyer_id:
+        raise ValueError("a handshake is signed by the buyer's own key")
+    stamp = time.time() if timestamp is None else timestamp
+    signed = {"buyer_id": buyer_id, "nonce": nonce, "timestamp": stamp}
+    return {**signed, "sig": signer.frame(signed)["sig"]}
+
+
+def build_snapshot(
+    campaigns: List[dict],
+    signer: FeedSigner,
+    *,
+    model_version: int,
+    head_by_symbol: Dict[str, int],
+    publish_modes: Iterable[str] = ("live",),
+) -> List[dict]:
+    """
+    Current geometry for everything running, as signed frames — so a cold
+    executor does not have to replay history it would ignore anyway.
+
+    These carry the symbol's current head as their `seq`. They are a rendering
+    of the present, not entries in the log, so they consume no seq of their
+    own; the executor sets its cursor from them and picks up the stream from
+    exactly there.
+    """
+    modes = {str(mode).lower() for mode in publish_modes}
+    frames = []
+
+    def emit(msg_type, symbol, campaign_id, payload):
+        frames.append(
+            signer.frame(
+                build_envelope(
+                    msg_type=msg_type,
+                    symbol=symbol,
+                    campaign_id=campaign_id,
+                    payload=payload,
+                    seq=int(head_by_symbol.get(symbol, 0)),
+                    model_version=model_version,
+                )
+            )
+        )
+
+    for campaign in campaigns or []:
+        if str(campaign.get("mode") or "").lower() not in modes:
+            continue
+        symbol = campaign.get("symbol") or ""
+        campaign_id = campaign.get("campaign_id") or ""
+        emit("campaign.opened", symbol, campaign_id, campaign_opened_payload(campaign))
+        for trendline in campaign.get("trendlines") or []:
+            emit("trendline.set", symbol, campaign_id, trendline_set_payload(trendline))
+        legs = campaign.get("legs") or []
+        for index, leg in enumerate(legs):
+            anchor = legs[index - 1]["low"] if index > 0 and legs[index - 1].get("low") else campaign.get("mother_high")
+            emit("leg.opened", symbol, campaign_id, leg_opened_payload(leg, allocation_anchor=anchor))
+            if leg.get("finalized"):
+                emit("leg.finalized", symbol, campaign_id, leg_finalized_payload(leg.get("leg_id")))
+        emit("campaign.state", symbol, campaign_id, campaign_state_payload(campaign))
+    return frames
+
+
 class CascadeFeedPublisher:
     """
     Turns engine status snapshots into feed messages by diffing what changed.

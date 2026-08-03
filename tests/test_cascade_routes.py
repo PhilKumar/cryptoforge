@@ -1,9 +1,11 @@
 """Route tests for the /api/cascade endpoints."""
 
+import asyncio
+import json
 import os
 import tempfile
 import unittest
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib import import_module
 from unittest.mock import patch
 
@@ -567,3 +569,280 @@ class FeedPublisherWiringTests(unittest.TestCase):
             self.app_module._get_cascade_feed_publisher()
             with patch.object(self.app_module._cascade_feed_publisher, "publish", side_effect=RuntimeError("boom")):
                 self.app_module._broadcast_cascade_update(self._live_status())  # must not raise
+
+
+class _ASGIWebSocket:
+    """A minimal WebSocket client that speaks ASGI directly.
+
+    starlette's TestClient cannot be used here: it passes `app=` to httpx.Client,
+    which httpx removed, so every websocket_connect raises TypeError. Three tests
+    written against it PASSED for the wrong reason — they asserted that connecting
+    raised, and the TypeError obliged. Driving the protocol ourselves is a dozen
+    lines and tests the actual route.
+    """
+
+    def __init__(self, app, path):
+        self._app = app
+        self._path = path
+        self._to_app = asyncio.Queue()
+        self._from_app = asyncio.Queue()
+        self._task = None
+        self.closed = None
+
+    async def __aenter__(self):
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0"},
+            "path": self._path,
+            "raw_path": self._path.encode(),
+            "query_string": b"",
+            "headers": [(b"host", b"testserver.local")],
+            "client": ("127.0.0.1", 1234),
+            "server": ("testserver.local", 80),
+            "scheme": "ws",
+            "subprotocols": [],
+        }
+        await self._to_app.put({"type": "websocket.connect"})
+        self._task = asyncio.ensure_future(self._app(scope, self._to_app.get, self._from_app.put))
+        first = await self._recv_raw()
+        if first["type"] == "websocket.close":
+            self.closed = first
+        return self
+
+    async def __aexit__(self, *exc):
+        await self._to_app.put({"type": "websocket.disconnect", "code": 1000})
+        if self._task:
+            self._task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._task
+
+    async def _recv_raw(self):
+        return await asyncio.wait_for(self._from_app.get(), timeout=5)
+
+    async def send_json(self, payload):
+        await self._to_app.put({"type": "websocket.receive", "text": json.dumps(payload)})
+
+    async def receive_json(self):
+        message = await self._recv_raw()
+        if message["type"] == "websocket.close":
+            self.closed = message
+            raise AssertionError(f"socket closed: {message.get('reason')}")
+        return json.loads(message["text"])
+
+    async def expect_close(self, *, max_drain=50):
+        """Drain to the close. A displaced socket may still have a snapshot in
+        flight ahead of it, and the close is what we are asserting about."""
+        if self.closed:
+            return self.closed
+        for _ in range(max_drain):
+            message = await self._recv_raw()
+            if message["type"] == "websocket.close":
+                self.closed = message
+                return message
+        raise AssertionError("never saw a close")
+
+
+class FeedStreamTests(unittest.IsolatedAsyncioTestCase):
+    """The transport, driven over a real ASGI WebSocket."""
+
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._saved = {
+            "_FEED_KEYSET_FILE": self.app_module._FEED_KEYSET_FILE,
+            "_STATE_DIR": self.app_module._STATE_DIR,
+            "_STATE_DB_FILE": self.app_module._STATE_DB_FILE,
+            "_cascade_feed_publisher": self.app_module._cascade_feed_publisher,
+            "_cascade_feed_publisher_checked": self.app_module._cascade_feed_publisher_checked,
+            "_cascade_engine": getattr(self.app_module, "_cascade_engine", None),
+        }
+        self.addCleanup(self._restore)
+        self.app_module._STATE_DIR = self._tmp.name
+        self.app_module._FEED_KEYSET_FILE = os.path.join(self._tmp.name, "feed_keyset.json")
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        self.app_module._cascade_feed_publisher = None
+        self.app_module._cascade_feed_publisher_checked = False
+        self.app_module._feed_streams.clear()
+        self.app_module._feed_nonces.clear()
+
+    def _restore(self):
+        for attr, value in self._saved.items():
+            setattr(self.app_module, attr, value)
+        self.app_module._feed_streams.clear()
+
+    def _install_feed(self):
+        import json as _json
+        import time as _time
+
+        from cryptography.hazmat.primitives import serialization
+
+        from engine.cascade_feed import ROOT_KID, FeedSigner, build_key_set, sign_key_set
+
+        root = FeedSigner.generate(ROOT_KID)
+        feed = FeedSigner.generate("cf-feed-2026a")
+        now = int(_time.time())
+        document = build_key_set(
+            [{"kid": feed.kid, "public": feed.public_key_b64(), "not_before": now, "not_after": now + 90 * 86400}],
+            issued_at=now,
+        )
+        with open(self.app_module._FEED_KEYSET_FILE, "w", encoding="utf-8") as handle:
+            _json.dump(sign_key_set(document, root), handle)
+        with open(os.path.join(self._tmp.name, f"feed_key_{feed.kid}.pem"), "wb") as handle:
+            handle.write(
+                feed._key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            )
+        return feed
+
+    def _register_buyer(self, buyer_id="buyer-7"):
+        from engine.cascade_feed import FeedSigner, FeedSubscribers
+
+        buyer = FeedSigner.generate(buyer_id)
+        FeedSubscribers(self.app_module._get_state_store()).add(buyer_id, buyer.public_key_b64())
+        return buyer
+
+    def _stub_engine(self, campaigns):
+        class Stub:
+            def get_status(self_inner):
+                return {"campaigns": campaigns, "closed_campaigns": []}
+
+            def stop(self_inner):
+                pass
+
+        self.app_module._cascade_engine = Stub()
+
+    @staticmethod
+    def _campaign(mode="live"):
+        return {
+            "campaign_id": "casc_SOLUSDT_1",
+            "symbol": "SOLUSDT",
+            "mode": mode,
+            "created_at": "2026-08-03 19:47:00",
+            "mother_high": 178.42,
+            "mother_low": 174.10,
+            "mother_timestamp": 1785400800,
+            "state": "TRENDLINE_ACTIVE",
+            "timeframe": "5m",
+            "trendlines": [],
+            "legs": [],
+            "capital_usd": 2000.0,
+        }
+
+    def _socket(self):
+        return _ASGIWebSocket(self.app_module.app, "/ws/cascade-feed")
+
+    async def test_a_registered_executor_gets_welcome_then_a_snapshot(self):
+        from engine.cascade_feed import sign_handshake, verify_frame
+
+        feed = self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            buyer = self._register_buyer()
+            self._stub_engine([self._campaign()])
+            async with self._socket() as ws:
+                await ws.send_json(sign_handshake("buyer-7", buyer, nonce="n1"))
+                welcome = await ws.receive_json()
+                self.assertEqual(welcome["type"], "welcome")
+                self.assertIsNone(welcome["clock_warning"])
+                snapshot = await ws.receive_json()
+                self.assertEqual(snapshot["type"], "snapshot")
+                message = verify_frame(snapshot["frame"], {feed.kid: feed.public_key_b64()})
+                self.assertEqual(message["type"], "campaign.opened")
+                self.assertNotIn("capital_usd", message["payload"])
+                state = await ws.receive_json()
+                self.assertEqual(state["type"], "snapshot")
+                self.assertEqual(
+                    verify_frame(state["frame"], {feed.kid: feed.public_key_b64()})["type"], "campaign.state"
+                )
+                self.assertEqual((await ws.receive_json())["type"], "snapshot.end")
+
+    async def test_an_unregistered_machine_is_closed_out(self):
+        from engine.cascade_feed import FeedSigner, sign_handshake
+
+        self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            self._stub_engine([])
+            stranger = FeedSigner.generate("buyer-99")
+            async with self._socket() as ws:
+                await ws.send_json(sign_handshake("buyer-99", stranger, nonce="n1"))
+                closed = await ws.expect_close()
+        self.assertEqual(closed["code"], 4003)
+        self.assertIn("not registered", closed["reason"])
+
+    async def test_a_forged_signature_is_closed_out(self):
+        from engine.cascade_feed import FeedSigner, sign_handshake
+
+        self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            self._register_buyer()
+            self._stub_engine([])
+            impostor = FeedSigner.generate("buyer-7")
+            async with self._socket() as ws:
+                await ws.send_json(sign_handshake("buyer-7", impostor, nonce="n1"))
+                closed = await ws.expect_close()
+        self.assertEqual(closed["code"], 4003)
+
+    async def test_a_lapsed_subscription_cannot_open_a_stream(self):
+        from engine.cascade_feed import FeedSubscribers, sign_handshake
+
+        self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            buyer = self._register_buyer()
+            FeedSubscribers(self.app_module._get_state_store()).set_status("buyer-7", "lapsed")
+            self._stub_engine([])
+            async with self._socket() as ws:
+                await ws.send_json(sign_handshake("buyer-7", buyer, nonce="n1"))
+                closed = await ws.expect_close()
+        self.assertIn("lapsed", closed["reason"])
+
+    async def test_the_stream_is_shut_when_the_feed_is_off(self):
+        async with self._socket() as ws:
+            closed = await ws.expect_close()
+        self.assertEqual(closed["code"], 4004)
+
+    async def test_a_skewed_clock_is_said_out_loud_at_connect(self):
+        """It would otherwise join nothing at all and look perfectly healthy."""
+        import time as _time
+
+        from engine.cascade_feed import sign_handshake
+
+        self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            buyer = self._register_buyer()
+            self._stub_engine([])
+            async with self._socket() as ws:
+                await ws.send_json(sign_handshake("buyer-7", buyer, nonce="n1", timestamp=_time.time() + 95))
+                welcome = await ws.receive_json()
+                self.assertIn("skipped as too old", welcome["clock_warning"])
+
+    async def test_a_paper_campaign_is_absent_from_the_snapshot(self):
+        from engine.cascade_feed import sign_handshake
+
+        self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            buyer = self._register_buyer()
+            self._stub_engine([self._campaign(mode="paper")])
+            async with self._socket() as ws:
+                await ws.send_json(sign_handshake("buyer-7", buyer, nonce="n1"))
+                self.assertEqual((await ws.receive_json())["type"], "welcome")
+                self.assertEqual((await ws.receive_json())["type"], "snapshot.end")
+
+    async def test_a_second_connection_displaces_the_first(self):
+        """Sharing a key cannot be prevented — it can be made useless and visible."""
+        from engine.cascade_feed import sign_handshake
+
+        self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            buyer = self._register_buyer()
+            self._stub_engine([])
+            async with self._socket() as first:
+                await first.send_json(sign_handshake("buyer-7", buyer, nonce="n1"))
+                self.assertEqual((await first.receive_json())["type"], "welcome")
+                async with self._socket() as second:
+                    await second.send_json(sign_handshake("buyer-7", buyer, nonce="n2"))
+                    self.assertEqual((await second.receive_json())["type"], "welcome")
+                    closed = await first.expect_close()
+        self.assertEqual(closed["code"], 4009)

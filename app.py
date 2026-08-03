@@ -68,11 +68,16 @@ from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine
 from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
 from engine.cascade import MODEL_VERSION as CASCADE_MODEL_VERSION
 from engine.cascade_feed import (
+    FEED_VERSION,
     CascadeFeedPublisher,
     FeedLog,
     FeedSigner,
+    FeedSubscribers,
+    NotEntitled,
     active_public_keys,
+    build_snapshot,
     key_set_expiry_warning,
+    verify_subscriber_handshake,
 )
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
@@ -7629,6 +7634,131 @@ def _get_cascade_feed_publisher():
         return _cascade_feed_publisher
     _logger.warning("[FEED] enabled but no active signing key found in %s — publishing nothing", _STATE_DIR)
     return None
+
+
+_FEED_HEARTBEAT_SEC = 30
+_feed_streams: dict = {}  # buyer_id -> the one WebSocket that buyer may hold
+_feed_nonces: dict = {}
+
+
+def _get_feed_subscribers() -> FeedSubscribers:
+    return FeedSubscribers(_get_state_store())
+
+
+@app.websocket("/ws/cascade-feed")
+async def cascade_feed_stream(ws: WebSocket):
+    """
+    The buyer's executor connects here. Not cookie-authenticated like /ws —
+    this is not our own browser, it is somebody else's machine proving it holds
+    a key we registered.
+    """
+    publisher = _get_cascade_feed_publisher()
+    if not publisher:
+        await ws.close(code=4004, reason="Signal feed is not enabled")
+        return
+    await ws.accept()
+
+    try:
+        handshake = await asyncio.wait_for(ws.receive_json(), timeout=10)
+        verified = verify_subscriber_handshake(handshake, _get_feed_subscribers(), seen_nonces=_feed_nonces)
+    except NotEntitled as exc:
+        await ws.close(code=4003, reason=str(exc)[:120])
+        return
+    except Exception:
+        await ws.close(code=4000, reason="Handshake failed")
+        return
+
+    buyer_id = verified["subscriber"]["buyer_id"]
+    # One live stream per key. Sharing a key cannot be prevented — it can be
+    # made useless and visible, which is what displacing the older connection
+    # does. Both sides are told.
+    previous = _feed_streams.get(buyer_id)
+    if previous is not None:
+        try:
+            await previous.close(code=4009, reason="Replaced by a newer connection")
+        except Exception:
+            pass  # already gone; displacing it is the point, not the close succeeding
+    _feed_streams[buyer_id] = ws
+
+    log = FeedLog(_get_state_store())
+    try:
+        eng = _get_cascade_engine()
+        status = eng.get_status()
+        campaigns = list(status.get("campaigns") or [])
+        symbols = sorted({str(c.get("symbol") or "") for c in campaigns if c.get("symbol")})
+        heads = {symbol: log.head(symbol) for symbol in symbols}
+
+        await ws.send_json(
+            {
+                "type": "welcome",
+                "v": FEED_VERSION,
+                "model_version": CASCADE_MODEL_VERSION,
+                "heartbeat_sec": _FEED_HEARTBEAT_SEC,
+                "heads": heads,
+                "clock_skew_sec": round(verified["clock_skew_sec"], 1),
+                # Said out loud because the failure it warns about is silent:
+                # a fast clock makes join-at-start reject every campaign, and
+                # the stream looks perfectly healthy while nothing ever joins.
+                "clock_warning": (
+                    "This machine's clock is far enough off that campaigns may be skipped as too old. Sync it."
+                    if verified["join_risk"]
+                    else None
+                ),
+            }
+        )
+        for frame in build_snapshot(
+            campaigns, publisher._signer, model_version=CASCADE_MODEL_VERSION, head_by_symbol=heads
+        ):
+            await ws.send_json({"type": "snapshot", "frame": frame})
+        await ws.send_json({"type": "snapshot.end", "heads": heads})
+
+        cursors = dict(heads)
+        while True:
+            await asyncio.sleep(_FEED_HEARTBEAT_SEC)
+            # Entitlement on every beat, not just at connect: a long-lived
+            # stream must not become a way to keep receiving signals after the
+            # subscription lapses.
+            ok, reason = _get_feed_subscribers().entitled(buyer_id)
+            if not ok:
+                await ws.send_json({"type": "feed.revoked", "reason": reason})
+                await ws.close(code=4003, reason=reason[:120])
+                return
+            for symbol in sorted(set(cursors) | {s for s in _live_feed_symbols()}):
+                for frame in log.since(symbol, cursors.get(symbol, 0)):
+                    await ws.send_json({"type": "event", "frame": frame})
+                cursors[symbol] = log.head(symbol)
+                await ws.send_json(
+                    {
+                        "type": "heartbeat",
+                        "frame": log.heartbeat(
+                            symbol=symbol,
+                            signer=publisher._signer,
+                            running_campaigns=len(_live_feed_symbols()),
+                            model_version=CASCADE_MODEL_VERSION,
+                        ),
+                    }
+                )
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        _logger.error("[FEED] stream for %s ended: %s", buyer_id, exc)
+    finally:
+        if _feed_streams.get(buyer_id) is ws:
+            _feed_streams.pop(buyer_id, None)
+
+
+def _live_feed_symbols() -> list:
+    try:
+        status = _get_cascade_engine().get_status()
+    except Exception:
+        return []
+    return sorted(
+        {
+            str(c.get("symbol") or "")
+            for c in status.get("campaigns") or []
+            if c.get("symbol") and str(c.get("mode") or "").lower() == "live"
+        }
+    )
 
 
 @app.get("/api/cascade/feed/keys")
