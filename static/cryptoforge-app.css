@@ -6995,6 +6995,12 @@ html[data-theme="light"] .journal-entry-notes section {
      wrapper is the positioning context, so the panel hangs off the button
      rather than off the card — a card with overflow of its own would clip it. */
   .cf-cascade-more { position: relative; flex: none; }
+  /* Every .card carries a backdrop-filter, and that makes each one its own
+     stacking context — so the menu's z-index was sealed inside its card and the
+     campaigns below it, later in the DOM, painted straight over the top of it.
+     Raising the card itself while its menu is open is what actually lifts the
+     menu clear; no z-index on the menu alone can escape its own context. */
+  .cf-cascade-card.is-menu-open { position: relative; z-index: 40; }
   .cf-cascade-more-btn { line-height: 1; padding-left: 10px; padding-right: 10px; }
   .cf-cascade-more.is-open .cf-cascade-more-btn { border-color: var(--accent); color: var(--text); }
   .cf-cascade-menu {

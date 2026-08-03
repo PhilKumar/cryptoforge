@@ -342,3 +342,70 @@ test.describe('Cascade strip controls', () => {
     ).toBeLessThan(2.2);
   });
 });
+
+/**
+ * The menu against the cards below it.
+ *
+ * Every .card carries a backdrop-filter, which makes each one its own stacking
+ * context — so the menu's z-index cannot lift it above campaigns that come
+ * later in the DOM, and they painted straight over it. Phil saw "Restructure"
+ * sliced in half by the next card.
+ *
+ * It needs the GROUPED layout to show up: with a stack header above them the
+ * rows sit close enough that the menu reaches well into the next card. Without
+ * the header the menu happened to clear it, which is why a first attempt at
+ * reproducing this found nothing and pronounced the bug imaginary.
+ */
+function statusWithStack() {
+  const mk = (seq: number, id: string, symbol: string) => ({
+    campaign_id: id, seq, symbol, state: 'TRENDLINE_ACTIVE', mode: 'paper',
+    capital_usd: 2000, mother_high: 65000, mother_low: 63000, last_price: 63900,
+    legs: [], rounds: [], all_fills: [], timeframe: '5m', mc_kind: 'major',
+    spent_usd: 34.48, resting_usd: 0, fall_pct_from_mother: 1.2, allocated_pct: 0.4,
+  });
+  return {
+    status: 'ok',
+    campaigns: [mk(69, 'c69', 'BTCUSDT'), mk(76, 'c76', 'BTCUSDT'), mk(67, 'c67', 'PAXGUSDT'), mk(74, 'c74', 'SOLUSDT')],
+    instruments: {
+      BTCUSDT: {
+        budget_usd: 2000, available_usd: -2000, in_position_usd: 34.48,
+        committed_usd: 4000, live_count: 2, timeframes: ['1h', '5m'], realized_pnl_usd: 0,
+      },
+    },
+    closed_campaigns: [],
+    capital_groups: {},
+  };
+}
+
+test.describe('Cascade strip menu stacking', () => {
+  test('the menu paints over the campaigns below it, not under them', async ({ page }) => {
+    await login(page);
+    await serveStatus(page, statusWithStack());
+    await page.evaluate(() => (window as any).showPage(
+      'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
+    ));
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+    await expect(page.locator('#cf-cascade-campaigns .cf-cascade-card')).toHaveCount(4);
+    await expect(page.locator('.cf-cascade-stack-head'), 'the grouped layout is what exposes it').toHaveCount(1);
+
+    // Second card, as in the report — it has campaigns both above and below.
+    await page.locator('.cf-cascade-card').nth(1).scrollIntoViewIfNeeded();
+    await page.locator('.cf-cascade-card').nth(1).locator('.cf-cascade-more-btn').click();
+    const menu = page.locator('.cf-cascade-card .cf-cascade-menu:not([hidden])');
+    await expect(menu).toBeVisible();
+
+    // Hit-test the LAST item: it reaches deepest into the card below, so it is
+    // the first thing to disappear under it. Asserted on what is actually on
+    // top at that point rather than on any z-index we set ourselves — the
+    // reader of this pixel is the only witness that matches what Phil saw.
+    const topmost = await menu.evaluate((el) => {
+      const items = el.querySelectorAll('.cf-cascade-menu-item');
+      const item = items[items.length - 1] as HTMLElement;
+      const b = item.getBoundingClientRect();
+      const hit = document.elementFromPoint(Math.round(b.x + b.width / 2), Math.round(b.y + b.height / 2));
+      return hit ? String((hit as HTMLElement).className) : 'nothing';
+    });
+    expect(topmost, 'a campaign below must not be painted over the open menu')
+      .toContain('cf-cascade-menu-item');
+  });
+});

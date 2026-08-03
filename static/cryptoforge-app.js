@@ -8663,7 +8663,8 @@ function _cfCascadeCampaignCard(campaign) {
     ? '<div class="admin-stat-note">round ' + _escapeHtml(String(lastRound.round_id || rounds.length)) + '</div>'
     : '';
 
-  return '<div class="card cf-cascade-card' + (ended ? ' is-ended' : '') + (open ? ' is-open' : '') + '"'
+  return '<div class="card cf-cascade-card' + (ended ? ' is-ended' : '') + (open ? ' is-open' : '')
+      + (menuOpen ? ' is-menu-open' : '') + '"'
       + ' data-campaign="' + cid + '">'
     + '<div class="cf-cascade-head" role="button" tabindex="0"'
       + ' aria-expanded="' + (open ? 'true' : 'false') + '"'
