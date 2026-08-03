@@ -26,12 +26,14 @@ from engine.cascade import (
     PendingOrder,
     Round,
     Trendline,
+    build_fib_ladder_and_pool,
 )
 from engine.cascade_feed import (
     FEED_VERSION,
     LOGGED_TYPES,
     NEVER_PUBLISH,
     ROOT_KID,
+    CascadeFeedPublisher,
     FeedLeak,
     FeedLog,
     FeedSigner,
@@ -475,6 +477,165 @@ class FeedLogTests(unittest.TestCase):
                 },
                 signer=self.signer,
             )
+
+
+class PublisherTests(unittest.TestCase):
+    """The differ. It sees engine status snapshots and emits what changed."""
+
+    def setUp(self):
+        self.store = FakeStore()
+        self.signer = FeedSigner.generate("cf-feed-2026a")
+        self.keys = {self.signer.kid: self.signer.public_key_b64()}
+        self.errors = []
+        self.log = FeedLog(self.store)
+        self.publisher = CascadeFeedPublisher(
+            self.log,
+            self.signer,
+            model_version=MODEL_VERSION,
+            on_error=lambda what, exc: self.errors.append((what, exc)),
+        )
+
+    def _status(self, campaign):
+        return {"campaigns": [campaign.to_dict()], "closed_campaigns": []}
+
+    def _types(self, frames):
+        return [verify_frame(frame, self.keys)["type"] for frame in frames]
+
+    def test_a_new_campaign_announces_itself_and_its_geometry(self):
+        campaign = _loaded_campaign()
+        self.assertEqual(
+            self._types(self.publisher.publish(self._status(campaign))),
+            ["campaign.opened", "trendline.set", "leg.opened", "campaign.state"],
+        )
+
+    def test_an_unchanged_campaign_says_nothing(self):
+        campaign = _loaded_campaign()
+        self.publisher.publish(self._status(campaign))
+        self.assertEqual(self.publisher.publish(self._status(campaign)), [])
+
+    def test_finalizing_a_leg_is_announced_once(self):
+        campaign = _loaded_campaign()
+        self.publisher.publish(self._status(campaign))
+        campaign.legs[0].finalized = True
+        self.assertEqual(self._types(self.publisher.publish(self._status(campaign))), ["leg.finalized"])
+        self.assertEqual(self.publisher.publish(self._status(campaign)), [])
+
+    def test_a_new_trendline_carries_what_it_supersedes(self):
+        campaign = _loaded_campaign()
+        self.publisher.publish(self._status(campaign))
+        campaign.trendlines.append(
+            Trendline(
+                trendline_id=4,
+                anchor1_price=178.42,
+                anchor1_timestamp=1785400800,
+                anchor2_price=176.10,
+                anchor2_timestamp=1785406000,
+            )
+        )
+        frames = self.publisher.publish(self._status(campaign))
+        message = verify_frame(frames[0], self.keys)
+        self.assertEqual(message["type"], "trendline.set")
+        self.assertEqual(message["payload"]["supersedes"], 3)
+
+    def test_a_state_change_is_announced(self):
+        campaign = _loaded_campaign()
+        self.publisher.publish(self._status(campaign))
+        campaign.state = "MOTHER_BREAK_PENDING"
+        self.assertEqual(self._types(self.publisher.publish(self._status(campaign))), ["campaign.state"])
+
+    def test_paper_campaigns_are_not_published(self):
+        """Real geometry, but not money we stand behind."""
+        campaign = _loaded_campaign()
+        campaign.mode = "paper"
+        self.assertEqual(self.publisher.publish(self._status(campaign)), [])
+
+    def test_a_close_is_announced_once_and_only_if_we_announced_the_open(self):
+        campaign = _loaded_campaign()
+        self.publisher.publish(self._status(campaign))
+        campaign.state = "MOTHER_BROKEN"
+        campaign.close_reason = "mother_broken"
+        campaign.closed_at = "2026-08-03 21:10:00"
+        closed = {"campaigns": [], "closed_campaigns": [campaign.to_dict()]}
+        self.assertEqual(self._types(self.publisher.publish(closed)), [])  # returned frames exclude closures
+        stream = [verify_frame(f, self.keys)["type"] for f in self.log.since("SOLUSDT", 0)]
+        self.assertEqual(stream[-1], "campaign.closed")
+        before = len(self.log.since("SOLUSDT", 0))
+        self.publisher.publish(closed)
+        self.assertEqual(len(self.log.since("SOLUSDT", 0)), before)
+
+    def test_a_campaign_that_ended_before_the_feed_was_on_is_not_news(self):
+        campaign = _loaded_campaign()
+        campaign.state = "MOTHER_BROKEN"
+        self.publisher.publish({"campaigns": [], "closed_campaigns": [campaign.to_dict()]})
+        self.assertEqual(self.log.since("SOLUSDT", 0), [])
+
+    def test_a_broken_feed_never_stops_the_engine(self):
+        """The whole reason this hangs off on_update instead of the tick loop."""
+
+        class Exploding:
+            def append(self, **kwargs):
+                raise RuntimeError("disk is on fire")
+
+            def prune(self):
+                return 0
+
+        publisher = CascadeFeedPublisher(
+            Exploding(),
+            self.signer,
+            model_version=MODEL_VERSION,
+            on_error=lambda what, exc: self.errors.append((what, exc)),
+        )
+        self.assertEqual(publisher.publish(self._status(_loaded_campaign())), [])
+        self.assertTrue(self.errors)
+
+    def test_a_leak_is_the_one_thing_that_is_not_swallowed(self):
+        """Everything else degrades quietly. Nearly publishing a position does not."""
+
+        class Leaky:
+            def append(self, **kwargs):
+                raise FeedLeak("payload.capital_usd")
+
+            def prune(self):
+                return 0
+
+        publisher = CascadeFeedPublisher(Leaky(), self.signer, model_version=MODEL_VERSION)
+        with self.assertRaises(FeedLeak):
+            publisher._emit("campaign.opened", "SOLUSDT", "c1", {})
+
+    def test_the_published_anchor_matches_what_the_engine_computed(self):
+        """Not a restatement of my own formula — checked against the engine's.
+
+        The engine funds a leg from the PREVIOUS leg's low, falling back to the
+        mother high, with a truthiness check on that low that a plain index
+        test would miss. We publish the anchor and the gross percent; the
+        executor nets locally. If these two drift the executor halts, so they
+        are worth pinning to the real function.
+        """
+        campaign = Campaign(
+            campaign_id="c1",
+            symbol="SOLUSDT",
+            capital_usd=2000.0,
+            mother_high=178.42,
+            mother_low=174.10,
+            mother_timestamp=1785400800,
+        )
+        campaign.mode = "live"
+        first = Leg(leg_id=1, trendline_id=1, low=175.00, touch_high=177.90, touch_timestamp=1785401000)
+        campaign.legs.append(first)
+        build_fib_ladder_and_pool(campaign, first)
+        second = Leg(leg_id=2, trendline_id=1, low=172.88, touch_high=176.40, touch_timestamp=1785404100)
+        campaign.legs.append(second)
+        build_fib_ladder_and_pool(campaign, second)
+
+        legs = campaign.to_dict()["legs"]
+        data = campaign.to_dict()
+        self.assertEqual(CascadeFeedPublisher._allocation_anchor(data, legs, 0), 178.42)
+        self.assertEqual(CascadeFeedPublisher._allocation_anchor(data, legs, 1), 175.00)
+        for index, leg in enumerate(legs):
+            anchor = CascadeFeedPublisher._allocation_anchor(data, legs, index)
+            published = leg_opened_payload(leg, allocation_anchor=anchor)["allocation_pct_gross"]
+            engine_gross = leg["allocation_pct"] + leg["netted_pct"]
+            self.assertAlmostEqual(published, engine_gross, places=9)
 
 
 class KeySetTests(unittest.TestCase):

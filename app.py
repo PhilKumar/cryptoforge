@@ -66,6 +66,14 @@ from engine.backtest import run_backtest
 from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
 from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine
 from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
+from engine.cascade import MODEL_VERSION as CASCADE_MODEL_VERSION
+from engine.cascade_feed import (
+    CascadeFeedPublisher,
+    FeedLog,
+    FeedSigner,
+    active_public_keys,
+    key_set_expiry_warning,
+)
 from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade, normalize_scalp_order_type
@@ -1273,6 +1281,9 @@ async def require_auth(request: Request):
         "/api/auth/status",
         "/api/health",
         "/api/ready",
+        # Public keys, and an executor must be able to fetch them before it has
+        # proved anything about itself.
+        "/api/cascade/feed/keys",
         "/login",
         "/",
         "/favicon.ico",
@@ -1311,6 +1322,7 @@ async def auth_middleware(request: Request, call_next):
         "/health",
         "/api/health",
         "/api/ready",
+        "/api/cascade/feed/keys",
         "/favicon.ico",
         "/manifest.webmanifest",
         "/site.webmanifest",
@@ -3143,7 +3155,7 @@ async def liveness():
 @app.get("/api/health")
 async def health():
     summary = _ops_state_summary()
-    return {
+    payload = {
         "status": summary["status"],
         "time": summary["time"],
         "ready": summary["ready"],
@@ -3164,6 +3176,17 @@ async def health():
             or summary["recovery"]["scalp_recovery_required"]
         ),
     }
+    # Only present once a key set is installed, so an install that never sells
+    # signals stays quiet. A key set nobody re-signs eventually stops every
+    # buyer, and the whole point of the warning is to arrive while there is
+    # still time to run `renew`.
+    _, keyset = _load_feed_keyset()
+    if keyset:
+        payload["feed_keyset"] = {
+            "expires_at": keyset.get("expires_at"),
+            "warning": key_set_expiry_warning(keyset),
+        }
+    return payload
 
 
 @app.get("/api/ready")
@@ -7108,6 +7131,18 @@ def _broadcast_cascade_update(status: dict) -> None:
     except Exception as exc:
         _logger.error("[CASCADE] Failed to persist runtime state: %s", exc)
 
+    # The signal feed rides this callback rather than living inside the engine.
+    # The engine trades real money and every line added to it is a line that
+    # can raise in a tick loop; this hook already fires on every geometry
+    # change, from all sixteen places that call _emit_update. The publisher
+    # swallows its own failures, and this guard catches anything it doesn't.
+    try:
+        publisher = _get_cascade_feed_publisher()
+        if publisher:
+            publisher.publish(status)
+    except Exception as exc:
+        _logger.error("[FEED] publish failed: %s", exc)
+
     async def _push():
         payload = {"source": "cascade", "type": "cascade_status", "status": status}
         for ws in ws_clients.copy():
@@ -7524,6 +7559,94 @@ async def notifications_list(include_seen: bool = False, limit: int = 50):
 async def notifications_ack(request: Request):
     body = await _read_json_body(request)
     return _notify_ack(ids=body.get("ids"), ack_all=bool(body.get("all")))
+
+
+_FEED_KEYSET_FILE = os.path.join(_STATE_DIR, "feed_keyset.json")
+
+
+def _load_feed_keyset() -> tuple[Optional[dict], Optional[dict]]:
+    """
+    The root-signed key set, as (frame, inner document).
+
+    The server does not verify the signature and does not need to: it holds no
+    root public key, and a key set it forged for itself would prove nothing to
+    anyone. Verification is the executor's job, against a root key compiled
+    into its build. All we do here is serve the bytes and read the expiry.
+    """
+    try:
+        with open(_FEED_KEYSET_FILE, encoding="utf-8") as handle:
+            frame = json.load(handle)
+        return frame, json.loads(frame["msg"])
+    except FileNotFoundError:
+        return None, None
+    except Exception as exc:
+        _logger.error("[FEED] key set at %s is unreadable: %s", _FEED_KEYSET_FILE, exc)
+        return None, None
+
+
+_cascade_feed_publisher = None
+_cascade_feed_publisher_checked = False
+
+
+def _get_cascade_feed_publisher():
+    """
+    The signal-feed publisher, or None when the feed is off — which is the
+    default and stays the default until three things are true: the flag is set,
+    a key set is installed, and the private half of a currently-active kid is
+    on disk. Any one missing and we publish nothing, quietly.
+
+    The kid is discovered from the installed key set rather than configured,
+    so a rotation is "drop in the new pem, drop in the new key set, restart"
+    with no environment change to forget.
+    """
+    global _cascade_feed_publisher, _cascade_feed_publisher_checked
+    if _cascade_feed_publisher_checked:
+        return _cascade_feed_publisher
+    _cascade_feed_publisher_checked = True
+    if os.getenv("CRYPTOFORGE_FEED_ENABLED", "false").lower() != "true":
+        return None
+    _, keyset = _load_feed_keyset()
+    if not keyset:
+        _logger.warning("[FEED] enabled but no key set is installed — publishing nothing")
+        return None
+    for kid in active_public_keys(keyset):
+        pem_path = os.path.join(_STATE_DIR, f"feed_key_{kid}.pem")
+        if not os.path.exists(pem_path):
+            continue
+        try:
+            with open(pem_path, "rb") as handle:
+                signer = FeedSigner.from_pem(kid, handle.read())
+        except Exception as exc:
+            _logger.error("[FEED] signing key %s is unusable: %s", pem_path, exc)
+            continue
+        _cascade_feed_publisher = CascadeFeedPublisher(
+            FeedLog(_get_state_store()),
+            signer,
+            model_version=CASCADE_MODEL_VERSION,
+            on_error=lambda what, exc: _logger.error("[FEED] %s failed: %s", what, exc),
+        )
+        _logger.info("[FEED] publishing under kid %s", kid)
+        return _cascade_feed_publisher
+    _logger.warning("[FEED] enabled but no active signing key found in %s — publishing nothing", _STATE_DIR)
+    return None
+
+
+@app.get("/api/cascade/feed/keys")
+async def cascade_feed_keys():
+    """
+    Public on purpose — it carries public keys, and an executor has to be able
+    to fetch it before it has proved anything about itself.
+
+    Cached for five minutes rather than an hour: this is the document that
+    carries a revocation, and the propagation delay a buyer already lives with
+    (their 24h cache) is quite long enough without a proxy adding to it.
+    """
+    frame, _ = _load_feed_keyset()
+    if not frame:
+        raise HTTPException(status_code=404, detail="No feed key set is installed")
+    response = JSONResponse(frame)
+    response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
+    return response
 
 
 @app.get("/api/cascade/status")

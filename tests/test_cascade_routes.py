@@ -358,3 +358,212 @@ class CascadeJournalLinkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FeedKeySetRouteTests(unittest.IsolatedAsyncioTestCase):
+    """The key-set endpoint. Public by necessity: an executor has to fetch it
+    before it has proved anything about itself."""
+
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_file = self.app_module._FEED_KEYSET_FILE
+        self.app_module._FEED_KEYSET_FILE = os.path.join(self._tmp.name, "feed_keyset.json")
+        self.addCleanup(lambda: setattr(self.app_module, "_FEED_KEYSET_FILE", self._orig_file))
+        self.transport = httpx.ASGITransport(app=self.app_module.app)
+
+    def _install(self, *, issued_at=None):
+        import json as _json
+
+        from engine.cascade_feed import ROOT_KID, FeedSigner, build_key_set, sign_key_set
+
+        root = FeedSigner.generate(ROOT_KID)
+        feed = FeedSigner.generate("cf-feed-2026a")
+        now = int(issued_at if issued_at is not None else __import__("time").time())
+        document = build_key_set(
+            [{"kid": feed.kid, "public": feed.public_key_b64(), "not_before": now, "not_after": now + 90 * 86400}],
+            issued_at=now,
+        )
+        with open(self.app_module._FEED_KEYSET_FILE, "w", encoding="utf-8") as handle:
+            _json.dump(sign_key_set(document, root), handle)
+        return root, feed
+
+    async def test_it_is_reachable_without_a_session(self):
+        self._install()
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            response = await client.get("/api/cascade/feed/keys")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("sig", response.json())
+        self.assertIn("max-age=300", response.headers.get("cache-control", ""))
+
+    async def test_the_bytes_are_served_verbatim_so_the_signature_still_checks(self):
+        """Re-serializing the document on the way out would break every signature."""
+        from engine.cascade_feed import verify_key_set
+
+        root, _ = self._install()
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            response = await client.get("/api/cascade/feed/keys")
+        verify_key_set(response.json(), root.public_key_b64())
+
+    async def test_no_key_set_installed_is_a_404_not_a_crash(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            response = await client.get("/api/cascade/feed/keys")
+        self.assertEqual(response.status_code, 404)
+
+    async def test_an_unreadable_key_set_is_a_404_not_a_500(self):
+        with open(self.app_module._FEED_KEYSET_FILE, "w", encoding="utf-8") as handle:
+            handle.write("{ this is not json")
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            response = await client.get("/api/cascade/feed/keys")
+        self.assertEqual(response.status_code, 404)
+
+    async def test_health_warns_before_the_key_set_expires(self):
+        import time as _time
+
+        self._install(issued_at=int(_time.time()) - 27 * 86400)
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            body = (await client.get("/api/health")).json()
+        self.assertIn("day(s)", body["feed_keyset"]["warning"])
+
+    async def test_health_stays_quiet_when_no_feed_is_installed(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            body = (await client.get("/api/health")).json()
+        self.assertNotIn("feed_keyset", body)
+
+
+class FeedPublisherWiringTests(unittest.TestCase):
+    """That the feed is OFF by default, and that when switched on it actually
+    fires. Easy to build all of this and have the wiring silently never run."""
+
+    def setUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._saved = {
+            "keyset": self.app_module._FEED_KEYSET_FILE,
+            "state_dir": self.app_module._STATE_DIR,
+            "state_db": self.app_module._STATE_DB_FILE,
+            "publisher": self.app_module._cascade_feed_publisher,
+            "checked": self.app_module._cascade_feed_publisher_checked,
+        }
+        self.addCleanup(self._restore)
+        self.app_module._STATE_DIR = self._tmp.name
+        self.app_module._FEED_KEYSET_FILE = os.path.join(self._tmp.name, "feed_keyset.json")
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        self._reset_publisher()
+
+    def _restore(self):
+        self.app_module._FEED_KEYSET_FILE = self._saved["keyset"]
+        self.app_module._STATE_DIR = self._saved["state_dir"]
+        self.app_module._STATE_DB_FILE = self._saved["state_db"]
+        self.app_module._cascade_feed_publisher = self._saved["publisher"]
+        self.app_module._cascade_feed_publisher_checked = self._saved["checked"]
+
+    def _reset_publisher(self):
+        self.app_module._cascade_feed_publisher = None
+        self.app_module._cascade_feed_publisher_checked = False
+
+    def _install_feed(self):
+        import json as _json
+        import time as _time
+
+        from cryptography.hazmat.primitives import serialization
+
+        from engine.cascade_feed import ROOT_KID, FeedSigner, build_key_set, sign_key_set
+
+        root = FeedSigner.generate(ROOT_KID)
+        feed = FeedSigner.generate("cf-feed-2026a")
+        now = int(_time.time())
+        document = build_key_set(
+            [{"kid": feed.kid, "public": feed.public_key_b64(), "not_before": now, "not_after": now + 90 * 86400}],
+            issued_at=now,
+        )
+        with open(self.app_module._FEED_KEYSET_FILE, "w", encoding="utf-8") as handle:
+            _json.dump(sign_key_set(document, root), handle)
+        pem = feed._key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        with open(os.path.join(self._tmp.name, f"feed_key_{feed.kid}.pem"), "wb") as handle:
+            handle.write(pem)
+        return feed
+
+    @staticmethod
+    def _live_status():
+        return {
+            "campaigns": [
+                {
+                    "campaign_id": "casc_SOLUSDT_1",
+                    "symbol": "SOLUSDT",
+                    "mode": "live",
+                    "created_at": "2026-08-03 19:47:00",
+                    "mother_high": 178.42,
+                    "mother_low": 174.10,
+                    "mother_timestamp": 1785400800,
+                    "state": "TRENDLINE_ACTIVE",
+                    "timeframe": "5m",
+                    "trendlines": [],
+                    "legs": [],
+                    "capital_usd": 2000.0,
+                }
+            ],
+            "closed_campaigns": [],
+        }
+
+    def test_the_feed_is_off_unless_the_flag_is_set(self):
+        self._install_feed()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CRYPTOFORGE_FEED_ENABLED", None)
+            self.assertIsNone(self.app_module._get_cascade_feed_publisher())
+
+    def test_enabled_without_a_key_set_publishes_nothing_and_does_not_crash(self):
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            self.assertIsNone(self.app_module._get_cascade_feed_publisher())
+
+    def test_enabled_with_a_key_set_but_no_private_key_publishes_nothing(self):
+        import json as _json
+        import time as _time
+
+        from engine.cascade_feed import ROOT_KID, FeedSigner, build_key_set, sign_key_set
+
+        root = FeedSigner.generate(ROOT_KID)
+        now = int(_time.time())
+        document = build_key_set(
+            [{"kid": "cf-feed-absent", "public": "x", "not_before": now, "not_after": now + 86400}], issued_at=now
+        )
+        with open(self.app_module._FEED_KEYSET_FILE, "w", encoding="utf-8") as handle:
+            _json.dump(sign_key_set(document, root), handle)
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            self.assertIsNone(self.app_module._get_cascade_feed_publisher())
+
+    def test_switched_on_it_actually_publishes_signed_geometry(self):
+        from engine.cascade_feed import FeedLog, verify_frame
+
+        feed = self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            self.assertIsNotNone(self.app_module._get_cascade_feed_publisher())
+            self.app_module._broadcast_cascade_update(self._live_status())
+
+        frames = FeedLog(self.app_module._get_state_store()).since("SOLUSDT", 0)
+        types = [verify_frame(f, {feed.kid: feed.public_key_b64()})["type"] for f in frames]
+        self.assertEqual(types, ["campaign.opened", "campaign.state"])
+
+    def test_a_paper_campaign_is_not_published_even_with_the_feed_on(self):
+        from engine.cascade_feed import FeedLog
+
+        self._install_feed()
+        status = self._live_status()
+        status["campaigns"][0]["mode"] = "paper"
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            self.app_module._broadcast_cascade_update(status)
+        self.assertEqual(FeedLog(self.app_module._get_state_store()).since("SOLUSDT", 0), [])
+
+    def test_a_broken_feed_never_breaks_the_broadcast(self):
+        """The engine's snapshot persistence must survive a feed that explodes."""
+        self._install_feed()
+        with patch.dict(os.environ, {"CRYPTOFORGE_FEED_ENABLED": "true"}):
+            self.app_module._get_cascade_feed_publisher()
+            with patch.object(self.app_module._cascade_feed_publisher, "publish", side_effect=RuntimeError("boom")):
+                self.app_module._broadcast_cascade_update(self._live_status())  # must not raise

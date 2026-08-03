@@ -599,6 +599,187 @@ def _derived_levels(high_anchor: Optional[float], low_anchor: Optional[float]) -
 # ── the durable log ──────────────────────────────────────────────────
 
 
+class CascadeFeedPublisher:
+    """
+    Turns engine status snapshots into feed messages by diffing what changed.
+
+    This is deliberately NOT six emit calls sprinkled through the geometry
+    code. The engine trades real money, and every line added inside it is a
+    line that can raise in a tick loop. `_emit_update` already hands out the
+    full status on every geometry change, from all sixteen places that matter,
+    so a differ hooked to that callback sees everything the instrumented
+    version would — and it cannot miss a transition somebody adds next month,
+    because it never had to know the transitions in the first place.
+
+    Nothing here raises. A feed that breaks must never stop the engine.
+
+    **Messages are idempotent by identity.** A repeated `campaign.opened` for a
+    campaign the executor already knows carries no new information and must be
+    a no-op on its side. That is required anyway — a subscribe snapshot and the
+    event stream overlap — and it is what lets us restart without persisting
+    publisher state: a fresh process re-announces what is running, and every
+    executor already knows to ignore it.
+    """
+
+    def __init__(
+        self,
+        log: "FeedLog",
+        signer: FeedSigner,
+        *,
+        model_version: int,
+        publish_modes: Iterable[str] = ("live",),
+        on_error: Optional[Callable[[str, Exception], None]] = None,
+        now_fn: Callable[[], float] = time.time,
+    ):
+        self._log = log
+        self._signer = signer
+        self._model_version = int(model_version)
+        # Paper campaigns are real geometry but they are not money we stand
+        # behind. A buyer following one is being sold a rehearsal.
+        self._modes = {str(mode).lower() for mode in publish_modes}
+        self._on_error = on_error
+        self._now = now_fn
+        self._seen: Dict[str, dict] = {}
+        self._last_prune = 0.0
+
+    def publish(self, status: dict) -> List[dict]:
+        """Emit everything that changed since the last call. Returns the frames."""
+        frames: List[dict] = []
+        try:
+            campaigns = [c for c in (status or {}).get("campaigns") or [] if self._eligible(c)]
+            for campaign in campaigns:
+                frames.extend(self._publish_campaign(campaign))
+            self._publish_closures(status, {c.get("campaign_id") for c in campaigns})
+            self._maybe_prune()
+        except Exception as exc:  # never let the feed stop the engine
+            self._fail("publish", exc)
+        return frames
+
+    def _eligible(self, campaign: dict) -> bool:
+        return bool(campaign.get("campaign_id")) and str(campaign.get("mode") or "").lower() in self._modes
+
+    def _publish_campaign(self, campaign: dict) -> List[dict]:
+        campaign_id = campaign["campaign_id"]
+        symbol = campaign.get("symbol") or ""
+        seen = self._seen.get(campaign_id)
+        frames = []
+
+        if seen is None:
+            seen = {"state": None, "trendlines": {}, "legs": {}, "closed": False}
+            self._seen[campaign_id] = seen
+            frames.append(self._emit("campaign.opened", symbol, campaign_id, campaign_opened_payload(campaign)))
+
+        for trendline in campaign.get("trendlines") or []:
+            tl_id = trendline.get("trendline_id")
+            fingerprint = (
+                trendline.get("anchor1_price"),
+                trendline.get("anchor1_timestamp"),
+                trendline.get("anchor2_price"),
+                trendline.get("anchor2_timestamp"),
+                bool(trendline.get("bears_fib", True)),
+            )
+            if seen["trendlines"].get(tl_id) == fingerprint:
+                continue
+            supersedes = max([k for k in seen["trendlines"] if k != tl_id], default=None)
+            seen["trendlines"][tl_id] = fingerprint
+            frames.append(
+                self._emit(
+                    "trendline.set", symbol, campaign_id, trendline_set_payload(trendline, supersedes=supersedes)
+                )
+            )
+
+        legs = campaign.get("legs") or []
+        for index, leg in enumerate(legs):
+            leg_id = leg.get("leg_id")
+            known = seen["legs"].get(leg_id)
+            if known is None:
+                seen["legs"][leg_id] = {"finalized": False}
+                frames.append(
+                    self._emit(
+                        "leg.opened",
+                        symbol,
+                        campaign_id,
+                        leg_opened_payload(leg, allocation_anchor=self._allocation_anchor(campaign, legs, index)),
+                    )
+                )
+                known = seen["legs"][leg_id]
+            if leg.get("finalized") and not known["finalized"]:
+                known["finalized"] = True
+                frames.append(self._emit("leg.finalized", symbol, campaign_id, leg_finalized_payload(leg_id)))
+
+        state = campaign.get("state")
+        if state != seen["state"]:
+            seen["state"] = state
+            frames.append(self._emit("campaign.state", symbol, campaign_id, campaign_state_payload(campaign)))
+
+        return [frame for frame in frames if frame]
+
+    @staticmethod
+    def _allocation_anchor(campaign: dict, legs: List[dict], index: int) -> Optional[float]:
+        """
+        Mirrors build_fib_ladder_and_pool: the previous leg's low, or the
+        mother high for the first — and note the truthiness check on the prior
+        low, which the engine has and which a plain `index > 0` would miss.
+        """
+        if index > 0 and legs[index - 1].get("low"):
+            return legs[index - 1]["low"]
+        return campaign.get("mother_high")
+
+    def _publish_closures(self, status: dict, live_ids: set) -> None:
+        for campaign in (status or {}).get("closed_campaigns") or []:
+            campaign_id = campaign.get("campaign_id")
+            seen = self._seen.get(campaign_id)
+            # Only announce the close of something we announced the open of.
+            # A campaign that ended before the feed was switched on is not news
+            # to anyone downstream.
+            if not seen or seen["closed"] or campaign_id in live_ids:
+                continue
+            seen["closed"] = True
+            self._emit(
+                "campaign.closed",
+                campaign.get("symbol") or "",
+                campaign_id,
+                campaign_closed_payload(campaign),
+            )
+
+    def _emit(self, msg_type: str, symbol: str, campaign_id: str, payload: dict) -> Optional[dict]:
+        try:
+            return self._log.append(
+                envelope_fields={
+                    "msg_type": msg_type,
+                    "symbol": symbol,
+                    "campaign_id": campaign_id,
+                    "payload": payload,
+                    "model_version": self._model_version,
+                },
+                signer=self._signer,
+            )
+        except FeedLeak:
+            # Not swallowed like the rest: this one means we nearly published
+            # somebody's position. Let it out.
+            raise
+        except Exception as exc:
+            self._fail(f"{msg_type} for {campaign_id}", exc)
+            return None
+
+    def _maybe_prune(self) -> None:
+        now = self._now()
+        if now - self._last_prune < 3600:
+            return
+        self._last_prune = now
+        try:
+            self._log.prune()
+        except Exception as exc:
+            self._fail("prune", exc)
+
+    def _fail(self, what: str, exc: Exception) -> None:
+        if self._on_error:
+            try:
+                self._on_error(what, exc)
+            except Exception:
+                pass
+
+
 class FeedLog:
     """
     Append-only, per-symbol monotonic `seq`, backed by the same SQLite JSON
