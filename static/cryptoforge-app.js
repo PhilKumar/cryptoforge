@@ -8838,6 +8838,26 @@ function cfCascadeToggleCard(cid) {
 
 // Entries and closed rounds, stated plainly — "has a buy happened, and did the
 // target hit" should never require reading the event log.
+// What one round's commission cost, said three different ways.
+//
+//   -$0.04   the figure Binance reported for both fills
+//   ~-$0.05  modelled at the standard rate, because the exchange did not say
+//   --       closed before fees were recorded at all
+//
+// The "~" matters: the model cannot see the BNB discount, a VIP tier or a
+// maker rebate, so a marked figure is an approximation and an unmarked one is
+// what actually left the account. A "$0.00" is never shown for an unknown —
+// that would claim the round traded free.
+function _cfCascadeFeeCell(round) {
+  var fee = Number(round.fees_usd) || 0;
+  if (fee <= 0) {
+    return '<span class="table-meta" title="Closed before fees were recorded">--</span>';
+  }
+  if (round.fees_estimated === false) return '-$' + _cfCascadeUsd(fee);
+  return '<span title="Estimated at the standard rate — not the commission the exchange reported">~-$'
+    + _cfCascadeUsd(fee) + '</span>';
+}
+
 function _cfCascadePositionPanel(campaign, fills) {
   var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
   var out = '';
@@ -8905,18 +8925,7 @@ function _cfCascadePositionPanel(campaign, fills) {
         var fee = Number(r.fees_usd) || 0;
         var tone = pnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
         var buys = (r.fills || []).length;
-        // A round closed before fees were modelled has no fee of its own. Show
-        // it as unknown rather than as zero — it did pay commission, we just
-        // never recorded it, and a "$0.00" would claim otherwise.
-        // A "~" marks a modelled fee. The model runs at the standard rate and
-        // cannot see the BNB discount or a VIP tier, so it is an approximation;
-        // an unmarked figure is the commission Binance actually charged.
-        var feeCell = fee > 0
-          ? (r.fees_estimated === false
-              ? '-$' + _cfCascadeUsd(fee)
-              : '<span title="Estimated at the standard rate — not the commission the exchange reported">~-$'
-                  + _cfCascadeUsd(fee) + '</span>')
-          : '<span class="table-meta" title="Closed before fees were recorded">--</span>';
+        var feeCell = _cfCascadeFeeCell(r);
         return '<tr><td>#' + _escapeHtml(String(r.round_id)) + '</td>'
           + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'
           + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
@@ -9717,7 +9726,7 @@ function _cfCascadeRenderLedgerRows() {
     : _cfCascadeLedgerAll.filter(function(row) { return row.symbol === _cfCascadeLedgerCoin; });
 
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="13" class="cf-table-empty-cell">'
+    body.innerHTML = '<tr><td colspan="14" class="cf-table-empty-cell">'
       + (_cfCascadeLedgerAll.length ? 'No closed rounds for this coin' : 'No closed rounds yet')
       + '</td></tr>';
     _cfCascadeRenderLedgerPager(0, 0);
@@ -9728,11 +9737,16 @@ function _cfCascadeRenderLedgerRows() {
     return;
   }
 
-  var invested = 0, realised = 0, wins = 0;
+  var invested = 0, realised = 0, wins = 0, feesPaid = 0, feesEstimated = 0;
   rows.forEach(function(row) {
     invested += Number(row.round.invested_usd) || 0;
     realised += Number(row.round.pnl) || 0;
     if ((Number(row.round.pnl) || 0) > 0) wins++;
+    var fee = Number(row.round.fees_usd) || 0;
+    feesPaid += fee;
+    // Counted separately so the total can admit how much of itself is a guess
+    // rather than quietly averaging measured and modelled figures together.
+    if (fee > 0 && row.round.fees_estimated !== false) feesEstimated += fee;
   });
 
   var pages = Math.max(1, Math.ceil(rows.length / _CF_LEDGER_PAGE_SIZE));
@@ -9766,6 +9780,7 @@ function _cfCascadeRenderLedgerRows() {
       + '<td class="num">' + _cfCascadeFmt(r.exit_price) + '</td>'
       + '<td class="num">' + Number(r.quantity || 0).toFixed(8) + '</td>'
       + '<td class="num">$' + _cfCascadeUsd(inv) + '</td>'
+      + '<td class="num">' + _cfCascadeFeeCell(r) + '</td>'
       + '<td class="num" style="color:' + tone + ';">' + (pnl >= 0 ? '+' : '') + '$' + _cfCascadeUsd(pnl) + '</td>'
       + '<td class="num" style="color:' + tone + ';">' + (inv > 0 ? (pnl / inv * 100).toFixed(2) + '%' : '--') + '</td>'
       + '<td>' + _escapeHtml(_cfCascadeHeldFor(r)) + '</td>'
@@ -9783,8 +9798,16 @@ function _cfCascadeRenderLedgerRows() {
       + '<strong style="color:' + tone + ';">' + (realised >= 0 ? '+' : '') + '$'
       + _cfCascadeUsd(realised) + ' realised</strong>'
       + (invested > 0 ? ' (' + (realised / invested * 100).toFixed(2) + '%)' : '')
-      + ' · ' + wins + '/' + rows.length + ' in profit. '
-      + 'Log opens the individual buys behind each average.';
+      + ' · ' + wins + '/' + rows.length + ' in profit'
+      + (feesPaid > 0
+        ? ' · after $' + _cfCascadeUsd(feesPaid) + ' fees'
+          + (feesEstimated > 0
+            ? '<span class="table-meta" title="Rounds closed before the commission was read back from '
+              + 'the exchange are modelled at the standard rate, which cannot see the BNB discount.">'
+              + ' ($' + _cfCascadeUsd(feesEstimated) + ' of it estimated)</span>'
+            : '')
+        : '')
+      + '. Log opens the individual buys behind each average.';
   }
   _cfCascadeRenderLedgerPager(pages, rows.length);
 }

@@ -132,6 +132,62 @@ async function showCampaign(page: Page) {
   await expect(page.locator('#cf-cascade-campaigns .cf-cascade-card.is-open')).toHaveCount(1);
 }
 
+/**
+ * The Closed Rounds LEDGER — the flat table under the campaign list, which is
+ * the one actually read day to day. It had no Fees column at all, so the "~"
+ * that says a fee was modelled rather than read back from Binance was only
+ * visible inside an expanded campaign card. Phil went looking for it here and
+ * there was nothing to find.
+ */
+function ledgerRound(id: number, over: Record<string, unknown> = {}) {
+  return {
+    round_id: id, leg_id: 6, avg_entry: 72.69, exit_price: 73.09, quantity: 0.357,
+    invested_usd: 25.95, pnl: 0.1038, pnl_gross: 0.1428, fees_usd: 0.039, fees_estimated: false,
+    closed_ts: T0 + id, closed_at: '2026-08-03 19:15:00', opened_ts: T0, fills: [{}, {}],
+    ...over,
+  };
+}
+
+test.describe('Cascade closed-rounds ledger', () => {
+  test('the ledger shows what each round paid, and says which figures are guesses', async ({ page }) => {
+    await login(page);
+    // Explicit close times: the ledger sorts newest first, so leaving them to
+    // fall out of the loop index puts the rows in the opposite order to the
+    // one the assertions below read.
+    const measured = ledgerRound(1, { closed_ts: T0 + 300 });
+    const modelled = ledgerRound(2, { closed_ts: T0 + 200, fees_usd: 0.052, fees_estimated: true });
+    const legacy = ledgerRound(3, { closed_ts: T0 + 100 });
+    delete (legacy as Record<string, unknown>).fees_usd;
+    delete (legacy as Record<string, unknown>).fees_estimated;
+    await serveStatus(page, statusWith([measured, modelled, legacy]));
+    await page.evaluate(() => (window as any).showPage(
+      'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
+    ));
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+
+    const rows = page.locator('#cf-cascade-ledger-body tr');
+    await expect(rows).toHaveCount(3);
+    // Header, body and the empty-state colspan all have to agree, or the table
+    // shears sideways the moment a column is added.
+    await expect(page.locator('.cf-cascade-ledger thead th')).toHaveCount(14);
+    await expect(rows.first().locator('td')).toHaveCount(14);
+
+    // Read back from the exchange: a bare figure.
+    await expect(rows.nth(0).locator('td').nth(9)).toHaveText('-$0.04');
+    // Modelled at the standard rate: marked, because it cannot see the BNB
+    // discount and is therefore an approximation.
+    await expect(rows.nth(1).locator('td').nth(9)).toHaveText('~-$0.05');
+    // Closed before fees were recorded at all — unknown, never "$0.00", which
+    // would claim the round traded free.
+    await expect(rows.nth(2).locator('td').nth(9)).toHaveText('--');
+
+    const meta = page.locator('#cf-cascade-ledger-meta');
+    await expect(meta).toContainText('after $0.09 fees');
+    await expect(meta, 'the total admits how much of itself is modelled')
+      .toContainText('$0.05 of it estimated');
+  });
+});
+
 test.describe('Cascade closed-rounds table', () => {
   test('a campaign holding closed rounds still renders its card', async ({ page }) => {
     const errors = watchErrors(page);
