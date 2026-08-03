@@ -158,7 +158,12 @@ def main() -> int:
             free = row.get("free_balance")
             locked = row.get("locked_balance")
             print(f"           {str(asset):<8} free {str(free):>18}   locked {str(locked):>18}")
-            if asset and asset != client.quote_asset:
+            # {asset}{quote} is a guess, not a market. A fiat balance like INR
+            # yields "INRUSDT", which is not listed anywhere — probing it
+            # reports a confident "0 open orders" about a market that does not
+            # exist, and hides real orders sitting elsewhere. Keep only the
+            # guesses the exchange actually lists.
+            if asset and asset != client.quote_asset and client.get_product_by_symbol(f"{asset}{client.quote_asset}"):
                 held.append(f"{asset}{client.quote_asset}")
         if len(wallet) > 12:
             print(f"           … {len(wallet) - 12} more")
@@ -176,42 +181,75 @@ def main() -> int:
     else:
         skip("positions derive from balances")
 
-    probe_market = held[0] if held else "BTCUSDT"
-    # Raw first (a 401 raises), then through the adapter (proves the parsing).
-    step(
-        f"open orders endpoint ({probe_market})",
-        lambda: client._private_post("/exchange/v1/orders/active_orders", {"market": probe_market}),
-        detail=lambda r: f"{len(r.get('orders') or []) if isinstance(r, dict) else len(r)} open",
-    )
-    if authed:
-        step(
-            "open orders parse through the adapter",
-            lambda: client.get_orders(probe_market, "open"),
-            detail=lambda o: f"{len(o)} open orders",
-            validate=lambda o: None if isinstance(o, list) else f"expected a list, got {type(o).__name__}",
-        )
-    else:
-        skip("open orders parse through the adapter")
+    # History first: it names the markets actually traded, which is a far
+    # better place to look for resting orders than a guess built from balances.
     step(
         "trade history endpoint",
-        lambda: client._private_post("/exchange/v1/orders/trade_history", {"limit": 10, "sort": "desc"}),
+        lambda: client._private_post("/exchange/v1/orders/trade_history", {"limit": 50, "sort": "desc"}),
         detail=lambda r: f"{len(r) if isinstance(r, list) else '?'} rows",
     )
+    history = []
     if authed:
-        step(
-            "trade history parse through the adapter",
-            client.get_order_history,
-            detail=lambda t: f"{len(t)} recent fills",
-            validate=lambda t: None if isinstance(t, list) else f"expected a list, got {type(t).__name__}",
+        history = (
+            step(
+                "trade history parse through the adapter",
+                client.get_order_history,
+                detail=lambda t: f"{len(t)} recent fills",
+                validate=lambda t: None if isinstance(t, list) else f"expected a list, got {type(t).__name__}",
+            )
+            or []
         )
     else:
         skip("trade history parse through the adapter")
 
-    if products:
+    traded = []
+    for row in history:
+        market = str(row.get("symbol") or row.get("market") or "").upper()
+        if market and market not in traded and client.get_product_by_symbol(market):
+            traded.append(market)
+    probes = client.unique([*held, *traded, "BTCUSDT"])[:6]
+
+    if authed:
+        found = []
+
+        def scan_open_orders() -> list:
+            rows = []
+            for market in probes:
+                raw = client._private_post("/exchange/v1/orders/active_orders", {"market": market})
+                orders = raw.get("orders") if isinstance(raw, dict) else raw
+                for order in orders or []:
+                    rows.append((market, order))
+            found.extend(rows)
+            return rows
+
         step(
-            "product lookup for a held asset" if held else "product lookup",
-            lambda: client.get_product_by_symbol(probe_market) or {},
-            detail=lambda p: f"{probe_market} step {p.get('step_size')} minNotional {p.get('min_notional')}",
+            f"open orders across {len(probes)} market(s)",
+            scan_open_orders,
+            detail=lambda r: f"{len(r)} resting order(s) on {', '.join(probes)}",
+        )
+        for market, order in found:
+            print(
+                f"           {market}: {order.get('side')} {order.get('order_type')} "
+                f"qty {order.get('total_quantity')} @ {order.get('price_per_unit')} ({order.get('status')})"
+            )
+        step(
+            "open orders parse through the adapter",
+            lambda: client.get_orders(probes[0], "open"),
+            detail=lambda o: f"{len(o)} parsed on {probes[0]}",
+            validate=lambda o: None if isinstance(o, list) else f"expected a list, got {type(o).__name__}",
+        )
+    else:
+        skip("open orders scan")
+        skip("open orders parse through the adapter")
+
+    if products:
+        # Must FAIL when the market is unlisted: an empty dict rendering as
+        # "step None minNotional None" is not a passing lookup.
+        step(
+            f"product lookup ({probes[0]})",
+            lambda: client.get_product_by_symbol(probes[0]),
+            detail=lambda p: f"step {p.get('step_size')} minNotional {p.get('min_notional')}",
+            validate=lambda p: None if p else f"{probes[0]} is not a listed market",
         )
 
     passed = sum(1 for _, ok, _ in _results if ok)
