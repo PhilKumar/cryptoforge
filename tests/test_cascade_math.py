@@ -4,6 +4,8 @@ import unittest
 
 from engine.cascade import (
     FEE_PCT_PER_SIDE,
+    MAX_STOP_RAISE_BAR_RATIO,
+    MAX_STOP_RAISE_FLOOR_TICKS,
     TP_FIB_LEVEL,
     Campaign,
     Candle,
@@ -16,6 +18,7 @@ from engine.cascade import (
     compute_tp_price,
     exchange_fill_ts,
     leg_broken,
+    max_stop_raise_usd,
     plan_leg_orders,
     recompute_avg_entry_price,
     round_trip_fee,
@@ -405,6 +408,68 @@ class CascadeFeeAccountingTests(unittest.TestCase):
         net_floored = (tp - campaign.avg_entry_price) * qty - round_trip_fee(cost, tp * qty)
         self.assertLess(net_geometric, 0.0, "this is the round that used to lose money")
         self.assertGreater(net_floored, 0.0, "and it must not any more")
+
+
+class StopRaiseAllowanceTests(unittest.TestCase):
+    """How far a buy stop may chase a market that already passed its trigger.
+
+    Median 5m bars measured on Binance 2026-08-03, as a fraction of price.
+    """
+
+    BAR = {"PAXGUSDT": 0.00005, "BTCUSDT": 0.00053, "SOLUSDT": 0.00096, "ADAUSDT": 0.00322}
+    TICK = {"PAXGUSDT": 0.01, "BTCUSDT": 0.01, "SOLUSDT": 0.01, "ADAUSDT": 0.0001}
+
+    def test_the_sol_entry_that_reversed_is_held(self):
+        """2026-08-03 10:42:43. The two reds set 72.90; the market was already
+        at 73.03 when the order went out, so the engine re-armed at 73.04 and
+        bought the top of a bounce. Under the old flat 0.5% cap that 0.18%
+        raise sailed through. It must not now."""
+        allowed = max_stop_raise_usd(72.90, self.BAR["SOLUSDT"], self.TICK["SOLUSDT"])
+        self.assertGreater(73.03 - 72.90, allowed, "the bounce had already run — hold, do not arm")
+
+    def test_a_tick_scale_cross_still_arms(self):
+        """The case the raise exists for: price ticked over a freshly-set
+        trigger inside the one-second price read. Holding that would drop real
+        entries for nothing."""
+        for symbol, bar in self.BAR.items():
+            tick = self.TICK[symbol]
+            price = {"PAXGUSDT": 4057.64, "BTCUSDT": 62586.0, "SOLUSDT": 72.46, "ADAUSDT": 0.1829}[symbol]
+            allowed = max_stop_raise_usd(price, bar, tick)
+            self.assertGreaterEqual(allowed, tick, f"{symbol}: one tick must always be allowed")
+
+    def test_the_late_start_bug_is_held_on_every_instrument(self):
+        """1.39% above the trigger — the replayed-fall case named in the
+        comment. No instrument's bar is loud enough to make that a live cross."""
+        for symbol, bar in self.BAR.items():
+            price = 100.0
+            allowed = max_stop_raise_usd(price, bar, self.TICK[symbol])
+            self.assertLess(allowed, price * 0.0139, f"{symbol} would still arm on a bounced fall")
+
+    def test_the_cap_is_a_quarter_bar_where_the_bar_is_the_binding_side(self):
+        allowed = max_stop_raise_usd(62586.0, self.BAR["BTCUSDT"], self.TICK["BTCUSDT"])
+        self.assertAlmostEqual(allowed, 62586.0 * self.BAR["BTCUSDT"] * MAX_STOP_RAISE_BAR_RATIO, places=8)
+
+    def test_a_quiet_instrument_gets_a_far_tighter_cap_than_a_loud_one(self):
+        """The whole point of dropping the flat percent. As a fraction of
+        price, gold's allowance has to be a fraction of a mover's."""
+        paxg = max_stop_raise_usd(4057.64, self.BAR["PAXGUSDT"], self.TICK["PAXGUSDT"]) / 4057.64
+        ada = max_stop_raise_usd(0.1829, self.BAR["ADAUSDT"], self.TICK["ADAUSDT"]) / 0.1829
+        self.assertLess(paxg, ada / 10, "a flat percent treated these as the same market")
+
+    def test_an_unmeasured_bar_tightens_rather_than_loosens(self):
+        """A failed measurement must never widen a real filter — the same rule
+        min_fib_range_for follows. With no bar, the tick floor is the whole
+        allowance, which is stricter than any instrument that was measured."""
+        floor = MAX_STOP_RAISE_FLOOR_TICKS * 0.01
+        self.assertAlmostEqual(max_stop_raise_usd(62586.0, 0.0, 0.01), floor, places=10)
+        self.assertLess(floor, max_stop_raise_usd(62586.0, self.BAR["BTCUSDT"], 0.01))
+
+    def test_nonsense_inputs_fall_back_to_the_floor(self):
+        floor = MAX_STOP_RAISE_FLOOR_TICKS * 0.01
+        for trigger, bar in ((0.0, 0.001), (-5.0, 0.001), (72.9, -0.001), (72.9, None)):
+            self.assertAlmostEqual(max_stop_raise_usd(trigger, bar, 0.01), floor, places=10)
+        # A missing tick size still yields a usable allowance, never zero.
+        self.assertGreater(max_stop_raise_usd(72.9, 0.0, 0.0), 0.0)
 
 
 if __name__ == "__main__":

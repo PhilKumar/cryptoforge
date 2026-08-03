@@ -111,11 +111,23 @@ STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
 # collects a fall that already bottomed and bounced DAYS ago, and the current
 # price is far above the trigger. Arming there buys over value on no new low —
 # exactly what the new-low rule forbids ([[proj_cascade_new_low_rule]]). So a
-# raise beyond this fraction is refused: the pot stays collected and unarmed,
-# and the walk-down re-arms it only when a genuine new low prints below the
-# trigger. A live cross lands within a tick or two (well under 0.1% on the
-# moves seen); the late-start bug that motivated this was 1.39% above.
-MAX_STOP_RAISE_PCT = 0.005
+# raise beyond the cap is refused: the pot stays collected and unarmed, and the
+# walk-down re-arms it only when a genuine new low prints below the trigger.
+#
+# The cap is a fraction of THIS instrument's median 5m bar, not a flat percent.
+# A flat percent is a different guard on every market — measured 2026-08-03,
+# 0.1% is 20.2 median bars on PAXG, 1.9 on BTC, 1.0 on SOL and 0.3 on ADA, a
+# 65x spread in strictness. On gold that is no guard at all, which is how the
+# 2026-08-03 SOL entry got through at 0.18% above its trigger under a 0.5% cap.
+# A quarter bar is small enough that only a tick-scale cross survives it and
+# large enough to scale with how loud the instrument actually is.
+MAX_STOP_RAISE_BAR_RATIO = 0.25
+# Floor under the cap, in exchange ticks: you cannot be stricter than the
+# instrument's own price granularity, and a real cross is a tick or two. This
+# is also the WHOLE cap when the bar was never measured — a missing
+# measurement must tighten the filter, never quietly loosen it, the same rule
+# min_fib_range_for follows.
+MAX_STOP_RAISE_FLOOR_TICKS = 3
 # Exchange commission, percent per side, charged on both the buy and the sell.
 #
 # Every other engine here models fees (backtest.py and paper_trading.py both
@@ -236,6 +248,28 @@ def min_fib_range_for(symbol: str, median_bar_pct: float) -> float:
         return MIN_FIB_RANGE_PCT
     scaled = median_bar_pct * FIB_RANGE_BAR_RATIO
     return max(min(scaled, MIN_FIB_RANGE_PCT), MIN_FIB_RANGE_FLOOR_PCT)
+
+
+def max_stop_raise_usd(trigger: float, median_bar_pct: float, tick_size: float) -> float:
+    """How far above its trigger a buy stop may be re-armed, in price units.
+
+    A quarter of the instrument's own median 5m bar, floored at a few ticks so
+    a genuine tick-scale cross is never refused. `median_bar_pct` is the median
+    5m high-low range as a FRACTION of price; 0.0 means it could not be
+    measured, and then the tick floor is the whole allowance — the strict end,
+    because a failed measurement must never widen a real filter.
+
+    Returns an absolute distance rather than a percent so the caller compares
+    against the trigger it actually holds, with no second conversion to get
+    wrong. See MAX_STOP_RAISE_BAR_RATIO for why this is not a flat percent.
+    """
+    tick = _coerce_float(tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
+    floor = MAX_STOP_RAISE_FLOOR_TICKS * tick
+    price = _coerce_float(trigger)
+    bar = _coerce_float(median_bar_pct)
+    if price <= 0 or bar <= 0:
+        return floor
+    return max(price * bar * MAX_STOP_RAISE_BAR_RATIO, floor)
 
 
 MOTHER_RETEST_PCT = 0.0005
@@ -5661,23 +5695,34 @@ class CascadeEngine:
             # current price would buy over value on NO new low. Hold instead:
             # keep the pot collected and let the walk-down re-arm it only when a
             # genuine new low prints below the trigger.
-            raise_pct = (market - stop) / stop if stop > 0 else 0.0
-            if raise_pct > MAX_STOP_RAISE_PCT:
+            #
+            # "Large" is measured in this instrument's own bars — see
+            # max_stop_raise_usd. A flat percent let SOL through at 0.18% on
+            # 2026-08-03 (1.9 median bars, armed at 73.04 against a 72.90
+            # trigger) and would never have stopped anything at all on PAXG.
+            allowed = max_stop_raise_usd(stop, campaign.median_bar_pct, tick)
+            raise_usd = market - stop
+            raise_pct = raise_usd / stop if stop > 0 else 0.0
+            if raise_usd > allowed:
                 if campaign.campaign_id not in self._stale_pot_held:
                     self._stale_pot_held.add(campaign.campaign_id)
                     self._log_event(
                         campaign,
                         "order",
                         f"Buy HELD, not armed: price {market:,.2f} is {raise_pct * 100:.2f}% above the "
-                        f"trigger {stop:,.2f}. The collected fall already bottomed and bounced, so arming "
-                        f"here would buy over value with no new low. ${campaign.pending_usd:,.2f} stays "
-                        f"collected — it will arm only when price makes a fresh low below {stop:,.2f}.",
+                        f"trigger {stop:,.2f} — {raise_usd:,.4f} against an allowance of {allowed:,.4f} "
+                        f"({MAX_STOP_RAISE_BAR_RATIO:g} of a median {campaign.median_bar_pct * 100:.3f}% bar, "
+                        f"floored at {MAX_STOP_RAISE_FLOOR_TICKS} ticks). The collected fall already bottomed "
+                        f"and bounced, so arming here would buy over value with no new low. "
+                        f"${campaign.pending_usd:,.2f} stays collected — it will arm only when price makes a "
+                        f"fresh low below {stop:,.2f}.",
                     )
                     self._alert(
                         "Cascade entry held — no new low",
                         f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()})\n"
                         f"Price {market:,.2f} is {raise_pct * 100:.2f}% above the collected fall's trigger "
-                        f"{stop:,.2f}.\n\nHolding ${campaign.pending_usd:,.2f} until price makes a new low — "
+                        f"{stop:,.2f} — more than {MAX_STOP_RAISE_BAR_RATIO:g} of a median bar on this "
+                        f"instrument.\n\nHolding ${campaign.pending_usd:,.2f} until price makes a new low — "
                         f"it will not buy over value. This is normal when a campaign is started late or from "
                         f"an older mother candle.",
                         level="warn",

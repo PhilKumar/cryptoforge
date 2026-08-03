@@ -3782,18 +3782,22 @@ class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
         """Price has passed the trigger. It must NOT become a limit buy — a limit
         fills on the way DOWN and catches the knife (the PAXG bug). Instead the
         STOP is re-armed just above the current price, so it can only fill on a
-        continuation UP, never on a fall."""
-        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.9}  # above stop 96.5
+        continuation UP, never on a fall.
+
+        Two ticks over the trigger: a genuine live cross, the only kind the
+        raise is for. This campaign has no measured bar, so its whole allowance
+        is the tick floor — see max_stop_raise_usd."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.52}  # above stop 96.5
         placed = await self.engine._place_pending_stop(self.campaign)
         self.assertTrue(placed)
         buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
         self.assertEqual(len(buys), 1)
         self.assertEqual(buys[0]["order_type"], "stop_limit", "always a stop — never a downward-filling limit")
-        # Raised to just ABOVE the live price (96.9), not left at the stale 96.5.
+        # Raised to just ABOVE the live price (96.52), not left at the stale 96.5.
         self.assertGreater(
-            buys[0]["stop_price"], 96.9, "the stop must sit above the market, so only an up-move fills it"
+            buys[0]["stop_price"], 96.52, "the stop must sit above the market, so only an up-move fills it"
         )
-        self.assertAlmostEqual(buys[0]["stop_price"], 96.9 + self.campaign.tick_size, places=6)
+        self.assertAlmostEqual(buys[0]["stop_price"], 96.52 + self.campaign.tick_size, places=6)
         self.assertGreater(buys[0]["limit_price"], buys[0]["stop_price"], "limit is the cap above the raised stop")
         self.assertIsNotNone(self.campaign.pending_order_id)
 
@@ -3801,11 +3805,11 @@ class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
         """The invariant, stated as the PAXG failure: price above the trigger,
         then it keeps falling. The order must be a stop above the market, which a
         fall can never reach — so no knife is caught."""
-        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.9}
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.52}
         await self.engine._place_pending_stop(self.campaign)
         order = [o for o in self.broker.placed_orders if o["side"] == "buy"][0]
-        # A stop above 96.9 cannot be hit by price falling to, say, 96.0.
-        self.assertGreater(order["stop_price"], 96.9)
+        # A stop above 96.52 cannot be hit by price falling to, say, 96.0.
+        self.assertGreater(order["stop_price"], 96.52)
         self.assertEqual(order["order_type"], "stop_limit")
 
     async def test_price_below_the_trigger_still_rests_a_stop(self):
@@ -3868,12 +3872,39 @@ class CascadeStalePotHoldTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_small_live_cross_still_arms(self):
         """The legitimate case is untouched: a real live cross within the ceiling
-        raises the stop just above the market and rests it."""
-        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.6}  # 0.10% above
+        raises the stop just above the market and rests it. Two ticks — what a
+        cross inside the one-second price read actually looks like."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.52}
         placed = await self.engine._place_pending_stop(self.campaign)
         self.assertTrue(placed)
         buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
         self.assertEqual(len(buys), 1)
+        self.assertAlmostEqual(buys[0]["stop_price"], 96.52 + self.campaign.tick_size, places=6)
+        self.assertNotIn(self.campaign.campaign_id, self.engine._stale_pot_held)
+
+    async def test_a_bounce_wider_than_the_instruments_bar_is_held(self):
+        """SOLUSDT, 2026-08-03 10:42:43, in miniature. The two reds set the
+        trigger; by the time the order went out the market was 0.18% above it —
+        1.9 median bars, a bounce that had already run for minutes. The old flat
+        0.5% ceiling armed it anyway, it filled at 73.04 against a 72.90
+        trigger, and it reversed. 0.10% here is the same shape."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.6}
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertFalse(placed, "a bounce is not a live cross, however small the percent")
+        self.assertEqual([o for o in self.broker.placed_orders if o["side"] == "buy"], [])
+        self.assertIn(self.campaign.campaign_id, self.engine._stale_pot_held)
+        self.assertEqual(self.campaign.pending_usd, 40.0, "the pot stays collected")
+
+    async def test_a_louder_instrument_earns_a_wider_allowance(self):
+        """The same 0.10% cross, on a market whose median bar is 0.5%. The cap
+        is a quarter of THIS instrument's bar, so what is a bounce on a quiet
+        book is still a live cross on a loud one — the whole reason this is not
+        a flat percent."""
+        self.campaign.median_bar_pct = 0.005
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.6}
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        buys = [o for o in self.broker.placed_orders if o["side"] == "buy"]
         self.assertAlmostEqual(buys[0]["stop_price"], 96.6 + self.campaign.tick_size, places=6)
         self.assertNotIn(self.campaign.campaign_id, self.engine._stale_pot_held)
 
