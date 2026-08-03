@@ -8473,6 +8473,25 @@ var _CF_CASCADE_REASONS = {
   stopped: ['Stopped', 'muted']
 };
 
+// The pill was printing the engine's own constant — WAITING_FIRST_DEPTH is 19
+// characters of SHOUTING for "hasn't found a fall to draw on yet". On a strip
+// that also carries LIVE, the MC kind, the timeframe and a summary, that one
+// word was most of the crowding. The raw state stays in the tooltip, because
+// it is what the event log and the API say.
+var _CF_CASCADE_STATE_LABELS = {
+  WAITING_FIRST_DEPTH: 'Waiting',
+  TRENDLINE_ACTIVE: 'Active',
+  MOTHER_BREAK_PENDING: 'Break pending',
+  COMPLETED: 'Completed',
+  MOTHER_BROKEN: 'MC broken',
+  STOPPED: 'Stopped'
+};
+
+function _cfCascadeStateLabel(state) {
+  var raw = String(state || '');
+  return _CF_CASCADE_STATE_LABELS[raw] || raw.replace(/_/g, ' ').toLowerCase();
+}
+
 // Which kind of mother candle this campaign is anchored to. The timeframe pill
 // implies it (5m means minor), but two campaigns can run on the same symbol at
 // once and the one thing you need to read off the strip is which structure each
@@ -8592,15 +8611,19 @@ function _cfCascadeCampaignCard(campaign) {
     ? '<span class="admin-pill" data-state="warn">LIVE</span>'
     : '<span class="admin-pill" data-state="ok">PAPER</span>';
   var goLive = mode !== 'LIVE' && fills.length === 0
-    ? '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeSetLive(\'' + cid + '\')">Go Live</button>'
+    ? '<button class="cf-cascade-menu-item" data-cf-click="cfCascadeMenuPick(\'' + cid + '\',\'live\')">Go Live</button>'
     : '';
   // A campaign that has ended is history: dimmed, and collapsed unless opened.
   var ended = campaign.state === 'MOTHER_BROKEN' || campaign.state === 'COMPLETED'
     || campaign.state === 'STOPPED';
   var open = _cfCascadeIsOpen(campaign.campaign_id, ended);
+  // The panel is re-rendered wholesale every few seconds, so an open menu has
+  // to be a fact the renderer knows, not a class on a node that is about to be
+  // thrown away — otherwise it shuts by itself mid-click.
+  var menuOpen = _cfCascadeMenuOpenFor === String(campaign.campaign_id || '');
   // An ended campaign shows WHY it ended, not just that it did.
   var reasonMeta = _CF_CASCADE_REASONS[String(campaign.close_reason || '')];
-  var stateLabel = (ended && reasonMeta) ? reasonMeta[0] : String(campaign.state || '');
+  var stateLabel = (ended && reasonMeta) ? reasonMeta[0] : _cfCascadeStateLabel(campaign.state);
   var num = Number(campaign.seq) > 0 ? '#' + campaign.seq : '#' + cid;
   var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
   var realised = rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0);
@@ -8613,15 +8636,15 @@ function _cfCascadeCampaignCard(campaign) {
   // round and dollar of realised P&L across. Offered on running campaigns
   // only — an ended one is history.
   var restructure = !ended
-    ? '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRestructure(\'' + cid + '\')"'
+    ? '<button class="cf-cascade-menu-item" data-cf-click="cfCascadeMenuPick(\'' + cid + '\',\'restructure\')"'
       + ' title="Redraw this campaign\'s trendlines and fibs under the current rules, keeping every'
       + ' trade it has already taken. Shows you what would change before anything moves.">Restructure</button>'
     : '';
   var recalc = mode === 'LIVE' && (fills.length || rounds.length)
-    ? '<button class="btn btn-outline btn-sm" disabled title="This campaign has traded live —'
+    ? '<button class="cf-cascade-menu-item" disabled title="This campaign has traded live —'
       + ' its fills and closed rounds came from the exchange, not from the replay, so rebuilding'
       + ' would erase them. Stop it and start a fresh one.">Recalc</button>'
-    : '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeRecalculate(\'' + cid + '\')">Recalc</button>';
+    : '<button class="cf-cascade-menu-item" data-cf-click="cfCascadeMenuPick(\'' + cid + '\',\'recalc\')">Recalc</button>';
   // A one-line summary so a collapsed card still says how it is doing.
   var gist = fills.length
     ? fills.length + ' open entr' + (fills.length === 1 ? 'y' : 'ies')
@@ -8654,7 +8677,8 @@ function _cfCascadeCampaignCard(campaign) {
     + '<strong>' + _escapeHtml(campaign.symbol || '') + '</strong>'
     + '<div class="cf-cascade-title-view"><div class="cf-cascade-title-track">'
     + '<span class="cf-cascade-title-group">'
-    + '<span class="admin-pill" data-state="' + stateTone + '">' + _escapeHtml(stateLabel) + '</span>'
+    + '<span class="admin-pill" data-state="' + stateTone + '" title="Engine state: '
+      + _escapeHtml(String(campaign.state || '')) + '">' + _escapeHtml(stateLabel) + '</span>'
     + modeBadge
     // The timeframe the engine steps this campaign on, and how it got there.
     // Two campaigns on the same symbol can now be running on different candles,
@@ -8665,18 +8689,32 @@ function _cfCascadeCampaignCard(campaign) {
     + (campaign.stale_model
       ? '<span class="admin-pill" data-state="warn" title="The fib and trendline rules have changed since '
         + 'this campaign drew its structure, so what you see came from the older logic. Nothing is broken '
-        + 'and it keeps trading — press Recalc to redraw it under the current rules.">OLD RULES · RECALC</span>'
+        + 'and it keeps trading — open the &#8943; menu and press Recalc to redraw it under the '
+        + 'current rules.">OLD RULES · RECALC</span>'
       : '')
     + '<span class="table-meta cf-cascade-gist">' + _escapeHtml(gist) + '</span>'
     + '</span></div></div></div>'
     // Buttons live inside the header but must not toggle it.
+    // Two buttons, not six. Chart and Stop are what you reach for while a
+    // campaign is running, so they stay full-size and labelled; the rest live
+    // behind the menu, Delete included — it was one stray click away on every
+    // row. Six buttons were also squeezing the pill strip beside them into a
+    // permanent scroll.
     + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
-    + restructure
-    + recalc
-    + goLive
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
-    + '<button class="btn btn-danger btn-sm" data-cf-click="cfCascadeDeleteCampaign(\'' + cid + '\')">Delete</button>'
+    + '<div class="cf-cascade-more' + (menuOpen ? ' is-open' : '') + '">'
+      + '<button class="btn btn-outline btn-sm cf-cascade-more-btn" aria-haspopup="menu"'
+        + ' aria-expanded="' + (menuOpen ? 'true' : 'false') + '"'
+        + ' title="More actions" data-cf-click="cfCascadeToggleMenu(\'' + cid + '\')">&#8943;</button>'
+      + '<div class="cf-cascade-menu" role="menu"' + (menuOpen ? '' : ' hidden') + '>'
+        + restructure
+        + recalc
+        + goLive
+        + '<button class="cf-cascade-menu-item is-danger"'
+          + ' data-cf-click="cfCascadeMenuPick(\'' + cid + '\',\'delete\')">Delete</button>'
+      + '</div>'
+    + '</div>'
     + '</div></div>'
     + '<div class="cf-cascade-body">'
     + '<div class="cf-cascade-stats">'
@@ -8736,6 +8774,41 @@ function _cfCascadeSortCampaigns(campaigns) {
     return (Number(a.seq) || 0) - (Number(b.seq) || 0);
   });
 }
+
+// Which campaign's "⋯" menu is open — at most one, and held here rather than
+// in the DOM because cfRenderCascadeStatus replaces this whole panel on every
+// status poll. A class set on the button would survive about three seconds.
+var _cfCascadeMenuOpenFor = '';
+
+function cfCascadeCloseMenu() {
+  if (!_cfCascadeMenuOpenFor) return;
+  _cfCascadeMenuOpenFor = '';
+  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+}
+
+function cfCascadeToggleMenu(cid) {
+  var key = String(cid || '');
+  _cfCascadeMenuOpenFor = _cfCascadeMenuOpenFor === key ? '' : key;
+  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+}
+
+// One entry point for everything behind the menu: close first, then act. Left
+// open, the menu would sit over the confirm dialog these actions raise.
+function cfCascadeMenuPick(cid, what) {
+  _cfCascadeMenuOpenFor = '';
+  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+  if (what === 'restructure') return cfCascadeRestructure(cid);
+  if (what === 'recalc') return cfCascadeRecalculate(cid);
+  if (what === 'live') return cfCascadeSetLive(cid);
+  if (what === 'delete') return cfCascadeDeleteCampaign(cid);
+}
+
+// Clicking anywhere else, or Escape, puts it away. Clicks inside the actions
+// strip never reach here — it stops propagation so they cannot toggle the card.
+document.addEventListener('click', function() { cfCascadeCloseMenu(); });
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') cfCascadeCloseMenu();
+});
 
 function cfCascadeToggleCard(cid) {
   var card = document.querySelector('.cf-cascade-card[data-campaign="' + cid + '"]');

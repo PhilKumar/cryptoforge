@@ -6990,6 +6990,42 @@ html[data-theme="light"] .journal-entry-notes section {
   /* Badges keep their size; the summary text is what gives way when the row is
      tight. A clipped "PAPE" is worse than no summary. */
   .cf-cascade-head .admin-pill { font-size: 10px; padding: 2px 8px; flex: none; }
+  /* ── The "⋯" overflow menu ──
+     Chart and Stop stay on the strip; everything rarer lives in here. The
+     wrapper is the positioning context, so the panel hangs off the button
+     rather than off the card — a card with overflow of its own would clip it. */
+  .cf-cascade-more { position: relative; flex: none; }
+  .cf-cascade-more-btn { line-height: 1; padding-left: 10px; padding-right: 10px; }
+  .cf-cascade-more.is-open .cf-cascade-more-btn { border-color: var(--accent); color: var(--text); }
+  .cf-cascade-menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+    min-width: 168px;
+    display: flex; flex-direction: column;
+    padding: 5px;
+    border-radius: 12px;
+    background: var(--card);
+    border: 1px solid var(--border-hi);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+    backdrop-filter: blur(18px);
+  }
+  [data-theme="light"] .cf-cascade-menu {
+    background: #ffffff;
+    box-shadow: 0 14px 32px rgba(15,23,42,0.16);
+  }
+  .cf-cascade-menu[hidden] { display: none; }
+  .cf-cascade-menu-item {
+    appearance: none; background: transparent; border: 0;
+    font-family: inherit; font-size: 12px; font-weight: 600;
+    color: var(--text); text-align: left;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .cf-cascade-menu-item:hover:not([disabled]) { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .cf-cascade-menu-item[disabled] { opacity: 0.45; cursor: not-allowed; }
+  /* Delete keeps its warning colour even in here — the menu hides it from a
+     stray click, it does not make it any less permanent. */
+  .cf-cascade-menu-item.is-danger { color: var(--red); }
+  .cf-cascade-menu-item.is-danger:hover { background: var(--red-bg); }
   .cf-cascade-title > strong { flex: none; }
   /* One row, always — seven compact stats beside the start form. Labels are
      clipped rather than wrapped; hovering a box marquees the full heading. */
