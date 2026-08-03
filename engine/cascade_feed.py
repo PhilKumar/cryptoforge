@@ -259,6 +259,118 @@ def verify_frame(frame: dict, public_keys: Dict[str, str]) -> dict:
     return json.loads(msg)
 
 
+# ── the key set ──────────────────────────────────────────────────────
+#
+# The root key signs this document; the document says which feed keys are
+# valid. Both halves of the trust chain are written here so they are read
+# together — the executor's verification and our minting must not drift apart.
+
+KEYSET_VERSION = 1
+
+# How long a signed key set stays valid. This is NOT the executor's cache TTL
+# (24h, which is how often it must re-fetch). Two different jobs again.
+#
+# The document needs an expiry at all because of one specific attack: an
+# attacker who can intercept the key-set endpoint serves LAST MONTH's key set,
+# the one that still lists a compromised kid as valid. Without an expiry that
+# replay works forever and revocation is decorative. With it, a revocation
+# becomes permanent once the old document lapses.
+#
+# 30 days is the trade. Shorter makes revocation stick faster and turns the
+# offline re-signing ceremony into a chore; longer widens the replay window.
+# The cost of the choice is a liveness risk — a key set nobody re-signs
+# eventually stops every buyer — so the server warns while there is still time
+# to act. See KEYSET_WARN_DAYS.
+KEYSET_VALID_DAYS = 30
+KEYSET_WARN_DAYS = 7
+
+
+def build_key_set(
+    keys: List[dict],
+    *,
+    revoked: Optional[List[str]] = None,
+    issued_at: Optional[int] = None,
+    valid_days: int = KEYSET_VALID_DAYS,
+) -> dict:
+    """The inner document. Signed by the ROOT key, never by a feed key."""
+    issued = int(issued_at if issued_at is not None else time.time())
+    return {
+        "v": KEYSET_VERSION,
+        "issued_at": issued,
+        "expires_at": issued + int(valid_days * 86400),
+        "keys": [
+            {
+                "kid": key["kid"],
+                "alg": "ed25519",
+                "public": key["public"],
+                "not_before": int(key.get("not_before", issued)),
+                "not_after": int(key["not_after"]),
+            }
+            for key in keys
+        ],
+        "revoked": list(revoked or []),
+    }
+
+
+ROOT_KID = "root"
+
+
+def sign_key_set(document: dict, root: FeedSigner) -> dict:
+    """
+    Wrap a key set in a root-signed frame — the same shape as a message frame,
+    on purpose, so there is one verification path to get right rather than two.
+    """
+    if root.kid != ROOT_KID:
+        raise ValueError(f"a key set is signed by the root key, not by {root.kid!r}")
+    return root.frame(document)
+
+
+def verify_key_set(frame: dict, root_public_b64: str, *, now: Optional[float] = None) -> dict:
+    """
+    The executor's side. Verify against the root public key compiled into the
+    build, then refuse an expired document.
+
+    Fail-closed on expiry is the point: an executor holding a lapsed key set
+    must stop opening campaigns rather than keep trusting whatever it last saw.
+    """
+    verified = verify_frame(frame, {ROOT_KID: root_public_b64})
+    stamp = time.time() if now is None else now
+    if int(verified.get("expires_at") or 0) <= stamp:
+        raise InvalidSignature("key set has expired — refetch before opening anything new")
+    return verified
+
+
+def active_public_keys(document: dict, *, now: Optional[float] = None) -> Dict[str, str]:
+    """
+    kid → public key, for keys that are in window and not revoked. Feed
+    everything through this rather than reading `document["keys"]` directly —
+    revocation only works if the revoked list is honoured at the one place the
+    map is built.
+    """
+    stamp = time.time() if now is None else now
+    revoked = set(document.get("revoked") or [])
+    active = {}
+    for key in document.get("keys") or []:
+        kid = key.get("kid")
+        if not kid or kid in revoked:
+            continue
+        if not (int(key.get("not_before") or 0) <= stamp < int(key.get("not_after") or 0)):
+            continue
+        active[kid] = key.get("public")
+    return active
+
+
+def key_set_expiry_warning(document: dict, *, now: Optional[float] = None) -> Optional[str]:
+    """Something for the server to surface while there is still time to act."""
+    stamp = time.time() if now is None else now
+    remaining = int(document.get("expires_at") or 0) - stamp
+    if remaining <= 0:
+        return "The feed key set has EXPIRED. Every executor has stopped opening campaigns."
+    if remaining <= KEYSET_WARN_DAYS * 86400:
+        return f"The feed key set expires in {int(remaining // 86400)} day(s) — re-sign it with the root key."
+    return None
+
+
 def _b64(raw: bytes) -> str:
     import base64
 

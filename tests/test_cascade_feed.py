@@ -31,19 +31,25 @@ from engine.cascade_feed import (
     FEED_VERSION,
     LOGGED_TYPES,
     NEVER_PUBLISH,
+    ROOT_KID,
     FeedLeak,
     FeedLog,
     FeedSigner,
+    active_public_keys,
     build_envelope,
+    build_key_set,
     campaign_closed_payload,
     campaign_opened_payload,
     campaign_state_payload,
     epoch_from_ist,
     gross_allocation_pct,
+    key_set_expiry_warning,
     leg_finalized_payload,
     leg_opened_payload,
+    sign_key_set,
     trendline_set_payload,
     verify_frame,
+    verify_key_set,
 )
 
 
@@ -469,6 +475,82 @@ class FeedLogTests(unittest.TestCase):
                 },
                 signer=self.signer,
             )
+
+
+class KeySetTests(unittest.TestCase):
+    """The trust chain: root signs the set, the set decides which feed keys count."""
+
+    def setUp(self):
+        self.root = FeedSigner.generate(ROOT_KID)
+        self.feed = FeedSigner.generate("cf-feed-2026a")
+        self.now = 1785770000
+        self.document = build_key_set(
+            [
+                {
+                    "kid": self.feed.kid,
+                    "public": self.feed.public_key_b64(),
+                    "not_before": self.now,
+                    "not_after": self.now + 90 * 86400,
+                }
+            ],
+            issued_at=self.now,
+        )
+        self.frame = sign_key_set(self.document, self.root)
+
+    def test_the_executor_trusts_a_root_signed_set(self):
+        verified = verify_key_set(self.frame, self.root.public_key_b64(), now=self.now + 60)
+        self.assertEqual(active_public_keys(verified, now=self.now + 60), {self.feed.kid: self.feed.public_key_b64()})
+
+    def test_a_set_signed_by_anything_but_the_root_is_refused(self):
+        """The attack the offline root exists for: a compromised server minting its own successor."""
+        attacker = FeedSigner.generate(ROOT_KID)
+        forged = sign_key_set(self.document, attacker)
+        with self.assertRaises(InvalidSignature):
+            verify_key_set(forged, self.root.public_key_b64(), now=self.now + 60)
+
+    def test_a_feed_key_may_not_sign_the_set_that_authorises_it(self):
+        with self.assertRaises(ValueError):
+            sign_key_set(self.document, self.feed)
+
+    def test_revoking_a_kid_drops_it_from_the_trusted_map(self):
+        revoked = build_key_set(self.document["keys"], revoked=[self.feed.kid], issued_at=self.now)
+        self.assertEqual(active_public_keys(revoked, now=self.now + 60), {})
+
+    def test_a_revoked_key_can_no_longer_verify_a_real_message(self):
+        """End of the chain — revocation has to reach actual messages, not just a list."""
+        envelope = build_envelope(
+            msg_type="leg.finalized",
+            symbol="SOLUSDT",
+            campaign_id="c1",
+            payload=leg_finalized_payload(4),
+            seq=1,
+            model_version=MODEL_VERSION,
+        )
+        message = self.feed.frame(envelope)
+        self.assertEqual(verify_frame(message, active_public_keys(self.document, now=self.now + 60))["seq"], 1)
+        revoked = build_key_set(self.document["keys"], revoked=[self.feed.kid], issued_at=self.now)
+        with self.assertRaises(InvalidSignature):
+            verify_frame(message, active_public_keys(revoked, now=self.now + 60))
+
+    def test_an_expired_set_fails_closed(self):
+        """A lapsed document must stop new campaigns, not keep trusting what it saw."""
+        with self.assertRaises(InvalidSignature):
+            verify_key_set(self.frame, self.root.public_key_b64(), now=self.now + 31 * 86400)
+
+    def test_expiry_is_what_makes_a_replayed_old_set_stop_working(self):
+        """Serving last month's set is how an attacker un-revokes a key."""
+        stale = sign_key_set(build_key_set(self.document["keys"], issued_at=self.now - 40 * 86400), self.root)
+        with self.assertRaises(InvalidSignature):
+            verify_key_set(stale, self.root.public_key_b64(), now=self.now)
+
+    def test_a_key_outside_its_own_window_is_not_trusted(self):
+        self.assertEqual(active_public_keys(self.document, now=self.now - 1), {})
+        self.assertEqual(active_public_keys(self.document, now=self.now + 91 * 86400), {})
+
+    def test_the_expiry_warning_arrives_with_time_to_act(self):
+        self.assertIsNone(key_set_expiry_warning(self.document, now=self.now))
+        self.assertIn("3 day", key_set_expiry_warning(self.document, now=self.now + 27 * 86400))
+        self.assertIn("EXPIRED", key_set_expiry_warning(self.document, now=self.now + 31 * 86400))
 
 
 class EnvelopeTests(unittest.TestCase):
