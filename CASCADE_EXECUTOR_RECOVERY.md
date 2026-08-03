@@ -160,6 +160,13 @@ API failures or missed feed heartbeats, then enter an explicit degraded state.
 Any gap flagged `slept_armed` skips straight to full recovery regardless of
 length.
 
+These thresholds are about **money** — how far the buyer's own positions may
+have drifted before a human should look at them. They sit alongside, and do not
+conflict with, the **data** thresholds in `CASCADE_SIGNAL_FORMAT.md`: replay
+from cursor under 2 minutes, re-snapshot past that, cursor refused entirely past
+24 hours. A seven-hour gap needs the buyer's confirmation but still has a valid
+cursor. A thirty-hour gap needs both.
+
 ### Full recovery, in order
 
 1. **Ask the exchange first, believe it over local state.** Open orders,
