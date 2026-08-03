@@ -27,6 +27,12 @@
 <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Inter:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/static/landing/landing.css">
+<!-- pwa.js builds its install-guidance dialog from cf-pwa-* classes and does
+     NOT ship any styles of its own, so the sheet renders as raw unstyled HTML
+     unless this is linked. It cannot be injected as a <style> either: this
+     origin sends two CSP headers whose intersection is
+     style-src-elem 'self', which blocks inline stylesheets outright. -->
+<link rel="stylesheet" href="/static/cryptoforge-pwa.css">
 <script src="/static/pwa.js" defer></script>
 </head>
 <body>
