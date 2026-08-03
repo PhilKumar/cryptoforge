@@ -6975,6 +6975,37 @@ html[data-theme="light"] .journal-entry-notes section {
 
   /* ── Cascade campaign cards: compact stat grid ── */
   .cf-cascade-card { padding: 14px 16px; margin-bottom: 12px; }
+  /* ── One instrument's campaigns, in one box ──
+     The stack header was a sibling of the cards: it announced where BTCUSDT
+     began and never said where it ended, so with a second instrument below you
+     could not tell which rows the group's budget actually covered. The wrapper
+     draws that boundary, and the header is now its lid rather than a bar
+     floating above it.
+
+     Deliberately NO backdrop-filter here. The cards have one, which makes each
+     its own stacking context and is what buried the open ⋯ menu under the rows
+     below; giving the wrapper one too would re-create that a level up. */
+  .cf-cascade-stack {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: rgba(148,163,184,0.045);
+    padding: 0 10px 4px;
+    margin-bottom: 14px;
+  }
+  [data-theme="light"] .cf-cascade-stack { background: rgba(15,23,42,0.025); }
+  .cf-cascade-stack-head {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 9px 6px;
+    margin: 0 0 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cf-cascade-stack-head > strong { letter-spacing: 0.02em; }
+  /* The cards keep their own margins between each other; the last one would
+     otherwise leave a gap before the wrapper's bottom edge. */
+  .cf-cascade-stack-body > .cf-cascade-card:last-child { margin-bottom: 6px; }
+  /* Same escape the card needed, one level up: while this group holds the open
+     menu it has to sit above the instruments below it, or they paint over it. */
+  .cf-cascade-stack.has-menu-open { position: relative; z-index: 40; }
   .cf-cascade-pager {
     display: flex;
     align-items: center;

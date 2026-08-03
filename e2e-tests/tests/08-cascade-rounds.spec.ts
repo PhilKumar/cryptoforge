@@ -408,4 +408,36 @@ test.describe('Cascade strip menu stacking', () => {
     expect(topmost, 'a campaign below must not be painted over the open menu')
       .toContain('cf-cascade-menu-item');
   });
+
+  test('an instrument\u2019s campaigns are drawn inside its group, and others are not', async ({ page }) => {
+    await login(page);
+    await serveStatus(page, statusWithStack());
+    await page.evaluate(() => (window as any).showPage(
+      'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
+    ));
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+    await expect(page.locator('#cf-cascade-campaigns .cf-cascade-card')).toHaveCount(4);
+
+    // The header used to be a sibling of the cards: it said where BTCUSDT
+    // began and never where it ended, so with PAXG and SOL underneath there was
+    // nothing on screen saying which rows the $2,000 budget covered.
+    const stack = page.locator('.cf-cascade-stack');
+    await expect(stack).toHaveCount(1);
+    await expect(stack.locator('> .cf-cascade-stack-head'), 'the header is the lid of the group')
+      .toHaveCount(1);
+    await expect(stack.locator('.cf-cascade-card'), 'both BTCUSDT campaigns live in it').toHaveCount(2);
+    await expect(stack).toContainText('BTCUSDT');
+    await expect(stack).toContainText('free of $2,000.00');
+
+    // A lone campaign with no budget is not a group; a box round one card is a
+    // box drawn for its own sake.
+    await expect(
+      page.locator('#cf-cascade-campaigns > .cf-cascade-card'),
+      'PAXG and SOL stay outside any wrapper',
+    ).toHaveCount(2);
+
+    // And the wrapper must not become a stacking context of its own, or it
+    // would bury the open menu exactly the way the cards did.
+    expect(await stack.evaluate((el) => getComputedStyle(el).backdropFilter)).toBe('none');
+  });
 });

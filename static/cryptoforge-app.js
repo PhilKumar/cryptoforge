@@ -9275,9 +9275,10 @@ function _cfCascadeStackHeader(symbol, stack, count) {
     group = ' · group <strong style="color:' + (free > 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)') + ';">$'
       + _cfCascadeUsd(free) + '</strong> free of $' + _cfCascadeUsd(stack.budget_usd);
   }
-  return '<div class="cf-cascade-stack-head" style="display:flex;flex-wrap:wrap;align-items:center;'
-    + 'gap:8px;padding:8px 12px;margin:10px 0 6px;border:1px solid var(--border);border-radius:10px;'
-    + 'background:rgba(148,163,184,0.06);">'
+  // Presentation lives in the stylesheet now. It used to be a free-standing
+  // bordered bar carrying its own margins, which is why it read as a label
+  // floating above the cards rather than as the lid of the group they sit in.
+  return '<div class="cf-cascade-stack-head">'
     + '<strong>' + _escapeHtml(symbol) + '</strong>'
     + '<span class="table-meta">' + count + ' campaign' + (count === 1 ? '' : 's')
     + (stack.live_count ? ' (' + stack.live_count + ' live)' : '')
@@ -9375,19 +9376,38 @@ function cfRenderCascadeCampaigns(campaigns, instruments) {
   // already clusters by symbol, so this is a single pass.
   var stacks = instruments || {};
   var sorted = _cfCascadeSortCampaigns(live);
-  var html = '';
-  var lastSymbol = null;
+  // Gather each instrument's campaigns before drawing any of them. The header
+  // used to be emitted as a SIBLING of the cards, which said "here begins
+  // BTCUSDT" and then never said where it ended — with a second instrument
+  // below, nothing on screen told you which rows the group's budget covered.
+  var groups = [];
   sorted.forEach(function (c) {
     var symbol = String(c.symbol || '').toUpperCase();
-    if (symbol !== lastSymbol) {
-      lastSymbol = symbol;
-      var stack = stacks[symbol];
-      var count = sorted.filter(function (x) { return String(x.symbol || '').toUpperCase() === symbol; }).length;
-      if (stack && (count > 1 || stack.budget_usd != null)) {
-        html += _cfCascadeStackHeader(symbol, stack, count);
-      }
+    var last = groups[groups.length - 1];
+    if (last && last.symbol === symbol) last.campaigns.push(c);
+    else groups.push({ symbol: symbol, stack: stacks[symbol], campaigns: [c] });
+  });
+
+  var html = '';
+  groups.forEach(function (group) {
+    var cards = group.campaigns.map(_cfCascadeCampaignCard).join('');
+    // One campaign and no budget is not a group — a wrapper round a single
+    // card is a box drawn for its own sake.
+    if (!group.stack || (group.campaigns.length < 2 && group.stack.budget_usd == null)) {
+      html += cards;
+      return;
     }
-    html += _cfCascadeCampaignCard(c);
+    // The wrapper must not trap an open menu the way the cards themselves did.
+    // It carries no backdrop-filter, so it is not a stacking context until the
+    // rule below makes it one — and that only happens when it holds the menu,
+    // which is exactly when it needs lifting above the instruments beneath it.
+    var holdsMenu = group.campaigns.some(function (c) {
+      return String(c.campaign_id || '') === _cfCascadeMenuOpenFor;
+    });
+    html += '<section class="cf-cascade-stack' + (holdsMenu ? ' has-menu-open' : '') + '">'
+      + _cfCascadeStackHeader(group.symbol, group.stack, group.campaigns.length)
+      + '<div class="cf-cascade-stack-body">' + cards + '</div>'
+      + '</section>';
   });
   mount.innerHTML = html;
 
