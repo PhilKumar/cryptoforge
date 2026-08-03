@@ -7667,11 +7667,14 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-cascade-title-view.is-clipped > .cf-cascade-title-track {
     animation: cfStripMarquee var(--cf-marquee-time, 9s) linear infinite;
     animation-delay: var(--cf-marquee-delay, 0s);
-    /* Hovering holds it still so it can be read. Driven from JS rather than a
-       :hover rule because the paused phase has to be frozen in the shared
-       clock too — otherwise the 3s repaint recomputes a later delay and the
-       "stopped" text jumps forward every three seconds. */
-    animation-play-state: var(--cf-marquee-play, running);
+  }
+  /* Hovering holds it still so it can be read, and CSS does the holding: it
+     takes effect on the exact frame the pointer arrives, with no script and no
+     touching the DOM. JS only notes how long the pause lasted, so the delay it
+     recomputes on the next repaint lands on the same frame instead of jumping
+     the "stopped" text forward every three seconds. */
+  .cf-cascade-title-view.is-clipped:hover > .cf-cascade-title-track {
+    animation-play-state: paused;
   }
   .cf-cascade-title-view.is-clipped { cursor: default; }
   /* Exactly one copy's width — the second copy is then sitting where the first

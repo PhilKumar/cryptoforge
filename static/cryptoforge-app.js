@@ -8978,20 +8978,70 @@ function _cfMarqueeElapsedMs(key) {
   return elapsed;
 }
 
+// Where the pointer is. Tracked rather than inferred from mouseover/mouseout
+// because the panel is rebuilt every 3s: the node under the cursor is
+// destroyed, Chrome fires mouseout for it with a null relatedTarget, and
+// event-based bookkeeping unfreezes a strip the pointer never left.
+var _cfPointerX = -1;
+var _cfPointerY = -1;
+// Which strip the pointer is over, so the books are opened the instant it
+// arrives rather than at the next repaint. Waiting for the repaint was the
+// visible bug: CSS stopped the strip immediately, but up to 3s of hovering
+// went unrecorded, so the first render after it recomputed a later phase and
+// the "stopped" text jumped once before settling.
+var _cfStripPointerKey = '';
+
+function _cfStripSyncFromPointer() {
+  var key = '';
+  if (_cfPointerX >= 0 && _cfPointerY >= 0) {
+    var under = document.elementFromPoint(_cfPointerX, _cfPointerY);
+    var view = under && typeof under.closest === 'function' ? under.closest('.cf-cascade-title-view') : null;
+    if (view) key = _cfStripKey(view);
+  }
+  // Same strip as last time — including across a repaint, since the key is the
+  // campaign id and not the element. Nothing to do, and no double counting.
+  if (key === _cfStripPointerKey) return;
+  if (_cfStripPointerKey && _cfStripHoverAt[_cfStripPointerKey]) {
+    _cfStripPausedMs[_cfStripPointerKey] = (_cfStripPausedMs[_cfStripPointerKey] || 0)
+      + (Date.now() - _cfStripHoverAt[_cfStripPointerKey]);
+    delete _cfStripHoverAt[_cfStripPointerKey];
+  }
+  _cfStripPointerKey = key;
+  if (key && !_cfStripHoverAt[key]) _cfStripHoverAt[key] = Date.now();
+}
+
+// Books only — no DOM is touched here. The first cut re-ran the strip measure
+// on hover, which tears the cloned pill group out of the track and re-appends
+// it, and doing that mid-animation made the strip lurch before it settled.
+document.addEventListener('mousemove', function(e) {
+  _cfPointerX = e.clientX;
+  _cfPointerY = e.clientY;
+  _cfStripSyncFromPointer();
+}, true);
+document.addEventListener('mouseleave', function() {
+  _cfPointerX = -1;
+  _cfPointerY = -1;
+  _cfStripSyncFromPointer();
+});
+
 function _cfMarqueeTune(el, distance, travelFraction, minSec, maxSec, key) {
   var seconds = (distance / _CF_MARQUEE_PX_PER_SEC) / travelFraction;
   seconds = Math.max(minSec, Math.min(maxSec, seconds));
+  // A backstop for the case the pointer never moves: the panel can scroll a
+  // different strip under a still cursor, and elementFromPoint is the only
+  // thing that notices. `:hover` cannot be used here — this runs right after
+  // innerHTML is replaced, before the browser has re-hit-tested the new nodes,
+  // so it reads false on the element the cursor is visibly sitting on.
+  _cfStripSyncFromPointer();
   var phase = (_cfMarqueeElapsedMs(key) / 1000) % seconds;
   el.style.setProperty('--cf-marquee-time', seconds.toFixed(2) + 's');
   el.style.setProperty('--cf-marquee-delay', (-phase).toFixed(2) + 's');
-  el.style.setProperty('--cf-marquee-play', key && _cfStripHoverAt[key] ? 'paused' : 'running');
 }
 
 function _cfMarqueeClear(el) {
   el.style.removeProperty('--cf-marquee-shift');
   el.style.removeProperty('--cf-marquee-time');
   el.style.removeProperty('--cf-marquee-delay');
-  el.style.removeProperty('--cf-marquee-play');
 }
 
 // Which campaign a strip belongs to — the elements themselves are replaced
@@ -9001,33 +9051,12 @@ function _cfStripKey(node) {
   return card ? String(card.getAttribute('data-campaign') || '') : '';
 }
 
-// Delegated, for the same reason: a listener bound to the strip would be
-// thrown away with it on the next status poll.
-document.addEventListener('mouseover', function(event) {
-  var view = event.target && typeof event.target.closest === 'function'
-    ? event.target.closest('.cf-cascade-title-view') : null;
-  if (!view) return;
-  // Moving between children of the same strip is not a fresh arrival.
-  if (event.relatedTarget && view.contains(event.relatedTarget)) return;
-  var key = _cfStripKey(view);
-  if (!key || _cfStripHoverAt[key]) return;
-  _cfStripHoverAt[key] = Date.now();
-  _cfCascadeMarkClippedStrips(view.closest('.cf-cascade-card') || document);
-});
-
-document.addEventListener('mouseout', function(event) {
-  var view = event.target && typeof event.target.closest === 'function'
-    ? event.target.closest('.cf-cascade-title-view') : null;
-  if (!view) return;
-  if (event.relatedTarget && view.contains(event.relatedTarget)) return;
-  var key = _cfStripKey(view);
-  if (!key || !_cfStripHoverAt[key]) return;
-  _cfStripPausedMs[key] = (_cfStripPausedMs[key] || 0) + (Date.now() - _cfStripHoverAt[key]);
-  delete _cfStripHoverAt[key];
-  // Re-tune now rather than waiting up to 3s for the next poll, or the strip
-  // would sit frozen for a beat after the pointer has already left.
-  _cfCascadeMarkClippedStrips(view.closest('.cf-cascade-card') || document);
-});
+// No mouseover/mouseout listeners here on purpose. The first cut had them, and
+// each one re-ran _cfCascadeMarkClippedStrips to re-tune the strip — which
+// tears the cloned pill group out of the track, re-measures, and appends it
+// again. Doing that to an element mid-animation makes it lurch before it
+// settles: it read as "sticks, then stops". Stopping is CSS's job now
+// (:hover), and this file only keeps the books.
 
 // The campaign strip carries a state pill, PAPER/LIVE, the MC kind, the
 // timeframe, sometimes OLD RULES, and a summary — and the buttons beside it

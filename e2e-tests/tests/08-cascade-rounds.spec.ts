@@ -259,23 +259,86 @@ test.describe('Cascade strip controls', () => {
     await showCampaign(page);
 
     const view = page.locator('.cf-cascade-card .cf-cascade-title-view');
-    const playState = () => view.evaluate((el) => (el as HTMLElement).style.getPropertyValue('--cf-marquee-play').trim());
+    // The COMPUTED state of the track, not a CSS variable we set ourselves —
+    // the first version asserted its own bookkeeping and passed while the
+    // strip visibly lurched on screen.
+    const playState = () => view.evaluate((el) =>
+      getComputedStyle(el.firstElementChild as Element).animationPlayState);
     const delay = () => view.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--cf-marquee-delay')));
+    const trackNode = () => view.evaluate((el) => (el.firstElementChild as HTMLElement).dataset.probe);
 
     // Only a clipped strip scrolls; a short one has nothing to pause.
     const clipped = await view.evaluate((el) => el.classList.contains('is-clipped'));
     test.skip(!clipped, 'this fixture’s strip fits, so there is no marquee to pause');
 
+    // Mark the live track so we can tell whether hovering rebuilt it. It must
+    // not: tearing the cloned pill group out to re-measure is what made the
+    // strip lurch before it settled.
+    await view.evaluate((el) => { (el.firstElementChild as HTMLElement).dataset.probe = 'original'; });
     await view.hover();
-    expect(await playState()).toBe('paused');
+    expect(await playState(), 'the pointer arriving must stop it').toBe('paused');
+    expect(await trackNode(), 'hovering must not rebuild the track').toBe('original');
+
+    const cycle = await view.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--cf-marquee-time')));
+    const advanceFrom = (a: number, b: number) => (((a - b) % cycle) + cycle) % cycle;
+
+    // THE symptom this test exists for: the strip stops on screen the instant
+    // the pointer lands (CSS), but the phase is only recomputed when the panel
+    // repaints. If the hover is not booked the moment it happens, that repaint
+    // computes a phase several seconds later and the "stopped" text lurches
+    // once before settling. So: read the phase, hover, and check that the
+    // first repaint under the cursor advanced it only by the time the strip
+    // was genuinely still running — not by the whole time it was held.
+    // Take the poll out of the loop so repaints happen only when this test says
+    // so. With it running, a rebuild lands somewhere inside every measurement
+    // window and the difference between "booked on hover" and "booked at the
+    // next repaint" is unobservable — which is exactly how the defect survived.
+    await page.evaluate(() => { (window as any).cfLoadCascadeStatus = () => {}; });
+    const repaint = () => page.evaluate(() =>
+      (window as any).cfRenderCascadeStatus((window as any)._cfCascadeLastStatus));
+
+    // Off the strip first. The hover above already froze it, and measuring the
+    // arrival while the pointer is still down compares a frozen phase with
+    // itself — which passes whatever the code does, and is how the first two
+    // attempts at this test fooled me.
+    await page.mouse.move(0, 0);
+    await repaint();
+    const beforeHover = await delay();
+    await view.hover();
+    // Held for well over a second with no repaint in between. The next repaint
+    // must place the strip where it was when the pointer landed — if the hover
+    // is only booked at repaint time, this second and a half counts as running
+    // and the "stopped" text lurches forward before settling.
+    await page.waitForTimeout(1500);
+    await repaint();
     const held = await delay();
-    // Frozen has to mean frozen ACROSS the repaint — the shared clock keeps
-    // running, so a naive :hover rule would jump the text every three seconds.
+    expect(await playState(), 'still held after the panel rebuilt under the cursor').toBe('paused');
+    expect(
+      advanceFrom(beforeHover, held),
+      'the first repaint after hovering must not jump the strip forward',
+    ).toBeLessThan(0.8);
+
+    await page.waitForTimeout(1500);
+    await repaint();
+
+    // Frozen has to mean frozen across further repaints. The panel destroys the
+    // hovered node every 3s and Chrome fires mouseout for it with a null
+    // relatedTarget, which used to un-freeze a strip the pointer never left.
     await page.waitForTimeout(3500);
+    expect(await playState(), 'two repaints later, still held').toBe('paused');
     expect(await delay(), 'a held strip must not advance').toBeCloseTo(held, 1);
 
     await page.mouse.move(0, 0);
-    expect(await playState()).toBe('running');
-    expect(await delay(), 'it resumes where it stopped, not where the clock got to').toBeCloseTo(held, 0);
+    expect(await playState(), 'letting go starts it again').toBe('running');
+    // It carries on from the frozen frame rather than snapping to wherever the
+    // shared clock reached while it was held — that is what the paused-time
+    // ledger buys. Without it this jumps by the entire hover duration, which
+    // here is over three seconds of a six second cycle.
+    await page.waitForTimeout(1200);
+    await repaint();
+    expect(
+      advanceFrom(held, await delay()),
+      'on release it carries on from the frozen frame, not from the live clock',
+    ).toBeLessThan(2.2);
   });
 });
