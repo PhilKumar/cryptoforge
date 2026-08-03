@@ -10,6 +10,22 @@
   "background_color": "#07090f",
   "theme_color": "#07090f",
   "prefer_related_applications": false,
+  "screenshots": [
+    {
+      "src": "/static/pwa-shots/cryptoforge-wide.jpg?v=20260803-1",
+      "sizes": "1280x800",
+      "type": "image/jpeg",
+      "form_factor": "wide",
+      "label": "CryptoForge — from ink to algorithm"
+    },
+    {
+      "src": "/static/pwa-shots/cryptoforge-narrow.jpg?v=20260803-1",
+      "sizes": "750x1334",
+      "type": "image/jpeg",
+      "form_factor": "narrow",
+      "label": "CryptoForge — from ink to algorithm"
+    }
+  ],
   "icons": [
     {
       "src": "/static/pwa-icons/icon-192.png?v=20260426-2",
