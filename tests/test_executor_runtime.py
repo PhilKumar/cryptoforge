@@ -474,3 +474,55 @@ class StatusTests(RuntimeHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuyerGateTests(RuntimeHarness):
+    """The buyer's own switches gate the TICK, not just the status readout."""
+
+    def _falling_market(self, runtime):
+        self.market.candles = [
+            Candle(10, 175, 175, 162.0, 163),
+            self._red(20, 162.0),
+            self._red(30, 161.5),
+        ]
+        self.market.price = 161.55
+        return runtime
+
+    def test_pause_stops_the_tick_placing_entries(self):
+        self._open()
+        self._leg()
+        runtime = self._falling_market(self._runtime())
+        runtime.pause_opening()
+        report = runtime.tick()
+        self.assertEqual(report.placed, 0)
+        self.assertTrue(any("Paused by you" in note for note in report.notes))
+
+    def test_resume_lets_the_same_tick_place_again(self):
+        self._open()
+        self._leg()
+        runtime = self._falling_market(self._runtime())
+        runtime.pause_opening()
+        runtime.tick()
+        runtime.resume_opening()
+        report = runtime.tick()
+        self.assertEqual(report.placed, 1)
+
+    def test_an_unconfirmed_wake_stops_the_tick_placing_entries(self):
+        self._open()
+        self._leg()
+        runtime = self._falling_market(self._runtime())
+        runtime.on_wake({"shutdown_at": NOW - 8 * 3600, "slept_armed": False})
+        report = runtime.tick()
+        self.assertEqual(report.placed, 0)
+        runtime.confirm_wake()
+        self.assertEqual(runtime.tick().placed, 1)
+
+    def test_pause_still_places_the_exit_on_a_held_position(self):
+        """Pause is "stop opening", never "stop caring"."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.on_fill("casc_SOLUSDT_1", Fill(price=162.0, quantity=0.05, timestamp=40))
+        runtime.pause_opening()
+        runtime.tick()
+        self.assertIn("sell", self.exchange.sides)

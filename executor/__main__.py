@@ -98,7 +98,7 @@ class Executor:
                 if self._ui_state is not None:
                     from executor.ui import campaigns_view
 
-                    self._ui_state.set_status(status, campaigns_view(self.runtime))
+                    self._ui_state.set_status(status, campaigns_view(self.runtime), self.runtime.rounds_view())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

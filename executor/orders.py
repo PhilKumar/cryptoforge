@@ -147,6 +147,12 @@ class CampaignOrders:
     # all, so our floor is not their floor.
     reuse_below: Optional[float] = None
 
+    # What each finished round did, kept locally so the buyer's page can show
+    # a history without asking the exchange. The P&L is NET of the venue's
+    # headline commission and says "estimated" — their actual rate (VIP tier,
+    # fee token) is theirs, and pretending to know it would be a false ledger.
+    closed_rounds: List[dict] = field(default_factory=list)
+
     # ── position ─────────────────────────────────────────────────
 
     @property
@@ -354,8 +360,26 @@ class CampaignOrders:
         self.entry_resting = False
         self.held_reason = ""
 
-    def on_exit_filled(self, exit_price: float) -> None:
+    def on_exit_filled(self, exit_price: float, *, ts: int = 0) -> None:
         """A round closed. Their floor moves to where THEIR round closed."""
+        qty = self.base_qty
+        entry = self.avg_entry
+        if qty > 0 and entry:
+            invested = entry * qty
+            exited = float(exit_price) * qty
+            fees = (invested + exited) * model.fee_pct_for(self.exchange) / 100.0
+            self.closed_rounds.append(
+                {
+                    "opened_ts": min((fill.timestamp for fill in self.fills), default=0),
+                    "closed_ts": int(ts),
+                    "quantity": qty,
+                    "avg_entry": entry,
+                    "exit_price": float(exit_price),
+                    "gross_usd": round(exited - invested, 4),
+                    "fees_est_usd": round(fees, 4),
+                    "net_est_usd": round(exited - invested - fees, 4),
+                }
+            )
         self.fills.clear()
         self.exit_resting = False
         self.exit_price = None

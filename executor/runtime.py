@@ -100,6 +100,13 @@ class ExecutorRuntime:
         # walked past, because money is deployed as price moves and there is no
         # going back to buy a dip that is over.
         self._birth_bands: Dict[str, List[Band]] = {}
+        # Buyer-facing switches, all read by the tick. Bools written from the
+        # UI's thread and read from the loop's — atomic in CPython, and the
+        # worst race is one tick of lag on a machine ticking every 20 seconds.
+        self.opening_paused: bool = False
+        self.awaiting_confirmation: str = ""  # the wake message, kept until confirmed
+        self._stand_down_requested: bool = False
+        self.last_prices: Dict[str, float] = {}
 
     # ── keeping the book in step with the feed ───────────────────
 
@@ -161,7 +168,20 @@ class ExecutorRuntime:
         """
         report = TickReport()
         self.sync()
+        if self._stand_down_requested:
+            self._stand_down_requested = False
+            self.opening_paused = True
+            stood = self.prepare_for_sleep(reason="buyer")
+            report.notes.append(f"Stood down at your request. {stood['message']}")
         may_open, reason = self._client.may_open_new
+        # The buyer's own gates come after the feed's, and both keep exits
+        # running: pause is "stop opening", never "stop caring".
+        if may_open and self.opening_paused:
+            may_open, reason = False, "Paused by you — opening nothing new until you resume."
+        elif may_open and self.awaiting_confirmation:
+            may_open, reason = False, "Waiting for you to review what changed while this machine was away."
+
+        prices: Dict[str, float] = {}
 
         for campaign_id, orders in list(self.book.campaigns.items()):
             followed = self._client.campaigns.get(campaign_id)
@@ -180,9 +200,13 @@ class ExecutorRuntime:
             # Exits run whatever the posture; entries only when allowed.
             # `intents()` covers both, so a blocked campaign asks for its exit
             # alone rather than nothing at all.
-            intents = (
-                orders.intents(self._market.last_price(orders.symbol)) if entries_allowed else orders.exit_intents()
-            )
+            if orders.symbol not in prices:
+                try:
+                    prices[orders.symbol] = float(self._market.last_price(orders.symbol))
+                except Exception:
+                    prices[orders.symbol] = self.last_prices.get(orders.symbol, 0.0)
+            self.last_prices[orders.symbol] = prices[orders.symbol]
+            intents = orders.intents(prices[orders.symbol]) if entries_allowed else orders.exit_intents()
             if not intents:
                 continue
             result = IntentExecutor(self._adapter, orders.symbol, quote_asset=self._config.quote_asset).apply(
@@ -255,7 +279,7 @@ class ExecutorRuntime:
                             Fill(price=price, quantity=record.filled_qty, timestamp=int(self._now()))
                         )
                     else:
-                        orders.on_exit_filled(price)
+                        orders.on_exit_filled(price, ts=int(self._now()))
                     noticed.append(f"{campaign_id}: {kind} filled at {price:,.4f}")
                 elif not record.is_open:
                     # Cancelled or rejected out from under us. Clear the flag so
@@ -273,7 +297,7 @@ class ExecutorRuntime:
         if side == "buy":
             orders.on_entry_filled(fill)
         else:
-            orders.on_exit_filled(fill.price)
+            orders.on_exit_filled(fill.price, ts=fill.timestamp)
 
     # ── going away and coming back ───────────────────────────────
 
@@ -345,13 +369,19 @@ class ExecutorRuntime:
                 IntentExecutor(self._adapter, orders.symbol, quote_asset=self._config.quote_asset).apply([intent])
                 caught_up.append(campaign_id)
 
+        message = wake_report(plan, record)
+        if plan.requires_confirmation:
+            # Held OPEN until the buyer clears it — the report alone used to
+            # say "no new entries until you have looked" with nothing anywhere
+            # to look at or press, which made the gate a permanent stop.
+            self.awaiting_confirmation = message
         return {
             "band": plan.band,
             "requires_confirmation": plan.requires_confirmation,
             "steps": plan.step_names,
             "protected": protected,
             "tp_caught_up": caught_up,
-            "message": wake_report(plan, record),
+            "message": message,
         }
 
     def _first_run_report(self) -> dict:
@@ -374,10 +404,50 @@ class ExecutorRuntime:
             ),
         }
 
+    # ── the buyer's own switches ─────────────────────────────────
+
+    def pause_opening(self) -> str:
+        self.opening_paused = True
+        return "Paused. Nothing new will be opened; open positions keep their exits."
+
+    def resume_opening(self) -> str:
+        self.opening_paused = False
+        return "Resumed. New campaigns and entries are allowed again."
+
+    def confirm_wake(self) -> str:
+        """The buyer has read the wake report. The long-gap gate lifts."""
+        self.awaiting_confirmation = ""
+        return "Thanks — resuming. New entries are allowed again."
+
+    def request_stand_down(self) -> str:
+        """
+        Run the sleep invariants on the next tick, from the buyer's button.
+
+        A flag rather than a direct call: the UI thread must not drive the
+        adapter concurrently with the tick, and twenty seconds of latency on a
+        deliberate wind-down is cheaper than a race on live orders.
+        """
+        self._stand_down_requested = True
+        return "Standing down on the next pass: buy orders will be cancelled, sell orders left protecting."
+
+    def rounds_view(self, limit: int = 50) -> List[dict]:
+        rows = [
+            {**row, "campaign_id": campaign_id, "symbol": orders.symbol, "exchange": orders.exchange}
+            for campaign_id, orders in self.book.campaigns.items()
+            for row in orders.closed_rounds
+        ]
+        rows.sort(key=lambda row: row.get("closed_ts") or 0, reverse=True)
+        return rows[:limit]
+
     # ── what the buyer sees ──────────────────────────────────────
 
     def status(self) -> dict:
         may_open, reason = self._client.may_open_new
+        if may_open and self.opening_paused:
+            may_open, reason = False, "Paused by you — opening nothing new until you resume."
+        elif may_open and self.awaiting_confirmation:
+            may_open, reason = False, "Waiting for you to review what changed while this machine was away."
+        rounds = self.rounds_view()
         return {
             "following": len([c for c in self._client.campaigns.values() if c.active]),
             "halted": [c.campaign_id for c in self._client.campaigns.values() if c.halted],
@@ -389,4 +459,11 @@ class ExecutorRuntime:
             # a buyer can judge.
             "armed_exposure_usd": self.book.armed_exposure_usd(),
             "unprotected": self.book.unprotected(),
+            "paused": self.opening_paused,
+            "awaiting_confirmation": self.awaiting_confirmation,
+            "prices": dict(self.last_prices),
+            "capital_usd": self._config.capital_usd,
+            "quote_asset": self._config.quote_asset,
+            "rounds_closed": len(rounds),
+            "rounds_net_est_usd": round(sum(row["net_est_usd"] for row in rounds), 2),
         }

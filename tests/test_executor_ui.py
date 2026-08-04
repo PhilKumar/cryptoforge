@@ -178,3 +178,125 @@ class UIServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ActionEndpointTests(unittest.TestCase):
+    """The buttons cancel and place real orders, so the gates are the test.
+
+    Any web page can blind-POST to localhost — a form needs no permission. The
+    custom header forces a CORS preflight we never answer, and the Host check
+    is DNS-rebinding defence: a hostile page can point its own domain at
+    127.0.0.1 and fetch it same-origin, but the browser faithfully reports the
+    Host it asked for.
+    """
+
+    def setUp(self):
+        self.state = UIState()
+        self.calls = []
+        self.server = UIServer(
+            self.state, port=0, actions={"pause": lambda: (self.calls.append("pause"), "Paused.")[1]}
+        )
+        self.assertIsNone(self.server.start())
+        self.port = self.server._server.server_address[1]
+        self.addCleanup(self.server.stop)
+
+    def _post(self, path="/api/action", body=b'{"action":"pause"}', headers=None):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", **(headers or {})},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, b""
+
+    def test_a_post_without_the_custom_header_is_refused(self):
+        status, _ = self._post()
+        self.assertEqual(status, 403)
+        self.assertEqual(self.calls, [])
+
+    def test_a_post_with_the_header_runs_the_action(self):
+        status, body = self._post(headers={"X-Cascade-UI": "1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.calls, ["pause"])
+        self.assertIn(b"Paused.", body)
+
+    def test_a_rebinding_host_is_refused_even_from_loopback(self):
+        status, _ = self._post(headers={"X-Cascade-UI": "1", "Host": "evil.example.com"})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.calls, [])
+
+    def test_an_unknown_action_is_a_404_not_a_crash(self):
+        status, _ = self._post(body=b'{"action":"transfer_everything"}', headers={"X-Cascade-UI": "1"})
+        self.assertEqual(status, 404)
+
+    def test_the_action_lands_on_the_event_strip(self):
+        self._post(headers={"X-Cascade-UI": "1"})
+        self.assertEqual(self.state.snapshot()["events"][0]["line"], "Paused.")
+
+
+class BuyerSwitchTests(unittest.TestCase):
+    """Pause, confirm, stand down — each read by the tick, none touching exits."""
+
+    def _runtime(self):
+        client = FeedClient(public_keys={}, keyset_fetched_at=NOW, now_fn=lambda: NOW)
+        return ExecutorRuntime(
+            client=client,
+            adapter=FakeExchange(),
+            market=FakeMarket(),
+            config=RuntimeConfig(capital_usd=5000.0),
+            now_fn=lambda: NOW,
+        )
+
+    def test_pause_blocks_opening_and_says_so(self):
+        runtime = self._runtime()
+        runtime.pause_opening()
+        status = runtime.status()
+        self.assertFalse(status["opening_new"])
+        self.assertIn("Paused by you", status["posture_reason"])
+        runtime.resume_opening()
+        self.assertTrue(runtime.status()["opening_new"])
+
+    def test_a_long_gap_holds_until_the_buyer_confirms(self):
+        """The gate used to be a message with no door: the report said "until
+        you have looked" and there was nothing anywhere to press."""
+        runtime = self._runtime()
+        report = runtime.on_wake({"shutdown_at": NOW - 8 * 3600, "slept_armed": False})
+        self.assertTrue(report["requires_confirmation"])
+        self.assertFalse(runtime.status()["opening_new"])
+        runtime.confirm_wake()
+        self.assertTrue(runtime.status()["opening_new"])
+
+    def test_stand_down_runs_the_sleep_invariants_on_the_next_tick(self):
+        from executor.orders import CampaignOrders, Fill
+
+        runtime = self._runtime()
+        orders = runtime.book.track(
+            CampaignOrders(campaign_id="c1", symbol="SOLUSDT", mother_high=178.42, exchange="binance")
+        )
+        orders.on_entry_filled(Fill(price=162.0, quantity=0.05, timestamp=1))
+        runtime.request_stand_down()
+        report = runtime.tick()
+        self.assertTrue(runtime.opening_paused)
+        self.assertTrue(any("Stood down" in note for note in report.notes))
+        # The held position got its exit placed, not abandoned.
+        self.assertTrue(orders.exit_resting)
+
+    def test_a_closed_round_lands_in_the_ledger_net_of_venue_fees(self):
+        from executor import model
+        from executor.orders import CampaignOrders, Fill
+
+        runtime = self._runtime()
+        orders = runtime.book.track(
+            CampaignOrders(campaign_id="c1", symbol="SOLUSDT", mother_high=178.42, exchange="coindcx")
+        )
+        orders.on_entry_filled(Fill(price=100.0, quantity=1.0, timestamp=1))
+        orders.on_exit_filled(105.0, ts=99)
+        row = runtime.rounds_view()[0]
+        self.assertEqual(row["closed_ts"], 99)
+        fees = (100.0 + 105.0) * model.EXCHANGE_FEE_PCT["coindcx"] / 100.0
+        self.assertAlmostEqual(row["net_est_usd"], 5.0 - fees, places=4)
+        self.assertAlmostEqual(runtime.status()["rounds_net_est_usd"], round(5.0 - fees, 2), places=2)
