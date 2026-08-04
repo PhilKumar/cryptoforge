@@ -9,11 +9,14 @@
     var APPEARANCE_KEY = 'cf-appearance';
     var APPEARANCE_DEFAULT = { tint: 'gold', font: 'institutional' };
     var APPEARANCE_TINTS = { gold: true, arctic: true, magenta: true, citrus: true, graphite: true, bronze: true };
-    // 'swiss' is the default and its families ship in the page head, so it needs
-    // no extra stylesheet. The rest are fetched on demand when selected.
+    // Every preset carries its stylesheet URL. 'swiss' used to be '' on the
+    // theory that its families ship in the page head — true on strategy.html,
+    // false on login.html, so picking Swiss at the unlock silently fell back
+    // to the system stack. Re-requesting a stylesheet the page already has is
+    // a cache hit; a preset with no faces is a broken button.
     var APPEARANCE_FONTS = {
       institutional: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap',
-      swiss: '',
+      swiss: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap',
       grotesk: 'https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Fira+Code:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap',
       editorial: 'https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600;6..72,700&family=Source+Code+Pro:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap',
       techno: 'https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Share+Tech+Mono&display=swap',

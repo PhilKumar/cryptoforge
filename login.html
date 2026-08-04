@@ -31,6 +31,11 @@
 </button>
 <div class="login-appearance-panel" id="login-appearance-panel" hidden>
   <div class="login-appearance-title">Appearance</div>
+  <div class="login-appearance-label">Theme</div>
+  <div class="login-theme-row">
+    <button type="button" data-login-theme="dark">Dark</button>
+    <button type="button" data-login-theme="light">Light</button>
+  </div>
   <div class="login-appearance-label">Tint</div>
   <div class="login-appearance-grid">
     <button type="button" data-login-tint="arctic" class="swatch-arctic" aria-label="Arctic tint"></button>
@@ -41,17 +46,30 @@
     <button type="button" data-login-tint="bronze" class="swatch-bronze" aria-label="Bronze tint"></button>
   </div>
   <div class="login-appearance-label">Font</div>
+  <!-- The app's six presets, by their app names. This list used to offer
+       terminal/modern/quant — names boot.js's allowlist has never accepted,
+       so three of five buttons silently applied Institutional. If a preset
+       is ever added it goes in boot.js first, here second. -->
   <div class="login-font-list">
-    <button type="button" data-login-font="terminal">Terminal</button>
     <button type="button" data-login-font="institutional">Institutional</button>
-    <button type="button" data-login-font="modern">Modern</button>
-    <button type="button" data-login-font="quant">Quant</button>
-    <button type="button" data-login-font="editorial">Serif</button>
+    <button type="button" data-login-font="swiss">Swiss</button>
+    <button type="button" data-login-font="grotesk">Grotesk</button>
+    <button type="button" data-login-font="editorial">Editorial</button>
+    <button type="button" data-login-font="techno">Techno</button>
+    <button type="button" data-login-font="humanist">Humanist</button>
   </div>
 </div>
 
 <div class="unlock-card" id="unlock-card">
-  <div class="brand-icon">CF</div>
+  <!-- The terminal's own mark — three depth columns and a spark — not a "CF"
+       monogram the rest of the product never uses. Same geometry as
+       .topbar-brand-icon in the app and the executor's console. -->
+  <div class="brand-icon" aria-hidden="true">
+    <span class="brand-column col-a"></span>
+    <span class="brand-column col-b"></span>
+    <span class="brand-column col-c"></span>
+    <span class="brand-spark"></span>
+  </div>
   <div class="unlock-title">CryptoForge</div>
   <div class="unlock-sub">Enter PIN to unlock</div>
 

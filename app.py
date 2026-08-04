@@ -1308,6 +1308,8 @@ async def require_auth(request: Request):
         "/api/billing/razorpay/webhook",
         "/login",
         "/",
+        "/robots.txt",
+        "/sitemap.xml",
         "/favicon.ico",
         "/manifest.webmanifest",
         "/site.webmanifest",
@@ -1346,6 +1348,8 @@ async def auth_middleware(request: Request, call_next):
         "/api/ready",
         "/api/cascade/feed/keys",
         "/api/billing/razorpay/webhook",
+        "/robots.txt",
+        "/sitemap.xml",
         "/favicon.ico",
         "/manifest.webmanifest",
         "/site.webmanifest",
@@ -1900,6 +1904,40 @@ async def site_webmanifest():
         media_type="application/manifest+json",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.api_route("/robots.txt", methods=["GET", "HEAD"])
+async def robots_txt():
+    """
+    The landing is public and meant to be found; everything behind the unlock
+    is not. Disallowing /app and /api costs nothing (both already 401) but
+    keeps crawlers from filling the logs with auth failures.
+    """
+    body = "\n".join(
+        (
+            "User-agent: *",
+            "Allow: /",
+            "Disallow: /app",
+            "Disallow: /api/",
+            "",
+            "Sitemap: https://crypto.philforge.in/sitemap.xml",
+            "",
+        )
+    )
+    return Response(content=body, media_type="text/plain", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.api_route("/sitemap.xml", methods=["GET", "HEAD"])
+async def sitemap_xml():
+    """One public page. A sitemap with one URL still beats a 404 to every
+    crawler the OG card invites in."""
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        "  <url><loc>https://crypto.philforge.in/</loc><changefreq>monthly</changefreq></url>\n"
+        "</urlset>\n"
+    )
+    return Response(content=body, media_type="application/xml", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.api_route("/sw.js", methods=["GET", "HEAD"])

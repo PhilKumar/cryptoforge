@@ -17,6 +17,12 @@ function syncLoginAppearancePanel() {
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
+  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  document.querySelectorAll('[data-login-theme]').forEach((btn) => {
+    const active = btn.getAttribute('data-login-theme') === theme;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
 }
 
 function initLoginAppearance() {
@@ -32,12 +38,17 @@ function initLoginAppearance() {
   panel.addEventListener('click', (event) => {
     const tintBtn = event.target.closest('[data-login-tint]');
     const fontBtn = event.target.closest('[data-login-font]');
+    const themeBtn = event.target.closest('[data-login-theme]');
     if (tintBtn && typeof window.cfApplyAppearance === 'function') {
       window.cfApplyAppearance({ tint: tintBtn.getAttribute('data-login-tint') }, { persist: true });
       syncLoginAppearancePanel();
     }
     if (fontBtn && typeof window.cfApplyAppearance === 'function') {
       window.cfApplyAppearance({ font: fontBtn.getAttribute('data-login-font') }, { persist: true });
+      syncLoginAppearancePanel();
+    }
+    if (themeBtn && typeof window.cfApplyTheme === 'function') {
+      window.cfApplyTheme(themeBtn.getAttribute('data-login-theme'), { persist: true });
       syncLoginAppearancePanel();
     }
   });
