@@ -6488,3 +6488,75 @@ class CascadePerExchangeCapitalTests(unittest.TestCase):
         engine.set_capital_group("BTCUSDT", 50, exchange="coindcx")
         engine.set_capital_group("BTCUSDT", 0, exchange="coindcx")
         self.assertEqual(list(engine.capital_group_status()), ["BTCUSDT"])
+
+
+class CascadePerVenueFeeTests(unittest.TestCase):
+    """A target priced with one exchange's commission, resting on another
+    exchange's book, sells below its own fee. The rate belongs to the venue."""
+
+    def _engine(self):
+        primary = FakeCascadeBroker()
+        primary.broker_name = "binance"
+        primary.fee_pct_per_side = 0.1
+        second = FakeCascadeBroker()
+        second.broker_name = "coindcx"
+        second.fee_pct_per_side = 0.2  # measured from real CoinDCX fills
+        return CascadeEngine(primary, brokers={"coindcx": second})
+
+    def _campaign(self, fee=None):
+        return Campaign(
+            campaign_id="c",
+            symbol="BTCUSDT",
+            capital_usd=500.0,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            fee_pct_per_side=fee,
+        )
+
+    def test_unset_rate_falls_back_to_the_engine_default(self):
+        # Every campaign saved before per-venue fees has None here and is on
+        # the default exchange, so the module rate is the right answer.
+        self.assertEqual(cascade_module.campaign_fee_pct(self._campaign()), cascade_module.FEE_PCT_PER_SIDE)
+
+    def test_breakeven_is_higher_on_the_dearer_venue(self):
+        cheap = cascade_module.tp_breakeven_price(100.0, 0.1)
+        dear = cascade_module.tp_breakeven_price(100.0, 0.2)
+        self.assertGreater(dear, cheap)
+        # 0.2%/side needs ~0.4% round trip, 0.1%/side ~0.2%.
+        self.assertAlmostEqual(dear, 100.0 * 1.002 / 0.998, places=6)
+
+    def test_round_trip_fee_scales_with_the_venue_rate(self):
+        self.assertAlmostEqual(
+            cascade_module.round_trip_fee(100.0, 100.0, 0.2),
+            2 * cascade_module.round_trip_fee(100.0, 100.0, 0.1),
+            places=8,
+        )
+
+    def test_tp_floor_uses_the_campaign_s_own_rate(self):
+        # A SHALLOW fall, where the geometric target lands under the fee floor
+        # and the floor is what actually prices the exit. This is the case the
+        # per-venue rate exists for: on the dearer venue the same geometry must
+        # sell higher, or the round pays more in commission than it makes.
+        dear = self._campaign(fee=0.2)
+        dear.mother_high = 100.5
+        dear.avg_entry_price = 100.0
+        cheap = self._campaign(fee=0.1)
+        cheap.mother_high = 100.5
+        cheap.avg_entry_price = 100.0
+        dear_tp = cascade_module.compute_tp_price(dear)
+        cheap_tp = cascade_module.compute_tp_price(cheap)
+        self.assertGreater(dear_tp, cheap_tp)
+        # And each must clear its OWN round trip, which is the whole point.
+        for tp, rate in ((dear_tp, 0.2), (cheap_tp, 0.1)):
+            self.assertGreater(tp, cascade_module.tp_breakeven_price(100.0, rate))
+
+    def test_a_coindcx_campaign_is_born_with_the_coindcx_rate(self):
+        engine = self._engine()
+        self.assertEqual(engine.brokers["coindcx"].fee_pct_per_side, 0.2)
+        self.assertEqual(engine.broker.fee_pct_per_side, 0.1)
+
+    def test_rate_survives_save_and_reload_and_recalc(self):
+        restored = Campaign.from_dict(self._campaign(fee=0.2).to_dict())
+        self.assertEqual(restored.fee_pct_per_side, 0.2)
+        self.assertIn("fee_pct_per_side", CascadeEngine._RECALC_KEEP)

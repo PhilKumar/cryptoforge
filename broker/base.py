@@ -17,6 +17,11 @@ class BaseBroker:
     # Funding and open interest only exist on perpetual/derivatives venues.
     # Spot clients set this False so the UI can hide meaningless chips.
     supports_funding = True
+    # Commission per side, in percent, used to model fees when the venue does
+    # not report a per-order figure. It belongs to the exchange, not the engine:
+    # a target priced with one venue's rate on another venue's book sells below
+    # its own commission. Adapters override with their measured rate.
+    fee_pct_per_side = 0.1
 
     def get_convert_history(self, days: int = 30) -> list:
         """Off-orderbook conversions. Only Binance Spot has these; the default

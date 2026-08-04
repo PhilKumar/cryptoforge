@@ -56,6 +56,11 @@ class CoinDCXSpotClient(BaseBroker):
     broker_name = "coindcx"
     display_name = "CoinDCX Spot"
     supports_funding = False
+    # Measured from real fills on 2026-08-03: every BTCUSDT trade was charged
+    # exactly 0.2000% per side — twice Binance's 0.1%. (INR pairs bill 0.59%,
+    # which this USDT-quoted adapter never touches.) Modelling CoinDCX at
+    # Binance's rate would floor a take-profit below its own commission.
+    fee_pct_per_side = 0.2
 
     _SYMBOL_ALIASES = {
         **BaseBroker._SYMBOL_ALIASES,
@@ -755,6 +760,32 @@ class CoinDCXSpotClient(BaseBroker):
         self._history_cache = trades
         self._history_ts = now
         return list(trades)
+
+    def get_order_commission(self, symbol: str, order_id) -> Optional[float]:
+        """Commission actually charged for one order, in quote currency.
+
+        The order endpoints carry no fee; only trade history does, one row per
+        fill, so a partially filled order's cost is the sum of its rows. Returns
+        None when nothing can be established — never 0.0, because "no data" and
+        "free trade" must not look alike to the caller, which books a modelled
+        rate for the former.
+        """
+        if not self._is_configured() or order_id in (None, ""):
+            return None
+        wanted = str(order_id).strip()
+        try:
+            rows = self._private_post("/exchange/v1/orders/trade_history", {"limit": 500, "sort": "desc"})
+        except Exception as exc:
+            _spot_log.warning("[COINDCX SPOT] Commission lookup failed for %s: %s", wanted, exc)
+            return None
+        total = 0.0
+        seen = False
+        for row in rows if isinstance(rows, list) else []:
+            if str(row.get("order_id") or "").strip() != wanted:
+                continue
+            seen = True
+            total += self.coerce_float(row.get("fee_amount"), 0.0)
+        return round(total, 8) if seen else None
 
     def get_funding_history(self, symbol: str) -> list:
         return []

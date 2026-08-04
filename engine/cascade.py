@@ -1024,6 +1024,11 @@ class Campaign:
     # venue by upgrading. It is a birth setting: a campaign never migrates, and
     # a successor inherits it, because its parent's position is on that venue.
     exchange: str = ""
+    # Commission per side on THIS campaign's venue, read from its client at
+    # birth. None means "whatever the engine default is", which is how every
+    # campaign saved before venues existed loads — correct for them, because
+    # they are all on the default exchange.
+    fee_pct_per_side: Optional[float] = None
     # Superseded by funded_bands. Kept so campaigns saved before the band
     # ledger still load; nothing reads it any more.
     funded_floor_price: float = 0.0
@@ -1293,6 +1298,7 @@ class Campaign:
             "escalates": self.escalates,
             "mc_kind": self.mc_kind,
             "exchange": self.exchange,
+            "fee_pct_per_side": self.fee_pct_per_side,
             "funded_floor_price": self.funded_floor_price,
             "funded_bands": [[low, high] for low, high in self.funded_bands],
             "min_notional_usd": self.min_notional_usd,
@@ -1380,6 +1386,7 @@ class Campaign:
             "escalates",
             "mc_kind",
             "exchange",
+            "fee_pct_per_side",
             "funded_floor_price",
             "min_notional_usd",
             "min_fib_range_pct",
@@ -1498,7 +1505,7 @@ def recompute_avg_entry_price(campaign: Campaign) -> Optional[float]:
     return campaign.avg_entry_price
 
 
-def round_trip_fee(cost_basis_usd: float, proceeds_usd: float) -> float:
+def round_trip_fee(cost_basis_usd: float, proceeds_usd: float, fee_pct: Optional[float] = None) -> float:
     """
     Commission on both sides of one round: what was paid to get in, plus what
     was paid to get out.
@@ -1511,23 +1518,33 @@ def round_trip_fee(cost_basis_usd: float, proceeds_usd: float) -> float:
     mismatch in the fee instead of leaving it where AUDIT §1.3 already tracks
     it.
     """
-    rate = FEE_PCT_PER_SIDE / 100.0
+    rate = (FEE_PCT_PER_SIDE if fee_pct is None else fee_pct) / 100.0
     if rate <= 0:
         return 0.0
     return round((max(cost_basis_usd, 0.0) + max(proceeds_usd, 0.0)) * rate, 8)
 
 
-def tp_breakeven_price(avg_entry: float) -> float:
+def tp_breakeven_price(avg_entry: float, fee_pct: Optional[float] = None) -> float:
     """The lowest exit that does not lose money once both commissions are paid.
 
     Selling `q` bought at `a` for `p` keeps `q*(p*(1-r) - a*(1+r))`, so the
     round breaks even at `a * (1+r) / (1-r)` — slightly more than `a * (1+2r)`,
     because the sell fee is charged on the larger proceeds.
     """
-    rate = FEE_PCT_PER_SIDE / 100.0
+    rate = (FEE_PCT_PER_SIDE if fee_pct is None else fee_pct) / 100.0
     if rate <= 0:
         return avg_entry
     return avg_entry * (1.0 + rate) / (1.0 - rate)
+
+
+def campaign_fee_pct(campaign: "Campaign") -> float:
+    """Commission per side for this campaign's venue.
+
+    None means the campaign predates per-venue fees, or was born on the engine
+    default — both resolve to the module rate, which is that default's own.
+    """
+    rate = getattr(campaign, "fee_pct_per_side", None)
+    return FEE_PCT_PER_SIDE if rate is None else float(rate)
 
 
 def compute_tp_price(campaign: Campaign) -> Optional[float]:
@@ -1556,7 +1573,7 @@ def compute_tp_price(campaign: Campaign) -> Optional[float]:
     geometric = anchor + TP_FIB_LEVEL * (campaign.mother_high - anchor)
     if not TP_MUST_CLEAR_FEES:
         return geometric
-    floor = tp_breakeven_price(anchor) * (1.0 + TP_MIN_NET_PCT / 100.0)
+    floor = tp_breakeven_price(anchor, campaign_fee_pct(campaign)) * (1.0 + TP_MIN_NET_PCT / 100.0)
     return max(geometric, floor)
 
 
@@ -2357,6 +2374,11 @@ class CascadeEngine:
             # so existing campaigns and new ones are stored identically, and
             # an engine started on a different broker keeps behaving as before.
             exchange=exchange,
+            # Read from the venue this campaign will actually trade on, and
+            # fixed for its life like every other birth setting. CoinDCX bills
+            # twice Binance's rate; a target priced at the wrong one sells
+            # below its own commission.
+            fee_pct_per_side=float(getattr(venue, "fee_pct_per_side", FEE_PCT_PER_SIDE)),
             funded_bands=funded_bands,
             min_notional_usd=min_notional,
             min_fib_range_pct=min_fib_range,
@@ -2951,6 +2973,9 @@ class CascadeEngine:
             # cleared it would silently hand the campaign back to the engine's
             # default exchange and point its next order at the wrong book.
             "exchange",
+            # The venue's commission, measured at birth. Replaying it away would
+            # re-price every take-profit at the default exchange's rate.
+            "fee_pct_per_side",
             # Birth settings, not replay output. The ledger a campaign was born
             # against is fixed for its life, and a recalc that cleared it would
             # replay every leg funding ground a sibling had already paid for.
@@ -4990,7 +5015,7 @@ class CascadeEngine:
         if measured:
             fees = round(sum(buy_fees) + sell_fee, 8)
         else:
-            fees = round_trip_fee(avg * qty, exit_price * qty)
+            fees = round_trip_fee(avg * qty, exit_price * qty, campaign_fee_pct(campaign))
         rnd = Round(
             round_id=len(campaign.rounds) + 1,
             leg_id=leg.leg_id if leg else 0,
@@ -5477,6 +5502,7 @@ class CascadeEngine:
             # A successor carries on the parent's move on the parent's venue.
             # Inheriting this is what stops a restart from crossing exchanges.
             exchange=parent.exchange,
+            fee_pct_per_side=parent.fee_pct_per_side,
             # A successor is a newly-born MC like any other, so it takes the
             # band ledger as it stands now. The parent is already archived and
             # has released its ground; only still-running siblings show up.
