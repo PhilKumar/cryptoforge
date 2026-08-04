@@ -32,6 +32,9 @@
 * { box-sizing: border-box; }
 
 body {
+  /* Opened straight from a file there is no reset and no doctype, so the
+     UA's 8px body margin would show. Harmless where a reset already ran. */
+  margin: 0;
   background: var(--ink);
   color: var(--text);
   font-family: var(--sans);
@@ -143,7 +146,10 @@ code {
   border-radius: 14px;
   padding: 22px 24px;
 }
-.figure { margin: 30px 0; }
+/* margin-block, NOT the `margin: 30px 0` shorthand: every figure is also a
+   .wide, and the shorthand's implied left/right 0 lands later in the sheet
+   than .wide's `margin-inline: auto` and silently un-centres it. */
+.figure { margin-block: 30px; }
 .caption {
   font-family: var(--mono); font-size: 12px; line-height: 1.65;
   color: var(--dim); margin-top: 12px; text-align: center;
