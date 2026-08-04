@@ -1,0 +1,7 @@
+# Everything the executor needs beyond the standard library. Four packages —
+# nothing else in this folder imports anything outside stdlib, deliberately, so
+# that what runs on a buyer's machine stays small enough to read.
+cryptography>=42      # the buyer's own ed25519 key, and verifying our signatures
+httpx>=0.27           # fetching the signed key set
+requests>=2.31        # the exchange REST calls
+websockets>=12        # the feed socket
