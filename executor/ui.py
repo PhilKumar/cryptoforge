@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -36,6 +37,44 @@ _log = logging.getLogger("cascade.executor.ui")
 
 DEFAULT_PORT = 7757
 EVENT_KEEP = 100
+
+# The setup guide, shipped beside this file and served on the Guide tab. It
+# lives next to the executor rather than inside PAGE because a buyer who has
+# broken something needs to READ it — often on a second machine, from an
+# email — and a guide that only exists inside a program you cannot start is
+# not a guide.
+GUIDE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guide.html")
+
+_GUIDE_MISSING = (
+    "<p style='font:16px/1.7 system-ui,sans-serif;color:#8a93a6;padding:48px;max-width:34em'>"
+    "The setup guide (<code>guide.html</code>) is not next to the executor any more. "
+    "Nothing is wrong with your trading — ask us for another copy.</p>"
+)
+
+
+def guide_document() -> bytes:
+    """
+    The buyer's guide, wrapped as a document.
+
+    `guide.html` is stored as body content so the same file can be published
+    on the web unchanged, which means the doctype has to be added here: an
+    iframe without one renders in quirks mode, and the guide is a thousand
+    lines of layout that assumes it is not.
+
+    A missing file is a note, never an error page. The guide going astray must
+    not look like the executor breaking.
+    """
+    try:
+        with open(GUIDE_FILE, encoding="utf-8") as handle:
+            content = handle.read()
+    except OSError as exc:
+        _log.warning("the setup guide could not be read: %s", exc)
+        content = _GUIDE_MISSING
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>Cascade — setup guide</title></head><body>" + content + "</body></html>"
+    ).encode("utf-8")
 
 
 class UIState:
@@ -296,6 +335,10 @@ class UIServer:
                     body = PAGE.encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
+                elif self.path in ("/guide", "/guide.html"):
+                    body = guide_document()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
                 else:
                     self.send_error(404)
                     return
@@ -421,6 +464,11 @@ PAGE = """<!doctype html>
 
   .page { display:none; position:relative; z-index:1; }
   .page.on { display:block; animation:fadeIn .25s ease; }
+  /* The guide fills what is left under the sticky bar and scrolls inside
+     itself, so the nav never leaves while a buyer is following a step. The
+     height is set from the bar's measured height rather than a constant —
+     the bar wraps to two rows on a narrow window. */
+  .guide-frame { display:block; width:100%; height:calc(100vh - 57px); border:0; background:#05060a; }
   @keyframes fadeIn { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:none} }
   .wrap { max-width:1080px; margin:0 auto; padding:22px 20px 72px; }
 
@@ -614,6 +662,7 @@ PAGE = """<!doctype html>
   <button class="nav-tab" data-page="campaigns">Campaigns</button>
   <button class="nav-tab" data-page="rounds">Rounds</button>
   <button class="nav-tab" data-page="setup">Setup</button>
+  <button class="nav-tab" data-page="guide">Guide</button>
 </div></div>
 
 <!-- ══════════ HOME ══════════ -->
@@ -808,6 +857,11 @@ PAGE = """<!doctype html>
   <div class="disclosure" id="setup-disclosure"></div>
 </div></section>
 
+<!-- ══════════ GUIDE ══════════ -->
+<section class="page" id="page-guide">
+  <iframe class="guide-frame" id="guide-frame" src="/guide.html" title="Cascade setup guide"></iframe>
+</section>
+
 <div class="modal" id="modal">
   <div class="modal-box">
     <div class="modal-head">
@@ -846,6 +900,16 @@ function show(name) {
   window.scrollTo(0, 0);
 }
 document.querySelectorAll(".nav-tab").forEach(t => t.addEventListener("click", () => show(t.dataset.page)));
+
+/* The guide fills the window under the top bar. Measured, not assumed: the
+   bar wraps to two rows on a narrow window, and a guessed height leaves
+   either a dead strip or a second scrollbar. */
+function sizeGuide() {
+  const frame = $("guide-frame"), bar = document.querySelector(".topbar");
+  if (frame && bar) frame.style.height = (window.innerHeight - bar.getBoundingClientRect().height) + "px";
+}
+window.addEventListener("resize", sizeGuide);
+sizeGuide();
 document.querySelectorAll("[data-goto]").forEach(b => b.addEventListener("click", () => show(b.dataset.goto)));
 if (location.hash.length > 1) show(location.hash.slice(1));
 

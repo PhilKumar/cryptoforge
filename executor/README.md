@@ -259,6 +259,9 @@ Now open your web browser and go to:
 That's your dashboard. It's coming from your own computer, not from the
 internet, and nobody else can open it — not us, not someone on your wifi.
 
+Everything on this page is also in the app itself, on the **Guide** tab, so you
+never have to go looking for it again.
+
 ---
 
 ## The one number to look at

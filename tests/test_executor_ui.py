@@ -10,10 +10,13 @@ leads report.py — it is the number the buyer is actually relying on.
 """
 
 import json
+import re
 import threading
 import unittest
 import urllib.request
+from unittest import mock
 
+from executor import ui
 from executor.feed_client import FeedClient
 from executor.orders import Fill
 from executor.power import WINDOWS
@@ -172,8 +175,42 @@ class UIServerTests(unittest.TestCase):
 
     def test_the_page_is_self_contained(self):
         """No CDN, no external fetch: nothing to trust but the executor itself."""
-        for marker in ("http://", "https://", "src=", "@import"):
+        for marker in ("http://", "https://", "@import"):
             self.assertNotIn(marker, PAGE.replace("http://127.0.0.1", ""))
+
+    def test_nothing_the_page_loads_comes_from_off_the_machine(self):
+        """The guide arrives by iframe, so `src=` is no longer disqualifying —
+        but every src must still be same-origin. A CDN would read identically
+        to a local path to anything cruder than this."""
+        for src in re.findall(r'src\s*=\s*"([^"]*)"', PAGE):
+            self.assertTrue(src.startswith("/") or src.startswith("data:"), f"off-machine src: {src}")
+
+    def test_the_guide_is_served_as_a_whole_document(self):
+        status, body = self._get("/guide.html")
+        self.assertEqual(status, 200)
+        # A body fragment in an iframe renders in quirks mode, which the
+        # guide's layout does not survive.
+        self.assertTrue(body.lstrip().lower().startswith(b"<!doctype html>"))
+        self.assertIn(b"Twenty minutes", body)
+
+    def test_the_guide_tab_points_at_the_route_that_serves_it(self):
+        self.assertIn('data-page="guide"', PAGE)
+        self.assertIn('src="/guide.html"', PAGE)
+
+    def test_a_missing_guide_is_a_note_not_a_broken_page(self):
+        """The guide going astray must not look like the executor breaking."""
+        with mock.patch("executor.ui.GUIDE_FILE", "/nonexistent/guide.html"):
+            body = ui.guide_document()
+        self.assertIn(b"ask us for another copy", body)
+        self.assertTrue(body.lstrip().lower().startswith(b"<!doctype html>"))
+
+    def test_the_guide_itself_fetches_nothing(self):
+        """It ships to strangers' machines and is served from loopback: a
+        remote font or script would be both a leak and a dependency."""
+        with open(ui.GUIDE_FILE, encoding="utf-8") as handle:
+            guide = handle.read()
+        for pattern in (r'src\s*=\s*"https?:', r'href\s*=\s*"https?:', "@import"):
+            self.assertEqual(re.findall(pattern, guide), [], f"the guide reaches out: {pattern}")
 
 
 if __name__ == "__main__":
