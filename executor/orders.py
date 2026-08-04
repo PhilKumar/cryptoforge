@@ -296,10 +296,10 @@ class CampaignOrders:
             else:
                 self.held_reason = reason
 
-        intents.extend(self._exit_intents())
+        intents.extend(self.exit_intents())
         return intents
 
-    def _exit_intents(self) -> List[OrderIntent]:
+    def exit_intents(self) -> List[OrderIntent]:
         """
         The exit, off the buyer's own average entry and their own venue's fee.
 
@@ -400,7 +400,7 @@ class CampaignOrders:
                 )
             )
         if self.base_qty > 0 and not self.exit_resting:
-            intents.extend(self._exit_intents())
+            intents.extend(self.exit_intents())
         return intents
 
     def armed_exposure_usd(self) -> float:

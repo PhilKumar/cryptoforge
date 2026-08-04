@@ -1,0 +1,316 @@
+"""
+executor/runtime.py — the loop that makes the other five files a program.
+
+feed_client knows what is true. model knows what it is worth. orders knows what
+to place. exchange knows how to say it. recovery knows what to do after a gap.
+This wires them together and owns the one thing none of them can: the decision
+about WHEN, and the buyer's own capital.
+
+Two behaviours here matter more than the plumbing, and both are integration
+properties that no single module can express on its own:
+
+**Staleness reduces trading; it never stops caring.** A feed that has gone
+quiet, a key set past its cache, a lapsed subscription — each stops NEW
+structure and leaves exit management running. A buyer whose subscription
+expired still has coin on an exchange, and it still needs its target.
+
+**A halted campaign is quarantined, not abandoned.** Published geometry that
+contradicts itself stops that campaign opening anything more, while its
+existing position keeps its exit and its siblings carry on untouched.
+
+Like the rest of `executor/`, this must not import `engine.cascade`.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
+
+from executor import model
+from executor.exchange import ExchangeAdapter, IntentExecutor
+from executor.feed_client import FeedClient, FollowedCampaign
+from executor.orders import CampaignOrders, Candle, Fill, OrderBook
+from executor.recovery import (
+    ShutdownRecord,
+    plan_for_sleep,
+    plan_recovery,
+    record_sleep_outcome,
+    tp_catchup_intent,
+    wake_report,
+)
+
+_log = logging.getLogger("cascade.executor.runtime")
+
+Band = Tuple[float, float]
+
+
+class MarketData(Protocol):
+    """The buyer's own candles, from their own venue — never ours.
+
+    They trade their exchange's prices, so they must read their exchange's
+    candles. Ours are what the geometry was DRAWN on, which is a different
+    question and is why `exchange` rides on campaign.opened.
+    """
+
+    def last_price(self, symbol: str) -> float: ...
+
+    def closed_candles_since(self, symbol: str, timeframe: str, since_ts: int) -> List[Candle]: ...
+
+
+@dataclass
+class RuntimeConfig:
+    capital_usd: float
+    quote_asset: str = "USDT"
+    # Symbols the buyer wants to follow. Empty means all of them — which is a
+    # real choice, not a default: fewer symbols means fewer siblings competing
+    # for the same capital and a more faithful ladder on each.
+    symbols: List[str] = field(default_factory=list)
+
+
+@dataclass
+class TickReport:
+    placed: int = 0
+    cancelled: int = 0
+    skipped: List[tuple] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
+    opened_blocked: List[str] = field(default_factory=list)
+
+
+class ExecutorRuntime:
+    def __init__(
+        self,
+        *,
+        client: FeedClient,
+        adapter: ExchangeAdapter,
+        market: MarketData,
+        config: RuntimeConfig,
+        now_fn: Callable[[], float] = time.time,
+    ):
+        self._client = client
+        self._adapter = adapter
+        self._market = market
+        self._config = config
+        self._now = now_fn
+        self.book = OrderBook()
+        # Bands this buyer's own campaigns have already funded on a symbol.
+        # Captured at each new campaign's birth and fixed for its life: a
+        # sibling ending does not retro-fund ground a running campaign already
+        # walked past, because money is deployed as price moves and there is no
+        # going back to buy a dip that is over.
+        self._birth_bands: Dict[str, List[Band]] = {}
+
+    # ── keeping the book in step with the feed ───────────────────
+
+    def sync(self) -> List[str]:
+        """Give every newly joined campaign an order book of its own."""
+        notes = []
+        for campaign_id, campaign in self._client.campaigns.items():
+            if campaign_id in self.book.campaigns or not campaign.joined:
+                continue
+            if self._config.symbols and campaign.symbol not in self._config.symbols:
+                continue
+            allowed, _, warning = model.capital_gate(self._config.capital_usd)
+            if not allowed:
+                notes.append(f"{campaign_id}: {warning}")
+                continue
+            self._birth_bands[campaign_id] = self._own_funded_bands(campaign.symbol)
+            self.book.track(
+                CampaignOrders(
+                    campaign_id=campaign_id,
+                    symbol=campaign.symbol,
+                    mother_high=campaign.mother_high,
+                    exchange=campaign.exchange,
+                    tick_size=campaign.tick_size,
+                    min_notional_usd=campaign.min_notional_usd,
+                    median_bar_pct=campaign.median_bar_pct,
+                )
+            )
+            if warning:
+                notes.append(f"{campaign_id}: {warning}")
+        return notes
+
+    def _own_funded_bands(self, symbol: str) -> List[Band]:
+        """
+        The stretches this buyer's other campaigns on this symbol already pay
+        for. Their siblings, not ours — which is the entire reason the feed
+        publishes the gross percent and lets them net it locally.
+        """
+        bands: List[Band] = []
+        for campaign_id, orders in self.book.campaigns.items():
+            if orders.symbol != symbol:
+                continue
+            followed = self._client.campaigns.get(campaign_id)
+            if not followed or not followed.legs:
+                continue
+            lowest = min(leg.low for leg in followed.legs.values())
+            if followed.mother_high > lowest:
+                bands.append((lowest, followed.mother_high))
+        return bands
+
+    # ── the tick ─────────────────────────────────────────────────
+
+    def tick(self) -> TickReport:
+        """
+        One pass: collect what price reached, walk the stops, place what is due.
+
+        Exits are always managed. Entries are gated — by the feed's posture, by
+        the campaign's own halt, and by whether the buyer's capital can lay the
+        ladder at all.
+        """
+        report = TickReport()
+        self.sync()
+        may_open, reason = self._client.may_open_new
+
+        for campaign_id, orders in list(self.book.campaigns.items()):
+            followed = self._client.campaigns.get(campaign_id)
+            if not followed:
+                continue
+
+            entries_allowed = may_open and followed.active
+            if not entries_allowed and (orders.pot_usd > 0 or orders.stop_price):
+                report.opened_blocked.append(campaign_id)
+
+            if entries_allowed:
+                report.notes.extend(self._advance(campaign_id, orders, followed))
+            elif not may_open and reason:
+                report.notes.append(f"{campaign_id}: {reason}")
+
+            # Exits run whatever the posture; entries only when allowed.
+            # `intents()` covers both, so a blocked campaign asks for its exit
+            # alone rather than nothing at all.
+            intents = (
+                orders.intents(self._market.last_price(orders.symbol)) if entries_allowed else orders.exit_intents()
+            )
+            if not intents:
+                continue
+            result = IntentExecutor(self._adapter, orders.symbol, quote_asset=self._config.quote_asset).apply(
+                intents, our_resting_exit_qty=self._resting_exit_qty(orders)
+            )
+            orders.entry_resting = bool(result.resting_entry) or orders.entry_resting
+            report.placed += len(result.placed)
+            report.cancelled += len(result.cancelled)
+            report.skipped.extend(result.skipped)
+        return report
+
+    def _advance(self, campaign_id: str, orders: CampaignOrders, followed: FollowedCampaign) -> List[str]:
+        plan = self._client.plan(
+            campaign_id,
+            capital_usd=self._config.capital_usd,
+            funded_bands=self._birth_bands.get(campaign_id, []),
+        )
+        if not plan or plan.get("refused"):
+            return [f"{campaign_id}: {plan['refused']}"] if plan and plan.get("refused") else []
+
+        rungs = [
+            {"leg_id": leg["leg_id"], "level": rung["level"], "price": rung["price"], "usd": rung["usd"]}
+            for leg in plan["legs"]
+            for rung in leg["rungs"]
+        ]
+        notes = []
+        for candle in self._market.closed_candles_since(orders.symbol, followed.timeframe, orders.stop_ts):
+            notes.extend(orders.collect(candle, rungs))
+            moved = orders.advance_stop(candle)
+            if moved:
+                notes.append(moved)
+        return notes
+
+    def _resting_exit_qty(self, orders: CampaignOrders) -> float:
+        """Coin our own resting sell has locked. See exchange.sellable_qty."""
+        return orders.base_qty if orders.exit_resting else 0.0
+
+    # ── events from the exchange ─────────────────────────────────
+
+    def on_fill(self, campaign_id: str, fill: Fill, *, side: str = "buy") -> None:
+        orders = self.book.get(campaign_id)
+        if not orders:
+            return
+        if side == "buy":
+            orders.on_entry_filled(fill)
+        else:
+            orders.on_exit_filled(fill.price)
+
+    # ── going away and coming back ───────────────────────────────
+
+    def prepare_for_sleep(self, *, reason: str = "sleep") -> dict:
+        plan = plan_for_sleep(self.book, now=self._now(), reason=reason)
+        cancelled: List[str] = []
+        for campaign_id, intent in plan.intents:
+            orders = self.book.get(campaign_id)
+            if not orders:
+                continue
+            result = IntentExecutor(self._adapter, orders.symbol, quote_asset=self._config.quote_asset).apply(
+                [intent], our_resting_exit_qty=self._resting_exit_qty(orders)
+            )
+            if intent.action == "cancel":
+                cancelled.extend(result.cancelled)
+                if result.cancelled:
+                    orders.entry_resting = False
+        record_sleep_outcome(plan.record, cancelled_ids=cancelled)
+        return {"record": plan.record.to_dict(), "message": plan.message}
+
+    def on_wake(self, saved: Optional[dict]) -> dict:
+        """
+        Run the ladder. Returns what the buyer is told and what was done.
+
+        A missing record means a crash rather than a clean stop: there was no
+        chance to cancel anything, so entries may have been resting the whole
+        time. That is treated as the armed case, because assuming otherwise is
+        exactly the mistake the record exists to prevent.
+        """
+        record = ShutdownRecord.from_dict(saved)
+        if record is None:
+            gap, armed = float("inf"), True
+        else:
+            gap = max(self._now() - record.shutdown_at, 0.0)
+            armed = record.slept_armed
+        plan = plan_recovery(gap if gap != float("inf") else 24 * 3600, slept_armed=armed)
+
+        protected = []
+        for campaign_id, orders in self.book.campaigns.items():
+            if orders.base_qty <= 0 or orders.exit_resting:
+                continue
+            executor = IntentExecutor(self._adapter, orders.symbol, quote_asset=self._config.quote_asset)
+            executor.apply(orders.exit_intents(), our_resting_exit_qty=0.0)
+            protected.append(campaign_id)
+
+        caught_up = []
+        for campaign_id, orders in self.book.campaigns.items():
+            if orders.exit_price is None or orders.base_qty <= 0:
+                continue
+            intent = tp_catchup_intent(
+                campaign_id,
+                target=orders.exit_price,
+                market_price=self._market.last_price(orders.symbol),
+                quantity=orders.base_qty,
+            )
+            if intent:
+                IntentExecutor(self._adapter, orders.symbol, quote_asset=self._config.quote_asset).apply([intent])
+                caught_up.append(campaign_id)
+
+        return {
+            "band": plan.band,
+            "requires_confirmation": plan.requires_confirmation,
+            "steps": plan.step_names,
+            "protected": protected,
+            "tp_caught_up": caught_up,
+            "message": wake_report(plan, record),
+        }
+
+    # ── what the buyer sees ──────────────────────────────────────
+
+    def status(self) -> dict:
+        may_open, reason = self._client.may_open_new
+        return {
+            "following": len([c for c in self._client.campaigns.values() if c.active]),
+            "halted": [c.campaign_id for c in self._client.campaigns.values() if c.halted],
+            "skipped": {c.campaign_id: c.skip_reason for c in self._client.campaigns.values() if c.skip_reason},
+            "opening_new": may_open,
+            "posture_reason": reason,
+            # The single most useful number in the product: knowable, changing
+            # as the ladder moves, and it turns an abstract worry into a figure
+            # a buyer can judge.
+            "armed_exposure_usd": self.book.armed_exposure_usd(),
+            "unprotected": self.book.unprotected(),
+        }

@@ -83,6 +83,10 @@ class FollowedCampaign:
     model_version: int
     min_notional_usd: float = 5.0
     tick_size: float = 0.01
+    # Published on campaign.opened. The buy-stop raise allowance is measured in
+    # this instrument's OWN bars, so a fabricated stand-in would be a different
+    # filter on every market — which is the exact bug the bar-scaling fixed.
+    median_bar_pct: float = 0.0
     joined: bool = False
     skip_reason: str = ""
     halted: str = ""
@@ -231,6 +235,7 @@ class FeedClient:
             model_version=int(envelope.get("model_version") or 0),
             min_notional_usd=float((payload.get("advisory") or {}).get("min_notional_usd") or 5.0),
             tick_size=float((payload.get("advisory") or {}).get("tick_size") or 0.01),
+            median_bar_pct=float(payload.get("median_bar_pct") or 0.0),
         )
         self.campaigns[campaign_id] = campaign
 
