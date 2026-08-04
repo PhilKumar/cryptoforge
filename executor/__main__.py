@@ -62,6 +62,7 @@ class Executor:
         self.runtime: Optional[ExecutorRuntime] = None
         self.inhibitor = SleepInhibitor()
         self._stopping = asyncio.Event()
+        self._ui_state = None  # set by ui.wire() when the page is on
 
     def _on_status(self, kind: str, detail: dict) -> None:
         if kind in ("connected", "synced", "stopped", "clock_warning", "halt", "bad_signature", "disconnected"):
@@ -85,15 +86,19 @@ class Executor:
                     self.runtime = self._build_runtime()
                     self._resume()
                 for note in self.runtime.poll_fills():
-                    _say(note)
+                    self._note(note)
                 report = self.runtime.tick()
                 for note in report.notes:
-                    _say(note)
+                    self._note(note)
                 for order_id, why in report.skipped:
-                    _say(f"[not placed] {order_id}: {why}")
+                    self._note(f"[not placed] {order_id}: {why}")
                 status = self.runtime.status()
                 # Awake exactly while something can fill unwatched.
                 sync_inhibitor(self.inhibitor, armed_exposure_usd=status["armed_exposure_usd"])
+                if self._ui_state is not None:
+                    from executor.ui import campaigns_view
+
+                    self._ui_state.set_status(status, campaigns_view(self.runtime))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -101,6 +106,11 @@ class Executor:
                 # next one re-reads the exchange, which is the source of truth.
                 _log.exception("tick failed")
                 _say(f"[tick failed] {exc}")
+
+    def _note(self, line: str) -> None:
+        _say(line)
+        if self._ui_state is not None:
+            self._ui_state.add_event(line)
 
     def _build_runtime(self) -> ExecutorRuntime:
         return ExecutorRuntime(
@@ -130,6 +140,11 @@ class Executor:
         self._mark_started()
         report = self.runtime.on_wake(saved, first_run=first_run)
         _say("", report["message"])
+        # getattr: tests drive _resume on stubs that never ran __init__, and
+        # the page is an optional attachment either way.
+        ui_state = getattr(self, "_ui_state", None)
+        if ui_state is not None:
+            ui_state.set_wake_message(report["message"])
         if report["protected"]:
             _say(f"Placed a missing target on: {', '.join(report['protected'])}")
         if report["requires_confirmation"]:
@@ -259,6 +274,8 @@ def main(argv=None) -> int:
     parser.add_argument("--check", action="store_true", help="verify config and connection, trade nothing")
     parser.add_argument("--register", action="store_true", help="print the public key to register, then stop")
     parser.add_argument("--sample-config", action="store_true", help="print a starter config file")
+    parser.add_argument("--no-ui", action="store_true", help="run without the local status page")
+    parser.add_argument("--ui-port", type=int, default=7757, help="port for the local status page")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -291,7 +308,18 @@ def main(argv=None) -> int:
 
     if args.check:
         return asyncio.run(_check(config))
-    return asyncio.run(Executor(config).run())
+
+    executor = Executor(config)
+    server = None
+    if not args.no_ui:
+        from executor.ui import wire
+
+        server = wire(executor, port=args.ui_port, say=_say)
+    try:
+        return asyncio.run(executor.run())
+    finally:
+        if server:
+            server.stop()
 
 
 if __name__ == "__main__":
