@@ -300,3 +300,140 @@ class BuyerSwitchTests(unittest.TestCase):
         fees = (100.0 + 105.0) * model.EXCHANGE_FEE_PCT["coindcx"] / 100.0
         self.assertAlmostEqual(row["net_est_usd"], 5.0 - fees, places=4)
         self.assertAlmostEqual(runtime.status()["rounds_net_est_usd"], round(5.0 - fees, 2), places=2)
+
+
+class ChartViewTests(unittest.TestCase):
+    """The chart draws THEIR candles under OUR geometry.
+
+    Which is exactly the split the whole product rests on, so the test that
+    matters is what the payload does not contain: nothing of ours that this
+    machine could not have derived itself.
+    """
+
+    def setUp(self):
+        from executor.feed_client import FollowedCampaign, FollowedLeg
+        from executor.orders import CampaignOrders, Candle, Fill
+
+        client = FeedClient(public_keys={}, keyset_fetched_at=NOW, now_fn=lambda: NOW)
+        self.runtime = ExecutorRuntime(
+            client=client,
+            adapter=FakeExchange(),
+            market=FakeMarket(),
+            config=RuntimeConfig(capital_usd=5000.0),
+            now_fn=lambda: NOW,
+        )
+        followed = FollowedCampaign(
+            campaign_id="c1",
+            symbol="SOLUSDT",
+            exchange="binance",
+            created_at=int(NOW),
+            mother_high=178.42,
+            mother_low=174.10,
+            mother_timestamp=1785400800,
+            timeframe="5m",
+            state="TRENDLINE_ACTIVE",
+            model_version=21,
+            joined=True,
+        )
+        followed.legs[4] = FollowedLeg(
+            leg_id=4,
+            trendline_id=3,
+            low=172.88,
+            touch_high=176.40,
+            fib_high=176.40,
+            fib_low=172.88,
+            allocation_anchor=178.42,
+            allocation_pct_gross=3.1,
+        )
+        followed.trendlines[3] = {
+            "trendline_id": 3,
+            "anchor1_price": 178.42,
+            "anchor1_timestamp": 1785400800,
+            "anchor2_price": 177.06,
+            "anchor2_timestamp": 1785403500,
+        }
+        followed.standing_trendline_id = 3
+        client.campaigns["c1"] = followed
+        orders = self.runtime.book.track(
+            CampaignOrders(campaign_id="c1", symbol="SOLUSDT", mother_high=178.42, exchange="binance")
+        )
+        orders.on_entry_filled(Fill(price=162.0, quantity=0.05, timestamp=1785404400))
+        orders.intents(163.0)  # places the exit, so target is set
+        self.market = FakeMarket(candles=[Candle(1785404000 + i * 300, 163, 164, 162, 163.5) for i in range(20)])
+
+    def test_it_carries_their_candles_and_our_geometry(self):
+        from executor.ui import chart_view
+
+        chart = chart_view(self.runtime, self.market, "c1")
+        self.assertTrue(chart["candles"])
+        self.assertEqual(chart["mother_high"], 178.42)
+        self.assertIsNotNone(chart["trendline"])
+        self.assertEqual(sorted(f["level"] for f in chart["fib_levels"]), [2, 4, 8])
+
+    def test_the_money_marks_are_the_buyers_own(self):
+        from executor.ui import chart_view
+
+        chart = chart_view(self.runtime, self.market, "c1")
+        self.assertAlmostEqual(chart["avg_entry"], 162.0)
+        self.assertEqual(len(chart["fills"]), 1)
+        self.assertIsNotNone(chart["target"])
+
+    def test_it_carries_nothing_of_ours(self):
+        """Our capital, our fills, our target were never on this machine — and
+        the payload must not invent a place for them."""
+        from executor.ui import chart_view
+
+        chart = chart_view(self.runtime, self.market, "c1")
+        for banned in ("capital_usd", "pool_usd", "our_fills", "allocation_pct", "mode"):
+            self.assertNotIn(banned, chart)
+
+    def test_a_finalized_leg_contributes_no_rungs(self):
+        from executor.ui import chart_view
+
+        self.runtime._client.campaigns["c1"].legs[4].finalized = True
+        self.assertEqual(chart_view(self.runtime, self.market, "c1")["fib_levels"], [])
+
+    def test_an_unknown_campaign_is_none_not_a_crash(self):
+        from executor.ui import chart_view
+
+        self.assertIsNone(chart_view(self.runtime, self.market, "nope"))
+
+    def test_a_broken_candle_feed_still_returns_the_geometry(self):
+        """A rate-limited exchange must not blank the chart's levels too."""
+        from executor.ui import chart_view
+
+        class Broken:
+            def closed_candles_since(self, *a, **k):
+                raise RuntimeError("429")
+
+        chart = chart_view(self.runtime, Broken(), "c1")
+        self.assertEqual(chart["candles"], [])
+        self.assertEqual(chart["mother_high"], 178.42)
+
+
+class ChartEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.state = UIState()
+        self.server = UIServer(
+            self.state,
+            port=0,
+            chart_fn=lambda cid: {"campaign_id": cid, "candles": []} if cid == "c1" else None,
+        )
+        self.assertIsNone(self.server.start())
+        self.port = self.server._server.server_address[1]
+        self.addCleanup(self.server.stop)
+
+    def _get(self, path):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, b""
+
+    def test_a_known_campaign_returns_its_chart(self):
+        status, body = self._get("/api/chart?cid=c1")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["campaign_id"], "c1")
+
+    def test_an_unknown_campaign_is_a_404(self):
+        self.assertEqual(self._get("/api/chart?cid=nope")[0], 404)

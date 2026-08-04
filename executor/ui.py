@@ -177,13 +177,72 @@ def campaigns_view(runtime) -> list:
     return rows
 
 
+def chart_view(runtime, market, campaign_id: str) -> Optional[dict]:
+    """
+    Everything a buyer's chart may draw, and nothing else.
+
+    Candles come from THEIR venue — they trade its prices, so they chart its
+    prices. Geometry (mother, trendline, fib rungs) is the published feed. The
+    money marks (fills, average, target) are their own. Our fills, our target
+    and our capital are not here because this machine never had them.
+    """
+    followed = runtime._client.campaigns.get(campaign_id)
+    orders = runtime.book.get(campaign_id)
+    if not followed:
+        return None
+    try:
+        candles = market.closed_candles_since(followed.symbol, followed.timeframe or "5m", 0)
+    except Exception as exc:
+        _log.warning("chart candles failed for %s: %s", campaign_id, exc)
+        candles = []
+    trendline = None
+    if followed.standing_trendline_id is not None:
+        raw = followed.trendlines.get(followed.standing_trendline_id) or {}
+        if raw.get("anchor1_price") and raw.get("anchor2_price"):
+            trendline = {
+                "a1_ts": raw.get("anchor1_timestamp"),
+                "a1_p": raw.get("anchor1_price"),
+                "a2_ts": raw.get("anchor2_timestamp"),
+                "a2_p": raw.get("anchor2_price"),
+            }
+    fib_levels = []
+    for leg in followed.legs.values():
+        if leg.finalized:
+            continue
+        for level, price in leg.level_prices().items():
+            fib_levels.append({"leg": leg.leg_id, "level": level, "price": price})
+    return {
+        "campaign_id": campaign_id,
+        "symbol": followed.symbol,
+        "timeframe": followed.timeframe,
+        "candles": [[c.timestamp, c.open, c.high, c.low, c.close] for c in candles[-160:]],
+        "mother_high": followed.mother_high,
+        "mother_timestamp": followed.mother_timestamp,
+        "trendline": trendline,
+        "fib_levels": fib_levels,
+        "fills": [{"ts": f.timestamp, "price": f.price} for f in (orders.fills if orders else [])],
+        "avg_entry": orders.avg_entry if orders else None,
+        "target": orders.exit_price if orders else None,
+        "stop_price": orders.stop_price if orders else None,
+        "reuse_below": orders.reuse_below if orders else None,
+    }
+
+
 class UIServer:
-    def __init__(self, state: UIState, *, port: int = DEFAULT_PORT, actions: Optional[dict] = None):
+    def __init__(
+        self,
+        state: UIState,
+        *,
+        port: int = DEFAULT_PORT,
+        actions: Optional[dict] = None,
+        chart_fn: Optional[Callable[[str], Optional[dict]]] = None,
+    ):
         self._state = state
         self._port = port
         # name -> zero-arg callable returning a message for the buyer. The
         # runtime hands these over; the server never reaches into it directly.
         self._actions = dict(actions or {})
+        self._chart_fn = chart_fn
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
@@ -195,6 +254,7 @@ class UIServer:
         """Serve, or explain why not. A busy port is a note, not a crash."""
         state = self._state
         actions = self._actions
+        chart_fn = self._chart_fn
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):  # quiet; the executor has its own log
@@ -217,7 +277,18 @@ class UIServer:
                 if not self._local():
                     self.send_error(403)
                     return
-                if self.path.startswith("/api/state"):
+                if self.path.startswith("/api/chart"):
+                    from urllib.parse import parse_qs, urlparse
+
+                    cid = (parse_qs(urlparse(self.path).query).get("cid") or [""])[0]
+                    chart = chart_fn(cid) if chart_fn else None
+                    if not chart:
+                        self.send_error(404, "no chart for that campaign")
+                        return
+                    body = json.dumps(chart, default=str).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                elif self.path.startswith("/api/state"):
                     body = json.dumps(state.snapshot(), default=str).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -481,6 +552,31 @@ PAGE = """<!doctype html>
   .disclosure { margin-top:36px; color:var(--muted); font-size:12.5px;
                 border-top:1px solid var(--border); padding-top:18px; max-width:760px; }
 
+  /* ══ Chart modal ══ */
+  .modal { position:fixed; inset:0; z-index:200; display:none; align-items:center;
+           justify-content:center; padding:20px; background:rgba(2,5,12,.82);
+           backdrop-filter:blur(6px); }
+  .modal.on { display:flex; }
+  .modal-box { width:min(1040px,100%); max-height:92vh; overflow:auto;
+    background:var(--surface); border:1px solid var(--border-hi); border-radius:16px; }
+  .modal-head { display:flex; align-items:center; gap:12px; padding:16px 20px;
+                border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  .modal-head .sym { font-weight:700; font-size:16px; letter-spacing:.04em; }
+  .modal-close { margin-left:auto; background:none; border:1px solid var(--border-hi);
+    color:var(--dim); width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:16px; }
+  .modal-close:hover { color:var(--red); border-color:rgba(251,113,133,.4); }
+  .chart-wrap { padding:16px 20px 6px; }
+  canvas { width:100%; height:380px; display:block; }
+  .legend { display:flex; gap:16px; flex-wrap:wrap; padding:4px 20px 14px;
+            color:var(--muted); font-size:11.5px; letter-spacing:.06em; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend i { width:14px; height:2px; display:inline-block; }
+  .chart-note { padding:0 20px 18px; color:var(--muted); font-size:12.5px; }
+  .btn-chart { background:none; border:1px solid var(--border-hi); color:var(--dim);
+    font:600 11.5px 'Sora',sans-serif; letter-spacing:.06em; padding:5px 12px;
+    border-radius:7px; cursor:pointer; }
+  .btn-chart:hover { color:var(--accent); border-color:var(--accent); }
+
   /* ══ Setup ══ */
   .steps { counter-reset:step; display:flex; flex-direction:column; gap:14px; margin:16px 0 26px; }
   .step { counter-increment:step; display:flex; gap:16px; padding:18px; }
@@ -712,6 +808,27 @@ PAGE = """<!doctype html>
   <div class="disclosure" id="setup-disclosure"></div>
 </div></section>
 
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span class="sym" id="ch-sym">—</span>
+      <span class="venue" id="ch-tf" style="color:var(--muted);font-size:12px"></span>
+      <span class="pill live" id="ch-pos" hidden></span>
+      <button class="modal-close" id="ch-close">×</button>
+    </div>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    <div class="legend">
+      <span><i style="background:#f59e0b"></i>mother high</span>
+      <span><i style="background:#22d3ee"></i>trendline</span>
+      <span><i style="background:rgba(34,211,238,.45)"></i>fib rungs</span>
+      <span><i style="background:#2dd4bf"></i>your target</span>
+      <span><i style="background:#a78bfa"></i>your average</span>
+      <span><i style="background:#fbbf24"></i>working stop</span>
+    </div>
+    <div class="chart-note" id="ch-note"></div>
+  </div>
+</div>
+
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -811,7 +928,9 @@ function render(s) {
       `<span class="venue">${cp.exchange || ""}${cp.timeframe ? " · " + cp.timeframe : ""}</span>` +
       `<span class="pill ${tag[0]}" title="${cp.halted || cp.skip_reason || ""}">${tag[1]}</span>` +
       (cp.fidelity === "coarse" ? `<span class="pill coarse" title="Shallow rungs cannot clear the exchange minimum at your capital — fewer, deeper entries than the signal.">coarse</span>` : "") +
-      (cp.last_price ? `<span class="last">last ${px(cp.last_price)}</span>` : "") + `</div>`;
+      (cp.last_price ? `<span class="last">last ${px(cp.last_price)}</span>` : "") +
+      (cp.state === "skipped" ? "" : `<button class="btn-chart" data-chart="${cp.campaign_id}" data-sym="${cp.symbol}">Chart</button>`) +
+      `</div>`;
     if (cp.state === "skipped") {
       card.innerHTML += `<div class="cell" style="border-top:1px solid var(--border)">` +
         `<div class="l">why</div><div class="v">${cp.skip_reason || ""}</div></div>`;
@@ -839,6 +958,8 @@ function render(s) {
         if (e.target.open) openLadders.add(cp.campaign_id); else openLadders.delete(cp.campaign_id);
       });
     }
+    const chartBtn = card.querySelector("button[data-chart]");
+    if (chartBtn) chartBtn.addEventListener("click", () => openChart(chartBtn.dataset.chart, chartBtn.dataset.sym));
     cards.appendChild(card);
   });
 
@@ -878,6 +999,123 @@ function render(s) {
   $("su-conn").textContent = c.state || "—";
   $("su-advice").textContent = s.advice || "Nothing to flag on this platform.";
 }
+/* ══ chart ══ */
+let chartData = null;
+function drawChart() {
+  const d = chartData, cv = $("chart");
+  if (!d || !cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  const candles = d.candles || [];
+  if (!candles.length) {
+    g.fillStyle = "rgba(174,191,213,.58)"; g.font = "13px Sora, sans-serif";
+    g.fillText("No candles from your exchange yet.", 16, H / 2);
+    return;
+  }
+  const padL = 8, padR = 68, padT = 14, padB = 22;
+  // Scale to PRICE, never to the deepest fib rung: L8 is eight leg-ranges down
+  // and would flatten every candle into a line. Rungs inside the price band
+  // are drawn; ones far below are named in the note instead.
+  let lo = Infinity, hi = -Infinity;
+  candles.forEach(c => { lo = Math.min(lo, c[3]); hi = Math.max(hi, c[2]); });
+  [d.mother_high, d.avg_entry, d.target, d.stop_price].forEach(v => {
+    if (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  });
+  const span = (hi - lo) || 1;
+  lo -= span * 0.06; hi += span * 0.06;
+  const X = i => padL + (i + 0.5) * ((W - padL - padR) / candles.length);
+  const Y = p => padT + (hi - p) / (hi - lo) * (H - padT - padB);
+  const bw = Math.max(1.5, Math.min(9, (W - padL - padR) / candles.length * 0.62));
+
+  // Labels are nudged apart, because the interesting case is levels that sit
+  // ON TOP of each other: an average entry lands within cents of the rung it
+  // filled from, and two overlapping labels are less readable than none.
+  const taken = [];
+  const line = (p, color, dash, label) => {
+    if (p == null || p < lo || p > hi) return;
+    const y = Y(p);
+    g.save(); g.strokeStyle = color; g.lineWidth = 1; g.setLineDash(dash || []);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke(); g.restore();
+    let ly = y;
+    while (taken.some(t => Math.abs(t - ly) < 11)) ly += 11;
+    taken.push(ly);
+    if (Math.abs(ly - y) > 2) {
+      g.save(); g.strokeStyle = color; g.globalAlpha = .45; g.lineWidth = .8;
+      g.beginPath(); g.moveTo(W - padR, y); g.lineTo(W - padR + 4, ly - 3.5); g.stroke(); g.restore();
+    }
+    g.fillStyle = color; g.font = "10.5px 'Azeret Mono', ui-monospace, monospace";
+    g.fillText(label, W - padR + 6, ly + 3.5);
+  };
+
+  (d.fib_levels || []).forEach(f => line(f.price, "rgba(34,211,238,.34)", [3, 6], "L" + f.level));
+  if (d.reuse_below) line(d.reuse_below, "rgba(174,191,213,.35)", [2, 5], "floor");
+
+  if (d.trendline && d.trendline.a1_ts && d.trendline.a2_ts) {
+    const t = d.trendline, t0 = candles[0][0], t1 = candles[candles.length - 1][0];
+    const at = ts => t.a1_p + (t.a2_p - t.a1_p) * ((ts - t.a1_ts) / ((t.a2_ts - t.a1_ts) || 1));
+    g.save(); g.strokeStyle = "#22d3ee"; g.lineWidth = 1.4; g.globalAlpha = .85;
+    g.beginPath(); g.moveTo(X(0), Y(at(t0))); g.lineTo(X(candles.length - 1), Y(at(t1)));
+    g.stroke(); g.restore();
+  }
+
+  candles.forEach((c, i) => {
+    const up = c[4] >= c[1], x = X(i);
+    g.strokeStyle = up ? "#2dd4bf" : "#fb7185"; g.fillStyle = g.strokeStyle;
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x, Y(c[2])); g.lineTo(x, Y(c[3])); g.stroke();
+    const yO = Y(c[1]), yC = Y(c[4]);
+    g.fillRect(x - bw / 2, Math.min(yO, yC), bw, Math.max(1.2, Math.abs(yC - yO)));
+  });
+
+  line(d.mother_high, "#f59e0b", [], "mother");
+  line(d.stop_price, "#fbbf24", [5, 4], "stop");
+  line(d.avg_entry, "#a78bfa", [], "avg");
+  line(d.target, "#2dd4bf", [], "target");
+
+  const first = candles[0][0], last = candles[candles.length - 1][0], spanT = (last - first) || 1;
+  (d.fills || []).forEach(f => {
+    const x = padL + ((f.ts - first) / spanT) * (W - padL - padR);
+    const y = Y(f.price);
+    if (y < padT || y > H - padB) return;
+    g.save(); g.fillStyle = "#a78bfa"; g.strokeStyle = "#040814"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); g.stroke(); g.restore();
+  });
+}
+
+async function openChart(cid, symbol) {
+  $("modal").classList.add("on");
+  $("ch-sym").textContent = symbol || "";
+  $("ch-tf").textContent = "loading…"; $("ch-note").textContent = "";
+  try {
+    const r = await fetch("/api/chart?cid=" + encodeURIComponent(cid), {cache: "no-store"});
+    if (!r.ok) throw new Error("no chart for that campaign");
+    chartData = await r.json();
+  } catch (e) {
+    $("ch-tf").textContent = ""; $("ch-note").textContent = String(e.message || e);
+    chartData = null; drawChart(); return;
+  }
+  const d = chartData;
+  $("ch-tf").textContent = (d.timeframe || "") + " · your exchange's candles";
+  const pos = $("ch-pos");
+  pos.hidden = !d.avg_entry;
+  if (d.avg_entry) pos.textContent = "holding @ " + px(d.avg_entry);
+  const deep = (d.fib_levels || []).filter(f => f.price < Math.min(...d.candles.map(c => c[3])));
+  $("ch-note").textContent =
+    "Geometry from the signal; candles, fills and target are your own machine's." +
+    (deep.length ? "  " + deep.length + " deeper rung(s) sit below this view — the chart scales to price, not to L8."
+                 : "");
+  drawChart();
+}
+$("ch-close").addEventListener("click", () => $("modal").classList.remove("on"));
+$("modal").addEventListener("click", e => { if (e.target.id === "modal") $("modal").classList.remove("on"); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("modal").classList.remove("on"); });
+window.addEventListener("resize", drawChart);
+
 async function poll() {
   try {
     const r = await fetch("/api/state", {cache: "no-store"});
@@ -934,6 +1172,7 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
             "confirm_wake": _runtime_action("confirm_wake"),
             "stand_down": _runtime_action("request_stand_down"),
         },
+        chart_fn=lambda cid: chart_view(executor.runtime, executor._market_for_ui(), cid) if executor.runtime else None,
     )
     problem = server.start()
     if problem:

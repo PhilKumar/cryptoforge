@@ -112,6 +112,11 @@ class Executor:
         if self._ui_state is not None:
             self._ui_state.add_event(line)
 
+    def _market_for_ui(self):
+        """The same venue feed the tick reads, so the chart cannot disagree
+        with the levels the executor is actually trading against."""
+        return ExchangeMarketData(self.adapter, self.config.exchange)
+
     def _build_runtime(self) -> ExecutorRuntime:
         return ExecutorRuntime(
             client=self.transport.client,
