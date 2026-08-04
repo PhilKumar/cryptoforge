@@ -846,3 +846,121 @@ class FeedStreamTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await second.receive_json())["type"], "welcome")
                     closed = await first.expect_close()
         self.assertEqual(closed["code"], 4009)
+
+
+class FeedSubscriberRouteTests(unittest.IsolatedAsyncioTestCase):
+    """The signup step: a printed public key becomes an entitlement here.
+
+    Session-authed like every other /api route — these decide who may receive
+    the paid feed, which is exactly the kind of thing the PIN exists for.
+    """
+
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_db = self.app_module._STATE_DB_FILE
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        self.addCleanup(lambda: setattr(self.app_module, "_STATE_DB_FILE", self._orig_db))
+        self.app_module._rate_limits.clear()
+        self.app_module._feed_streams.clear()
+        self.transport = httpx.ASGITransport(app=self.app_module.app)
+
+    @asynccontextmanager
+    async def _client(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            self._headers = {
+                "X-CSRF-Token": client.cookies.get("cryptoforge_csrf") or "",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            yield client
+
+    @staticmethod
+    def _key():
+        from engine.cascade_feed import FeedSigner
+
+        return FeedSigner.generate("buyer-x").public_key_b64()
+
+    async def test_registration_needs_a_session(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            response = await client.post(
+                "/api/cascade/feed/subscribers", json={"buyer_id": "b", "public_key": self._key()}
+            )
+        self.assertEqual(response.status_code, 401)
+
+    async def test_a_key_registers_and_lists(self):
+        async with self._client() as client:
+            response = await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-7", "public_key": self._key(), "label": "Phil's first buyer"},
+                headers=self._headers,
+            )
+            self.assertEqual(response.status_code, 200)
+            listed = (await client.get("/api/cascade/feed/subscribers")).json()["subscribers"]
+        self.assertEqual(listed[0]["buyer_id"], "buyer-7")
+        self.assertEqual(listed[0]["status"], "active")
+        self.assertFalse(listed[0]["connected"])
+
+    async def test_junk_that_is_not_an_ed25519_key_is_refused(self):
+        """A registered key that cannot verify is a locked-out buyer later."""
+        async with self._client() as client:
+            for bad in ("not-base64!!", "aGVsbG8=", ""):
+                response = await client.post(
+                    "/api/cascade/feed/subscribers",
+                    json={"buyer_id": "buyer-7", "public_key": bad},
+                    headers=self._headers,
+                )
+                self.assertEqual(response.status_code, 400, bad)
+
+    async def test_rekeying_an_existing_buyer_needs_an_explicit_replace(self):
+        """A typo'd buyer_id must not silently displace a paying customer."""
+        async with self._client() as client:
+            await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-7", "public_key": self._key()},
+                headers=self._headers,
+            )
+            collision = await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-7", "public_key": self._key()},
+                headers=self._headers,
+            )
+            self.assertEqual(collision.status_code, 409)
+            replaced = await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-7", "public_key": self._key(), "replace": True},
+                headers=self._headers,
+            )
+            self.assertEqual(replaced.status_code, 200)
+
+    async def test_lapsing_a_buyer_flows_to_the_entitlement_check(self):
+        """The heartbeat check reads the same record this route writes."""
+        from engine.cascade_feed import FeedSubscribers
+
+        async with self._client() as client:
+            await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-7", "public_key": self._key()},
+                headers=self._headers,
+            )
+            response = await client.post(
+                "/api/cascade/feed/subscribers/buyer-7/status",
+                json={"status": "lapsed"},
+                headers=self._headers,
+            )
+            self.assertEqual(response.status_code, 200)
+        ok, reason = FeedSubscribers(self.app_module._get_state_store()).entitled("buyer-7")
+        self.assertFalse(ok)
+        self.assertIn("lapsed", reason)
+
+    async def test_an_unknown_buyer_or_status_is_named(self):
+        async with self._client() as client:
+            missing = await client.post(
+                "/api/cascade/feed/subscribers/nobody/status", json={"status": "lapsed"}, headers=self._headers
+            )
+            self.assertEqual(missing.status_code, 404)
+            bad = await client.post(
+                "/api/cascade/feed/subscribers/nobody/status", json={"status": "banished"}, headers=self._headers
+            )
+            self.assertEqual(bad.status_code, 400)

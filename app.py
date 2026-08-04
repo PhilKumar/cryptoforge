@@ -7773,6 +7773,94 @@ def _live_feed_symbols() -> list:
     )
 
 
+# Buyer statuses Phil can set from the admin routes. "active" trades;
+# everything else stops NEW entitlement within one heartbeat (30s) while the
+# buyer's executor keeps managing what it already holds — that rule lives in
+# the executor and is not billing's to override.
+_FEED_SUBSCRIBER_STATUSES = ("active", "lapsed", "revoked")
+
+
+def _validate_buyer_public_key(raw: str) -> str:
+    """A registered key that cannot verify anything is a locked-out buyer who
+    finds out at connect time, with a support chat instead of an error here."""
+    import base64
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    text = str(raw or "").strip()
+    try:
+        decoded = base64.b64decode(text.encode("ascii"), validate=True)
+        Ed25519PublicKey.from_public_bytes(decoded)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="public_key must be the base64 ed25519 key the executor prints from --register",
+        )
+    return text
+
+
+@app.get("/api/cascade/feed/subscribers")
+async def cascade_feed_subscribers():
+    """Who may connect, and whether their stream is live right now."""
+    rows = _get_feed_subscribers().list()
+    for row in rows:
+        row["connected"] = row.get("buyer_id") in _feed_streams
+    return {"subscribers": rows}
+
+
+@app.post("/api/cascade/feed/subscribers")
+async def cascade_feed_subscriber_add(request: Request):
+    """
+    Register (or re-key) a buyer. This is the signup step: the buyer runs
+    `python -m executor --register`, sends the printed public key, and this
+    route is where that key becomes an entitlement.
+
+    Re-keying an existing ACTIVE buyer requires `replace: true` — a typo'd
+    buyer_id here would otherwise silently displace a paying customer's key,
+    and their executor would stop verifying with no hint why.
+    """
+    check_rate_limit("feed_subscriber", max_calls=10, window_sec=60)
+    body = await _read_json_body(request)
+    buyer_id = str(body.get("buyer_id") or "").strip()
+    if not buyer_id or not all(ch.isalnum() or ch in "-_" for ch in buyer_id):
+        raise HTTPException(status_code=400, detail="buyer_id must be letters, digits, - or _")
+    public_key = _validate_buyer_public_key(body.get("public_key"))
+
+    subscribers = _get_feed_subscribers()
+    existing = subscribers.get(buyer_id)
+    if existing and existing.get("public_key") != public_key and not body.get("replace"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{buyer_id} is already registered with a different key. Pass replace: true to re-key.",
+        )
+    expires_at = body.get("expires_at")
+    record = subscribers.add(
+        buyer_id,
+        public_key,
+        label=str(body.get("label") or ""),
+        expires_at=int(expires_at) if expires_at else None,
+    )
+    return {"status": "ok", "subscriber": record}
+
+
+@app.post("/api/cascade/feed/subscribers/{buyer_id}/status")
+async def cascade_feed_subscriber_status(buyer_id: str, request: Request):
+    """
+    active / lapsed / revoked. A non-active status reaches a connected
+    executor within one heartbeat: entitlement is re-checked every 30s and the
+    stream closes with a terminal reason the buyer reads in their own UI.
+    """
+    body = await _read_json_body(request)
+    status = str(body.get("status") or "").strip().lower()
+    if status not in _FEED_SUBSCRIBER_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {_FEED_SUBSCRIBER_STATUSES}")
+    try:
+        record = _get_feed_subscribers().set_status(buyer_id, status)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"{buyer_id} is not registered")
+    return {"status": "ok", "subscriber": record}
+
+
 @app.get("/api/cascade/feed/keys")
 async def cascade_feed_keys():
     """

@@ -668,6 +668,11 @@ class FeedSubscribers:
         record = self._store.get(self._bucket, buyer_id, default=None)
         return record if isinstance(record, dict) else None
 
+    def list(self) -> List[dict]:
+        rows = [row for row in self._store.get_mapping(self._bucket).values() if isinstance(row, dict)]
+        rows.sort(key=lambda row: row.get("created_at") or 0, reverse=True)
+        return rows
+
     def set_status(self, buyer_id: str, status: str) -> dict:
         record = self.get(buyer_id)
         if not record:
