@@ -39,6 +39,9 @@ _RECENT_TS = (int(time.time()) - 3600) // 300 * 300  # a truthy, in-window mothe
 
 class FakeCascadeBroker:
     display_name = "Fake Broker"
+    # Every real adapter carries one, and capital-group keys are built from it.
+    # Without it the fake would exercise a shape production never sees.
+    broker_name = "fake"
 
     def __init__(self):
         self.placed_orders = []
@@ -4540,7 +4543,11 @@ class CascadeCapitalGroupTests(unittest.IsolatedAsyncioTestCase):
         saved = engine.get_status()["capital_groups"]
         fresh = _mk_engine()
         fresh.load_capital_groups(saved)
-        self.assertEqual(fresh.capital_groups, {"ETHUSDT": 1000})
+        # Asserted at the level callers see. Pots are keyed per exchange
+        # internally now; what must survive is the budget, found under the same
+        # name the snapshot used.
+        self.assertEqual(fresh.get_status()["capital_groups"], saved)
+        self.assertEqual(fresh.capital_groups[fresh._group_key("ETHUSDT")], 1000)
 
 
 class CascadeInstrumentStackTests(unittest.TestCase):
@@ -6383,3 +6390,101 @@ class CascadeExchangeRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", result)
         self.assertIn("CoinDCX", result["error"])
         self.assertEqual(campaign.mode, "paper")
+
+
+class CascadePerExchangeCapitalTests(unittest.TestCase):
+    """Stage two of multi-venue Cascade: money is per exchange. Bitcoin dollars
+    on Binance are not Bitcoin dollars on CoinDCX."""
+
+    def _engine(self):
+        primary = FakeCascadeBroker()
+        primary.broker_name = "binance"
+        second = FakeCascadeBroker()
+        second.broker_name = "coindcx"
+        return CascadeEngine(primary, brokers={"coindcx": second})
+
+    def _campaign(self, engine, cid, symbol, capital, exchange="", state="TRENDLINE_ACTIVE"):
+        campaign = Campaign(
+            campaign_id=cid,
+            symbol=symbol,
+            capital_usd=capital,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            exchange=exchange,
+        )
+        campaign.state = state
+        engine.campaigns[cid] = campaign
+        return campaign
+
+    def test_same_symbol_on_two_venues_keeps_two_budgets(self):
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        engine.set_capital_group("BTCUSDT", 50, exchange="coindcx")
+        status = engine.capital_group_status()
+        self.assertEqual(status["BTCUSDT"]["budget_usd"], 2000)
+        self.assertEqual(status["coindcx:BTCUSDT"]["budget_usd"], 50)
+
+    def test_committed_money_does_not_leak_across_venues(self):
+        # The bug this stage exists to prevent: a CoinDCX campaign counting
+        # against the Binance pot, so Binance believes its capital is spent.
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        engine.set_capital_group("BTCUSDT", 50, exchange="coindcx")
+        self._campaign(engine, "a", "BTCUSDT", 1500)
+        self._campaign(engine, "b", "BTCUSDT", 40, exchange="coindcx")
+        self.assertEqual(engine.group_committed_usd("BTCUSDT"), 1500)
+        self.assertEqual(engine.group_committed_usd("BTCUSDT", "coindcx"), 40)
+        status = engine.capital_group_status()
+        self.assertEqual(status["BTCUSDT"]["available_usd"], 500)
+        self.assertEqual(status["coindcx:BTCUSDT"]["available_usd"], 10)
+
+    def test_blank_and_named_primary_are_the_same_pot(self):
+        # A campaign stamped "binance" and one left blank are on one exchange
+        # and must share one budget, or each would think the other's capital
+        # was still available.
+        engine = self._engine()
+        self._campaign(engine, "a", "BTCUSDT", 100, exchange="")
+        self._campaign(engine, "b", "BTCUSDT", 250, exchange="binance")
+        self.assertEqual(engine.group_committed_usd("BTCUSDT"), 350)
+
+    def test_stacks_are_separated_by_venue(self):
+        engine = self._engine()
+        self._campaign(engine, "a", "BTCUSDT", 1500)
+        self._campaign(engine, "b", "BTCUSDT", 40, exchange="coindcx")
+        stacks = engine.instrument_stacks()
+        self.assertEqual(stacks["BTCUSDT"]["committed_usd"], 1500)
+        self.assertEqual(stacks["coindcx:BTCUSDT"]["committed_usd"], 40)
+
+    def test_single_venue_status_looks_exactly_as_before(self):
+        # Prod runs one exchange. Nothing about its keys or numbers may change.
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        self._campaign(engine, "a", "BTCUSDT", 1500)
+        self.assertEqual(list(engine.capital_group_status()), ["BTCUSDT"])
+        self.assertEqual(list(engine.instrument_stacks()), ["BTCUSDT"])
+
+    def test_old_snapshot_migrates_to_the_default_venue(self):
+        # Snapshots written before the split are bare symbols. They were funded
+        # on the default exchange and must land there, not become orphans.
+        engine = self._engine()
+        engine.load_capital_groups({"BTCUSDT": {"budget_usd": 2000}})
+        self.assertEqual(engine.capital_groups, {"binance:BTCUSDT": 2000})
+        self._campaign(engine, "a", "BTCUSDT", 500)
+        self.assertEqual(engine.capital_group_status()["BTCUSDT"]["available_usd"], 1500)
+
+    def test_snapshot_with_venues_round_trips(self):
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        engine.set_capital_group("BTCUSDT", 50, exchange="coindcx")
+        saved = engine.capital_group_status()
+        fresh = self._engine()
+        fresh.load_capital_groups(saved)
+        self.assertEqual(fresh.capital_groups, {"binance:BTCUSDT": 2000, "coindcx:BTCUSDT": 50})
+
+    def test_clearing_one_venue_leaves_the_other(self):
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        engine.set_capital_group("BTCUSDT", 50, exchange="coindcx")
+        engine.set_capital_group("BTCUSDT", 0, exchange="coindcx")
+        self.assertEqual(list(engine.capital_group_status()), ["BTCUSDT"])

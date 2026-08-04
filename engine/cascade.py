@@ -1978,42 +1978,84 @@ class CascadeEngine:
             )
         return client
 
-    def set_capital_group(self, symbol: str, budget_usd) -> dict:
+    def venue_of(self, campaign: "Campaign") -> str:
+        """The canonical exchange name a campaign's money belongs to.
+
+        A blank `exchange` means the engine's own default, so it must resolve to
+        the SAME name the default resolves to — otherwise a campaign stamped
+        "binance" and one left blank would sit in two different pots on the same
+        exchange, and each would think the other's capital was still free.
+        """
+        return str(getattr(campaign, "exchange", "") or "").strip().lower() or self.primary_broker_name
+
+    def _group_key(self, symbol: str, exchange: str = "") -> str:
+        """Canonical pot identity: one budget per symbol PER EXCHANGE.
+
+        Bitcoin money on Binance and Bitcoin money on CoinDCX are different
+        money. Keying on the symbol alone let a campaign on one venue spend
+        against a budget funded on the other.
+        """
+        venue = str(exchange or "").strip().lower() or self.primary_broker_name
+        return f"{venue}:{str(symbol or '').strip().upper()}"
+
+    def _group_display_key(self, key: str) -> str:
+        """How a pot is named outside the engine.
+
+        The default venue keeps the bare symbol, so every existing caller, saved
+        snapshot and rendered card is untouched by the split. Only the second
+        exchange onwards carries a prefix.
+        """
+        venue, _, symbol = str(key or "").partition(":")
+        return symbol if venue == self.primary_broker_name else key
+
+    def set_capital_group(self, symbol: str, budget_usd, exchange: str = "") -> dict:
         """Set (or clear, with 0/blank) the one budget a symbol's campaigns share."""
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return {"error": "Symbol is required"}
+        key = self._group_key(symbol, exchange)
         budget = _coerce_float(budget_usd)
         if budget <= 0:
-            existed = self.capital_groups.pop(symbol, None) is not None
+            existed = self.capital_groups.pop(key, None) is not None
             self._emit_update()
-            return {"status": "ok", "symbol": symbol, "removed": existed}
-        committed = self.group_committed_usd(symbol)
-        self.capital_groups[symbol] = budget
+            return {"status": "ok", "symbol": symbol, "exchange": key.split(":", 1)[0], "removed": existed}
+        committed = self.group_committed_usd(symbol, exchange)
+        self.capital_groups[key] = budget
         self._emit_update()
         return {
             "status": "ok",
             "symbol": symbol,
+            "exchange": key.split(":", 1)[0],
             "budget_usd": budget,
             "committed_usd": round(committed, 2),
             "available_usd": round(budget - committed, 2),
         }
 
-    def group_committed_usd(self, symbol: str) -> float:
-        """What the symbol's ACTIVE campaigns hold of the group budget.
+    def group_committed_usd(self, symbol: str, exchange: str = "") -> float:
+        """What the symbol's ACTIVE campaigns ON THAT EXCHANGE hold of the budget.
 
         A campaign commits its full capital_usd for its whole life — resting
         orders are promises against it even before they fill — and releases it
         only by ending. Ended campaigns are out of the sum, so their capital
-        flows back to the group automatically.
+        flows back to the group automatically. Campaigns on another exchange are
+        out of it too: their money was never in this pot.
         """
-        return sum(c.capital_usd for c in self.campaigns.values() if c.symbol == symbol and c.state in ACTIVE_STATES)
+        venue = str(exchange or "").strip().lower() or self.primary_broker_name
+        symbol = str(symbol or "").strip().upper()
+        return sum(
+            c.capital_usd
+            for c in self.campaigns.values()
+            if c.symbol == symbol and c.state in ACTIVE_STATES and self.venue_of(c) == venue
+        )
 
     def capital_group_status(self) -> Dict[str, dict]:
         out = {}
-        for symbol, budget in sorted(self.capital_groups.items()):
-            committed = self.group_committed_usd(symbol)
-            out[symbol] = {
+        for key, budget in sorted(self.capital_groups.items()):
+            venue, _, symbol = key.partition(":")
+            committed = self.group_committed_usd(symbol, venue)
+            out[self._group_display_key(key)] = {
+                "symbol": symbol,
+                "exchange": venue,
                 "budget_usd": budget,
                 "committed_usd": round(committed, 2),
                 "available_usd": round(budget - committed, 2),
@@ -2021,11 +2063,24 @@ class CascadeEngine:
         return out
 
     def load_capital_groups(self, groups: dict) -> None:
-        """Seed groups from the persisted snapshot on restart."""
-        for symbol, value in (groups or {}).items():
+        """Seed groups from the persisted snapshot on restart.
+
+        Snapshots written before the split are keyed by bare symbol. Those pots
+        were funded on whatever this engine trades by default, so they migrate
+        there — anything else would silently un-budget every live group.
+        """
+        for raw_key, value in (groups or {}).items():
             budget = _coerce_float(value.get("budget_usd") if isinstance(value, dict) else value)
-            if budget > 0:
-                self.capital_groups[str(symbol).strip().upper()] = budget
+            if budget <= 0:
+                continue
+            key = str(raw_key or "").strip()
+            if ":" in key:
+                venue, _, symbol = key.partition(":")
+            else:
+                venue, symbol = "", key
+            if isinstance(value, dict) and value.get("exchange"):
+                venue = str(value["exchange"]).strip().lower()
+            self.capital_groups[self._group_key(symbol, venue)] = budget
 
     def instrument_stacks(self) -> Dict[str, dict]:
         """Per-instrument roll-up: every symbol's running campaigns as one stack.
@@ -2056,7 +2111,12 @@ class CascadeEngine:
         for campaign in self.campaigns.values():
             if campaign.state not in ACTIVE_STATES:
                 continue
-            stack = stacks.setdefault(campaign.symbol, _blank())
+            # Keyed per venue, displayed bare for the default one — so a single
+            # exchange renders exactly as before, and a second exchange's BTC
+            # never adds its exposure into the first one's total.
+            stack = stacks.setdefault(
+                self._group_display_key(self._group_key(campaign.symbol, campaign.exchange)), _blank()
+            )
             stack["active_count"] += 1
             if campaign.mode == "live":
                 stack["live_count"] += 1
@@ -2071,8 +2131,8 @@ class CascadeEngine:
                 stack["timeframes"].append(campaign.timeframe)
         # A group with nothing running is still a stack — the budget is standing
         # capital waiting for its next campaign and should stay visible.
-        for symbol, budget in self.capital_groups.items():
-            stack = stacks.setdefault(symbol, _blank())
+        for key, budget in self.capital_groups.items():
+            stack = stacks.setdefault(self._group_display_key(key), _blank())
             stack["budget_usd"] = budget
             stack["available_usd"] = round(budget - stack["committed_usd"], 2)
         for stack in stacks.values():
@@ -2186,10 +2246,10 @@ class CascadeEngine:
         # reasonable thing to do); typing more is quietly capped to it.
         #
         # PARKED (2026-07-28) behind GROUP_CAP_ENFORCED — see the flag for why.
-        group_budget = _coerce_float(self.capital_groups.get(symbol))
+        group_budget = _coerce_float(self.capital_groups.get(self._group_key(symbol, exchange)))
         group_note = ""
         if GROUP_CAP_ENFORCED and group_budget > 0:
-            available = group_budget - self.group_committed_usd(symbol)
+            available = group_budget - self.group_committed_usd(symbol, exchange)
             if available < min_notional * 2:
                 return {
                     "error": (
@@ -5364,9 +5424,11 @@ class CascadeEngine:
         # so its own capital has flowed back and normally covers the child in
         # full — the clamp only bites when siblings grabbed budget in between.
         child_capital = parent.capital_usd
-        group_budget = _coerce_float(self.capital_groups.get(parent.symbol))
+        # The successor stays on its parent's venue, so it draws on its parent's
+        # pot — not on a same-named symbol's budget somewhere else.
+        group_budget = _coerce_float(self.capital_groups.get(self._group_key(parent.symbol, parent.exchange)))
         if GROUP_CAP_ENFORCED and group_budget > 0:
-            available = group_budget - self.group_committed_usd(parent.symbol)
+            available = group_budget - self.group_committed_usd(parent.symbol, parent.exchange)
             child_capital = min(child_capital, available)
             if child_capital < parent.min_notional_usd * 2:
                 self._log_event(

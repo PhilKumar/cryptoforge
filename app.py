@@ -7824,7 +7824,11 @@ async def cascade_set_capital_group(request: Request):
     eng = _get_cascade_engine()
     if not eng.campaigns:
         _restore_cascade_runtime(eng)
-    result = eng.set_capital_group(str(body.get("symbol") or ""), body.get("budget_usd") or body.get("budget") or 0)
+    result = eng.set_capital_group(
+        str(body.get("symbol") or ""),
+        body.get("budget_usd") or body.get("budget") or 0,
+        exchange=str(body.get("exchange") or ""),
+    )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     _persist_cascade_runtime_snapshot(eng)
