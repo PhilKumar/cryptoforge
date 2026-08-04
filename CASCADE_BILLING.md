@@ -1,7 +1,7 @@
 # Cascade billing v1 — Razorpay
 
-How a buyer's money becomes, and stops being, an entitlement. Design — nothing
-implements this yet.
+How a buyer's money becomes, and stops being, an entitlement. Built —
+see "Built" near the bottom for what is and is not proven.
 
 ## The one rule
 
@@ -146,7 +146,7 @@ exercised against an injected stub, so the request shape is assumed correct
 until one real test-mode call proves it. Do that before the first paying
 buyer, not after.
 
-## Needed from Phil before build
+## Needed from Phil before the first buyer
 
 - Razorpay account with Subscriptions enabled (KYC done), a Plan (price is
   his call), and the webhook secret into the server env as
