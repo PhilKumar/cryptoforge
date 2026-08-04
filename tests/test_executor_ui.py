@@ -148,7 +148,7 @@ class UIServerTests(unittest.TestCase):
     def test_the_page_is_served(self):
         status, body = self._get("/")
         self.assertEqual(status, 200)
-        self.assertIn(b"Cascade Executor", body)
+        self.assertIn(b"by CryptoForge", body)  # the child carries the parent's name
 
     def test_the_state_is_served_as_json(self):
         status, body = self._get("/api/state")
