@@ -34,7 +34,18 @@ STOP_ENTRY_LEVELS = (2, 4)
 TP_FIB_LEVEL = 0.25
 TP_MUST_CLEAR_FEES = True
 TP_MIN_NET_PCT = 0.05
-FEE_PCT_PER_SIDE = 0.1
+# Commission per side, per venue, measured from real fills. CoinDCX charges
+# twice what Binance does on USDT pairs, and the difference is not cosmetic: a
+# target computed at Binance's rate sits BELOW a CoinDCX round's own
+# commission, so an exit the executor believed cleared its fees would lose
+# money every round.
+#
+# This is deliberately not published on the feed. The venue's headline rate is
+# public, but a buyer's actual commission depends on their VIP tier and whether
+# they pay fees in the exchange's own token — so it is theirs to know, not ours
+# to assert.
+FEE_PCT_PER_SIDE = 0.1  # binance spot, and the fallback for an unknown venue
+EXCHANGE_FEE_PCT = {"binance": 0.1, "coindcx": 0.2}
 # An order sized exactly at the exchange minimum is one tick of adverse quote
 # movement from rejection, so every rung carries 10% more.
 RUNG_BUFFER_PCT = 0.10
@@ -157,15 +168,27 @@ def min_rung_usd(min_notional_usd: float) -> float:
     return float(min_notional_usd) * (1.0 + RUNG_BUFFER_PCT)
 
 
-def tp_breakeven_price(avg_entry: float) -> float:
+def fee_pct_for(exchange: str) -> float:
+    """This buyer's commission per side. Unknown venues take the safer rate.
+
+    Safer means HIGHER: guessing low sets a target that does not clear the
+    commission, and guessing high merely leaves a little on the table.
+    """
+    name = str(exchange or "").strip().lower()
+    if not name:
+        return FEE_PCT_PER_SIDE
+    return EXCHANGE_FEE_PCT.get(name, max(EXCHANGE_FEE_PCT.values()))
+
+
+def tp_breakeven_price(avg_entry: float, fee_pct_per_side: float = FEE_PCT_PER_SIDE) -> float:
     """Where a round merely pays both commissions and returns the cost basis."""
-    rate = FEE_PCT_PER_SIDE / 100.0
+    rate = float(fee_pct_per_side) / 100.0
     if rate <= 0:
         return float(avg_entry)
     return float(avg_entry) * (1.0 + rate) / (1.0 - rate)
 
 
-def take_profit_price(avg_entry: float, mother_high: float) -> float:
+def take_profit_price(avg_entry: float, mother_high: float, *, exchange: str = "") -> float:
     """
     Fib 0.25 off the buyer's OWN average entry — not ours. Their fills are
     theirs, so their target is theirs.
@@ -178,7 +201,7 @@ def take_profit_price(avg_entry: float, mother_high: float) -> float:
     geometric = float(avg_entry) + TP_FIB_LEVEL * (float(mother_high) - float(avg_entry))
     if not TP_MUST_CLEAR_FEES:
         return geometric
-    floor = tp_breakeven_price(avg_entry) * (1.0 + TP_MIN_NET_PCT / 100.0)
+    floor = tp_breakeven_price(avg_entry, fee_pct_for(exchange)) * (1.0 + TP_MIN_NET_PCT / 100.0)
     return max(geometric, floor)
 
 

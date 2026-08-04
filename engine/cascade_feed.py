@@ -143,6 +143,12 @@ NEVER_PUBLISH = frozenset(
         "pnl_gross",
         "fees_usd",
         "fees_estimated",
+        # The venue's rate is public, but OUR rate is not THEIRS: a buyer's
+        # actual commission depends on their VIP tier and whether they pay in
+        # BNB. Publishing ours as if it were theirs would price their target
+        # off our account, which is the exact lie the one rule exists to stop.
+        # The executor reads its own rate from its own venue.
+        "fee_pct_per_side",
         "exit_price",
         # take-profit — derived from their fills, not ours
         "tp_price",
