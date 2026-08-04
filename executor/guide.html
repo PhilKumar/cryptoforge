@@ -4,15 +4,23 @@
 /* ═══════════════════════════════════════════════════════════════════
    CryptoForge's guide voice, inherited from the landing page: ink
    ground, amber eyebrows on wide tracking, mint for safe and rose for
-   never. Committed to dark in both themes on purpose — this is a page
-   about a black terminal window, and a parchment version of it would
-   be a different product.
-   Michroma and Inter are CDN faces the artifact CSP will not load, so
-   the display role is carried by weight and tracking on the system
-   sans, and the mono face — which every machine has — is promoted to
-   do the work the subject actually calls for.
+   never.
+
+   Dark is the default and the standalone look. Framed inside the buyer's
+   console the guide follows whatever the console is set to — the console
+   stamps data-theme on this document — because a light app with one dark
+   tab reads as a page that failed to load rather than a choice.
+
+   Chrome (the eyebrows, the step discs, the rules) follows the console's
+   site tint through --chrome. The FIGURES do not: amber-mint-rose in
+   there are semantic — safe, never, the money's own colour — and tinting
+   them magenta would be recolouring the meaning, not the theme.
+
+   Fonts: the console serves CryptoForge's own faces same-origin, and this
+   page inherits them when framed. Standalone it falls back to the system
+   stack, which is the only choice that fetches nothing.
    ═══════════════════════════════════════════════════════════════════ */
-:root, :root[data-theme="light"], :root[data-theme="dark"] {
+:root {
   --ink:      #05060a;
   --panel:    #0c111c;
   --panel-2:  #10172480;
@@ -25,11 +33,27 @@
   --mint:     #86efb8;
   --rose:     #f4718a;
   --violet:   #b4a8ef;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --chrome:   var(--amber);   /* overwritten by the console with its tint */
+  --mono: 'Azeret Mono', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: 'Sora', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   /* Framed inside the console, the browser draws this page its own scrollbar.
      Without this it draws a light one down the side of an ink page. */
   color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --ink:      #f5f8fc;
+  --panel:    #ffffff;
+  --panel-2:  #f8fafcCC;
+  --line:     rgba(15,23,42,0.10);
+  --text:     #0b1220;
+  --muted:    #56637a;
+  --dim:      #7b8798;
+  --amber:    #b45309;
+  --cyan:     #0e7490;
+  --mint:     #0f766e;
+  --rose:     #be123c;
+  --violet:   #6d28d9;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -59,14 +83,14 @@ body {
 .close .wrap > * { margin-inline: auto; }
 
 section { padding: 56px 0; }
-section + section { border-top: 1px solid #10151f; }
+section + section { border-top: 1px solid var(--line); }
 
 .eyebrow {
   font-family: var(--mono);
   font-size: 10.5px;
   letter-spacing: .34em;
   text-transform: uppercase;
-  color: var(--amber);
+  color: var(--chrome);
   margin-bottom: 14px;
 }
 h1, h2, h3 { text-wrap: balance; margin: 0; }
@@ -85,18 +109,18 @@ h2 {
 }
 h3 { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
 p { margin: 14px 0; }
-p.lead { font-size: 19.5px; color: #cfd6e2; }
-strong { color: #fff; font-weight: 650; }
+p.lead { font-size: 19.5px; color: color-mix(in srgb, var(--text) 84%, var(--muted)); }
+strong { color: color-mix(in srgb, var(--text) 100%, transparent); font-weight: 650; }
 em { color: var(--cyan); font-style: normal; }
 a { color: var(--cyan); }
 code {
   font-family: var(--mono);
   font-size: .86em;
-  background: #131b28;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   border: 1px solid var(--line);
   border-radius: 5px;
   padding: 1.5px 6px;
-  color: #dbe4f0;
+  color: var(--text);
 }
 
 /* ── hero ── */
@@ -107,7 +131,7 @@ code {
   background:
     radial-gradient(70% 120% at 50% 0%, rgba(245,166,35,.10), transparent 62%),
     radial-gradient(50% 90% at 82% 30%, rgba(142,233,242,.07), transparent 70%);
-  border-bottom: 1px solid #10151f;
+  border-bottom: 1px solid var(--line);
 }
 .embers { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .embers i {
@@ -127,18 +151,47 @@ code {
 }
 .hero-inner { position: relative; z-index: 1; }
 .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 34px; }
+/* The terminal's own mark: three depth columns and a spark. Same geometry as
+   the console's, so the two products open with the same logo. */
 .brand-mark {
-  width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-  background: linear-gradient(145deg, #1a1a1a, #000); border: 1px solid #3a342a;
-  font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--amber);
+  position: relative; width: 36px; height: 36px; border-radius: 12px; flex: none; overflow: hidden;
+  border: 1px solid rgba(148,163,184,0.22);
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255,255,255,0.22), transparent 36%),
+    linear-gradient(180deg, rgba(30,41,66,0.96), rgba(10,16,30,0.98));
+  box-shadow: 0 14px 28px rgba(2,6,23,0.34), inset 0 1px 0 rgba(255,255,255,0.16),
+              inset 0 -12px 18px rgba(0,0,0,0.18);
 }
-.brand-text { font-family: var(--mono); font-size: 10px; letter-spacing: .2em; line-height: 1.5; color: #ded7ca; }
+:root[data-theme="light"] .brand-mark {
+  border-color: rgba(15,23,42,0.08);
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255,255,255,0.94), transparent 38%),
+    linear-gradient(180deg, #ffffff, #f1f5f9);
+  box-shadow: 0 12px 24px rgba(15,23,42,0.08), inset 0 1px 0 rgba(255,255,255,0.92);
+}
+.brand-mark::before {
+  content: ""; position: absolute; inset: 4px; border-radius: 10px;
+  border: 1px solid rgba(96,165,250,0.14);
+  background: linear-gradient(145deg, rgba(24,35,62,0.30), transparent 62%);
+}
+.brand-column {
+  position: absolute; bottom: 7px; width: 6px; border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.20);
+}
+.brand-column.col-a { left: 9px;  height: 18px; background: linear-gradient(180deg,#93c5fd,#2563eb); }
+.brand-column.col-b { left: 16px; height: 24px; background: linear-gradient(180deg,var(--cyan),var(--amber)); }
+.brand-column.col-c { left: 23px; height: 14px; background: linear-gradient(180deg,#fb7185,#db2777); }
+.brand-spark {
+  position: absolute; top: 8px; right: 7px; width: 8px; height: 8px; border-radius: 999px;
+  background: radial-gradient(circle,#f8fafc 0%, rgba(125,211,252,0.86) 48%, rgba(14,165,233,0) 100%);
+}
+.brand-text { font-family: var(--mono); font-size: 10px; letter-spacing: .2em; line-height: 1.5; color: var(--text); }
 .hero p.lead { max-width: 33em; }
 .facts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
 .fact {
   font-family: var(--mono); font-size: 12px; letter-spacing: .04em;
   border: 1px solid var(--line); border-radius: 999px; padding: 7px 15px;
-  color: var(--muted); background: #0a0f18;
+  color: var(--muted); background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 .fact b { color: var(--text); font-weight: 600; }
 
@@ -193,10 +246,12 @@ code {
 .perm { display: grid; gap: 10px; margin-top: 6px; }
 .perm-row {
   display: flex; align-items: center; gap: 14px;
-  border: 1px solid var(--line); border-radius: 11px; padding: 13px 16px; background: #0a0f18;
+  border: 1px solid var(--line); border-radius: 11px; padding: 13px 16px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
 }
-.sw { width: 46px; height: 26px; border-radius: 999px; position: relative; flex: none; border: 1px solid var(--line); background: #151d2b; }
-.sw::after { content: ""; position: absolute; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #4b556b; transition: none; }
+.sw { width: 46px; height: 26px; border-radius: 999px; position: relative; flex: none; border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--text) 8%, transparent); }
+.sw::after { content: ""; position: absolute; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--dim); transition: none; }
 .sw.on  { background: rgba(134,239,184,.18); border-color: rgba(134,239,184,.5); }
 .sw.on::after  { right: 3px; background: var(--mint); }
 .sw.off::after { left: 3px; }
@@ -213,9 +268,9 @@ code {
 .rail { position: relative; }
 .disc {
   width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
-  font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--amber);
-  background: #0d1119; border: 1px solid rgba(245,166,35,.42);
-  box-shadow: 0 0 0 5px rgba(245,166,35,.05);
+  font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--chrome);
+  background: var(--panel); border: 1px solid color-mix(in srgb, var(--chrome) 42%, transparent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--chrome) 6%, transparent);
 }
 .step:not(:last-child) .rail::after {
   content: ""; position: absolute; left: 21px; top: 50px; bottom: -34px; width: 1px;
@@ -283,7 +338,8 @@ code {
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
   border-radius: 999px; padding: 3px 9px; border: 1px solid;
 }
-.pill.coarse { color: var(--amber); border-color: rgba(245,166,35,.4); background: rgba(245,166,35,.08); }
+.pill.coarse { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+               background: color-mix(in srgb, var(--amber) 9%, transparent); }
 
 /* ── figures with bars ── */
 .bars { display: grid; gap: 18px; }
@@ -312,23 +368,24 @@ code {
 /* ── plain tables ── */
 .tablewrap { overflow-x: auto; margin: 20px 0; border: 1px solid var(--line); border-radius: 12px; }
 table { border-collapse: collapse; width: 100%; font-size: 15px; }
-th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid #131b28; vertical-align: top; }
-thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); background: #090e18; }
+th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase;
+           color: var(--dim); background: color-mix(in srgb, var(--text) 5%, transparent); }
 tbody tr:last-child td { border-bottom: 0; }
 td:first-child { color: var(--text); font-weight: 560; white-space: nowrap; }
 td code { white-space: nowrap; }
 
 /* ── callouts ── */
 .note {
-  border-left: 2px solid var(--amber); background: rgba(245,166,35,.05);
+  border-left: 2px solid var(--amber); background: color-mix(in srgb, var(--amber) 7%, transparent);
   padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 20px 0;
 }
-.note.warn { border-color: var(--rose); background: rgba(244,113,138,.055); }
+.note.warn { border-color: var(--rose); background: color-mix(in srgb, var(--rose) 7%, transparent); }
 .note p { margin: 0; font-size: 15.5px; }
 .note p + p { margin-top: 8px; }
 
 .close { text-align: center; padding: 70px 0 84px; }
-.close .rule { width: 46px; height: 1px; background: var(--amber); margin: 0 auto 24px; }
+.close .rule { width: 46px; height: 1px; background: var(--chrome); margin: 0 auto 24px; }
 
 @media (max-width: 720px) {
   body { font-size: 16px; }
@@ -353,7 +410,12 @@ td code { white-space: nowrap; }
   <div class="embers"><i></i><i></i><i></i><i></i><i></i></div>
   <div class="wrap hero-inner">
     <div class="brand">
-      <div class="brand-mark">CF</div>
+      <div class="brand-mark">
+        <span class="brand-column col-a"></span>
+        <span class="brand-column col-b"></span>
+        <span class="brand-column col-c"></span>
+        <span class="brand-spark"></span>
+      </div>
       <div class="brand-text">CRYPTO<br>FORGE</div>
     </div>
     <div class="eyebrow">Cascade · Setup guide</div>

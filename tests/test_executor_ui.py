@@ -179,11 +179,16 @@ class UIServerTests(unittest.TestCase):
             self.assertNotIn(marker, PAGE.replace("http://127.0.0.1", ""))
 
     def test_nothing_the_page_loads_comes_from_off_the_machine(self):
-        """The guide arrives by iframe, so `src=` is no longer disqualifying —
-        but every src must still be same-origin. A CDN would read identically
-        to a local path to anything cruder than this."""
-        for src in re.findall(r'src\s*=\s*"([^"]*)"', PAGE):
-            self.assertTrue(src.startswith("/") or src.startswith("data:"), f"off-machine src: {src}")
+        """The guide arrives by iframe and the faces by stylesheet, so `src=`
+        and `href=` are no longer disqualifying — but every one must be
+        same-origin. A font CDN reads identically to a local path to anything
+        cruder than this, and a font CDN is exactly what the parent uses."""
+        for attr in ("src", "href"):
+            for ref in re.findall(attr + r'\s*=\s*"([^"]*)"', PAGE):
+                self.assertTrue(
+                    ref.startswith("/") or ref.startswith("data:") or ref.startswith("#"),
+                    f"off-machine {attr}: {ref}",
+                )
 
     def test_the_guide_is_served_as_a_whole_document(self):
         status, body = self._get("/guide.html")
@@ -203,6 +208,62 @@ class UIServerTests(unittest.TestCase):
             body = ui.guide_document()
         self.assertIn(b"ask us for another copy", body)
         self.assertTrue(body.lstrip().lower().startswith(b"<!doctype html>"))
+
+    def test_every_font_set_is_served_and_embedded(self):
+        """Each preset must actually ship its faces. A preset whose stylesheet
+        were missing would silently fall back to the system stack and all six
+        would look the same — the exact failure the parent's CSS warns about."""
+        for name in ui.FONT_SETS:
+            status, body = self._get(f"/assets/fonts/{name}.css")
+            self.assertEqual(status, 200, name)
+            self.assertIn(b"@font-face", body, name)
+            self.assertIn(b"url(data:font/woff2;base64,", body, name)
+            self.assertNotIn(b"http", body, name)
+
+    def test_the_head_links_the_core_faces_and_the_presets_are_reachable(self):
+        self.assertIn('href="/assets/fonts/core.css"', PAGE)
+        self.assertIn('"/assets/fonts/" + font + ".css"', PAGE)
+
+    def test_an_unknown_font_set_is_a_404(self):
+        for path in ("/assets/fonts/nope.css", "/assets/fonts/../../ui.py", "/assets/fonts/"):
+            try:
+                status, _ = self._get(path)
+            except urllib.error.HTTPError as exc:
+                status = exc.code
+            self.assertEqual(status, 404, path)
+
+    def test_a_traversing_name_never_reaches_the_filesystem(self):
+        """Membership of FONT_SETS is the whole check, so there is no path to
+        sanitise — assert that directly rather than trusting the URL parse."""
+        for name in ("../guide", "/etc/passwd", "core/../../ui", ""):
+            self.assertIsNone(ui.font_css(name), name)
+
+    def test_the_appearance_controls_offer_the_terminals_six_and_six(self):
+        for tint in ("gold", "arctic", "magenta", "citrus", "graphite", "bronze"):
+            self.assertIn(f'"{tint}"', PAGE)
+        for font in ui.FONT_SETS:
+            if font != "core":
+                self.assertIn(f'"{font}"', PAGE)
+        # Same storage keys as the terminal, so the two products agree.
+        self.assertIn('"cf-appearance"', PAGE)
+        self.assertIn('"cf-theme"', PAGE)
+
+    def test_the_theme_is_applied_before_the_body_paints(self):
+        """After first paint it is a white flash on a page that is meant to be
+        ink, which is why the parent does it in the head too."""
+        self.assertLess(PAGE.index("window.cfTheme()"), PAGE.index("<body>"))
+
+    def test_the_brand_mark_is_the_terminals_own(self):
+        for part in ("brand-column col-a", "brand-column col-b", "brand-column col-c", "brand-spark"):
+            self.assertIn(part, PAGE)
+
+    def test_the_chart_reads_its_colours_from_the_theme(self):
+        """Canvas is painted, not styled: a hardcoded palette is the one place
+        a tint or light mode would visibly fail to reach."""
+        chart = PAGE[PAGE.index("function drawChart()") : PAGE.index("async function openChart")]
+        self.assertIn("getComputedStyle(document.documentElement)", chart)
+        for hardcoded in ('"#22d3ee"', '"#2dd4bf"', '"#fb7185"', '"#f59e0b"', '"#fbbf24"', '"#040814"'):
+            self.assertNotIn(hardcoded, chart)
 
     def test_the_guide_itself_fetches_nothing(self):
         """It ships to strangers' machines and is served from loopback: a
