@@ -1,0 +1,1079 @@
+<title>Cascade — Setting it up on your computer</title>
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   CryptoForge's guide voice, inherited from the landing page: ink
+   ground, amber eyebrows on wide tracking, mint for safe and rose for
+   never. Committed to dark in both themes on purpose — this is a page
+   about a black terminal window, and a parchment version of it would
+   be a different product.
+   Michroma and Inter are CDN faces the artifact CSP will not load, so
+   the display role is carried by weight and tracking on the system
+   sans, and the mono face — which every machine has — is promoted to
+   do the work the subject actually calls for.
+   ═══════════════════════════════════════════════════════════════════ */
+:root, :root[data-theme="light"], :root[data-theme="dark"] {
+  --ink:      #05060a;
+  --panel:    #0c111c;
+  --panel-2:  #10172480;
+  --line:     #1d2637;
+  --text:     #f2ede2;
+  --muted:    #8a93a6;   /* grey pulled toward the cyan, not neutral */
+  --dim:      #5d6779;
+  --amber:    #f5a623;
+  --cyan:     #8ee9f2;
+  --mint:     #86efb8;
+  --rose:     #f4718a;
+  --violet:   #b4a8ef;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── layout: a prose column, with figures allowed to breathe wider ── */
+.wrap  { width: min(100% - 40px, 720px); margin-inline: auto; }
+.wide  { width: min(100% - 40px, 960px); margin-inline: auto; }
+
+section { padding: 56px 0; }
+section + section { border-top: 1px solid #10151f; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .34em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 14px;
+}
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 {
+  font-size: clamp(34px, 6.2vw, 58px);
+  font-weight: 800;
+  letter-spacing: -.028em;
+  line-height: 1.06;
+}
+h2 {
+  font-size: clamp(24px, 3.4vw, 33px);
+  font-weight: 750;
+  letter-spacing: -.02em;
+  line-height: 1.18;
+  margin-bottom: 8px;
+}
+h3 { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+p { margin: 14px 0; }
+p.lead { font-size: 19.5px; color: #cfd6e2; }
+strong { color: #fff; font-weight: 650; }
+em { color: var(--cyan); font-style: normal; }
+a { color: var(--cyan); }
+code {
+  font-family: var(--mono);
+  font-size: .86em;
+  background: #131b28;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1.5px 6px;
+  color: #dbe4f0;
+}
+
+/* ── hero ── */
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 84px 0 68px;
+  background:
+    radial-gradient(70% 120% at 50% 0%, rgba(245,166,35,.10), transparent 62%),
+    radial-gradient(50% 90% at 82% 30%, rgba(142,233,242,.07), transparent 70%);
+  border-bottom: 1px solid #10151f;
+}
+.embers { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.embers i {
+  position: absolute; bottom: -10px; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--amber); opacity: 0; animation: rise linear infinite;
+  box-shadow: 0 0 9px rgba(245,166,35,.85);
+}
+.embers i:nth-child(1) { left: 12%; animation-duration: 17s; animation-delay: 0s; }
+.embers i:nth-child(2) { left: 31%; animation-duration: 22s; animation-delay: 5s; background: var(--cyan); box-shadow: 0 0 9px rgba(142,233,242,.7); }
+.embers i:nth-child(3) { left: 58%; animation-duration: 19s; animation-delay: 9s; }
+.embers i:nth-child(4) { left: 77%; animation-duration: 24s; animation-delay: 3s; background: var(--mint); box-shadow: 0 0 9px rgba(134,239,184,.7); }
+.embers i:nth-child(5) { left: 90%; animation-duration: 20s; animation-delay: 13s; }
+@keyframes rise {
+  0% { transform: translateY(0); opacity: 0; }
+  10% { opacity: .8; } 75% { opacity: .35; }
+  100% { transform: translateY(-360px); opacity: 0; }
+}
+.hero-inner { position: relative; z-index: 1; }
+.brand { display: flex; align-items: center; gap: 11px; margin-bottom: 34px; }
+.brand-mark {
+  width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  background: linear-gradient(145deg, #1a1a1a, #000); border: 1px solid #3a342a;
+  font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--amber);
+}
+.brand-text { font-family: var(--mono); font-size: 10px; letter-spacing: .2em; line-height: 1.5; color: #ded7ca; }
+.hero p.lead { max-width: 33em; }
+.facts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.fact {
+  font-family: var(--mono); font-size: 12px; letter-spacing: .04em;
+  border: 1px solid var(--line); border-radius: 999px; padding: 7px 15px;
+  color: var(--muted); background: #0a0f18;
+}
+.fact b { color: var(--text); font-weight: 600; }
+
+/* ── panels ── */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px 24px;
+}
+.figure { margin: 30px 0; }
+.caption {
+  font-family: var(--mono); font-size: 12px; line-height: 1.65;
+  color: var(--dim); margin-top: 12px; text-align: center;
+}
+
+/* ── the money-flow diagram ── */
+.flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 0; align-items: stretch; }
+.node {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 20px 18px; display: flex; flex-direction: column; gap: 8px;
+}
+.node .tag {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .22em;
+  text-transform: uppercase; color: var(--dim);
+}
+.node h3 { font-size: 16.5px; }
+.node p { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--muted); }
+.node.ours  { border-color: rgba(142,233,242,.34); box-shadow: inset 0 0 34px rgba(142,233,242,.05); }
+.node.ours .tag  { color: var(--cyan); }
+.node.yours { border-color: rgba(245,166,35,.34); box-shadow: inset 0 0 34px rgba(245,166,35,.05); }
+.node.yours .tag { color: var(--amber); }
+.node.money { border-color: rgba(134,239,184,.34); box-shadow: inset 0 0 34px rgba(134,239,184,.05); }
+.node.money .tag { color: var(--mint); }
+.link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; min-width: 108px; }
+.link .arrow { font-family: var(--mono); font-size: 19px; letter-spacing: -.06em; }
+.link .what { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; text-align: center; line-height: 1.5; }
+.link.signal .arrow, .link.signal .what { color: var(--cyan); }
+.link.orders .arrow, .link.orders .what { color: var(--amber); }
+.barrier {
+  margin-top: 22px; border: 1px dashed rgba(244,113,138,.42); border-radius: 12px;
+  padding: 14px 18px; background: rgba(244,113,138,.045);
+  display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+}
+.barrier .lbl { font-family: var(--mono); font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--rose); }
+.barrier p { margin: 0; font-size: 14.5px; color: var(--muted); flex: 1 1 380px; }
+
+/* ── the API-key permission card ── */
+.perm { display: grid; gap: 10px; margin-top: 6px; }
+.perm-row {
+  display: flex; align-items: center; gap: 14px;
+  border: 1px solid var(--line); border-radius: 11px; padding: 13px 16px; background: #0a0f18;
+}
+.sw { width: 46px; height: 26px; border-radius: 999px; position: relative; flex: none; border: 1px solid var(--line); background: #151d2b; }
+.sw::after { content: ""; position: absolute; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #4b556b; transition: none; }
+.sw.on  { background: rgba(134,239,184,.18); border-color: rgba(134,239,184,.5); }
+.sw.on::after  { right: 3px; background: var(--mint); }
+.sw.off::after { left: 3px; }
+.sw.off { background: rgba(244,113,138,.10); border-color: rgba(244,113,138,.42); }
+.sw.off::after { background: var(--rose); }
+.perm-row .name { font-weight: 620; }
+.perm-row .note { color: var(--muted); font-size: 14px; margin-left: auto; text-align: right; }
+.perm-row.no .name { color: var(--rose); }
+
+/* ── the numbered steps ── */
+.steps { display: grid; gap: 0; }
+.step { display: grid; grid-template-columns: 46px 1fr; gap: 22px; padding-bottom: 34px; position: relative; }
+.step:last-child { padding-bottom: 0; }
+.rail { position: relative; }
+.disc {
+  width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--amber);
+  background: #0d1119; border: 1px solid rgba(245,166,35,.42);
+  box-shadow: 0 0 0 5px rgba(245,166,35,.05);
+}
+.step:not(:last-child) .rail::after {
+  content: ""; position: absolute; left: 21px; top: 50px; bottom: -34px; width: 1px;
+  background: linear-gradient(var(--line), #10151f);
+}
+.step-body h3 { margin-bottom: 4px; }
+.step-body > p:first-of-type { margin-top: 6px; }
+
+/* ── terminal windows: the aesthetic centre, because they are the subject ── */
+.term {
+  background: #07090f; border: 1px solid #1a2231; border-radius: 11px;
+  overflow: hidden; margin: 16px 0; box-shadow: 0 18px 44px rgba(0,0,0,.5);
+}
+.term-bar {
+  display: flex; align-items: center; gap: 7px; padding: 9px 13px;
+  background: linear-gradient(#141a26, #0e131d); border-bottom: 1px solid #1a2231;
+}
+.term-bar i { width: 10px; height: 10px; border-radius: 50%; background: #2a3348; }
+.term-bar i:nth-child(1) { background: #f4718a; }
+.term-bar i:nth-child(2) { background: #f5a623; }
+.term-bar i:nth-child(3) { background: #86efb8; }
+.term-bar span { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-left: 8px; letter-spacing: .04em; }
+.term-body { padding: 15px 17px; font-family: var(--mono); font-size: 13.5px; line-height: 1.72; overflow-x: auto; }
+.term-body .cmd { color: #e8eef8; white-space: pre; }
+.term-body .cmd::before { content: "$ "; color: var(--amber); }
+.term-body .out { color: var(--muted); white-space: pre; }
+.term-body .ok   { color: var(--mint); }
+.term-body .bad  { color: var(--rose); }
+.term-body .hi   { color: var(--cyan); }
+.cursor {
+  display: inline-block; width: 8px; height: 15px; background: var(--amber);
+  vertical-align: -2px; animation: blink 1.15s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.said { font-family: var(--mono); font-size: 12px; color: var(--dim); margin: -4px 0 0 2px; }
+
+/* ── the dashboard mock ── */
+.mock { background: #040814; border: 1px solid #1b2436; border-radius: 14px; overflow: hidden; }
+.mock-nav { display: flex; gap: 4px; padding: 0 16px; border-bottom: 1px solid #16202f; background: #060b17; }
+.mock-nav b {
+  font-size: 12.5px; font-weight: 600; color: var(--dim); padding: 13px 12px;
+  border-bottom: 2px solid transparent;
+}
+.mock-nav b.on { color: #22d3ee; border-bottom-color: #22d3ee; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 8px rgba(134,239,184,.8); }
+.mock-body { padding: 20px 18px; }
+.expo {
+  border: 1px solid rgba(245,166,35,.3); border-radius: 12px; padding: 18px 20px;
+  background: linear-gradient(180deg, rgba(245,166,35,.07), transparent);
+}
+.expo .num { font-size: clamp(22px, 3.6vw, 30px); font-weight: 750; letter-spacing: -.02em; }
+.expo .why { color: var(--muted); font-size: 13.5px; margin-top: 3px; }
+.btns { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.btn {
+  font-family: var(--sans); font-size: 13px; font-weight: 620; padding: 9px 16px;
+  border-radius: 9px; border: 1px solid var(--line); background: #101827; color: #cfd6e2;
+}
+.btn.danger { border-color: rgba(244,113,138,.5); color: var(--rose); background: rgba(244,113,138,.08); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; margin-top: 14px; }
+.tile { border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; background: #080d17; }
+.tile .l { font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); font-family: var(--mono); }
+.tile .v { font-size: 19px; font-weight: 700; margin-top: 5px; font-variant-numeric: tabular-nums; }
+.tile .v.acc { color: #22d3ee; }
+.pill {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  border-radius: 999px; padding: 3px 9px; border: 1px solid;
+}
+.pill.coarse { color: var(--amber); border-color: rgba(245,166,35,.4); background: rgba(245,166,35,.08); }
+
+/* ── figures with bars ── */
+.bars { display: grid; gap: 18px; }
+.bargroup .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 9px; }
+.bargroup .head .who { font-weight: 640; }
+.bargroup .head .verdict { font-family: var(--mono); font-size: 12px; }
+.bar { display: grid; grid-template-columns: 70px 1fr 62px; align-items: center; gap: 12px; margin: 5px 0; }
+.bar .k { font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+.bar .track { height: 15px; background: #0c1220; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.bar .fill { height: 100%; background: linear-gradient(90deg, rgba(245,166,35,.75), rgba(245,166,35,.42)); }
+.bar.under .fill { background: repeating-linear-gradient(45deg, rgba(244,113,138,.55) 0 5px, rgba(244,113,138,.22) 5px 10px); }
+.bar .amt { font-family: var(--mono); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.bar.under .amt { color: var(--rose); }
+.minline { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--rose); }
+.minline i { flex: none; width: 34px; height: 0; border-top: 2px dashed var(--rose); }
+
+/* ── sleep table ── */
+.sleep { display: grid; gap: 12px; }
+.sleep-row { display: grid; grid-template-columns: 96px 1fr; gap: 16px; align-items: center; }
+.sleep-row .os { font-weight: 660; }
+.sleep-bar { display: flex; align-items: center; gap: 12px; }
+.sleep-bar .track { height: 12px; border-radius: 4px; background: #0c1220; border: 1px solid var(--line); flex: 1; overflow: hidden; }
+.sleep-bar .fill { height: 100%; }
+.sleep-bar .secs { font-family: var(--mono); font-size: 12.5px; width: 108px; flex: none; }
+
+/* ── plain tables ── */
+.tablewrap { overflow-x: auto; margin: 20px 0; border: 1px solid var(--line); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid #131b28; vertical-align: top; }
+thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); background: #090e18; }
+tbody tr:last-child td { border-bottom: 0; }
+td:first-child { color: var(--text); font-weight: 560; white-space: nowrap; }
+td code { white-space: nowrap; }
+
+/* ── callouts ── */
+.note {
+  border-left: 2px solid var(--amber); background: rgba(245,166,35,.05);
+  padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 20px 0;
+}
+.note.warn { border-color: var(--rose); background: rgba(244,113,138,.055); }
+.note p { margin: 0; font-size: 15.5px; }
+.note p + p { margin-top: 8px; }
+
+.close { text-align: center; padding: 70px 0 84px; }
+.close .rule { width: 46px; height: 1px; background: var(--amber); margin: 0 auto 24px; }
+
+@media (max-width: 720px) {
+  body { font-size: 16px; }
+  .flow { grid-template-columns: 1fr; }
+  .link { flex-direction: row; padding: 12px 0; min-width: 0; }
+  .link .arrow { transform: rotate(90deg); }
+  .step { grid-template-columns: 34px 1fr; gap: 14px; }
+  .disc { width: 32px; height: 32px; font-size: 13px; }
+  .step:not(:last-child) .rail::after { left: 16px; top: 40px; }
+  .sleep-row { grid-template-columns: 1fr; gap: 6px; }
+  .perm-row .note { margin-left: 0; text-align: left; flex-basis: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .embers, .cursor { animation: none; }
+  .embers i { opacity: 0; }
+  .cursor { opacity: 1; }
+}
+</style>
+
+<!-- ═══════════════════════ HERO ═══════════════════════ -->
+<section class="hero">
+  <div class="embers"><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="wrap hero-inner">
+    <div class="brand">
+      <div class="brand-mark">CF</div>
+      <div class="brand-text">CRYPTO<br>FORGE</div>
+    </div>
+    <div class="eyebrow">Cascade · Setup guide</div>
+    <h1>Twenty minutes,<br>once.</h1>
+    <p class="lead">Then it runs on your computer, trades your own account, and shows you
+      exactly what it is doing. Read this all the way through before you type anything.</p>
+    <div class="facts">
+      <div class="fact"><b>No borrowing</b> — nothing can be liquidated</div>
+      <div class="fact"><b>Your exchange, your money</b></div>
+      <div class="fact"><b>One button</b> stops it</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ WHAT IT IS ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">What this actually is</div>
+    <h2>We work out the trade. Your computer places it.</h2>
+    <p>We watch the market and work out where to buy and where to sell. That is our side, and
+      it is all our side does.</p>
+    <p>This little program is your side. It sits on your computer, listens to what we worked
+      out, and places the orders on <strong>your own exchange account</strong> — in your name,
+      with your money, under your control.</p>
+  </div>
+
+  <div class="wide figure">
+    <div class="flow">
+      <div class="node ours">
+        <div class="tag">Our side</div>
+        <h3>CryptoForge</h3>
+        <p>Reads the market and works out the shape of a fall: where to buy, in what steps,
+          and where to sell.</p>
+      </div>
+      <div class="link signal">
+        <div class="arrow">──▸</div>
+        <div class="what">the signal<br>(numbers only)</div>
+      </div>
+      <div class="node yours">
+        <div class="tag">Your side</div>
+        <h3>This program</h3>
+        <p>Runs on your computer. Turns the signal into orders sized to your money, and looks
+          after them until they close.</p>
+      </div>
+      <div class="link orders">
+        <div class="arrow">──▸</div>
+        <div class="what">your orders</div>
+      </div>
+      <div class="node money">
+        <div class="tag">Your side</div>
+        <h3>Your exchange</h3>
+        <p>Binance or CoinDCX, in your name. Your coins and your cash never leave it.</p>
+      </div>
+    </div>
+    <div class="barrier">
+      <div class="lbl">Never crosses back</div>
+      <p>Your money, your balance, your orders, your profit and loss. We never receive any of
+        it — there is nowhere in the signal for it to travel. All we hold about you is your
+        public ID, when you connect, and whether you have paid.</p>
+    </div>
+    <div class="caption">If you stop paying, the signal stops arriving. That is the whole of what we can do to you.</div>
+  </div>
+
+  <div class="wrap">
+    <div class="panel">
+      <h3>Three things worth knowing up front</h3>
+      <p><strong>No borrowing.</strong> This buys coins with money you already have. There is
+        no margin call and no liquidation. The worst case is holding a coin worth less than
+        you paid.</p>
+      <p><strong>It runs on your computer, not ours.</strong> While it is off, it is not doing
+        anything. There is a section below on exactly what that means.</p>
+      <p><strong>You can stop it any time</strong>, with one button, and it will never walk
+        away from something you already own.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ WHAT YOU NEED ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Before you start</div>
+    <h2>What you will need</h2>
+    <div class="tablewrap">
+      <table>
+        <tbody>
+          <tr><td>A computer</td><td>That can stay switched on while you are trading. A laptop is fine — see <em>Closing the lid</em> below.</td></tr>
+          <tr><td>An exchange account</td><td>Binance or CoinDCX, with at least <strong>$1,000</strong> in it as USDT. There is a section on why that number below.</td></tr>
+          <tr><td>Twenty minutes</td><td>Once. You will not have to do this again.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>You do not need to know how to program. You will be copying lines from this page and
+      pressing Enter. That is genuinely all it is.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ API KEYS ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">First, the important bit</div>
+    <h2>One unticked box is most of your safety.</h2>
+    <p>At some point you will create something on your exchange called an <em>API key</em>. It
+      sounds alarming. It is not, if you set it up the way below.</p>
+    <p>Think of it as a spare car key that starts the engine but does not open the boot. It lets
+      this program buy and sell on your account — and nothing else.</p>
+    <p>When your exchange asks what the key is allowed to do:</p>
+
+    <div class="panel figure">
+      <div class="perm">
+        <div class="perm-row">
+          <div class="sw on"></div>
+          <div class="name">Spot trading</div>
+          <div class="note">Tick this. It is what the program does.</div>
+        </div>
+        <div class="perm-row no">
+          <div class="sw off"></div>
+          <div class="name">Withdrawals</div>
+          <div class="note">Leave off. Always. For anything.</div>
+        </div>
+        <div class="perm-row no">
+          <div class="sw off"></div>
+          <div class="name">Futures, margin, lending</div>
+          <div class="note">Leave off. The program never uses them.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note warn">
+      <p>A key that cannot withdraw <strong>cannot take money out of your account</strong>. Not
+        by us, not by a thief, not by a bug in anyone's software. That one box costs you nothing
+        and removes the only genuinely bad outcome.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ THE STEPS ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Nine steps, in order</div>
+    <h2>Setting it up</h2>
+    <p>Each step is one line you paste and one thing you should see back. If a step does not
+      look right, stop there — the next one will not fix it.</p>
+  </div>
+
+  <div class="wrap" style="margin-top:34px">
+    <div class="steps">
+
+      <!-- 1 -->
+      <div class="step">
+        <div class="rail"><div class="disc">1</div></div>
+        <div class="step-body">
+          <h3>Open the black window</h3>
+          <p>Everything happens in a program already on your computer, where you type a line and
+            press Enter.</p>
+          <p><strong>On a Mac:</strong> press <code>Cmd + Space</code>, type <code>Terminal</code>,
+            press Enter.<br>
+            <strong>On Windows:</strong> click Start, type <code>PowerShell</code>, press Enter.</p>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><span class="out">Last login: Tue Aug  4 18:20 on ttys002</span>
+<div class="cmd"><span class="cursor"></span></div></div>
+          </div>
+          <p class="said">A blinking cursor. Nothing you type here can break your computer.</p>
+        </div>
+      </div>
+
+      <!-- 2 -->
+      <div class="step">
+        <div class="rail"><div class="disc">2</div></div>
+        <div class="step-body">
+          <h3>Check you have Python</h3>
+          <p>Python is the language this program is written in. Macs usually have it already.</p>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><div class="cmd">python3 --version</div><span class="out ok">Python 3.11.0</span></div>
+          </div>
+          <p>Any number <strong>3.11 or higher</strong> and you are set. If it says it cannot
+            find it, go to <em>python.org/downloads</em>, click the big yellow button, install it,
+            then close and reopen the black window and try again.</p>
+          <div class="note">
+            <p><strong>Windows:</strong> everywhere below says <code>python3</code>. On Windows,
+              type <code>python</code> instead. That one word is the only difference.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3 -->
+      <div class="step">
+        <div class="rail"><div class="disc">3</div></div>
+        <div class="step-body">
+          <h3>Go to the folder we sent you</h3>
+          <p>We will have sent you a folder called <code>executor</code>. Put it somewhere you
+            will remember — your Desktop is perfectly fine.</p>
+          <p>Now tell the black window where it is. Type <code>cd</code> and a space, then
+            <strong>drag the folder that contains <code>executor</code> straight into the
+            window</strong>. It fills in the location for you. Press Enter.</p>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><div class="cmd">cd ~/Desktop</div></div>
+          </div>
+          <p class="said">On a Mac with the folder on your Desktop, that line works as-is.</p>
+        </div>
+      </div>
+
+      <!-- 4 -->
+      <div class="step">
+        <div class="rail"><div class="disc">4</div></div>
+        <div class="step-body">
+          <h3>Install the four pieces it needs</h3>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><div class="cmd">python3 -m pip install -r executor/requirements.txt</div><span class="out">Collecting cryptography&gt;=42
+Collecting httpx&gt;=0.27
+Collecting requests&gt;=2.31
+Collecting websockets&gt;=12
+</span><span class="out ok">Successfully installed cryptography httpx requests websockets</span></div>
+          </div>
+          <p>Four small, standard, widely used pieces of software. It prints a lot of text —
+            wait for the cursor to come back.</p>
+        </div>
+      </div>
+
+      <!-- 5 -->
+      <div class="step">
+        <div class="rail"><div class="disc">5</div></div>
+        <div class="step-body">
+          <h3>Create your ID and send it to us</h3>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><div class="cmd">python3 -m executor --register</div><span class="out hi">XCmGM01hy/L0EN8qqmpQ+GID4IMG9p2Upu67jXIR4ZQ=</span></div>
+          </div>
+          <p><strong>Copy that line of nonsense and email it to us</strong>, with the name you
+            would like to be known by.</p>
+          <p>What just happened: your computer made itself a pair of matching keys, like a lock
+            and its key. It kept the private one and printed the public one. The public one is
+            what you just sent — it is how we recognise you, and it is useless to anybody else.
+            The private one never leaves your computer, and we never have it, so there is nothing
+            on our side that could be stolen and used to pretend to be you.</p>
+          <div class="note">
+            <p>We will email you back <strong>two things</strong>: a short name (your
+              <em>buyer ID</em>) and another line of nonsense (the <em>root key</em>). You need
+              both for the next step, so wait for that email before carrying on.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6 -->
+      <div class="step">
+        <div class="rail"><div class="disc">6</div></div>
+        <div class="step-body">
+          <h3>Fill in your details</h3>
+          <p>Make yourself a settings file, then open it:</p>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><div class="cmd">mkdir -p ~/.cascade-executor</div><div class="cmd">python3 -m executor --sample-config &gt; ~/.cascade-executor/config.json</div><div class="cmd">open -e ~/.cascade-executor/config.json</div></div>
+          </div>
+          <p class="said">On Windows, the last line is: notepad $HOME\.cascade-executor\config.json</p>
+          <p>A file opens. Change the parts to the right of each colon, keeping the quote marks
+            exactly where they are:</p>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>config.json</span></div>
+            <div class="term-body"><span class="out">{
+  "server_url": <span class="hi">"https://crypto.philforge.in"</span>,
+  "buyer_id": <span class="hi">"buyer-your-name"</span>,
+  "root_public_key": <span class="hi">"(the long line we emailed you)"</span>,
+  "exchange": <span class="hi">"binance"</span>,
+  "capital_usd": <span class="hi">3000</span>,
+  "symbols": [],
+  "tick_seconds": 20
+}</span></div>
+          </div>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>Line</th><th>What to put</th></tr></thead>
+              <tbody>
+                <tr><td>server_url</td><td>Leave exactly as it is.</td></tr>
+                <tr><td>buyer_id</td><td>The short name we emailed you.</td></tr>
+                <tr><td>root_public_key</td><td>The long line we emailed you. This is how your computer checks a signal really came from us, and not from someone pretending to be us.</td></tr>
+                <tr><td>exchange</td><td><code>binance</code> or <code>coindcx</code> — whichever you use.</td></tr>
+                <tr><td>capital_usd</td><td><strong>The money you are putting behind this</strong>, in dollars.</td></tr>
+                <tr><td>symbols</td><td>Leave as <code>[]</code>, which means "follow everything".</td></tr>
+                <tr><td>tick_seconds</td><td>Leave at <code>20</code>.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="note">
+            <p><strong>About that capital figure.</strong> It is not a safety limit you probably
+              will not reach. It is the number every order size is worked out from. Put 3000 and
+              it trades as though it has $3,000. Put your real figure.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7 -->
+      <div class="step">
+        <div class="rail"><div class="disc">7</div></div>
+        <div class="step-body">
+          <h3>Give it your exchange keys</h3>
+          <p>On your exchange, create an API key with <strong>trading ticked and withdrawals not
+            ticked</strong> — the section above. Copy the two long strings it gives you, usually
+            called the <em>key</em> and the <em>secret</em>.</p>
+          <p>Open your settings file again and add them as two extra lines just before the closing
+            brace. Mind the comma at the end of the line above them:</p>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>config.json</span></div>
+            <div class="term-body"><span class="out">  "tick_seconds": 20<span class="bad">,</span>
+  <span class="hi">"api_key": "paste the key here",</span>
+  <span class="hi">"api_secret": "paste the secret here"</span>
+}</span></div>
+          </div>
+          <div class="note warn">
+            <p><strong>From now on that file has your exchange keys in it.</strong> Do not email
+              it, do not paste it into a chat, do not screenshot it.</p>
+            <p>If you ever need to send us something to sort out a problem, use step 8 instead —
+              it prints the same information with the secret parts blanked out, safe to send to
+              anyone.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 8 -->
+      <div class="step">
+        <div class="rail"><div class="disc">8</div></div>
+        <div class="step-body">
+          <h3>Test it, without trading anything</h3>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><div class="cmd">python3 -m executor --check</div><span class="out">Public key to register: XCmGM01hy/L0EN8qqmpQ+GID4IMG…
+
+</span><span class="out ok">PASS  Key set: verified against your root key, 1 active signing key(s)
+PASS  Exchange: reachable, 3,142.88 USDT free
+PASS  Feed: connected and snapshotted, 2 campaign(s) following</span><span class="out">
+
+All good. Nothing was placed.</span></div>
+          </div>
+          <p>This buys nothing and sells nothing. It checks the three things that have to be
+            right, and tells you about all of them at once so you are not fixing one problem at a
+            time. If one says <span style="color:var(--rose)">FAIL</span>:</p>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>It says</th><th>Almost always means</th></tr></thead>
+              <tbody>
+                <tr><td>FAIL Key set</td><td>The root key got copied wrong — a missing character, or a space on the end. If it says <code>could not fetch</code> instead of anything about your key, that one is our end, not yours. Tell us.</td></tr>
+                <tr><td>FAIL Exchange</td><td>The exchange key or secret got copied wrong, or trading was not ticked when you made the key. The exchange's own words follow it.</td></tr>
+                <tr><td>FAIL Feed</td><td><code>not entitled</code> means we have not registered you yet, or your subscription has run out. Email us — trying again will not fix it.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Do not go past this step until all three say <span style="color:var(--mint)">PASS</span>.</p>
+        </div>
+      </div>
+
+      <!-- 9 -->
+      <div class="step">
+        <div class="rail"><div class="disc">9</div></div>
+        <div class="step-body">
+          <h3>Start it</h3>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+            <div class="term-body"><div class="cmd">python3 -m executor</div><span class="out">Cascade executor — binance, $3,000
+
+</span><span class="out hi">[connected] {"buyer_id": "buyer-your-name"}
+[synced] {"campaigns": 2}</span><span class="out">
+Following SOLUSDT — waiting for the fall to reach the first step.
+</span><div class="cmd"><span class="cursor"></span></div></div>
+          </div>
+          <p><strong>Leave that window open.</strong> Closing it stops the program. Now open your
+            web browser and go to:</p>
+          <p style="font-family:var(--mono);font-size:19px;color:var(--cyan);letter-spacing:.02em">http://127.0.0.1:7757</p>
+          <p>That is your dashboard. It comes from your own computer, not from the internet, and
+            nobody else can open it — not us, not somebody on your wifi.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ THE DASHBOARD ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Your dashboard</div>
+    <h2>One number tells you the whole risk.</h2>
+    <p>It is the biggest thing on the screen, and that is deliberate.</p>
+  </div>
+
+  <div class="wide figure">
+    <div class="mock">
+      <div class="mock-nav">
+        <b>Home</b><b class="on"><span class="dot"></span>Console</b><b>Campaigns</b><b>Rounds</b><b>Setup</b>
+      </div>
+      <div class="mock-body">
+        <div class="expo">
+          <div class="num">If this machine stops now, at most <span style="color:var(--amber)">$412.50</span> can fill unwatched.</div>
+          <div class="why">One buy order is resting at 169.36 on SOLUSDT.</div>
+        </div>
+        <div class="btns">
+          <button class="btn danger">Stand down</button>
+          <button class="btn">Pause opening</button>
+        </div>
+        <div class="tiles">
+          <div class="tile"><div class="l">Signal</div><div class="v acc">Following</div></div>
+          <div class="tile"><div class="l">Following</div><div class="v">2</div></div>
+          <div class="tile"><div class="l">Capital</div><div class="v">$3,000</div></div>
+          <div class="tile"><div class="l">Uptime</div><div class="v">6.2h</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="caption">Your own computer serves this page. Nothing about it is on the internet.</div>
+  </div>
+
+  <div class="wrap">
+    <p>Here is what that number means. At any moment there is at most <strong>one</strong> buy
+      order sitting out at the exchange, waiting for the price to come down to it. If your
+      computer dies right now — power cut, cat on the keyboard — that one order could still go
+      through while nobody is watching, and you would own that coin until you start the program
+      again. The number tells you exactly how much that is.</p>
+    <p>When it says <strong>"Nothing can fill while this machine is away"</strong>, there is no
+      order waiting, and you can shut the lid without a second thought.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Button</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Stand down</td><td>Cancels every buy order right now, and leaves every sell order in place protecting what you already own. This is the "I have to go and I do not want to think about it" button.</td></tr>
+          <tr><td>Pause opening</td><td>Stops it starting anything new, while letting everything already running finish normally.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Neither of them ever walks away from something you own. Nothing in this program will
+      cancel a sell order that is protecting a coin you are holding.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ HOW IT BUYS ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">What it is actually doing</div>
+    <h2>It buys a fall in steps, not in one go.</h2>
+    <p>When a fall begins, the program does not buy at the top of it. It works out three prices
+      on the way down and puts a portion of the money at each one — a little at the first, more
+      at the second, most at the deepest. If the price only reaches the first step, that is all
+      it buys.</p>
+  </div>
+
+  <div class="wide figure">
+    <div class="panel" style="padding:16px">
+      <div style="overflow-x:auto">
+        <svg viewBox="0 0 900 400" width="100%" style="min-width:620px;display:block" role="img"
+             aria-label="A falling price with three buy steps beneath it, an average price, and a sell target a quarter of the way back up.">
+          <defs>
+            <linearGradient id="fadeAmber" x1="0" x2="1">
+              <stop offset="0" stop-color="#f5a623" stop-opacity=".55"/>
+              <stop offset="1" stop-color="#f5a623" stop-opacity=".12"/>
+            </linearGradient>
+          </defs>
+
+          <!-- plot frame -->
+          <line x1="60" y1="372" x2="700" y2="372" stroke="#1d2637"/>
+
+          <!-- mother high -->
+          <line x1="60" y1="54" x2="700" y2="54" stroke="#f5a623" stroke-width="1.4" stroke-dasharray="7 5"/>
+          <text x="712" y="50" fill="#f5a623" font-family="ui-monospace,Menlo,monospace" font-size="12">the high it fell from</text>
+          <text x="712" y="66" fill="#5d6779" font-family="ui-monospace,Menlo,monospace" font-size="12">178.42</text>
+
+          <!-- rungs -->
+          <line x1="60" y1="135" x2="700" y2="135" stroke="#8ee9f2" stroke-opacity=".45" stroke-dasharray="4 5"/>
+          <line x1="60" y1="197" x2="700" y2="197" stroke="#8ee9f2" stroke-opacity=".45" stroke-dasharray="4 5"/>
+          <line x1="60" y1="322" x2="700" y2="322" stroke="#8ee9f2" stroke-opacity=".45" stroke-dasharray="4 5"/>
+
+          <g font-family="ui-monospace,Menlo,monospace" font-size="12" fill="#8ee9f2">
+            <text x="62" y="129">step 1 · 20% of the money · 169.36</text>
+            <text x="62" y="191">step 2 · 30% of the money · 162.32</text>
+            <text x="62" y="316">step 3 · 50% of the money · 148.24</text>
+          </g>
+
+          <!-- average and target -->
+          <line x1="60" y1="247" x2="700" y2="247" stroke="#b4a8ef" stroke-width="1.3"/>
+          <text x="712" y="243" fill="#b4a8ef" font-family="ui-monospace,Menlo,monospace" font-size="12">your average buy</text>
+          <text x="712" y="259" fill="#5d6779" font-family="ui-monospace,Menlo,monospace" font-size="12">156.69</text>
+
+          <line x1="60" y1="199" x2="700" y2="199" stroke="#86efb8" stroke-width="1.6"/>
+          <text x="712" y="195" fill="#86efb8" font-family="ui-monospace,Menlo,monospace" font-size="12">it sells here</text>
+          <text x="712" y="211" fill="#5d6779" font-family="ui-monospace,Menlo,monospace" font-size="12">162.12</text>
+
+          <g id="candles"></g>
+        </svg>
+      </div>
+    </div>
+    <div class="caption">A real set of levels, from a real fall. Buying lower three times pulls your average
+      down to 156.69 — so the price only has to come back a quarter of the way for the round to close.</div>
+  </div>
+
+  <div class="wrap">
+    <p>That is the whole idea: your average price improves as the fall deepens, so the price
+      does not have to recover all the way for you to be out. The sell order goes in
+      automatically as soon as there is something to protect, and it is a real order sitting at
+      your exchange — not a reminder on your screen.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ WHY $1,000 ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">The minimum</div>
+    <h2>Why it asks for $1,000.</h2>
+    <p>Exchanges refuse orders below a minimum size — often about $5 to $10, depending on the
+      coin. Each of those three steps is a separate order, and the first one is the smallest.</p>
+    <p>So below a certain point, the early steps come out under the exchange's minimum and get
+      rejected, and you only ever get the deepest one. That is a completely different strategy
+      from the one you are paying for.</p>
+  </div>
+
+  <div class="wide figure">
+    <div class="panel">
+      <div class="bars">
+
+        <div class="bargroup">
+          <div class="head">
+            <span class="who">With $3,000 behind it</span>
+            <span class="verdict" style="color:var(--mint)">all three steps go in</span>
+          </div>
+          <div class="bar"><span class="k">step 1</span><span class="track"><span class="fill" style="width:32%"></span></span><span class="amt">$24</span></div>
+          <div class="bar"><span class="k">step 2</span><span class="track"><span class="fill" style="width:48%"></span></span><span class="amt">$36</span></div>
+          <div class="bar"><span class="k">step 3</span><span class="track"><span class="fill" style="width:80%"></span></span><span class="amt">$60</span></div>
+        </div>
+
+        <div class="bargroup">
+          <div class="head">
+            <span class="who">With $1,000 behind it</span>
+            <span class="verdict" style="color:var(--amber)">the first step gets skipped</span>
+          </div>
+          <div class="bar under"><span class="k">step 1</span><span class="track"><span class="fill" style="width:10.7%"></span></span><span class="amt">$8</span></div>
+          <div class="bar"><span class="k">step 2</span><span class="track"><span class="fill" style="width:16%"></span></span><span class="amt">$12</span></div>
+          <div class="bar"><span class="k">step 3</span><span class="track"><span class="fill" style="width:26.7%"></span></span><span class="amt">$20</span></div>
+        </div>
+
+        <div class="bargroup">
+          <div class="head">
+            <span class="who">With $500 behind it</span>
+            <span class="verdict" style="color:var(--rose)">refused — only the deepest step is left</span>
+          </div>
+          <div class="bar under"><span class="k">step 1</span><span class="track"><span class="fill" style="width:5.3%"></span></span><span class="amt">$4</span></div>
+          <div class="bar under"><span class="k">step 2</span><span class="track"><span class="fill" style="width:8%"></span></span><span class="amt">$6</span></div>
+          <div class="bar under"><span class="k">step 3</span><span class="track"><span class="fill" style="width:13.3%"></span></span><span class="amt">$10</span></div>
+        </div>
+
+      </div>
+      <div class="minline"><i></i> the exchange will not accept an order under about $11</div>
+    </div>
+    <div class="caption">Example figures for one fall. The proportions are what matter: every step scales
+      straight up and down with the money behind it, so halving your capital halves every bar.</div>
+  </div>
+
+  <div class="wrap">
+    <p>Between <strong>$1,000 and $3,000</strong> it works, but on smaller falls some early
+      steps still land under the minimum, so it buys in fewer and deeper chunks than the signal
+      describes. Your dashboard marks those with a
+      <span class="pill coarse">coarse</span> tag so you always know which ones. Above $3,000,
+      every step lands as intended.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ SLEEP ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Going away</div>
+    <h2>Closing the lid.</h2>
+    <p><strong>If you shut it down properly</strong> — click into the black window and press
+      <code>Ctrl + C</code>, or press Stand down first — it cancels the waiting buy orders,
+      makes sure everything you own has a sell order protecting it, and writes down where it got
+      to. Give it a few seconds to finish.</p>
+    <p><strong>If you just close the laptop lid</strong>, your computer gives the program a few
+      seconds' warning before it sleeps, and it spends them doing that same tidy-up. How many
+      seconds depends on the computer, and it is worth knowing which one you have:</p>
+  </div>
+
+  <div class="wide figure">
+    <div class="panel">
+      <div class="sleep">
+        <div class="sleep-row">
+          <div class="os">Mac</div>
+          <div class="sleep-bar">
+            <span class="track"><span class="fill" style="width:100%;background:linear-gradient(90deg,rgba(134,239,184,.75),rgba(134,239,184,.3))"></span></span>
+            <span class="secs" style="color:var(--mint)">~30 seconds</span>
+          </div>
+        </div>
+        <div class="sleep-row">
+          <div class="os">Linux</div>
+          <div class="sleep-bar">
+            <span class="track"><span class="fill" style="width:17%;background:linear-gradient(90deg,rgba(245,166,35,.8),rgba(245,166,35,.35))"></span></span>
+            <span class="secs" style="color:var(--amber)">~5 seconds</span>
+          </div>
+        </div>
+        <div class="sleep-row">
+          <div class="os">Windows</div>
+          <div class="sleep-bar">
+            <span class="track"><span class="fill" style="width:7%;background:linear-gradient(90deg,rgba(244,113,138,.85),rgba(244,113,138,.4))"></span></span>
+            <span class="secs" style="color:var(--rose)">~2 seconds</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="caption">Plenty · enough · not enough.</div>
+  </div>
+
+  <div class="wrap">
+    <p><strong>On a Mac</strong> there is time to spare, and it also quietly stops your Mac
+      dozing off on its own while an order is waiting — and stops doing that the moment nothing
+      is waiting, so it never keeps your laptop awake for no reason.</p>
+    <p><strong>On Windows</strong>, two seconds is not enough to cancel an order and be sure it
+      worked. So treat that big number on your dashboard as the real thing, and press
+      <strong>Stand down</strong> before you close the lid.</p>
+    <div class="note">
+      <p>No software can stop a laptop lid from closing. What this program gets is a few seconds
+        to react — never a veto — so it is built around using those seconds well, not around
+        keeping your computer awake.</p>
+    </div>
+    <p><strong>When you come back</strong>, it asks your exchange what actually happened while it
+      was away, puts a sell order on anything you turn out to be holding, and shows you what
+      changed. It will not start anything new until you click
+      <em>"I've reviewed — resume trading"</em>. That is deliberate: a program that has been away
+      does not get to guess.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ WHEN IT STOPS ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Without you asking</div>
+    <h2>When it stops trading on its own</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>What happened</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Your subscription runs out</td><td>It stops receiving new signals. <strong>Anything you already own is still looked after and still sold at its target.</strong> It will not leave you holding something.</td></tr>
+          <tr><td>You start a second copy</td><td>The newest one carries on, the older one steps aside and says so.</td></tr>
+          <tr><td>Your wifi drops</td><td>It reconnects by itself. Being disconnected does not mean it has forgotten what you own.</td></tr>
+          <tr><td>A signal does not add up</td><td>It drops that one trade and tells you. Real money goes nowhere near numbers that do not check out.</td></tr>
+          <tr><td>A move started over 5 minutes ago</td><td>It skips it. These trades only make sense from their beginning; joining halfway down is a different and worse idea.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ SUPPORT + PRIVACY ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">If something looks wrong</div>
+    <h2>Send us this.</h2>
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+      <div class="term-body"><div class="cmd">python3 -m executor --check</div><span class="out">Config:
+{
+  "server_url": "https://crypto.philforge.in",
+  "buyer_id": "buyer-your-name",
+  "exchange": "binance",
+  "capital_usd": 3000.0,
+  "api_key": <span class="hi">"…1234"</span>,
+  "api_secret": <span class="hi">"(set)"</span>
+}</span></div>
+    </div>
+    <p>It blanks out your secret automatically, so the whole thing is safe to send to anyone —
+      and it is nearly always enough for us to tell you what is wrong.</p>
+
+    <div class="eyebrow" style="margin-top:44px">What we can see about you</div>
+    <h2>Three things, and that is the list.</h2>
+    <p>Your public line of nonsense from step 5. When your program connects and disconnects.
+      Whether you have paid.</p>
+    <p>We do not have your exchange keys, so we cannot see your balance or your trades. We never
+      receive what you bought or sold, so we do not know whether you are up or down. There is no
+      place in the signal we send you for any of that to travel — which is enforced by our
+      software, not just promised on this page.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ CLOSE ═══════════════════════ -->
+<section class="close">
+  <div class="wrap">
+    <div class="rule"></div>
+    <div class="eyebrow">The honest version</div>
+    <h2>The risk, stated plainly.</h2>
+    <p class="lead">This program trades from your computer. If your computer stops, an order that
+      was waiting may still go through, and you would own that coin until your computer comes
+      back.</p>
+    <p>It cannot be sold out from under you — you are buying with your own money, not borrowed —
+      and the most that can happen unwatched is the one order shown on your dashboard. That risk
+      is small, and bounded, and it is not zero. Anyone who tells you their trading software has
+      no such gap is either not thinking about it, or not telling you.</p>
+  </div>
+</section>
+
+<script>
+/* The candles on the ladder figure. Drawn here rather than hand-authored so
+   every body and wick lands on the same price scale as the level lines above
+   them — a chart whose candles disagree with its own levels would be worse
+   than no chart. If this never runs, the figure still reads: the levels, the
+   average and the target are all in the markup. */
+(function () {
+  var g = document.getElementById("candles");
+  if (!g) return;
+
+  var TOP = 180, BOTTOM = 144, Y0 = 40, H = 320;          // price → pixels
+  var y = function (p) { return Y0 + (TOP - p) * (H / (TOP - BOTTOM)); };
+
+  // open, high, low, close — a fall from 178.42 that reaches 148.24 and turns.
+  var bars = [
+    [177.9, 178.42, 177.1, 177.4], [177.4, 177.8, 176.2, 176.5],
+    [176.5, 176.9, 174.8, 175.0],  [175.0, 175.4, 172.1, 172.4],
+    [172.4, 172.8, 169.0, 169.3],  [169.3, 170.6, 168.2, 168.6],
+    [168.6, 169.1, 165.4, 165.7],  [165.7, 166.2, 161.9, 162.1],
+    [162.1, 163.4, 160.8, 161.2],  [161.2, 161.6, 156.3, 156.6],
+    [156.6, 157.2, 151.4, 151.8],  [151.8, 152.3, 148.24, 149.1],
+    [149.1, 153.0, 148.9, 152.6],  [152.6, 157.4, 152.2, 157.0],
+    [157.0, 161.0, 156.4, 160.6],  [160.6, 163.2, 160.1, 162.4]
+  ];
+
+  var x0 = 92, step = 37, w = 15;
+  bars.forEach(function (b, i) {
+    var cx = x0 + i * step;
+    var up = b[3] >= b[0];
+    var colour = up ? "#86efb8" : "#f4718a";
+    var wick = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    wick.setAttribute("x1", cx); wick.setAttribute("x2", cx);
+    wick.setAttribute("y1", y(b[1])); wick.setAttribute("y2", y(b[2]));
+    wick.setAttribute("stroke", colour); wick.setAttribute("stroke-opacity", ".7");
+    g.appendChild(wick);
+
+    var top = Math.min(y(b[0]), y(b[3]));
+    var body = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    body.setAttribute("x", cx - w / 2); body.setAttribute("y", top);
+    body.setAttribute("width", w);
+    body.setAttribute("height", Math.max(Math.abs(y(b[0]) - y(b[3])), 1.5));
+    body.setAttribute("fill", colour); body.setAttribute("fill-opacity", up ? ".55" : ".45");
+    body.setAttribute("stroke", colour); body.setAttribute("stroke-opacity", ".8");
+    g.appendChild(body);
+  });
+})();
+</script>
