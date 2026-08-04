@@ -416,7 +416,7 @@ def build_envelope(
 # never publish it by accident.
 
 
-def campaign_opened_payload(campaign: dict, *, advisory: Optional[dict] = None) -> dict:
+def campaign_opened_payload(campaign: dict, *, advisory: Optional[dict] = None, default_exchange: str = "") -> dict:
     """
     The only message that may start a follower campaign.
 
@@ -424,10 +424,23 @@ def campaign_opened_payload(campaign: dict, *, advisory: Optional[dict] = None) 
     must re-fetch these from its own exchangeInfo and prefer its own values —
     filters change, and an order rejected on a stale tick size is its problem
     to prevent, not ours to cause.
+
+    **`exchange` names whose candles this geometry was drawn from**, and it is
+    published even though it sounds account-ish, because it is not: it names a
+    public data source, which is exactly as public as the candles themselves.
+    Binance SOLUSDT and CoinDCX SOLUSDT are not the same series. Without it
+    `symbol` silently implies "yours", and an executor cross-checking our
+    levels against its own candles would find small mismatches with nothing to
+    explain them. A follower trading a different venue from the one the fib was
+    drawn on should be told, not left to infer it.
+
+    The engine stores "" for "the venue this engine was started with", so the
+    caller passes the resolved default — a bare "" would tell a buyer nothing.
     """
     payload = {
         "campaign_id": campaign.get("campaign_id"),
         "symbol": campaign.get("symbol"),
+        "exchange": str(campaign.get("exchange") or default_exchange or "").lower(),
         "created_at": epoch_from_ist(campaign.get("created_at")),
         "mother_high": campaign.get("mother_high"),
         "mother_low": campaign.get("mother_low"),
@@ -756,6 +769,7 @@ def build_snapshot(
     model_version: int,
     head_by_symbol: Dict[str, int],
     publish_modes: Iterable[str] = ("live",),
+    default_exchange: str = "",
 ) -> List[dict]:
     """
     Current geometry for everything running, as signed frames — so a cold
@@ -788,7 +802,12 @@ def build_snapshot(
             continue
         symbol = campaign.get("symbol") or ""
         campaign_id = campaign.get("campaign_id") or ""
-        emit("campaign.opened", symbol, campaign_id, campaign_opened_payload(campaign))
+        emit(
+            "campaign.opened",
+            symbol,
+            campaign_id,
+            campaign_opened_payload(campaign, default_exchange=default_exchange),
+        )
         for trendline in campaign.get("trendlines") or []:
             emit("trendline.set", symbol, campaign_id, trendline_set_payload(trendline))
         legs = campaign.get("legs") or []
@@ -830,12 +849,14 @@ class CascadeFeedPublisher:
         *,
         model_version: int,
         publish_modes: Iterable[str] = ("live",),
+        default_exchange: str = "",
         on_error: Optional[Callable[[str, Exception], None]] = None,
         now_fn: Callable[[], float] = time.time,
     ):
         self._log = log
         self._signer = signer
         self._model_version = int(model_version)
+        self._default_exchange = default_exchange
         # Paper campaigns are real geometry but they are not money we stand
         # behind. A buyer following one is being sold a rehearsal.
         self._modes = {str(mode).lower() for mode in publish_modes}
@@ -869,7 +890,14 @@ class CascadeFeedPublisher:
         if seen is None:
             seen = {"state": None, "trendlines": {}, "legs": {}, "closed": False}
             self._seen[campaign_id] = seen
-            frames.append(self._emit("campaign.opened", symbol, campaign_id, campaign_opened_payload(campaign)))
+            frames.append(
+                self._emit(
+                    "campaign.opened",
+                    symbol,
+                    campaign_id,
+                    campaign_opened_payload(campaign, default_exchange=self._default_exchange),
+                )
+            )
 
         for trendline in campaign.get("trendlines") or []:
             tl_id = trendline.get("trendline_id")

@@ -472,9 +472,19 @@ optimization that can be subtly wrong. Take the boring one.
 
 - **Snapshot delivery under load.** A cold executor asks for full geometry on
   every running campaign. Fine at our scale; needs a bound before it isn't.
-- **Which venue the geometry came from.** Campaigns are gaining an `exchange`
-  field. `symbol` alone does not say whose candles a fib was drawn on, and
-  Binance SOLUSDT and CoinDCX SOLUSDT are not the same series. Unpublished for
-  now, which is the safe default; decide before a second venue goes live.
 - **The executor itself.** Everything above is the server half. Nothing has
   been built that connects to it and trades.
+
+## Which venue the geometry came from
+
+`campaign.opened` carries `exchange`. It sounds account-specific and is not: it
+names a public data source, which is exactly as public as the candles. Binance
+SOLUSDT and CoinDCX SOLUSDT are not the same series, and without this field
+`symbol` silently implies "yours" — an executor cross-checking our levels
+against its own candles would find small mismatches with nothing to explain
+them.
+
+The engine stores `""` for "the venue this engine was started with", so the
+publisher resolves it before it goes out; a bare `""` on the wire would tell a
+buyer nothing. An executor trading a different venue from the one named should
+say so plainly in its UI rather than leave the buyer to infer it.

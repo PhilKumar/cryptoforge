@@ -7628,6 +7628,10 @@ def _get_cascade_feed_publisher():
             FeedLog(_get_state_store()),
             signer,
             model_version=CASCADE_MODEL_VERSION,
+            # A campaign stores "" for "the venue this engine was started with".
+            # Resolve it here: a bare "" on the wire would tell a buyer nothing
+            # about whose candles the geometry was drawn from.
+            default_exchange=_active_broker_name(),
             on_error=lambda what, exc: _logger.error("[FEED] %s failed: %s", what, exc),
         )
         _logger.info("[FEED] publishing under kid %s", kid)
@@ -7707,7 +7711,11 @@ async def cascade_feed_stream(ws: WebSocket):
             }
         )
         for frame in build_snapshot(
-            campaigns, publisher._signer, model_version=CASCADE_MODEL_VERSION, head_by_symbol=heads
+            campaigns,
+            publisher._signer,
+            model_version=CASCADE_MODEL_VERSION,
+            head_by_symbol=heads,
+            default_exchange=_active_broker_name(),
         ):
             await ws.send_json({"type": "snapshot", "frame": frame})
         await ws.send_json({"type": "snapshot.end", "heads": heads})

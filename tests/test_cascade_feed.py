@@ -889,3 +889,43 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(
             build_snapshot([campaign.to_dict()], self.signer, model_version=MODEL_VERSION, head_by_symbol={}), []
         )
+
+
+class VenueTests(unittest.TestCase):
+    """Whose candles a fib was drawn on. Binance SOLUSDT is not CoinDCX SOLUSDT."""
+
+    def test_the_campaigns_own_venue_is_published(self):
+        campaign = _loaded_campaign()
+        campaign.exchange = "coindcx"
+        payload = campaign_opened_payload(campaign.to_dict(), default_exchange="binance")
+        self.assertEqual(payload["exchange"], "coindcx")
+
+    def test_a_blank_venue_resolves_to_the_engines_default(self):
+        """The engine stores "" for "wherever this engine points". A bare ""
+        on the wire would tell a buyer nothing at all."""
+        campaign = _loaded_campaign()
+        self.assertEqual(campaign.to_dict()["exchange"], "")
+        payload = campaign_opened_payload(campaign.to_dict(), default_exchange="binance")
+        self.assertEqual(payload["exchange"], "binance")
+
+    def test_the_snapshot_names_the_venue_too(self):
+        signer = FeedSigner.generate("cf-feed-2026a")
+        campaign = _loaded_campaign()
+        frames = build_snapshot(
+            [campaign.to_dict()],
+            signer,
+            model_version=MODEL_VERSION,
+            head_by_symbol={"SOLUSDT": 1},
+            default_exchange="binance",
+        )
+        opened = verify_frame(frames[0], {signer.kid: signer.public_key_b64()})
+        self.assertEqual(opened["payload"]["exchange"], "binance")
+
+    def test_the_publisher_stamps_its_engines_venue(self):
+        store = FakeStore()
+        signer = FeedSigner.generate("cf-feed-2026a")
+        log = FeedLog(store)
+        publisher = CascadeFeedPublisher(log, signer, model_version=MODEL_VERSION, default_exchange="binance")
+        frames = publisher.publish({"campaigns": [_loaded_campaign().to_dict()], "closed_campaigns": []})
+        opened = verify_frame(frames[0], {signer.kid: signer.public_key_b64()})
+        self.assertEqual(opened["payload"]["exchange"], "binance")
