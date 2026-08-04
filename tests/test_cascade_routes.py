@@ -901,6 +901,8 @@ class FeedSubscriberRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed[0]["buyer_id"], "buyer-7")
         self.assertEqual(listed[0]["status"], "active")
         self.assertFalse(listed[0]["connected"])
+        # No subscription yet, so nothing to count down.
+        self.assertIsNone(listed[0]["days_left"])
 
     async def test_junk_that_is_not_an_ed25519_key_is_refused(self):
         """A registered key that cannot verify is a locked-out buyer later."""
@@ -964,3 +966,175 @@ class FeedSubscriberRouteTests(unittest.IsolatedAsyncioTestCase):
                 "/api/cascade/feed/subscribers/nobody/status", json={"status": "banished"}, headers=self._headers
             )
             self.assertEqual(bad.status_code, 400)
+
+
+class RazorpayWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
+    """The webhook, end to end, against the real subscriber record.
+
+    Public because Razorpay has no session — its HMAC over the raw body IS the
+    authentication, which is why the first test is that an unsigned call gets
+    nowhere.
+    """
+
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_db = self.app_module._STATE_DB_FILE
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        self.addCleanup(lambda: setattr(self.app_module, "_STATE_DB_FILE", self._orig_db))
+        self.app_module._rate_limits.clear()
+        self.transport = httpx.ASGITransport(app=self.app_module.app)
+        self.subscription = {
+            "id": "sub_123",
+            "status": "active",
+            "current_end": 1785900000,
+            "notes": {"buyer_id": "buyer-7"},
+        }
+        self._register("buyer-7")
+
+    def _register(self, buyer_id, status="active"):
+        from engine.cascade_feed import FeedSigner, FeedSubscribers
+
+        subs = FeedSubscribers(self.app_module._get_state_store())
+        subs.add(buyer_id, FeedSigner.generate(buyer_id).public_key_b64())
+        if status != "active":
+            subs.set_status(buyer_id, status)
+
+    def _record(self, buyer_id="buyer-7"):
+        from engine.cascade_feed import FeedSubscribers
+
+        return FeedSubscribers(self.app_module._get_state_store()).get(buyer_id)
+
+    async def _post(self, *, body=None, sign_with="whsec_test", headers=None):
+        import hashlib
+        import hmac as _hmac
+
+        raw = (
+            body
+            if body is not None
+            else json.dumps(
+                {
+                    "event": "subscription.charged",
+                    "payload": {"subscription": {"entity": {"id": "sub_123", "status": "active"}}},
+                }
+            ).encode()
+        )
+        signature = _hmac.new(sign_with.encode(), raw, hashlib.sha256).hexdigest() if sign_with else "bad"
+        sent = {"X-Razorpay-Signature": signature, "Content-Type": "application/json", **(headers or {})}
+        with patch.dict(
+            os.environ,
+            {
+                "RAZORPAY_WEBHOOK_SECRET": "whsec_test",
+                "RAZORPAY_KEY_ID": "id",
+                "RAZORPAY_KEY_SECRET": "secret",
+            },
+        ):
+            with patch.object(
+                self.app_module,
+                "_razorpay_client",
+                lambda: _StubRazorpay(self.subscription),
+            ):
+                async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+                    return await client.post("/api/billing/razorpay/webhook", content=raw, headers=sent)
+
+    async def test_an_unsigned_call_is_refused(self):
+        response = await self._post(sign_with=None)
+        self.assertEqual(response.status_code, 401)
+
+    async def test_a_signature_from_the_wrong_secret_is_refused(self):
+        response = await self._post(sign_with="whsec_attacker")
+        self.assertEqual(response.status_code, 401)
+
+    async def test_a_charge_extends_the_buyers_expiry(self):
+        response = await self._post()
+        self.assertEqual(response.status_code, 200)
+        record = self._record()
+        self.assertEqual(record["status"], "active")
+        self.assertEqual(record["expires_at"], 1785900000 + 3 * 86400)
+        self.assertEqual(record["razorpay_subscription_id"], "sub_123")
+
+    async def test_a_redelivery_is_a_200_no_op(self):
+        """Never 4xx a duplicate — that just makes Razorpay redeliver harder."""
+        headers = {"X-Razorpay-Event-Id": "evt_1"}
+        first = await self._post(headers=headers)
+        self.assertEqual(first.status_code, 200)
+        self.subscription["current_end"] = 9999999999  # would move it, if acted on
+        second = await self._post(headers=headers)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.json()["duplicate"])
+        self.assertEqual(self._record()["expires_at"], 1785900000 + 3 * 86400)
+
+    async def test_a_halted_subscription_lapses_the_buyer(self):
+        self.subscription["status"] = "halted"
+        await self._post()
+        self.assertEqual(self._record()["status"], "lapsed")
+
+    async def test_the_authoritative_fetch_decides_not_the_event(self):
+        """A signed event claiming "charged" while Razorpay says halted must
+        lapse them — otherwise a replayed old delivery revives a dead mandate."""
+        self.subscription["status"] = "halted"
+        raw = json.dumps(
+            {
+                "event": "subscription.charged",
+                "payload": {"subscription": {"entity": {"id": "sub_123", "status": "active"}}},
+            }
+        ).encode()
+        await self._post(body=raw)
+        self.assertEqual(self._record()["status"], "lapsed")
+
+    async def test_a_revoked_buyer_is_not_reactivated_by_a_real_payment(self):
+        self._register("buyer-7", status="revoked")
+        await self._post()
+        self.assertEqual(self._record()["status"], "revoked")
+
+    async def test_an_unknown_buyer_alerts_and_still_answers_200(self):
+        """A dashboard typo needs a human, not a retry."""
+        self.subscription["notes"] = {"buyer_id": "buyer-typo"}
+        response = await self._post()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["error"], "unknown buyer_id")
+        inbox = self.app_module._notify_load()
+        self.assertTrue(any("unknown buyer" in str(item.get("title", "")).lower() for item in inbox))
+
+    async def test_a_non_subscription_event_is_skipped(self):
+        raw = json.dumps({"event": "payment.captured", "payload": {}}).encode()
+        response = await self._post(body=raw)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("skipped", response.json())
+
+    async def test_a_failed_fetch_defers_so_razorpay_can_redeliver(self):
+        """NOT remembered as processed: the fetch is what decides, so an event
+        we could not resolve must stay eligible for redelivery."""
+        import hashlib
+        import hmac as _hmac
+
+        raw = json.dumps(
+            {"event": "subscription.charged", "payload": {"subscription": {"entity": {"id": "sub_123"}}}}
+        ).encode()
+        sig = _hmac.new(b"whsec_test", raw, hashlib.sha256).hexdigest()
+        headers = {"X-Razorpay-Signature": sig, "X-Razorpay-Event-Id": "evt_flaky"}
+        with patch.dict(os.environ, {"RAZORPAY_WEBHOOK_SECRET": "whsec_test"}):
+            with patch.object(self.app_module, "_razorpay_client", lambda: _BrokenRazorpay()):
+                async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+                    response = await client.post("/api/billing/razorpay/webhook", content=raw, headers=headers)
+        self.assertEqual(response.json()["status"], "deferred")
+        # The retry lands, because the failure was never recorded as handled.
+        retry = await self._post(headers={"X-Razorpay-Event-Id": "evt_flaky"})
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(self._record()["status"], "active")
+
+
+class _StubRazorpay:
+    def __init__(self, subscription):
+        self._subscription = subscription
+
+    def fetch_subscription(self, subscription_id):
+        return dict(self._subscription)
+
+
+class _BrokenRazorpay:
+    def fetch_subscription(self, subscription_id):
+        from engine.billing import BillingRefused
+
+        raise BillingRefused("Razorpay refused the fetch (500).", status_code=502)

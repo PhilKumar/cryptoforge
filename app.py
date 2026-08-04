@@ -63,12 +63,26 @@ import config  # must be first — calls load_dotenv()
 from broker import get_broker_client, get_supported_brokers
 from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
+from engine.billing import (
+    BillingRefused,
+    ProcessedEvents,
+    RazorpayClient,
+    apply_decision,
+    buyer_id_of,
+    decide,
+    event_id,
+    parse_event,
+    subscription_id_of,
+    summarize,
+    verify_signature,
+)
 from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
 from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine
 from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
 from engine.cascade import MODEL_VERSION as CASCADE_MODEL_VERSION
 from engine.cascade_feed import (
     FEED_VERSION,
+    SUBSCRIBER_BUCKET,
     CascadeFeedPublisher,
     FeedLog,
     FeedSigner,
@@ -1289,6 +1303,9 @@ async def require_auth(request: Request):
         # Public keys, and an executor must be able to fetch them before it has
         # proved anything about itself.
         "/api/cascade/feed/keys",
+        # Razorpay is the caller and has no session. Its own signature over the
+        # raw body is the authentication.
+        "/api/billing/razorpay/webhook",
         "/login",
         "/",
         "/favicon.ico",
@@ -1328,6 +1345,7 @@ async def auth_middleware(request: Request, call_next):
         "/api/health",
         "/api/ready",
         "/api/cascade/feed/keys",
+        "/api/billing/razorpay/webhook",
         "/favicon.ico",
         "/manifest.webmanifest",
         "/site.webmanifest",
@@ -7801,10 +7819,16 @@ def _validate_buyer_public_key(raw: str) -> str:
 
 @app.get("/api/cascade/feed/subscribers")
 async def cascade_feed_subscribers():
-    """Who may connect, and whether their stream is live right now."""
+    """Who may connect, whether their stream is live, and how long they're paid up."""
+    now = time.time()
     rows = _get_feed_subscribers().list()
     for row in rows:
         row["connected"] = row.get("buyer_id") in _feed_streams
+        expires = row.get("expires_at")
+        # Days left is the number that answers "is anyone about to fall off?"
+        # without arithmetic. Negative means the entitlement has already ended,
+        # which the executor enforces regardless of the status word.
+        row["days_left"] = round((int(expires) - now) / 86400, 1) if expires else None
     return {"subscribers": rows}
 
 
@@ -7859,6 +7883,85 @@ async def cascade_feed_subscriber_status(buyer_id: str, request: Request):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"{buyer_id} is not registered")
     return {"status": "ok", "subscriber": record}
+
+
+def _razorpay_client() -> RazorpayClient:
+    return RazorpayClient(
+        os.getenv("RAZORPAY_KEY_ID", ""),
+        os.getenv("RAZORPAY_KEY_SECRET", ""),
+    )
+
+
+@app.post("/api/billing/razorpay/webhook")
+async def razorpay_webhook(request: Request):
+    """
+    Money becomes an entitlement here, and only here.
+
+    Public because Razorpay is the caller and has no session — its HMAC over
+    the raw body IS the authentication. The three hardenings are the same ones
+    every other wire in this system uses: signature over the exact bytes
+    received, idempotency by delivery id, and treating the event as a doorbell
+    while the authoritative fetch decides.
+
+    Always 200 once the signature checks out. A 4xx to Razorpay only makes it
+    redeliver harder, and every case below is either already handled or needs a
+    human rather than a retry.
+    """
+    raw = await request.body()
+    try:
+        verify_signature(raw, request.headers.get("X-Razorpay-Signature", ""), os.getenv("RAZORPAY_WEBHOOK_SECRET", ""))
+        event = parse_event(raw)
+    except BillingRefused as exc:
+        # Only the signature and parse failures answer with an error, because
+        # they mean "this was not us" rather than "we could not act on it".
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+
+    store = _get_state_store()
+    processed = ProcessedEvents(store)
+    key = event_id(event, dict(request.headers))
+    if processed.seen(key):
+        return {"status": "ok", "duplicate": True}
+
+    subscription_id = subscription_id_of(event)
+    if not subscription_id:
+        processed.remember(key, {"skipped": "not a subscription event"})
+        return {"status": "ok", "skipped": "not a subscription event"}
+
+    try:
+        subscription = _razorpay_client().fetch_subscription(subscription_id)
+    except BillingRefused as exc:
+        # Deliberately NOT remembered: the fetch is what decides, so an event
+        # we could not resolve must stay eligible for Razorpay's redelivery.
+        _logger.error("[BILLING] could not fetch %s: %s", subscription_id, exc)
+        return {"status": "deferred", "reason": str(exc)}
+
+    buyer_id = buyer_id_of(subscription)
+    subscribers = _get_feed_subscribers()
+    record = subscribers.get(buyer_id) if buyer_id else None
+    if not record:
+        # A dashboard typo. Loud, because the buyer has paid and is not being
+        # entitled, and no amount of retrying will fix it.
+        _logger.error("[BILLING] subscription %s names buyer_id %r, which is not registered", subscription_id, buyer_id)
+        _notify_push(
+            "billing",
+            "Billing: unknown buyer",
+            f"Razorpay subscription {subscription_id} names buyer_id {buyer_id!r}, "
+            "which is not registered. Fix the note in the Razorpay dashboard.",
+            level="error",
+            dedupe_key=f"billing_unknown_buyer:{subscription_id}",
+        )
+        processed.remember(key, {"error": "unknown buyer_id", "subscription_id": subscription_id})
+        return {"status": "ok", "error": "unknown buyer_id"}
+
+    decision = decide(subscription)
+    updated = apply_decision(record, decision[0], decision[1])
+    if updated != record:
+        updated["razorpay_subscription_id"] = subscription_id
+        store.put(SUBSCRIBER_BUCKET, buyer_id, updated)
+    processed.remember(key, {"buyer_id": buyer_id, **summarize(subscription, decision)})
+    _logger.info("[BILLING] %s: %s", buyer_id, summarize(subscription, decision))
+    processed.prune()
+    return {"status": "ok", "buyer_id": buyer_id, **summarize(subscription, decision)}
 
 
 @app.get("/api/cascade/feed/keys")

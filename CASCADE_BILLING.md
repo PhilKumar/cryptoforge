@@ -133,14 +133,18 @@ period is refunded by Phil manually keeps entitlement until `expires_at`
 unless he also clicks lapse. Refunds are manual and rare; the lapse button is
 right there.
 
-## Build order (when this gets built)
+## Built — 2026-08-04
 
-1. Webhook route + signature verification + event dedupe, with fixture tests
-   signed by the real algorithm and a sabotage test on each gate.
-2. The authoritative-fetch client (tiny: one GET with basic auth) and the
-   state table above.
-3. Subscriber-list columns.
-4. One end-to-end run against Razorpay test mode before the first real buyer.
+Steps 1–3 are in: `engine/billing.py` (signature, decision table, write
+limits, idempotency, the fetch client) and `POST
+/api/billing/razorpay/webhook`, with the subscriber list carrying
+`razorpay_subscription_id` and `days_left`. Every gate is verified by
+disabling it and watching a test fail.
+
+**Step 4 has not happened.** Nothing has spoken to Razorpay — the client is
+exercised against an injected stub, so the request shape is assumed correct
+until one real test-mode call proves it. Do that before the first paying
+buyer, not after.
 
 ## Needed from Phil before build
 
