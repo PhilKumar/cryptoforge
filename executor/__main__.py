@@ -26,6 +26,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from typing import Optional
 
 from executor.config import SAMPLE, ConfigError, ExecutorConfig, build_adapter, load
@@ -124,12 +125,30 @@ class Executor:
         except Exception as exc:
             # An unreadable record reads as a crash, which is the safe side.
             _log.warning("could not read the shutdown record: %s", exc)
-        report = self.runtime.on_wake(saved)
+        # Read BEFORE the marker is written, or every run looks like the first.
+        first_run = not os.path.exists(self.config.started_marker_path)
+        self._mark_started()
+        report = self.runtime.on_wake(saved, first_run=first_run)
         _say("", report["message"])
         if report["protected"]:
             _say(f"Placed a missing target on: {', '.join(report['protected'])}")
         if report["requires_confirmation"]:
             _say("No new entries will go out until you have looked at what changed.")
+
+    def _mark_started(self) -> None:
+        """Record that this machine has run, so the next missing shutdown
+        record reads as the crash it would then be.
+
+        A failure here is logged and swallowed: the worst it costs is one more
+        run that introduces itself as a first run, which is a cosmetic loss.
+        Refusing to start over it would not be.
+        """
+        try:
+            os.makedirs(os.path.dirname(self.config.started_marker_path), exist_ok=True)
+            with open(self.config.started_marker_path, "w", encoding="utf-8") as handle:
+                json.dump({"first_started_at": int(time.time())}, handle)
+        except Exception as exc:
+            _log.warning("could not write the first-start marker: %s", exc)
 
     def _shutdown(self) -> None:
         if self.runtime is None:

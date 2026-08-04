@@ -196,6 +196,11 @@ class RecoveryPlan:
     steps: List[RecoveryStep]
     requires_confirmation: bool
     note: str = ""
+    # False when there was no shutdown record to measure against. `gap_sec` is
+    # then a stand-in chosen to land in the most cautious band, NOT a duration
+    # anyone observed — reporting it as one told buyers "away for 24.0h" about
+    # a process that had crashed thirty seconds earlier.
+    gap_known: bool = True
 
     @property
     def step_names(self) -> List[str]:
@@ -219,7 +224,7 @@ def classify_gap(gap_sec: float, *, slept_armed: bool = False) -> str:
     return "confirm"
 
 
-def plan_recovery(gap_sec: float, *, slept_armed: bool = False) -> RecoveryPlan:
+def plan_recovery(gap_sec: float, *, slept_armed: bool = False, gap_known: bool = True) -> RecoveryPlan:
     """
     What to do on wake, in order.
 
@@ -238,6 +243,7 @@ def plan_recovery(gap_sec: float, *, slept_armed: bool = False) -> RecoveryPlan:
             steps=[ASK_EXCHANGE, INGEST_FILLS, PROTECT_POSITION],
             requires_confirmation=False,
             note="Short gap — the ordinary reconcile.",
+            gap_known=gap_known,
         )
 
     steps = [ASK_EXCHANGE, INGEST_FILLS, PROTECT_POSITION, REPLAY_GEOMETRY, TP_CATCHUP]
@@ -246,15 +252,21 @@ def plan_recovery(gap_sec: float, *, slept_armed: bool = False) -> RecoveryPlan:
         note = "Full recovery."
         if slept_armed:
             note = "Slept with an entry live — full recovery regardless of how short the gap was."
-        return RecoveryPlan(gap_sec=gap_sec, band=band, steps=steps, requires_confirmation=False, note=note)
+        return RecoveryPlan(
+            gap_sec=gap_sec, band=band, steps=steps, requires_confirmation=False, note=note, gap_known=gap_known
+        )
 
     return RecoveryPlan(
         gap_sec=gap_sec,
         band=band,
         steps=steps,
         requires_confirmation=True,
+        gap_known=gap_known,
+        # The duration is left out of the note deliberately: `wake_report`
+        # already opens with it, and saying it twice read as a stutter in the
+        # one message a buyer gets at the worst possible moment.
         note=(
-            f"Away for {gap_sec / 3600:.1f} hours. Positions are protected and the picture is rebuilt, "
+            "Positions are protected and the picture is rebuilt, "
             "but no new entries go out until you have seen what changed."
         ),
     )
@@ -285,8 +297,11 @@ def tp_catchup_intent(
 
 def wake_report(plan: RecoveryPlan, record: Optional[ShutdownRecord]) -> str:
     """One paragraph a buyer can act on, not a log they have to decode."""
-    away = f"{plan.gap_sec / 3600:.1f}h" if plan.gap_sec >= 3600 else f"{plan.gap_sec / 60:.0f}m"
-    lines = [f"Away for {away}."]
+    if not plan.gap_known:
+        lines = ["Stopped without a clean shutdown, so how long it was away is unknown."]
+    else:
+        away = f"{plan.gap_sec / 3600:.1f}h" if plan.gap_sec >= 3600 else f"{plan.gap_sec / 60:.0f}m"
+        lines = [f"Away for {away}."]
     if record and record.slept_armed:
         lines.append(
             f"It went away with ${record.armed_exposure_usd:,.2f} of buy orders live, "

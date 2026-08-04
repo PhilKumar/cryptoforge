@@ -55,6 +55,17 @@ class ExecutorConfig:
     def shutdown_record_path(self) -> str:
         return os.path.join(os.path.expanduser(self.state_dir), "shutdown.json")
 
+    @property
+    def started_marker_path(self) -> str:
+        """Written once, on the first start, and never removed.
+
+        A missing shutdown record means a crash — except on a first install,
+        where it only means there has never been a shutdown. Nothing else in
+        the state dir separates the two: the buyer key is created before the
+        wake ladder runs, so it exists in both cases.
+        """
+        return os.path.join(os.path.expanduser(self.state_dir), "started.json")
+
     def redacted(self) -> dict:
         """Safe to print, log, or paste into a support conversation."""
         return {

@@ -108,7 +108,11 @@ class ConfirmationTests(unittest.TestCase):
     def test_a_long_gap_requires_confirmation(self):
         plan = plan_recovery(CONFIRM_GAP_SEC + 60)
         self.assertTrue(plan.requires_confirmation)
-        self.assertIn("hours", plan.note)
+        self.assertIn("no new entries go out", plan.note)
+        # The duration belongs to wake_report, which opens with it. Repeating
+        # it here made the message stutter: "Away for 24.0h. Away for 24.0
+        # hours. Positions are protected…"
+        self.assertNotIn("Away for", plan.note)
 
     def test_confirmation_never_gates_protecting_a_held_position(self):
         """Their coin does not wait for a button. That is the whole point."""

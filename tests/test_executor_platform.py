@@ -12,6 +12,7 @@ surface in what they read, not sit in a comment.
 """
 
 import json
+import os
 import unittest
 
 from executor.coindcx import CoinDCXSpotAdapter
@@ -330,3 +331,69 @@ class PlatformShapeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FirstStartMarkerTests(unittest.TestCase):
+    """The marker is the only thing separating a first install from a crash.
+
+    `_resume` has to read it BEFORE writing it. Writing first would make every
+    run look like a first run, which would quietly disable crash detection for
+    good — the failure mode is silent, so it is pinned here rather than trusted
+    to review.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+
+    def _config(self):
+        from executor.config import ExecutorConfig
+
+        return ExecutorConfig(
+            server_url="http://localhost",
+            buyer_id="b",
+            root_public_key="k",
+            state_dir=self._dir.name,
+        )
+
+    def test_the_marker_lives_beside_the_shutdown_record(self):
+        config = self._config()
+        self.assertTrue(config.started_marker_path.endswith("started.json"))
+        self.assertEqual(
+            os.path.dirname(config.started_marker_path),
+            os.path.dirname(config.shutdown_record_path),
+        )
+
+    def test_resume_reads_the_marker_before_writing_it(self):
+        """First call sees no marker; the second must see one."""
+        from executor.__main__ import Executor
+
+        config = self._config()
+        seen = []
+
+        class Stub:
+            def __init__(self, cfg):
+                self.config = cfg
+                self.runtime = self
+
+            def on_wake(self, saved, *, first_run=False):
+                seen.append(first_run)
+                return {
+                    "band": "first_run" if first_run else "normal",
+                    "requires_confirmation": False,
+                    "steps": [],
+                    "protected": [],
+                    "tp_caught_up": [],
+                    "message": "",
+                }
+
+        stub = Stub(config)
+        # The real marker writer, bound to the stub — the point of the test is
+        # the ORDER of the read and the write, so both must be genuine.
+        stub._mark_started = lambda: Executor._mark_started(stub)
+        Executor._resume(stub)
+        Executor._resume(stub)
+        self.assertEqual(seen, [True, False])
+        self.assertTrue(os.path.exists(config.started_marker_path))

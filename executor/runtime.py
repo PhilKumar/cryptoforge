@@ -294,7 +294,7 @@ class ExecutorRuntime:
         record_sleep_outcome(plan.record, cancelled_ids=cancelled)
         return {"record": plan.record.to_dict(), "message": plan.message}
 
-    def on_wake(self, saved: Optional[dict]) -> dict:
+    def on_wake(self, saved: Optional[dict], *, first_run: bool = False) -> dict:
         """
         Run the ladder. Returns what the buyer is told and what was done.
 
@@ -302,14 +302,26 @@ class ExecutorRuntime:
         chance to cancel anything, so entries may have been resting the whole
         time. That is treated as the armed case, because assuming otherwise is
         exactly the mistake the record exists to prevent.
+
+        Unless nothing has ever run here. A first install has no record for the
+        innocent reason that there has never been a shutdown, and treating that
+        as a crash told a brand-new buyer they had been "away for 24.0 hours"
+        and that entries were being held back — one statement false, the other
+        describing a restriction that is not actually applied. `first_run` is
+        the caller's answer to "has this machine ever started before", which
+        only it can know: the buyer key is created before this runs, so its
+        presence proves nothing.
         """
         record = ShutdownRecord.from_dict(saved)
+        if record is None and first_run:
+            return self._first_run_report()
         if record is None:
             gap, armed = float("inf"), True
         else:
             gap = max(self._now() - record.shutdown_at, 0.0)
             armed = record.slept_armed
-        plan = plan_recovery(gap if gap != float("inf") else 24 * 3600, slept_armed=armed)
+        known = gap != float("inf")
+        plan = plan_recovery(gap if known else 24 * 3600, slept_armed=armed, gap_known=known)
 
         protected = []
         for campaign_id, orders in self.book.campaigns.items():
@@ -340,6 +352,26 @@ class ExecutorRuntime:
             "protected": protected,
             "tp_caught_up": caught_up,
             "message": wake_report(plan, record),
+        }
+
+    def _first_run_report(self) -> dict:
+        """Nothing has ever run here, so there is nothing to recover.
+
+        Deliberately not routed through `plan_recovery`: every band it can
+        return describes coming back to something, and the honest answer here
+        is that there is nothing to come back to. No position can exist, so the
+        protect and catch-up passes have nothing to act on either.
+        """
+        return {
+            "band": "first_run",
+            "requires_confirmation": False,
+            "steps": [],
+            "protected": [],
+            "tp_caught_up": [],
+            "message": (
+                "First run on this machine — nothing held, nothing to recover. "
+                "Campaigns are joined as they start, so nothing already running will be picked up."
+            ),
         }
 
     # ── what the buyer sees ──────────────────────────────────────

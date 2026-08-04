@@ -371,6 +371,54 @@ class SleepAndWakeTests(RuntimeHarness):
         report = runtime.on_wake(None)
         self.assertTrue(report["requires_confirmation"])
 
+    def test_a_first_ever_run_is_not_a_crash(self):
+        """A fresh install has no record because there has never been a
+        shutdown. Reading that as a crash told a brand-new buyer they had been
+        "away for 24.0 hours" and that entries were being held back — the first
+        false, the second describing a gate that is not actually applied."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        report = runtime.on_wake(None, first_run=True)
+        self.assertEqual(report["band"], "first_run")
+        self.assertFalse(report["requires_confirmation"])
+        self.assertEqual(report["steps"], [])
+        self.assertNotIn("Away for", report["message"])
+        self.assertIn("First run", report["message"])
+
+    def test_first_run_never_overrides_a_real_shutdown_record(self):
+        """The flag answers "has this machine started before", not "is this
+        safe" — a record present means a real gap, and it still governs."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        report = runtime.on_wake({"shutdown_at": NOW - 8 * 3600, "slept_armed": False}, first_run=True)
+        self.assertNotEqual(report["band"], "first_run")
+        self.assertTrue(report["requires_confirmation"])
+
+    def test_a_crash_after_the_first_run_is_still_a_crash(self):
+        """The marker exists from run two onward, so a missing record then is
+        the real thing and must stay loud."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        report = runtime.on_wake(None, first_run=False)
+        self.assertTrue(report["requires_confirmation"])
+        self.assertIn("no new entries go out", report["message"])
+        # An unmeasured gap must not be reported as a measured one. The 24h
+        # stand-in exists to pick the cautious band, not to be read aloud.
+        self.assertNotIn("24.0h", report["message"])
+        self.assertIn("unknown", report["message"])
+        self.assertEqual(report["message"].count("Away for"), 0)
+
+    def test_a_measured_gap_is_still_stated_once(self):
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        report = runtime.on_wake({"shutdown_at": NOW - 8 * 3600, "slept_armed": False})
+        self.assertEqual(report["message"].count("Away for"), 1)
+        self.assertIn("8.0h", report["message"])
+
     def test_a_long_gap_protects_the_position_but_asks_before_trading(self):
         self._open()
         runtime = self._runtime()
