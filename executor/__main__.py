@@ -212,7 +212,10 @@ async def _check(config: ExecutorConfig) -> int:
     find the next.
     """
     executor = Executor(config)
-    _say("Config:", json.dumps(config.redacted(), indent=2))
+    # ensure_ascii=False: the redacted key reads "…1234", which escapes to
+    # "…1234" by default and makes the one output we ask buyers to send us
+    # look like something has gone wrong. Keep it readable.
+    _say("Config:", json.dumps(config.redacted(), indent=2, ensure_ascii=False))
     _say("", f"Public key to register: {executor.identity.public_key_b64()}", "")
 
     results = []

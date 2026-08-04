@@ -1,111 +1,232 @@
-# Cascade Executor — install and run
+# Cascade — setting it up on your computer
 
-This program trades on your own exchange account, from your own machine.
-
-CryptoForge computes the geometry — the mother candle, the trendline, the fib
-ladder, the target — and publishes it as a signal. This program listens to that
-signal, sizes it to *your* capital, and places *your* orders with *your* API
-keys. Those keys are read from your machine's environment and used only to talk
-to your exchange. They are never sent to us, and neither is anything they
-return: not your balance, not your orders, not your fills, not your P&L. The
-only thing we hold about you is a public key and whether you have paid.
-
-Spot only. No leverage, no futures, no margin. Nothing here can be liquidated.
+Read this once, all the way through, before you type anything. Setting up takes
+about twenty minutes and you only ever do it once.
 
 ---
 
-## Before you start
+## What this actually is
 
-| | |
-|---|---|
-| A machine | Anything that runs Python 3.11 or newer. A laptop is fine — see [Sleep, lids and shutting down](#sleep-lids-and-shutting-down). |
-| An exchange account | Binance or CoinDCX, spot, funded in USDT. |
-| Capital | **$1,000 minimum.** Below $3,000 campaigns still run but coarsened — the shallow rungs on smaller legs cannot clear the exchange's minimum order size, so those campaigns trade with fewer, deeper entries than the signal describes. |
-| An API key | **Trade permission only.** Never enable withdrawal. Never enable futures or margin. This program uses neither, and a key that cannot withdraw cannot lose you your balance no matter what goes wrong here. |
-| A subscription | Your public key has to be registered before the feed will talk to you. That is step 2 below, and it comes before money. |
+We watch the market and work out where to buy and where to sell. That's our
+side.
+
+This little program is your side. It sits on your computer, listens to what
+we've worked out, and places the buy and sell orders on **your own exchange
+account** — in your name, with your money, under your control.
+
+Your money never comes to us. We can't move it, and we can't see it. If you
+stop paying, the program stops getting our signal, and that's the whole of what
+we can do to you.
+
+A few things that are worth knowing up front:
+
+- **No borrowing.** This buys coins with money you already have. There's no
+  such thing as being "wiped out" or "margin called" here. The worst case is
+  that you're holding a coin that's worth less than you paid.
+- **It runs on your computer, not ours.** So while it's off, it isn't doing
+  anything. There's a section below on exactly what that means.
+- **You can stop it at any time**, with one button, and it will never abandon a
+  position when you do.
 
 ---
 
-## 1. Install
+## What you'll need
 
-Put this `executor/` folder wherever you keep things, then, from the folder
-that *contains* it:
+- **A computer that can stay switched on** while you're trading. A laptop is
+  fine — there's a section on lids and sleeping below.
+- **An account on Binance or CoinDCX**, with at least **$1,000** in it (as
+  USDT). Below that, the strategy can't really be followed properly — you can
+  read why in "Why $1,000" near the end.
+- **About twenty minutes**, once.
 
-```bash
-pip install -r executor/requirements.txt
+You do not need to know how to program. You'll be copying lines from this page
+and pressing Enter. That's all it is.
+
+---
+
+## First, a word about exchange keys
+
+At one point you'll create something on your exchange called an **API key**.
+It sounds alarming. It isn't, if you set it up the way described here.
+
+Think of it as a spare car key that starts the engine but doesn't open the
+boot. It lets this program buy and sell on your account — and nothing else.
+
+When your exchange asks what the key is allowed to do:
+
+- ✅ **Tick: trading (spot)**
+- ❌ **Do not tick: withdrawals.** Ever. Not for this, not for anything.
+- ❌ **Do not tick: futures, margin, or lending.** This program doesn't use them.
+
+A key that can't withdraw can't take your money out of your account. Not by us,
+not by a thief, not by a bug. That one unticked box is most of your safety, and
+it costs you nothing.
+
+---
+
+## Step 1 — Open the black window
+
+Everything below happens in a program that's already on your computer, where
+you type a line and press Enter.
+
+- **On a Mac:** press `Cmd + Space`, type `Terminal`, press Enter.
+- **On Windows:** click Start, type `PowerShell`, press Enter.
+
+A window opens with a blinking cursor. This is where the lines below go. You
+paste a line, press Enter, wait for it to finish, then do the next one. If
+something goes wrong it will tell you in words — nothing here can break your
+computer.
+
+## Step 2 — Check you have Python
+
+Python is the language this program is written in. Macs usually have it.
+Paste this and press Enter:
+
+```
+python3 --version
 ```
 
-Four packages, listed with a note each in `requirements.txt`. Everything else
-the executor uses is Python's standard library.
+If it prints something like `Python 3.11.0` (any number 3.11 or higher), you're
+set — carry on to step 3.
 
-Every command below is run from that same parent folder — `python -m executor`
-needs to see `executor/` as a package.
+If it says it can't find it, go to **python.org/downloads**, download the big
+yellow button, install it, then close and reopen the black window and try again.
 
-## 2. Generate your key and register it
+> **Windows note:** everywhere below says `python3`. On Windows, type `python`
+> instead — just that one word changes.
 
-```bash
-python -m executor --register
+## Step 3 — Go to the folder we sent you
+
+We'll have sent you a folder called `executor`. Put it somewhere you'll
+remember — your Desktop is perfectly fine.
+
+Now you need to tell the black window where it is. Type `cd ` (that's c, d, and
+a space) — then **drag the folder that contains `executor` into the window**.
+It'll fill in the location for you. Press Enter.
+
+On a Mac, if the `executor` folder is on your Desktop, this also works:
+
+```
+cd ~/Desktop
 ```
 
-This makes a key on your machine (at `~/.cascade-executor/buyer_key.pem`, mode
-`0600`) and prints the **public half** — a line of base64. Send us that line and
-the name you want to be known by.
+## Step 4 — Install the four pieces it needs
 
-The private half never leaves your machine, and there is nothing on our side
-that could ever become you. If you lose it — new laptop, wiped disk — run
-`--register` again on the new machine and send the new line; we re-key you.
+```
+python3 -m pip install -r executor/requirements.txt
+```
 
-You can run this before you have paid for anything, and before the config file
-in step 3 exists. Registering is deliberately the first step: it means every
-later billing event lands on a subscriber record that already exists, and the
-"paid but no key" mess never happens.
+This downloads four small, standard, well-known bits of software that the
+program uses. It'll print a lot of text. Wait for the cursor to come back.
 
-We will send you back two things: your **buyer id**, and the **root public
-key** — the base64 string your executor uses to check that a signal really came
-from us. Both go in the config next.
+## Step 5 — Create your ID and send it to us
 
-## 3. Write your config
+```
+python3 -m executor --register
+```
 
-```bash
+This prints one line that looks like nonsense:
+
+```
+XCmGM01hy/L0EN8qqmpQ+GID4IMG9p2Upu67jXIR4ZQ=
+```
+
+**Copy that line and email it to us**, along with the name you'd like to be
+known by.
+
+What just happened: your computer made itself a pair of matching keys, like a
+lock and its key. It kept the private one and printed the public one. The
+public one is what you just sent us — it's how we recognise you, and it's
+useless to anyone else. The private one never leaves your computer, and we
+never have it. There's nothing on our side that could be stolen and used to
+pretend to be you.
+
+If you ever get a new computer, just do this step again there and send us the
+new line.
+
+**We'll email you back two things:** a short name (your *buyer ID*), and
+another line of nonsense (the *root key*). You need both for the next step, so
+wait for that email before carrying on.
+
+## Step 6 — Fill in your details
+
+Make yourself a settings file:
+
+```
 mkdir -p ~/.cascade-executor
-python -m executor --sample-config > ~/.cascade-executor/config.json
+python3 -m executor --sample-config > ~/.cascade-executor/config.json
 ```
 
-Then edit it:
+Now open it so you can edit it:
 
-| Field | What to put |
+- **Mac:** `open -e ~/.cascade-executor/config.json`
+- **Windows:** `notepad $HOME\.cascade-executor\config.json`
+
+You'll see something like this. Change the parts on the right of each colon,
+keeping the quote marks exactly where they are:
+
+```json
+{
+  "server_url": "https://crypto.philforge.in",
+  "buyer_id": "buyer-your-name",
+  "root_public_key": "(the base64 root key from your subscription email)",
+  "exchange": "binance",
+  "capital_usd": 3000,
+  "symbols": [],
+  "tick_seconds": 20
+}
+```
+
+| Line | What to put |
 |---|---|
-| `server_url` | `https://crypto.philforge.in` |
-| `buyer_id` | The id we sent you. |
-| `root_public_key` | The base64 root key we sent you. Every signal is checked against this; a signal that does not verify is discarded, not traded. |
-| `exchange` | `binance` or `coindcx`. |
-| `capital_usd` | What you are putting behind this. **Every ladder is sized from this number** — it is not a limit you happen not to hit, it is the input. |
-| `symbols` | `[]` follows everything published. Or list the ones you want: `["BTCUSDT", "SOLUSDT"]`. |
-| `tick_seconds` | Leave at `20`. Under 5 is refused: it rate-limits your exchange without trading any better. |
+| `server_url` | Leave it exactly as it is. |
+| `buyer_id` | The short name we emailed you. |
+| `root_public_key` | The long line of nonsense we emailed you. This is how your computer checks a signal really came from us and not from someone pretending. |
+| `exchange` | `binance` or `coindcx` — whichever you use. |
+| `capital_usd` | **The money you're putting behind this**, in dollars. Read the note below — this one matters more than it looks. |
+| `symbols` | Leave as `[]`, which means "follow everything". |
+| `tick_seconds` | Leave at `20`. |
 
-**Your exchange credentials do not go in this file.** They are read from the
-environment:
+**About `capital_usd`.** This isn't a safety limit you probably won't reach. It
+is the number every order size is worked out from. Put 3000 and it will trade
+as though it has $3,000 to work with. Put your real figure.
 
-```bash
-export CASCADE_API_KEY="…"
-export CASCADE_API_SECRET="…"
+Save the file and close it.
+
+## Step 7 — Give it your exchange keys
+
+Go to your exchange, create an API key with **trading ticked and withdrawals
+NOT ticked** (see the section above), and copy the two long strings it gives
+you — usually called the *key* and the *secret*.
+
+Open your settings file again and add them, as two extra lines just before the
+closing `}`. Don't forget the comma at the end of the line above:
+
+```json
+  "tick_seconds": 20,
+  "api_key": "paste the key here",
+  "api_secret": "paste the secret here"
+}
 ```
 
-The config file is the thing people paste into a support conversation when
-something is wrong. Keeping secrets out of it by default means that paste is
-always safe. (Every field above can also be set by environment variable —
-`CASCADE_SERVER_URL`, `CASCADE_CAPITAL_USD`, and so on — which is what you want
-if you run this from a launch agent or a container. The environment wins over
-the file.)
+Save and close.
 
-## 4. Check it before it trades
+> **From now on, that file has your exchange keys in it.** Don't email it,
+> don't put it in a chat, don't screenshot it. If you ever need to send us
+> something to help sort out a problem, use step 8 — it prints the same
+> information with the secret parts blanked out, safe to send to anyone.
 
-```bash
-python -m executor --check
+## Step 8 — Test it, without trading anything
+
+```
+python3 -m executor --check
 ```
 
-This places nothing. It prints your config with the secrets redacted, your
-public key, and then three lines:
+This buys nothing and sells nothing. It just checks the three things that have
+to be right, and tells you about all of them at once, so you're not fixing one
+problem at a time.
+
+You want three lines saying PASS:
 
 ```
 PASS  Key set: verified against your root key, 1 active signing key(s)
@@ -113,117 +234,144 @@ PASS  Exchange: reachable, 3,142.88 USDT free
 PASS  Feed: connected and snapshotted, 2 campaign(s) following
 ```
 
-Every leg is tried even after one fails, so one run tells you everything that
-is wrong rather than one thing at a time.
+If one says FAIL:
 
-- **Key set FAIL** — usually a wrong `root_public_key`, or a `server_url` typo.
-  `No feed key set is installed` is different: that one is our side, not yours.
-- **Exchange FAIL** — wrong API key, wrong secret, or the key lacks trade
-  permission. The exchange's own message is passed through.
-- **Feed FAIL** — `not entitled` means your key is not registered or your
-  subscription has lapsed. Anything else is a network or server problem.
+| It says | Almost always means |
+|---|---|
+| FAIL Key set | The root key in your settings file got copied wrong — a missing character, or a space at the end. If it says `could not fetch` rather than anything about your key, that one's our end, not yours; tell us. |
+| FAIL Exchange | The exchange key or secret got copied wrong, or you didn't tick trading when you created it. The exchange's own words are printed after it. |
+| FAIL Feed, `not entitled` | We haven't registered you yet, or your subscription has run out. Email us — trying again won't fix it. |
 
-## 5. Run it
+Don't go past this step until all three say PASS.
 
-```bash
-python -m executor
+## Step 9 — Start it
+
+```
+python3 -m executor
 ```
 
-It prints what it is doing to the terminal, and serves a page at
-**http://127.0.0.1:7757** — Home, Console, Campaigns, Rounds, Setup. That page
-is bound to localhost and refuses connections from anywhere else; nobody on
-your network or the internet can reach it.
+It's now running. Leave that window open — closing it stops the program.
 
-Options: `--no-ui` to skip the page, `--ui-port 7758` to move it, `--verbose`
-for debug logging, `--config path/to/config.json` for a config somewhere else.
+Now open your web browser and go to:
+
+**http://127.0.0.1:7757**
+
+That's your dashboard. It's coming from your own computer, not from the
+internet, and nobody else can open it — not us, not someone on your wifi.
 
 ---
 
 ## The one number to look at
 
-At the top of the Console:
+At the top of your dashboard, in big text:
 
 > **If this machine stops now, at most $412.50 can fill unwatched.**
 
-That is the whole risk of running this on a laptop, as a figure rather than a
-worry. There is at most one buy order resting at any moment, of a size the
-executor knows, so the number is exact. When it says **nothing can fill while
-this machine is away**, you can close the lid without thinking about it.
+That single line is the entire risk of running this on your own computer, and
+it's the reason it's the biggest thing on the screen.
 
-Two buttons sit under it:
+Here's what it means. At any moment there is at most **one** buy order sitting
+out at the exchange waiting for the price to come to it. If your computer dies
+right now — power cut, cat on the keyboard — that one order could still get
+filled while nobody's watching, and you'd own that coin until you start the
+program again. The number tells you exactly how much that is.
 
-- **Stand down** — cancels every buy order now, leaves every sell order
-  protecting what you hold, and stops opening anything new. This is the button
-  for "I need to go and I don't want to think about it."
-- **Pause / Resume opening** — stops new campaigns being joined while leaving
-  everything in flight alone.
+When it says **"Nothing can fill while this machine is away"**, there's no
+order waiting, and you can shut the lid without a second thought.
 
-Neither ever abandons a position. Nothing in this program will cancel a sell
-order that is protecting coin you hold.
+Two buttons sit underneath it:
 
-## Sleep, lids and shutting down
+- **Stand down** — cancels every buy order right now, and leaves every sell
+  order in place protecting what you already own. This is the "I have to go and
+  I don't want to think about it" button.
+- **Pause opening** — stops it starting anything new, while letting everything
+  already running finish normally.
 
-Stopping cleanly — Ctrl-C, or `systemctl stop` — cancels resting buys, makes
-sure anything you hold has a sell order against it, and writes down what it did
-so the next start knows. That takes a few seconds; let it finish.
+Neither of them ever walks away from something you own. Nothing in this program
+will cancel a sell order that's protecting a coin you're holding.
 
-Sleep is not equally survivable on every platform, and pretending otherwise
-would be the bug:
+## Closing the lid, and going away
 
-| | What you get |
+**If you shut it down properly** — click into the black window and press
+`Ctrl + C`, or use Stand down first — it cancels the waiting buy orders, makes
+sure everything you own has a sell order protecting it, and writes down where
+it got to. Give it a few seconds to finish.
+
+**If you just close the laptop lid**, your computer gives the program a few
+seconds' warning before it sleeps, and it uses them to do the same tidy-up. How
+many seconds depends on the computer, and this is worth knowing:
+
+| | |
 |---|---|
-| **macOS** | About 30 seconds' warning before sleep — plenty to cancel entries. The machine is held awake automatically while, and only while, a buy order is resting. |
-| **Linux** | systemd gives 5 seconds by default, which is enough, and can be configured higher. Same automatic hold-awake. |
-| **Windows** | About 2 seconds — **not** enough to cancel an order and confirm it. So a forced sleep is treated as a crash when you come back, and the armed-exposure number above is what you are actually relying on. |
+| **Mac** | About 30 seconds' warning. Plenty. It also quietly stops your Mac dozing off on its own while an order is waiting — and stops doing that the moment nothing is. |
+| **Linux** | About 5 seconds. Enough. |
+| **Windows** | About 2 seconds — **not** enough to cancel an order and be sure it worked. So on Windows, treat that big number on your dashboard as the real thing, and use **Stand down** before you close the lid. |
 
-A lid close cannot be prevented on any operating system. What the executor gets
-is a window to act in, never a veto, so the design is "do the cancels inside
-the window" rather than "keep the machine awake".
+Nobody's software can stop a laptop lid from closing. What this program gets is
+a few seconds to react, never a veto — so it's built around using those seconds
+well, not around keeping your computer awake.
 
-**After a crash or a forced sleep**, the executor asks your exchange what
-actually happened while it was gone, places a target on anything you turned out
-to be holding, and shows you what changed. It will not open anything new until
-you click **I've reviewed — resume trading**. That gate is the point: a machine
-that was away and came back does not get to guess.
+**When you come back**, it asks your exchange what actually happened while it
+was away, puts a sell order on anything you turn out to be holding, and shows
+you what changed. It won't start anything new until you click **"I've reviewed
+— resume trading"**. That's deliberate. A program that's been away doesn't get
+to guess.
 
-## What stops it, and what doesn't
+## When it stops trading on its own
 
-| | What happens |
+| What happened | What it does |
 |---|---|
-| Subscription lapses | The feed closes and stays closed — retrying will not change it. **Positions you already hold keep being managed to their target.** Entitlement is re-checked every 30 seconds, so this lands within a minute of the status changing. |
-| You start a second copy | The newest one wins; the older steps aside and says so. Two copies both reconnecting would displace each other forever and neither would manage anything properly. |
-| Wifi drops, or we deploy | Reconnects with backoff. Disconnected is not flat — it keeps its picture and keeps managing what it holds. |
-| A campaign's published geometry contradicts itself | That campaign is dropped and says so. Positions already open in it are still managed. Nothing is traded against numbers that do not add up. |
-| A campaign started more than 5 minutes ago | Skipped. The ladder only means anything from its mother candle, so joining a fall halfway down is not the strategy — it is a different, worse one. |
-| One bad tick | Logged, and the next tick re-reads the exchange. A single failure never stops positions being managed. |
+| Your subscription runs out | It stops receiving new signals. **Anything you already own is still looked after and still sold at its target.** It won't leave you holding something. |
+| You start a second copy by mistake | The newest one carries on and the older one steps aside and says so. |
+| Your wifi drops, or we restart something | It reconnects by itself. Being disconnected doesn't mean it's forgotten what you own. |
+| A signal doesn't add up | It drops that one trade and tells you. Real money doesn't go anywhere near numbers that don't check out. |
+| A move started more than 5 minutes ago | It skips it. These trades only make sense from their beginning; joining halfway down is a different and worse idea. |
 
-## Troubleshooting
+## Why $1,000
 
-| It says | It means |
-|---|---|
-| `Config problem: Missing: …` | A required field is blank. API credentials come from `CASCADE_API_KEY` / `CASCADE_API_SECRET` unless you put them in the file. |
-| `capital_usd must be set` | It is the input every ladder is sized from, so there is no sensible default. |
-| `<campaign>: $500 is under the $1,000 minimum` | Your `capital_usd` is below the floor, so that campaign was not joined. This is checked per campaign as one starts, not at launch — the executor runs and connects fine, it just opens nothing. |
-| `Unknown exchange 'kraken'` | Supported today: `binance`, `coindcx`. |
-| `not entitled` | Key not registered, or subscription lapsed. Talk to us — a retry loop will not fix it and may get you rate-limited. |
-| `Away for 4.2 hours` on a brand-new install | Shouldn't happen anymore; if it does, tell us, because it means the first-start marker did not get written. |
-| `Not following <campaign>: …` | It is telling you exactly why — usually the join window or your capital floor. |
+The strategy works by buying in steps on the way down — a little, then a bit
+more, then more — so your average price improves as the price falls.
 
-Send us the output of `python -m executor --check`. It is redacted by design
-and it is almost always enough.
+Exchanges refuse orders below a minimum size (often about $5–10). Below $1,000,
+the early, smaller steps come out under that minimum and get rejected, so
+you'd only ever get the big one at the bottom. That's a completely different
+strategy from the one you're paying for, and not one we'd recommend.
 
-## What we can see
+Between $1,000 and $3,000 it works, but on smaller moves some of the early
+steps still get skipped, so it buys in fewer and deeper chunks than the signal
+describes. Your dashboard says so when it happens. Above $3,000, every step
+lands as intended.
 
-Your public key. When you connect and disconnect. Whether you have paid.
+## If something looks wrong
 
-That is all of it. We do not have your API keys, so we cannot see your balance
-or your trades; we do not receive your fills, so we do not know your P&L; and
-there is no field in the signal protocol that could carry any of it, which is
-enforced in code on our side rather than promised here.
+Run this and send us what it prints:
 
-## The risk, stated plainly
+```
+python3 -m executor --check
+```
 
-This software trades from your machine. If your machine stops, a resting order
-may still fill, and that position waits for your machine to come back. It
-cannot be liquidated — this is spot, not leverage — and the most that can fill
-unwatched is the one order shown on your Console.
+It blanks out your exchange secret automatically, so it's safe to send to
+anyone, and it's nearly always enough for us to tell you what's wrong.
+
+## What we can see about you
+
+Your public line of nonsense from step 5. When your program connects and
+disconnects. Whether you've paid.
+
+That's the entire list. We don't have your exchange keys, so we can't see your
+balance or your trades. We never receive what you bought or sold, so we don't
+know whether you're up or down. There is no place in the signal we send you for
+any of that to travel, which is enforced by our software rather than just
+promised on this page.
+
+## The honest version of the risk
+
+This program trades from your computer. If your computer stops, an order that
+was waiting may still go through, and you'd own that coin until your computer
+comes back.
+
+It cannot be sold out from under you — you're buying with your own money, not
+borrowed — and the most that can happen unwatched is the one order shown on
+your dashboard. That risk is small, and bounded, and it is not zero. Anyone who
+tells you their trading software has no such gap is either not thinking about
+it or not telling you.
