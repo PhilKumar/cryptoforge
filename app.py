@@ -7731,7 +7731,11 @@ async def cascade_feed_stream(ws: WebSocket):
                 await ws.send_json({"type": "feed.revoked", "reason": reason})
                 await ws.close(code=4003, reason=reason[:120])
                 return
-            for symbol in sorted(set(cursors) | {s for s in _live_feed_symbols()}):
+            # The log's symbols, not just the engine's live ones. A campaign's
+            # last message is campaign.closed, emitted when the engine has
+            # already dropped it — streaming only live symbols writes that
+            # message and never delivers it.
+            for symbol in sorted(set(cursors) | set(log.symbols()) | set(_live_feed_symbols())):
                 for frame in log.since(symbol, cursors.get(symbol, 0)):
                     await ws.send_json({"type": "event", "frame": frame})
                 cursors[symbol] = log.head(symbol)

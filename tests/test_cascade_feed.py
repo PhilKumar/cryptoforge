@@ -470,6 +470,20 @@ class FeedLogTests(unittest.TestCase):
         self.assertEqual(self.log.head("SOLUSDT"), 2)
         self.assertEqual([verify_frame(f, self.keys)["seq"] for f in self.log.since("SOLUSDT", 0)], [2])
 
+    def test_it_lists_every_symbol_it_holds_events_for(self):
+        """Not the same as "symbols with a live campaign", and the difference
+        was a real bug: a campaign's last message is campaign.closed, emitted
+        when the engine has already dropped it. A stream that only looked at
+        live symbols wrote that message and never delivered it — so an executor
+        never learned the campaign had ended."""
+        self._append(symbol="SOLUSDT")
+        self._append(symbol="BTCUSDT")
+        self.assertEqual(self.log.symbols(), ["BTCUSDT", "SOLUSDT"])
+
+    def test_the_symbol_list_ignores_the_head_watermarks(self):
+        self._append(symbol="SOLUSDT")
+        self.assertNotIn("head", self.log.symbols())
+
     def test_an_unlogged_type_is_refused(self):
         with self.assertRaises(ValueError):
             self.log.append(

@@ -223,6 +223,29 @@ class FeedTransport:
         self.client: Optional[FeedClient] = None
         self.stopped_reason: str = ""
 
+    def _adopt_keys(self, keys: Dict[str, str], fetched_at: float) -> None:
+        """
+        One FeedClient for the life of the transport, re-keyed per session.
+
+        Rebuilding it on every reconnect looks harmless and is not: the client
+        holds which campaigns are being followed, and the runtime's order book
+        finds a campaign by asking the client about it. A fresh client after a
+        dropped wifi would answer "never heard of it" for every position
+        already open, and those positions would silently stop having their
+        exits managed — while the executor looked perfectly healthy.
+        """
+        if self.client is None:
+            self.client = FeedClient(
+                public_keys=keys,
+                keyset_fetched_at=fetched_at,
+                now_fn=self._now,
+                on_event=lambda kind, detail: self._status(kind, detail),
+            )
+            return
+        self.client._keys = dict(keys)
+        self.client._keyset_fetched_at = float(fetched_at)
+        self.client.last_entitled_at = float(fetched_at)
+
     @property
     def ws_url(self) -> str:
         scheme = "wss" if self._base_url.startswith("https") else "ws"
@@ -255,12 +278,7 @@ class FeedTransport:
 
     async def _session(self) -> None:
         keys, fetched_at = self._current_keys()
-        self.client = FeedClient(
-            public_keys=keys,
-            keyset_fetched_at=fetched_at,
-            now_fn=self._now,
-            on_event=lambda kind, detail: self._status(kind, detail),
-        )
+        self._adopt_keys(keys, fetched_at)
 
         async with self._connect(self.ws_url) as socket:
             await socket.send(json.dumps(self._identity.handshake(now=self._now())))

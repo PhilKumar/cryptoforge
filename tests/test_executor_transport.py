@@ -442,3 +442,37 @@ class TransportSessionTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClientContinuityTests(TransportSessionTests):
+    """A reconnect must not forget what it was managing.
+
+    The runtime's order book finds a campaign by asking the client about it, so
+    a fresh client after a dropped wifi answers "never heard of it" for every
+    open position — and those positions silently stop having their exits
+    managed, while the executor looks perfectly healthy.
+    """
+
+    async def test_the_same_client_survives_a_reconnect(self):
+        connect = _connect_returning(
+            [self._welcome(), {"type": "snapshot", "frame": self.fx.campaign_frame()}, FakeClose(1006)],
+            [self._welcome(), FakeClose(1000)],
+        )
+        transport = self._transport(connect)
+        await transport.run(max_sessions=1)
+        first = transport.client
+        self.assertIn("casc_SOLUSDT_1", first.campaigns)
+
+        await transport.run(max_sessions=1)
+        self.assertIs(transport.client, first)
+        self.assertIn("casc_SOLUSDT_1", transport.client.campaigns)
+
+    async def test_a_reconnect_still_refreshes_the_keys(self):
+        connect = _connect_returning([self._welcome(), FakeClose(1000)], [self._welcome(), FakeClose(1000)])
+        transport = self._transport(connect)
+        await transport.run(max_sessions=1)
+        self.clock[0] += 600
+        await transport.run(max_sessions=1)
+        # The cached set is still inside its TTL, so the client's own staleness
+        # clock moved with it rather than ageing out mid-run.
+        self.assertFalse(transport.client.keyset_expired)

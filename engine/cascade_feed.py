@@ -1148,6 +1148,22 @@ class FeedLog:
         )
         return signer.frame(envelope)
 
+    def symbols(self) -> List[str]:
+        """Every symbol the log holds events for.
+
+        Not the same as "symbols with a live campaign", and the difference is a
+        bug: the last thing a campaign ever emits is `campaign.closed`, by
+        which point the engine has already dropped it. Streaming only live
+        symbols means that message — the one telling an executor to stop
+        drawing new structure — is written and never delivered.
+        """
+        found = set()
+        for key in self._keys():
+            symbol, _, tail = key.partition("|")
+            if tail.isdigit() and symbol:
+                found.add(symbol)
+        return sorted(found)
+
     def prune(self) -> int:
         """Drop events past retention. Watermarks are never pruned."""
         cutoff = self._now() - self._retention_sec

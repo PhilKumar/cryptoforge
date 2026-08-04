@@ -222,6 +222,50 @@ class ExecutorRuntime:
 
     # ── events from the exchange ─────────────────────────────────
 
+    def poll_fills(self) -> List[str]:
+        """
+        Ask the exchange what happened to the orders we placed.
+
+        Polling rather than a user-data stream on purpose, for now: a websocket
+        that silently stops delivering fills leaves the executor believing it
+        is flat while it is not, and that failure is invisible. A poll that
+        stops throws. The cost is latency on a strategy whose exits are resting
+        orders anyway — the exchange fills them whether or not we noticed.
+        """
+        noticed = []
+        for campaign_id, orders in list(self.book.campaigns.items()):
+            adapter_calls = (
+                ("entry", orders.entry_client_order_id(), orders.entry_resting),
+                ("exit", orders.exit_client_order_id(), orders.exit_resting),
+            )
+            for kind, client_order_id, live in adapter_calls:
+                if not live:
+                    continue
+                try:
+                    record = self._adapter.get_order(symbol=orders.symbol, client_order_id=client_order_id)
+                except Exception as exc:
+                    _log.warning("could not read %s: %s", client_order_id, exc)
+                    continue
+                if record is None:
+                    continue
+                if record.status == "FILLED":
+                    price = record.avg_fill_price or record.price or 0.0
+                    if kind == "entry":
+                        orders.on_entry_filled(
+                            Fill(price=price, quantity=record.filled_qty, timestamp=int(self._now()))
+                        )
+                    else:
+                        orders.on_exit_filled(price)
+                    noticed.append(f"{campaign_id}: {kind} filled at {price:,.4f}")
+                elif not record.is_open:
+                    # Cancelled or rejected out from under us. Clear the flag so
+                    # the next tick re-places rather than waiting on a ghost.
+                    if kind == "entry":
+                        orders.entry_resting = False
+                    else:
+                        orders.exit_resting = False
+        return noticed
+
     def on_fill(self, campaign_id: str, fill: Fill, *, side: str = "buy") -> None:
         orders = self.book.get(campaign_id)
         if not orders:
