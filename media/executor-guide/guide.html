@@ -40,9 +40,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── layout: a prose column, with figures allowed to breathe wider ── */
-.wrap  { width: min(100% - 40px, 720px); margin-inline: auto; }
-.wide  { width: min(100% - 40px, 960px); margin-inline: auto; }
+/* ── layout ──────────────────────────────────────────────────────────
+   One column, one left edge. Prose and figures share the SAME container
+   width and are narrowed from the inside by max-width, rather than being
+   two centred boxes of different widths — two centred boxes never share
+   an edge, and a margin that shifts under the reader as they scroll is
+   the one thing a step-by-step guide cannot do. Figures use the full
+   width and so bleed to the right of the text; that is the only
+   difference between them, and it is deliberate. */
+.wrap, .wide { width: min(100% - 40px, 960px); margin-inline: auto; }
+.wrap > * { max-width: 730px; }        /* reading measure, left-anchored */
+.close .wrap > * { margin-inline: auto; }
 
 section { padding: 56px 0; }
 section + section { border-top: 1px solid #10151f; }
