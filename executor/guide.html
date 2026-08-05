@@ -1042,6 +1042,112 @@ Following SOLUSDT — waiting for the fall to reach the first step.
   </div>
 </section>
 
+<!-- ═══════════════════════ NO COMPUTER TO SPARE ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">If you have no computer to leave on</div>
+    <h2>Rent one that never sleeps.</h2>
+    <p>Everything above assumes you have a machine that can stay switched on. Plenty of people
+      do not — you work off a laptop, it goes in a bag, and that is that.</p>
+    <p>The answer is to rent a small computer that lives in a data centre and never closes. It
+      costs about <strong>$5 a month</strong>, it belongs to you, and you install this program on
+      it exactly the way you would on your own machine. Everyone calls these a <em>VPS</em>.</p>
+    <div class="note">
+      <p>This changes nothing about who holds your money. Your exchange keys sit on a computer
+        you rent and only you can log into. They still never reach us — that is the whole
+        design, and renting the machine does not bend it.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Option</th><th>Cost</th><th>Worth knowing</th></tr></thead>
+        <tbody>
+          <tr><td><strong>A small VPS</strong></td><td>~$5/month</td><td>The one we recommend. Never sleeps, never loses wifi, not in your bag.</td></tr>
+          <tr><td>A Raspberry Pi at home</td><td>~$60 once</td><td>Works well if you enjoy this sort of thing. Still stops when your power or broadband does.</td></tr>
+          <tr><td>An old desktop left on</td><td>free</td><td>Perfectly fine. It is your electricity bill and your home internet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="eyebrow" style="margin-top:44px">How small is small</div>
+    <h2>The cheapest plan they sell is enough.</h2>
+    <p>This program is deliberately tiny. It needs four extra pieces of software and nothing
+      else — no giant number-crunching libraries — which is why the whole thing sits in about
+      <strong>40 MB</strong> of memory while it runs.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>The $5 plan gives you</th><th>This needs</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>0.5 GB memory</td><td>about 40 MB, plus the operating system</td><td style="color:var(--mint)">roughly 7&times; more than enough</td></tr>
+          <tr><td>2 shared processors</td><td>almost nothing — it sits waiting for the market</td><td style="color:var(--mint)">fine</td></tr>
+          <tr><td>20 GB disk</td><td>under 1 GB</td><td style="color:var(--mint)">far more than needed</td></tr>
+          <tr><td>1 TB of traffic</td><td>one small live connection</td><td style="color:var(--mint)">not a consideration</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Two things to do anyway, because a small machine fails differently from a big one:</p>
+    <p><strong>Give it some swap.</strong> A half-gigabyte machine with no swap does not slow
+      down when something spikes — it kills whatever is running. One command at setup turns a
+      hard stop into a slow moment:</p>
+
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+      <div class="term-body"><div class="cmd">sudo fallocate -l 2G /swapfile &amp;&amp; sudo chmod 600 /swapfile</div><div class="cmd">sudo mkswap /swapfile &amp;&amp; sudo swapon /swapfile</div><div class="cmd">echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab</div></div>
+    </div>
+
+    <p><strong>Run nothing else on it.</strong> This is the real risk, and it is not this
+      program being too big — it is a neighbour. One other busy thing on a small machine is what
+      starves it. Keep this one dedicated and it will sit there quietly for years.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ YOUR PHONE ═══════════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Watching it from your phone</div>
+    <h2>Your phone is a screen, not the machine.</h2>
+    <p><strong>It cannot run there.</strong> Phones shut background programs down to save
+      battery, and something placing real orders cannot be at the mercy of that. So the rented
+      computer does the work — but your phone is a perfectly good way to watch it, and to stop
+      it.</p>
+    <p>The dashboard is already built for a phone screen. And it is not just something to look
+      at: <strong>Stand down</strong>, <em>Pause</em> and <em>Resume</em> are all right there, so
+      you can pull every waiting buy order while you are standing in a queue somewhere.</p>
+
+    <div class="note warn">
+      <p><strong>Do not put the dashboard on the internet.</strong> It has a Stand down button
+        and shows everything you hold. It is built to refuse anything that is not the machine it
+        runs on, and that is worth keeping.</p>
+    </div>
+
+    <p>Instead, put your phone and the rented computer on the same private network, so they can
+      see each other and nobody else can. A free tool called <strong>Tailscale</strong> does
+      this — install it on both, sign into the same account, then on the computer run:</p>
+
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+      <div class="term-body"><div class="cmd">tailscale serve 7757</div><span class="out">Available within your tailnet:
+<span class="hi">https://your-machine.tail-scale.ts.net/</span>
+
+Serving <span class="ok">http://127.0.0.1:7757</span></span></div>
+    </div>
+
+    <p>Open that address on your phone and the dashboard is there. No port to open, no password
+      that could leak, no public web address for anyone to find. The program still only answers
+      to its own machine — Tailscale is what carries your phone into the same room.</p>
+
+    <div class="note">
+      <p><strong>Honestly:</strong> this path is longer than the twenty minutes on the front of
+        this guide. Renting the machine, installing this program on it and adding your phone is
+        closer to <strong>forty</strong> if you have never used a terminal. It is still once,
+        and it is still every step written out — but we would rather you heard that number from
+        us than discovered it halfway through.</p>
+    </div>
+  </div>
+</section>
+
 <!-- ═══════════════════════ WHEN IT STOPS ═══════════════════════ -->
 <section>
   <div class="wrap">
