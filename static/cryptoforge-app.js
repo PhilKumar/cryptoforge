@@ -8205,6 +8205,9 @@ function cfInitCascadePage() {
   if (!_cfCascadePollTimer) {
     _cfCascadePollTimer = setInterval(function() { cfLoadCascadeStatus(false); }, 3000);
   }
+  // Once, on open — deliberately not on the 3s poll. Nothing here changes tick
+  // to tick, and repainting it would wipe a half-typed registration.
+  if (typeof cfFeedBuyersLoad === 'function') cfFeedBuyersLoad();
 }
 
 var _cfCascadeOrigShowPage = showPage;
@@ -11998,3 +12001,217 @@ window.addEventListener('resize', function () {
   if (typeof _cfCascadeMarkClippedStrips === 'function') _cfCascadeMarkClippedStrips(document);
   if (typeof _cfCascadeMarkClippedLabels === 'function') _cfCascadeMarkClippedLabels(document);
 });
+
+
+/* ══════════════════════ FEED BUYERS ══════════════════════
+   Registering a buyer had an API and no way to reach it, so onboarding a
+   paying customer meant hand-writing a curl with a base64 key in it. This is
+   that, as a screen.
+
+   Loaded on demand, never on the 3s cascade repaint: this table is not
+   derived from engine state and nothing about it changes tick to tick, so
+   re-rendering it under the operator would only close the form they were
+   halfway through filling in. */
+
+var _cfFeedBuyersLoading = false;
+
+function _cfFeedBuyerStatusPill(row) {
+  var status = String(row.status || '');
+  var tone = status === 'active' ? 'ok' : (status === 'revoked' ? 'bad' : 'warn');
+  var label = status === 'active' ? 'Active' : (status === 'revoked' ? 'Revoked' : 'Lapsed');
+  var title = status === 'active'
+    ? 'Their executor may connect and receive signals.'
+    : (status === 'revoked'
+        ? 'Banned. Only you can undo this — billing never writes it.'
+        : 'Not paid up. Anything they already hold is still looked after.');
+  return '<span class="cf-feed-pill is-' + tone + '" title="' + _escapeHtml(title) + '">'
+    + _escapeHtml(label) + '</span>';
+}
+
+function _cfFeedBuyerDaysCell(row) {
+  var days = row.days_left;
+  if (days === null || days === undefined) {
+    return '<span class="table-meta" title="No end date set — a free look. They can connect, but nothing opens.">--</span>';
+  }
+  var n = Number(days);
+  // Negative is not a display quirk: the executor stops on the date whatever
+  // the status word says, so an expired row is already off the feed.
+  var colour = n <= 0 ? 'var(--red,#e2574c)' : (n <= 5 ? 'var(--amber,#f5a623)' : 'var(--green,#3fae56)');
+  var text = n <= 0 ? 'expired' : n + 'd';
+  return '<span style="color:' + colour + ';" title="Entitlement is re-checked every 30 seconds">'
+    + _escapeHtml(text) + '</span>';
+}
+
+function _cfFeedBuyerActions(row) {
+  var id = String(row.buyer_id || '');
+  var status = String(row.status || '');
+  var bits = [];
+  if (status !== 'active') {
+    bits.push('<button class="btn btn-outline btn-sm" data-cf-click="cfFeedBuyerSetStatus(\'' + id + '\',\'active\')">Reactivate</button>');
+  }
+  if (status !== 'lapsed') {
+    bits.push('<button class="btn btn-outline btn-sm" data-cf-click="cfFeedBuyerSetStatus(\'' + id + '\',\'lapsed\')">Lapse</button>');
+  }
+  if (status !== 'revoked') {
+    bits.push('<button class="btn btn-outline btn-sm cf-feed-danger" data-cf-click="cfFeedBuyerSetStatus(\'' + id + '\',\'revoked\')">Revoke</button>');
+  }
+  return '<div class="admin-inline-actions">' + bits.join('') + '</div>';
+}
+
+function _cfFeedBuyersRender(rows) {
+  var body = document.getElementById('cf-feed-buyers-body');
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">'
+      + 'No buyers registered yet. Register one once they send you the key their executor printed.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(function(row) {
+    var id = String(row.buyer_id || '');
+    var label = String(row.label || '');
+    return '<tr>'
+      + '<td><strong>' + _escapeHtml(id) + '</strong>'
+        + (label ? '<div class="table-note">' + _escapeHtml(label) + '</div>' : '') + '</td>'
+      + '<td>' + _cfFeedBuyerStatusPill(row) + '</td>'
+      + '<td>' + (row.connected
+          ? '<span class="cf-feed-pill is-ok" title="Their executor is connected right now">Live</span>'
+          : '<span class="table-meta" title="Not connected. This is normal — they may simply have it switched off.">--</span>') + '</td>'
+      + '<td class="num">' + _cfFeedBuyerDaysCell(row) + '</td>'
+      + '<td>' + _escapeHtml(_cfFeedBuyerWhen(row.created_at)) + '</td>'
+      + '<td>' + _cfFeedBuyerActions(row) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function _cfFeedBuyerWhen(epochSec) {
+  var n = Number(epochSec) || 0;
+  if (!n) return '--';
+  // IST, like every other time on this site.
+  return new Date(n * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function _cfFeedBuyersMeta(rows) {
+  var meta = document.getElementById('cf-feed-buyers-meta');
+  if (!meta) return;
+  if (!rows.length) {
+    meta.textContent = 'Who may connect their executor to the signal feed. We hold their public key and nothing else.';
+    return;
+  }
+  var active = rows.filter(function(r) { return r.status === 'active'; }).length;
+  var live = rows.filter(function(r) { return r.connected; }).length;
+  // Anyone inside five days is the number that answers "is someone about to
+  // fall off?" without doing arithmetic on the table.
+  var soon = rows.filter(function(r) {
+    return r.days_left !== null && r.days_left !== undefined && Number(r.days_left) > 0 && Number(r.days_left) <= 5;
+  }).length;
+  meta.textContent = rows.length + ' registered · ' + active + ' active · ' + live + ' connected now'
+    + (soon ? ' · ' + soon + ' expiring within 5 days' : '');
+}
+
+async function cfFeedBuyersLoad() {
+  if (_cfFeedBuyersLoading) return;
+  _cfFeedBuyersLoading = true;
+  var body = document.getElementById('cf-feed-buyers-body');
+  try {
+    var res = await cfApiFetch('/api/cascade/feed/subscribers');
+    var data = await cfReadApiPayload(res);
+    if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Could not read the buyer list'));
+    var rows = Array.isArray(data.subscribers) ? data.subscribers : [];
+    _cfFeedBuyersRender(rows);
+    _cfFeedBuyersMeta(rows);
+  } catch (err) {
+    if (body) {
+      body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">'
+        + _escapeHtml(String(err.message || err)) + '</td></tr>';
+    }
+  } finally {
+    _cfFeedBuyersLoading = false;
+  }
+}
+
+function cfFeedBuyerFormToggle() {
+  var form = document.getElementById('cf-feed-buyer-form');
+  if (!form) return;
+  form.hidden = !form.hidden;
+  _cfFeedBuyerMsg('');
+  if (!form.hidden) {
+    var id = document.getElementById('cf-feed-buyer-id');
+    if (id) id.focus();
+  }
+}
+
+function _cfFeedBuyerMsg(text, isError) {
+  var el = document.getElementById('cf-feed-buyer-msg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? 'var(--red,#e2574c)' : 'var(--green,#3fae56)';
+}
+
+async function cfFeedBuyerSubmit() {
+  var idEl = document.getElementById('cf-feed-buyer-id');
+  var keyEl = document.getElementById('cf-feed-buyer-key');
+  var labelEl = document.getElementById('cf-feed-buyer-label');
+  var daysEl = document.getElementById('cf-feed-buyer-days');
+  var replaceEl = document.getElementById('cf-feed-buyer-replace');
+  var saveBtn = document.getElementById('cf-feed-buyer-save');
+  if (!idEl || !keyEl) return;
+
+  var buyerId = String(idEl.value || '').trim();
+  // Whitespace and line breaks are what you get from pasting out of an email,
+  // so they are stripped here rather than rejected at the server as a bad key.
+  var publicKey = String(keyEl.value || '').replace(/\s+/g, '');
+  if (!buyerId) { _cfFeedBuyerMsg('A buyer ID is needed.', true); idEl.focus(); return; }
+  if (!publicKey) { _cfFeedBuyerMsg('Paste the key their executor printed.', true); keyEl.focus(); return; }
+
+  var payload = { buyer_id: buyerId, public_key: publicKey };
+  // Only sent when filled in. An empty box means "leave it alone" — sending ''
+  // would erase the label of the buyer being re-keyed.
+  var label = String(labelEl ? labelEl.value : '').trim();
+  if (label) payload.label = label;
+  if (replaceEl && replaceEl.checked) payload.replace = true;
+  var days = Number(daysEl && daysEl.value);
+  if (days > 0) payload.expires_at = Math.floor(Date.now() / 1000 + days * 86400);
+
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Registering…'; }
+  try {
+    var res = await cfApiFetch('/api/cascade/feed/subscribers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var data = await cfReadApiPayload(res);
+    if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Registration failed'));
+    _cfFeedBuyerMsg(buyerId + ' registered.');
+    idEl.value = ''; keyEl.value = '';
+    if (labelEl) labelEl.value = '';
+    if (daysEl) daysEl.value = '';
+    if (replaceEl) replaceEl.checked = false;
+    await cfFeedBuyersLoad();
+  } catch (err) {
+    _cfFeedBuyerMsg(String(err.message || err), true);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Register'; }
+  }
+}
+
+async function cfFeedBuyerSetStatus(buyerId, status) {
+  // Revoking is the one that cannot be undone by anything automatic — billing
+  // may only ever write active or lapsed — so it is the one that asks.
+  if (status === 'revoked'
+      && !window.confirm('Revoke ' + buyerId + '?\n\nTheir stream closes within 30 seconds. Only you can undo this — a payment never will.')) {
+    return;
+  }
+  try {
+    var res = await cfApiFetch('/api/cascade/feed/subscribers/' + encodeURIComponent(buyerId) + '/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: status })
+    });
+    var data = await cfReadApiPayload(res);
+    if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Could not change the status'));
+    await cfFeedBuyersLoad();
+  } catch (err) {
+    var meta = document.getElementById('cf-feed-buyers-meta');
+    if (meta) meta.textContent = String(err.message || err);
+  }
+}

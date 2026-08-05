@@ -7905,12 +7905,26 @@ async def cascade_feed_subscriber_add(request: Request):
             detail=f"{buyer_id} is already registered with a different key. Pass replace: true to re-key.",
         )
     expires_at = body.get("expires_at")
-    record = subscribers.add(
-        buyer_id,
-        public_key,
-        label=str(body.get("label") or ""),
-        expires_at=int(expires_at) if expires_at else None,
-    )
+    expires_at = int(expires_at) if expires_at else None
+    label = body.get("label")
+
+    if existing:
+        # A ban must not be undoable by re-registering. Re-keying is a routine
+        # act — a buyer's machine died — and it would otherwise be the one route
+        # back in for someone deliberately shut out.
+        if existing.get("status") == "revoked":
+            raise HTTPException(
+                status_code=409,
+                detail=f"{buyer_id} is revoked. Set the status back to active first if that is what you mean to do.",
+            )
+        record = subscribers.rekey(
+            buyer_id,
+            public_key,
+            label=str(label) if label is not None else None,
+            expires_at=expires_at,
+        )
+    else:
+        record = subscribers.add(buyer_id, public_key, label=str(label or ""), expires_at=expires_at)
     return {"status": "ok", "subscriber": record}
 
 

@@ -1567,6 +1567,77 @@
     </div>
     <div class="cf-cascade-pager" id="cf-cascade-closed-pager"></div>
   </section>
+
+  <!-- Who may receive the signal feed. The API for this existed with no way to
+       reach it, so onboarding a paying buyer meant hand-writing a curl with a
+       base64 key in it. This is that, as a screen. -->
+  <section class="card table-panel" id="cf-feed-buyers-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Feed Buyers</h3>
+        <div class="table-meta" id="cf-feed-buyers-meta">Who may connect their executor to the signal feed. We hold their public key and nothing else.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <button class="btn btn-outline btn-sm" data-cf-click="cfFeedBuyersLoad()"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> Refresh</button>
+        <button class="btn btn-primary btn-sm" data-cf-click="cfFeedBuyerFormToggle()" id="cf-feed-buyer-add-btn">Register a buyer</button>
+      </div>
+    </div>
+
+    <div id="cf-feed-buyer-form" class="cf-feed-form" hidden>
+      <div class="cf-feed-form-grid">
+        <label class="cf-feed-field">
+          <span>Buyer ID</span>
+          <input type="text" id="cf-feed-buyer-id" placeholder="buyer-anita" autocomplete="off" spellcheck="false">
+          <em>Letters, digits, - or _. This is what their executor identifies itself as.</em>
+        </label>
+        <label class="cf-feed-field">
+          <span>Label <i>optional</i></span>
+          <input type="text" id="cf-feed-buyer-label" placeholder="Anita — quarterly" autocomplete="off">
+          <em>For you, not for them. Nothing is sent anywhere.</em>
+        </label>
+        <label class="cf-feed-field">
+          <span>Paid up for <i>optional</i></span>
+          <input type="number" id="cf-feed-buyer-days" placeholder="30" min="1" max="3650" step="1">
+          <em>Days from now. Leave blank for a free look that opens nothing.</em>
+        </label>
+      </div>
+      <label class="cf-feed-field cf-feed-field-wide">
+        <span>Public key</span>
+        <textarea id="cf-feed-buyer-key" rows="2" spellcheck="false" autocomplete="off"
+                  placeholder="the base64 line their executor prints from: python3 -m executor --register"></textarea>
+        <em>Their machine makes this pair and keeps the private half. This one is safe to email.</em>
+      </label>
+      <label class="cf-feed-replace">
+        <input type="checkbox" id="cf-feed-buyer-replace">
+        <span>Re-key an existing buyer &mdash; swaps the key they verify with. Their status and paid-up date are kept; leave a box blank to leave that field alone.</span>
+      </label>
+      <div class="cf-feed-form-actions">
+        <span class="cf-feed-form-msg" id="cf-feed-buyer-msg"></span>
+        <button class="btn btn-outline btn-sm" data-cf-click="cfFeedBuyerFormToggle()">Cancel</button>
+        <button class="btn btn-primary btn-sm" data-cf-click="cfFeedBuyerSubmit()" id="cf-feed-buyer-save">Register</button>
+      </div>
+    </div>
+
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th>Buyer</th>
+              <th>Status</th>
+              <th>Stream</th>
+              <th class="num">Days Left</th>
+              <th>Registered</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-feed-buyers-body">
+            <tr><td colspan="6" class="cf-table-empty-cell">Not loaded yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 </div>
 
 <div id="scalp-page" class="page-section">

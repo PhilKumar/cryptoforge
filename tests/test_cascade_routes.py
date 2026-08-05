@@ -889,6 +889,68 @@ class FeedSubscriberRouteTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 401)
 
+    async def test_rekeying_keeps_the_entitlement_it_found(self):
+        """A buyer's laptop dies and they register again. That must not quietly
+        hand them an entitlement with no end date, which is what writing a whole
+        fresh record did."""
+        async with self._client() as client:
+            await client.post(
+                "/api/cascade/feed/subscribers",
+                json={
+                    "buyer_id": "buyer-anita",
+                    "public_key": self._key(),
+                    "label": "Anita \u2014 quarterly",
+                    "expires_at": 1790000000,
+                },
+                headers=self._headers,
+            )
+            response = await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-anita", "public_key": self._key(), "replace": True},
+                headers=self._headers,
+            )
+            self.assertEqual(response.status_code, 200)
+            record = response.json()["subscriber"]
+        self.assertEqual(record["expires_at"], 1790000000, "the paid-up date must survive a re-key")
+        self.assertEqual(record["label"], "Anita \u2014 quarterly", "an omitted label means leave it alone")
+
+    async def test_a_revoked_buyer_cannot_re_register_their_way_back_in(self):
+        """The ban is the strongest thing here and only Phil may lift it, so the
+        routine act of swapping a key must not be a way around it."""
+        async with self._client() as client:
+            await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-banned", "public_key": self._key()},
+                headers=self._headers,
+            )
+            await client.post(
+                "/api/cascade/feed/subscribers/buyer-banned/status",
+                json={"status": "revoked"},
+                headers=self._headers,
+            )
+            response = await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-banned", "public_key": self._key(), "replace": True},
+                headers=self._headers,
+            )
+            self.assertEqual(response.status_code, 409)
+            listed = (await client.get("/api/cascade/feed/subscribers")).json()["subscribers"]
+        self.assertEqual(listed[0]["status"], "revoked", "still banned")
+
+    async def test_a_new_label_on_a_rekey_replaces_the_old_one(self):
+        async with self._client() as client:
+            await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-r", "public_key": self._key(), "label": "old"},
+                headers=self._headers,
+            )
+            response = await client.post(
+                "/api/cascade/feed/subscribers",
+                json={"buyer_id": "buyer-r", "public_key": self._key(), "label": "new", "replace": True},
+                headers=self._headers,
+            )
+        self.assertEqual(response.json()["subscriber"]["label"], "new")
+
     async def test_a_key_registers_and_lists(self):
         async with self._client() as client:
             response = await client.post(

@@ -664,6 +664,32 @@ class FeedSubscribers:
         self._store.put(self._bucket, buyer_id, record)
         return record
 
+    def rekey(
+        self, buyer_id: str, public_key_b64: str, *, label: Optional[str] = None, expires_at: Optional[int] = None
+    ) -> dict:
+        """Swap the key a registered buyer verifies with, and change nothing else.
+
+        `add()` writes a whole fresh record, which is right for a new buyer and
+        wrong for an existing one: replacing a key that way reset the status to
+        active and the expiry to None. So re-keying a REVOKED buyer silently
+        un-banned them, and re-keying anyone handed them an entitlement with no
+        end date. A buyer whose laptop died and who registered again is exactly
+        the person that would happen to.
+
+        Status is never touched here — reactivating is its own deliberate act.
+        Label and expiry are carried forward unless new ones are given.
+        """
+        record = self.get(buyer_id)
+        if not record:
+            raise KeyError(buyer_id)
+        record["public_key"] = public_key_b64
+        if label is not None:
+            record["label"] = label
+        if expires_at is not None:
+            record["expires_at"] = int(expires_at)
+        self._store.put(self._bucket, buyer_id, record)
+        return record
+
     def get(self, buyer_id: str) -> Optional[dict]:
         record = self._store.get(self._bucket, buyer_id, default=None)
         return record if isinstance(record, dict) else None
