@@ -105,15 +105,16 @@ class FibLadderPoolTests(unittest.TestCase):
 
     def test_order_timeframe_labels_follow_the_campaign_timeframe(self):
         """A 4H campaign must not label its deep rungs 15m. The labels are
-        relative to whatever the campaign is actually being stepped on, and 4H
-        is the cap, so one rung up from 4H is still 4H."""
+        relative to whatever the campaign is actually being stepped on, so one
+        rung up from 4H is 1D — the ladder runs to 1W since 2026-08-05. Display
+        only: every order is still worked on the campaign's own timeframe."""
         campaign = _campaign(mother_high=100.0)
         campaign.timeframe = "4h"
         deep = _leg(campaign, low=95.0, touch_high=98.0)
         build_fib_ladder_and_pool(campaign, deep)
         self.assertTrue(deep.escalated)
         self.assertEqual(timeframe_for_level(campaign, deep, 2), "4h")
-        self.assertEqual(timeframe_for_level(campaign, deep, 4), "4h")
+        self.assertEqual(timeframe_for_level(campaign, deep, 4), "1d")
         campaign.timeframe = "15m"
         self.assertEqual(timeframe_for_level(campaign, deep, 4), "1h")
 

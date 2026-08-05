@@ -403,12 +403,36 @@ TIMEFRAME_SECONDS = {
     "1w": 7 * 86400,
 }
 # The ladder a campaign climbs as it outgrows the screen (Phase 2 walks it).
-# Every rung climbs to the next one — 5m to 15m, 15m to 1H, 1H to 4H — so where
-# a campaign STARTS on the ladder only decides where it joins, not whether it
-# moves. Capped at 4H on purpose: a campaign quietly becoming a weekly position
-# is too big a change of character to happen by itself, which is also why 1D and
-# 1W are not on the ladder at all.
-ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
+# Every rung climbs to the next one, so where a campaign STARTS on the ladder
+# only decides where it joins, not whether it moves.
+#
+# It used to stop at 4H, on the reasoning that a campaign quietly becoming a
+# weekly position was too big a change of character to happen by itself.
+# Phil overruled that on 2026-08-05: "escalations can happen but don't stop at
+# 4H". A campaign that has outlived 200 4H bars is already a multi-month
+# position, and freezing its geometry at 4H while it runs on does not make it
+# smaller — it just funds the money off structure too fine to matter, which is
+# the whole point of climbing in the first place.
+ESCALATION_LADDER = ("5m", "15m", "1h", "4h", "1d", "1w")
+# Unix time began on a THURSDAY, so `ts // 604800` buckets weeks Thursday to
+# Thursday while every exchange opens its weekly bar on Monday 00:00 UTC
+# (verified against Binance 1w klines: ts % 604800 == 345600, never 0). Four
+# days of offset reconciles them. Without it a 1W roll-up draws bars that exist
+# on no exchange, and a 1D->1W escalation waits for a boundary that no weekly
+# bar ever starts on — so it would simply never climb the last rung.
+WEEK_ALIGN_SEC = 4 * 86400
+
+
+def bucket_start(timestamp: int, bucket_sec: int) -> int:
+    """The open of the bucket `timestamp` falls in, aligned the way an exchange
+    aligns it. Identical to floor division for every rung except the weekly
+    one — see WEEK_ALIGN_SEC."""
+    if bucket_sec <= 0:
+        return int(timestamp)
+    offset = WEEK_ALIGN_SEC if bucket_sec % (7 * 86400) == 0 else 0
+    return ((int(timestamp) - offset) // bucket_sec) * bucket_sec + offset
+
+
 # What may be picked when STARTING a campaign. The timeframe and the KIND are
 # two separate questions, and the form asks both:
 #   kind = minor       — a sub-mother marked inside a move that is already
@@ -422,13 +446,12 @@ ESCALATION_LADDER = ("5m", "15m", "1h", "4h")
 #                        be mislabelled minor when the kind was inferred from
 #                        the timeframe alone.
 # Whether a campaign escalates is decided by the LADDER, not by which of those
-# two it is: start at 5m, 15m or 1H and it climbs toward the 4H cap. Start at
-# 4H, 1D or 1W and it is fixed — 4H because it is already the cap, 1D and 1W
-# because they are off the ladder by design.
+# two it is: start anywhere below 1W and it climbs. Only a campaign started on
+# 1W is fixed, because there is no rung above it.
 CAMPAIGN_START_TIMEFRAMES = ("5m", "15m", "1h", "4h", "1d", "1w")
 # The rungs that still have somewhere to climb to. Starting on one of these is
 # what makes a campaign an escalating one.
-ESCALATING_START_TIMEFRAMES = ESCALATION_LADDER[:-1]  # 5m, 15m, 1h
+ESCALATING_START_TIMEFRAMES = ESCALATION_LADDER[:-1]  # 5m, 15m, 1h, 4h, 1d
 # When a campaign has more bars than this behind it on its current rung, it has
 # outgrown the screen and climbs to the next one. 200 matches the chart budget:
 # the campaign chart draws its last ~200 buckets, so past this the mother candle
@@ -474,7 +497,7 @@ def chart_timeframes_for(timeframe: str) -> Dict[str, int]:
 
 
 def next_timeframe_up(timeframe: str) -> str:
-    """The next rung above `timeframe` on the escalation ladder, capped at 4H."""
+    """The next rung above `timeframe` on the escalation ladder, capped at 1W."""
     base = str(timeframe or "").lower()
     if base not in ESCALATION_LADDER:
         return base or BASE_TIMEFRAME
@@ -1238,7 +1261,7 @@ class Campaign:
 
     @property
     def can_escalate(self) -> bool:
-        """A ladder-born campaign that has not already reached the 4H cap."""
+        """A ladder-born campaign that has not already reached the top rung."""
         return bool(self.escalates) and self.timeframe != ESCALATION_LADDER[-1]
 
     @property
@@ -2422,7 +2445,7 @@ class CascadeEngine:
             timeframe=timeframe,
             start_timeframe=timeframe,
             # Every rung with somewhere above it climbs: 5m, 15m and 1H all
-            # escalate toward the 4H cap. 4H/1D/1W stay put for life.
+            # escalate all the way to 1W. Only a campaign STARTED on 1W is fixed.
             escalates=timeframe in ESCALATING_START_TIMEFRAMES,
             mc_kind=mc_kind,
             # Stamped only when a venue was named. Left empty for the default
@@ -3405,7 +3428,7 @@ class CascadeEngine:
         current: Optional[Candle] = None
         current_bucket = None
         for c in candles:
-            bucket = (c.timestamp // bucket_sec) * bucket_sec
+            bucket = bucket_start(c.timestamp, bucket_sec)
             if current is None or bucket != current_bucket:
                 if current is not None:
                     out.append(current)
@@ -4184,7 +4207,8 @@ class CascadeEngine:
             return False
         new_tf = next_timeframe_up(campaign.timeframe)
         new_sec = timeframe_seconds(new_tf)
-        if (candle.timestamp + old_sec) % new_sec != 0:
+        closes_at = candle.timestamp + old_sec
+        if closes_at != bucket_start(closes_at, new_sec):
             return False  # wait for the candle that completes a new-TF bucket
         old_tf = campaign.timeframe
         history = self._candles.get(campaign.campaign_id) or []
@@ -4209,7 +4233,7 @@ class CascadeEngine:
             + (
                 f"Next rung: {next_timeframe_up(new_tf)}."
                 if campaign.can_escalate
-                else "This is the 4H cap — it stays here."
+                else f"This is the top of the ladder ({new_tf.upper()}) — it stays here."
             ),
             level="info",
             dedupe_sec=60.0,

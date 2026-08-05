@@ -3995,15 +3995,19 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["campaign"]["timeframe"], "5m")
         self.assertTrue(result["campaign"]["escalates"])
 
-    async def test_a_higher_timeframe_campaign_never_escalates(self):
+    async def test_a_daily_campaign_climbs_to_weekly(self):
+        """Phil, 2026-08-05: "escalations can happen but don't stop at 4H". A 1D
+        campaign that outlives 200 daily bars is a multi-month position; keeping
+        its geometry daily just funds money off structure too fine to matter."""
         engine = _mk_engine()
         mother_ts = (int(time.time()) - 30 * 86400) // 86400 * 86400
         result = await engine.start_campaign("BTCUSDT", 2000, 105, 99, mother_timestamp=mother_ts, timeframe="1d")
         campaign = engine.campaigns[result["campaign"]["campaign_id"]]
         engine.stop()
         self.assertEqual(campaign.timeframe, "1d")
-        self.assertFalse(campaign.escalates)
-        self.assertFalse(campaign.can_escalate)
+        self.assertTrue(campaign.escalates)
+        self.assertTrue(campaign.can_escalate)
+        self.assertEqual(cascade_module.next_timeframe_up("1d"), "1w")
 
     async def test_every_rung_with_somewhere_to_go_escalates(self):
         """The LADDER decides escalation, not major/minor. 5m, 15m and 1H all
@@ -4026,9 +4030,9 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(campaign.has_escalated, "it has not moved yet")
         engine.stop()
 
-    async def test_the_cap_and_the_off_ladder_timeframes_are_fixed(self):
-        """4H is fixed because it IS the cap; 1D and 1W because they are off the
-        ladder by design — a campaign must not drift into a weekly position."""
+    async def test_only_the_top_rung_is_fixed(self):
+        """Every rung with somewhere above it climbs. 1W is fixed for the one
+        reason that survives: there is no rung above it."""
         engine = _mk_engine()
         mother_ts = (int(time.time()) - 30 * 86400) // 86400 * 86400
         for tf in ("4h", "1d", "1w"):
@@ -4042,8 +4046,9 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
             )
             campaign = engine.campaigns[result["campaign"]["campaign_id"]]
             self.assertEqual(campaign.timeframe, tf)
-            self.assertFalse(campaign.escalates, f"{tf} must keep its timeframe for life")
-            self.assertFalse(campaign.can_escalate)
+            top = tf == "1w"
+            self.assertEqual(campaign.escalates, not top, f"{tf}: only 1W keeps its timeframe for life")
+            self.assertEqual(campaign.can_escalate, not top)
         engine.stop()
 
     async def test_the_start_rung_is_remembered_so_climbing_can_be_told_apart(self):
@@ -4265,7 +4270,7 @@ class CascadeMinorMotherCandleTests(unittest.IsolatedAsyncioTestCase):
         )
         engine.stop()
         self.assertEqual(result["campaign"]["timeframe"], "1d")
-        self.assertFalse(result["campaign"]["escalates"])
+        self.assertTrue(result["campaign"]["escalates"], "1d climbs to 1w now — only 1w is fixed")
 
     async def test_major_is_the_default_and_unknown_kinds_are_not_minor(self):
         """Anything that is not literally 'minor' is a major MC — a typo must
@@ -4968,6 +4973,83 @@ class CascadeFibSizeFloorTests(unittest.TestCase):
                 )
                 self.assertEqual(restored.min_fib_range_pct, gate)
                 self.assertEqual(restored.median_bar_pct, 0.00099)
+
+
+class CascadeWeeklyLadderTests(unittest.TestCase):
+    """The ladder runs to 1W (Phil, 2026-08-05: "don't stop at 4H"), and the
+    last rung only works because weeks are aligned to Monday.
+
+    Unix time began on a Thursday, so `ts // 604800` buckets weeks Thursday to
+    Thursday while every exchange opens its weekly bar on Monday 00:00 UTC.
+    Left alone, a 1D campaign would wait forever for a boundary that no weekly
+    bar starts on, and the 1W chart roll-up would draw bars that exist nowhere.
+    """
+
+    WEEK = 7 * 86400
+    MONDAY = 1785715200  # 2026-08-03 00:00 UTC, a real Binance 1w bar open
+    THURSDAY = 1785974400  # 2026-08-06 00:00 UTC — where naive bucketing lands (ts % WEEK == 0)
+
+    def test_the_ladder_runs_to_the_weekly_rung(self):
+        self.assertEqual(cascade_module.ESCALATION_LADDER, ("5m", "15m", "1h", "4h", "1d", "1w"))
+        self.assertEqual(cascade_module.next_timeframe_up("4h"), "1d")
+        self.assertEqual(cascade_module.next_timeframe_up("1d"), "1w")
+        self.assertEqual(cascade_module.next_timeframe_up("1w"), "1w", "nothing above the top rung")
+
+    def test_weeks_open_on_monday_not_thursday(self):
+        self.assertEqual(cascade_module.bucket_start(self.MONDAY, self.WEEK), self.MONDAY)
+        self.assertNotEqual(cascade_module.bucket_start(self.THURSDAY, self.WEEK), self.THURSDAY)
+        # Binance's own weekly opens all satisfy this and none satisfy `% WEEK == 0`.
+        for open_ts in (1784505600, 1785110400, 1785715200):
+            self.assertEqual(cascade_module.bucket_start(open_ts, self.WEEK), open_ts)
+            self.assertNotEqual(open_ts % self.WEEK, 0, "the naive form would reject a real weekly bar")
+
+    def test_every_other_rung_is_plain_floor_division(self):
+        for sec in (300, 900, 3600, 4 * 3600, 86400):
+            for ts in (0, 1785715200, 1785717777):
+                self.assertEqual(cascade_module.bucket_start(ts, sec), (ts // sec) * sec)
+
+    def _daily_campaign(self, engine):
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "1d"
+        campaign.start_timeframe = "1d"
+        campaign.escalates = True
+        campaign.state = "TRENDLINE_ACTIVE"
+        campaign.mother_timestamp = self.MONDAY - 201 * 86400
+        history = engine._candles.setdefault(campaign.campaign_id, [])
+        for i in range(200):
+            ts = campaign.mother_timestamp + (i + 1) * 86400
+            history.append(Candle(timestamp=ts, open=100.0, high=101.0, low=99.0, close=100.5))
+        return campaign
+
+    def test_a_daily_campaign_climbs_on_a_monday_close(self):
+        engine = _mk_engine()
+        campaign = self._daily_campaign(engine)
+        candle = engine._candles[campaign.campaign_id][-1]
+        self.assertEqual(candle.timestamp + 86400, self.MONDAY, "the trigger bar closes on a Monday")
+        self.assertTrue(engine._maybe_escalate(campaign, candle))
+        self.assertEqual(campaign.timeframe, "1w")
+        self.assertFalse(campaign.can_escalate, "1w is the top")
+        history = engine._candles[campaign.campaign_id]
+        for c in history:
+            self.assertEqual(c.timestamp % self.WEEK, 345600, "every rolled-up bar opens on a Monday")
+        self.assertEqual(campaign.last_processed_ts, self.MONDAY - self.WEEK)
+
+    def test_it_will_not_climb_on_a_thursday_close(self):
+        """The exact bug the alignment fixes: naive bucketing fires here, and
+        would hand the campaign a cursor no weekly bar ever starts at."""
+        engine = _mk_engine()
+        campaign = self._daily_campaign(engine)
+        candle = Candle(timestamp=self.THURSDAY - 86400, open=100.0, high=101.0, low=99.0, close=100.5)
+        self.assertEqual((candle.timestamp + 86400) % self.WEEK, 0, "naive bucketing would allow this")
+        self.assertFalse(engine._maybe_escalate(campaign, candle))
+        self.assertEqual(campaign.timeframe, "1d")
+
+    def test_a_four_hour_campaign_no_longer_stops(self):
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "4h"
+        campaign.escalates = True
+        self.assertTrue(campaign.can_escalate, "4h used to be the cap")
 
 
 class CascadeFibGateTimeframeTests(unittest.TestCase):
