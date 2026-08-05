@@ -195,6 +195,41 @@ MIN_FIB_RANGE_FLOOR_PCT = 0.0002
 # hand. Empty by design: the automatic rule is meant to handle a symbol that has
 # never been traded here before, without anyone remembering to add a row.
 MIN_FIB_RANGE_PCT_BY_SYMBOL: Dict[str, float] = {}
+# Everything above is a 5m number: the measurement fetches 5m candles, the
+# ceiling was verified on 5m charts, and one "median bar" means one 5m bar. A
+# campaign stepping 4h candles was still being asked for a 5m-sized swing, so
+# a bump a ninth of one of its own candles counted as tradeable structure and
+# it drew fib after fib. PAXGUSDT #47 (born 02-28, escalated to 4h) had 15 fibs
+# and 9 trendlines by 08-05 — the report that found this.
+#
+# So the stored gate stays a 5m number and is SCALED AT USE by the timeframe
+# the campaign is stepping right now. Scaling at use rather than at birth is
+# what makes escalation work for free: campaign.timeframe changes and the gate
+# follows, with nothing to migrate, no second measurement, and no stored value
+# that could go stale against the timeframe it was measured for.
+#
+# Measured on Binance 2026-08-05 — median bar as a multiple of the same
+# instrument's 5m bar, across BTC/ETH/SOL/BNB/PAXG/XRP:
+#
+#     1m 0.33-0.48   15m 1.45-1.99   1h 3.79-4.71
+#     4h 9.25-11.67  1d 33.16-39.35  1w 72.04-125.67
+#
+# Tight enough across six very different instruments to take the median and
+# hard-code it. NOT sqrt(time), which is the textbook answer and is wrong here:
+# it predicts 6.93x at 4h against a measured 10.22x, and 16.97x at 1d against
+# 33.64x. Price trends, so range grows faster than diffusion says.
+#
+# 1w is the loosest fit (72-126) and has the fewest bars behind it, but 1w
+# campaigns are rare and the direction is not in doubt.
+FIB_RANGE_TF_SCALE: Dict[str, float] = {
+    "1m": 0.38,
+    "5m": 1.0,
+    "15m": 1.75,
+    "1h": 3.90,
+    "4h": 10.20,
+    "1d": 33.60,
+    "1w": 105.00,
+}
 
 
 def repair_scaled_fib_range(min_fib_range_pct: float, median_bar_pct: float) -> Tuple[float, float]:
@@ -248,6 +283,26 @@ def min_fib_range_for(symbol: str, median_bar_pct: float) -> float:
         return MIN_FIB_RANGE_PCT
     scaled = median_bar_pct * FIB_RANGE_BAR_RATIO
     return max(min(scaled, MIN_FIB_RANGE_PCT), MIN_FIB_RANGE_FLOOR_PCT)
+
+
+def fib_range_gate(min_fib_range_pct: float, timeframe: str) -> float:
+    """The smallest swing that counts as structure, on the timeframe actually
+    being stepped right now.
+
+    `min_fib_range_pct` is the campaign's stored gate, which is always a 5m
+    number — see FIB_RANGE_TF_SCALE for why it stays that way and is scaled
+    here instead of at birth. A 5m campaign therefore gets exactly the number
+    it got before this existed, which is what keeps the verified 2026-07-20
+    BTC anchors valid.
+
+    An unknown timeframe scales by 1.0: a name nobody has measured must not
+    silently loosen the filter, and 1.0 is the strictest factor in the table
+    above 1m.
+    """
+    base = _coerce_float(min_fib_range_pct)
+    if base <= 0:
+        base = MIN_FIB_RANGE_PCT
+    return base * FIB_RANGE_TF_SCALE.get(str(timeframe or "").lower(), 1.0)
 
 
 def max_stop_raise_usd(trigger: float, median_bar_pct: float, tick_size: float) -> float:
@@ -2863,6 +2918,14 @@ class CascadeEngine:
             # Anything that wants percent multiplies at the point it prints.
             payload["min_fib_range_pct_display"] = round(campaign.min_fib_range_pct * 100, 4)
             payload["median_bar_pct_display"] = round(campaign.median_bar_pct * 100, 4)
+            # The stored gate is a 5m number; what actually rejects a fib is
+            # that number scaled to the timeframe being stepped. Show the one
+            # doing the work, or a 4h campaign reports a threshold ten times
+            # smaller than the one it is really applying.
+            payload["fib_gate_pct_display"] = round(
+                fib_range_gate(campaign.min_fib_range_pct, campaign.timeframe) * 100, 4
+            )
+            payload["fib_gate_tf_scale"] = FIB_RANGE_TF_SCALE.get(str(campaign.timeframe or "").lower(), 1.0)
             # Ground a sibling had already funded when this campaign was born,
             # so the strip can say why its pools are smaller than the raw fall
             # implies. Empty for a campaign that started on clear ground.
@@ -4308,9 +4371,8 @@ class CascadeEngine:
                 # Only a structure-sized recovery is the whole V — a candle
                 # green by a few ticks locking a few-tick wiggle handed TL1 to
                 # noise on the steady-fall day.
-                if (
-                    candle.close > candle.open
-                    and (candle.close - candle.low) >= candle.close * campaign.min_fib_range_pct
+                if candle.close > candle.open and (candle.close - candle.low) >= candle.close * fib_range_gate(
+                    campaign.min_fib_range_pct, campaign.timeframe
                 ):
                     campaign.geo_low_locked = True
         elif (
@@ -4331,7 +4393,7 @@ class CascadeEngine:
         """
         if fib1 is None or touch_high <= fib1:
             return
-        if (touch_high - fib1) < touch_high * campaign.min_fib_range_pct:
+        if (touch_high - fib1) < touch_high * fib_range_gate(campaign.min_fib_range_pct, campaign.timeframe):
             return  # a few ticks of chop, not a swing — its levels would be noise
         for p in campaign.pending_fibs:
             if abs(p["fib1"] - fib1) <= fib1 * 1e-9:
@@ -4499,7 +4561,9 @@ class CascadeEngine:
             anchor_candle = next((c for c in window if c.timestamp == tl.anchor2_timestamp), None)
             if ult is not None and anchor_candle is not None and anchor_candle.high < campaign.mother_high:
                 fib1 = min(ult, anchor_candle.low)
-                if (anchor_candle.high - fib1) >= anchor_candle.high * campaign.min_fib_range_pct:
+                if (anchor_candle.high - fib1) >= anchor_candle.high * fib_range_gate(
+                    campaign.min_fib_range_pct, campaign.timeframe
+                ):
                     touch = (anchor_candle.high, int(anchor_candle.timestamp), fib1)
         if touch is not None:
             th, tts, fib1 = touch
@@ -4532,7 +4596,7 @@ class CascadeEngine:
                 lv = trendline_price(tl, c.timestamp)
                 if lv > 0 and c.high >= lv and c.close < lv:
                     fib1 = min(ult, c.low)
-                    if (c.high - fib1) >= c.high * campaign.min_fib_range_pct:
+                    if (c.high - fib1) >= c.high * fib_range_gate(campaign.min_fib_range_pct, campaign.timeframe):
                         if best is None or fib1 < best[2] - best[2] * 1e-9:
                             # a deeper low: the swing has grown — this level
                             # supersedes the shallower one entirely

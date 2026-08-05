@@ -4970,6 +4970,77 @@ class CascadeFibSizeFloorTests(unittest.TestCase):
                 self.assertEqual(restored.median_bar_pct, 0.00099)
 
 
+class CascadeFibGateTimeframeTests(unittest.TestCase):
+    """The stored gate is a 5m number. What rejects a fib is that number scaled
+    to the timeframe the campaign is actually stepping.
+
+    PAXGUSDT #47 is why: born 02-28, escalated to 4h, and by 08-05 it had drawn
+    15 fibs and 9 trendlines because it was still applying a 5m-sized threshold
+    to 4h candles — a bump a ninth of one of its own bars counted as structure.
+    """
+
+    def test_five_minute_campaigns_are_bit_identical(self):
+        """Non-negotiable: the 2026-07-20 BTC anchors Phil verified by hand were
+        drawn under a 5m gate. If this moves, that ground truth is void."""
+        for gate in (cascade_module.MIN_FIB_RANGE_FLOOR_PCT, 0.0005, cascade_module.MIN_FIB_RANGE_PCT):
+            self.assertEqual(cascade_module.fib_range_gate(gate, "5m"), gate)
+
+    def test_a_four_hour_campaign_asks_for_a_four_hour_swing(self):
+        gate5 = cascade_module.MIN_FIB_RANGE_PCT
+        gate4h = cascade_module.fib_range_gate(gate5, "4h")
+        self.assertAlmostEqual(gate4h / gate5, 10.20, places=6)
+        # PAXG at ~4,700: $3.76 of swing on 5m, $38.36 on 4h. The 4h number is
+        # what a 4h bar can actually produce; the 5m one is noise up there.
+        self.assertLess(4700 * gate5, 4.0)
+        self.assertGreater(4700 * gate4h, 35.0)
+
+    def test_the_gate_climbs_with_every_rung(self):
+        gate = cascade_module.MIN_FIB_RANGE_PCT
+        seq = [cascade_module.fib_range_gate(gate, tf) for tf in ("5m", "15m", "1h", "4h", "1d", "1w")]
+        self.assertEqual(seq, sorted(seq), "a slower timeframe may never ask for a smaller swing")
+        self.assertEqual(len(set(seq)), len(seq), "and never the same one twice")
+
+    def test_escalation_moves_the_gate_with_no_migration(self):
+        """Scaling at USE, not at birth, is the whole trick: _maybe_escalate
+        rewrites campaign.timeframe and touches nothing else, so a campaign that
+        climbs 5m -> 4h tightens by itself."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.min_fib_range_pct = cascade_module.MIN_FIB_RANGE_PCT
+        campaign.timeframe = "5m"
+        before = cascade_module.fib_range_gate(campaign.min_fib_range_pct, campaign.timeframe)
+        campaign.timeframe = "4h"  # what escalation does, and all it does
+        after = cascade_module.fib_range_gate(campaign.min_fib_range_pct, campaign.timeframe)
+        self.assertAlmostEqual(after / before, 10.20, places=6)
+        self.assertEqual(
+            campaign.min_fib_range_pct, cascade_module.MIN_FIB_RANGE_PCT, "the STORED gate must stay a 5m number"
+        )
+
+    def test_a_successor_restarting_on_5m_inherits_a_5m_gate(self):
+        """A mother break restarts on 5m whatever the parent was stepping, and
+        the successor inherits min_fib_range_pct. Storing a scaled gate would
+        hand a 5m campaign a 4h threshold and it would draw nothing."""
+        parent_stored = cascade_module.MIN_FIB_RANGE_PCT
+        self.assertEqual(cascade_module.fib_range_gate(parent_stored, "5m"), parent_stored)
+
+    def test_the_corruption_repair_window_is_untouched(self):
+        """repair_scaled_fib_range divides anything above MIN_FIB_RANGE_PCT by
+        100 to undo the old x100-per-restart bug. A scaled gate written to disk
+        would look exactly like that corruption and be silently destroyed."""
+        for tf in ("5m", "4h", "1d", "1w"):
+            gate = cascade_module.MIN_FIB_RANGE_PCT
+            repaired, _ = cascade_module.repair_scaled_fib_range(gate, 0.0005)
+            self.assertEqual(repaired, gate, f"stored gate must survive a restore ({tf})")
+
+    def test_an_unmeasured_timeframe_does_not_loosen_anything(self):
+        gate = cascade_module.MIN_FIB_RANGE_PCT
+        for tf in ("", None, "3d", "nonsense"):
+            self.assertEqual(cascade_module.fib_range_gate(gate, tf), gate)
+
+    def test_a_missing_gate_falls_back_to_the_calibrated_one(self):
+        self.assertEqual(cascade_module.fib_range_gate(0.0, "5m"), cascade_module.MIN_FIB_RANGE_PCT)
+
+
 class CascadeFibSizeGateTests(unittest.IsolatedAsyncioTestCase):
     """The gate reads the CAMPAIGN's threshold, not the module constant."""
 
