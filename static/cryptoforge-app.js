@@ -5931,7 +5931,9 @@ function _cfJournalKpiHtml(summary) {
   var feeFloat = Number(summary.fee_float_usd) || 0;
   var cards = [
     { label: 'Realised P&L', value: _cfJournalUsd(summary.realized_pnl_usd), tone: summary.realized_pnl_usd,
-      note: _cfJournalPct(summary.roi_pct, 2) + ' on capital deployed · net of fees' },
+      // The percent that used to live here now has its own ROI tile; repeating
+      // it in two places invited reading them as two different figures.
+      note: 'net of fees · open positions not counted' },
     // Fees earn their own tile: on these small rounds the commission is a large
     // share of the result, and it was invisible before.
     { label: 'Fees Paid', value: _cfJournalUsd(fees, 2), tone: fees ? -1 : 0,
@@ -5946,8 +5948,12 @@ function _cfJournalKpiHtml(summary) {
         + (feeFloat ? ' · ' + _cfJournalUsd(feeFloat, 2) + ' held as fee reserve' : '') },
     { label: 'Win Rate', value: _cfJournalPct(summary.win_rate_pct, 1),
       note: summary.win_count + 'W / ' + summary.loss_count + 'L' },
-    { label: 'Average ROI', value: _cfJournalPct(summary.avg_roi_pct, 2), tone: summary.avg_roi_pct,
-      note: 'per trade' },
+    // Total P&L over total capital deployed, NOT the mean of the per-trade
+    // percentages. The mean weighs a $5 trade and a $50 trade the same, so it
+    // drifts away from the money actually made — 0.52% against 0.66% on the
+    // same trades. This one is arithmetic on the dollars.
+    { label: 'ROI', value: _cfJournalPct(summary.roi_pct, 2), tone: summary.roi_pct,
+      note: 'on capital deployed · avg ' + _cfJournalPct(summary.avg_roi_pct, 2) + ' per trade' },
     { label: 'Avg Win', value: _cfJournalUsd(summary.avg_win_usd, 2), tone: 1,
       note: summary.loss_count ? 'avg loss ' + _cfJournalUsd(summary.avg_loss_usd, 2) : 'no losing trades yet' }
   ];
@@ -5956,7 +5962,7 @@ function _cfJournalKpiHtml(summary) {
     'Fees Paid': "Total commission charged by the exchange on these trades. The drag figure is what share of the gross profit it took.",
     'Capital Deployed': "The sum invested across closed trades \u2014 money put to work, not your account balance. The same dollar redeployed twice counts twice.",
     'Win Rate': "Closed trades that finished green, as a share of all closed trades. Open positions do not count either way.",
-    'Average ROI': "Mean return per closed trade, so a large trade and a small one weigh the same. It is not the return on your account.",
+    'ROI': "Total profit divided by all the capital you put to work — the dollars, weighted by size. The average per trade sits underneath it: that one counts a small trade as heavily as a large one, so the two rarely agree. Neither is the return on your whole account, since money that sat idle is not counted.",
     'Avg Win': "Average profit of the trades that won. Read it next to the average loss to see whether the wins are big enough to pay for the losses."
   };
   return cards.map(function(c) {
