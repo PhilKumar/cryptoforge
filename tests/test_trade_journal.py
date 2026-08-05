@@ -434,3 +434,65 @@ class ConvertExitTests(unittest.TestCase):
     def test_convert_only_history_makes_no_phantom_trades(self):
         converts = [self._convert("SOLUSDT", "sell", 0.5, 38.0, _BASE)]
         self.assertEqual(pair_fills_into_trades([], converts=converts), [])
+
+
+class FeeFloatTests(unittest.TestCase):
+    """BNB bought to pay commission with is not a position.
+
+    Binance's fee discount needs a BNB balance in the spot wallet, so the
+    account buys BNB once and never sells it — the exchange burns it a fraction
+    at a time. To the pairing that is a buy with no sell, the exact shape of an
+    open position, and a $6.84 fee float was reported as "1 trade still open"
+    for as long as any of it was left.
+    """
+
+    def test_a_never_sold_bnb_buy_is_flagged_as_a_fee_float(self):
+        trades = pair_fills_into_trades([fill("BNBUSDT", "buy", 570.12, 0.012, ms=_BASE)])
+        self.assertEqual(len(trades), 1, "the row is kept — the money really was spent")
+        self.assertEqual(trades[0]["status"], "Open")
+        self.assertEqual(trades[0]["kind"], "fee_float")
+
+    def test_bnb_actually_traded_is_a_normal_round_trip(self):
+        """The narrow test earns its keep here: buy BNB and sell it and it is a
+        trade like any other, not silently reclassified as fuel."""
+        fills = [
+            fill("BNBUSDT", "buy", 570.0, 0.05, ms=_BASE),
+            fill("BNBUSDT", "sell", 580.0, 0.05, ms=_BASE + 60_000),
+        ]
+        trades = pair_fills_into_trades(fills)
+        self.assertEqual(trades[0]["status"], "Closed")
+        self.assertNotIn("kind", trades[0])
+
+    def test_a_part_sold_bnb_position_is_not_a_fee_float(self):
+        """Any sell at all means it is being traded, so the leftover is a real
+        open position and must keep being reported as one."""
+        fills = [
+            fill("BNBUSDT", "buy", 570.0, 1.0, ms=_BASE),
+            fill("BNBUSDT", "sell", 580.0, 0.4, ms=_BASE + 60_000),
+        ]
+        trades = pair_fills_into_trades(fills)
+        self.assertEqual(trades[0]["status"], "Open")
+        self.assertNotIn("kind", trades[0], "part-sold BNB is a position, not fuel")
+
+    def test_other_coins_left_open_are_untouched(self):
+        trades = pair_fills_into_trades([fill("SOLUSDT", "buy", 77.0, 1.0, ms=_BASE)])
+        self.assertEqual(trades[0]["status"], "Open")
+        self.assertNotIn("kind", trades[0])
+
+    def test_the_summary_stops_counting_it_as_an_open_trade(self):
+        import app
+
+        trades = pair_fills_into_trades(
+            [
+                fill("SOLUSDT", "buy", 77.0, 1.0, ms=_BASE),
+                fill("SOLUSDT", "sell", 78.0, 1.0, ms=_BASE + 1000),
+                fill("BNBUSDT", "buy", 570.12, 0.012, ms=_BASE + 2000),
+            ]
+        )
+        summary = app._journal_summary(trades, 200.0)
+        self.assertEqual(summary["open_trade_count"], 0)
+        self.assertEqual(summary["open_invested_usd"], 0.0)
+        # Still visible, just not as a position.
+        self.assertAlmostEqual(summary["fee_float_usd"], 6.84, places=2)
+        # And it never leaks into the realised figures.
+        self.assertEqual(summary["trade_count"], 1)

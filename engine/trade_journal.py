@@ -36,6 +36,18 @@ IST = timezone(timedelta(hours=5, minutes=30))
 _MIN_SELLABLE_USD = 5.0
 _FLAT_EPSILON = 1e-9
 
+# Coin bought to PAY the fees with, not to trade. Binance's "pay fees with BNB"
+# discount needs a BNB balance sitting in the spot wallet, so the account buys
+# BNB once and then never sells it — the exchange burns it a fraction at a time
+# as commission. To the pairing that is a buy with no sell, which is exactly the
+# shape of an open position, so a $6.84 fee float read as "1 trade still open"
+# for as long as any of it was left.
+#
+# The test is deliberately narrow: only a holding that has NEVER been sold
+# counts. Buy BNB and later sell it and that is a real round trip, paired and
+# reported like any other.
+_FEE_ASSETS = ("BNB",)
+
 
 def _f(value, default: float = 0.0) -> float:
     try:
@@ -57,6 +69,14 @@ def _fill_time_ms(fill: dict) -> int:
         if value is not None:
             return int(_f(value))
     return 0
+
+
+def _is_fee_float(symbol: str, sell_qty: float) -> bool:
+    """A never-sold holding of the exchange's fee coin: a reserve, not a trade."""
+    if sell_qty > 0:
+        return False
+    base = str(symbol or "").upper()
+    return any(base.startswith(asset) and base != asset for asset in _FEE_ASSETS)
 
 
 def _ist_date(ms: int) -> str:
@@ -310,7 +330,13 @@ def pair_fills_into_trades(
                 position = None
         if position is not None and position.bought_qty > 0 and include_open:
             counter += 1
-            trades.append(position.to_trade(counter, closed=False))
+            leftover = position.to_trade(counter, closed=False)
+            # Kept as a row rather than dropped — the money was really spent and
+            # the coin is really held — but flagged so the summary stops calling
+            # it an open trade.
+            if _is_fee_float(symbol, position.sell_qty):
+                leftover["kind"] = "fee_float"
+            trades.append(leftover)
 
     trades.sort(key=lambda t: t.get("closed_ts") or t.get("opened_ts") or 0)
     return trades

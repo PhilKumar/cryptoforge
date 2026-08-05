@@ -7322,7 +7322,13 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
     # counting its still-deployed capital inflated "capital deployed" with money
     # that has not come back. Open trades are reported on their own instead.
     closed = [t for t in trades if str(t.get("status") or "Closed") != "Open"]
-    open_trades = [t for t in trades if str(t.get("status") or "") == "Open"]
+    # A fee float is coin bought to pay commission with, never to sell. It is
+    # held, so it is not closed; it is not a position taken on a view, so
+    # counting it as an open trade reports a decision that was never made.
+    open_trades = [
+        t for t in trades if str(t.get("status") or "") == "Open" and str(t.get("kind") or "") != "fee_float"
+    ]
+    fee_float = [t for t in trades if str(t.get("kind") or "") == "fee_float"]
 
     invested = sum(_coerce_float_safe(t.get("invested_usd")) for t in closed)
     pnl = sum(_coerce_float_safe(t.get("pnl_usd")) for t in closed)
@@ -7401,6 +7407,9 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
         "fee_drag_pct": round(fees / gross * 100, 1) if gross > 0 else 0.0,
         "open_trade_count": len(open_trades),
         "open_invested_usd": round(sum(_coerce_float_safe(t.get("invested_usd")) for t in open_trades), 2),
+        # Reported separately so the money is still visible somewhere: it left
+        # the USDT balance and has not come back, it is just not a trade.
+        "fee_float_usd": round(sum(_coerce_float_safe(t.get("invested_usd")) for t in fee_float), 2),
         "roi_pct": round(pnl / invested * 100, 3) if invested else 0.0,
         "capital_roi_pct": round(pnl / capital_base * 100, 3) if capital_base else 0.0,
         "win_count": len(wins),

@@ -5830,7 +5830,11 @@ function _cfJournalSourceTag(t) {
   var bits = [];
   if (String(t.source || '') === 'binance') bits.push('<span class="cf-journal-src" title="Paired from your Binance fills — P&amp;L is net of commission">Binance</span>');
   else bits.push('<span class="cf-journal-src is-sheet" title="From the imported spreadsheet — P&amp;L is gross, fees not included">Sheet</span>');
-  if (open) bits.push('<span class="cf-journal-src is-open" title="Still holding — no realised result yet">Open</span>');
+  if (open && String(t.kind || '') === 'fee_float') {
+    bits.push('<span class="cf-journal-src is-open" title="Coin held to pay exchange commission with, not a position — the exchange burns it a little at a time">Fee reserve</span>');
+  } else if (open) {
+    bits.push('<span class="cf-journal-src is-open" title="Still holding — no realised result yet">Open</span>');
+  }
   return '<div class="table-note">' + bits.join(' ') + '</div>';
 }
 
@@ -5862,7 +5866,9 @@ function _cfJournalSellCell(t) {
     return price + '<div class="table-note" title="Exited via Binance Convert, off the orderbook">via convert</div>';
   }
   if (String(t.status || '') === 'Open') {
-    return '<span style="color:var(--muted);" title="Still holding — not sold yet">held</span>';
+    return String(t.kind || '') === 'fee_float'
+      ? '<span style="color:var(--muted);" title="Never sold — it is spent as commission, not exited">not for sale</span>'
+      : '<span style="color:var(--muted);" title="Still holding — not sold yet">held</span>';
   }
   return price;
 }
@@ -5922,6 +5928,7 @@ function _cfJournalKpiHtml(summary) {
   var gross = Number(summary.gross_pnl_usd);
   var fees = Number(summary.fees_usd) || 0;
   var openCount = Number(summary.open_trade_count) || 0;
+  var feeFloat = Number(summary.fee_float_usd) || 0;
   var cards = [
     { label: 'Realised P&L', value: _cfJournalUsd(summary.realized_pnl_usd), tone: summary.realized_pnl_usd,
       note: _cfJournalPct(summary.roi_pct, 2) + ' on capital deployed · net of fees' },
@@ -5933,7 +5940,10 @@ function _cfJournalKpiHtml(summary) {
                  : 'no exchange fees recorded' },
     { label: 'Capital Deployed', value: _cfJournalUsd(summary.invested_usd),
       note: 'across ' + summary.trade_count + ' closed trade' + (summary.trade_count === 1 ? '' : 's')
-        + (openCount ? ' · ' + openCount + ' still open (' + _cfJournalUsd(summary.open_invested_usd, 2) + ')' : '') },
+        + (openCount ? ' · ' + openCount + ' still open (' + _cfJournalUsd(summary.open_invested_usd, 2) + ')' : '')
+        // The fee coin still left the balance, so it is named rather than
+        // silently dropped — just not counted as a position.
+        + (feeFloat ? ' · ' + _cfJournalUsd(feeFloat, 2) + ' held as fee reserve' : '') },
     { label: 'Win Rate', value: _cfJournalPct(summary.win_rate_pct, 1),
       note: summary.win_count + 'W / ' + summary.loss_count + 'L' },
     { label: 'Average ROI', value: _cfJournalPct(summary.avg_roi_pct, 2), tone: summary.avg_roi_pct,
