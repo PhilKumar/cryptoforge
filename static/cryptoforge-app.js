@@ -11635,12 +11635,19 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
       var cands = data.candles || [];
       var motherT = data.mother && data.mother.t;
       var engineTf = data.campaign_timeframe || '5m';
+      // Drilled in, the window no longer starts at the mother candle — saying
+      // "candles since mother candle" there would be a plain lie, and the
+      // mother's absence from the left edge is the thing most worth flagging.
       meta.textContent = data.symbol + ' · ' + data.state + ' · ' + cands.length
-        + ' ' + (data.timeframe || engineTf) + ' candles since mother candle ('
-        + _cfCascadeIst(motherT) + ' IST) · '
+        + ' ' + (data.timeframe || engineTf) + ' candles '
+        + (data.drilled_in
+            ? 'to ' + _cfCascadeIst(cands.length ? cands[cands.length - 1].t : motherT) + ' IST'
+            : 'since mother candle (' + _cfCascadeIst(motherT) + ' IST)')
+        + ' · '
         + (data.legs || []).length + ' fib(s), ' + (data.trendlines || []).length + ' trendline(s)'
         + (data.timeframe_auto ? ' · auto-fitted to ' + (data.timeframe || engineTf) : '')
         + (data.mother_forced_visible ? ' · widened to keep the mother candle visible' : '')
+        + (data.drilled_in ? ' · zoomed in past ' + engineTf + ' — mother candle is off-screen left' : '')
         + (data.timeframe && data.timeframe !== engineTf ? ' · geometry is always ' + engineTf + '-derived' : '')
         ;
     }

@@ -796,6 +796,41 @@ test.describe('Cascade chart', () => {
     expect(watch.take()).toEqual([]);
   });
 
+  test('drilling in below the engine timeframe draws, and says the mother is gone', async ({ page }) => {
+    // A 1H campaign read at 5m. The mother candle is thousands of bars back, so
+    // the window no longer starts at it — and a header still claiming "candles
+    // since mother candle" would be a plain lie about what is on screen.
+    const watch = watchErrors(page);
+    await serveFixture(page, chartPayload({
+      timeframe: '5m',
+      campaign_timeframe: '1h',
+      timeframe_auto: false,
+      drilled_in: true,
+      timeframe_options: ['5m', '15m', '1h', '4h', '1d'],
+    }));
+    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
+    await openChart(page);
+    await svgIsPainted(page, 80);
+
+    const meta = page.locator('#cf-cascade-chart-meta');
+    await expect(meta).toContainText('mother candle is off-screen left');
+    await expect(meta).toContainText('geometry is always 1h-derived');
+    await expect(meta).not.toContainText('since mother candle');
+
+    // The finer rungs are offered as buttons, which is the whole feature.
+    await expect(page.locator('#cf-cascade-chart-tf [data-tf="5m"]')).toBeVisible();
+    await expect(page.locator('#cf-cascade-chart-tf [data-tf="1d"]')).toBeVisible();
+
+    // And a normal payload must not pick up the drilled-in wording.
+    await serveFixture(page, chartPayload());
+    await page.evaluate(() => (window as any).cfCascadeRefreshChart());
+    await svgIsPainted(page, 80);
+    await expect(meta).toContainText('since mother candle');
+    await expect(meta).not.toContainText('off-screen left');
+
+    expect(watch.take()).toEqual([]);
+  });
+
   test('a chart error is reported, not left as a blank panel', async ({ page }) => {
     const watch = watchErrors(page);
     await page.route('**/api/cascade/campaigns/*/chart*', (route) =>

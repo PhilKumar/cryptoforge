@@ -4115,16 +4115,32 @@ class CascadeCampaignTimeframeTests(unittest.IsolatedAsyncioTestCase):
         # daily klines are what must not be re-paged every five seconds.
         self.assertNotIn("1d", {r.get("resolution") for r in broker.candle_requests}, "no 1D fetch is due yet")
 
-    def test_the_chart_never_offers_a_finer_timeframe_than_the_engine(self):
-        """A 4H campaign has no 5m history behind it, so 5m is not a view it
-        can be drawn at — the options start at its own timeframe."""
+    def test_the_chart_offers_two_rungs_either_side(self):
+        """Phil, 2026-08-05: "if it is in 1H, we have to view 15m and 5m as
+        well". The 5m candles exist on the exchange whatever the engine chose to
+        step; refusing to show them meant a 1H campaign's entries could only be
+        read as a smear inside one bar."""
+        self.assertEqual(list(chart_timeframes_for("1h")), ["5m", "15m", "1h", "4h", "1d"])
+        self.assertEqual(list(chart_timeframes_for("4h")), ["15m", "1h", "4h", "1d", "1w"])
+        # Clamped at both ends of the ladder rather than wrapping.
+        self.assertEqual(list(chart_timeframes_for("5m")), ["1m", "5m", "15m", "1h"])
+        self.assertEqual(list(chart_timeframes_for("1w")), ["4h", "1d", "1w"])
+
+    def test_auto_never_resolves_finer_than_the_engine(self):
+        """Dropping in is a deliberate act. `auto` means "fit the whole campaign
+        on screen", and a finer view is by definition one that cannot — a young
+        campaign must not default to a zoomed-in chart whose geometry comes from
+        bars it is not showing."""
         engine = _mk_engine()
         campaign = _mk_campaign(engine)
         campaign.timeframe = "4h"
         campaign.mother_timestamp = int(time.time()) - 200 * 86400
-        self.assertEqual(list(chart_timeframes_for("4h")), ["4h", "1d", "1w"])
-        self.assertEqual(list(chart_timeframes_for("5m")), ["5m", "15m", "1h"])
         self.assertIn(CascadeEngine._auto_chart_timeframe(campaign, 250), {"4h", "1d", "1w"})
+        # A campaign minutes old still resolves to its own rung, never below it.
+        fresh = _mk_campaign(engine)
+        fresh.timeframe = "1h"
+        fresh.mother_timestamp = int(time.time()) - 3600
+        self.assertEqual(CascadeEngine._auto_chart_timeframe(fresh, 250), "1h")
 
     def test_the_timeframe_survives_a_snapshot_round_trip(self):
         engine = _mk_engine()
@@ -4973,6 +4989,77 @@ class CascadeFibSizeFloorTests(unittest.TestCase):
                 )
                 self.assertEqual(restored.min_fib_range_pct, gate)
                 self.assertEqual(restored.median_bar_pct, 0.00099)
+
+
+class CascadeChartDrillInTests(unittest.IsolatedAsyncioTestCase):
+    """Viewing a campaign at a FINER timeframe than it steps.
+
+    A 1H campaign's entries all land inside single bars, so the chart could
+    show that something happened but never where. The 5m candles exist on the
+    exchange regardless of what the engine chose to step — the chart just was
+    not allowed to ask for them.
+    """
+
+    def _frame(self, start_ts, count, step):
+        index = pd.to_datetime([start_ts + i * step for i in range(count)], unit="s", utc=True)
+        return pd.DataFrame(
+            {
+                "open": [100.0] * count,
+                "high": [101.0] * count,
+                "low": [99.0] * count,
+                "close": [100.5] * count,
+                "volume": [1.0] * count,
+            },
+            index=index,
+        )
+
+    async def _campaign_on(self, engine, tf, age_sec):
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = tf
+        campaign.start_timeframe = tf
+        campaign.state = "TRENDLINE_ACTIVE"
+        campaign.mother_timestamp = int(time.time()) - age_sec
+        return campaign
+
+    async def test_a_one_hour_campaign_can_be_read_at_five_minutes(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = await self._campaign_on(engine, "1h", 20 * 86400)
+        now = int(time.time())
+        broker.candles_df = self._frame(now - 400 * 300, 400, 300)
+        data = await engine.get_chart_data(campaign.campaign_id, timeframe="5m", max_candles=60)
+        engine.stop()
+        self.assertEqual(data["timeframe"], "5m", "the selection is honoured, not snapped back out")
+        self.assertTrue(data["drilled_in"])
+        self.assertEqual(data["campaign_timeframe"], "1h", "geometry still belongs to the campaign")
+        self.assertTrue(data["candles"])
+        self.assertIn(
+            "5m",
+            [str(k.get("resolution")) for k in broker.candle_requests],
+            "the finer bars must be FETCHED — there is nothing to roll a 1H bar down into",
+        )
+
+    async def test_the_options_offered_include_the_finer_rungs(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = await self._campaign_on(engine, "1h", 20 * 86400)
+        now = int(time.time())
+        broker.candles_df = self._frame(now - 400 * 3600, 400, 3600)
+        data = await engine.get_chart_data(campaign.campaign_id, timeframe="auto", max_candles=60)
+        engine.stop()
+        self.assertEqual(data["timeframe_options"], ["5m", "15m", "1h", "4h", "1d"])
+        self.assertFalse(data["drilled_in"], "auto never drills in")
+
+    async def test_an_empty_fine_fetch_falls_back_rather_than_drawing_nothing(self):
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = await self._campaign_on(engine, "1h", 20 * 86400)
+        broker.candles_df = None  # the exchange has nothing at that resolution
+        data = await engine.get_chart_data(campaign.campaign_id, timeframe="5m", max_candles=60)
+        engine.stop()
+        self.assertFalse(data["drilled_in"])
+        self.assertNotEqual(data["timeframe"], "5m")
+        self.assertTrue(data["mother_forced_visible"], "and it says the view is not the one asked for")
 
 
 class CascadeWeeklyLadderTests(unittest.TestCase):

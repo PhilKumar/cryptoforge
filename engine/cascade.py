@@ -476,6 +476,10 @@ MAX_FETCH_PAGES = 60
 # next two above it. View-only — the geometry is always computed on the
 # campaign's engine timeframe, whatever the chart is being read at.
 CHART_TIMEFRAME_LADDER = ("1m", "5m", "15m", "1h", "4h", "1d", "1w")
+# How many rungs either side of the campaign's own timeframe the chart offers.
+# Two down is far enough to read individual entries out of a bar that looks
+# solid at the campaign's timeframe; two up is the old roll-up behaviour.
+CHART_TIMEFRAME_SPAN = 2
 
 
 def timeframe_seconds(timeframe: str) -> int:
@@ -483,17 +487,27 @@ def timeframe_seconds(timeframe: str) -> int:
 
 
 def chart_timeframes_for(timeframe: str) -> Dict[str, int]:
-    """The chart roll-ups available to a campaign stepping `timeframe`.
+    """The views available to a campaign stepping `timeframe` — finer as well
+    as coarser.
 
-    A campaign cannot be drawn at a timeframe FINER than the candles it steps —
-    a 4H campaign has no 5m history to show — so the options start at its own
-    timeframe and climb from there.
+    This used to start at the campaign's own timeframe and only climb, on the
+    reasoning that "a 4H campaign has no 5m history to show". That was never
+    true: the 5m candles exist on the exchange whatever the engine chose to
+    step, and being unable to drop into them meant a 1H campaign's entries
+    could only ever be read as a smear inside one bar. Phil asked for it on
+    2026-08-05 — "if it is in 1H, we have to view 15m and 5m as well".
+
+    Two rungs down and two up, so 1H offers 5m/15m/1H/4H/1D. Zooming IN pushes
+    the mother candle off the left edge, which is why it is a deliberate choice
+    and never what `auto` resolves to.
     """
     base = str(timeframe or "").lower()
     if base not in CHART_TIMEFRAME_LADDER:
         base = BASE_TIMEFRAME
-    start = CHART_TIMEFRAME_LADDER.index(base)
-    return {name: TIMEFRAME_SECONDS[name] for name in CHART_TIMEFRAME_LADDER[start : start + 3]}
+    index = CHART_TIMEFRAME_LADDER.index(base)
+    start = max(index - CHART_TIMEFRAME_SPAN, 0)
+    end = index + CHART_TIMEFRAME_SPAN + 1
+    return {name: TIMEFRAME_SECONDS[name] for name in CHART_TIMEFRAME_LADDER[start:end]}
 
 
 def next_timeframe_up(timeframe: str) -> str:
@@ -2980,6 +2994,39 @@ class CascadeEngine:
             "updated_at": _ist_now_str(),
         }
 
+    async def _chart_candles_fine(
+        self, campaign: Campaign, timeframe: str, max_candles: int, end_ts: int = 0
+    ) -> List[Candle]:
+        """A window of candles FINER than the campaign steps, for drilling in.
+
+        Deliberately NOT anchored at the mother candle the way _chart_candles
+        is. At this resolution the mother is thousands of bars back — asking
+        for everything since it would page the whole campaign to draw the last
+        screenful. The window is sized to the view and hung off the RIGHT edge
+        instead, which for a closed trade is where that trade ended, so a
+        journal chart drills into its own candles rather than into whatever the
+        most recent page happens to hold.
+
+        Never used for geometry. Every fib, trendline and entry on the chart is
+        still computed from the campaign's own timeframe; this only changes
+        which candles they are drawn on top of.
+        """
+        tf_sec = timeframe_seconds(timeframe)
+        if tf_sec <= 0:
+            return []
+        window_end = int(end_ts) or int(time.time())
+        # One extra screen of slack so panning left has somewhere to go, and the
+        # tail buckets the caller trims to.
+        span = (int(max_candles) + _CHART_TAIL_BUCKETS + 2) * tf_sec * 2
+        since = max(int(campaign.mother_timestamp) - tf_sec, window_end - span)
+        try:
+            rows = await self._fetch_closed_candles(campaign.symbol, since, timeframe)
+        except Exception as exc:
+            _log.warning("[CASCADE] fine chart fetch failed for %s %s: %s", campaign.symbol, timeframe, exc)
+            return []
+        cutoff = window_end + _CHART_TAIL_BUCKETS * tf_sec
+        return [c for c in rows if c.timestamp <= cutoff][-max_candles:]
+
     async def _chart_candles(self, campaign: Campaign, max_candles: int) -> List[Candle]:
         """Closed candles from the mother candle forward, in the campaign's own
         timeframe — the same candles the engine stepped, so the chart and the
@@ -3471,7 +3518,13 @@ class CascadeEngine:
         View only. The engine still computes every fib, trendline and entry
         from the campaign's own candles regardless of what is being displayed.
         """
-        options = chart_timeframes_for(campaign.timeframe)
+        # Only the campaign's own rung and coarser. The options now run finer
+        # too, but `auto` means "fit the whole campaign on screen", and a finer
+        # view is by definition one that cannot — a young campaign would
+        # otherwise default to a zoomed-in chart with its geometry drawn from
+        # bars it is not showing. Dropping in is a deliberate act.
+        base_sec = campaign.timeframe_sec
+        options = {name: sec for name, sec in chart_timeframes_for(campaign.timeframe).items() if sec >= base_sec}
         # For a finished campaign the span ends where the TRADE ended, not at
         # the wall clock. Measuring to "now" made a closed trade's chart zoom
         # out a rung further every few hours — the same record, redrawn coarser
@@ -3555,22 +3608,33 @@ class CascadeEngine:
         mother_forced_visible = False
         if requested == "auto" or requested not in options:
             requested = auto_timeframe
-        # A mother candle is the anchor for every trendline and fib, so showing
-        # a hand-picked smaller view that pushes it off-screen is misleading.
-        # A manual selection may zoom OUT (to 15m/1H/4H), but never IN far
-        # enough to hide the mother.  This changes presentation only; all
-        # trading calculations retain the campaign's own timeframe.
-        elif options[requested] < options[auto_timeframe]:
-            requested = auto_timeframe
-            mother_forced_visible = True
         bucket_sec = options.get(requested, base_sec)
-        # Pull enough base candles that the rolled-up view still spans the window.
-        raw_needed = max_candles * max(bucket_sec // base_sec, 1)
-        history = await self._chart_candles(campaign, raw_needed)
-        if not history:
-            history = self._candles.get(campaign_id) or []
-
-        view = self._aggregate_candles(history, bucket_sec, base_sec)
+        # A hand-picked view FINER than the campaign steps cannot be rolled up
+        # from the campaign's own candles — there is nothing to divide. Fetch
+        # that timeframe's real bars instead, windowed to the end of the chart
+        # so an old closed trade drills into ITS OWN candles and not into
+        # whatever the most recent page happens to hold.
+        #
+        # The mother candle goes off the left edge at this zoom. That used to be
+        # forbidden outright, and the selection was silently snapped back out;
+        # it is now allowed and reported, because "show me the entries inside
+        # that bar" is a real question and refusing it answered nothing.
+        drilled_in = bucket_sec < base_sec
+        if drilled_in:
+            view = await self._chart_candles_fine(campaign, requested, max_candles, trade_end_ts)
+            if not view:
+                # Nothing at that resolution — fall back rather than draw an
+                # empty chart, and say the view is not the one that was asked for.
+                drilled_in = False
+                requested, bucket_sec = auto_timeframe, options[auto_timeframe]
+                mother_forced_visible = True
+        if not drilled_in:
+            # Pull enough base candles that the rolled-up view still spans the window.
+            raw_needed = max_candles * max(bucket_sec // base_sec, 1)
+            history = await self._chart_candles(campaign, raw_needed)
+            if not history:
+                history = self._candles.get(campaign_id) or []
+            view = self._aggregate_candles(history, bucket_sec, base_sec)
         # A finished trade is a record, not a live feed. Cut the view off at the
         # candle the campaign ended in (plus a short tail so the exit is not
         # jammed against the right edge), otherwise every later view redraws a
@@ -3659,9 +3723,13 @@ class CascadeEngine:
             "timeframe": requested,
             "timeframe_auto": requested_input == "auto",
             "mother_forced_visible": mother_forced_visible,
-            # What this campaign may be drawn at: its own timeframe and the two
-            # above it. A 4H campaign has no 5m history, so the chart must not
-            # offer 5m for it.
+            # True when the view is FINER than the campaign steps. The geometry
+            # is unchanged — still drawn from the campaign's own candles — but
+            # the mother candle is off the left edge, and a chart that does not
+            # say so looks like one whose lines start from nowhere.
+            "drilled_in": drilled_in,
+            # What this campaign may be drawn at: two rungs either side of its
+            # own timeframe, so a 1H campaign offers 5m/15m/1H/4H/1D.
             "timeframe_options": list(options.keys()),
             "campaign_timeframe": campaign.timeframe,
             "candles": candles,
