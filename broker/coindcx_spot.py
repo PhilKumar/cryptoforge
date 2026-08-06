@@ -58,10 +58,21 @@ class CoinDCXSpotClient(BaseBroker):
     supports_funding = False
     # Stop-limit buys with client order ids, and a free/locked spot wallet.
     supports_cascade = True
-    # Measured from real fills on 2026-08-03: every BTCUSDT trade was charged
-    # exactly 0.2000% per side — twice Binance's 0.1%. (INR pairs bill 0.59%,
-    # which this USDT-quoted adapter never touches.) Modelling CoinDCX at
-    # Binance's rate would floor a take-profit below its own commission.
+    # Twice Binance's 0.1%, and confirmed two independent ways.
+    #
+    # Measured: every BTCUSDT fill on the live account was charged exactly
+    # 0.2000% per side. Published (coindcx.com/fees, checked 2026-08-06): the
+    # "Spot (C2C)" column — crypto-to-crypto, which is what a USDT pair is —
+    # bills 0.17% maker AND taker, plus 18% GST: 0.17 x 1.18 = 0.2006%.
+    #
+    # The C2C rate is FLAT across every fee level, Regular 1 through VIP 7, so
+    # unlike their INR book it does not improve with volume and this constant
+    # will not drift. (INR pairs bill 0.50% + GST = 0.59%, which matches the
+    # INR fills on the same account and is why this USDT-quoted adapter must
+    # never be pointed at an INR market.)
+    #
+    # Modelling CoinDCX at Binance's rate floors a take-profit below its own
+    # commission, so every round exiting on that floor loses money.
     fee_pct_per_side = 0.2
 
     _SYMBOL_ALIASES = {
