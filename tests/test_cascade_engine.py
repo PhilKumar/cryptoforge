@@ -6924,7 +6924,9 @@ class CascadeVenueTimeframeFloorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", result)
         self.assertIn("15m", result["error"])
 
-    async def test_a_minor_mc_is_refused_there_because_a_minor_is_5m(self):
+    async def test_a_minor_mc_is_lifted_to_the_floor_not_refused(self):
+        # A minor is the fastest rung by definition, and on this venue the
+        # fastest rung is 15m. The idea survives; only the candle changes.
         engine = self._engine()
         result = await engine.start_campaign(
             symbol="BTCUSDT",
@@ -6936,8 +6938,41 @@ class CascadeVenueTimeframeFloorTests(unittest.IsolatedAsyncioTestCase):
             mc_kind="minor",
             exchange="coindcx",
         )
-        self.assertIn("error", result)
-        self.assertIn("minor", result["error"].lower())
+        self.assertNotIn("15m and slower only", result.get("error", ""))
+        if "campaign" in result:
+            self.assertEqual(result["campaign"]["mc_kind"], "minor")
+            self.assertEqual(result["campaign"]["timeframe"], "15m")
+
+    def test_the_settle_window_is_the_same_quarter_hour_either_way(self):
+        # Three 5m candles on Binance, ONE 15m candle on CoinDCX — the same 15
+        # minutes. On a single candle there is no "which was highest" step:
+        # the candle is its own high.
+        engine = self._engine()
+        self.assertEqual(engine.settle_candle_count("5m"), 3)
+        self.assertEqual(engine.settle_candle_count("15m"), 1)
+        binance_campaign = Campaign(
+            campaign_id="b",
+            symbol="BTCUSDT",
+            capital_usd=500,
+            mother_high=105,
+            mother_low=99,
+            mother_timestamp=0,
+        )
+        coindcx_campaign = Campaign(
+            campaign_id="c",
+            symbol="BTCUSDT",
+            capital_usd=500,
+            mother_high=105,
+            mother_low=99,
+            mother_timestamp=0,
+            exchange="coindcx",
+        )
+        self.assertEqual(engine.settle_timeframe(binance_campaign), "5m")
+        self.assertEqual(engine.settle_timeframe(coindcx_campaign), "15m")
+        for campaign in (binance_campaign, coindcx_campaign):
+            tf = engine.settle_timeframe(campaign)
+            covered = engine.settle_candle_count(tf) * cascade_module.timeframe_seconds(tf)
+            self.assertEqual(covered, cascade_module.MOTHER_BREAK_SETTLE_SEC)
 
     async def test_the_default_venue_still_takes_5m(self):
         engine = self._engine()

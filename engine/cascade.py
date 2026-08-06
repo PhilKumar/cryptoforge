@@ -547,6 +547,11 @@ MOTHER_WATCH_MAX_LOOKBACK_SEC = 12 * 3600
 # break already gets. The highest of those three becomes the next mother and the
 # 1m candle that did the breaking is never itself a candidate.
 MOTHER_BREAK_CONFIRM_5M_CANDLES = 3
+# How long a break settles before the successor anchors, in seconds. Three
+# 5m candles on Binance; the same quarter hour is ONE candle on a venue that
+# starts at 15m, and one candle is its own high — so there is nothing to pick
+# between. The window is the constant, not the number of bars.
+MOTHER_BREAK_SETTLE_SEC = FIVE_MIN_SEC * MOTHER_BREAK_CONFIRM_5M_CANDLES
 RUNNING_STATES = ACTIVE_STATES | {MOTHER_BREAK_PENDING}
 FINAL_STATES = {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}
 # Endings that roll straight into a fresh campaign. A deliberate stop does not.
@@ -2064,6 +2069,21 @@ class CascadeEngine:
 
     # ── capital groups ───────────────────────────────────────────
 
+    def settle_timeframe(self, campaign: "Campaign") -> str:
+        """The candle a mother break settles on for this campaign's venue."""
+        return self.venue_min_timeframe(getattr(campaign, "exchange", ""))
+
+    @staticmethod
+    def settle_candle_count(timeframe: str) -> int:
+        """How many of those candles cover the settle window.
+
+        Three on 5m, one on 15m — the same fifteen minutes either way. On a
+        single candle there is no "which of these was highest" step at all: the
+        candle IS the high.
+        """
+        sec = timeframe_seconds(timeframe) or FIVE_MIN_SEC
+        return max(1, round(MOTHER_BREAK_SETTLE_SEC / sec))
+
     def venue_min_timeframe(self, exchange: str = "") -> str:
         """The fastest candle a campaign may run on at this venue.
 
@@ -2333,7 +2353,15 @@ class CascadeEngine:
         # small structure no matter which chart it was spotted on.
         asked = str(mc_kind or "").strip().lower()
         if asked == "minor":
+            # A minor is the fastest rung by definition — but "fastest" means the
+            # VENUE's fastest. On an exchange that starts at 15m a minor is a 15m
+            # sub-mother rather than a refusal: the idea (a small structure inside
+            # a move already running) survives, and only the candle it is read on
+            # changes, because a 5m round there cannot clear its own fee.
             mc_kind, timeframe = "minor", MINOR_MC_TIMEFRAME
+            minor_floor = self.venue_min_timeframe(exchange)
+            if not self._timeframe_is_slower_or_equal(timeframe, minor_floor):
+                timeframe = minor_floor
         elif asked == "major":
             mc_kind = "major"
         else:
@@ -2346,12 +2374,11 @@ class CascadeEngine:
         venue_floor = self.venue_min_timeframe(exchange)
         if not self._timeframe_is_slower_or_equal(timeframe, venue_floor):
             venue_label = str(getattr(venue, "display_name", "This exchange"))
-            extra = " A minor MC is 5m by definition, so this venue cannot take one." if mc_kind == "minor" else ""
             return {
                 "error": (
                     f"{venue_label} trades {venue_floor} and slower only — its commission needs a deeper "
                     f"fall than a {timeframe} campaign usually makes before the target clears its own "
-                    f"fee.{extra} Pick {venue_floor} or higher."
+                    f"fee. Pick {venue_floor} or higher."
                 )
             }
         if timeframe not in CAMPAIGN_START_TIMEFRAMES:
@@ -4297,7 +4324,7 @@ class CascadeEngine:
         after_ts = int(campaign.mother_break_last_5m_ts or 0)
         if after_ts <= 0:
             return False
-        candles = await self._fetch_closed_candles(campaign.symbol, after_ts, BASE_TIMEFRAME)
+        candles = await self._fetch_closed_candles(campaign.symbol, after_ts, self.settle_timeframe(campaign))
         changed = False
         for candle in candles:
             if candle.timestamp <= after_ts:
@@ -5366,16 +5393,22 @@ class CascadeEngine:
             if campaign.mode == "live" and campaign.filled_base_qty > 0
             else ""
         )
-        broke_on_sub_5m = timeframe_seconds(candle.timeframe or BASE_TIMEFRAME) < FIVE_MIN_SEC
+        # The settle candle is the venue's own: 5m on Binance, 15m where the
+        # venue starts there. A break detected on a FASTER bar than that is a
+        # detector, not a mother.
+        settle_tf = self.settle_timeframe(campaign)
+        settle_sec = timeframe_seconds(settle_tf) or FIVE_MIN_SEC
+        settle_count = self.settle_candle_count(settle_tf)
+        broke_on_sub_5m = timeframe_seconds(candle.timeframe or BASE_TIMEFRAME) < settle_sec
         if broke_on_sub_5m:
             # The 1m bar is a detector, not a mother. Leave the candidate EMPTY
             # so the first 5m candle takes it outright — seeding the 1m snapshot
             # here would leave it standing whenever the containing 5m candle
             # merely equals its high rather than exceeding it, which is exactly
             # the case where the 1m bar made the bucket's high.
-            bucket = candle.timestamp - (candle.timestamp % FIVE_MIN_SEC)
+            bucket = candle.timestamp - (candle.timestamp % settle_sec)
             campaign.mother_break_top_candle = None
-            campaign.mother_break_wait_remaining = MOTHER_BREAK_CONFIRM_5M_CANDLES
+            campaign.mother_break_wait_remaining = settle_count
             # One tick under the bucket, so the 5m candle CONTAINING the break
             # is the first candidate rather than being skipped as already seen.
             campaign.mother_break_last_5m_ts = bucket - 1
@@ -5384,8 +5417,15 @@ class CascadeEngine:
                 "warn",
                 f"Mother candle high {campaign.mother_high:g} broken above by a "
                 f"{candle.timeframe or MOTHER_BREAK_WATCH_TIMEFRAME} candle at {candle.high:,.2f} — campaign "
-                f"frozen now. Three closed 5m candles (15 minutes) settle the restart; the highest of them "
-                f"becomes the next mother. " + tail,
+                + (
+                    f"frozen now. One closed {settle_tf} candle ({MOTHER_BREAK_SETTLE_SEC // 60} minutes) settles "
+                    f"the restart and becomes the next mother. "
+                    if settle_count == 1
+                    else f"frozen now. {settle_count} closed {settle_tf} candles "
+                    f"({MOTHER_BREAK_SETTLE_SEC // 60} minutes) settle the restart; the highest of them "
+                    f"becomes the next mother. "
+                )
+                + tail,
             )
         else:
             campaign.mother_break_top_candle = dict(snapshot)
@@ -5413,7 +5453,8 @@ class CascadeEngine:
         # itself twice. The fetch cursor is what actually prevents re-processing.
         # The break snapshot already carries its timeframe, so this needs no new
         # field on a campaign whose shape is serialized into live state.
-        broke_on_sub_5m = timeframe_seconds(str(source.get("timeframe") or BASE_TIMEFRAME)) < FIVE_MIN_SEC
+        settle_sec = timeframe_seconds(self.settle_timeframe(campaign)) or FIVE_MIN_SEC
+        broke_on_sub_5m = timeframe_seconds(str(source.get("timeframe") or BASE_TIMEFRAME)) < settle_sec
         if not broke_on_sub_5m and candle.timestamp <= source_ts:
             return
         # Every candle in the window is a candidate for the next mother, so the
