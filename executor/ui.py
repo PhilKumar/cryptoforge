@@ -311,33 +311,74 @@ def chart_view(runtime, market, campaign_id: str) -> Optional[dict]:
     except Exception as exc:
         _log.warning("chart candles failed for %s: %s", campaign_id, exc)
         candles = []
-    trendline = None
-    if followed.standing_trendline_id is not None:
-        raw = followed.trendlines.get(followed.standing_trendline_id) or {}
-        if raw.get("anchor1_price") and raw.get("anchor2_price"):
-            trendline = {
+    # Every trendline, not only the standing one — the parent's chart draws the
+    # fan and marks the active line, and a buyer comparing the two charts
+    # should be looking at the same picture.
+    trendlines = []
+    for trendline_id, raw in sorted(followed.trendlines.items()):
+        if not (raw.get("anchor1_price") and raw.get("anchor2_price")):
+            continue
+        trendlines.append(
+            {
+                "id": trendline_id,
                 "a1_ts": raw.get("anchor1_timestamp"),
                 "a1_p": raw.get("anchor1_price"),
                 "a2_ts": raw.get("anchor2_timestamp"),
                 "a2_p": raw.get("anchor2_price"),
+                "active": trendline_id == followed.standing_trendline_id,
+                "bears_fib": bool(raw.get("bears_fib", True)),
             }
-    fib_levels = []
+        )
+    # Per LEG, the way the parent draws it: the two anchors that frame the
+    # swing and the buy levels hanging off them. Flat level rows lost which
+    # fib a rung belonged to, which is the one thing the colour is for.
+    #
+    # Every leg is drawn, finalized or not — see the note in FeedClient.plan.
+    # A finalized leg is a tradeable leg, so hiding its levels left the buyer
+    # looking at a chart with no ladder on it while their money waited at
+    # exactly those prices.
+    # What THIS buyer's money would put on each rung, so the labels read like
+    # the parent's — the level, its price, and the amount waiting there.
+    sized = {}
+    plan = runtime._client.plan(
+        campaign_id,
+        capital_usd=runtime._config.capital_usd,
+        funded_bands=runtime._birth_bands.get(campaign_id, []),
+    )
+    if plan and not plan.get("refused"):
+        for leg in plan.get("legs") or []:
+            for rung in leg.get("rungs") or []:
+                sized[(leg.get("leg_id"), rung.get("level"))] = rung.get("usd")
+    legs = []
     for leg in followed.legs.values():
-        # Every leg's rungs are drawn, finalized or not — see the note in
-        # FeedClient.plan. A finalized leg is a tradeable leg, so hiding its
-        # levels left the buyer looking at a chart with no ladder on it while
-        # their money was waiting at exactly those prices.
-        for level, price in leg.level_prices().items():
-            fib_levels.append({"leg": leg.leg_id, "level": level, "price": price})
+        levels = leg.level_prices()
+        legs.append(
+            {
+                "leg_id": leg.leg_id,
+                "touch_high": leg.fib_high,
+                "low": leg.fib_low,
+                "levels": {str(level): price for level, price in levels.items()},
+                "usd": {str(level): sized.get((leg.leg_id, level)) for level in levels},
+            }
+        )
+    # Rounds this buyer already closed, so the chart shows the trades that
+    # happened and not only the ones waiting to.
+    exits = [
+        {"ts": row.get("closed_ts"), "price": row.get("exit_price"), "pnl": row.get("net_est_usd")}
+        for row in (orders.closed_rounds if orders else [])
+        if row.get("exit_price")
+    ]
     return {
         "campaign_id": campaign_id,
         "symbol": followed.symbol,
         "timeframe": followed.timeframe,
         "candles": [[c.timestamp, c.open, c.high, c.low, c.close] for c in candles[-160:]],
         "mother_high": followed.mother_high,
+        "mother_low": followed.mother_low,
         "mother_timestamp": followed.mother_timestamp,
-        "trendline": trendline,
-        "fib_levels": fib_levels,
+        "trendlines": trendlines,
+        "legs": legs,
+        "exits": exits,
         "fills": [{"ts": f.timestamp, "price": f.price} for f in (orders.fills if orders else [])],
         "avg_entry": orders.avg_entry if orders else None,
         "target": orders.exit_price if orders else None,
@@ -1200,10 +1241,12 @@ PAGE = """<!doctype html>
             color:var(--muted); font-size:11.5px; letter-spacing:.06em; }
   .legend span { display:inline-flex; align-items:center; gap:6px; }
   .legend i { width:14px; height:2px; display:inline-block; }
-  /* The fills are drawn as triangles, so the key says triangle, not dash. */
-  .legend i.tri { width:0; height:0; background:none;
+  /* Fills are drawn as triangles, so the key says triangle, not dash — and
+     pointing the way the mark points: buys up, sells down. */
+  .legend i.tri { width:0; height:0; background:none !important;
     border-left:5px solid transparent; border-right:5px solid transparent; border-bottom-width:8px;
     border-bottom-style:solid; }
+  .legend i.tri.down { border-bottom-width:0; border-top-width:8px; border-top-style:solid; }
   .chart-note { padding:0 22px 20px; color:var(--muted); font-size:12.5px; }
 
   /* ══ Setup ══ */
@@ -1523,14 +1566,17 @@ PAGE = """<!doctype html>
       <button class="modal-close" id="ch-close">×</button>
     </div>
     <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    <!-- Swatches are painted from the chart's own palette at draw time, so the
+         key and the picture cannot drift apart. -->
     <div class="legend">
-      <span><i style="background:var(--accent2)"></i>mother high</span>
-      <span><i style="background:var(--accent)"></i>trendline</span>
-      <span><i style="background:rgba(var(--tint-primary-rgb),.45)"></i>fib rungs</span>
-      <span><i style="background:var(--green)"></i>your target</span>
-      <span><i style="background:#a78bfa"></i>your average</span>
-      <span><i class="tri" style="border-bottom-color:#a78bfa"></i>where you bought</span>
-      <span><i style="background:var(--yellow)"></i>working stop</span>
+      <span><i data-pal="mother"></i>mother high &amp; MC</span>
+      <span><i data-pal="fib0"></i>fib 1 / TL1</span>
+      <span><i data-pal="fib1"></i>fib 2 / TL2</span>
+      <span><i data-pal="fib2"></i>fib 3 / TL3</span>
+      <span><i data-pal="tp"></i>your target &amp; stop</span>
+      <span><i data-pal="avg"></i>your average</span>
+      <span><i class="tri" data-pal="buyMark"></i>where you bought</span>
+      <span><i class="tri down" data-pal="sellMark"></i>where you sold</span>
     </div>
     <div class="chart-note" id="ch-note"></div>
   </div>
@@ -1897,128 +1943,200 @@ function drawChart() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
 
-  /* Canvas is painted, not styled, so the theme has to be read rather than
-     inherited — a hardcoded palette here is the one place a tint or a switch
-     to light mode would visibly not reach. */
+  /* The parent's chart palette, value for value. The buyer is looking at the
+     same geometry we are, and a chart that colours it differently makes them
+     do a translation every time they check our work against theirs. Canvas is
+     painted rather than styled, so light mode has to be read, not inherited. */
+  const theme = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  const PAL = theme === "light"
+    ? {grid: "rgba(15,23,42,0.10)", axis: "rgba(51,65,85,0.75)", up: "#0f766e", down: "#be123c",
+       mother: "#7c3aed", tp: "#047857", avg: "#334155", buyMark: "#1e293b", sellMark: "#b45309",
+       markRing: "#ffffff", fibs: ["#1d4ed8", "#15803d", "#be123c"]}
+    : {grid: "rgba(148,163,184,0.12)", axis: "rgba(148,163,184,0.55)", up: "#3fae56", down: "#d9534f",
+       mother: "#a855f7", tp: "#10b981", avg: "#e2e8f0", buyMark: "#ffffff", sellMark: "#fbbf24",
+       markRing: "#0b1220", fibs: ["#3b82f6", "#22c55e", "#ef4444"]};
   const cs = getComputedStyle(document.documentElement);
-  const tok = n => (cs.getPropertyValue(n) || "").trim();
-  const rgba = (n, a) => "rgba(" + tok(n) + "," + a + ")";
-  const C = {
-    accent: tok("--accent"), amber: tok("--accent2"), green: tok("--green"),
-    red: tok("--red"), yellow: tok("--yellow"), muted: tok("--muted"),
-    ink: tok("--bg"), avg: "#a78bfa", body: tok("--font-body"), mono: tok("--font-mono")
-  };
+  const MONO = (cs.getPropertyValue("--font-mono") || "monospace").trim();
+
+  /* The key is painted from this same palette. A legend with its own colours
+     is a legend that quietly stops matching the chart. */
+  document.querySelectorAll(".legend i[data-pal]").forEach(swatch => {
+    const key = swatch.dataset.pal;
+    const colour = key.startsWith("fib") ? PAL.fibs[Number(key.slice(3))] : PAL[key];
+    if (!colour) return;
+    if (swatch.classList.contains("tri")) {
+      swatch.style[swatch.classList.contains("down") ? "borderTopColor" : "borderBottomColor"] = colour;
+    } else {
+      swatch.style.background = colour;
+    }
+  });
 
   const candles = d.candles || [];
   if (!candles.length) {
-    g.fillStyle = C.muted; g.font = "13px " + C.body;
+    g.fillStyle = PAL.axis; g.font = "13px " + MONO;
     g.fillText("No candles from your exchange yet.", 16, H / 2);
     return;
   }
-  const padL = 8, padR = 92, padT = 16, padB = 30;
-  // Scale to PRICE, never to the deepest fib rung: L8 is eight leg-ranges down
-  // and would flatten every candle into a line. Rungs inside the price band
-  // are drawn; ones far below are named in the note instead.
+
+  /* Labels live in a LEFT gutter, the way they do on the parent's chart and on
+     TradingView: the eye reads level-then-price instead of hunting past every
+     candle to the right edge. The right margin is the price axis alone. */
+  const padL = 132, padR = 58, padT = 18, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const n = candles.length, cw = plotW / n;
+
+  /* Scale to PRICE, never to the deepest rung: L8 is eight leg-ranges down and
+     would flatten every candle into a line. Rungs inside the band are drawn;
+     ones below it are counted in the note under the chart. */
   let lo = Infinity, hi = -Infinity;
   candles.forEach(c => { lo = Math.min(lo, c[3]); hi = Math.max(hi, c[2]); });
   [d.mother_high, d.avg_entry, d.target, d.stop_price].forEach(v => {
     if (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
   });
-  const span = (hi - lo) || 1;
-  lo -= span * 0.06; hi += span * 0.06;
-  const X = i => padL + (i + 0.5) * ((W - padL - padR) / candles.length);
-  const Y = p => padT + (hi - p) / (hi - lo) * (H - padT - padB);
-  const bw = Math.max(1.5, Math.min(9, (W - padL - padR) / candles.length * 0.62));
-
-  // Labels are nudged apart, because the interesting case is levels that sit
-  // ON TOP of each other: an average entry lands within cents of the rung it
-  // filled from, and two overlapping labels are less readable than none.
-  const taken = [];
-  const line = (p, color, dash, label) => {
-    if (p == null || p < lo || p > hi) return;
-    const y = Y(p);
-    g.save(); g.strokeStyle = color; g.lineWidth = 1; g.setLineDash(dash || []);
-    g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke(); g.restore();
-    let ly = y;
-    while (taken.some(t => Math.abs(t - ly) < 11)) ly += 11;
-    taken.push(ly);
-    if (Math.abs(ly - y) > 2) {
-      g.save(); g.strokeStyle = color; g.globalAlpha = .45; g.lineWidth = .8;
-      g.beginPath(); g.moveTo(W - padR, y); g.lineTo(W - padR + 4, ly - 3.5); g.stroke(); g.restore();
-    }
-    g.fillStyle = color; g.font = "10.5px " + C.mono;
-    g.fillText(label, W - padR + 6, ly + 3.5);
-  };
-
-  /* A price grid and a time axis, because "where is this trading" is the first
-     question the chart is asked and reading it off unlabelled candles is
-     guesswork. Four gridlines is enough to place a level without clutter. */
-  g.save();
-  g.strokeStyle = rgba("--tint-primary-rgb", ".07"); g.lineWidth = 1;
-  g.fillStyle = C.muted; g.font = "9.5px " + C.mono; g.textAlign = "left";
-  // Two decimals on the axis whatever the coin's tick: the gridline says
-  // roughly where, and 64,875.8748 is four digits of noise for that job.
-  const axisPx = p => Number(p).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  for (let i = 0; i <= 4; i++) {
-    const p = lo + (hi - lo) * (i / 4), y = Y(p);
-    g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
-    g.globalAlpha = .55; g.fillText(axisPx(p), W - padR + 6, y + 3); g.globalAlpha = 1;
-  }
-  const tsFmt = ts => new Date(ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-  g.globalAlpha = .6;
-  // The ends are anchored to their edges rather than centred on the candle:
-  // a centred first label runs off the left of the canvas and loses its hour.
-  const marks = [[0, "left"], [Math.floor(candles.length / 2), "center"], [candles.length - 1, "right"]];
-  marks.forEach(([i, align]) => {
-    if (!candles[i]) return;
-    g.textAlign = align;
-    const x = align === "left" ? padL : align === "right" ? W - padR : X(i);
-    g.fillText(tsFmt(candles[i][0]), x, H - padB + 14);
+  (d.legs || []).forEach(leg => {
+    if (leg.touch_high) hi = Math.max(hi, leg.touch_high);
+    if (leg.low) lo = Math.min(lo, leg.low);
   });
+  const span = (hi - lo) || 1, padP = span * 0.06;
+  const maxP = hi + padP, minP = lo - padP;
+
+  const X = i => padL + i * cw + cw / 2;
+  const Y = p => padT + (maxP - p) / (maxP - minP) * plotH;
+  const t0 = candles[0][0], t1 = candles[n - 1][0];
+  const Xt = t => t1 === t0 ? X(0) : padL + cw / 2 + ((t - t0) / (t1 - t0)) * (plotW - cw);
+  const inView = p => p >= minP && p <= maxP;
+  const fmt = v => Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+
+  /* price gridlines + right axis */
+  g.save(); g.font = "9.5px " + MONO; g.textAlign = "left";
+  for (let i = 0; i <= 4; i++) {
+    const p = minP + (maxP - minP) * (i / 4), y = Y(p);
+    g.strokeStyle = PAL.grid; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
+    g.fillStyle = PAL.axis; g.fillText(fmt(p), padL + plotW + 6, y + 3);
+  }
+  /* time axis */
+  const ticks = Math.min(6, n);
+  g.textAlign = "center"; g.fillStyle = PAL.axis;
+  for (let t = 0; t < ticks; t++) {
+    const i = Math.round((n - 1) * (t / Math.max(ticks - 1, 1)));
+    const label = new Date(candles[i][0] * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    g.fillText(label, Math.min(Math.max(X(i), padL + 18), padL + plotW - 18), H - 10);
+  }
   g.restore();
 
-  (d.fib_levels || []).forEach(f => line(f.price, rgba("--tint-primary-rgb", ".34"), [3, 6], "L" + f.level));
-  if (d.reuse_below) line(d.reuse_below, C.muted, [2, 5], "floor");
-
-  if (d.trendline && d.trendline.a1_ts && d.trendline.a2_ts) {
-    const t = d.trendline, t0 = candles[0][0], t1 = candles[candles.length - 1][0];
-    const at = ts => t.a1_p + (t.a2_p - t.a1_p) * ((ts - t.a1_ts) / ((t.a2_ts - t.a1_ts) || 1));
-    g.save(); g.strokeStyle = C.accent; g.lineWidth = 1.4; g.globalAlpha = .85;
-    g.beginPath(); g.moveTo(X(0), Y(at(t0))); g.lineTo(X(candles.length - 1), Y(at(t1)));
-    g.stroke(); g.restore();
-  }
-
+  /* candles, and the mother candle marked as a column the way the parent does
+     — the horizontal high line alone disappears once a chart is rolled up. */
+  const bodyW = Math.max(Math.min(cw * 0.65, 9), 1);
   candles.forEach((c, i) => {
-    const up = c[4] >= c[1], x = X(i);
-    g.strokeStyle = up ? C.green : C.red; g.fillStyle = g.strokeStyle;
-    g.lineWidth = 1;
+    const up = c[4] >= c[1], col = up ? PAL.up : PAL.down, x = X(i);
+    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1;
     g.beginPath(); g.moveTo(x, Y(c[2])); g.lineTo(x, Y(c[3])); g.stroke();
-    const yO = Y(c[1]), yC = Y(c[4]);
-    g.fillRect(x - bw / 2, Math.min(yO, yC), bw, Math.max(1.2, Math.abs(yC - yO)));
+    const yTop = Y(Math.max(c[1], c[4])), yBot = Y(Math.min(c[1], c[4]));
+    g.fillRect(x - bodyW / 2, yTop, bodyW, Math.max(yBot - yTop, 1));
+    if (d.mother_timestamp && c[0] === d.mother_timestamp) {
+      g.save();
+      g.globalAlpha = 0.09; g.fillStyle = PAL.mother;
+      g.fillRect(x - Math.max(bodyW, 6) / 2 - 3, padT + 1, Math.max(bodyW, 6) + 6, plotH - 2);
+      g.globalAlpha = 1; g.strokeStyle = PAL.mother; g.lineWidth = 1.4;
+      g.strokeRect(x - bodyW / 2 - 1, Y(c[2]) - 1, bodyW + 2, Math.max(Y(c[3]) - Y(c[2]) + 2, 4));
+      g.fillStyle = PAL.mother; g.font = "700 9.5px " + MONO; g.textAlign = "center";
+      g.fillText("MC", x, Math.max(Y(c[2]) - 8, padT + 10));
+      g.restore();
+    }
   });
 
-  line(d.mother_high, C.amber, [], "mother");
-  line(d.stop_price, C.yellow, [5, 4], "stop");
-  line(d.avg_entry, C.avg, [], "avg");
-  line(d.target, C.green, [], "target");
+  /* Gutter labels, nudged apart so two levels a few ticks apart stay legible.
+     The overshoot is deliberate — an exact +10 can land, in floating point,
+     fractionally under the gap it just cleared and loop forever. */
+  const slots = [];
+  const label = (y, text, colour) => {
+    let ly = y;
+    for (let pass = 0, moved = true; moved && pass <= slots.length; pass++) {
+      moved = false;
+      for (let k = 0; k < slots.length; k++) {
+        if (Math.abs(slots[k] - ly) < 10) { ly = slots[k] + 10.5; moved = true; break; }
+      }
+    }
+    slots.push(ly);
+    g.save(); g.fillStyle = colour; g.font = "10px " + MONO; g.textAlign = "right";
+    g.fillText(text, padL - 6, ly + 3); g.restore();
+  };
+  const hline = (price, colour, text, dash, width, alpha) => {
+    if (price == null || !inView(price)) return;
+    const y = Y(price);
+    g.save(); g.strokeStyle = colour; g.lineWidth = width || 0.9;
+    if (alpha) g.globalAlpha = alpha;
+    if (dash) g.setLineDash(dash);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke(); g.restore();
+    if (text) label(y, text, colour);
+  };
 
-  /* Where the buyer's own money went in. Drawn last so nothing paints over
-     them, as an upward triangle with its price beside it — a bare dot said
-     "something happened here" without saying what or at what price. */
-  const first = candles[0][0], last = candles[candles.length - 1][0], spanT = (last - first) || 1;
-  (d.fills || []).forEach(f => {
-    const x = padL + ((f.ts - first) / spanT) * (W - padL - padR);
-    const y = Y(f.price);
-    if (y < padT || y > H - padB) return;
-    g.save();
-    g.fillStyle = C.avg; g.strokeStyle = C.ink; g.lineWidth = 1.5;
-    g.beginPath(); g.moveTo(x, y - 5.5); g.lineTo(x + 5, y + 4); g.lineTo(x - 5, y + 4);
-    g.closePath(); g.fill(); g.stroke();
-    g.fillStyle = C.avg; g.font = "9.5px " + C.mono; g.textAlign = "left";
-    g.fillText(px(f.price), x + 8, y + 3.5);
+  hline(d.mother_high, PAL.mother, "MOTHER (" + fmt(d.mother_high) + ")", [5, 3], 1.1);
+
+  /* every trendline, coloured by creation order and marked when active */
+  (d.trendlines || []).forEach(tl => {
+    if (!tl.a1_ts || !tl.a2_ts || tl.a2_ts === tl.a1_ts) return;
+    const slope = (tl.a2_p - tl.a1_p) / (tl.a2_ts - tl.a1_ts);
+    const p0 = tl.a1_p + slope * (t0 - tl.a1_ts), p1 = tl.a1_p + slope * (t1 - tl.a1_ts);
+    const col = PAL.fibs[(Math.max(1, Number(tl.id) || 1) - 1) % PAL.fibs.length];
+    const noFib = tl.bears_fib === false;
+    g.save(); g.strokeStyle = col; g.lineWidth = tl.active ? 1.3 : 0.9;
+    g.globalAlpha = noFib ? 0.35 : (tl.active ? 0.95 : 0.5);
+    if (noFib) g.setLineDash([6, 4]);
+    g.beginPath(); g.moveTo(Xt(t0), Y(p0)); g.lineTo(Xt(t1), Y(p1)); g.stroke();
+    if (inView(p1)) {
+      g.setLineDash([]); g.globalAlpha = 0.9; g.fillStyle = col;
+      g.font = "9.5px " + MONO; g.textAlign = "right";
+      g.fillText("TL" + tl.id + (noFib ? " (no fib)" : (tl.active ? " ★" : "")), Xt(t1) - 4, Y(p1) - 5);
+    }
     g.restore();
   });
 
+  /* every fib: 0/1 frame the swing faintly, 2/4/8 are the rungs money sits on.
+     Colour is keyed to leg id, not position, so a fib keeps its hue as others
+     retire — which is what lets a label say only the level and the price. */
+  (d.legs || []).forEach(leg => {
+    const col = PAL.fibs[(Math.max(1, Number(leg.leg_id) || 1) - 1) % PAL.fibs.length];
+    hline(leg.touch_high, col, "0 (" + fmt(leg.touch_high) + ")", null, 0.8, 0.4);
+    hline(leg.low, col, "1 (" + fmt(leg.low) + ")", null, 0.8, 0.4);
+    [2, 4, 8].forEach(lv => {
+      const p = leg.levels ? leg.levels[String(lv)] : null;
+      if (p == null) return;
+      const usd = Number((leg.usd || {})[String(lv)]) || 0;
+      hline(Number(p), col, lv + " (" + fmt(p) + ")" + (usd > 0 ? "  $" + usd.toFixed(2) : ""), null, 1.1, 0.9);
+    });
+  });
+
+  if (d.reuse_below) hline(d.reuse_below, PAL.axis, "FLOOR (" + fmt(d.reuse_below) + ")", [2, 5], 0.9);
+  if (d.stop_price) hline(d.stop_price, PAL.tp, "STOP (" + fmt(d.stop_price) + ")", [5, 4], 1.0, 0.8);
+  if (d.target) hline(d.target, PAL.tp, "TARGET · open (" + fmt(d.target) + ")", [6, 3], 1.2);
+  if (d.avg_entry) hline(d.avg_entry, PAL.avg, "AVG ENTRY · open (" + fmt(d.avg_entry) + ")", [4, 4], 1.1);
+
+  /* Buys: arrow pointing UP, sitting BELOW the candle, the way an entry is
+     marked on a real chart. A dot said something happened, not what. */
+  const arrow = (x, y, downward, fill) => {
+    const s = downward ? -1 : 1;
+    g.save(); g.fillStyle = fill; g.strokeStyle = PAL.markRing; g.lineWidth = 0.9;
+    g.beginPath();
+    g.moveTo(x, y - 9 * s); g.lineTo(x - 5, y); g.lineTo(x - 2, y);
+    g.lineTo(x - 2, y + 6 * s); g.lineTo(x + 2, y + 6 * s); g.lineTo(x + 2, y);
+    g.lineTo(x + 5, y); g.closePath(); g.fill(); g.stroke(); g.restore();
+  };
+  (d.fills || []).forEach(f => {
+    if (!f.price || !inView(f.price)) return;
+    arrow(Xt(f.ts), Y(f.price) + 10, false, PAL.buyMark);
+  });
+  /* Sells: mirrored above the candle and labelled with the round's P&L — the
+     one number the record is kept for. */
+  (d.exits || []).forEach(x => {
+    if (!x.price || !inView(x.price)) return;
+    const cx = Xt(x.ts), cy = Y(x.price) - 10, pnl = Number(x.pnl) || 0;
+    arrow(cx, cy, true, PAL.sellMark);
+    g.save(); g.fillStyle = PAL.sellMark; g.font = "9.5px " + MONO; g.textAlign = "center";
+    g.fillText("SELL " + fmt(x.price) + "  " + (pnl >= 0 ? "+" : "−") + "$" + Math.abs(pnl).toFixed(2), cx, cy - 9);
+    g.restore();
+  });
 }
 
 async function openChart(cid, symbol) {
@@ -2038,11 +2156,12 @@ async function openChart(cid, symbol) {
   const pos = $("ch-pos");
   pos.hidden = !d.avg_entry;
   if (d.avg_entry) pos.textContent = "holding @ " + px(d.avg_entry);
-  const deep = (d.fib_levels || []).filter(f => f.price < Math.min(...d.candles.map(c => c[3])));
+  const floor = Math.min(...d.candles.map(c => c[3]));
+  const deep = (d.legs || []).reduce((count, leg) =>
+    count + [2, 4, 8].filter(lv => leg.levels && leg.levels[String(lv)] < floor).length, 0);
   $("ch-note").textContent =
     "Geometry from the signal; candles, fills and target are your own machine's." +
-    (deep.length ? "  " + deep.length + " deeper rung(s) sit below this view — the chart scales to price, not to L8."
-                 : "");
+    (deep ? "  " + deep + " deeper rung(s) sit below this view — the chart scales to price, not to L8." : "");
   drawChart();
 }
 $("ch-close").addEventListener("click", () => $("modal").classList.remove("on"));

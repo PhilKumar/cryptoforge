@@ -325,13 +325,31 @@ class UIServerTests(unittest.TestCase):
         for part in ("brand-column col-a", "brand-column col-b", "brand-column col-c", "brand-spark"):
             self.assertIn(part, PAGE)
 
-    def test_the_chart_reads_its_colours_from_the_theme(self):
-        """Canvas is painted, not styled: a hardcoded palette is the one place
-        a tint or light mode would visibly fail to reach."""
+    def test_the_chart_still_answers_to_light_mode(self):
+        """Canvas is painted, not styled, so the theme has to be read rather
+        than inherited — the one place a switch to light would not reach."""
         chart = PAGE[PAGE.index("function drawChart()") : PAGE.index("async function openChart")]
-        self.assertIn("getComputedStyle(document.documentElement)", chart)
-        for hardcoded in ('"#22d3ee"', '"#2dd4bf"', '"#fb7185"', '"#f59e0b"', '"#fbbf24"', '"#040814"'):
-            self.assertNotIn(hardcoded, chart)
+        self.assertIn('getAttribute("data-theme") === "light"', chart)
+
+    def test_the_chart_palette_matches_the_parents_value_for_value(self):
+        """The buyer is looking at the same geometry we are. A chart that
+        colours it differently makes them translate every time they check our
+        work — so this is pinned to the site's own palette, not merely similar
+        to it. If the parent's chart is recoloured, this fails rather than
+        drifting quietly apart."""
+        with open(os.path.join(os.path.dirname(ui.__file__), "..", "static", "cryptoforge-app.js")) as handle:
+            parent = handle.read()
+        chart = PAGE[PAGE.index("function drawChart()") : PAGE.index("async function openChart")]
+
+        def palette(source, name):
+            body = source[source.index(name) : source.index("}", source.index(name))]
+            return dict(re.findall(r"(\w+):\s*'([^']+)'", body))
+
+        for name, theme in (("_CF_CHART_DARK", "dark"), ("_CF_CHART_LIGHT", "light")):
+            for key, value in palette(parent, name).items():
+                if key == "fibs":
+                    continue
+                self.assertIn(value, chart, f"{theme} {key}={value} missing from the buyer's chart")
 
     def test_the_guide_itself_fetches_nothing(self):
         """It ships to strangers' machines and is served from loopback: a
@@ -730,8 +748,34 @@ class ChartViewTests(unittest.TestCase):
         chart = chart_view(self.runtime, self.market, "c1")
         self.assertTrue(chart["candles"])
         self.assertEqual(chart["mother_high"], 178.42)
-        self.assertIsNotNone(chart["trendline"])
-        self.assertEqual(sorted(f["level"] for f in chart["fib_levels"]), [2, 4, 8])
+        self.assertTrue(chart["trendlines"])
+        # Per leg, the way the parent draws it: the two anchors that frame the
+        # swing, and the rungs hanging off them.
+        leg = chart["legs"][0]
+        self.assertEqual(sorted(int(level) for level in leg["levels"]), [2, 4, 8])
+        self.assertEqual(leg["touch_high"], 176.40)
+        self.assertEqual(leg["low"], 172.88)
+
+    def test_the_standing_trendline_is_the_one_marked_active(self):
+        """The parent stars the line being traded against; a buyer comparing
+        charts should see the same one starred."""
+        from executor.ui import chart_view
+
+        chart = chart_view(self.runtime, self.market, "c1")
+        active = [tl for tl in chart["trendlines"] if tl["active"]]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["id"], self.runtime._client.campaigns["c1"].standing_trendline_id)
+
+    def test_a_closed_round_becomes_a_sell_mark(self):
+        """The chart shows trades that happened, not only ones waiting to."""
+        from executor.ui import chart_view
+
+        orders = self.runtime.book.get("c1")
+        orders.on_exit_filled(168.0, ts=1785405000)
+        exits = chart_view(self.runtime, self.market, "c1")["exits"]
+        self.assertEqual(len(exits), 1)
+        self.assertEqual(exits[0]["price"], 168.0)
+        self.assertIsNotNone(exits[0]["pnl"])
 
     def test_the_money_marks_are_the_buyers_own(self):
         from executor.ui import chart_view
@@ -762,8 +806,8 @@ class ChartViewTests(unittest.TestCase):
         from executor.ui import chart_view
 
         self.runtime._client.campaigns["c1"].legs[4].finalized = True
-        levels = chart_view(self.runtime, self.market, "c1")["fib_levels"]
-        self.assertEqual(sorted(row["level"] for row in levels), [2, 4, 8])
+        legs = chart_view(self.runtime, self.market, "c1")["legs"]
+        self.assertEqual(sorted(int(level) for level in legs[0]["levels"]), [2, 4, 8])
 
     def test_an_unknown_campaign_is_none_not_a_crash(self):
         from executor.ui import chart_view
