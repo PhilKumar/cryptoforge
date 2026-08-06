@@ -1065,6 +1065,35 @@ PAGE = """<!doctype html>
   .set-pending { margin-top:10px; font-size:12.5px; line-height:1.5; color:var(--accent); }
   .set-hint { font-style:normal; font-size:11px; font-weight:400; letter-spacing:0;
     text-transform:none; color:var(--dim); }
+
+  /* Top strip: the coins this machine follows, and its own clock. */
+  .ticker { display:flex; gap:2px; margin-left:auto; }
+  .tick { padding:5px 12px; border-left:1px solid var(--border); text-align:center; min-width:86px; }
+  .tick:first-child { border-left:0; }
+  .tick .t-sym { font:700 9.5px/1.4 var(--font-display); letter-spacing:.1em; color:var(--dim); }
+  .tick .t-px { font:600 13px/1.3 var(--font-mono); color:var(--text); }
+  .clock { font:12.5px/1 var(--font-mono); color:var(--muted); padding:6px 12px;
+    border:1px solid var(--border); border-radius:9px; white-space:nowrap; }
+  @media (max-width:1100px) { .ticker, .clock { display:none; } }
+
+  /* Setup and the guide, side by side. */
+  .setup-split { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:22px; align-items:start; }
+  .setup-col { min-width:0; }
+  .setup-guide .guide-frame { height:calc(100vh - 190px); border-radius:14px; border:1px solid var(--border); }
+  @media (max-width:1000px) {
+    .setup-split { grid-template-columns:minmax(0,1fr); }
+    .setup-guide .guide-frame { height:70vh; }
+  }
+
+  /* Console sub-sections. One page, three ranges of the same question. */
+  .sub-tabs { display:inline-flex; gap:2px; margin-left:auto; }
+  .sub-tabs button { font:600 10.5px/1 var(--font-display); letter-spacing:.07em;
+    padding:6px 11px; border-radius:7px; cursor:pointer; color:var(--dim);
+    border:1px solid var(--border); background:rgba(255,255,255,.03); }
+  .sub-tabs button:hover { color:var(--text); border-color:var(--border-hi); }
+  .sub-tabs button[aria-pressed="true"] { color:var(--accent); border-color:var(--border-acc);
+    background:rgba(var(--tint-primary-rgb),.12); }
+  .console-block[hidden] { display:none; }
   /* The answer sits beside the button that caused it. The console's own toast
      is on a different page, so a save made here used to report into thin air
      and read as a dead button. */
@@ -1466,14 +1495,16 @@ PAGE = """<!doctype html>
       <div class="brand-sub">by CryptoForge · Signal · Execution</div>
     </div>
   </div>
+  <!-- The prices this machine is actually watching, and the time it thinks it
+       is. Both belong at the top: the first is what every rung is measured
+       against, and the second is how a buyer catches a clock that has drifted
+       — which is the one local fault that silently breaks a signed handshake. -->
+  <div class="ticker" id="ticker"></div>
+  <div class="clock" id="clock" title="this machine's own clock">—</div>
   <button class="nav-tab active" data-page="home">Home</button>
   <button class="nav-tab" data-page="console"><span class="live-dot" id="dot"></span>Console</button>
   <button class="nav-tab" data-page="campaigns">Campaigns</button>
-  <button class="nav-tab" data-page="portfolio">Portfolio</button>
-  <button class="nav-tab" data-page="journal">Journal</button>
-  <button class="nav-tab" data-page="rounds">Rounds</button>
-  <button class="nav-tab" data-page="setup">Setup</button>
-  <button class="nav-tab" data-page="guide">Guide</button>
+  <button class="nav-tab" data-page="setup">Setup &amp; guide</button>
   <div class="topbar-right">
     <button class="icon-btn" id="btn-theme" title="Light or dark" aria-label="Light or dark">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
@@ -1635,30 +1666,14 @@ PAGE = """<!doctype html>
   <div class="lines" id="lines"></div>
   <div class="section-h"><h2>Recent activity</h2></div>
   <div class="panel events" id="events" style="padding:14px 18px"></div>
-  <div class="disclosure" id="disclosure"></div>
-</div></section>
 
-<!-- ══════════ CAMPAIGNS ══════════ -->
-<section class="page" id="page-campaigns"><div class="wrap">
-  <div class="section-h"><h2>Campaigns</h2><span style="color:var(--muted);font-size:12.5px">
-    the geometry this machine is following, and where its money is waiting</span></div>
-  <div id="cards"></div>
-  <div class="empty panel" id="cards-empty">Nothing followed yet — campaigns join as they start on the feed.</div>
-  <!-- Ended campaigns keep their own section BELOW the live ones, the way the
-       parent's Closed Campaigns table sits under its live strip. Mixed into one
-       list, a mother-broken card sat between two running ones and read as
-       something still being traded. -->
-  <div class="section-h" id="closed-h" hidden><h2>Closed campaigns</h2><span style="color:var(--muted);font-size:12.5px">
-    ended — target hit, mother broken, stopped, or halted. Anything still held here is still being managed.</span></div>
-  <div id="cards-closed"></div>
-</div></section>
-
-<!-- ══════════ PORTFOLIO ══════════
-     Deliberately short. The parent's Portfolio answers "what is my account
-     doing"; this machine only knows the part of the account IT touched, and
-     reporting a whole exchange balance as though this software put it there
-     would be the wrong claim. -->
-<section class="page" id="page-portfolio"><div class="wrap">
+  <!-- Portfolio, Journal and Rounds live INSIDE the console, as sections of
+       one page rather than three tabs. They answer the same question at
+       different ranges — what is held now, what closed, what it added up to —
+       and splitting them made the buyer navigate to assemble one picture. -->
+  <div class="section-h" style="margin-top:34px"><h2>Your book</h2>
+    <span class="sub-tabs" id="console-tabs"></span></div>
+<div class="console-block" id="block-portfolio">
   <div class="section-h"><h2>Portfolio</h2><span style="color:var(--muted);font-size:12.5px">
     what this machine is holding, and what it is worth right now</span></div>
   <div class="stats-grid">
@@ -1679,10 +1694,9 @@ PAGE = """<!doctype html>
     </tr></thead><tbody id="pf-rows"></tbody></table>
   </div>
   <div class="empty panel" id="pf-empty">Holding nothing — no coin has been bought yet.</div>
-</div></section>
+</div>
 
-<!-- ══════════ JOURNAL ══════════ -->
-<section class="page" id="page-journal"><div class="wrap">
+<div class="console-block" id="block-journal">
   <div class="section-h"><h2>Trade journal</h2><span style="color:var(--muted);font-size:12.5px">
     every round this machine closed — your entries, your fees, your exits</span></div>
   <div class="stats-grid">
@@ -1709,10 +1723,9 @@ PAGE = """<!doctype html>
     </tr></thead><tbody id="j-rows"></tbody></table>
   </div>
   <div class="empty panel" id="j-empty">No rounds closed yet — the journal fills as targets are hit.</div>
-</div></section>
+</div>
 
-<!-- ══════════ ROUNDS ══════════ -->
-<section class="page" id="page-rounds"><div class="wrap">
+<div class="console-block" id="block-rounds">
   <div class="section-h"><h2>Closed rounds</h2><span style="color:var(--muted);font-size:12.5px">
     estimated, after your venue's headline commission</span></div>
   <div class="stats-grid">
@@ -1726,11 +1739,33 @@ PAGE = """<!doctype html>
     </table>
     <div class="empty" id="rounds-empty">No rounds have closed yet on this machine.</div>
   </div>
+</div>
+  <div class="disclosure" id="disclosure"></div>
+</div></section>
+
+<!-- ══════════ CAMPAIGNS ══════════ -->
+<section class="page" id="page-campaigns"><div class="wrap">
+  <div class="section-h"><h2>Campaigns</h2><span style="color:var(--muted);font-size:12.5px">
+    the geometry this machine is following, and where its money is waiting</span></div>
+  <div id="cards"></div>
+  <div class="empty panel" id="cards-empty">Nothing followed yet — campaigns join as they start on the feed.</div>
+  <!-- Ended campaigns keep their own section BELOW the live ones, the way the
+       parent's Closed Campaigns table sits under its live strip. Mixed into one
+       list, a mother-broken card sat between two running ones and read as
+       something still being traded. -->
+  <div class="section-h" id="closed-h" hidden><h2>Closed campaigns</h2><span style="color:var(--muted);font-size:12.5px">
+    ended — target hit, mother broken, stopped, or halted. Anything still held here is still being managed.</span></div>
+  <div id="cards-closed"></div>
 </div></section>
 
 <!-- ══════════ SETUP ══════════ -->
 <section class="page" id="page-setup"><div class="wrap">
-  <div class="section-h"><h2>Setup</h2></div>
+  <!-- Two columns: what to do on the left, the guide open beside it on the
+       right. They were two tabs, which meant reading a step, switching, losing
+       your place, and switching back. -->
+  <div class="setup-split">
+   <div class="setup-col">
+  <div class="section-h" style="margin-top:0"><h2>Setup</h2></div>
   <div class="steps">
     <div class="step panel"><div><h3>Register this machine</h3>
       <p>This machine generated its own key when it first ran. Send the public half to
@@ -1789,12 +1824,16 @@ PAGE = """<!doctype html>
     </div>
   </div>
   <div class="disclosure" id="setup-disclosure"></div>
+   </div>
+   <div class="setup-col setup-guide">
+     <div class="section-h" style="margin-top:0"><h2>Guide</h2><span style="color:var(--muted);font-size:12.5px">
+       the whole thing, start to finish</span></div>
+     <iframe class="guide-frame" id="guide-frame" src="/guide.html" title="Cascade setup guide"></iframe>
+   </div>
+  </div>
 </div></section>
 
-<!-- ══════════ GUIDE ══════════ -->
-<section class="page" id="page-guide">
-  <iframe class="guide-frame" id="guide-frame" src="/guide.html" title="Cascade setup guide"></iframe>
-</section>
+
 
 <div class="modal" id="modal">
   <div class="modal-box">
@@ -1988,6 +2027,7 @@ function cell(label, value, cls) {
 }
 
 function render(s) {
+  lastSnapshot = s;   /* so a sub-tab switch can repaint without a fetch */
   const st = s.status || {}, c = s.connection || {}, id = s.identity || {};
   const live = c.state === "connected" || c.state === "synced";
   const exp = Number(st.armed_exposure_usd || 0);
@@ -2165,6 +2205,26 @@ function render(s) {
     tbody.appendChild(tr);
   });
 
+  /* Top strip: the coins this machine actually follows, at its own venue's
+     prices. Not a market ticker — only what it is watching. */
+  const prices = st.prices || {};
+  const ticker = $("ticker");
+  const wanted = Object.keys(prices).sort().slice(0, 4);
+  if (wanted.join(",") !== ticker.dataset.syms) {
+    ticker.dataset.syms = wanted.join(",");
+    ticker.replaceChildren();
+    wanted.forEach(sym => {
+      const el = document.createElement("div"); el.className = "tick";
+      el.innerHTML = `<div class="t-sym">${sym.replace(/USDT$/, "")}</div>` +
+                     `<div class="t-px" data-px="${sym}">—</div>`;
+      ticker.appendChild(el);
+    });
+  }
+  wanted.forEach(sym => {
+    const cell = ticker.querySelector(`[data-px="${sym}"]`);
+    if (cell) cell.textContent = px(prices[sym]);
+  });
+
   /* portfolio */
   const pf = s.portfolio || {};
   const held = pf.holdings || [];
@@ -2270,6 +2330,7 @@ function render(s) {
 }
 /* ══ chart ══ */
 let chartData = null;
+let lastSnapshot = {};
 let chartScale = null;   /* set by drawChart; read by the crosshair */
 let chartCid = "", chartTf = "";
 function drawChart() {
@@ -2646,6 +2707,38 @@ async function poll() {
     $("h-conn").textContent = "no executor"; $("s-conn").textContent = "no executor";
   }
 }
+/* The machine's own clock, with its zone spelled out. A buyer in another
+   country reading OUR timezone would be told the wrong thing, and clock drift
+   is the one local fault that silently breaks a signed handshake. */
+function tickClock() {
+  const now = new Date();
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  $("clock").textContent = now.toLocaleTimeString([], {hour12: false}) + (zone ? " " + zone.split("/").pop() : "");
+}
+tickClock(); setInterval(tickClock, 1000);
+
+/* Console sub-sections. The choice survives the 3s repaint because it lives
+   here, not in the DOM being rewritten. */
+let consoleBlock = "portfolio";
+(function buildConsoleTabs() {
+  const strip = $("console-tabs");
+  [["portfolio", "Portfolio"], ["journal", "Journal"], ["rounds", "Rounds"]].forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.addEventListener("click", () => { consoleBlock = key; paintConsoleTabs(); });
+    strip.appendChild(b);
+  });
+})();
+function paintConsoleTabs() {
+  const keys = ["portfolio", "journal", "rounds"];
+  keys.forEach((key, i) => {
+    $("console-tabs").children[i].setAttribute("aria-pressed", key === consoleBlock ? "true" : "false");
+    $("block-" + key).hidden = key !== consoleBlock;
+  });
+  if (consoleBlock === "journal") drawEquity((lastSnapshot.journal || {}).equity || []);
+}
+paintConsoleTabs();
+
 poll(); setInterval(poll, 3000);
 
 /* Installable, so the console can live in its own window with its own icon

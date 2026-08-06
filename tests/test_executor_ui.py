@@ -283,8 +283,10 @@ class UIServerTests(unittest.TestCase):
         self.assertTrue(body.lstrip().lower().startswith(b"<!doctype html>"))
         self.assertIn(b"Twenty minutes", body)
 
-    def test_the_guide_tab_points_at_the_route_that_serves_it(self):
-        self.assertIn('data-page="guide"', PAGE)
+    def test_the_guide_frame_points_at_the_route_that_serves_it(self):
+        """It sits beside Setup now rather than behind its own tab, but it is
+        still the same iframe on the same route."""
+        self.assertIn('data-page="setup"', PAGE)
         self.assertIn('src="/guide.html"', PAGE)
 
     def test_a_missing_guide_is_a_note_not_a_broken_page(self):
@@ -952,9 +954,21 @@ class JournalAndPortfolioTests(unittest.TestCase):
         self.assertIsNone(view["free_quote"])
         self.assertIn("holdings", view)
 
-    def test_both_pages_exist_and_are_reachable(self):
-        for marker in ('id="page-portfolio"', 'id="page-journal"', 'data-page="portfolio"', 'data-page="journal"'):
+    def test_both_live_inside_the_console(self):
+        """Not three tabs: they answer the same question at different ranges —
+        what is held now, what closed, what it added up to — and splitting
+        them made the buyer navigate to assemble one picture."""
+        for marker in ('id="block-portfolio"', 'id="block-journal"', 'id="block-rounds"', 'id="console-tabs"'):
             self.assertIn(marker, PAGE, marker)
+        for gone in ('data-page="portfolio"', 'data-page="journal"', 'data-page="rounds"'):
+            self.assertNotIn(gone, PAGE, gone)
+
+    def test_setup_and_the_guide_are_one_page_side_by_side(self):
+        """They were two tabs, which meant reading a step, switching, losing
+        your place, and switching back."""
+        self.assertIn('class="setup-split"', PAGE)
+        self.assertIn('src="/guide.html"', PAGE)
+        self.assertNotIn('data-page="guide"', PAGE)
 
 
 class ChartEndpointTests(unittest.TestCase):
