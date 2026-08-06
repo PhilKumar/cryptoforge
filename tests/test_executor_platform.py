@@ -419,6 +419,57 @@ class FirstStartMarkerTests(unittest.TestCase):
         overridden = load(path, environ={"CASCADE_TIMEFRAMES": "5m, 1h"})
         self.assertEqual(overridden.timeframes, ["5m", "1h"])
 
+    def test_saving_a_setting_leaves_everything_else_in_the_file_alone(self):
+        """Merged, not rewritten: the env overrides the file at load, so
+        rewriting from the live config would burn an environment value into
+        the file and outlive the variable."""
+        import json as _json
+        import os as _os
+
+        from executor.config import load, save_settings
+
+        path = _os.path.join(self._dir.name, "config.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            _json.dump(
+                {
+                    "server_url": "http://localhost",
+                    "buyer_id": "b",
+                    "root_public_key": "k",
+                    "capital_usd": 3000,
+                    "a_field_we_do_not_model": "kept",
+                },
+                handle,
+            )
+        config = load(path, environ={"CASCADE_EXCHANGE": "coindcx"})
+        self.assertEqual(config.exchange, "coindcx")
+
+        save_settings(config, {"timeframes": ["15m"]})
+        with open(path, encoding="utf-8") as handle:
+            written = _json.load(handle)
+        self.assertEqual(written["timeframes"], ["15m"])
+        self.assertEqual(written["a_field_we_do_not_model"], "kept")
+        self.assertEqual(written["capital_usd"], 3000)
+        self.assertNotIn("exchange", written)
+
+    def test_a_secret_can_never_be_written_by_the_settings_page(self):
+        from executor.config import ConfigError, save_settings
+
+        config = self._config()
+        config.source_path = os.path.join(self._dir.name, "config.json")
+        with self.assertRaises(ConfigError):
+            save_settings(config, {"api_key": "AKIA-nope"})
+        self.assertFalse(os.path.exists(config.source_path))
+
+    def test_a_saved_setting_survives_a_reload(self):
+        from executor.config import load, save_settings
+
+        config = self._config()
+        config.source_path = os.path.join(self._dir.name, "config.json")
+        save_settings(config, {"timeframes": ["5m"], "signal_exchanges": ["binance"]})
+        reloaded = load(config.source_path, environ={})
+        self.assertEqual(reloaded.timeframes, ["5m"])
+        self.assertEqual(reloaded.signal_exchanges, ["binance"])
+
     def test_an_unsubscribed_default_follows_everything(self):
         config = self._config()
         self.assertEqual(config.timeframes, [])

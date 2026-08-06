@@ -457,6 +457,20 @@ class OrderBook:
     def sleep_intents(self) -> List[Tuple[str, OrderIntent]]:
         return [(orders.campaign_id, intent) for orders in self.campaigns.values() for intent in orders.sleep_intents()]
 
+    def engaged(self) -> List[str]:
+        """Campaigns holding coin or with an order resting on the exchange.
+
+        The question a venue change has to ask. Positions live on the venue
+        this machine is connected to; switching underneath them would leave
+        real coin on the old exchange with nothing managing its exit, and
+        resting orders there that nothing will ever cancel.
+        """
+        return [
+            orders.campaign_id
+            for orders in self.campaigns.values()
+            if orders.base_qty > 0 or orders.entry_resting or orders.exit_resting
+        ]
+
     def unprotected(self) -> List[str]:
         """Campaigns holding coin with no exit resting — the one bad state."""
         return [

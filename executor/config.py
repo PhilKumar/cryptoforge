@@ -27,6 +27,19 @@ class ConfigError(Exception):
     """The config cannot be used. Message is meant for the buyer, not a log."""
 
 
+def subscription_phrase(timeframes, signal_exchanges, symbols) -> str:
+    """What a subscription covers, in one line a buyer can check at a glance.
+
+    Shown wherever a quiet console might otherwise be read as a broken one:
+    "I did not buy that" and "something is wrong" look identical until
+    somebody says which.
+    """
+    tf = "/".join(timeframes) if timeframes else "all timeframes"
+    venue = "/".join(signal_exchanges) if signal_exchanges else "all venues"
+    coins = ", ".join(symbols) if symbols else "all coins"
+    return f"{tf} · drawn on {venue} · {coins}"
+
+
 @dataclass
 class ExecutorConfig:
     server_url: str
@@ -53,6 +66,9 @@ class ExecutorConfig:
     api_secret: str = ""
     # Where this machine keeps its own things.
     state_dir: str = DEFAULT_DIR
+    # The file this was read from, so a settings change can be written back to
+    # the same place rather than guessing. Empty when nothing was on disk.
+    source_path: str = ""
 
     @property
     def buyer_key_path(self) -> str:
@@ -89,16 +105,8 @@ class ExecutorConfig:
 
     @property
     def subscription_line(self) -> str:
-        """The signals this machine is subscribed to, in one phrase.
-
-        Shown wherever a buyer might otherwise read a quiet console as broken:
-        "I did not buy that" and "something is wrong" look identical until
-        somebody says which.
-        """
-        tf = "/".join(self.timeframes) if self.timeframes else "all timeframes"
-        venue = "/".join(self.signal_exchanges) if self.signal_exchanges else "all venues"
-        coins = ", ".join(self.symbols) if self.symbols else "all coins"
-        return f"{tf} · drawn on {venue} · {coins}"
+        """The signals this machine is subscribed to, in one phrase."""
+        return subscription_phrase(self.timeframes, self.signal_exchanges, self.symbols)
 
     def redacted(self) -> dict:
         """Safe to print, log, or paste into a support conversation."""
@@ -182,6 +190,7 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
         api_key=str(env.get("CASCADE_API_KEY") or data.get("api_key") or ""),
         api_secret=str(env.get("CASCADE_API_SECRET") or data.get("api_secret") or ""),
         state_dir=str(env.get("CASCADE_STATE_DIR") or data.get("state_dir") or DEFAULT_DIR),
+        source_path=resolved,
     )
     if env.get("CASCADE_SYMBOLS"):
         config.symbols = [s.strip().upper() for s in str(env["CASCADE_SYMBOLS"]).split(",") if s.strip()]
@@ -192,6 +201,46 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
             x.strip().lower() for x in str(env["CASCADE_SIGNAL_EXCHANGES"]).split(",") if x.strip()
         ]
     return config
+
+
+SETTABLE_KEYS = ("timeframes", "signal_exchanges", "symbols", "exchange")
+
+
+def save_settings(config: ExecutorConfig, changes: dict) -> str:
+    """
+    Write changed settings back to the buyer's config file.
+
+    Merged into the file rather than rewritten from the live config, for two
+    reasons. The environment overrides the file at load, so a config whose
+    exchange came from `CASCADE_EXCHANGE` would otherwise have that value
+    burned into the file, silently outliving the variable. And the file may
+    hold keys we do not model — comments people add, fields from a newer
+    version — which are not ours to delete.
+
+    Secrets are never written. If a buyer put their API key in the file
+    themselves, it stays exactly as they left it; nothing here adds one.
+    """
+    path = config.source_path or os.path.abspath(os.path.expanduser(DEFAULT_CONFIG))
+    data = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"{path} is not valid JSON, so it cannot be updated safely: {exc}") from exc
+    for key, value in changes.items():
+        if key not in SETTABLE_KEYS:
+            raise ConfigError(f"{key} is not a setting this page may change.")
+        data[key] = value
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Written via a neighbour and renamed: a half-written config is one a
+    # restart cannot read, and the restart is exactly when it is read.
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+        handle.write("\n")
+    os.replace(temporary, path)
+    return path
 
 
 def build_adapter(config: ExecutorConfig):

@@ -369,6 +369,94 @@ class ActionEndpointTests(unittest.TestCase):
         self._post(headers={"X-Cascade-UI": "1"})
         self.assertEqual(self.state.snapshot()["events"][0]["line"], "Paused.")
 
+    def test_a_saved_subscription_reaches_the_page_not_just_the_machine(self):
+        """The runtime carries its own config, built at startup. Updating only
+        that left the page showing boot values while the machine followed
+        something else — the change looked ignored when it had been applied."""
+        import os
+        import tempfile
+
+        from executor.config import ExecutorConfig
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        config = ExecutorConfig(
+            server_url="http://localhost",
+            buyer_id="b",
+            root_public_key="k",
+            state_dir=directory.name,
+            source_path=os.path.join(directory.name, "config.json"),
+        )
+
+        class StubRuntime:
+            def set_subscription(self, **kwargs):
+                return "Now following."
+
+            def venue_change_blockers(self):
+                return []
+
+        class StubExecutor:
+            def __init__(self):
+                self.config = config
+                self.runtime = StubRuntime()
+                self.identity = mock.Mock(public_key_b64=lambda: "pk")
+                self.transport = mock.Mock()
+
+            def _on_status(self, kind, detail):
+                pass
+
+            def _market_for_ui(self):
+                return None
+
+        executor = StubExecutor()
+        server = ui.wire(executor, port=0)
+        self.addCleanup(server.stop)
+        state = executor._ui_state
+        port = server._server.server_address[1]
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/action",
+            data=b'{"action":"set_subscription","payload":{"timeframes":"15m","signal_exchanges":"coindcx"}}',
+            method="POST",
+            headers={"Content-Type": "application/json", "X-Cascade-UI": "1"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            response.read()
+
+        identity = state.snapshot()["identity"]
+        self.assertEqual(identity["timeframes"], ["15m"])
+        self.assertEqual(identity["following"], "15m · drawn on coindcx · all coins")
+        self.assertEqual(config.timeframes, ["15m"])
+
+    def test_a_settings_action_receives_what_to_set(self):
+        """Switches take no argument and settings do; one signature carries
+        both, so a handler that wants nothing keeps saying so."""
+        got = {}
+        server = UIServer(
+            self.state,
+            port=0,
+            actions={
+                "set_it": lambda payload: (got.update(payload), "Set.")[1],
+                "plain": lambda: "Switched.",
+            },
+        )
+        self.assertIsNone(server.start())
+        self.addCleanup(server.stop)
+        port = server._server.server_address[1]
+
+        def post(body):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/action",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json", "X-Cascade-UI": "1"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.read()
+
+        self.assertIn(b"Set.", post(b'{"action":"set_it","payload":{"timeframes":["15m"]}}'))
+        self.assertEqual(got, {"timeframes": ["15m"]})
+        self.assertIn(b"Switched.", post(b'{"action":"plain"}'))
+
 
 class BuyerSwitchTests(unittest.TestCase):
     """Pause, confirm, stand down — each read by the tick, none touching exits."""

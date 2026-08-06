@@ -208,6 +208,13 @@ Leave both `[]` and you follow everything we publish. Anything you did not
 subscribe to is listed on your console with the reason, so a coin that never
 trades is never a mystery.
 
+**You can change all of this later without editing the file.** The Setup page
+of your console has a Settings panel. Signal choices there apply immediately;
+anything already running keeps its exits. Changing your exchange is written
+down and applied the next time you start the machine, and it is refused while
+you hold coin or have an order resting — those live on the exchange you are
+connected to now, and switching underneath them would leave them behind.
+
 **About `capital_usd`.** This isn't a safety limit you probably won't reach. It
 is the number every order size is worked out from. Put 3000 and it will trade
 as though it has $3,000 to work with. Put your real figure.

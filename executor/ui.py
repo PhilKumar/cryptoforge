@@ -30,6 +30,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Optional
 
+from executor.config import ConfigError, save_settings
 from executor.power import PlatformPower, suspend_advice
 from executor.report import irreducible_risk, running_status
 
@@ -250,6 +251,21 @@ def campaigns_view(runtime) -> list:
 
 LOGGED_EVENTS = ("halt", "bad_signature", "clock_warning", "stopped", "campaign", "closed")
 
+# The venues this product supports, for both trading and drawing. Kept here so
+# the page offers exactly what the config will accept.
+SUPPORTED_EXCHANGES = ("binance", "coindcx")
+
+
+def _as_list(value) -> list:
+    """A comma-separated box or a JSON list, both ending up as clean items."""
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        parts = list(value)
+    else:
+        return []
+    return [str(part).strip().lower() for part in parts if str(part).strip()]
+
 
 def worth_logging(kind: str, detail: dict) -> bool:
     """Does this belong in the activity log a buyer actually reads?
@@ -446,7 +462,11 @@ class UIServer:
                     self.send_error(404, f"unknown action {name!r}")
                     return
                 try:
-                    message = handler()
+                    # Settings actions need what to set; the switches take
+                    # nothing. One signature for both, so a handler that wants
+                    # no argument keeps saying so.
+                    payload = request.get("payload")
+                    message = handler(payload) if payload is not None else handler()
                 except Exception as exc:
                     _log.exception("action %s failed", name)
                     message = f"{name} failed: {exc}"
@@ -809,6 +829,23 @@ PAGE = """<!doctype html>
   .ap-font[aria-pressed="true"] { color:var(--accent); border-color:var(--border-acc);
     background:rgba(var(--tint-primary-rgb),0.10); }
   html[data-theme="light"] .ap-font { background:rgba(15,23,42,0.03); }
+
+  /* Settings. Two blocks, deliberately not one: the first is live and the
+     second waits for a restart, and that difference is the whole design. */
+  .settings { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; margin:0 0 16px; }
+  .set-block { background:rgba(255,255,255,.03); border:1px solid var(--border);
+    border-radius:12px; padding:16px 18px; }
+  .set-block h3 { margin:0 0 6px; font-size:14px; letter-spacing:.2px; }
+  .set-note { margin:0 0 12px; font-size:12.5px; line-height:1.5; color:var(--dim); }
+  .set-row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .set-row label { flex:1 1 140px; display:flex; flex-direction:column; gap:5px;
+    font-size:10.5px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; color:var(--dim); }
+  .set-row input, .set-row select { padding:9px 11px; border-radius:9px; border:1px solid var(--border-hi);
+    background:rgba(5,10,20,.35); color:var(--text); font:inherit; font-size:13px; font-weight:400;
+    text-transform:none; letter-spacing:0; }
+  .set-row input:focus, .set-row select:focus { outline:none; border-color:var(--border-acc); }
+  html[data-theme="light"] .set-row input, html[data-theme="light"] .set-row select { background:#fff; }
+  .set-pending { margin-top:10px; font-size:12.5px; line-height:1.5; color:var(--accent); }
 
   .page { display:none; position:relative; z-index:1; }
   .page.on { display:block; animation:fadeIn .25s ease; }
@@ -1379,6 +1416,35 @@ PAGE = """<!doctype html>
     <div class="stat"><div class="l">Subscribed to</div><div class="v" id="su-following" style="font-size:12.5px;font-weight:400;color:var(--dim)">—</div></div>
     <div class="stat"><div class="l">Platform note</div><div class="v" id="su-advice" style="font-size:12.5px;font-weight:400;color:var(--dim)">—</div></div>
   </div>
+  <div class="section-h"><h2>Settings</h2></div>
+  <div class="settings">
+    <div class="set-block">
+      <h3>Which signals you follow</h3>
+      <p class="set-note">Takes effect immediately. Campaigns already running keep their exits —
+         narrowing what you follow never abandons a position.</p>
+      <div class="set-row">
+        <label>Timeframes<input id="set-tf" placeholder="5m, 15m — blank means all"></label>
+        <label>Drawn on<input id="set-src" placeholder="binance, coindcx — blank means all"></label>
+        <label>Coins<input id="set-sym" placeholder="BTCUSDT, SOLUSDT — blank means all"></label>
+      </div>
+      <button class="btn" id="btn-save-signals">Save signal choice</button>
+    </div>
+    <div class="set-block">
+      <h3>Which exchange you trade on</h3>
+      <p class="set-note">Applied at the next start, and only from a flat book: your coin and your
+         orders live on the exchange this machine is connected to, so switching while something is
+         open would leave them behind with nothing watching them. Your API keys come from this
+         machine's environment and are never typed here.</p>
+      <div class="set-row">
+        <label>Exchange<select id="set-ex">
+          <option value="binance">binance</option>
+          <option value="coindcx">coindcx</option>
+        </select></label>
+      </div>
+      <button class="btn" id="btn-save-exchange">Change exchange</button>
+      <div class="set-pending" id="set-pending" hidden></div>
+    </div>
+  </div>
   <div class="disclosure" id="setup-disclosure"></div>
 </div></section>
 
@@ -1511,12 +1577,13 @@ sizeGuide();
 document.querySelectorAll("[data-goto]").forEach(b => b.addEventListener("click", () => show(b.dataset.goto)));
 if (location.hash.length > 1) show(location.hash.slice(1));
 
-async function act(name, button) {
+async function act(name, button, payload) {
   button.disabled = true;
   try {
+    const body = payload ? {action: name, payload: payload} : {action: name};
     const r = await fetch("/api/action", {method: "POST",
       headers: {"Content-Type": "application/json", "X-Cascade-UI": "1"},
-      body: JSON.stringify({action: name})});
+      body: JSON.stringify(body)});
     const d = await r.json();
     $("toast").textContent = d.message || "done";
   } catch (e) { $("toast").textContent = "action failed: " + e; }
@@ -1525,6 +1592,20 @@ async function act(name, button) {
 }
 document.querySelectorAll("button[data-action]").forEach(b =>
   b.addEventListener("click", () => act(b.dataset.action, b)));
+
+/* Settings. The page repaints every few seconds, so a field the buyer is
+   typing in must not be overwritten underneath them — hence `touched`, set on
+   first input and only cleared when a save comes back. */
+let settingsTouched = false;
+["set-tf", "set-src", "set-sym"].forEach(id =>
+  $(id).addEventListener("input", () => { settingsTouched = true; }));
+$("btn-save-signals").addEventListener("click", async b => {
+  await act("set_subscription", $("btn-save-signals"), {
+    timeframes: $("set-tf").value, signal_exchanges: $("set-src").value, symbols: $("set-sym").value});
+  settingsTouched = false;
+});
+$("btn-save-exchange").addEventListener("click", () =>
+  act("set_exchange", $("btn-save-exchange"), {exchange: $("set-ex").value}));
 
 function cell(label, value, cls) {
   return `<div class="cell"><div class="l">${label}</div><div class="v ${cls || ""}">${value}</div></div>`;
@@ -1680,6 +1761,17 @@ function render(s) {
   $("su-exchange").textContent = id.exchange || "—";
   $("su-conn").textContent = c.state || "—";
   $("su-following").textContent = id.following || "—";
+  if (!settingsTouched) {
+    $("set-tf").value = (id.timeframes || []).join(", ");
+    $("set-src").value = (id.signal_exchanges || []).join(", ");
+    $("set-sym").value = (id.symbols || []).join(", ");
+    $("set-ex").value = id.pending_exchange || id.exchange || "binance";
+  }
+  const pending = id.pending_exchange && id.pending_exchange !== id.exchange;
+  $("set-pending").hidden = !pending;
+  if (pending) $("set-pending").textContent =
+    "Saved: this machine will trade on " + id.pending_exchange + " once you stop and start it again. "
+    + "Until then it is still on " + id.exchange + ".";
   $("su-advice").textContent = s.advice || "Nothing to flag on this platform.";
 }
 /* ══ chart ══ */
@@ -1838,20 +1930,6 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
     from executor.power import detect
 
     state = UIState(power=detect())
-    state.set_identity(
-        {
-            "buyer_id": executor.config.buyer_id,
-            "exchange": executor.config.exchange,
-            # What this subscription covers. Shown because a buyer looking at a
-            # quiet console should be able to tell "I did not subscribe to
-            # that" from "something is broken".
-            "following": executor.config.subscription_line,
-            # The public half only — it is the one thing the server holds, and
-            # the Setup page shows it so "send us your key" is a copy, not a
-            # terminal session.
-            "public_key": executor.identity.public_key_b64(),
-        }
-    )
 
     def _runtime_action(name):
         def run():
@@ -1862,6 +1940,91 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
 
         return run
 
+    def _refresh_identity() -> None:
+        """Everything the Setup page shows about this machine.
+
+        Called once at wiring and again after any settings change, so the
+        boxes always read back what was actually saved rather than what was
+        typed. The public key is the only key here — it is the one thing the
+        server holds, and showing it makes "send us your key" a copy rather
+        than a terminal session.
+        """
+        state.set_identity(
+            {
+                "buyer_id": executor.config.buyer_id,
+                "exchange": executor.config.exchange,
+                "following": executor.config.subscription_line,
+                "public_key": executor.identity.public_key_b64(),
+                "timeframes": list(executor.config.timeframes),
+                "signal_exchanges": list(executor.config.signal_exchanges),
+                "symbols": list(executor.config.symbols),
+                "pending_exchange": getattr(executor.config, "_pending_exchange", ""),
+            }
+        )
+
+    _refresh_identity()
+
+    def _set_subscription(payload: dict) -> str:
+        """Live: this only decides what is joined next."""
+        runtime = executor.runtime
+        timeframes = _as_list(payload.get("timeframes"))
+        venues = _as_list(payload.get("signal_exchanges"))
+        symbols = [s.upper() for s in _as_list(payload.get("symbols"))]
+        unknown = [v for v in venues if v not in SUPPORTED_EXCHANGES]
+        if unknown:
+            return f"Not a venue we publish from: {', '.join(unknown)}. Use {' or '.join(SUPPORTED_EXCHANGES)}."
+        if runtime is None:
+            return "Not connected yet — try once the feed is synced."
+        message = runtime.set_subscription(timeframes=timeframes, source_exchanges=venues, symbols=symbols)
+        try:
+            path = save_settings(
+                executor.config, {"timeframes": timeframes, "signal_exchanges": venues, "symbols": symbols}
+            )
+        except ConfigError as exc:
+            return f"{message} But it could not be saved, so a restart will forget it: {exc}"
+        # The runtime carries its OWN config, built from this one at startup.
+        # Updating only that left the page reading the values it had at boot
+        # while the machine followed something else — the change looked to
+        # have been ignored when it had in fact been applied.
+        executor.config.timeframes = timeframes
+        executor.config.signal_exchanges = venues
+        executor.config.symbols = symbols
+        _refresh_identity()
+        return f"{message} Saved to {path}."
+
+    def _set_exchange(payload: dict) -> str:
+        """
+        Not live, and refused while anything is open.
+
+        Positions live on the venue this machine is connected to. Switching
+        underneath them would strand real coin on the old exchange with
+        nothing managing its exit — so the change is written down and applied
+        by the next start, and only from a flat book.
+        """
+        wanted = str(payload.get("exchange") or "").strip().lower()
+        if wanted not in SUPPORTED_EXCHANGES:
+            return f"Unknown exchange {wanted!r}. Supported: {', '.join(SUPPORTED_EXCHANGES)}."
+        if wanted == executor.config.exchange:
+            return f"Already on {wanted}."
+        runtime = executor.runtime
+        engaged = runtime.venue_change_blockers() if runtime else []
+        if engaged:
+            return (
+                f"Not while {len(engaged)} campaign{'s are' if len(engaged) > 1 else ' is'} open on "
+                f"{executor.config.exchange}. Use Stand down, wait for it to be flat, then change venue — "
+                "switching now would leave coin on the old exchange with nothing watching it."
+            )
+        try:
+            path = save_settings(executor.config, {"exchange": wanted})
+        except ConfigError as exc:
+            return f"Could not save the change: {exc}"
+        executor.config._pending_exchange = wanted
+        _refresh_identity()
+        return (
+            f"Saved to {path}. Stop this machine and start it again to trade on {wanted} — "
+            f"its API keys must be {wanted}'s, from the environment as usual."
+        )
+
     server = UIServer(
         state,
         port=port,
@@ -1870,6 +2033,8 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
             "resume": _runtime_action("resume_opening"),
             "confirm_wake": _runtime_action("confirm_wake"),
             "stand_down": _runtime_action("request_stand_down"),
+            "set_subscription": _set_subscription,
+            "set_exchange": _set_exchange,
         },
         chart_fn=lambda cid: chart_view(executor.runtime, executor._market_for_ui(), cid) if executor.runtime else None,
     )

@@ -235,6 +235,55 @@ class SyncTests(RuntimeHarness):
         self.assertAlmostEqual(runtime.book.get("casc_SOLUSDT_1").median_bar_pct, 0.002)
 
 
+class SettingsTests(RuntimeHarness):
+    """The buyer changing their own mind, from their own console."""
+
+    def test_narrowing_the_subscription_takes_effect_on_the_next_campaign(self):
+        runtime = self._runtime()
+        runtime.set_subscription(timeframes=["15m"], source_exchanges=[], symbols=[])
+        self._open(campaign_id="fast", timeframe="5m", start_timeframe="5m")
+        runtime.sync()
+        self.assertEqual(runtime.book.campaigns, {})
+        self.assertIn("15m", self.client.campaigns["fast"].skip_reason)
+
+    def test_narrowing_never_abandons_a_campaign_already_running(self):
+        """A position does not stop needing its exit because the buyer
+        narrowed what they want to hear about next."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        self.assertIn("casc_SOLUSDT_1", runtime.book.campaigns)
+        runtime.set_subscription(timeframes=["1h"], source_exchanges=["coindcx"], symbols=["BTCUSDT"])
+        self.assertIn("casc_SOLUSDT_1", runtime.book.campaigns)
+
+    def test_the_subscription_line_follows_the_change(self):
+        runtime = self._runtime()
+        message = runtime.set_subscription(timeframes=["15m"], source_exchanges=["coindcx"], symbols=["solusdt"])
+        self.assertIn("15m · drawn on coindcx · SOLUSDT", message)
+
+    def test_a_flat_machine_may_change_venue(self):
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        self.assertEqual(runtime.venue_change_blockers(), [])
+
+    def test_holding_coin_blocks_a_venue_change(self):
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.on_fill("casc_SOLUSDT_1", Fill(price=162.0, quantity=0.05, timestamp=40))
+        self.assertEqual(runtime.venue_change_blockers(), ["casc_SOLUSDT_1"])
+
+    def test_a_resting_order_blocks_a_venue_change_too(self):
+        """Nothing held, but an order on the old exchange that nothing would
+        ever come back to cancel."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.book.get("casc_SOLUSDT_1").entry_resting = True
+        self.assertEqual(runtime.venue_change_blockers(), ["casc_SOLUSDT_1"])
+
+
 class TickTests(RuntimeHarness):
     def test_a_fall_through_a_level_arms_and_places_a_buy(self):
         self._open()

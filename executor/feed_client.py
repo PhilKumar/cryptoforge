@@ -311,6 +311,17 @@ class FeedClient:
             },
         )
 
+    def set_subscription(self, *, timeframes: Iterable[str], source_exchanges: Iterable[str]) -> None:
+        """Change which signals are followed, without a restart.
+
+        Only ever affects campaigns opened AFTER this call. Re-judging the
+        ones already joined would be the wrong kind of tidy: this machine may
+        hold coin in them, and a position does not stop needing its exit
+        because the buyer narrowed what they want to hear about next.
+        """
+        self._timeframes = {str(tf).strip().lower() for tf in timeframes if str(tf).strip()}
+        self._source_exchanges = {str(x).strip().lower() for x in source_exchanges if str(x).strip()}
+
     def _subscribed_to(self, campaign: "FollowedCampaign") -> bool:
         """Is this one of the signals this buyer asked for?
 

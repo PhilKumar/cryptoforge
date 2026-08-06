@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from executor import model
+from executor.config import subscription_phrase
 from executor.exchange import ExchangeAdapter, IntentExecutor
 from executor.feed_client import FeedClient, FollowedCampaign
 from executor.orders import CampaignOrders, Candle, Fill, OrderBook
@@ -450,6 +451,28 @@ class ExecutorRuntime:
         """
         self._stand_down_requested = True
         return "Standing down on the next pass: buy orders will be cancelled, sell orders left protecting."
+
+    def set_subscription(self, *, timeframes, source_exchanges, symbols) -> str:
+        """Change which signals this machine follows. Takes effect at once.
+
+        Safe live because it only decides what is joined NEXT. Campaigns
+        already running keep their books and their exits: narrowing what you
+        want to hear about is not an instruction to abandon a position.
+        """
+        self._client.set_subscription(timeframes=timeframes, source_exchanges=source_exchanges)
+        self._config.symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
+        self._config.timeframes = [str(t).strip().lower() for t in timeframes if str(t).strip()]
+        self._config.signal_exchanges = [str(x).strip().lower() for x in source_exchanges if str(x).strip()]
+        self._config.subscription_line = subscription_phrase(
+            self._config.timeframes, self._config.signal_exchanges, self._config.symbols
+        )
+        running = len(self.book.campaigns)
+        held = f" {running} campaign{'s' if running != 1 else ''} already running keep their exits." if running else ""
+        return f"Now following {self._config.subscription_line}.{held}"
+
+    def venue_change_blockers(self) -> List[str]:
+        """Campaigns that make switching exchange unsafe right now."""
+        return self.book.engaged()
 
     def rounds_view(self, limit: int = 50) -> List[dict]:
         rows = [
