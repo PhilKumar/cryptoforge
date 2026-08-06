@@ -473,9 +473,13 @@ def campaign_opened_payload(campaign: dict, *, advisory: Optional[dict] = None, 
 
 def trendline_set_payload(trendline: dict, *, supersedes: Optional[int] = None) -> dict:
     """
-    `supersedes` carries the standing-line rule. The executor asserts it rather
-    than trusting it: a new line sitting below the one it replaces is a feed
-    bug, and the right response is to halt that campaign, not to follow it.
+    `supersedes` means the old line was still STANDING and this one replaces
+    it, and the executor asserts the standing-line rule on the pair: a
+    replacement may never sit below the line it replaces. This engine never
+    replaces a standing line — a new id is only drawn after a close above
+    spends the old one, and that successor legitimately sits lower — so it
+    always publishes None. The field and the guard stay for any feed that
+    does replace in place.
     """
     payload = {
         "trendline_id": trendline.get("trendline_id"),
@@ -947,13 +951,13 @@ class CascadeFeedPublisher:
             )
             if seen["trendlines"].get(tl_id) == fingerprint:
                 continue
-            supersedes = max([k for k in seen["trendlines"] if k != tl_id], default=None)
+            # Never chained to the previous id: in this engine a new line only
+            # exists because a close above SPENT the old one, and the successor
+            # fans lower from the same mother high as the fall deepens. Calling
+            # that a replacement told the executor's standing-line guard to
+            # halt every normal multi-line campaign.
             seen["trendlines"][tl_id] = fingerprint
-            frames.append(
-                self._emit(
-                    "trendline.set", symbol, campaign_id, trendline_set_payload(trendline, supersedes=supersedes)
-                )
-            )
+            frames.append(self._emit("trendline.set", symbol, campaign_id, trendline_set_payload(trendline)))
 
         legs = campaign.get("legs") or []
         for index, leg in enumerate(legs):

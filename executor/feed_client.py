@@ -275,6 +275,14 @@ class FeedClient:
         if not campaign:
             return
         trendline_id = payload.get("trendline_id")
+        known = campaign.trendlines.get(trendline_id)
+        if known is not None and all(known.get(k) == payload.get(k) for k in _TRENDLINE_IDENTITY):
+            # Idempotent by identity: their restart re-announces every line,
+            # and the log keeps old frames for days. A line we already hold
+            # and already survived is not re-judged — re-judging it against
+            # whatever chain it arrives with turned every engine restart into
+            # a page of false halts on the buyer's console.
+            return
         supersedes = payload.get("supersedes")
         if supersedes is not None and supersedes in campaign.trendlines:
             old = campaign.trendlines[supersedes]
@@ -289,6 +297,11 @@ class FeedClient:
     def _on_leg_opened(self, envelope: dict, payload: dict) -> None:
         campaign = self.campaigns.get(envelope.get("campaign_id") or "")
         if not campaign:
+            return
+        if int(payload.get("leg_id") or 0) in campaign.legs:
+            # Same identity rule as trendlines: a re-announced leg is one we
+            # already verified and hold. Re-adding it would re-emit "leg" on
+            # every engine restart for nothing.
             return
         fib = payload.get("fib") or {}
         high_anchor, low_anchor = fib.get("high_anchor"), fib.get("low_anchor")
@@ -424,6 +437,18 @@ def model_logged_types() -> frozenset:
     return frozenset(
         {"campaign.opened", "campaign.state", "campaign.closed", "trendline.set", "leg.opened", "leg.finalized"}
     )
+
+
+# What makes a trendline the SAME line: the anchors that place it and the flag
+# that says whether fibs hang from it. `supersedes` is deliberately not part of
+# identity — it describes the frame's claim about history, not the line.
+_TRENDLINE_IDENTITY = (
+    "anchor1_price",
+    "anchor1_timestamp",
+    "anchor2_price",
+    "anchor2_timestamp",
+    "bears_fib",
+)
 
 
 def _lower_at_both_anchors(new: dict, old: dict) -> bool:

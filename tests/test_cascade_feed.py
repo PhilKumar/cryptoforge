@@ -539,7 +539,11 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self._types(self.publisher.publish(self._status(campaign))), ["leg.finalized"])
         self.assertEqual(self.publisher.publish(self._status(campaign)), [])
 
-    def test_a_new_trendline_carries_what_it_supersedes(self):
+    def test_a_new_trendline_never_claims_to_supersede(self):
+        """A new id means the old line was SPENT by a close above, not
+        replaced — the successor legitimately fans lower from the same mother
+        high. Chaining ids here told the executor's standing-line guard to
+        halt every normal multi-line campaign."""
         campaign = _loaded_campaign()
         self.publisher.publish(self._status(campaign))
         campaign.trendlines.append(
@@ -547,14 +551,14 @@ class PublisherTests(unittest.TestCase):
                 trendline_id=4,
                 anchor1_price=178.42,
                 anchor1_timestamp=1785400800,
-                anchor2_price=176.10,
+                anchor2_price=176.10,  # below line 3's anchor2 — the normal case
                 anchor2_timestamp=1785406000,
             )
         )
         frames = self.publisher.publish(self._status(campaign))
         message = verify_frame(frames[0], self.keys)
         self.assertEqual(message["type"], "trendline.set")
-        self.assertEqual(message["payload"]["supersedes"], 3)
+        self.assertIsNone(message["payload"]["supersedes"])
 
     def test_a_state_change_is_announced(self):
         campaign = _loaded_campaign()

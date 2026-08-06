@@ -270,6 +270,45 @@ class HaltTests(ClientHarness):
         )
         self.assertIn("below the line", self.client.campaigns["casc_SOLUSDT_1"].halted)
 
+    def test_a_replayed_trendline_is_not_rejudged(self):
+        """An engine restart re-announces every line, and the log keeps old
+        frames — some carrying the retired `supersedes` chain — for days. A
+        line we already hold and already survived must be a no-op, not a halt:
+        this exact replay put a page of false halts on the buyer's console."""
+        line2 = {
+            "trendline_id": 2,
+            "anchor1_price": 178.42,
+            "anchor1_timestamp": 1785400800,
+            "anchor2_price": 176.00,  # lower than line 1 — normal after a break
+            "anchor2_timestamp": 1785406000,
+        }
+        self.open_campaign()
+        self.send(
+            "trendline.set",
+            trendline_set_payload(
+                {
+                    "trendline_id": 1,
+                    "anchor1_price": 178.42,
+                    "anchor1_timestamp": 1785400800,
+                    "anchor2_price": 177.06,
+                    "anchor2_timestamp": 1785403500,
+                }
+            ),
+        )
+        self.send("trendline.set", trendline_set_payload(line2))
+        self.send("trendline.set", trendline_set_payload(line2, supersedes=1))  # the old server's frame
+        campaign = self.client.campaigns["casc_SOLUSDT_1"]
+        self.assertEqual(campaign.halted, "")
+        self.assertEqual(campaign.standing_trendline_id, 2)
+
+    def test_a_replayed_leg_is_not_reopened(self):
+        self.open_campaign()
+        self.send("leg.opened", _leg_payload())
+        self.send("leg.opened", _leg_payload())
+        campaign = self.client.campaigns["casc_SOLUSDT_1"]
+        self.assertEqual(len(campaign.legs), 1)
+        self.assertEqual(len([e for e in self.events if e[0] == "leg"]), 1)
+
     def test_a_legitimate_new_trendline_is_accepted(self):
         self.open_campaign()
         for tl_id, anchor2 in ((3, 177.06), (4, 177.50)):
