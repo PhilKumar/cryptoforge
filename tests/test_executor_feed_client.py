@@ -381,11 +381,66 @@ class PlanTests(ClientHarness):
         self.assertIn("minimum", plan["refused"])
         self.assertEqual(plan["legs"], [])
 
-    def test_a_finalized_leg_gets_no_new_rungs(self):
+    def test_a_finalized_leg_still_gets_its_rungs(self):
+        """`finalized` locks the anchors; it does not spend the money.
+
+        This test asserted the opposite and the opposite was shipped, so a
+        buyer following a live campaign placed nothing at all. The engine
+        creates a leg with `finalized = True` and builds its fib and rungs on
+        the next lines — a finalized leg is the normal shape of a tradeable
+        one. See test_a_born_finalized_leg_matches_the_engines_own_ladder for
+        the live campaign that proved it.
+        """
         self.open_campaign()
         self.send("leg.opened", _leg_payload())
         self.send("leg.finalized", leg_finalized_payload(4))
-        self.assertEqual(self.client.plan("casc_SOLUSDT_1", capital_usd=5000.0)["legs"], [])
+        legs = self.client.plan("casc_SOLUSDT_1", capital_usd=5000.0)["legs"]
+        self.assertEqual(len(legs), 1)
+        self.assertEqual([r["level"] for r in legs[0]["rungs"]], [2, 4, 8])
+        self.assertGreater(legs[0]["pool_usd"], 0.0)
+
+    def test_a_born_finalized_leg_matches_the_engines_own_ladder(self):
+        """Replay of live BTCUSDT #147, 2026-08-06 — the campaign that found
+        this. Its one leg arrived finalized in the same second it opened, and
+        the engine held three PENDING rungs against it while the executor
+        showed an empty ladder.
+
+        The engine's own numbers, at its capital, were L2 $0.67 / L4 $1.01 /
+        L8 $1.68 out of a $3.35 pool on a 0.1676872422918302% allocation. The
+        buyer sizes the same percentage against their own capital, so the
+        SPLIT is what has to agree: 20 / 30 / 50.
+        """
+        self.open_campaign(
+            campaign_id="casc_SOLUSDT_1",
+            mother_high=64996.0,
+            mother_low=64912.0,
+        )
+        self.send(
+            "leg.opened",
+            _leg_payload(
+                leg_id=1,
+                trendline_id=1,
+                low=64032.1,
+                touch_high=64982.0,
+                fib={"high_anchor": 64982.0, "low_anchor": 64032.1},
+                allocation_anchor=64996.0,
+            ),
+        )
+        self.send("leg.finalized", leg_finalized_payload(1))
+
+        plan = self.client.plan("casc_SOLUSDT_1", capital_usd=2000.0)
+        self.assertEqual(len(plan["legs"]), 1, "a born-finalized leg must be planned")
+        leg = plan["legs"][0]
+        rungs = {r["level"]: r["usd"] for r in leg["rungs"]}
+        self.assertEqual(sorted(rungs), [2, 4, 8])
+        pool = leg["pool_usd"]
+        self.assertAlmostEqual(rungs[2] / pool, 0.20, places=6)
+        self.assertAlmostEqual(rungs[4] / pool, 0.30, places=6)
+        self.assertAlmostEqual(rungs[8] / pool, 0.50, places=6)
+        # Rungs descend, and every one sits under the mother high.
+        prices = [r["price"] for r in sorted(leg["rungs"], key=lambda r: r["level"])]
+        self.assertEqual(prices, sorted(prices, reverse=True))
+        self.assertLess(prices[0], 64996.0)
 
     def test_a_skipped_campaign_is_not_planned(self):
         self.open_campaign(created_at=int(NOW) - 900)

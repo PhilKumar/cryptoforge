@@ -348,8 +348,17 @@ class FeedClient:
 
         legs = []
         for leg in sorted(campaign.legs.values(), key=lambda item: item.leg_id):
-            if leg.finalized:
-                continue
+            # `finalized` does NOT mean spent, and skipping these legs meant a
+            # buyer following a live campaign placed nothing at all.
+            #
+            # In the engine a leg is created with `finalized = True` the moment
+            # its swing is complete, and its fib and rungs are built on the very
+            # next lines — "the previous fib keeps every rung it has"
+            # (engine/cascade.py `_open_leg`). So a finalized leg is the NORMAL
+            # shape of a tradeable one: it means the anchors are locked, not
+            # that the money is gone. Verified against live BTCUSDT #147, whose
+            # only leg was finalized with three PENDING rungs holding real money
+            # while the executor showed an empty ladder.
             net_pct = model.net_allocation_pct(
                 leg.allocation_pct_gross,
                 allocation_anchor=leg.allocation_anchor,

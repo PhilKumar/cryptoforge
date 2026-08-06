@@ -485,11 +485,20 @@ class ChartViewTests(unittest.TestCase):
         for banned in ("capital_usd", "pool_usd", "our_fills", "allocation_pct", "mode"):
             self.assertNotIn(banned, chart)
 
-    def test_a_finalized_leg_contributes_no_rungs(self):
+    def test_a_finalized_leg_still_draws_its_rungs(self):
+        """The chart has to show the ladder the buyer's money is waiting on.
+
+        This asserted the opposite, matching the same wrong reading of
+        `finalized` that stopped the executor placing anything: a leg is born
+        finalized in the engine and trades from that moment, so hiding its
+        levels left the buyer staring at a chart with no ladder while their
+        orders sat at exactly those prices.
+        """
         from executor.ui import chart_view
 
         self.runtime._client.campaigns["c1"].legs[4].finalized = True
-        self.assertEqual(chart_view(self.runtime, self.market, "c1")["fib_levels"], [])
+        levels = chart_view(self.runtime, self.market, "c1")["fib_levels"]
+        self.assertEqual(sorted(row["level"] for row in levels), [2, 4, 8])
 
     def test_an_unknown_campaign_is_none_not_a_crash(self):
         from executor.ui import chart_view

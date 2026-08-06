@@ -276,8 +276,10 @@ def chart_view(runtime, market, campaign_id: str) -> Optional[dict]:
             }
     fib_levels = []
     for leg in followed.legs.values():
-        if leg.finalized:
-            continue
+        # Every leg's rungs are drawn, finalized or not — see the note in
+        # FeedClient.plan. A finalized leg is a tradeable leg, so hiding its
+        # levels left the buyer looking at a chart with no ladder on it while
+        # their money was waiting at exactly those prices.
         for level, price in leg.level_prices().items():
             fib_levels.append({"leg": leg.leg_id, "level": level, "price": price})
     return {
