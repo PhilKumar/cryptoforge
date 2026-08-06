@@ -24,7 +24,7 @@ import random
 import stat
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterable, Optional
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -212,6 +212,7 @@ class FeedTransport:
         on_status: Optional[Callable[[str, dict], None]] = None,
         now_fn: Callable[[], float] = time.time,
         sleep_fn: Optional[Callable] = None,
+        resumed_campaign_ids: Iterable[str] = (),
     ):
         self._base_url = base_url.rstrip("/")
         self._identity = identity
@@ -219,6 +220,9 @@ class FeedTransport:
         self._connect = connect_fn
         self._on_status = on_status
         self._now = now_fn
+        # Handed to the one FeedClient below, so campaigns we were already in
+        # survive a restart instead of reading as arrivals we missed.
+        self._resumed = tuple(resumed_campaign_ids)
         self._sleep = sleep_fn or asyncio.sleep
         self.client: Optional[FeedClient] = None
         self.stopped_reason: str = ""
@@ -240,6 +244,7 @@ class FeedTransport:
                 keyset_fetched_at=fetched_at,
                 now_fn=self._now,
                 on_event=lambda kind, detail: self._status(kind, detail),
+                resumed_campaign_ids=self._resumed,
             )
             return
         self.client._keys = dict(keys)

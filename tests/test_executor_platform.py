@@ -397,3 +397,69 @@ class FirstStartMarkerTests(unittest.TestCase):
         Executor._resume(stub)
         self.assertEqual(seen, [True, False])
         self.assertTrue(os.path.exists(config.started_marker_path))
+
+
+class JoinedPersistenceTests(unittest.TestCase):
+    """A restart must not abandon a campaign this machine is already in.
+
+    The join window asks "did we see this start?" — and for a rebooted
+    executor the honest answer is yes. The set is written AS campaigns join,
+    because a crash is exactly when the record matters."""
+
+    def setUp(self):
+        import tempfile
+
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+
+    def _config(self):
+        from executor.config import ExecutorConfig
+
+        return ExecutorConfig(
+            server_url="http://localhost",
+            buyer_id="b",
+            root_public_key="k",
+            state_dir=self._dir.name,
+        )
+
+    def _shell(self, config):
+        """An Executor-shaped object carrying only the joined-set machinery."""
+        from executor.__main__ import Executor
+
+        class Shell:
+            pass
+
+        shell = Shell()
+        shell.config = config
+        shell._joined_ids = Executor._load_joined(shell)
+        shell._on_status = lambda kind, detail: Executor._on_status(shell, kind, detail)
+        shell._load_joined = lambda: Executor._load_joined(shell)
+        shell._save_joined = lambda: Executor._save_joined(shell)
+        return shell
+
+    def test_a_join_is_written_immediately_and_survives_a_restart(self):
+        config = self._config()
+        first = self._shell(config)
+        first._on_status("campaign", {"campaign_id": "c-alpha", "joined": True})
+        # A skipped campaign must NOT be recorded — only real joins resume.
+        first._on_status("campaign", {"campaign_id": "c-late", "joined": False})
+
+        second = self._shell(config)  # the restart
+        self.assertEqual(second._joined_ids, {"c-alpha"})
+
+    def test_a_closed_campaign_does_not_resume(self):
+        config = self._config()
+        first = self._shell(config)
+        first._on_status("campaign", {"campaign_id": "c-alpha", "joined": True})
+        first._on_status("closed", {"campaign_id": "c-alpha", "reason": "mother_broken"})
+
+        second = self._shell(config)
+        self.assertEqual(second._joined_ids, set())
+
+    def test_an_unreadable_record_reads_as_empty_not_a_crash(self):
+        config = self._config()
+        import pathlib
+
+        pathlib.Path(config.joined_path).write_text("{not json")
+        shell = self._shell(config)
+        self.assertEqual(shell._joined_ids, set())

@@ -56,6 +56,16 @@ class ExecutorConfig:
         return os.path.join(os.path.expanduser(self.state_dir), "shutdown.json")
 
     @property
+    def joined_path(self) -> str:
+        """Campaigns this machine is in, so a restart does not abandon them.
+
+        Written as they are joined rather than at shutdown: a crash is exactly
+        when this matters, and a file only written on a clean exit would be
+        missing in the one case it exists for.
+        """
+        return os.path.join(os.path.expanduser(self.state_dir), "joined.json")
+
+    @property
     def started_marker_path(self) -> str:
         """Written once, on the first start, and never removed.
 

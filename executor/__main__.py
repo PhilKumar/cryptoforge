@@ -49,6 +49,11 @@ class Executor:
         self.config = config
         self.identity = ExecutorIdentity.load_or_create(config.buyer_key_path, config.buyer_id)
         self.adapter = build_adapter(config)
+        # Campaigns this machine was in when it last stopped. Loaded BEFORE the
+        # transport exists so the very first snapshot of a session can resume
+        # them; the join window otherwise reads a reboot as having missed the
+        # start of a campaign we were already laddering into.
+        self._joined_ids = self._load_joined()
         self.transport = FeedTransport(
             base_url=config.server_url,
             identity=self.identity,
@@ -58,6 +63,7 @@ class Executor:
             ),
             connect_fn=_connect,
             on_status=self._on_status,
+            resumed_campaign_ids=self._joined_ids,
         )
         self.runtime: Optional[ExecutorRuntime] = None
         self.inhibitor = SleepInhibitor()
@@ -67,6 +73,38 @@ class Executor:
     def _on_status(self, kind: str, detail: dict) -> None:
         if kind in ("connected", "synced", "stopped", "clock_warning", "halt", "bad_signature", "disconnected"):
             _say(f"[{kind}] {json.dumps(detail, default=str)[:300]}")
+        # The joined set is written AS campaigns join, not at shutdown — a
+        # crash is exactly when the file matters, and one written on a clean
+        # exit would be missing in the one case it exists for.
+        if kind == "campaign" and detail.get("joined") and detail.get("campaign_id"):
+            if detail["campaign_id"] not in self._joined_ids:
+                self._joined_ids.add(detail["campaign_id"])
+                self._save_joined()
+        elif kind == "closed" and detail.get("campaign_id") in self._joined_ids:
+            # An ended campaign must not resume on the next start: its ladder
+            # is history, and holding its id forever would grow the file and
+            # re-follow anything a stale feed replayed.
+            self._joined_ids.discard(detail["campaign_id"])
+            self._save_joined()
+
+    def _load_joined(self) -> set:
+        try:
+            if os.path.exists(self.config.joined_path):
+                with open(self.config.joined_path, encoding="utf-8") as handle:
+                    return {str(cid) for cid in json.load(handle) if cid}
+        except Exception as exc:
+            # Unreadable is treated as empty: the cost is the old behaviour
+            # (a resumed campaign reads as late), never anything unsafe.
+            _log.warning("could not read the joined-campaigns record: %s", exc)
+        return set()
+
+    def _save_joined(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.config.joined_path), exist_ok=True)
+            with open(self.config.joined_path, "w", encoding="utf-8") as handle:
+                json.dump(sorted(self._joined_ids), handle)
+        except Exception as exc:
+            _log.warning("could not write the joined-campaigns record: %s", exc)
 
     # ── the two tasks ────────────────────────────────────────────
 

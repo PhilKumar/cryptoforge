@@ -446,6 +446,44 @@ class PlanTests(ClientHarness):
         self.open_campaign(created_at=int(NOW) - 900)
         self.assertIsNone(self.client.plan("casc_SOLUSDT_1", capital_usd=5000.0))
 
+    def test_a_resumed_campaign_rejoins_past_the_window(self):
+        """Resuming is not joining late. This machine saw the campaign start
+        and was laddering into it; a restart does not un-see that. Without
+        this a reboot mid-campaign silently turned a three-step entry into a
+        one-step one."""
+        self.client._resumed = {"casc_SOLUSDT_1"}
+        campaign = self.open_campaign(created_at=int(NOW) - 900)
+        self.assertTrue(campaign.joined)
+        self.assertEqual(campaign.skip_reason, "")
+        self.assertIsNotNone(self.client.plan("casc_SOLUSDT_1", capital_usd=5000.0))
+
+    def test_resumption_is_per_campaign_not_a_blanket_pass(self):
+        """Only the campaigns we were actually in resume — everything else
+        still meets the join window, or the window means nothing."""
+        self.client._resumed = {"some-other-campaign"}
+        campaign = self.open_campaign(created_at=int(NOW) - 900)
+        self.assertFalse(campaign.joined)
+        self.assertIn("join window", campaign.skip_reason)
+
+    def test_a_resumed_id_does_not_bypass_the_model_version_gate(self):
+        """Resumption answers the AGE question only. Geometry drawn under
+        rules we would read differently stays declined, resumed or not.
+        The version gate reads the ENVELOPE, so the frame is built by hand."""
+        self.client._resumed = {"casc_SOLUSDT_1"}
+        envelope = build_envelope(
+            msg_type="campaign.opened",
+            symbol="SOLUSDT",
+            campaign_id="casc_SOLUSDT_1",
+            payload=_campaign_payload(created_at=int(NOW) - 900),
+            seq=1,
+            model_version=MODEL_VERSION + 1,
+            emitted_at=int(NOW),
+        )
+        self.client.handle_frame(self.signer.frame(envelope))
+        campaign = self.client.campaigns["casc_SOLUSDT_1"]
+        self.assertFalse(campaign.joined)
+        self.assertIn("model v", campaign.skip_reason)
+
     def test_the_target_is_priced_off_the_buyers_own_venue(self):
         """A CoinDCX buyer pays twice a Binance buyer's commission."""
         self.open_campaign(exchange="coindcx")

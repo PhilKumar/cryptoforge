@@ -28,7 +28,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterable, Optional
 
 from cryptography.exceptions import InvalidSignature
 
@@ -116,12 +116,19 @@ class FeedClient:
         now_fn: Callable[[], float] = time.time,
         max_join_age_sec: int = MAX_JOIN_AGE_SEC,
         on_event: Optional[Callable[[str, dict], None]] = None,
+        resumed_campaign_ids: Iterable[str] = (),
     ):
         self._keys = dict(public_keys)
         self._keyset_fetched_at = float(keyset_fetched_at)
         self._now = now_fn
         self._max_join_age = int(max_join_age_sec)
         self._on_event = on_event
+        # Campaigns this machine had already joined before it stopped. The join
+        # window asks "did we see this start?", and for these the answer is yes
+        # — the process restarting does not un-see it. Without this a buyer who
+        # rebooted mid-campaign kept the coin they held and stopped laddering
+        # into it, turning a three-step entry into a one-step one silently.
+        self._resumed = {str(cid) for cid in resumed_campaign_ids if cid}
         self.campaigns: Dict[str, FollowedCampaign] = {}
         self.cursors: Dict[str, int] = {}
         self.last_heartbeat_at: float = 0.0
@@ -247,7 +254,11 @@ class FeedClient:
             )
         else:
             age = self._now() - campaign.created_at
-            if age > self._max_join_age:
+            # Resuming is not joining late: we were in this one before the
+            # restart, so the ladder we would rebuild is the ladder we already
+            # had. The age check exists to stop us picking up a fall we never
+            # saw the top of, which is a different situation entirely.
+            if age > self._max_join_age and campaign_id not in self._resumed:
                 campaign.skip_reason = (
                     f"Started {int(age)}s ago — past the {self._max_join_age}s join window. "
                     "A ladder only makes sense from its mother."
