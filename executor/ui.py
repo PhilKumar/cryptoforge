@@ -258,6 +258,10 @@ SUPPORTED_EXCHANGES = ("binance", "coindcx")
 
 # Install icons, drawn on demand. Apple ignores the manifest and wants its own
 # link tag, which is why the 192 is served under two names.
+# Bars the chart will show. The geometry never changes with these — it was
+# drawn on the campaign's own timeframe — only the candles under it do.
+CHART_TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h")
+
 _ICONS = {
     "/icon-192.png": (192, False),
     "/icon-512.png": (512, False),
@@ -293,7 +297,7 @@ def worth_logging(kind: str, detail: dict) -> bool:
     return kind in LOGGED_EVENTS
 
 
-def chart_view(runtime, market, campaign_id: str) -> Optional[dict]:
+def chart_view(runtime, market, campaign_id: str, timeframe: str = "") -> Optional[dict]:
     """
     Everything a buyer's chart may draw, and nothing else.
 
@@ -306,11 +310,20 @@ def chart_view(runtime, market, campaign_id: str) -> Optional[dict]:
     orders = runtime.book.get(campaign_id)
     if not followed:
         return None
+    # The buyer may look at the same geometry on a slower bar. The GEOMETRY is
+    # unchanged — it was drawn on the campaign's own timeframe and is not
+    # re-derived here — only the candles under it change. Anything the venue
+    # will not serve falls back to the campaign's own, rather than an empty
+    # chart with no explanation.
+    native = followed.timeframe or "5m"
+    wanted = str(timeframe or "").strip().lower() or native
+    if wanted not in CHART_TIMEFRAMES:
+        wanted = native
     try:
-        candles = market.closed_candles_since(followed.symbol, followed.timeframe or "5m", 0)
+        candles = market.closed_candles_since(followed.symbol, wanted, 0)
     except Exception as exc:
-        _log.warning("chart candles failed for %s: %s", campaign_id, exc)
-        candles = []
+        _log.warning("chart candles failed for %s at %s: %s", campaign_id, wanted, exc)
+        candles, wanted = [], native
     # Every trendline, not only the standing one — the parent's chart draws the
     # fan and marks the active line, and a buyer comparing the two charts
     # should be looking at the same picture.
@@ -371,7 +384,9 @@ def chart_view(runtime, market, campaign_id: str) -> Optional[dict]:
     return {
         "campaign_id": campaign_id,
         "symbol": followed.symbol,
-        "timeframe": followed.timeframe,
+        "timeframe": wanted,
+        "native_timeframe": native,
+        "timeframes": list(CHART_TIMEFRAMES),
         "candles": [[c.timestamp, c.open, c.high, c.low, c.close] for c in candles[-160:]],
         "mother_high": followed.mother_high,
         "mother_low": followed.mother_low,
@@ -442,8 +457,9 @@ class UIServer:
                 if self.path.startswith("/api/chart"):
                     from urllib.parse import parse_qs, urlparse
 
-                    cid = (parse_qs(urlparse(self.path).query).get("cid") or [""])[0]
-                    chart = chart_fn(cid) if chart_fn else None
+                    query = parse_qs(urlparse(self.path).query)
+                    cid = (query.get("cid") or [""])[0]
+                    chart = chart_fn(cid, (query.get("tf") or [""])[0]) if chart_fn else None
                     if not chart:
                         self.send_error(404, "no chart for that campaign")
                         return
@@ -1256,8 +1272,23 @@ PAGE = """<!doctype html>
                 border-bottom:1px solid var(--border); flex-wrap:wrap; }
   .modal-head .sym { font-family:var(--font-display); font-weight:800; font-size:18px; letter-spacing:.03em; }
   .modal-head .modal-close { margin-left:auto; }
-  .chart-wrap { padding:16px 22px 6px; }
+  .chart-wrap { padding:16px 22px 6px; position:relative; }
   canvas { width:100%; height:440px; display:block; }
+  /* The crosshair layer sits exactly over the chart and never takes the
+     pointer — the wrap owns the pointer, so leaving the canvas is detectable. */
+  #chart-cross { position:absolute; inset:16px 22px 6px; pointer-events:none; }
+  .tf-toggle { display:inline-flex; gap:2px; margin-left:4px; }
+  .tf-toggle button { font:600 10.5px/1 var(--font-display); letter-spacing:.06em;
+    padding:5px 9px; border-radius:7px; cursor:pointer; color:var(--dim);
+    border:1px solid var(--border); background:rgba(255,255,255,.03); }
+  .tf-toggle button:hover { color:var(--text); border-color:var(--border-hi); }
+  .tf-toggle button[aria-pressed="true"] { color:var(--accent); border-color:var(--border-acc);
+    background:rgba(var(--tint-primary-rgb),.12); }
+  .cross-readout { position:absolute; top:22px; right:30px; pointer-events:none;
+    font:11.5px/1.5 var(--font-mono); color:var(--text); text-align:right;
+    background:rgba(4,8,20,.72); border:1px solid var(--border); border-radius:8px;
+    padding:6px 9px; backdrop-filter:blur(6px); }
+  html[data-theme="light"] .cross-readout { background:rgba(255,255,255,.85); }
   .legend { display:flex; gap:16px; flex-wrap:wrap; padding:4px 22px 14px;
             color:var(--muted); font-size:11.5px; letter-spacing:.06em; }
   .legend span { display:inline-flex; align-items:center; gap:6px; }
@@ -1593,10 +1624,19 @@ PAGE = """<!doctype html>
     <div class="modal-head">
       <span class="sym" id="ch-sym">—</span>
       <span class="venue" id="ch-tf" style="color:var(--muted);font-size:12px"></span>
+      <!-- The bars change; the geometry does not. It was drawn on the
+           campaign's own timeframe and is never re-derived here. -->
+      <span class="tf-toggle" id="ch-tfs"></span>
       <span class="pill live" id="ch-pos" hidden></span>
       <button class="modal-close" id="ch-close">×</button>
     </div>
-    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    <!-- Two canvases: the crosshair repaints on every pointer move, and it has
+         no business making the chart redraw its candles to do it. -->
+    <div class="chart-wrap" id="chart-wrap">
+      <canvas id="chart"></canvas>
+      <canvas id="chart-cross"></canvas>
+      <div class="cross-readout" id="cross-readout" hidden></div>
+    </div>
     <!-- Swatches are painted from the chart's own palette at draw time, so the
          key and the picture cannot drift apart. -->
     <div class="legend">
@@ -1622,6 +1662,8 @@ const px = v => v == null ? "—" : Number(v).toLocaleString(undefined, {maximum
 const ago = s => s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : (s / 3600).toFixed(1) + "h";
 const openLadders = new Set();
 const openFolds = new Set();
+/* Matches the parent's _CF_CHART_MAX_STRUCTURES. */
+const MAX_STRUCTURES = 3;
 
 /* tabs */
 function show(name) {
@@ -1985,6 +2027,8 @@ function render(s) {
 }
 /* ══ chart ══ */
 let chartData = null;
+let chartScale = null;   /* set by drawChart; read by the crosshair */
+let chartCid = "", chartTf = "";
 function drawChart() {
   const d = chartData, cv = $("chart");
   if (!d || !cv) return;
@@ -2057,6 +2101,11 @@ function drawChart() {
   const t0 = candles[0][0], t1 = candles[n - 1][0];
   const Xt = t => t1 === t0 ? X(0) : padL + cw / 2 + ((t - t0) / (t1 - t0)) * (plotW - cw);
   const inView = p => p >= minP && p <= maxP;
+  /* Carried out of here so the crosshair can invert a pointer position back
+     into a price and a candle without re-deriving any of the projection. */
+  chartScale = {padL, padT, plotW, plotH, minP, maxP, cw, n, W, H,
+                priceAt: y => maxP - (y - padT) / plotH * (maxP - minP),
+                indexAt: x => Math.round((x - padL - cw / 2) / cw)};
   const fmt = v => Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
 
   /* price gridlines + right axis */
@@ -2126,17 +2175,34 @@ function drawChart() {
 
   hline(d.mother_high, PAL.mother, "MOTHER (" + fmt(d.mother_high) + ")", [5, 3], 1.1);
 
+  /* The three most recent structures, as the parent draws it. Every line a
+     campaign ever built stayed on the chart, and past three they overlap into
+     a mesh — the colour cycle has three hues, so the fourth repeats the first.
+     The active line is never dropped, whatever its age. */
+  const recent = rows => {
+    const all = rows || [];
+    let keep = all.slice(-MAX_STRUCTURES);
+    const active = all.filter(r => r.active)[0];
+    if (active && keep.indexOf(active) === -1) keep = [active].concat(keep).slice(-MAX_STRUCTURES);
+    return keep;
+  };
+
   /* every trendline, coloured by creation order and marked when active */
-  (d.trendlines || []).forEach(tl => {
+  recent(d.trendlines).forEach(tl => {
     if (!tl.a1_ts || !tl.a2_ts || tl.a2_ts === tl.a1_ts) return;
     const slope = (tl.a2_p - tl.a1_p) / (tl.a2_ts - tl.a1_ts);
-    const p0 = tl.a1_p + slope * (t0 - tl.a1_ts), p1 = tl.a1_p + slope * (t1 - tl.a1_ts);
+    /* A trendline BEGINS at the mother high — anchor1 IS that high. Drawing it
+       back to the left edge extrapolates it upward past the mother, into
+       prices the line never described and the engine never traded from. */
+    const tStart = Math.max(t0, tl.a1_ts);
+    if (tStart >= t1) return;
+    const p0 = tl.a1_p + slope * (tStart - tl.a1_ts), p1 = tl.a1_p + slope * (t1 - tl.a1_ts);
     const col = PAL.fibs[(Math.max(1, Number(tl.id) || 1) - 1) % PAL.fibs.length];
     const noFib = tl.bears_fib === false;
     g.save(); g.strokeStyle = col; g.lineWidth = tl.active ? 1.3 : 0.9;
     g.globalAlpha = noFib ? 0.35 : (tl.active ? 0.95 : 0.5);
     if (noFib) g.setLineDash([6, 4]);
-    g.beginPath(); g.moveTo(Xt(t0), Y(p0)); g.lineTo(Xt(t1), Y(p1)); g.stroke();
+    g.beginPath(); g.moveTo(Xt(tStart), Y(p0)); g.lineTo(Xt(t1), Y(p1)); g.stroke();
     if (inView(p1)) {
       g.setLineDash([]); g.globalAlpha = 0.9; g.fillStyle = col;
       g.font = "9.5px " + MONO; g.textAlign = "right";
@@ -2148,7 +2214,7 @@ function drawChart() {
   /* every fib: 0/1 frame the swing faintly, 2/4/8 are the rungs money sits on.
      Colour is keyed to leg id, not position, so a fib keeps its hue as others
      retire — which is what lets a label say only the level and the price. */
-  (d.legs || []).forEach(leg => {
+  recent(d.legs).forEach(leg => {
     const col = PAL.fibs[(Math.max(1, Number(leg.leg_id) || 1) - 1) % PAL.fibs.length];
     hline(leg.touch_high, col, "0 (" + fmt(leg.touch_high) + ")", null, 0.8, 0.4);
     hline(leg.low, col, "1 (" + fmt(leg.low) + ")", null, 0.8, 0.4);
@@ -2191,12 +2257,14 @@ function drawChart() {
   });
 }
 
-async function openChart(cid, symbol) {
+async function openChart(cid, symbol, tf) {
   $("modal").classList.add("on");
   $("ch-sym").textContent = symbol || "";
   $("ch-tf").textContent = "loading…"; $("ch-note").textContent = "";
+  chartCid = cid; chartTf = tf || "";
   try {
-    const r = await fetch("/api/chart?cid=" + encodeURIComponent(cid), {cache: "no-store"});
+    const url = "/api/chart?cid=" + encodeURIComponent(cid) + (tf ? "&tf=" + encodeURIComponent(tf) : "");
+    const r = await fetch(url, {cache: "no-store"});
     if (!r.ok) throw new Error("no chart for that campaign");
     chartData = await r.json();
   } catch (e) {
@@ -2204,22 +2272,87 @@ async function openChart(cid, symbol) {
     chartData = null; drawChart(); return;
   }
   const d = chartData;
-  $("ch-tf").textContent = (d.timeframe || "") + " · your exchange's candles";
+  chartTf = d.timeframe || "";
+  $("ch-tf").textContent = "your exchange's candles";
+  /* Rebuilt each open so the row always reflects what the venue actually
+     served — a timeframe it refused falls back, and the buttons must agree. */
+  const tfs = $("ch-tfs"); tfs.replaceChildren();
+  (d.timeframes || []).forEach(name => {
+    const b = document.createElement("button");
+    b.textContent = name + (name === d.native_timeframe ? " ●" : "");
+    b.title = name === d.native_timeframe
+      ? "the timeframe this campaign's geometry was drawn on"
+      : "the same geometry, on " + name + " bars";
+    b.setAttribute("aria-pressed", name === d.timeframe ? "true" : "false");
+    b.addEventListener("click", () => openChart(cid, symbol, name));
+    tfs.appendChild(b);
+  });
   const pos = $("ch-pos");
   pos.hidden = !d.avg_entry;
   if (d.avg_entry) pos.textContent = "holding @ " + px(d.avg_entry);
   const floor = Math.min(...d.candles.map(c => c[3]));
   const deep = (d.legs || []).reduce((count, leg) =>
     count + [2, 4, 8].filter(lv => leg.levels && leg.levels[String(lv)] < floor).length, 0);
+  /* Structures past the newest three are still traded — they are just not
+     drawn, because four overlapping fibs is a mesh. Say how many, so a buyer
+     comparing the chart with the ladder is never quietly missing rows. */
+  const hidden = Math.max((d.legs || []).length - MAX_STRUCTURES, 0)
+               + Math.max((d.trendlines || []).length - MAX_STRUCTURES, 0);
   $("ch-note").textContent =
     "Geometry from the signal; candles, fills and target are your own machine's." +
-    (deep ? "  " + deep + " deeper rung(s) sit below this view — the chart scales to price, not to L8." : "");
+    (deep ? "  " + deep + " deeper rung(s) sit below this view — the chart scales to price, not to L8." : "") +
+    (hidden ? "  " + hidden + " older structure(s) are traded but not drawn — the newest three are." : "");
   drawChart();
 }
 $("ch-close").addEventListener("click", () => $("modal").classList.remove("on"));
 $("modal").addEventListener("click", e => { if (e.target.id === "modal") $("modal").classList.remove("on"); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") $("modal").classList.remove("on"); });
-window.addEventListener("resize", drawChart);
+window.addEventListener("resize", () => { drawChart(); clearCross(); });
+
+/* ══ crosshair ══
+   On its own canvas, so a pointer move repaints one cheap layer instead of
+   every candle. It reads the projection drawChart left behind rather than
+   re-deriving it — two derivations of the same scale is two chances to
+   disagree, and the number under the cursor has to be the number on the axis. */
+function clearCross() {
+  const cv = $("chart-cross");
+  if (cv.width) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+  $("cross-readout").hidden = true;
+}
+function drawCross(clientX, clientY) {
+  const cv = $("chart-cross"), main = $("chart");
+  if (!chartScale || !chartData || !(chartData.candles || []).length) return;
+  const box = main.getBoundingClientRect();
+  const x = clientX - box.left, y = clientY - box.top;
+  const s = chartScale;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = main.clientWidth * dpr; cv.height = main.clientHeight * dpr;
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, main.clientWidth, main.clientHeight);
+  if (x < s.padL || x > s.padL + s.plotW || y < s.padT || y > s.padT + s.plotH) {
+    $("cross-readout").hidden = true; return;
+  }
+  const cs = getComputedStyle(document.documentElement);
+  g.save();
+  g.strokeStyle = (cs.getPropertyValue("--muted") || "#888").trim();
+  g.globalAlpha = .5; g.lineWidth = 1; g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(s.padL, y); g.lineTo(s.padL + s.plotW, y);
+  g.moveTo(x, s.padT); g.lineTo(x, s.padT + s.plotH); g.stroke();
+  g.restore();
+
+  const i = Math.min(Math.max(s.indexAt(x), 0), s.n - 1);
+  const c = chartData.candles[i];
+  const price = s.priceAt(y);
+  const fmt = v => Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+  const at = new Date(c[0] * 1000).toLocaleString([], {hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short"});
+  const readout = $("cross-readout");
+  readout.hidden = false;
+  readout.textContent = fmt(price) + "  ·  " + at
+    + "   O " + fmt(c[1]) + "  H " + fmt(c[2]) + "  L " + fmt(c[3]) + "  C " + fmt(c[4]);
+}
+$("chart-wrap").addEventListener("mousemove", e => drawCross(e.clientX, e.clientY));
+$("chart-wrap").addEventListener("mouseleave", clearCross);
 
 async function poll() {
   try {
@@ -2448,7 +2581,9 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
             "set_subscription": _set_subscription,
             "set_exchange": _set_exchange,
         },
-        chart_fn=lambda cid: chart_view(executor.runtime, executor._market_for_ui(), cid) if executor.runtime else None,
+        chart_fn=lambda cid, tf="": (
+            chart_view(executor.runtime, executor._market_for_ui(), cid, tf) if executor.runtime else None
+        ),
     )
     problem = server.start()
     if problem:

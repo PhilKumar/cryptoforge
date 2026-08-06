@@ -10541,7 +10541,12 @@ function _cfCascadeChartSvg(d) {
     var a1 = tl.a1, a2 = tl.a2;
     if (!a1 || !a2 || a2.t === a1.t) return;
     var slope = (a2.p - a1.p) / (a2.t - a1.t);
-    var t0 = candles[0].t, t1 = candles[n - 1].t;
+    // A trendline BEGINS at the mother high — anchor1 IS that high. Drawing it
+    // back to the left edge extrapolates it upward past the mother, into
+    // prices the line never described and the engine never traded from. It
+    // starts where it starts.
+    var t0 = Math.max(candles[0].t, a1.t), t1 = candles[n - 1].t;
+    if (t0 >= t1) return;
     var p0 = a1.p + slope * (t0 - a1.t), p1 = a1.p + slope * (t1 - a1.t);
     var col = tlColors[(Math.max(1, Number(tl.id) || 1) - 1) % tlColors.length];
     // A same-shelf line is real geometry but carries no fib and places no
@@ -11026,14 +11031,18 @@ function _cfChartCanvasTrendlines(c, p, PAL, labels) {
       var a1 = tl.a1, a2 = tl.a2;
       if (!a1 || !a2 || Number(a2.t) === Number(a1.t)) return;
       var slope = (Number(a2.p) - Number(a1.p)) / (Number(a2.t) - Number(a1.t));
-      var p0 = Number(a1.p) + slope * (c.viewport.tMin - Number(a1.t));
+      // Starts at its own anchor, never extrapolated back above the mother.
+      // See the note in the SVG renderer.
+      var tStart = Math.max(c.viewport.tMin, Number(a1.t));
+      if (tStart >= c.viewport.tMax) return;
+      var p0 = Number(a1.p) + slope * (tStart - Number(a1.t));
       var p1 = Number(a1.p) + slope * (c.viewport.tMax - Number(a1.t));
       var color = PAL.fibs[(Math.max(1, Number(tl.id) || 1) - 1) % PAL.fibs.length];
       var noFib = tl.bears_fib === false;
       ctx.strokeStyle = color; ctx.lineWidth = tl.active ? 1.3 : 0.9;
       ctx.globalAlpha = noFib ? 0.35 : (tl.active ? 0.95 : 0.5);
       ctx.setLineDash(noFib ? [6, 4] : []);
-      ctx.beginPath(); ctx.moveTo(p.xOf(c.viewport.tMin), p.yOf(p0)); ctx.lineTo(p.xOf(c.viewport.tMax), p.yOf(p1)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p.xOf(tStart), p.yOf(p0)); ctx.lineTo(p.xOf(c.viewport.tMax), p.yOf(p1)); ctx.stroke();
       ctx.setLineDash([]); ctx.globalAlpha = 1;
       if (p.inPrice(p1)) labels.push({ kind: 'right', x: p.xOf(c.viewport.tMax) - 4, y: p.yOf(p1) - 5,
         text: 'TL' + tl.id + (noFib ? ' (no fib)' : (tl.active ? ' ★' : '')), color: color });

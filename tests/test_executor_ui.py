@@ -780,6 +780,28 @@ class ChartViewTests(unittest.TestCase):
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0]["id"], self.runtime._client.campaigns["c1"].standing_trendline_id)
 
+    def test_a_slower_timeframe_changes_the_candles_not_the_geometry(self):
+        """The geometry was drawn on the campaign's own bars and is never
+        re-derived here — only what sits under it changes."""
+        from executor.ui import chart_view
+
+        native = chart_view(self.runtime, self.market, "c1")
+        slower = chart_view(self.runtime, self.market, "c1", "1h")
+        self.assertEqual(slower["timeframe"], "1h")
+        self.assertEqual(slower["native_timeframe"], native["timeframe"])
+        self.assertEqual(slower["legs"], native["legs"])
+        self.assertEqual(slower["trendlines"], native["trendlines"])
+        self.assertEqual(slower["mother_high"], native["mother_high"])
+
+    def test_a_timeframe_the_venue_will_not_serve_falls_back(self):
+        """An empty chart with no explanation is worse than the campaign's own
+        bars, which are always available."""
+        from executor.ui import chart_view
+
+        chart = chart_view(self.runtime, self.market, "c1", "3d")
+        self.assertEqual(chart["timeframe"], chart["native_timeframe"])
+        self.assertTrue(chart["candles"])
+
     def test_a_closed_round_becomes_a_sell_mark(self):
         """The chart shows trades that happened, not only ones waiting to."""
         from executor.ui import chart_view
@@ -847,7 +869,7 @@ class ChartEndpointTests(unittest.TestCase):
         self.server = UIServer(
             self.state,
             port=0,
-            chart_fn=lambda cid: {"campaign_id": cid, "candles": []} if cid == "c1" else None,
+            chart_fn=lambda cid, tf="": {"campaign_id": cid, "candles": [], "timeframe": tf} if cid == "c1" else None,
         )
         self.assertIsNone(self.server.start())
         self.port = self.server._server.server_address[1]
@@ -864,6 +886,13 @@ class ChartEndpointTests(unittest.TestCase):
         status, body = self._get("/api/chart?cid=c1")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["campaign_id"], "c1")
+
+    def test_the_requested_timeframe_reaches_the_chart(self):
+        """Different bars under the same geometry — the buyer asks for them by
+        query string, and the answer says which it actually served."""
+        status, body = self._get("/api/chart?cid=c1&tf=15m")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["timeframe"], "15m")
 
     def test_an_unknown_campaign_is_a_404(self):
         self.assertEqual(self._get("/api/chart?cid=nope")[0], 404)
