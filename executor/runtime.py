@@ -451,7 +451,15 @@ class ExecutorRuntime:
         return {
             "following": len([c for c in self._client.campaigns.values() if c.active]),
             "halted": [c.campaign_id for c in self._client.campaigns.values() if c.halted],
-            "skipped": {c.campaign_id: c.skip_reason for c in self._client.campaigns.values() if c.skip_reason},
+            "skipped": {
+                c.campaign_id: c.skip_reason
+                for c in self._client.campaigns.values()
+                if c.skip_reason and not c.skipped_as_old
+            },
+            # Folded, not listed: predating this machine is the normal state
+            # of almost every campaign a buyer ever sees, and a page of
+            # per-campaign alerts buried the lines that ask for attention.
+            "skipped_as_old": len([c for c in self._client.campaigns.values() if c.skipped_as_old]),
             "opening_new": may_open,
             "posture_reason": reason,
             # The single most useful number in the product: knowable, changing

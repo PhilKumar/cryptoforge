@@ -309,6 +309,25 @@ class ReportTests(unittest.TestCase):
         lines = running_status({"armed_exposure_usd": 0.0, "opening_new": True, "halted": ["c1"]})
         self.assertTrue(any("still managed" in line for line in lines))
 
+    def test_old_campaigns_fold_into_one_line(self):
+        """140 campaigns predating the machine is one fact, not a page of
+        alerts — the flood Phil saw on the buyer console."""
+        lines = running_status({"armed_exposure_usd": 0.0, "opening_new": True, "skipped_as_old": 140})
+        folded = [line for line in lines if "140 older campaigns" in line]
+        self.assertEqual(len(folded), 1)
+        self.assertFalse(any("Not following" in line for line in lines))
+
+    def test_an_actionable_skip_still_gets_its_own_line(self):
+        lines = running_status(
+            {
+                "armed_exposure_usd": 0.0,
+                "opening_new": True,
+                "skipped_as_old": 140,
+                "skipped": {"c9": "Drawn under model v22; this executor understands v21."},
+            }
+        )
+        self.assertTrue(any("Not following c9" in line for line in lines))
+
     def test_a_blocked_posture_explains_itself(self):
         lines = running_status({"armed_exposure_usd": 0.0, "opening_new": False, "posture_reason": "Feed is stale."})
         self.assertIn("Feed is stale.", lines)

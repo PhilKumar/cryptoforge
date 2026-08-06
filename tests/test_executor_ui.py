@@ -129,6 +129,28 @@ class CampaignViewTests(unittest.TestCase):
         self.assertEqual(rows[0]["state"], "skipped")
         self.assertIn("join window", rows[0]["skip_reason"])
 
+    def test_an_old_skip_is_marked_for_folding(self):
+        from executor.feed_client import FollowedCampaign
+
+        runtime = self._runtime()
+        runtime._client.campaigns["old"] = FollowedCampaign(
+            campaign_id="old",
+            symbol="SOLUSDT",
+            exchange="binance",
+            created_at=int(NOW) - 900,
+            mother_high=178.42,
+            mother_low=174.10,
+            mother_timestamp=1,
+            timeframe="5m",
+            state="TRENDLINE_ACTIVE",
+            model_version=21,
+            joined=False,
+            skip_reason="Started 900s ago — past the join window.",
+            skipped_as_old=True,
+        )
+        rows = campaigns_view(runtime)
+        self.assertTrue(rows[0]["skipped_as_old"])
+
 
 class UIServerTests(unittest.TestCase):
     def setUp(self):

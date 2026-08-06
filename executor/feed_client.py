@@ -89,6 +89,10 @@ class FollowedCampaign:
     median_bar_pct: float = 0.0
     joined: bool = False
     skip_reason: str = ""
+    # True when the ONLY thing wrong is age: it started before this machine
+    # was watching. That is the normal condition of almost every campaign a
+    # buyer ever sees, so the UI folds these into one line instead of a page.
+    skipped_as_old: bool = False
     halted: str = ""
     legs: Dict[int, FollowedLeg] = field(default_factory=dict)
     trendlines: Dict[int, dict] = field(default_factory=dict)
@@ -263,6 +267,7 @@ class FeedClient:
                     f"Started {int(age)}s ago — past the {self._max_join_age}s join window. "
                     "A ladder only makes sense from its mother."
                 )
+                campaign.skipped_as_old = True
             else:
                 may_open, reason = self.may_open_new
                 campaign.skip_reason = "" if may_open else reason

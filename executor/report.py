@@ -99,6 +99,13 @@ def running_status(status: dict, *, power: Optional[PlatformPower] = None) -> Li
     for campaign_id, reason in skipped.items():
         lines.append(f"Not following {campaign_id}: {reason}")
 
+    old = int(status.get("skipped_as_old") or 0)
+    if old:
+        lines.append(
+            f"{old} older campaign{'s' if old > 1 else ''} not followed — "
+            "started before this machine was watching. New ones are joined as they open."
+        )
+
     if power:
         advice = suspend_advice(power, armed_exposure_usd=exposure)
         if advice:

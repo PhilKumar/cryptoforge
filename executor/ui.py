@@ -241,6 +241,7 @@ def campaigns_view(runtime) -> list:
                 "exchange": followed.exchange,
                 "state": "skipped",
                 "skip_reason": followed.skip_reason,
+                "skipped_as_old": followed.skipped_as_old,
             }
         )
     return rows
@@ -1558,8 +1559,23 @@ function render(s) {
 
   /* campaigns */
   const cards = $("cards"); cards.replaceChildren();
-  const campaigns = s.campaigns || [];
-  $("cards-empty").hidden = campaigns.length > 0;
+  const all = s.campaigns || [];
+  /* Almost every campaign a buyer ever sees predates their machine. That is
+     one fact, not a page of alerts — fold them into a single line and keep
+     individual cards for reasons that ask something of the buyer. */
+  const old = all.filter(cp => cp.skipped_as_old);
+  const campaigns = all.filter(cp => !cp.skipped_as_old);
+  $("cards-empty").hidden = all.length > 0;
+  if (old.length) {
+    const fold = document.createElement("div"); fold.className = "camp panel";
+    const syms = {};
+    old.forEach(cp => { syms[cp.symbol] = (syms[cp.symbol] || 0) + 1; });
+    const bySym = Object.entries(syms).map(([k, n]) => `${k} ${n}`).join(" · ");
+    fold.innerHTML = `<details><summary>${old.length} older campaign${old.length > 1 ? "s" : ""} not followed — ` +
+      `they started before this machine was watching, and a ladder only makes sense from its mother` +
+      `</summary><div class="cell"><div class="l">by symbol</div><div class="v">${bySym}</div></div></details>`;
+    cards.appendChild(fold);
+  }
   campaigns.forEach(cp => {
     const card = document.createElement("div"); card.className = "camp panel";
     const tag = cp.halted ? ["halt", "halted"] : cp.state === "skipped" ? ["skip", "skipped"]
