@@ -827,6 +827,25 @@ class SubscriberTests(unittest.TestCase):
                 now=self.now[0],
             )
 
+    def test_a_deleted_buyer_cannot_connect(self):
+        self.subs.remove("buyer-7")
+        self.assertIsNone(self.subs.get("buyer-7"))
+        with self.assertRaises(NotEntitled):
+            verify_subscriber_handshake(self._handshake(), self.subs, now=self.now[0])
+
+    def test_deleting_lets_the_same_machine_register_from_scratch(self):
+        """`add()` on a live id re-keys it and carries the old status forward.
+        Deleting first is what makes a genuinely fresh registration possible."""
+        self.subs.set_status("buyer-7", "lapsed")
+        self.subs.remove("buyer-7")
+        record = self.subs.add("buyer-7", self.buyer.public_key_b64())
+        self.assertEqual(record["status"], "active")
+        self.assertIsNone(record["expires_at"])
+
+    def test_deleting_an_unknown_buyer_is_an_error_not_a_silent_pass(self):
+        with self.assertRaises(KeyError):
+            self.subs.remove("nobody")
+
     def test_a_lapsed_subscription_cannot_connect(self):
         self.subs.set_status("buyer-7", "lapsed")
         with self.assertRaises(NotEntitled) as caught:

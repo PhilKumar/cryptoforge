@@ -7958,6 +7958,25 @@ async def cascade_feed_subscriber_add(request: Request):
     return {"status": "ok", "subscriber": record}
 
 
+@app.delete("/api/cascade/feed/subscribers/{buyer_id}")
+async def cascade_feed_subscriber_delete(buyer_id: str):
+    """
+    Forget a buyer, so their machine can register from scratch.
+
+    Not the tool for cutting someone off — that is `revoked`, which keeps them
+    on the record and survives a re-registration. This is for rows that should
+    not exist: a test buyer, a typo'd id. Deleting one does NOT close a stream
+    they currently hold; entitlement is re-checked every 30 seconds, and the
+    next check finds no record and closes it with "not registered".
+    """
+    check_rate_limit("feed_subscriber", max_calls=10, window_sec=60)
+    try:
+        record = _get_feed_subscribers().remove(buyer_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"{buyer_id} is not registered")
+    return {"status": "ok", "removed": record.get("buyer_id"), "was": record.get("status")}
+
+
 @app.post("/api/cascade/feed/subscribers/{buyer_id}/status")
 async def cascade_feed_subscriber_status(buyer_id: str, request: Request):
     """

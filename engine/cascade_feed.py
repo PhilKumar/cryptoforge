@@ -703,6 +703,21 @@ class FeedSubscribers:
         rows.sort(key=lambda row: row.get("created_at") or 0, reverse=True)
         return rows
 
+    def remove(self, buyer_id: str) -> dict:
+        """Forget a buyer entirely, so their id and key can be registered fresh.
+
+        Distinct from revoking, which is the tool for cutting off someone who
+        should stay on the record. This is for a row that should never have
+        existed — a test registration, a typo'd id — and it is what makes
+        re-registering the same machine from scratch possible: `add()` on an
+        existing id re-keys it and keeps the old status and expiry.
+        """
+        record = self.get(buyer_id)
+        if not record:
+            raise KeyError(buyer_id)
+        self._store.delete(self._bucket, buyer_id)
+        return record
+
     def set_status(self, buyer_id: str, status: str) -> dict:
         record = self.get(buyer_id)
         if not record:

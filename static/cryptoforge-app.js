@@ -1009,12 +1009,34 @@ function cfSyncPageHistory(pageId, options) {
   cfUpdateAppNavControls();
 }
 
+// The nav is one horizontally scrolling row on a phone, so the active tab can
+// sit off-screen — on first load especially, since Journal is mid-row. Centre
+// it in the strip. No-ops on desktop, where the bar does not scroll.
+// Measured with rects rather than offsetLeft so it does not depend on which
+// ancestor happens to be the offsetParent, and it only ever moves the strip's
+// own scrollLeft, never the page.
+function cfScrollActiveTabIntoView(btn) {
+  if (!btn || typeof btn.getBoundingClientRect !== 'function') return;
+  var bar = btn.closest ? btn.closest('.nav-bar') : null;
+  if (!bar || bar.scrollWidth <= bar.clientWidth + 1) return;
+  var barRect = bar.getBoundingClientRect();
+  var btnRect = btn.getBoundingClientRect();
+  var delta = (btnRect.left - barRect.left) - (barRect.width - btnRect.width) / 2;
+  var target = Math.max(0, Math.min(bar.scrollLeft + delta, bar.scrollWidth - bar.clientWidth));
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  try {
+    bar.scrollTo({ left: target, behavior: reduce ? 'auto' : 'smooth' });
+  } catch (e) {
+    bar.scrollLeft = target;
+  }
+}
+
 function cfSetActivePageShell(pageId, btn) {
   document.querySelectorAll('.page-section').forEach(function(p) { p.classList.remove('active-page'); });
   document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
   document.getElementById(pageId).classList.add('active-page');
   if (!btn) btn = cfNavButtonForPage(pageId);
-  if (btn) btn.classList.add('active');
+  if (btn) { btn.classList.add('active'); cfScrollActiveTabIntoView(btn); }
 }
 
 function showPage(pageId, btn, options) {
@@ -12165,6 +12187,9 @@ function _cfFeedBuyerActions(row) {
   if (status !== 'revoked') {
     bits.push('<button class="btn btn-outline btn-sm cf-feed-danger" data-cf-click="cfFeedBuyerSetStatus(\'' + id + '\',\'revoked\')">Revoke</button>');
   }
+  // Forget, not cut off. Revoking is what keeps someone on the record and
+  // survives a re-registration; this is for rows that should not exist.
+  bits.push('<button class="btn btn-outline btn-sm cf-feed-danger" data-cf-click="cfFeedBuyerDelete(\'' + id + '\')" title="Forget this buyer entirely, so the same machine can register from scratch. Use Revoke to cut someone off instead.">Delete</button>');
   return '<div class="admin-inline-actions">' + bits.join('') + '</div>';
 }
 
@@ -12301,6 +12326,25 @@ async function cfFeedBuyerSubmit() {
     _cfFeedBuyerMsg(String(err.message || err), true);
   } finally {
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Register'; }
+  }
+}
+
+async function cfFeedBuyerDelete(buyerId) {
+  // Always asks: this is the only row-destroying action on the panel, and a
+  // deleted buyer_id can be registered again by anyone holding the key.
+  if (!window.confirm('Delete ' + buyerId + ' completely?\n\n'
+      + 'The record is gone and the same buyer_id can be registered fresh. '
+      + 'To cut someone off while keeping them on the record, use Revoke instead.')) {
+    return;
+  }
+  try {
+    var res = await cfApiFetch('/api/cascade/feed/subscribers/' + encodeURIComponent(buyerId), { method: 'DELETE' });
+    var data = await cfReadApiPayload(res);
+    if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Could not delete the buyer'));
+    await cfFeedBuyersLoad();
+  } catch (err) {
+    var meta = document.getElementById('cf-feed-buyers-meta');
+    if (meta) meta.textContent = String(err.message || err);
   }
 }
 
