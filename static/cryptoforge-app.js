@@ -12332,11 +12332,12 @@ async function cfFeedBuyerSubmit() {
 async function cfFeedBuyerDelete(buyerId) {
   // Always asks: this is the only row-destroying action on the panel, and a
   // deleted buyer_id can be registered again by anyone holding the key.
-  if (!window.confirm('Delete ' + buyerId + ' completely?\n\n'
-      + 'The record is gone and the same buyer_id can be registered fresh. '
-      + 'To cut someone off while keeping them on the record, use Revoke instead.')) {
-    return;
-  }
+  var ok = await cfConfirm(
+    'The record for <b>' + _escapeHtml(buyerId) + '</b> is gone and the same buyer_id can be '
+      + 'registered fresh.<br><br>To cut someone off while keeping them on the record, use '
+      + '<b>Revoke</b> instead.',
+    'Delete this buyer?', '🗑️', true);
+  if (!ok) return;
   try {
     var res = await cfApiFetch('/api/cascade/feed/subscribers/' + encodeURIComponent(buyerId), { method: 'DELETE' });
     var data = await cfReadApiPayload(res);
@@ -12351,9 +12352,12 @@ async function cfFeedBuyerDelete(buyerId) {
 async function cfFeedBuyerSetStatus(buyerId, status) {
   // Revoking is the one that cannot be undone by anything automatic — billing
   // may only ever write active or lapsed — so it is the one that asks.
-  if (status === 'revoked'
-      && !window.confirm('Revoke ' + buyerId + '?\n\nTheir stream closes within 30 seconds. Only you can undo this — a payment never will.')) {
-    return;
+  if (status === 'revoked') {
+    var ok = await cfConfirm(
+      'The stream for <b>' + _escapeHtml(buyerId) + '</b> closes within 30 seconds.<br><br>'
+        + 'Only you can undo this — a payment never will.',
+      'Revoke this buyer?', '⛔', true);
+    if (!ok) return;
   }
   try {
     var res = await cfApiFetch('/api/cascade/feed/subscribers/' + encodeURIComponent(buyerId) + '/status', {
