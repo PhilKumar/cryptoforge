@@ -30,3 +30,10 @@ runs.json
 strategies.json
 tools/.backtest_cache/
 tools/.paper_prove_cache/
+
+# Minted feed signing keys. `cascade_feed_keyset.py` writes the SERVER'S PRIVATE
+# signing key here — the one thing that lets anyone forge geometry our buyers
+# would trade on. It was untracked but not ignored, so a stray `git add out/`
+# would have published it. The tool tells you to delete these once they are on
+# the server; this is the guard for the gap in between.
+out/
