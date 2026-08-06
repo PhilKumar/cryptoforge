@@ -273,7 +273,15 @@ class FeedClient:
                 campaign.skip_reason = "" if may_open else reason
                 campaign.joined = may_open
 
-        self._emit("campaign", {"campaign_id": campaign_id, "joined": campaign.joined, "reason": campaign.skip_reason})
+        self._emit(
+            "campaign",
+            {
+                "campaign_id": campaign_id,
+                "joined": campaign.joined,
+                "reason": campaign.skip_reason,
+                "skipped_as_old": campaign.skipped_as_old,
+            },
+        )
 
     def _on_trendline_set(self, envelope: dict, payload: dict) -> None:
         campaign = self.campaigns.get(envelope.get("campaign_id") or "")

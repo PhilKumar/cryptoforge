@@ -129,6 +129,17 @@ class CampaignViewTests(unittest.TestCase):
         self.assertEqual(rows[0]["state"], "skipped")
         self.assertIn("join window", rows[0]["skip_reason"])
 
+    def test_an_old_skip_never_reaches_the_activity_log(self):
+        """One connect emits one campaign event per campaign the server has
+        ever run. Logging the old ones buried everything else."""
+        from executor.ui import worth_logging
+
+        self.assertFalse(worth_logging("campaign", {"joined": False, "skipped_as_old": True}))
+        self.assertTrue(worth_logging("campaign", {"joined": True}))
+        self.assertTrue(worth_logging("campaign", {"joined": False, "reason": "model v22"}))
+        self.assertTrue(worth_logging("halt", {"campaign_id": "c1"}))
+        self.assertFalse(worth_logging("leg", {"campaign_id": "c1"}))
+
     def test_an_old_skip_is_marked_for_folding(self):
         from executor.feed_client import FollowedCampaign
 

@@ -247,6 +247,22 @@ def campaigns_view(runtime) -> list:
     return rows
 
 
+LOGGED_EVENTS = ("halt", "bad_signature", "clock_warning", "stopped", "campaign", "closed")
+
+
+def worth_logging(kind: str, detail: dict) -> bool:
+    """Does this belong in the activity log a buyer actually reads?
+
+    A campaign older than this machine is not an event, it is the weather:
+    one connect emits one per campaign the server has ever run, which is how
+    the log came to be a hundred repetitions of the same sentence. The folded
+    count on the status line carries that fact instead.
+    """
+    if kind == "campaign" and not detail.get("joined") and detail.get("skipped_as_old"):
+        return False
+    return kind in LOGGED_EVENTS
+
+
 def chart_view(runtime, market, campaign_id: str) -> Optional[dict]:
     """
     Everything a buyer's chart may draw, and nothing else.
@@ -1858,7 +1874,7 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
             state.set_connection("reconnecting", str(detail.get("error") or "")[:80])
         elif kind == "stopped":
             state.set_connection("stopped", str(detail.get("reason") or "")[:120])
-        if kind in ("halt", "bad_signature", "clock_warning", "stopped", "campaign", "closed"):
+        if worth_logging(kind, detail):
             state.add_event(f"[{kind}] {json.dumps(detail, default=str)[:160]}")
 
     executor._on_status = on_status
