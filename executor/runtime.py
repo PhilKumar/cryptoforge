@@ -497,6 +497,16 @@ class ExecutorRuntime:
         held = f" {running} campaign{'s' if running != 1 else ''} already running keep their exits." if running else ""
         return f"Now following {self._config.subscription_line}.{held}"
 
+    def set_capital(self, usd: float) -> None:
+        """Resize from now on.
+
+        Reaches campaigns already running, because `plan()` is recomputed from
+        this on every tick: rungs not yet filled resize, coin already bought
+        keeps what it cost. That is the honest behaviour of a number every
+        ladder is derived from, and the console says so when anything is open.
+        """
+        self._config.capital_usd = float(usd)
+
     def venue_change_blockers(self) -> List[str]:
         """Campaigns that make switching exchange unsafe right now."""
         return self.book.engaged()

@@ -535,17 +535,26 @@ class UIServer:
                 if not handler:
                     self.send_error(404, f"unknown action {name!r}")
                     return
+                ok = True
                 try:
                     # Settings actions need what to set; the switches take
                     # nothing. One signature for both, so a handler that wants
                     # no argument keeps saying so.
                     payload = request.get("payload")
-                    message = handler(payload) if payload is not None else handler()
+                    result = handler(payload) if payload is not None else handler()
                 except Exception as exc:
                     _log.exception("action %s failed", name)
-                    message = f"{name} failed: {exc}"
+                    result, ok = f"{name} failed: {exc}", False
+                # A handler that can refuse says so in a field. The page used to
+                # guess from the wording, which meant a new refusal phrased a
+                # new way was coloured as a success — "under the $1,000 minimum"
+                # arrived green.
+                if isinstance(result, tuple):
+                    message, ok = result[0], bool(result[1])
+                else:
+                    message = result
                 state.add_event(message)
-                body = json.dumps({"message": message}).encode("utf-8")
+                body = json.dumps({"message": message, "ok": ok}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -1124,6 +1133,14 @@ PAGE = """<!doctype html>
     border:1px solid rgba(251,191,36,.34); color:var(--yellow);
     font-size:14px; display:flex; gap:16px; align-items:center; flex-wrap:wrap;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.10); }
+  /* Once reviewed, the bar stops asking. It stays on screen — the wake report
+     is still worth reading — but it goes green and says so, because a bar that
+     looks identical before and after the click leaves the buyer wondering
+     whether the click landed. */
+  .wake.is-done { background:linear-gradient(180deg, rgba(45,212,191,.12), rgba(13,148,136,.08));
+    border-color:rgba(45,212,191,.30); color:var(--green); }
+  .wake-done { display:inline-flex; align-items:center; gap:7px; font-weight:700;
+    font-size:13px; letter-spacing:.03em; color:var(--green); }
   .lines { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
   .line { padding:12px 16px; border-radius:12px; font-size:13.5px;
     background:linear-gradient(180deg, rgba(20,28,48,0.94), rgba(12,18,34,0.99));
@@ -1172,6 +1189,10 @@ PAGE = """<!doctype html>
   summary::-webkit-details-marker { display:none; }
   summary:hover { color:var(--accent); }
   summary::before { content:"▸ "; color:var(--accent); } details[open] summary::before { content:"▾ "; }
+  /* An ended campaign is history: quieter than the live ones so the eye lands
+     on what is trading, but never hidden — coin may still be held there. */
+  .camp.is-closed { opacity:.72; }
+  .camp.is-closed:hover { opacity:1; }
   .rungs { padding:2px 20px 16px; overflow-x:auto; }
   table.ladder { border-collapse:collapse; width:100%; font:12.5px/1.9 var(--font-mono); }
   table.ladder th { font:600 10px/1.9 var(--font-display); letter-spacing:.08em; text-transform:uppercase;
@@ -1453,6 +1474,7 @@ PAGE = """<!doctype html>
   <div class="wake" id="wake" hidden>
     <span id="wake-text"></span>
     <button class="act solid" id="btn-confirm" data-action="confirm_wake">I've reviewed — resume trading</button>
+    <span class="wake-done" id="wake-done" hidden>✓ Reviewed — entries are allowed again</span>
   </div>
   <div class="stats-grid">
     <div class="stat"><div class="l">Signal</div><div class="v acc" id="s-conn">—</div><div class="s" id="s-conn-d"></div></div>
@@ -1472,6 +1494,13 @@ PAGE = """<!doctype html>
     the geometry this machine is following, and where its money is waiting</span></div>
   <div id="cards"></div>
   <div class="empty panel" id="cards-empty">Nothing followed yet — campaigns join as they start on the feed.</div>
+  <!-- Ended campaigns keep their own section BELOW the live ones, the way the
+       parent's Closed Campaigns table sits under its live strip. Mixed into one
+       list, a mother-broken card sat between two running ones and read as
+       something still being traded. -->
+  <div class="section-h" id="closed-h" hidden><h2>Closed campaigns</h2><span style="color:var(--muted);font-size:12.5px">
+    ended — target hit, mother broken, stopped, or halted. Anything still held here is still being managed.</span></div>
+  <div id="cards-closed"></div>
 </div></section>
 
 <!-- ══════════ ROUNDS ══════════ -->
@@ -1524,6 +1553,8 @@ PAGE = """<!doctype html>
         <label>Timeframes<input id="set-tf" placeholder="blank means all"><em class="set-hint" id="set-tf-hint"></em></label>
         <label>Drawn on<input id="set-src" readonly tabindex="-1"><em class="set-hint">always your exchange — you fill at its prices</em></label>
         <label>Coins<input id="set-sym" placeholder="blank means all"><em class="set-hint">e.g. BTCUSDT, SOLUSDT</em></label>
+        <label>Capital (USD)<input id="set-cap" type="number" min="0" step="100">
+          <em class="set-hint">every rung is sized from this</em></label>
       </div>
       <div class="set-foot">
         <button class="act solid" id="btn-save-signals">Save signal choice</button>
@@ -1688,7 +1719,7 @@ if (location.hash.length > 1) show(location.hash.slice(1));
 
 async function act(name, button, payload) {
   button.disabled = true;
-  let message = "";
+  let message = "", ok = true;
   try {
     const body = payload ? {action: name, payload: payload} : {action: name};
     const r = await fetch("/api/action", {method: "POST",
@@ -1696,11 +1727,12 @@ async function act(name, button, payload) {
       body: JSON.stringify(body)});
     const d = await r.json();
     message = d.message || "done";
-  } catch (e) { message = "action failed: " + e; }
+    ok = d.ok !== false;
+  } catch (e) { message = "action failed: " + e; ok = false; }
   $("toast").textContent = message;
   button.disabled = false;
   poll();
-  return message;
+  return {message: message, ok: ok};
 }
 document.querySelectorAll("button[data-action]").forEach(b =>
   b.addEventListener("click", () => act(b.dataset.action, b)));
@@ -1709,23 +1741,24 @@ document.querySelectorAll("button[data-action]").forEach(b =>
    typing in must not be overwritten underneath them — hence `touched`, set on
    first input and only cleared when a save comes back. */
 let settingsTouched = false;
-["set-tf", "set-sym"].forEach(id =>
+["set-tf", "set-sym", "set-cap"].forEach(id =>
   $(id).addEventListener("input", () => { settingsTouched = true; }));
 
 /* A refusal reads differently from a save, so it is coloured differently and
-   said where the button is rather than on the Console page's toast. */
-function settingResult(where, message) {
+   said where the button is rather than on the Console page's toast. Whether it
+   WAS a refusal comes from the server, never from reading the wording — a new
+   refusal phrased a new way used to arrive green. */
+function settingResult(where, result) {
   const el = $(where);
-  el.textContent = message || "";
-  const refused = /cannot|could not|not a venue|unknown|not while|already on/i.test(message || "");
-  el.className = "set-msg " + (message ? (refused ? "no" : "ok") : "");
+  el.textContent = result.message || "";
+  el.className = "set-msg " + (result.message ? (result.ok ? "ok" : "no") : "");
 }
 $("btn-save-signals").addEventListener("click", async () => {
   /* No signal_exchanges: it is derived from the trading venue, not typed. */
-  const message = await act("set_subscription", $("btn-save-signals"), {
-    timeframes: $("set-tf").value, symbols: $("set-sym").value});
-  settingResult("set-signals-msg", message);
-  settingsTouched = false;
+  const result = await act("set_subscription", $("btn-save-signals"), {
+    timeframes: $("set-tf").value, symbols: $("set-sym").value, capital_usd: $("set-cap").value});
+  settingResult("set-signals-msg", result);
+  if (result.ok) settingsTouched = false;
 });
 $("btn-save-exchange").addEventListener("click", async () => {
   settingResult("set-exchange-msg", await act("set_exchange", $("btn-save-exchange"), {exchange: $("set-ex").value}));
@@ -1766,7 +1799,13 @@ function render(s) {
   const waiting = st.awaiting_confirmation || s.wake_message;
   $("wake").hidden = !waiting;
   $("wake-text").textContent = st.awaiting_confirmation || s.wake_message || "";
-  $("btn-confirm").hidden = !st.awaiting_confirmation;
+  /* Asked, then answered. The report stays readable either way; only the
+     colour and the trailing mark change, so a buyer can see their click
+     landed without waiting to notice a button has quietly vanished. */
+  const asking = !!st.awaiting_confirmation;
+  $("btn-confirm").hidden = !asking;
+  $("wake-done").hidden = asking || !waiting;
+  $("wake").classList.toggle("is-done", !asking && !!waiting);
 
   $("s-conn").textContent = c.state || "—";
   $("s-conn-d").textContent = c.detail || "";
@@ -1791,7 +1830,16 @@ function render(s) {
      individual cards for reasons that ask something of the buyer. */
   const old = all.filter(cp => cp.skipped_as_old);
   const unsub = all.filter(cp => cp.skipped_unsubscribed);
-  const campaigns = all.filter(cp => !cp.skipped_as_old && !cp.skipped_unsubscribed);
+  const followed = all.filter(cp => !cp.skipped_as_old && !cp.skipped_unsubscribed);
+  /* Ended campaigns go in their own section below, the way the parent keeps a
+     Closed Campaigns table under its live strip. In one list a mother-broken
+     card sat between two running ones and read as something still trading. */
+  const ENDED = ["COMPLETED", "MOTHER_BROKEN", "STOPPED"];
+  const isEnded = cp => cp.state !== "skipped" && (cp.halted || ENDED.indexOf(cp.state) >= 0);
+  const campaigns = followed.filter(cp => !isEnded(cp));
+  const closed = followed.filter(isEnded);
+  const closedMount = $("cards-closed"); closedMount.replaceChildren();
+  $("closed-h").hidden = closed.length === 0;
   $("cards-empty").hidden = all.length > 0;
   /* Opened by a click and CLOSED by another. The page repaints on a timer, so
      an open fold would snap shut a second later unless the state lives outside
@@ -1814,9 +1862,10 @@ function render(s) {
     `was watching, and a ladder only makes sense from its mother`);
   foldInto("unsub", unsub, n => `${n} signal${n > 1 ? "s" : ""} outside your subscription — you follow ` +
     `${st.subscription || "a subset of what we publish"}`);
-  campaigns.forEach(cp => {
-    const card = document.createElement("div"); card.className = "camp panel";
+  const drawCard = (cp, mount) => {
+    const card = document.createElement("div"); card.className = "camp panel" + (isEnded(cp) ? " is-closed" : "");
     const tag = cp.halted ? ["halt", "halted"] : cp.state === "skipped" ? ["skip", "skipped"]
+              : isEnded(cp) ? ["skip", (cp.state || "").toLowerCase().replace(/_/g, " ")]
               : ["live", (cp.state || "").toLowerCase().replace("_", " ")];
     card.innerHTML = `<div class="head"><span class="sym">${cp.symbol}</span>` +
       `<span class="venue">${cp.exchange || ""}${cp.timeframe ? " · " + cp.timeframe : ""}</span>` +
@@ -1828,7 +1877,7 @@ function render(s) {
     if (cp.state === "skipped") {
       card.innerHTML += `<div class="cell" style="border-top:1px solid var(--border)">` +
         `<div class="l">why</div><div class="v">${cp.skip_reason || ""}</div></div>`;
-      cards.appendChild(card); return;
+      mount.appendChild(card); return;
     }
     card.innerHTML += `<div class="grid">` +
       cell("Position", cp.position_qty > 0 ? px(cp.position_qty) + " @ " + px(cp.avg_entry) : "—") +
@@ -1873,8 +1922,10 @@ function render(s) {
     }
     const chartBtn = card.querySelector("button[data-chart]");
     if (chartBtn) chartBtn.addEventListener("click", () => openChart(chartBtn.dataset.chart, chartBtn.dataset.sym));
-    cards.appendChild(card);
-  });
+    mount.appendChild(card);
+  };
+  campaigns.forEach(cp => drawCard(cp, cards));
+  closed.forEach(cp => drawCard(cp, closedMount));
 
   /* rounds */
   const rounds = s.rounds || [];
@@ -1914,6 +1965,7 @@ function render(s) {
   if (!settingsTouched) {
     $("set-tf").value = (id.timeframes || []).join(", ");
     $("set-sym").value = (id.symbols || []).join(", ");
+    $("set-cap").value = id.capital_usd != null ? id.capital_usd : "";
     $("set-ex").value = id.pending_exchange || id.exchange || "binance";
   }
   /* Derived: it tracks the venue even mid-edit, and shows the PENDING one so
@@ -2236,6 +2288,7 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
                 "timeframes": list(executor.config.timeframes),
                 "signal_exchanges": list(executor.config.signal_exchanges),
                 "symbols": list(executor.config.symbols),
+                "capital_usd": executor.config.capital_usd,
                 "pending_exchange": getattr(executor.config, "_pending_exchange", ""),
                 # What the venue about to be used can actually carry — the
                 # pending one if a change is waiting, since that is the
@@ -2268,14 +2321,45 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
             allowed = ", ".join(model.timeframes_for(trading_on))
             return (
                 f"{trading_on} cannot trade {', '.join(impossible)} — it carries {allowed}. "
-                f"Either pick from those, or change this machine's exchange first."
+                f"Either pick from those, or change this machine's exchange first.",
+                False,
             )
+        # Capital is not a filter — it is what every rung is sized from, and
+        # `plan()` is recomputed from it on every tick. So a change reaches
+        # campaigns ALREADY RUNNING, not only the next one: rungs not yet
+        # filled resize, while coin already bought keeps what it cost. Allowed,
+        # because the alternative is a buyer who cannot correct a typo without
+        # a restart — but said out loud when anything is open.
+        capital, capital_note = executor.config.capital_usd, ""
+        raw_capital = str(payload.get("capital_usd") or "").strip()
+        if raw_capital:
+            try:
+                capital = float(raw_capital)
+            except ValueError:
+                return f"{raw_capital!r} is not a number of dollars.", False
+            allowed, _, warning = model.capital_gate(capital)
+            if not allowed:
+                return warning or "That is below the minimum this strategy can trade.", False
+            if capital != executor.config.capital_usd:
+                running = len(runtime.book.campaigns) if runtime else 0
+                capital_note = f" Capital is now ${capital:,.0f}" + (
+                    f" — the {running} campaign{'s' if running != 1 else ''} already running resize their "
+                    "unfilled rungs to match; coin already bought keeps what it cost."
+                    if running
+                    else "."
+                )
         if runtime is None:
-            return "Not connected yet — try once the feed is synced."
+            return "Not connected yet — try once the feed is synced.", False
         message = runtime.set_subscription(timeframes=timeframes, source_exchanges=venues, symbols=symbols)
         try:
             path = save_settings(
-                executor.config, {"timeframes": timeframes, "signal_exchanges": venues, "symbols": symbols}
+                executor.config,
+                {
+                    "timeframes": timeframes,
+                    "signal_exchanges": venues,
+                    "symbols": symbols,
+                    "capital_usd": capital,
+                },
             )
         except ConfigError as exc:
             return f"{message} But it could not be saved, so a restart will forget it: {exc}"
@@ -2286,8 +2370,10 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         executor.config.timeframes = timeframes
         executor.config.signal_exchanges = venues
         executor.config.symbols = symbols
+        executor.config.capital_usd = capital
+        runtime.set_capital(capital)
         _refresh_identity()
-        return f"{message} Saved to {path}."
+        return f"{message}{capital_note} Saved to {path}."
 
     def _set_exchange(payload: dict) -> str:
         """
@@ -2300,16 +2386,17 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         """
         wanted = str(payload.get("exchange") or "").strip().lower()
         if wanted not in SUPPORTED_EXCHANGES:
-            return f"Unknown exchange {wanted!r}. Supported: {', '.join(SUPPORTED_EXCHANGES)}."
+            return f"Unknown exchange {wanted!r}. Supported: {', '.join(SUPPORTED_EXCHANGES)}.", False
         if wanted == executor.config.exchange:
-            return f"Already on {wanted}."
+            return f"Already on {wanted}.", False
         runtime = executor.runtime
         engaged = runtime.venue_change_blockers() if runtime else []
         if engaged:
             return (
                 f"Not while {len(engaged)} campaign{'s are' if len(engaged) > 1 else ' is'} open on "
                 f"{executor.config.exchange}. Use Stand down, wait for it to be flat, then change venue — "
-                "switching now would leave coin on the old exchange with nothing watching it."
+                "switching now would leave coin on the old exchange with nothing watching it.",
+                False,
             )
         # The signal choice travels with the venue. A CoinDCX machine following
         # 5m Binance geometry is not a preference, it is a machine that cannot
@@ -2333,7 +2420,7 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         try:
             path = save_settings(executor.config, changes)
         except ConfigError as exc:
-            return f"Could not save the change: {exc}"
+            return f"Could not save the change: {exc}", False
         if len(changes) > 1:
             executor.config.timeframes = changes.get("timeframes", executor.config.timeframes)
             executor.config.signal_exchanges = changes.get("signal_exchanges", executor.config.signal_exchanges)

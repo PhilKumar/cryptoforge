@@ -210,7 +210,7 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
     return config
 
 
-SETTABLE_KEYS = ("timeframes", "signal_exchanges", "symbols", "exchange")
+SETTABLE_KEYS = ("timeframes", "signal_exchanges", "symbols", "exchange", "capital_usd")
 
 
 def save_settings(config: ExecutorConfig, changes: dict) -> str:

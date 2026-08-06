@@ -254,6 +254,23 @@ class UIServerTests(unittest.TestCase):
         guard = text[text.index("if (url.pathname.startsWith('/api/')") :]
         self.assertTrue(guard.lstrip().startswith("if (url.pathname.startsWith('/api/')) return;"))
 
+    def test_ended_campaigns_render_in_their_own_section(self):
+        """A mother-broken card sitting between two running ones read as
+        something still being traded."""
+        page = PAGE
+        self.assertIn('id="cards-closed"', page)
+        self.assertIn("Closed campaigns", page)
+        script = page[page.index('const cards = $("cards")') :]
+        self.assertIn('const ENDED = ["COMPLETED", "MOTHER_BROKEN", "STOPPED"]', script)
+        self.assertIn("closed.forEach(cp => drawCard(cp, closedMount))", script)
+
+    def test_the_wake_bar_shows_that_it_was_answered(self):
+        """A bar that looks identical before and after the click leaves the
+        buyer wondering whether the click landed."""
+        self.assertIn('id="wake-done"', PAGE)
+        self.assertIn('$("wake").classList.toggle("is-done"', PAGE)
+        self.assertIn(".wake.is-done", PAGE)
+
     def test_the_page_asks_to_be_installed(self):
         self.assertIn('<link rel="manifest" href="/manifest.webmanifest">', PAGE)
         self.assertIn('navigator.serviceWorker.register("/sw.js")', PAGE)
@@ -425,58 +442,13 @@ class ActionEndpointTests(unittest.TestCase):
         """The runtime carries its own config, built at startup. Updating only
         that left the page showing boot values while the machine followed
         something else — the change looked ignored when it had been applied."""
-        import tempfile
+        executor, post = self._settings_harness()
+        post("set_subscription", {"timeframes": "15m"})
 
-        from executor.config import ExecutorConfig
-
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        config = ExecutorConfig(
-            server_url="http://localhost",
-            buyer_id="b",
-            root_public_key="k",
-            state_dir=directory.name,
-            source_path=os.path.join(directory.name, "config.json"),
-        )
-
-        class StubRuntime:
-            def set_subscription(self, **kwargs):
-                return "Now following."
-
-            def venue_change_blockers(self):
-                return []
-
-        class StubExecutor:
-            def __init__(self):
-                self.config = config
-                self.runtime = StubRuntime()
-                self.identity = mock.Mock(public_key_b64=lambda: "pk")
-                self.transport = mock.Mock()
-
-            def _on_status(self, kind, detail):
-                pass
-
-            def _market_for_ui(self):
-                return None
-
-        executor = StubExecutor()
-        server = ui.wire(executor, port=0)
-        self.addCleanup(server.stop)
-        state = executor._ui_state
-        port = server._server.server_address[1]
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/action",
-            data=b'{"action":"set_subscription","payload":{"timeframes":"15m"}}',
-            method="POST",
-            headers={"Content-Type": "application/json", "X-Cascade-UI": "1"},
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            response.read()
-
-        identity = state.snapshot()["identity"]
+        identity = executor._ui_state.snapshot()["identity"]
         self.assertEqual(identity["timeframes"], ["15m"])
         self.assertEqual(identity["following"], "15m · drawn on binance · all coins")
-        self.assertEqual(config.timeframes, ["15m"])
+        self.assertEqual(executor.config.timeframes, ["15m"])
 
     def _settings_harness(self, **config_kwargs):
         """A wired UI over a stub executor, for driving the settings actions."""
@@ -498,10 +470,15 @@ class ActionEndpointTests(unittest.TestCase):
         class StubRuntime:
             def __init__(self):
                 self.subscriptions = []
+                self.capital = None
+                self.book = mock.Mock(campaigns={})
 
             def set_subscription(self, **kwargs):
                 self.subscriptions.append(kwargs)
                 return "Now following."
+
+            def set_capital(self, usd):
+                self.capital = usd
 
             def venue_change_blockers(self):
                 return []
@@ -524,7 +501,7 @@ class ActionEndpointTests(unittest.TestCase):
         self.addCleanup(server.stop)
         port = server._server.server_address[1]
 
-        def post(action, payload):
+        def post(action, payload, field="message"):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/action",
                 data=json.dumps({"action": action, "payload": payload}).encode(),
@@ -532,7 +509,7 @@ class ActionEndpointTests(unittest.TestCase):
                 headers={"Content-Type": "application/json", "X-Cascade-UI": "1"},
             )
             with urllib.request.urlopen(request, timeout=5) as response:
-                return json.loads(response.read())["message"]
+                return json.loads(response.read())[field]
 
         return executor, post
 
@@ -581,6 +558,43 @@ class ActionEndpointTests(unittest.TestCase):
         message = post("set_subscription", {"timeframes": "5m"})
         self.assertIn("cannot trade 5m", message)
         self.assertEqual(executor.config.timeframes, ["15m"])
+
+    def test_capital_can_be_corrected_without_a_restart(self):
+        executor, post = self._settings_harness(capital_usd=3000.0)
+        message = post("set_subscription", {"timeframes": "5m", "capital_usd": "5000"})
+        self.assertEqual(executor.config.capital_usd, 5000.0)
+        self.assertEqual(executor.runtime.capital, 5000.0)
+        self.assertIn("$5,000", message)
+
+    def test_changing_capital_says_what_it_does_to_a_running_campaign(self):
+        """It is not a filter: `plan()` is recomputed from it every tick, so a
+        change resizes ladders already in flight. Allowed, but never silent."""
+        executor, post = self._settings_harness(capital_usd=3000.0)
+        executor.runtime.book.campaigns = {"c1": object(), "c2": object()}
+        message = post("set_subscription", {"capital_usd": "1000"})
+        self.assertIn("2 campaigns already running", message)
+        self.assertIn("coin already bought keeps what it cost", message)
+
+    def test_capital_under_the_floor_is_refused_with_the_reason(self):
+        executor, post = self._settings_harness(capital_usd=3000.0)
+        message = post("set_subscription", {"capital_usd": "50"})
+        self.assertEqual(executor.config.capital_usd, 3000.0)
+        self.assertIn("minimum", message.lower())
+
+    def test_a_refusal_says_so_in_a_field_not_in_its_wording(self):
+        """The page coloured the message by matching English against a list of
+        phrases, so "under the $1,000 minimum" — a refusal nobody had thought
+        to add — arrived green."""
+        executor, post = self._settings_harness(capital_usd=3000.0)
+        self.assertFalse(post("set_subscription", {"capital_usd": "50"}, field="ok"))
+        self.assertFalse(post("set_exchange", {"exchange": "kraken"}, field="ok"))
+        self.assertTrue(post("set_subscription", {"capital_usd": "4000"}, field="ok"))
+
+    def test_capital_that_is_not_a_number_changes_nothing(self):
+        executor, post = self._settings_harness(capital_usd=3000.0)
+        message = post("set_subscription", {"capital_usd": "three thousand"})
+        self.assertEqual(executor.config.capital_usd, 3000.0)
+        self.assertIn("not a number", message)
 
     def test_the_page_says_what_the_venue_carries(self):
         executor, post = self._settings_harness(exchange="coindcx")
