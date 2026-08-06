@@ -67,6 +67,11 @@ class RuntimeConfig:
     # real choice, not a default: fewer symbols means fewer siblings competing
     # for the same capital and a more faithful ladder on each.
     symbols: List[str] = field(default_factory=list)
+    # The venue this machine TRADES on, which is not necessarily the venue the
+    # geometry was drawn on. Every figure about the buyer's own money — the
+    # fee floor under their target, the commission netted off their rounds —
+    # is priced here, because this is where they actually pay.
+    exchange: str = "binance"
 
 
 @dataclass
@@ -122,15 +127,28 @@ class ExecutorRuntime:
             if not allowed:
                 notes.append(f"{campaign_id}: {warning}")
                 continue
+            # Ask THIS venue about the symbol before taking the campaign on.
+            # The geometry may be drawn on an exchange that lists coins ours
+            # does not, and finding that out at order time means a campaign
+            # that looks followed and can never place. Rules also come back
+            # from the venue that will enforce them, not from the feed's
+            # advisory copy of some other venue's filters.
+            try:
+                rules = self._adapter.symbol_rules(campaign.symbol)
+            except Exception as exc:
+                notes.append(f"{campaign_id}: {campaign.symbol} is not tradeable on {self._config.exchange} — {exc}")
+                continue
             self._birth_bands[campaign_id] = self._own_funded_bands(campaign.symbol)
             self.book.track(
                 CampaignOrders(
                     campaign_id=campaign_id,
                     symbol=campaign.symbol,
                     mother_high=campaign.mother_high,
-                    exchange=campaign.exchange,
-                    tick_size=campaign.tick_size,
-                    min_notional_usd=campaign.min_notional_usd,
+                    # Where this buyer PAYS, not where the geometry was drawn:
+                    # every fee figure below is about their own money.
+                    exchange=self._config.exchange,
+                    tick_size=rules.tick_size or campaign.tick_size,
+                    min_notional_usd=rules.min_notional_usd or campaign.min_notional_usd,
                     median_bar_pct=campaign.median_bar_pct,
                 )
             )

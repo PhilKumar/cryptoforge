@@ -25,7 +25,7 @@ from engine.cascade_feed import (
     campaign_opened_payload,
     leg_opened_payload,
 )
-from executor.exchange import OrderRecord, SymbolRules
+from executor.exchange import ExchangeError, OrderRecord, SymbolRules
 from executor.feed_client import FeedClient
 from executor.orders import Candle, Fill
 from executor.runtime import ExecutorRuntime, RuntimeConfig
@@ -194,6 +194,38 @@ class SyncTests(RuntimeHarness):
         runtime = self._runtime(symbols=["SOLUSDT"])
         runtime.sync()
         self.assertEqual(list(runtime.book.campaigns), ["sol"])
+
+    def test_a_symbol_this_venue_does_not_list_is_declined_at_sync(self):
+        """The geometry may be drawn on an exchange carrying coins ours does
+        not. Finding that out at order time leaves a campaign that looks
+        followed and can never place."""
+
+        def unlisted(symbol):
+            raise ExchangeError(f"{symbol} is not listed on CoinDCX")
+
+        self.exchange.symbol_rules = unlisted
+        self._open()
+        runtime = self._runtime(exchange="coindcx")
+        notes = runtime.sync()
+        self.assertEqual(runtime.book.campaigns, {})
+        self.assertIn("not tradeable on coindcx", notes[0])
+
+    def test_the_fee_venue_is_where_the_buyer_pays_not_where_it_was_drawn(self):
+        """A CoinDCX buyer following a Binance-drawn campaign pays CoinDCX's
+        commission, so their target's fee floor must be priced there."""
+        self._open(exchange="binance")
+        runtime = self._runtime(exchange="coindcx")
+        runtime.sync()
+        self.assertEqual(runtime.book.campaigns["casc_SOLUSDT_1"].exchange, "coindcx")
+
+    def test_the_venues_own_filters_beat_the_feeds_advisory(self):
+        self.exchange.rules = SymbolRules(tick_size=0.5, step_size=0.001, min_notional_usd=17.0, base_asset="SOL")
+        self._open(tick_size=0.01, min_notional_usd=5.0)
+        runtime = self._runtime()
+        runtime.sync()
+        orders = runtime.book.campaigns["casc_SOLUSDT_1"]
+        self.assertEqual(orders.tick_size, 0.5)
+        self.assertEqual(orders.min_notional_usd, 17.0)
 
     def test_the_published_bar_size_reaches_the_stop_allowance(self):
         """A fabricated stand-in would be a different filter on every market."""

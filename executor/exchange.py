@@ -202,7 +202,17 @@ class IntentExecutor:
 
     def apply(self, intents: List[OrderIntent], *, our_resting_exit_qty: float = 0.0) -> ApplyResult:
         result = ApplyResult()
-        rules = self._adapter.symbol_rules(self._symbol)
+        try:
+            rules = self._adapter.symbol_rules(self._symbol)
+        except Exception as exc:
+            # Unlisted on this venue, or the filter fetch failed. Reported per
+            # intent like any other refusal: raising here escaped the caller's
+            # per-campaign loop, so one symbol this exchange does not carry
+            # stopped every OTHER campaign from placing — including the exit
+            # orders that protect coin already held.
+            for intent in intents:
+                result.skipped.append((intent.client_order_id, f"{self._symbol}: {exc}"))
+            return result
         for intent in intents:
             try:
                 if intent.action == "cancel":

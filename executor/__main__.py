@@ -164,6 +164,7 @@ class Executor:
                 capital_usd=self.config.capital_usd,
                 quote_asset=self.config.quote_asset,
                 symbols=list(self.config.symbols),
+                exchange=self.config.exchange,
             ),
         )
 

@@ -266,6 +266,20 @@ class ResilienceTests(unittest.TestCase):
         self.assertEqual(len(result.placed), 1)
         self.assertEqual(result.placed[0].side, "sell")
 
+    def test_an_unlistable_symbol_is_reported_not_raised(self):
+        """Raising here escaped the caller's per-campaign loop, so one symbol
+        this venue does not carry stopped every other campaign from placing —
+        including the exit orders protecting coin already held."""
+
+        class Unlisted(FakeExchange):
+            def symbol_rules(self, symbol):
+                raise ExchangeError(f"{symbol} is not listed on CoinDCX")
+
+        result = IntentExecutor(Unlisted(), "SOLUSDT").apply([_buy(), _sell(qty=0.08)])
+        self.assertEqual(len(result.skipped), 2)
+        self.assertEqual(result.placed, [])
+        self.assertIn("not listed", result.skipped[0][1])
+
     def test_an_adapter_that_explodes_is_reported_not_propagated(self):
         class Broken(FakeExchange):
             def place(self, **kwargs):
