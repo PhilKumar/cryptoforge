@@ -1,3 +1,19 @@
+/* Double-tap zoom off, pinch zoom kept.
+   `manipulation` permits scrolling and continuous (two-finger) pinch zoom and
+   drops only the double-tap-to-zoom gesture. Touch-action resolves by
+   intersecting values down the ancestor chain, so setting it on <html> covers
+   every element — and a descendant asking for something stricter still wins,
+   which is how the cascade chart surfaces keep `touch-action: none` for their
+   own drag-to-pan and pinch.
+   Deliberately NOT done with `user-scalable=no` on the viewport: that kills
+   pinch zoom outright and fails WCAG 1.4.4. Nothing set touch-action at all
+   before this, so double-tap zoomed on every page.
+   This file is the one stylesheet loaded by login, the terminal and the
+   landing page alike, so a single rule covers all three. */
+html, body {
+  touch-action: manipulation;
+}
+
 .cf-pwa-overlay {
   position: fixed;
   inset: 0;
