@@ -21,6 +21,7 @@ Like the rest of `executor/`, this must not import `engine.cascade`.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import os
@@ -329,12 +330,11 @@ def journal_view(runtime) -> dict:
     from our numbers would be a statement about a trade they did not make.
     """
     rounds = runtime.rounds_view(limit=500)
-    trades, equity, running = [], [], 0.0
+    trades, running = [], 0.0
     for index, row in enumerate(reversed(rounds)):
         invested = float(row.get("avg_entry") or 0) * float(row.get("quantity") or 0)
         net = float(row.get("net_est_usd") or 0)
         running += net
-        equity.append({"n": index + 1, "closed_ts": row.get("closed_ts"), "cumulative": round(running, 4)})
         trades.append(
             {
                 **row,
@@ -345,26 +345,80 @@ def journal_view(runtime) -> dict:
                 "roi_pct": round(net / invested * 100, 2) if invested else None,
             }
         )
+
+    # Equity is BY DAY, the way the parent draws it — a point per trade makes
+    # a busy day look like a trend and a quiet week look like a flat line of
+    # the same length. Days with no closed round simply have no point.
+    by_day: dict = {}
+    order: list = []
+    for trade in trades:
+        closed = trade.get("closed_ts")
+        if not closed:
+            continue
+        # The buyer's own local day: this machine sits where they sit, and a
+        # trade closed at 2am their time belongs to that date on their screen.
+        day = _dt.datetime.fromtimestamp(float(closed)).strftime("%Y-%m-%d")
+        if day not in by_day:
+            by_day[day] = 0.0
+            order.append(day)
+        by_day[day] += float(trade.get("net_est_usd") or 0)
+    equity, cumulative = [], 0.0
+    for day in order:
+        cumulative += by_day[day]
+        equity.append({"date": day, "pnl": round(by_day[day], 4), "cumulative_pnl": round(cumulative, 4)})
+
     by_coin: dict = {}
     for trade in trades:
         row = by_coin.setdefault(
-            trade["symbol"], {"symbol": trade["symbol"], "trades": 0, "wins": 0, "net_usd": 0.0, "fees_usd": 0.0}
+            trade["symbol"],
+            {"coin": trade["symbol"], "trades": 0, "wins": 0, "invested": 0.0, "pnl": 0.0, "fees_usd": 0.0},
         )
         row["trades"] += 1
         row["wins"] += 1 if float(trade.get("net_est_usd") or 0) > 0 else 0
-        row["net_usd"] = round(row["net_usd"] + float(trade.get("net_est_usd") or 0), 4)
-        row["fees_usd"] = round(row["fees_usd"] + float(trade.get("fees_est_usd") or 0), 4)
-    wins = len([t for t in trades if float(t.get("net_est_usd") or 0) > 0])
+        row["invested"] += float(trade.get("invested_usd") or 0)
+        row["pnl"] += float(trade.get("net_est_usd") or 0)
+        row["fees_usd"] += float(trade.get("fees_est_usd") or 0)
+    for row in by_coin.values():
+        # Weighted by the dollars, not the mean of the per-trade percentages:
+        # a mean counts a $5 round as heavily as a $50 one.
+        row["roi_pct"] = round(row["pnl"] / row["invested"] * 100, 2) if row["invested"] else 0.0
+        row["invested"] = round(row["invested"], 4)
+        row["pnl"] = round(row["pnl"], 4)
+        row["fees_usd"] = round(row["fees_usd"], 4)
+
+    wins = [t for t in trades if float(t.get("net_est_usd") or 0) > 0]
+    losses = [t for t in trades if float(t.get("net_est_usd") or 0) < 0]
+    invested_total = sum(float(t.get("invested_usd") or 0) for t in trades)
+    fees_total = sum(float(t.get("fees_est_usd") or 0) for t in trades)
+    per_trade = [float(t["roi_pct"]) for t in trades if t.get("roi_pct") is not None]
     return {
         "trades": list(reversed(trades)),
+        # Oldest first, the order the parent's ROI chart reads in.
+        "roi_trades": [
+            {
+                "trade_id": f"#{t['trade_no']}",
+                "coin": t["symbol"],
+                "roi_pct": t.get("roi_pct") or 0.0,
+                "pnl_usd": float(t.get("net_est_usd") or 0),
+            }
+            for t in trades
+        ],
         "equity": equity,
-        "by_coin": sorted(by_coin.values(), key=lambda r: r["net_usd"], reverse=True),
+        "by_coin": sorted(by_coin.values(), key=lambda r: r["invested"], reverse=True),
         "totals": {
             "closed": len(trades),
-            "wins": wins,
-            "win_rate_pct": round(wins / len(trades) * 100, 1) if trades else None,
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate_pct": round(len(wins) / len(trades) * 100, 1) if trades else None,
             "net_usd": round(running, 2),
-            "fees_usd": round(sum(float(t.get("fees_est_usd") or 0) for t in trades), 4),
+            "gross_usd": round(running + fees_total, 4),
+            "fees_usd": round(fees_total, 4),
+            "fee_drag_pct": round(fees_total / (running + fees_total) * 100, 1) if (running + fees_total) else None,
+            "invested_usd": round(invested_total, 2),
+            "roi_pct": round(running / invested_total * 100, 2) if invested_total else None,
+            "avg_roi_pct": round(sum(per_trade) / len(per_trade), 2) if per_trade else None,
+            "avg_win_usd": (round(sum(float(t["net_est_usd"]) for t in wins) / len(wins), 4) if wins else 0.0),
+            "avg_loss_usd": (round(sum(float(t["net_est_usd"]) for t in losses) / len(losses), 4) if losses else 0.0),
         },
     }
 
@@ -1143,6 +1197,51 @@ PAGE = """<!doctype html>
   #block-guide .guide-frame { height:calc(100vh - 210px); min-height:420px;
     border-radius:14px; border:1px solid var(--border); }
 
+  /* ══ Journal charts — the parent's three, same shapes, same proportions ══ */
+  .journal-charts { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+    gap:14px; margin:18px 0 6px; }
+  .journal-chart-card { padding:15px 17px; }
+  .journal-chart-card h3 { font-size:16px; letter-spacing:.01em; }
+  .journal-chart-card .j-sub { color:var(--muted); font-size:12.5px; margin-top:3px; }
+  .journal-chart { margin-top:12px; color:var(--text); }
+  .journal-chart svg { width:100%; height:auto; display:block; }
+  .journal-chart .j-none { color:var(--muted); font-size:13px; padding:26px 0; text-align:center; }
+
+  .journal-coinbars { display:flex; flex-direction:column; gap:11px; }
+  .journal-coinrow { display:grid; grid-template-columns:minmax(72px,auto) 1fr minmax(96px,auto);
+    align-items:center; gap:11px; }
+  .journal-coinname { font-size:12.5px; font-weight:650; line-height:1.25; }
+  .journal-coinname span { display:block; font-size:9.5px; font-weight:400; color:var(--muted); }
+  .journal-coinbar { height:8px; border-radius:999px; background:rgba(118,138,176,0.14); overflow:hidden; }
+  .journal-coinbar span { display:block; height:100%; border-radius:999px;
+    background:linear-gradient(90deg, var(--accent2), var(--green)); }
+  .journal-coinstat { text-align:right; font-family:var(--font-mono); font-size:12px;
+    font-variant-numeric:tabular-nums; line-height:1.3; }
+  .journal-coinstat span { display:block; font-size:10.5px; }
+  @media (max-width:720px) {
+    .journal-charts { grid-template-columns:minmax(0,1fr); }
+    .journal-coinrow { grid-template-columns:minmax(60px,auto) 1fr minmax(84px,auto); gap:8px; }
+  }
+
+  /* Filter the closed-trades table by coin, the way the parent does. */
+  .j-filters { margin-left:auto; display:inline-flex; gap:4px; flex-wrap:wrap; }
+  .j-filters button { font:700 10.5px/1 var(--font-display); letter-spacing:.09em;
+    text-transform:uppercase; color:var(--muted); background:rgba(255,255,255,.03);
+    border:1px solid var(--border); border-radius:8px; padding:7px 11px; cursor:pointer;
+    transition:all .15s; }
+  .j-filters button:hover { color:var(--text); border-color:var(--border-hi); }
+  .j-filters button[aria-checked="true"] { color:var(--accent); border-color:var(--border-acc);
+    background:rgba(var(--tint-primary-rgb),0.08); }
+
+  /* The tile mark sits with the label, not beside the number. A tile clips its
+     contents so its top hairline follows the rounded corners — which also cut
+     the explanation in half. The hairline's gradient is already transparent at
+     both ends, so letting THESE tiles overflow costs nothing, and the tile
+     being read is lifted above the one to its right. */
+  .stat .l .info { margin-left:5px; vertical-align:-3px; }
+  .stat:has(.info) { overflow:visible; }
+  .stat:has(.info:hover), .stat:has(.info:focus) { z-index:70; }
+
   /* Sub-sections of one page. Full width and equal share: these are the whole
      content of the page below them, not a control tucked beside a heading, so
      they read as the page's own divisions rather than as a filter on it. */
@@ -1357,7 +1456,9 @@ PAGE = """<!doctype html>
   /* An author `display` beats the UA's [hidden], and without this the console
      offered Pause and Resume at the same time. */
   .ctl[hidden] { display:none; }
-  .info { width:17px; height:17px; border-radius:50%; flex:none; cursor:help; padding:0;
+  /* Positioned itself, so the bubble hangs off the mark wherever the mark is
+     put — a control row, a tile label, anywhere. */
+  .info { position:relative; width:17px; height:17px; border-radius:50%; flex:none; cursor:help; padding:0;
     display:inline-flex; align-items:center; justify-content:center;
     font:700 11px/1 var(--font-display); color:var(--muted);
     background:none; border:1px solid var(--border); transition:all .15s; }
@@ -1843,23 +1944,32 @@ PAGE = """<!doctype html>
 <div class="console-block" id="block-journal">
   <div class="section-h"><h2>Trade journal</h2><span style="color:var(--muted);font-size:12.5px">
     every round this machine closed — your entries, your fees, your exits</span></div>
-  <div class="stats-grid">
-    <div class="stat"><div class="l">Closed</div><div class="v" id="j-closed">—</div></div>
-    <div class="stat"><div class="l">Win rate</div><div class="v" id="j-win">—</div>
-      <div class="s" id="j-wins"></div></div>
-    <div class="stat"><div class="l">Net</div><div class="v" id="j-net">—</div>
-      <div class="s">after fees</div></div>
-    <div class="stat"><div class="l">Fees paid</div><div class="v" id="j-fees">—</div></div>
+  <!-- The parent's six tiles, over the buyer's own rounds. Same labels, same
+       explanations, same arithmetic — ROI is total P&L over total capital
+       deployed, weighted by the dollars, not the mean of the per-trade
+       percentages. -->
+  <div class="stats-grid" id="j-kpis"></div>
+
+  <!-- The parent's three journal charts, drawn as SVG for the reason it draws
+       them as SVG: they scale with the card and need no repaint when the page
+       they live on becomes visible. -->
+  <div class="journal-charts">
+    <div class="panel journal-chart-card">
+      <h3>Equity Curve</h3><div class="j-sub">Cumulative realised P&amp;L, day by day.</div>
+      <div class="journal-chart" id="j-equity"></div>
+    </div>
+    <div class="panel journal-chart-card">
+      <h3>ROI by Trade</h3><div class="j-sub">Every closed trade, oldest first.</div>
+      <div class="journal-chart" id="j-roi"></div>
+    </div>
+    <div class="panel journal-chart-card">
+      <h3>Performance by Coin</h3><div class="j-sub">Capital deployed and what it returned.</div>
+      <div class="journal-chart" id="j-coins"></div>
+    </div>
   </div>
-  <div class="section-h"><h2 style="font-size:14px">Equity curve</h2></div>
-  <div class="panel" style="padding:14px 18px"><canvas id="j-equity" style="height:200px"></canvas></div>
-  <div class="section-h"><h2 style="font-size:14px">By coin</h2></div>
-  <div class="panel" style="overflow-x:auto">
-    <table id="j-coin-table"><thead><tr>
-      <th>Coin</th><th class="n">Trades</th><th class="n">Won</th><th class="n">Fees</th><th class="n">Net</th>
-    </tr></thead><tbody id="j-coins"></tbody></table>
-  </div>
-  <div class="section-h"><h2 style="font-size:14px">Closed trades</h2></div>
+
+  <div class="section-h"><h2 style="font-size:14px">Closed trades</h2>
+    <span class="j-filters" id="j-filters"></span></div>
   <div class="panel" style="overflow-x:auto">
     <table id="j-table"><thead><tr>
       <th>#</th><th>Closed</th><th>Coin</th><th class="n">Qty</th><th class="n">Avg buy</th>
@@ -2031,9 +2141,6 @@ function show(name) {
   if (chosen && chosen.scrollIntoView) chosen.scrollIntoView({block: "nearest", inline: "nearest"});
   history.replaceState(null, "", "#" + name);
   window.scrollTo(0, 0);
-  /* The equity curve is canvas, and a canvas sized while its page is hidden
-     has no width to draw into — it has to be repainted on arrival. */
-  if (name === "journal") drawEquity((lastSnapshot.journal || {}).equity || []);
 }
 document.querySelectorAll(".nav-tab").forEach(t => t.addEventListener("click", () => show(t.dataset.page)));
 
@@ -2419,38 +2526,7 @@ function render(s) {
   });
 
   /* journal */
-  const j = s.journal || {}, jt = j.totals || {}, trades = j.trades || [];
-  $("j-closed").textContent = jt.closed != null ? jt.closed : "—";
-  $("j-win").textContent = jt.win_rate_pct != null ? jt.win_rate_pct + "%" : "—";
-  $("j-wins").textContent = jt.closed ? jt.wins + " of " + jt.closed : "";
-  $("j-net").textContent = money(jt.net_usd || 0);
-  $("j-net").className = "v " + (jt.net_usd > 0 ? "up" : jt.net_usd < 0 ? "down" : "");
-  $("j-fees").textContent = money(jt.fees_usd || 0);
-  $("j-empty").hidden = trades.length > 0;
-  $("j-table").hidden = trades.length === 0;
-  $("j-coin-table").hidden = trades.length === 0;
-  const jRows = $("j-rows"); jRows.replaceChildren();
-  trades.forEach(t => {
-    const tr = document.createElement("tr");
-    const net = Number(t.net_est_usd || 0);
-    tr.innerHTML = `<td>#${t.trade_no}</td>` +
-      `<td>${t.closed_ts ? new Date(t.closed_ts * 1000).toLocaleString() : "—"}</td>` +
-      `<td>${t.symbol}</td><td class="n">${px(t.quantity)}</td><td class="n">${px(t.avg_entry)}</td>` +
-      `<td class="n">${money(t.invested_usd)}</td><td class="n">${px(t.exit_price)}</td>` +
-      `<td class="n">${money(t.fees_est_usd)}</td>` +
-      `<td class="n ${net >= 0 ? "up" : "down"}">${money(net)}</td>` +
-      `<td class="n">${t.roi_pct != null ? t.roi_pct + "%" : "—"}</td>`;
-    jRows.appendChild(tr);
-  });
-  const jCoins = $("j-coins"); jCoins.replaceChildren();
-  (j.by_coin || []).forEach(c => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${c.symbol}</td><td class="n">${c.trades}</td>` +
-      `<td class="n">${c.wins}</td><td class="n">${money(c.fees_usd)}</td>` +
-      `<td class="n ${c.net_usd >= 0 ? "up" : "down"}">${money(c.net_usd)}</td>`;
-    jCoins.appendChild(tr);
-  });
-  drawEquity(j.equity || []);
+  paintJournal(s.journal || {});
 
   /* events + setup */
   const ev = $("events"); ev.replaceChildren();
@@ -2773,45 +2849,197 @@ $("modal").addEventListener("click", e => { if (e.target.id === "modal") $("moda
 document.addEventListener("keydown", e => { if (e.key === "Escape") $("modal").classList.remove("on"); });
 window.addEventListener("resize", () => { drawChart(); clearCross(); });
 
-/* Cumulative net after each closed round. Deliberately plain: no axis, no
-   grid — the numbers are in the table above it, and this only has to answer
-   "is the line going up". Zero is drawn, because a curve that never crosses
-   its own start line is a curve that has not made money. */
-function drawEquity(points) {
-  const cv = $("j-equity");
-  if (!cv) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth, H = cv.clientHeight;
-  if (!W || !H) return;
-  cv.width = W * dpr; cv.height = H * dpr;
-  const g = cv.getContext("2d");
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, W, H);
-  const cs = getComputedStyle(document.documentElement);
-  const tok = n => (cs.getPropertyValue(n) || "").trim();
-  if (points.length < 2) {
-    g.fillStyle = tok("--muted"); g.font = "12px " + tok("--font-body");
-    g.fillText(points.length ? "One round closed — a curve needs two." : "Nothing closed yet.", 12, H / 2);
-    return;
+/* ══ Journal ══
+   The parent's Trade Journal, over the buyer's own rounds. Six tiles and
+   three charts, and the charts are SVG for the reason the parent's are: they
+   scale with their card and need no repaint when the page becomes visible —
+   a canvas sized while hidden has no width and draws nothing.
+
+   The shapes are the parent's, not near-misses of them: same grid lines, same
+   labels, same rotated coin ticks, same coin bars. A buyer who has seen a
+   CryptoForge screenshot should recognise this page. */
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const pct = (v, d) => { const n = Number(v); return isFinite(n)
+  ? (n >= 0 ? "" : "-") + Math.abs(n).toFixed(d === undefined ? 2 : d) + "%" : "—"; };
+const tone = v => (Number(v) || 0) > 0 ? "var(--green)" : (Number(v) || 0) < 0 ? "var(--red)" : "var(--muted)";
+const NONE = '<div class="j-none">No closed trades yet.</div>';
+let jCoinFilter = "ALL";
+
+function equitySvg(points) {
+  if (!points.length) return NONE;
+  const W = 640, H = 220, padL = 56, padR = 16, padT = 16, padB = 30;
+  const values = points.map(p => Number(p.cumulative_pnl) || 0);
+  let maxV = Math.max(...values, 0), minV = Math.min(...values, 0);
+  let span = (maxV - minV) || 1;
+  maxV += span * 0.12; minV -= span * 0.12; span = maxV - minV;
+  const x = i => padL + (points.length === 1 ? (W - padL - padR) / 2
+                                             : i * (W - padL - padR) / (points.length - 1));
+  const y = v => padT + (maxV - v) * (H - padT - padB) / span;
+
+  let grid = "";
+  for (let i = 0; i <= 4; i++) {
+    const gv = maxV - (span * i / 4), gy = y(gv);
+    grid += `<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="currentColor" stroke-opacity="0.10"/>`
+      + `<text x="${padL - 8}" y="${gy + 3.5}" text-anchor="end" font-size="9.5" fill="currentColor"`
+      + ` fill-opacity="0.55">$${gv.toFixed(2)}</text>`;
   }
-  const values = points.map(p => p.cumulative).concat([0]);
-  const lo = Math.min(...values), hi = Math.max(...values), span = (hi - lo) || 1;
-  const pad = 14;
-  const X = i => pad + i * ((W - pad * 2) / (points.length - 1));
-  const Y = v => pad + (hi - v) / span * (H - pad * 2);
-  g.save();
-  g.strokeStyle = tok("--border-hi") || "#334"; g.setLineDash([3, 4]); g.lineWidth = 1;
-  g.beginPath(); g.moveTo(pad, Y(0)); g.lineTo(W - pad, Y(0)); g.stroke();
-  g.restore();
-  const end = points[points.length - 1].cumulative;
-  const colour = end >= 0 ? tok("--green") : tok("--red");
-  g.save(); g.strokeStyle = colour; g.lineWidth = 1.8; g.beginPath();
-  points.forEach((p, i) => (i ? g.lineTo(X(i), Y(p.cumulative)) : g.moveTo(X(i), Y(p.cumulative))));
-  g.stroke();
-  g.globalAlpha = .12; g.fillStyle = colour;
-  g.lineTo(X(points.length - 1), Y(0)); g.lineTo(X(0), Y(0)); g.closePath(); g.fill();
-  g.restore();
+  const zeroY = y(0);
+  grid += `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="currentColor"`
+    + ` stroke-opacity="0.32" stroke-dasharray="3 3"/>`;
+
+  const path = points.map((p, i) =>
+    (i ? "L" : "M") + x(i).toFixed(2) + " " + y(Number(p.cumulative_pnl) || 0).toFixed(2)).join(" ");
+  const area = `${path} L${x(points.length - 1).toFixed(2)} ${zeroY.toFixed(2)}`
+    + ` L${x(0).toFixed(2)} ${zeroY.toFixed(2)} Z`;
+  const dots = points.map((p, i) =>
+    `<circle cx="${x(i).toFixed(2)}" cy="${y(Number(p.cumulative_pnl) || 0).toFixed(2)}" r="3"`
+    + ` fill="var(--green)"><title>${esc(p.date)} — cumulative ${esc(money(p.cumulative_pnl))}`
+    + ` (day ${esc(money(p.pnl))})</title></circle>`).join("");
+  const labels = points.map((p, i) => (points.length > 8 && i % 2) ? "" :
+    `<text x="${x(i).toFixed(2)}" y="${H - 10}" text-anchor="middle" font-size="9" fill="currentColor"`
+    + ` fill-opacity="0.55">${esc(String(p.date).slice(5))}</text>`).join("");
+
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative realised P&amp;L over time">`
+    + `<defs><linearGradient id="jFill" x1="0" y1="0" x2="0" y2="1">`
+    + `<stop offset="0%" stop-color="var(--green)" stop-opacity="0.28"/>`
+    + `<stop offset="100%" stop-color="var(--green)" stop-opacity="0"/></linearGradient></defs>`
+    + grid + `<path d="${area}" fill="url(#jFill)"/>`
+    + `<path d="${path}" fill="none" stroke="var(--green)" stroke-width="2"`
+    + ` stroke-linejoin="round" stroke-linecap="round"/>` + dots + labels + `</svg>`;
 }
+
+function roiSvg(trades) {
+  if (!trades.length) return NONE;
+  const W = 640, H = 220, padL = 44, padR = 16, padT = 16, padB = 56;
+  const rois = trades.map(t => Number(t.roi_pct) || 0);
+  let maxV = Math.max(...rois, 0) * 1.15 || 1;
+  let minV = Math.min(...rois, 0);
+  if (minV > 0) minV = 0; else minV *= 1.15;
+  const span = (maxV - minV) || 1;
+  const slot = (W - padL - padR) / trades.length;
+  const barW = Math.max(Math.min(slot * 0.62, 30), 4);
+  const y = v => padT + (maxV - v) * (H - padT - padB) / span;
+  const zeroY = y(0);
+
+  let grid = "";
+  for (let i = 0; i <= 3; i++) {
+    const gv = maxV - (span * i / 3), gy = y(gv);
+    grid += `<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="currentColor" stroke-opacity="0.10"/>`
+      + `<text x="${padL - 8}" y="${gy + 3.5}" text-anchor="end" font-size="9.5" fill="currentColor"`
+      + ` fill-opacity="0.55">${gv.toFixed(1)}%</text>`;
+  }
+  const bars = trades.map((t, i) => {
+    const v = Number(t.roi_pct) || 0;
+    const cx = padL + slot * i + slot / 2;
+    const top = v >= 0 ? y(v) : zeroY;
+    const h = Math.max(Math.abs(zeroY - y(v)), 1);
+    const colour = v >= 0 ? "var(--green)" : "var(--red)";
+    return `<rect x="${(cx - barW / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barW.toFixed(2)}"`
+      + ` height="${h.toFixed(2)}" rx="2" fill="${colour}" fill-opacity="0.85">`
+      + `<title>${esc(t.trade_id)} — ${esc(pct(v, 2))} (${esc(money(t.pnl_usd))})</title></rect>`
+      + `<text x="${cx.toFixed(2)}" y="${H - padB + 14}" text-anchor="end" font-size="8.5" fill="currentColor"`
+      + ` fill-opacity="0.6" transform="rotate(-45 ${cx.toFixed(2)} ${H - padB + 14})">`
+      + `${esc(String(t.coin).replace("USDT", ""))}</text>`;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="ROI percent by trade">` + grid
+    + `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="currentColor" stroke-opacity="0.32"/>`
+    + bars + `</svg>`;
+}
+
+function coinsSvg(byCoin) {
+  if (!byCoin.length) return NONE;
+  const maxInv = Math.max(...byCoin.map(c => Number(c.invested) || 0), 0) || 1;
+  return '<div class="journal-coinbars">' + byCoin.map(c => {
+    const inv = Number(c.invested) || 0;
+    const width = Math.max(inv / maxInv * 100, 2);
+    return '<div class="journal-coinrow">'
+      + `<div class="journal-coinname">${esc(String(c.coin).replace("USDT", ""))}`
+      + `<span>${c.trades} trade${c.trades === 1 ? "" : "s"}</span></div>`
+      + `<div class="journal-coinbar"><span style="width:${width.toFixed(1)}%"></span></div>`
+      + `<div class="journal-coinstat">${esc(money(inv))}`
+      + `<span style="color:${tone(c.pnl)}">${esc(money(c.pnl))} · ${esc(pct(c.roi_pct, 2))}</span></div>`
+      + "</div>";
+  }).join("") + "</div>";
+}
+
+/* The parent's six tiles, same labels and same explanations. */
+function kpiHtml(t) {
+  const closed = t.closed || 0;
+  const cards = [
+    ["Realised P&L", money(t.net_usd || 0), t.net_usd, "net of fees · open positions not counted",
+     "Profit actually banked on closed rounds, after your venue's commission. Coin you still hold is not counted, however far up it is."],
+    ["Fees Paid", money(t.fees_usd || 0), t.fees_usd ? -1 : 0,
+     t.fees_usd ? "gross was " + money(t.gross_usd) + " · " + pct(t.fee_drag_pct, 1) + " drag"
+                : "no venue fees recorded",
+     "Total commission your exchange charged on these rounds. The drag figure is what share of the gross profit it took."],
+    ["Capital Deployed", money(t.invested_usd || 0), undefined,
+     "across " + closed + " closed round" + (closed === 1 ? "" : "s"),
+     "The sum invested across closed rounds — money put to work, not your account balance. The same dollar redeployed twice counts twice."],
+    ["Win Rate", t.win_rate_pct != null ? pct(t.win_rate_pct, 1) : "—", undefined,
+     (t.wins || 0) + "W / " + (t.losses || 0) + "L",
+     "Closed rounds that finished green, as a share of all closed rounds. Open positions do not count either way."],
+    ["ROI", t.roi_pct != null ? pct(t.roi_pct, 2) : "—", t.roi_pct,
+     "on capital deployed · avg " + (t.avg_roi_pct != null ? pct(t.avg_roi_pct, 2) : "—") + " per round",
+     "Total profit divided by all the capital you put to work — the dollars, weighted by size. The average per round underneath counts a small round as heavily as a large one, so the two rarely agree. Neither is the return on your whole account, since money that sat idle is not counted."],
+    ["Avg Win", money(t.avg_win_usd || 0), 1,
+     t.losses ? "avg loss " + money(t.avg_loss_usd || 0) : "no losing rounds yet",
+     "Average profit of the rounds that won. Read it next to the average loss to see whether the wins are big enough to pay for the losses."]
+  ];
+  return cards.map(([label, value, colour, note, tip]) =>
+    '<div class="stat"><div class="l">' + esc(label)
+    + `<button class="info" type="button" data-tip="${esc(tip)}" aria-label="What is ${esc(label)}?">i</button>`
+    + "</div>"
+    + `<div class="v"${colour === undefined ? "" : ` style="color:${tone(colour)}"`}>${esc(value)}</div>`
+    + `<div class="s">${esc(note)}</div></div>`).join("");
+}
+
+function paintJournal(j) {
+  const t = j.totals || {}, trades = j.trades || [], coins = j.by_coin || [];
+  $("j-kpis").innerHTML = kpiHtml(t);
+  $("j-equity").innerHTML = equitySvg(j.equity || []);
+
+  /* The coin filter narrows the ROI chart and the table together — they are
+     one answer read two ways, and filtering only one of them would show a
+     bar with no row behind it. The totals and the coin bars stay whole: they
+     are what the filter is chosen FROM. */
+  const names = ["ALL"].concat(coins.map(c => c.coin));
+  if (!names.includes(jCoinFilter)) jCoinFilter = "ALL";
+  $("j-filters").innerHTML = names.map(name =>
+    `<button type="button" role="radio" aria-checked="${name === jCoinFilter}"`
+    + ` data-coin="${esc(name)}">${esc(name === "ALL" ? "All" : name.replace("USDT", ""))}</button>`).join("");
+
+  const keep = row => jCoinFilter === "ALL" || row.coin === jCoinFilter || row.symbol === jCoinFilter;
+  $("j-roi").innerHTML = roiSvg((j.roi_trades || []).filter(keep));
+  $("j-coins").innerHTML = coinsSvg(coins);
+
+  const shown = trades.filter(keep);
+  $("j-empty").hidden = shown.length > 0;
+  $("j-table").hidden = shown.length === 0;
+  const rows = $("j-rows"); rows.replaceChildren();
+  shown.forEach(row => {
+    const tr = document.createElement("tr");
+    const net = Number(row.net_est_usd || 0);
+    tr.innerHTML = `<td>#${row.trade_no}</td>` +
+      `<td>${row.closed_ts ? new Date(row.closed_ts * 1000).toLocaleString() : "—"}</td>` +
+      `<td>${esc(row.symbol)}</td><td class="n">${px(row.quantity)}</td><td class="n">${px(row.avg_entry)}</td>` +
+      `<td class="n">${money(row.invested_usd)}</td><td class="n">${px(row.exit_price)}</td>` +
+      `<td class="n">${money(row.fees_est_usd)}</td>` +
+      `<td class="n ${net >= 0 ? "up" : "down"}">${money(net)}</td>` +
+      `<td class="n">${row.roi_pct != null ? pct(row.roi_pct, 2) : "—"}</td>`;
+    rows.appendChild(tr);
+  });
+}
+
+/* The strip is rewritten on every 3s repaint, so the click is caught on the
+   container that survives it, not on buttons that do not. */
+$("j-filters").addEventListener("click", ev => {
+  const button = ev.target.closest("button[data-coin]");
+  if (!button) return;
+  jCoinFilter = button.dataset.coin;
+  paintJournal(lastSnapshot.journal || {});
+});
 
 /* ══ crosshair ══
    On its own canvas, so a pointer move repaints one cheap layer instead of

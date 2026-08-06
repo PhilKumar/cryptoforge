@@ -936,14 +936,50 @@ class JournalAndPortfolioTests(unittest.TestCase):
         self.assertAlmostEqual(trade["invested_usd"], 100.0)
         self.assertAlmostEqual(trade["roi_pct"], trade["net_est_usd"] / 100.0 * 100, places=2)
 
-    def test_the_equity_curve_accumulates_in_the_order_they_closed(self):
+    def test_the_equity_curve_is_a_point_per_DAY_not_per_trade(self):
+        """The parent draws it by day: a point per trade makes a busy day look
+        like a trend and a quiet week look like a flat line the same length."""
         from executor.ui import journal_view
 
         self._close_round(100.0, 110.0)
         self._close_round(100.0, 105.0)
         equity = journal_view(self.runtime)["equity"]
-        self.assertEqual([p["n"] for p in equity], [1, 2])
-        self.assertGreater(equity[1]["cumulative"], equity[0]["cumulative"])
+        # Both rounds close at the fixture's NOW, so they share one day.
+        self.assertEqual(len(equity), 1)
+        point = equity[0]
+        self.assertRegex(point["date"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertAlmostEqual(point["cumulative_pnl"], point["pnl"], places=4)
+
+    def test_the_charts_are_fed_the_names_the_parents_charts_read(self):
+        """These renderers are the parent's, ported. Feeding them different
+        key names is how a chart silently draws nothing."""
+        from executor.ui import journal_view
+
+        self._close_round(100.0, 110.0, qty=1.0)
+        view = journal_view(self.runtime)
+        self.assertEqual(set(view["equity"][0]), {"date", "pnl", "cumulative_pnl"})
+        self.assertEqual(set(view["roi_trades"][0]), {"trade_id", "coin", "roi_pct", "pnl_usd"})
+        for key in ("coin", "trades", "invested", "pnl", "roi_pct"):
+            self.assertIn(key, view["by_coin"][0], key)
+
+    def test_coin_roi_is_weighted_by_the_dollars(self):
+        """Not the mean of the per-trade percentages — that counts a $5 round
+        as heavily as a $50 one."""
+        from executor.ui import journal_view
+
+        self._close_round(100.0, 110.0, qty=1.0)
+        self._close_round(100.0, 101.0, qty=0.1)
+        row = journal_view(self.runtime)["by_coin"][0]
+        self.assertAlmostEqual(row["roi_pct"], row["pnl"] / row["invested"] * 100, places=2)
+
+    def test_the_journal_totals_carry_what_the_parents_tiles_need(self):
+        from executor.ui import journal_view
+
+        self._close_round(100.0, 110.0, qty=1.0)
+        totals = journal_view(self.runtime)["totals"]
+        for key in ("invested_usd", "roi_pct", "avg_roi_pct", "avg_win_usd", "avg_loss_usd", "losses", "gross_usd"):
+            self.assertIn(key, totals, key)
+        self.assertAlmostEqual(totals["roi_pct"], totals["net_usd"] / totals["invested_usd"] * 100, places=1)
 
     def test_the_portfolio_reports_only_what_this_machine_holds(self):
         from executor.ui import portfolio_view
@@ -980,15 +1016,38 @@ class JournalAndPortfolioTests(unittest.TestCase):
         self.assertNotIn('data-page="rounds"', PAGE)
         self.assertNotIn('id="console-tabs"', PAGE)
 
-    def test_the_journal_page_repaints_its_canvas_on_arrival(self):
-        """A canvas sized while its page is hidden has no width to draw into,
-        so the curve is blank until something asks for it again."""
-        self.assertIn('if (name === "journal") drawEquity(', PAGE)
+    def test_the_journal_carries_the_parents_three_charts(self):
+        """Equity Curve, ROI by Trade, Performance by Coin — the same three,
+        by the same names, in the same order."""
+        for title in ("Equity Curve", "ROI by Trade", "Performance by Coin"):
+            self.assertIn(">" + title + "</h3>", PAGE, title)
+        for holder in ('id="j-equity"', 'id="j-roi"', 'id="j-coins"'):
+            self.assertIn(holder, PAGE, holder)
+        self.assertLess(PAGE.index("Equity Curve"), PAGE.index("ROI by Trade"))
+        self.assertLess(PAGE.index("ROI by Trade"), PAGE.index("Performance by Coin"))
+
+    def test_the_charts_are_svg_so_a_hidden_page_costs_nothing(self):
+        """The canvas version drew nothing when the page it lived on was
+        hidden — a canvas sized while hidden has no width — and needed a
+        repaint hook on arrival. An SVG scales and needs none."""
+        self.assertNotIn("drawEquity", PAGE)
+        self.assertIn("function equitySvg(", PAGE)
+        self.assertIn("function roiSvg(", PAGE)
+        self.assertIn("function coinsSvg(", PAGE)
+
+    def test_the_coin_filter_narrows_the_chart_and_the_table_together(self):
+        """One answer read two ways; filtering only one would show a bar with
+        no row behind it."""
+        self.assertIn('id="j-filters"', PAGE)
+        self.assertIn("jCoinFilter", PAGE)
+        # Caught on the container, because the strip is rewritten every 3s.
+        self.assertIn('$("j-filters").addEventListener("click"', PAGE)
 
     def test_each_control_explains_itself(self):
         """Three buttons that move money — or stop it moving — with names
         short enough to be guessed wrong."""
-        self.assertEqual(PAGE.count('class="info" type="button"'), 3)
+        controls = PAGE[PAGE.index('<div class="controls">') : PAGE.index('<div class="toast"')]
+        self.assertEqual(controls.count('class="info" type="button"'), 3)
         self.assertIn(".info:hover::after, .info:focus::after", PAGE)
         for wrapper in ('id="ctl-pause"', 'id="ctl-resume"', 'id="ctl-stand-down"'):
             self.assertIn(wrapper, PAGE, wrapper)
