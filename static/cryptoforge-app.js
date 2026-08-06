@@ -8357,17 +8357,20 @@ function _cfCascadeApplyVenueTimeframes() {
       if (!tf.options[i].disabled) { tf.value = tf.options[i].value; break; }
     }
   }
-  var kind = document.getElementById('cf-cascade-mc-kind');
-  if (kind) {
-    // A minor MC is 5m by definition, so a venue that cannot trade 5m cannot
-    // take one either.
-    [].forEach.call(kind.options, function (opt) {
-      if (String(opt.value) === 'minor') {
-        opt.disabled = floor > 0;
-        if (opt.disabled && kind.value === 'minor') kind.value = 'major';
-      }
-    });
-  }
+  // A minor MC stays available on every venue. It means "the fastest rung",
+  // and on a venue that starts at 15m that is a 15m sub-mother — the engine
+  // lifts it rather than refusing it, so the form must not block it either.
+}
+
+function _cfCascadeMinorTimeframe() {
+  // What a minor actually runs on HERE. Hardcoding 5m would make the live
+  // confirmation name a candle the campaign will not use.
+  var select = document.getElementById('cf-cascade-exchange');
+  var name = select ? select.value : '';
+  var venue = _cfCascadeExchanges.filter(function (x) {
+    return name ? x.name === name : x.is_default;
+  })[0];
+  return (venue && venue.min_timeframe) || '5m';
 }
 
 function _cfCascadeExchangeLabel(name) {
@@ -9974,7 +9977,7 @@ async function cfCascadeStartCampaign() {
   // what every campaign started before multi-venue means.
   var exchange = (document.getElementById('cf-cascade-exchange') || {}).value || '';
   // The server forces this too; saying it here keeps the confirm text honest.
-  if (mcKind === 'minor') timeframe = '5m';
+  if (mcKind === 'minor') timeframe = _cfCascadeMinorTimeframe();
 
   if (!symbol.trim()) return _cfCascadeSetError('Enter a symbol (e.g. BTCUSDT).');
   if (!(capital > 0)) return _cfCascadeSetError('Enter the campaign capital in USD.');
