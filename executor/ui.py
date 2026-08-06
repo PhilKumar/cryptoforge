@@ -1427,7 +1427,7 @@ PAGE = """<!doctype html>
         <label>Drawn on<input id="set-src" placeholder="binance, coindcx — blank means all"></label>
         <label>Coins<input id="set-sym" placeholder="BTCUSDT, SOLUSDT — blank means all"></label>
       </div>
-      <button class="btn" id="btn-save-signals">Save signal choice</button>
+      <button class="act solid" id="btn-save-signals">Save signal choice</button>
     </div>
     <div class="set-block">
       <h3>Which exchange you trade on</h3>
@@ -1441,7 +1441,7 @@ PAGE = """<!doctype html>
           <option value="coindcx">coindcx</option>
         </select></label>
       </div>
-      <button class="btn" id="btn-save-exchange">Change exchange</button>
+      <button class="act danger" id="btn-save-exchange">Change exchange</button>
       <div class="set-pending" id="set-pending" hidden></div>
     </div>
   </div>
