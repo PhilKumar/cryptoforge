@@ -414,10 +414,32 @@ class FirstStartMarkerTests(unittest.TestCase):
             )
         config = load(path, environ={})
         self.assertEqual(config.timeframes, ["15m"])
-        self.assertEqual(config.signal_exchanges, ["coindcx"])
 
         overridden = load(path, environ={"CASCADE_TIMEFRAMES": "5m, 1h"})
         self.assertEqual(overridden.timeframes, ["5m", "1h"])
+
+    def test_the_signal_venue_is_derived_from_the_trading_venue(self):
+        """Not a free choice: a buyer fills at their own venue's prices, so
+        geometry drawn on a different series would be a different trade. A
+        config left inconsistent by hand corrects itself on the next start."""
+        import json as _json
+        import os as _os
+
+        from executor.config import load
+
+        path = _os.path.join(self._dir.name, "config.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            _json.dump(
+                {
+                    "server_url": "http://localhost",
+                    "buyer_id": "b",
+                    "root_public_key": "k",
+                    "exchange": "coindcx",
+                    "signal_exchanges": ["binance"],  # the mismatch
+                },
+                handle,
+            )
+        self.assertEqual(load(path, environ={}).signal_exchanges, ["coindcx"])
 
     def test_saving_a_setting_leaves_everything_else_in_the_file_alone(self):
         """Merged, not rewritten: the env overrides the file at load, so

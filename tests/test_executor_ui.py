@@ -415,7 +415,7 @@ class ActionEndpointTests(unittest.TestCase):
         port = server._server.server_address[1]
         request = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/action",
-            data=b'{"action":"set_subscription","payload":{"timeframes":"15m","signal_exchanges":"coindcx"}}',
+            data=b'{"action":"set_subscription","payload":{"timeframes":"15m"}}',
             method="POST",
             headers={"Content-Type": "application/json", "X-Cascade-UI": "1"},
         )
@@ -424,7 +424,7 @@ class ActionEndpointTests(unittest.TestCase):
 
         identity = state.snapshot()["identity"]
         self.assertEqual(identity["timeframes"], ["15m"])
-        self.assertEqual(identity["following"], "15m · drawn on coindcx · all coins")
+        self.assertEqual(identity["following"], "15m · drawn on binance · all coins")
         self.assertEqual(config.timeframes, ["15m"])
 
     def _settings_harness(self, **config_kwargs):
@@ -493,6 +493,20 @@ class ActionEndpointTests(unittest.TestCase):
         self.assertIn("moved to 15m", message)
         self.assertEqual(executor.config.timeframes, ["15m"])
         self.assertEqual(executor.runtime.subscriptions[-1]["timeframes"], ["15m"])
+
+    def test_the_signal_venue_follows_the_trading_venue(self):
+        """Phil's rule: trade CoinDCX, follow CoinDCX-drawn geometry. The
+        buyer never types this — a mismatch is a different trade, not a
+        preference."""
+        executor, post = self._settings_harness(exchange="binance", signal_exchanges=["binance"])
+        message = post("set_exchange", {"exchange": "coindcx"})
+        self.assertIn("drawn on coindcx", message)
+        self.assertEqual(executor.config.signal_exchanges, ["coindcx"])
+
+    def test_the_form_cannot_set_a_signal_venue_of_its_own(self):
+        executor, post = self._settings_harness(exchange="binance")
+        post("set_subscription", {"timeframes": "15m", "signal_exchanges": "coindcx"})
+        self.assertEqual(executor.config.signal_exchanges, ["binance"])
 
     def test_a_venue_that_can_carry_the_choice_leaves_it_alone(self):
         executor, post = self._settings_harness(exchange="binance", timeframes=["1h"])

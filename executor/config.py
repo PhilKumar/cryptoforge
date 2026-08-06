@@ -55,9 +55,10 @@ class ExecutorConfig:
     # venues can carry them at all. A buyer whose exchange suits the slower
     # one should not be handed the faster one because nobody asked.
     timeframes: List[str] = field(default_factory=list)
-    # The venue whose CANDLES drew the geometry — not where this machine
-    # trades, which is `exchange` below. Binance SOLUSDT and CoinDCX SOLUSDT
-    # are not the same series.
+    # The venue whose CANDLES drew the geometry. NOT a free choice: it always
+    # equals `exchange`, because a buyer fills at their own venue's prices and
+    # geometry drawn on a different series would be a different trade. `load()`
+    # derives it; the settings page shows it and does not offer to change it.
     signal_exchanges: List[str] = field(default_factory=list)
     quote_asset: str = "USDT"
     tick_seconds: int = 20
@@ -194,6 +195,12 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
     )
     if env.get("CASCADE_SYMBOLS"):
         config.symbols = [s.strip().upper() for s in str(env["CASCADE_SYMBOLS"]).split(",") if s.strip()]
+    # Derived, not chosen. Geometry drawn on another venue's candles is not the
+    # trade this machine can make — they fill at THEIR exchange's prices, so
+    # the signals they follow are the ones drawn on it. Forced at load so a
+    # config left inconsistent by hand, or by an older version, corrects itself
+    # on the next start rather than quietly following the wrong series.
+    config.signal_exchanges = [config.exchange]
     if env.get("CASCADE_TIMEFRAMES"):
         config.timeframes = [t.strip().lower() for t in str(env["CASCADE_TIMEFRAMES"]).split(",") if t.strip()]
     if env.get("CASCADE_SIGNAL_EXCHANGES"):

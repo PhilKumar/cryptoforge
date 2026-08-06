@@ -845,10 +845,19 @@ PAGE = """<!doctype html>
     background:rgba(5,10,20,.35); color:var(--text); font:inherit; font-size:13px; font-weight:400;
     text-transform:none; letter-spacing:0; }
   .set-row input:focus, .set-row select:focus { outline:none; border-color:var(--border-acc); }
+  /* Derived, not chosen — it reads as a value, not as something to fill in. */
+  .set-row input[readonly] { color:var(--dim); background:rgba(255,255,255,.02); cursor:default; }
   html[data-theme="light"] .set-row input, html[data-theme="light"] .set-row select { background:#fff; }
   .set-pending { margin-top:10px; font-size:12.5px; line-height:1.5; color:var(--accent); }
   .set-hint { font-style:normal; font-size:11px; font-weight:400; letter-spacing:0;
     text-transform:none; color:var(--dim); }
+  /* The answer sits beside the button that caused it. The console's own toast
+     is on a different page, so a save made here used to report into thin air
+     and read as a dead button. */
+  .set-foot { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .set-msg { font-size:12.5px; line-height:1.45; color:var(--dim); flex:1 1 180px; }
+  .set-msg.ok { color:var(--green); }
+  .set-msg.no { color:var(--red); }
 
   .page { display:none; position:relative; z-index:1; }
   .page.on { display:block; animation:fadeIn .25s ease; }
@@ -1088,10 +1097,15 @@ PAGE = """<!doctype html>
   summary::-webkit-details-marker { display:none; }
   summary:hover { color:var(--accent); }
   summary::before { content:"▸ "; color:var(--accent); } details[open] summary::before { content:"▾ "; }
-  .rungs { padding:2px 20px 16px; }
-  .rung { display:flex; gap:16px; font:12.5px/2 var(--font-mono); color:var(--muted); }
-  .rung.reached { color:var(--text); }
-  .rung .dot { color:#4a4d55; } .rung.reached .dot { color:var(--green); }
+  .rungs { padding:2px 20px 16px; overflow-x:auto; }
+  table.ladder { border-collapse:collapse; width:100%; font:12.5px/1.9 var(--font-mono); }
+  table.ladder th { font:600 10px/1.9 var(--font-display); letter-spacing:.08em; text-transform:uppercase;
+    color:var(--dim); text-align:left; padding:0 14px 4px 0; border-bottom:1px solid var(--border); }
+  table.ladder td { padding:3px 14px 3px 0; color:var(--muted); white-space:nowrap; }
+  table.ladder th.n, table.ladder td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  table.ladder tr.reached td { color:var(--text); }
+  table.ladder td.dot { color:#4a4d55; padding-right:8px; }
+  table.ladder tr.reached td.dot { color:var(--green); }
 
   /* ══ Tables — the terminal's trade table ══ */
   .tablewrap { overflow-x:auto; }
@@ -1147,11 +1161,15 @@ PAGE = """<!doctype html>
   .modal-head .sym { font-family:var(--font-display); font-weight:800; font-size:18px; letter-spacing:.03em; }
   .modal-head .modal-close { margin-left:auto; }
   .chart-wrap { padding:16px 22px 6px; }
-  canvas { width:100%; height:380px; display:block; }
+  canvas { width:100%; height:440px; display:block; }
   .legend { display:flex; gap:16px; flex-wrap:wrap; padding:4px 22px 14px;
             color:var(--muted); font-size:11.5px; letter-spacing:.06em; }
   .legend span { display:inline-flex; align-items:center; gap:6px; }
   .legend i { width:14px; height:2px; display:inline-block; }
+  /* The fills are drawn as triangles, so the key says triangle, not dash. */
+  .legend i.tri { width:0; height:0; background:none;
+    border-left:5px solid transparent; border-right:5px solid transparent; border-bottom-width:8px;
+    border-bottom-style:solid; }
   .chart-note { padding:0 22px 20px; color:var(--muted); font-size:12.5px; }
 
   /* ══ Setup ══ */
@@ -1427,10 +1445,13 @@ PAGE = """<!doctype html>
          narrowing what you follow never abandons a position.</p>
       <div class="set-row">
         <label>Timeframes<input id="set-tf" placeholder="blank means all"><em class="set-hint" id="set-tf-hint"></em></label>
-        <label>Drawn on<input id="set-src" placeholder="binance, coindcx — blank means all"></label>
-        <label>Coins<input id="set-sym" placeholder="BTCUSDT, SOLUSDT — blank means all"></label>
+        <label>Drawn on<input id="set-src" readonly tabindex="-1"><em class="set-hint">always your exchange — you fill at its prices</em></label>
+        <label>Coins<input id="set-sym" placeholder="blank means all"><em class="set-hint">e.g. BTCUSDT, SOLUSDT</em></label>
       </div>
-      <button class="act solid" id="btn-save-signals">Save signal choice</button>
+      <div class="set-foot">
+        <button class="act solid" id="btn-save-signals">Save signal choice</button>
+        <span class="set-msg" id="set-signals-msg"></span>
+      </div>
     </div>
     <div class="set-block">
       <h3>Which exchange you trade on</h3>
@@ -1444,7 +1465,10 @@ PAGE = """<!doctype html>
           <option value="coindcx">coindcx</option>
         </select></label>
       </div>
-      <button class="act danger" id="btn-save-exchange">Change exchange</button>
+      <div class="set-foot">
+        <button class="act danger" id="btn-save-exchange">Change exchange</button>
+        <span class="set-msg" id="set-exchange-msg"></span>
+      </div>
       <div class="set-pending" id="set-pending" hidden></div>
     </div>
   </div>
@@ -1471,6 +1495,7 @@ PAGE = """<!doctype html>
       <span><i style="background:rgba(var(--tint-primary-rgb),.45)"></i>fib rungs</span>
       <span><i style="background:var(--green)"></i>your target</span>
       <span><i style="background:#a78bfa"></i>your average</span>
+      <span><i class="tri" style="border-bottom-color:#a78bfa"></i>where you bought</span>
       <span><i style="background:var(--yellow)"></i>working stop</span>
     </div>
     <div class="chart-note" id="ch-note"></div>
@@ -1485,6 +1510,7 @@ const money = v => (v < 0 ? "-$" : "$") + Math.abs(Number(v || 0)).toLocaleStrin
 const px = v => v == null ? "—" : Number(v).toLocaleString(undefined, {maximumFractionDigits: 4});
 const ago = s => s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : (s / 3600).toFixed(1) + "h";
 const openLadders = new Set();
+const openFolds = new Set();
 
 /* tabs */
 function show(name) {
@@ -1582,16 +1608,19 @@ if (location.hash.length > 1) show(location.hash.slice(1));
 
 async function act(name, button, payload) {
   button.disabled = true;
+  let message = "";
   try {
     const body = payload ? {action: name, payload: payload} : {action: name};
     const r = await fetch("/api/action", {method: "POST",
       headers: {"Content-Type": "application/json", "X-Cascade-UI": "1"},
       body: JSON.stringify(body)});
     const d = await r.json();
-    $("toast").textContent = d.message || "done";
-  } catch (e) { $("toast").textContent = "action failed: " + e; }
+    message = d.message || "done";
+  } catch (e) { message = "action failed: " + e; }
+  $("toast").textContent = message;
   button.disabled = false;
   poll();
+  return message;
 }
 document.querySelectorAll("button[data-action]").forEach(b =>
   b.addEventListener("click", () => act(b.dataset.action, b)));
@@ -1600,15 +1629,27 @@ document.querySelectorAll("button[data-action]").forEach(b =>
    typing in must not be overwritten underneath them — hence `touched`, set on
    first input and only cleared when a save comes back. */
 let settingsTouched = false;
-["set-tf", "set-src", "set-sym"].forEach(id =>
+["set-tf", "set-sym"].forEach(id =>
   $(id).addEventListener("input", () => { settingsTouched = true; }));
-$("btn-save-signals").addEventListener("click", async b => {
-  await act("set_subscription", $("btn-save-signals"), {
-    timeframes: $("set-tf").value, signal_exchanges: $("set-src").value, symbols: $("set-sym").value});
+
+/* A refusal reads differently from a save, so it is coloured differently and
+   said where the button is rather than on the Console page's toast. */
+function settingResult(where, message) {
+  const el = $(where);
+  el.textContent = message || "";
+  const refused = /cannot|could not|not a venue|unknown|not while|already on/i.test(message || "");
+  el.className = "set-msg " + (message ? (refused ? "no" : "ok") : "");
+}
+$("btn-save-signals").addEventListener("click", async () => {
+  /* No signal_exchanges: it is derived from the trading venue, not typed. */
+  const message = await act("set_subscription", $("btn-save-signals"), {
+    timeframes: $("set-tf").value, symbols: $("set-sym").value});
+  settingResult("set-signals-msg", message);
   settingsTouched = false;
 });
-$("btn-save-exchange").addEventListener("click", () =>
-  act("set_exchange", $("btn-save-exchange"), {exchange: $("set-ex").value}));
+$("btn-save-exchange").addEventListener("click", async () => {
+  settingResult("set-exchange-msg", await act("set_exchange", $("btn-save-exchange"), {exchange: $("set-ex").value}));
+});
 
 function cell(label, value, cls) {
   return `<div class="cell"><div class="l">${label}</div><div class="v ${cls || ""}">${value}</div></div>`;
@@ -1672,19 +1713,26 @@ function render(s) {
   const unsub = all.filter(cp => cp.skipped_unsubscribed);
   const campaigns = all.filter(cp => !cp.skipped_as_old && !cp.skipped_unsubscribed);
   $("cards-empty").hidden = all.length > 0;
-  const foldInto = (rows, headline) => {
+  /* Opened by a click and CLOSED by another. The page repaints on a timer, so
+     an open fold would snap shut a second later unless the state lives outside
+     the DOM being replaced — the same reason the ladders keep `openLadders`. */
+  const foldInto = (key, rows, headline) => {
     if (!rows.length) return;
     const fold = document.createElement("div"); fold.className = "camp panel";
     const syms = {};
     rows.forEach(cp => { syms[cp.symbol] = (syms[cp.symbol] || 0) + 1; });
     const bySym = Object.entries(syms).map(([k, n]) => `${k} ${n}`).join(" · ");
-    fold.innerHTML = `<details><summary>${headline(rows.length)}</summary>` +
+    fold.innerHTML = `<details ${openFolds.has(key) ? "open" : ""}>` +
+      `<summary>${headline(rows.length)}</summary>` +
       `<div class="cell"><div class="l">by symbol</div><div class="v">${bySym}</div></div></details>`;
+    fold.querySelector("details").addEventListener("toggle", e => {
+      if (e.target.open) openFolds.add(key); else openFolds.delete(key);
+    });
     cards.appendChild(fold);
   };
-  foldInto(old, n => `${n} older campaign${n > 1 ? "s" : ""} not followed — they started before this machine ` +
+  foldInto("old", old, n => `${n} older campaign${n > 1 ? "s" : ""} not followed — they started before this machine ` +
     `was watching, and a ladder only makes sense from its mother`);
-  foldInto(unsub, n => `${n} signal${n > 1 ? "s" : ""} outside your subscription — you follow ` +
+  foldInto("unsub", unsub, n => `${n} signal${n > 1 ? "s" : ""} outside your subscription — you follow ` +
     `${st.subscription || "a subset of what we publish"}`);
   campaigns.forEach(cp => {
     const card = document.createElement("div"); card.className = "camp panel";
@@ -1714,12 +1762,31 @@ function render(s) {
       cell("Rounds here", cp.rounds > 0 ? cp.rounds + " · " + money(cp.rounds_net_est_usd) : "—",
            cp.rounds > 0 && cp.rounds_net_est_usd >= 0 ? "up" : "") + `</div>`;
     if ((cp.ladder || []).length) {
-      const rungs = cp.ladder.map(r =>
-        `<div class="rung ${r.reached ? "reached" : ""}"><span class="dot">${r.reached ? "●" : "○"}</span>` +
-        `<span>L${r.level}</span><span>${px(r.price)}</span><span>${money(r.usd)}</span>` +
-        `<span>${r.style}</span></div>`).join("");
+      /* A real table: five aligned columns beat five spans that drift apart as
+         soon as one price is longer than another. "How far below" is computed
+         here rather than left to the reader — it is the question every rung
+         actually raises. */
+      const rows = cp.ladder.map(r => {
+        const away = cp.last_price ? ((cp.last_price - r.price) / cp.last_price * 100) : null;
+        /* "reached" means price has traded down to this rung — NOT that it
+           filled. Saying "filled" here would tell a buyer they hold coin they
+           may not. The order type is what is actually working. */
+        return `<tr class="${r.reached ? "reached" : ""}">` +
+          `<td class="dot" title="${r.reached ? "price has traded at or below this rung" : "price has not reached this rung"}">` +
+          `${r.reached ? "●" : "○"}</td>` +
+          `<td>L${r.level}</td>` +
+          `<td class="n">${px(r.price)}</td>` +
+          `<td class="n">${away != null ? (away >= 0 ? "−" : "+") + Math.abs(away).toFixed(2) + "%" : "—"}</td>` +
+          `<td class="n">${money(r.usd)}</td>` +
+          `<td>${r.style}</td>` +
+          `<td>${r.reached ? "price reached" : "waiting"}</td></tr>`;
+      }).join("");
       card.innerHTML += `<details ${openLadders.has(cp.campaign_id) ? "open" : ""}>` +
-        `<summary>ladder — where your money is waiting</summary><div class="rungs">${rungs}</div></details>`;
+        `<summary>ladder — where your money is waiting</summary>` +
+        `<div class="rungs"><table class="ladder"><thead><tr>` +
+        `<th></th><th>Rung</th><th class="n">Price</th><th class="n">From last</th>` +
+        `<th class="n">Size</th><th>Order</th><th>Status</th></tr></thead>` +
+        `<tbody>${rows}</tbody></table></div></details>`;
       card.querySelector("details").addEventListener("toggle", e => {
         if (e.target.open) openLadders.add(cp.campaign_id); else openLadders.delete(cp.campaign_id);
       });
@@ -1766,10 +1833,12 @@ function render(s) {
   $("su-following").textContent = id.following || "—";
   if (!settingsTouched) {
     $("set-tf").value = (id.timeframes || []).join(", ");
-    $("set-src").value = (id.signal_exchanges || []).join(", ");
     $("set-sym").value = (id.symbols || []).join(", ");
     $("set-ex").value = id.pending_exchange || id.exchange || "binance";
   }
+  /* Derived: it tracks the venue even mid-edit, and shows the PENDING one so
+     a buyer choosing timeframes is looking at the venue they are moving to. */
+  $("set-src").value = id.pending_exchange || id.exchange || "";
   /* The venue's own limit, stated before it is hit rather than after. */
   const carries = id.venue_timeframes || [];
   $("set-tf-hint").textContent = carries.length
@@ -1812,7 +1881,7 @@ function drawChart() {
     g.fillText("No candles from your exchange yet.", 16, H / 2);
     return;
   }
-  const padL = 8, padR = 68, padT = 14, padB = 22;
+  const padL = 8, padR = 92, padT = 16, padB = 30;
   // Scale to PRICE, never to the deepest fib rung: L8 is eight leg-ranges down
   // and would flatten every candle into a line. Rungs inside the price band
   // are drawn; ones far below are named in the note instead.
@@ -1847,6 +1916,33 @@ function drawChart() {
     g.fillText(label, W - padR + 6, ly + 3.5);
   };
 
+  /* A price grid and a time axis, because "where is this trading" is the first
+     question the chart is asked and reading it off unlabelled candles is
+     guesswork. Four gridlines is enough to place a level without clutter. */
+  g.save();
+  g.strokeStyle = rgba("--tint-primary-rgb", ".07"); g.lineWidth = 1;
+  g.fillStyle = C.muted; g.font = "9.5px " + C.mono; g.textAlign = "left";
+  // Two decimals on the axis whatever the coin's tick: the gridline says
+  // roughly where, and 64,875.8748 is four digits of noise for that job.
+  const axisPx = p => Number(p).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  for (let i = 0; i <= 4; i++) {
+    const p = lo + (hi - lo) * (i / 4), y = Y(p);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
+    g.globalAlpha = .55; g.fillText(axisPx(p), W - padR + 6, y + 3); g.globalAlpha = 1;
+  }
+  const tsFmt = ts => new Date(ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  g.globalAlpha = .6;
+  // The ends are anchored to their edges rather than centred on the candle:
+  // a centred first label runs off the left of the canvas and loses its hour.
+  const marks = [[0, "left"], [Math.floor(candles.length / 2), "center"], [candles.length - 1, "right"]];
+  marks.forEach(([i, align]) => {
+    if (!candles[i]) return;
+    g.textAlign = align;
+    const x = align === "left" ? padL : align === "right" ? W - padR : X(i);
+    g.fillText(tsFmt(candles[i][0]), x, H - padB + 14);
+  });
+  g.restore();
+
   (d.fib_levels || []).forEach(f => line(f.price, rgba("--tint-primary-rgb", ".34"), [3, 6], "L" + f.level));
   if (d.reuse_below) line(d.reuse_below, C.muted, [2, 5], "floor");
 
@@ -1872,14 +1968,23 @@ function drawChart() {
   line(d.avg_entry, C.avg, [], "avg");
   line(d.target, C.green, [], "target");
 
+  /* Where the buyer's own money went in. Drawn last so nothing paints over
+     them, as an upward triangle with its price beside it — a bare dot said
+     "something happened here" without saying what or at what price. */
   const first = candles[0][0], last = candles[candles.length - 1][0], spanT = (last - first) || 1;
   (d.fills || []).forEach(f => {
     const x = padL + ((f.ts - first) / spanT) * (W - padL - padR);
     const y = Y(f.price);
     if (y < padT || y > H - padB) return;
-    g.save(); g.fillStyle = C.avg; g.strokeStyle = C.ink; g.lineWidth = 1.5;
-    g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); g.stroke(); g.restore();
+    g.save();
+    g.fillStyle = C.avg; g.strokeStyle = C.ink; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(x, y - 5.5); g.lineTo(x + 5, y + 4); g.lineTo(x - 5, y + 4);
+    g.closePath(); g.fill(); g.stroke();
+    g.fillStyle = C.avg; g.font = "9.5px " + C.mono; g.textAlign = "left";
+    g.fillText(px(f.price), x + 8, y + 3.5);
+    g.restore();
   });
+
 }
 
 async function openChart(cid, symbol) {
@@ -1982,18 +2087,17 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         """Live: this only decides what is joined next."""
         runtime = executor.runtime
         timeframes = _as_list(payload.get("timeframes"))
-        venues = _as_list(payload.get("signal_exchanges"))
         symbols = [s.upper() for s in _as_list(payload.get("symbols"))]
-        unknown = [v for v in venues if v not in SUPPORTED_EXCHANGES]
-        if unknown:
-            return f"Not a venue we publish from: {', '.join(unknown)}. Use {' or '.join(SUPPORTED_EXCHANGES)}."
-        # A timeframe this machine's own venue cannot carry is not a choice,
-        # it is a machine that fails every tick fetching candles that do not
-        # exist. Refused here, where the buyer can see why.
         # The venue that will be in force, not the one running now: with a
         # change pending, saving a timeframe the NEW venue cannot serve is a
         # machine that boots straight into a failing tick.
         trading_on = getattr(executor.config, "_pending_exchange", "") or executor.config.exchange
+        # Never taken from the form: the venue that drew the geometry always
+        # follows the venue this machine trades on. See ExecutorConfig.
+        venues = [trading_on]
+        # A timeframe this machine's own venue cannot carry is not a choice,
+        # it is a machine that fails every tick fetching candles that do not
+        # exist. Refused here, where the buyer can see why.
         impossible = [tf for tf in timeframes if not model.timeframe_allowed_on(tf, trading_on)]
         if impossible:
             allowed = ", ".join(model.timeframes_for(trading_on))
@@ -2047,24 +2151,30 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         # fetch the candles it needs — so the timeframes are lifted to what the
         # new venue carries, and said out loud rather than done quietly.
         changes = {"exchange": wanted}
-        note = ""
+        told = []
+        # Geometry drawn on another venue's candles is not the trade this
+        # machine can make: they fill at THEIR exchange's prices, so the
+        # signals they follow must be the ones drawn on it.
+        if executor.config.signal_exchanges != [wanted]:
+            changes["signal_exchanges"] = [wanted]
+            told.append(f"you now follow signals drawn on {wanted}")
         stranded = [tf for tf in executor.config.timeframes if not model.timeframe_allowed_on(tf, wanted)]
         if stranded:
             floor = model.venue_min_timeframe(wanted)
             kept = [tf for tf in executor.config.timeframes if tf not in stranded]
-            changes["timeframes"] = kept + [floor] if floor not in kept else kept
-            note = (
-                f" Your {', '.join(stranded)} choice moved to {floor}, because {wanted} does not carry anything faster."
-            )
+            changes["timeframes"] = kept if floor in kept else kept + [floor]
+            told.append(f"your {', '.join(stranded)} choice moved to {floor}, the fastest {wanted} carries")
+        note = f" Because of that, {' and '.join(told)}." if told else ""
         try:
             path = save_settings(executor.config, changes)
         except ConfigError as exc:
             return f"Could not save the change: {exc}"
-        if "timeframes" in changes:
-            executor.config.timeframes = changes["timeframes"]
+        if len(changes) > 1:
+            executor.config.timeframes = changes.get("timeframes", executor.config.timeframes)
+            executor.config.signal_exchanges = changes.get("signal_exchanges", executor.config.signal_exchanges)
             if runtime is not None:
                 runtime.set_subscription(
-                    timeframes=changes["timeframes"],
+                    timeframes=executor.config.timeframes,
                     source_exchanges=executor.config.signal_exchanges,
                     symbols=executor.config.symbols,
                 )
