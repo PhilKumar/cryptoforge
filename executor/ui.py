@@ -1076,24 +1076,25 @@ PAGE = """<!doctype html>
     border:1px solid var(--border); border-radius:9px; white-space:nowrap; }
   @media (max-width:1100px) { .ticker, .clock { display:none; } }
 
-  /* Setup and the guide, side by side. */
-  .setup-split { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:22px; align-items:start; }
-  .setup-col { min-width:0; }
-  .setup-guide .guide-frame { height:calc(100vh - 190px); border-radius:14px; border:1px solid var(--border); }
-  @media (max-width:1000px) {
-    .setup-split { grid-template-columns:minmax(0,1fr); }
-    .setup-guide .guide-frame { height:70vh; }
-  }
+  /* The guide fills the page under its tab, framed like a panel rather than
+     bleeding to the window edges the way a whole-page iframe did. */
+  #block-guide .guide-frame { height:calc(100vh - 210px); min-height:420px;
+    border-radius:14px; border:1px solid var(--border); }
 
-  /* Console sub-sections. One page, three ranges of the same question. */
-  .sub-tabs { display:inline-flex; gap:2px; margin-left:auto; }
-  .sub-tabs button { font:600 10.5px/1 var(--font-display); letter-spacing:.07em;
-    padding:6px 11px; border-radius:7px; cursor:pointer; color:var(--dim);
-    border:1px solid var(--border); background:rgba(255,255,255,.03); }
+  /* Sub-sections of one page. Full width and equal share: these are the whole
+     content of the page below them, not a control tucked beside a heading, so
+     they read as the page's own divisions rather than as a filter on it. */
+  .sub-tabs { display:flex; gap:6px; margin:30px 0 14px; }
+  .sub-tabs button { flex:1 1 0; font:700 11.5px/1 var(--font-display); letter-spacing:.1em;
+    text-transform:uppercase; padding:13px 10px; border-radius:11px; cursor:pointer;
+    color:var(--dim); border:1px solid var(--border); background:rgba(255,255,255,.03);
+    transition:color .15s, border-color .15s, background .15s; }
   .sub-tabs button:hover { color:var(--text); border-color:var(--border-hi); }
   .sub-tabs button[aria-pressed="true"] { color:var(--accent); border-color:var(--border-acc);
-    background:rgba(var(--tint-primary-rgb),.12); }
-  .console-block[hidden] { display:none; }
+    background:rgba(var(--tint-primary-rgb),.12);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.08); }
+  html[data-theme="light"] .sub-tabs button { background:rgba(15,23,42,.03); }
+  .console-block[hidden], .setup-block[hidden] { display:none; }
   /* The answer sits beside the button that caused it. The console's own toast
      is on a different page, so a save made here used to report into thin air
      and read as a dead button. */
@@ -1671,8 +1672,7 @@ PAGE = """<!doctype html>
        one page rather than three tabs. They answer the same question at
        different ranges — what is held now, what closed, what it added up to —
        and splitting them made the buyer navigate to assemble one picture. -->
-  <div class="section-h" style="margin-top:34px"><h2>Your book</h2>
-    <span class="sub-tabs" id="console-tabs"></span></div>
+  <div class="sub-tabs" id="console-tabs"></div>
 <div class="console-block" id="block-portfolio">
   <div class="section-h"><h2>Portfolio</h2><span style="color:var(--muted);font-size:12.5px">
     what this machine is holding, and what it is worth right now</span></div>
@@ -1760,12 +1760,11 @@ PAGE = """<!doctype html>
 
 <!-- ══════════ SETUP ══════════ -->
 <section class="page" id="page-setup"><div class="wrap">
-  <!-- Two columns: what to do on the left, the guide open beside it on the
-       right. They were two tabs, which meant reading a step, switching, losing
-       your place, and switching back. -->
-  <div class="setup-split">
-   <div class="setup-col">
-  <div class="section-h" style="margin-top:0"><h2>Setup</h2></div>
+  <!-- Two sub-tabs, the same shape the console uses: what to do, and the
+       manual. Side by side made each half too narrow to read; behind separate
+       top-level tabs they were too far apart to use together. -->
+  <div class="sub-tabs" id="setup-tabs" style="margin-top:6px"></div>
+  <div class="setup-block" id="block-setup">
   <div class="steps">
     <div class="step panel"><div><h3>Register this machine</h3>
       <p>This machine generated its own key when it first ran. Send the public half to
@@ -1824,12 +1823,9 @@ PAGE = """<!doctype html>
     </div>
   </div>
   <div class="disclosure" id="setup-disclosure"></div>
-   </div>
-   <div class="setup-col setup-guide">
-     <div class="section-h" style="margin-top:0"><h2>Guide</h2><span style="color:var(--muted);font-size:12.5px">
-       the whole thing, start to finish</span></div>
-     <iframe class="guide-frame" id="guide-frame" src="/guide.html" title="Cascade setup guide"></iframe>
-   </div>
+  </div>
+  <div class="setup-block" id="block-guide" hidden>
+    <iframe class="guide-frame" id="guide-frame" src="/guide.html" title="Cascade setup guide"></iframe>
   </div>
 </div></section>
 
@@ -1967,8 +1963,14 @@ paintAppearance();
    bar wraps to two rows on a narrow window, and a guessed height leaves
    either a dead strip or a second scrollbar. */
 function sizeGuide() {
-  const frame = $("guide-frame"), bar = document.querySelector(".topbar");
-  if (frame && bar) frame.style.height = (window.innerHeight - bar.getBoundingClientRect().height) + "px";
+  /* Measured from where the frame actually sits, not from the topbar's height.
+     The guide is a tab inside a page now, with a strip above it — subtracting
+     only the topbar left the frame taller than the space it was given and put
+     a second scrollbar on the page. */
+  const frame = $("guide-frame");
+  if (!frame || frame.offsetParent === null) return;
+  const top = frame.getBoundingClientRect().top + window.scrollY;
+  frame.style.height = Math.max(window.innerHeight - top - 24, 420) + "px";
 }
 window.addEventListener("resize", sizeGuide);
 sizeGuide();
@@ -2717,27 +2719,34 @@ function tickClock() {
 }
 tickClock(); setInterval(tickClock, 1000);
 
-/* Console sub-sections. The choice survives the 3s repaint because it lives
+/* Sub-sections of a page. The choice survives the 3s repaint because it lives
    here, not in the DOM being rewritten. */
-let consoleBlock = "portfolio";
-(function buildConsoleTabs() {
-  const strip = $("console-tabs");
-  [["portfolio", "Portfolio"], ["journal", "Journal"], ["rounds", "Rounds"]].forEach(([key, label]) => {
+function subTabs(stripId, entries, onShow) {
+  const strip = $(stripId);
+  let current = entries[0][0];
+  const paint = () => {
+    entries.forEach(([key], i) => {
+      strip.children[i].setAttribute("aria-pressed", key === current ? "true" : "false");
+      $("block-" + key).hidden = key !== current;
+    });
+    if (onShow) onShow(current);
+  };
+  entries.forEach(([key, label]) => {
     const b = document.createElement("button");
     b.textContent = label;
-    b.addEventListener("click", () => { consoleBlock = key; paintConsoleTabs(); });
+    b.addEventListener("click", () => { current = key; paint(); });
     strip.appendChild(b);
   });
-})();
-function paintConsoleTabs() {
-  const keys = ["portfolio", "journal", "rounds"];
-  keys.forEach((key, i) => {
-    $("console-tabs").children[i].setAttribute("aria-pressed", key === consoleBlock ? "true" : "false");
-    $("block-" + key).hidden = key !== consoleBlock;
-  });
-  if (consoleBlock === "journal") drawEquity((lastSnapshot.journal || {}).equity || []);
+  paint();
+  return {paint: paint, showing: () => current};
 }
-paintConsoleTabs();
+const consoleTabs = subTabs("console-tabs",
+  [["portfolio", "Portfolio"], ["journal", "Journal"], ["rounds", "Rounds"]],
+  /* The curve is canvas: it has to be repainted when its tab appears, because
+     a canvas sized while hidden has no width to draw into. */
+  key => { if (key === "journal") drawEquity((lastSnapshot.journal || {}).equity || []); });
+/* The frame can only be measured once it is on screen. */
+subTabs("setup-tabs", [["setup", "Setup"], ["guide", "Guide"]], key => { if (key === "guide") sizeGuide(); });
 
 poll(); setInterval(poll, 3000);
 

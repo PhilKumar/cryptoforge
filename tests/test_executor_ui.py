@@ -963,12 +963,19 @@ class JournalAndPortfolioTests(unittest.TestCase):
         for gone in ('data-page="portfolio"', 'data-page="journal"', 'data-page="rounds"'):
             self.assertNotIn(gone, PAGE, gone)
 
-    def test_setup_and_the_guide_are_one_page_side_by_side(self):
-        """They were two tabs, which meant reading a step, switching, losing
-        your place, and switching back."""
-        self.assertIn('class="setup-split"', PAGE)
+    def test_setup_and_the_guide_are_sub_tabs_of_one_page(self):
+        """Side by side made each half too narrow to read; behind separate
+        top-level tabs they were too far apart to use together."""
+        for marker in ('id="setup-tabs"', 'id="block-setup"', 'id="block-guide"'):
+            self.assertIn(marker, PAGE, marker)
         self.assertIn('src="/guide.html"', PAGE)
         self.assertNotIn('data-page="guide"', PAGE)
+
+    def test_both_strips_use_the_same_sub_tab_machinery(self):
+        """One implementation, so a fix to how a tab behaves reaches both."""
+        self.assertEqual(PAGE.count("function subTabs("), 1)
+        self.assertIn('subTabs("console-tabs"', PAGE)
+        self.assertIn('subTabs("setup-tabs"', PAGE)
 
 
 class ChartEndpointTests(unittest.TestCase):
