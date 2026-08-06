@@ -335,15 +335,23 @@ to guess.
 The strategy works by buying in steps on the way down — a little, then a bit
 more, then more — so your average price improves as the price falls.
 
-Exchanges refuse orders below a minimum size (often about $5–10). Below $1,000,
-the early, smaller steps come out under that minimum and get rejected, so
-you'd only ever get the big one at the bottom. That's a completely different
+Exchanges won't accept an order below a minimum size (often about $5–10). On a
+small account the early steps come out under that minimum, so instead of
+sending them the program holds each one back and rolls it into the next. It
+buys once the held-back total is finally big enough.
+
+Nothing is lost and nothing is rejected — every rupee still gets spent. But the
+buying happens **lower down, in fewer and bigger pieces** than the plan calls
+for. Below $1,000 almost every step is too small on its own, so a fall that
+should have been three buys at three prices becomes one buy near the bottom.
+You end up holding the same coin at a worse average price than the strategy
+intends, and with more of your money committed in one go. That's a different
 strategy from the one you're paying for, and not one we'd recommend.
 
-Between $1,000 and $3,000 it works, but on smaller moves some of the early
-steps still get skipped, so it buys in fewer and deeper chunks than the signal
-describes. Your dashboard says so when it happens. Above $3,000, every step
-lands as intended.
+Between $1,000 and $3,000 it works, but on smaller moves some early steps still
+get rolled together, so it buys in fewer and deeper chunks than the signal
+describes. Your dashboard marks those campaigns **coarse** when it happens.
+Above $3,000, every step lands as intended.
 
 ## If something looks wrong
 

@@ -922,11 +922,14 @@ Following SOLUSDT — waiting for the fall to reach the first step.
   <div class="wrap">
     <div class="eyebrow">The minimum</div>
     <h2>Why it asks for $1,000.</h2>
-    <p>Exchanges refuse orders below a minimum size — often about $5 to $10, depending on the
-      coin. Each of those three steps is a separate order, and the first one is the smallest.</p>
-    <p>So below a certain point, the early steps come out under the exchange's minimum and get
-      rejected, and you only ever get the deepest one. That is a completely different strategy
-      from the one you are paying for.</p>
+    <p>Exchanges will not accept an order below a minimum size — often about $5 to $10,
+      depending on the coin. Each of those three steps is meant to be a separate order, and the
+      first one is the smallest.</p>
+    <p>When a step lands under that minimum it is not sent and it is not lost. The program holds
+      it back and rolls it into the next step, then buys once the held-back total is finally big
+      enough. Every rupee still gets spent — but it gets spent <strong>lower down, in fewer and
+      bigger pieces</strong> than the plan calls for, so your average price is worse than the
+      strategy intends and more of your money goes in at once.</p>
   </div>
 
   <div class="wide figure">
@@ -936,35 +939,35 @@ Following SOLUSDT — waiting for the fall to reach the first step.
         <div class="bargroup">
           <div class="head">
             <span class="who">With $3,000 behind it</span>
-            <span class="verdict" style="color:var(--mint)">all three steps go in</span>
+            <span class="verdict" style="color:var(--mint)">three separate buys, as designed</span>
           </div>
-          <div class="bar"><span class="k">step 1</span><span class="track"><span class="fill" style="width:32%"></span></span><span class="amt">$24</span></div>
-          <div class="bar"><span class="k">step 2</span><span class="track"><span class="fill" style="width:48%"></span></span><span class="amt">$36</span></div>
-          <div class="bar"><span class="k">step 3</span><span class="track"><span class="fill" style="width:80%"></span></span><span class="amt">$60</span></div>
+          <div class="bar"><span class="k">step 1</span><span class="track"><span class="fill" style="width:32%"></span></span><span class="amt">$6</span></div>
+          <div class="bar"><span class="k">step 2</span><span class="track"><span class="fill" style="width:48%"></span></span><span class="amt">$9</span></div>
+          <div class="bar"><span class="k">step 3</span><span class="track"><span class="fill" style="width:80%"></span></span><span class="amt">$15</span></div>
         </div>
 
         <div class="bargroup">
           <div class="head">
             <span class="who">With $1,000 behind it</span>
-            <span class="verdict" style="color:var(--amber)">the first step gets skipped</span>
+            <span class="verdict" style="color:var(--amber)">all three roll into one buy at the bottom</span>
           </div>
-          <div class="bar under"><span class="k">step 1</span><span class="track"><span class="fill" style="width:10.7%"></span></span><span class="amt">$8</span></div>
-          <div class="bar"><span class="k">step 2</span><span class="track"><span class="fill" style="width:16%"></span></span><span class="amt">$12</span></div>
-          <div class="bar"><span class="k">step 3</span><span class="track"><span class="fill" style="width:26.7%"></span></span><span class="amt">$20</span></div>
+          <div class="bar under"><span class="k">step 1</span><span class="track"><span class="fill" style="width:10.7%"></span></span><span class="amt">$2</span></div>
+          <div class="bar under"><span class="k">step 2</span><span class="track"><span class="fill" style="width:16%"></span></span><span class="amt">$3</span></div>
+          <div class="bar under"><span class="k">step 3</span><span class="track"><span class="fill" style="width:26.7%"></span></span><span class="amt">$5</span></div>
         </div>
 
         <div class="bargroup">
           <div class="head">
             <span class="who">With $500 behind it</span>
-            <span class="verdict" style="color:var(--rose)">refused — only the deepest step is left</span>
+            <span class="verdict" style="color:var(--rose)">not even enough to buy — it waits for a deeper fall</span>
           </div>
-          <div class="bar under"><span class="k">step 1</span><span class="track"><span class="fill" style="width:5.3%"></span></span><span class="amt">$4</span></div>
-          <div class="bar under"><span class="k">step 2</span><span class="track"><span class="fill" style="width:8%"></span></span><span class="amt">$6</span></div>
-          <div class="bar under"><span class="k">step 3</span><span class="track"><span class="fill" style="width:13.3%"></span></span><span class="amt">$10</span></div>
+          <div class="bar under"><span class="k">step 1</span><span class="track"><span class="fill" style="width:5.3%"></span></span><span class="amt">$1</span></div>
+          <div class="bar under"><span class="k">step 2</span><span class="track"><span class="fill" style="width:8%"></span></span><span class="amt">$1.50</span></div>
+          <div class="bar under"><span class="k">step 3</span><span class="track"><span class="fill" style="width:13.3%"></span></span><span class="amt">$2.50</span></div>
         </div>
 
       </div>
-      <div class="minline"><i></i> the exchange will not accept an order under about $11</div>
+      <div class="minline"><i></i> under about $5.50 a step cannot be sent on its own — it waits and joins the next</div>
     </div>
     <div class="caption">Example figures for one fall. The proportions are what matter: every step scales
       straight up and down with the money behind it, so halving your capital halves every bar.</div>
@@ -972,7 +975,7 @@ Following SOLUSDT — waiting for the fall to reach the first step.
 
   <div class="wrap">
     <p>Between <strong>$1,000 and $3,000</strong> it works, but on smaller falls some early
-      steps still land under the minimum, so it buys in fewer and deeper chunks than the signal
+      steps still get rolled together, so it buys in fewer and deeper chunks than the signal
       describes. Your dashboard marks those with a
       <span class="pill coarse">coarse</span> tag so you always know which ones. Above $3,000,
       every step lands as intended.</p>
