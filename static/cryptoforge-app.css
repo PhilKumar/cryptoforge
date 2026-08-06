@@ -7547,6 +7547,16 @@ html[data-theme="light"] .journal-entry-notes section {
     font-size: 12px;
     line-height: 1.5;
   }
+  /* Tables built inside a campaign card, which the page's own `.table-scroll`
+     wrappers never covered. Neither can go under ~600px — six columns, one of
+     them eight decimals — so on a phone they widened the card and took the
+     whole page sideways with them. They scroll within themselves instead. */
+  .cf-cascade-tablescroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* Horizontal only: a height cap here would cut rows off mid-table. */
+    overflow-y: hidden;
+  }
   [data-theme="light"] .cf-cascade-position {
     background: rgba(15,23,42,0.035);
     border-color: rgba(15,23,42,0.10);

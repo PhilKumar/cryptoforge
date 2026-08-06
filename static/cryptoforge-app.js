@@ -9015,6 +9015,10 @@ function _cfCascadePositionPanel(campaign, fills) {
         + '<span>' + fills.length + ' entr' + (fills.length === 1 ? 'y' : 'ies')
         + ' · $' + _cfCascadeFmt(invested) + ' invested</span>'
       + '</div>'
+      // Six columns, one of them eight decimal places: this cannot go narrower
+      // than ~600px, so on a phone it pushed the card and the whole page
+      // sideways. It scrolls inside itself now, like every other table here.
+      + '<div class="cf-cascade-tablescroll">'
       + '<table class="trade-table cf-cascade-fills" id="cf-fills-' + _safeDomId(campaign.campaign_id) + '"><thead><tr>'
         + '<th>Entry</th><th>Fib</th><th>Level</th>'
         + '<th class="num">Price</th><th class="num">Qty</th><th class="num">Cost</th>'
@@ -9028,7 +9032,7 @@ function _cfCascadePositionPanel(campaign, fills) {
           + '<td class="num">$' + _cfCascadeFmt((Number(f.price) || 0) * (Number(f.quantity) || 0)) + '</td>'
           + '</tr>';
       }).join('')
-      + '</tbody></table>'
+      + '</tbody></table></div>'
       + '<div class="cf-cascade-position-note">Target ' + _cfCascadeFmt(tp)
       + (toTp !== null ? ' · ' + toTp.toFixed(2) + '% away' : '')
       + ' — sells automatically when reached.</div>'
@@ -9054,6 +9058,7 @@ function _cfCascadePositionPanel(campaign, fills) {
         + (feeTotal > 0 ? '<span class="table-meta"> after $' + _cfCascadeUsd(feeTotal) + ' fees</span>' : '')
         + '</span>'
       + '</div>'
+      + '<div class="cf-cascade-tablescroll">'
       + '<table class="trade-table cf-cascade-rounds" id="cf-rounds-' + _safeDomId(campaign.campaign_id) + '"><thead><tr>'
         + '<th>Round</th><th>Fib</th><th class="num">Avg Entry</th><th class="num">Exit</th>'
         + '<th class="num">Qty</th><th class="num" title="Exchange commission, both sides">Fees</th>'
@@ -9082,7 +9087,7 @@ function _cfCascadePositionPanel(campaign, fills) {
             + '>Log' + (buys ? ' (' + buys + ')' : '') + '</button></td>'
           + '</tr>';
       }).join('')
-      + '</tbody></table>'
+      + '</tbody></table></div>'
       // No hand-built pager here. One was added with the paging work and read
       // `rFrom`/`rPage`/`rPages`, none of which were ever declared \u2014 so this
       // whole function threw ReferenceError for any campaign holding a closed
