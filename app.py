@@ -60,7 +60,7 @@ from pydantic import BaseModel
 
 import alerter
 import config  # must be first — calls load_dotenv()
-from broker import get_broker_client, get_supported_brokers
+from broker import get_broker_client, get_broker_name, get_supported_brokers
 from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
 from engine.billing import (
@@ -7287,6 +7287,35 @@ def _cascade_alert(title: str, body: str, level: str = "warn") -> None:
         _logger.warning("[CASCADE] alert dispatch failed: %s", exc)
 
 
+def _cascade_broker_registry() -> dict:
+    """Every venue a campaign may name, beyond the app's default broker.
+
+    Built once at engine construction. A venue whose client cannot even be
+    constructed is left OUT rather than added broken: the engine refuses to run
+    a campaign naming a venue it has no client for, which is a clear stop —
+    whereas a half-built client would fail later, mid-order.
+
+    Being present here does NOT mean tradable. Keys are checked when a campaign
+    goes live, against that venue's own client.
+    """
+    registry: dict = {}
+    for name in get_supported_brokers():
+        if name == get_broker_name():
+            continue  # the default broker is registered by the engine itself
+        try:
+            client = get_broker_client(name)
+        except Exception as exc:
+            _logger.warning("[CASCADE] venue %s unavailable, not registered: %s", name, exc)
+            continue
+        # Only venues that can actually run a campaign. The futures and Delta
+        # clients have no stop-limit entry, so they would raise on the first
+        # buy — after the campaign exists and capital is committed.
+        if not getattr(client, "supports_cascade", False):
+            continue
+        registry[name] = client
+    return registry
+
+
 def _get_cascade_engine() -> "CascadeEngine":
     global _cascade_engine
     if _cascade_engine is None:
@@ -7296,6 +7325,7 @@ def _get_cascade_engine() -> "CascadeEngine":
             on_event=_cascade_persist_event,
             on_update=_broadcast_cascade_update,
             on_alert=_cascade_alert,
+            brokers=_cascade_broker_registry(),
         )
         _restore_cascade_runtime(_cascade_engine)
     return _cascade_engine
@@ -8056,9 +8086,20 @@ async def cascade_start_campaign(request: Request):
     check_rate_limit("cascade_start", max_calls=3, window_sec=10)
     body = await _read_json_body(request)
     mode = str(body.get("mode") or "paper").strip().lower()
-    if mode == "live" and not _broker_is_configured():
-        raise HTTPException(status_code=409, detail="Broker API keys are not configured — cannot start a live campaign")
     eng = _get_cascade_engine()
+    # Check the keys of the venue this campaign names, not the app's default:
+    # a live CoinDCX campaign started while only Binance keys exist would place
+    # its first order into a rejection.
+    venue = str(body.get("exchange") or "").strip().lower()
+    if mode == "live":
+        client = eng.brokers.get(venue) if venue else eng.broker
+        if client is None:
+            raise HTTPException(status_code=400, detail=f"Unknown exchange '{venue}'")
+        if not _broker_is_configured(client):
+            label = str(getattr(client, "display_name", "Broker"))
+            raise HTTPException(
+                status_code=409, detail=f"{label} API keys are not configured — cannot start a live campaign"
+            )
     mother_timestamp = body.get("mother_timestamp")
     try:
         mother_timestamp = int(float(mother_timestamp)) if mother_timestamp not in (None, "") else None
@@ -8073,6 +8114,7 @@ async def cascade_start_campaign(request: Request):
         mode=mode,
         timeframe=str(body.get("timeframe") or "5m"),
         mc_kind=str(body.get("mc_kind") or "major"),
+        exchange=str(body.get("exchange") or ""),
     )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])

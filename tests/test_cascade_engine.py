@@ -6800,3 +6800,83 @@ class CascadePerVenueFeeTests(unittest.TestCase):
         restored = Campaign.from_dict(self._campaign(fee=0.2).to_dict())
         self.assertEqual(restored.fee_pct_per_side, 0.2)
         self.assertIn("fee_pct_per_side", CascadeEngine._RECALC_KEEP)
+
+
+class CascadeAvailableExchangesTests(unittest.TestCase):
+    """Stage three: the page has to know which venues exist, which one is the
+    default, and which can actually go live."""
+
+    def _engine(self, second_configured=True):
+        primary = FakeCascadeBroker()
+        primary.broker_name = "binance"
+        primary.display_name = "Binance Spot"
+        primary.configured = True
+        second = FakeCascadeBroker()
+        second.broker_name = "coindcx"
+        second.display_name = "CoinDCX Spot"
+        second.fee_pct_per_side = 0.2
+        second.configured = second_configured
+        return CascadeEngine(primary, brokers={"coindcx": second})
+
+    def test_default_venue_is_listed_first_and_flagged(self):
+        rows = self._engine().available_exchanges()
+        self.assertEqual(rows[0]["name"], "binance")
+        self.assertTrue(rows[0]["is_default"])
+        self.assertFalse(rows[1]["is_default"])
+
+    def test_each_venue_reports_its_own_fee(self):
+        rows = {r["name"]: r for r in self._engine().available_exchanges()}
+        self.assertEqual(rows["binance"]["fee_pct_per_side"], 0.1)
+        self.assertEqual(rows["coindcx"]["fee_pct_per_side"], 0.2)
+
+    def test_an_unconfigured_venue_is_still_listed(self):
+        # It can still paper-trade. Dropping it would silently remove that;
+        # the flag is what stops it being offered as live-ready.
+        rows = {r["name"]: r for r in self._engine(second_configured=False).available_exchanges()}
+        self.assertIn("coindcx", rows)
+        self.assertFalse(rows["coindcx"]["configured"])
+        self.assertTrue(rows["binance"]["configured"])
+
+    def test_a_single_venue_engine_lists_only_itself(self):
+        rows = _mk_engine().available_exchanges()
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["is_default"])
+
+    def test_status_carries_the_venue_list(self):
+        self.assertIn("exchanges", self._engine().get_status())
+
+
+class CascadeVenueCapabilityTests(unittest.TestCase):
+    """Only adapters that can actually run a campaign may be offered as venues."""
+
+    def test_spot_adapters_declare_cascade_support(self):
+        from broker.binance import BinanceSpotClient
+        from broker.coindcx_spot import CoinDCXSpotClient
+
+        self.assertTrue(BinanceSpotClient.supports_cascade)
+        self.assertTrue(CoinDCXSpotClient.supports_cascade)
+
+    def test_venues_without_stop_limit_entries_are_not_offered(self):
+        # The futures and Delta clients have no stop-limit buy, so a campaign
+        # on them would raise on its FIRST entry, with capital already
+        # committed. They must never appear as a Cascade venue.
+        from broker.base import BaseBroker
+        from broker.coindcx import CoinDCXClient
+        from broker.delta import DeltaClient
+
+        self.assertFalse(BaseBroker.supports_cascade)
+        self.assertFalse(getattr(CoinDCXClient, "supports_cascade", False))
+        self.assertFalse(getattr(DeltaClient, "supports_cascade", False))
+
+    def test_a_cascade_venue_accepts_the_entry_the_engine_actually_places(self):
+        # Guards the flag against drift: Cascade's only entry is a stop-limit
+        # carrying a client order id, so claiming support means accepting both.
+        import inspect
+
+        from broker.binance import BinanceSpotClient
+        from broker.coindcx_spot import CoinDCXSpotClient
+
+        for client in (BinanceSpotClient, CoinDCXSpotClient):
+            params = inspect.signature(client.place_order).parameters
+            self.assertIn("stop_price", params, client.__name__)
+            self.assertIn("client_order_id", params, client.__name__)

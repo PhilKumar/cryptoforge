@@ -2097,6 +2097,29 @@ class CascadeEngine:
         """
         return str(getattr(campaign, "exchange", "") or "").strip().lower() or self.primary_broker_name
 
+    def available_exchanges(self) -> List[dict]:
+        """Venues a campaign can be started on, default first.
+
+        `configured` says whether that venue's keys exist, which is what
+        separates "can paper-trade here" from "can go live here". The UI needs
+        both: hiding an unconfigured venue would silently drop paper trading on
+        it, and offering it as live-ready would fail at the first order.
+        """
+        out = []
+        for name, client in self.brokers.items():
+            checker = getattr(client, "_is_configured", None)
+            out.append(
+                {
+                    "name": name,
+                    "label": str(getattr(client, "display_name", name.title()) or name.title()),
+                    "is_default": name == self.primary_broker_name,
+                    "configured": bool(checker()) if callable(checker) else False,
+                    "fee_pct_per_side": float(getattr(client, "fee_pct_per_side", FEE_PCT_PER_SIDE)),
+                }
+            )
+        out.sort(key=lambda row: (not row["is_default"], row["name"]))
+        return out
+
     def _group_key(self, symbol: str, exchange: str = "") -> str:
         """Canonical pot identity: one budget per symbol PER EXCHANGE.
 
@@ -2991,6 +3014,10 @@ class CascadeEngine:
             "live_count": len(self.live_campaigns),
             "capital_groups": self.capital_group_status(),
             "instruments": self.instrument_stacks(),
+            # The venues a campaign may be started on. The default is first and
+            # is what an unnamed exchange means. Only offered when there is a
+            # real choice — one venue needs no picker.
+            "exchanges": self.available_exchanges(),
             "updated_at": _ist_now_str(),
         }
 

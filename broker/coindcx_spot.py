@@ -56,6 +56,8 @@ class CoinDCXSpotClient(BaseBroker):
     broker_name = "coindcx"
     display_name = "CoinDCX Spot"
     supports_funding = False
+    # Stop-limit buys with client order ids, and a free/locked spot wallet.
+    supports_cascade = True
     # Measured from real fills on 2026-08-03: every BTCUSDT trade was charged
     # exactly 0.2000% per side — twice Binance's 0.1%. (INR pairs bill 0.59%,
     # which this USDT-quoted adapter never touches.) Modelling CoinDCX at

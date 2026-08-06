@@ -96,6 +96,8 @@ class BinanceSpotClient(BaseBroker):
     broker_name = "binance"
     display_name = "Binance Spot"
     supports_funding = False  # spot has no funding rate or open interest
+    # Stop-limit buys with client order ids, and a free/locked spot wallet.
+    supports_cascade = True
 
     _SYMBOL_ALIASES = {
         **BaseBroker._SYMBOL_ALIASES,

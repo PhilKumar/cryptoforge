@@ -17,6 +17,12 @@ class BaseBroker:
     # Funding and open interest only exist on perpetual/derivatives venues.
     # Spot clients set this False so the UI can hide meaningless chips.
     supports_funding = True
+    # Whether Cascade can actually trade this venue. It needs stop-limit buys
+    # carrying a client order id, and a spot wallet reporting free vs locked.
+    # Default False so a new or legacy adapter is never offered as a Cascade
+    # venue by accident — the futures and Delta clients would raise on their
+    # first entry, mid-campaign, with money committed.
+    supports_cascade = False
     # Commission per side, in percent, used to model fees when the venue does
     # not report a per-order figure. It belongs to the exchange, not the engine:
     # a target priced with one venue's rate on another venue's book sells below

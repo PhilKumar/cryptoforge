@@ -1356,6 +1356,12 @@
     <section class="card allocator-input-panel">
       <h3>Start Campaign</h3>
       <div class="cf-cascade-form">
+        <div class="input-group" id="cf-cascade-exchange-group" hidden>
+          <label for="cf-cascade-exchange">Exchange<button type="button" class="cf-info" tabindex="0"
+            data-cf-info="Which exchange this campaign trades on. Its money is kept separate: a group fund on one exchange is never spent by a campaign on the other. The exchange is fixed for the campaign's life and a restart stays on it. Only exchanges Cascade can actually trade are listed."
+            aria-label="What does the exchange do?">i</button></label>
+          <select id="cf-cascade-exchange"></select>
+        </div>
         <div class="input-group">
           <label for="cf-cascade-symbol">Symbol</label>
           <select id="cf-cascade-symbol">

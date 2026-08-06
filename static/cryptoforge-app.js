@@ -8288,6 +8288,7 @@ function cfRenderCascadeStatus(data) {
     cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
     cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
     cfRenderCascadeGroups(data.capital_groups || {});
+    _cfCascadeRenderExchanges(data.exchanges || []);
     cfRenderCascadeLedger(data);
   });
 }
@@ -8295,6 +8296,42 @@ function cfRenderCascadeStatus(data) {
 // One line per capital group: budget, what running campaigns hold, what a new
 // campaign could take. No groups set = the block stays hidden and campaigns
 // take their typed capital, exactly as before groups existed.
+// Venues a campaign may be started on. Kept out of sight entirely when there
+// is only one — a picker with a single option is noise, and every campaign
+// started before multi-venue simply means "the default".
+var _cfCascadeExchanges = [];
+
+function _cfCascadeRenderExchanges(list) {
+  _cfCascadeExchanges = Array.isArray(list) ? list : [];
+  var group = document.getElementById('cf-cascade-exchange-group');
+  var select = document.getElementById('cf-cascade-exchange');
+  if (!group || !select) return;
+  if (_cfCascadeExchanges.length < 2) { group.hidden = true; return; }
+  group.hidden = false;
+  // The panel repaints on a timer; rewriting the options every pass would
+  // throw away a half-made choice. Only redraw when the venues change.
+  var signature = _cfCascadeExchanges.map(function (x) { return x.name + ':' + x.configured; }).join('|');
+  if (select.dataset.cfSignature === signature) return;
+  var chosen = select.value;
+  select.dataset.cfSignature = signature;
+  select.innerHTML = _cfCascadeExchanges.map(function (x) {
+    // An unconfigured venue still paper-trades, so it stays selectable and
+    // says why it cannot go live rather than vanishing.
+    var note = x.is_default ? ' — default' : '';
+    if (!x.configured) note += ' · paper only, no keys';
+    return '<option value="' + _escapeHtml(x.is_default ? '' : x.name) + '">'
+      + _escapeHtml(x.label) + _escapeHtml(note) + '</option>';
+  }).join('');
+  if (chosen) select.value = chosen;
+}
+
+function _cfCascadeExchangeLabel(name) {
+  var found = _cfCascadeExchanges.filter(function (x) {
+    return name ? x.name === name : x.is_default;
+  })[0];
+  return found ? found.label : (name || 'the default exchange');
+}
+
 function cfRenderCascadeGroups(groups) {
   var mount = document.getElementById('cf-cascade-groups');
   if (!mount) return;
@@ -8519,6 +8556,19 @@ function _cfCascadeStateLabel(state) {
 // The pill TEXT stays two words. This row is already tight enough that the
 // badges clip on a narrow window, so everything the label cannot say lives in
 // the tooltip instead of widening the pill.
+function _cfCascadeExchangePill(campaign) {
+  // Only when there is something to distinguish. With one exchange the venue
+  // is not information — it is the same word on every card.
+  if (_cfCascadeExchanges.length < 2) return '';
+  var name = String(campaign.exchange || '');
+  var label = _cfCascadeExchangeLabel(name);
+  var isDefault = !name;
+  return '<span class="admin-pill" data-state="' + (isDefault ? 'ok' : 'info') + '"'
+    + ' title="' + _escapeHtml('This campaign trades on ' + label
+      + '. Its money is separate from the other exchange, and a restart stays here.')
+    + '">' + _escapeHtml(label.toUpperCase()) + '</span>';
+}
+
 function _cfCascadeMcKindPill(campaign) {
   var kind = String(campaign.mc_kind || 'major').toLowerCase();
   var minor = kind === 'minor';
@@ -8704,6 +8754,7 @@ function _cfCascadeCampaignCard(campaign) {
     // Two campaigns on the same symbol can now be running on different candles,
     // so the card has to say which. One pill, not two: 5m and "initiate off a
     // minor MC" are the same fact, so printing both just repeats it.
+    + _cfCascadeExchangePill(campaign)
     + _cfCascadeMcKindPill(campaign)
     + _cfCascadeTimeframePill(campaign)
     + (campaign.stale_model
@@ -9874,6 +9925,9 @@ async function cfCascadeStartCampaign() {
   // major it has nothing to do with. Major is the default; a campaign with its
   // own anchor is major whatever chart it was spotted on.
   var mcKind = (document.getElementById('cf-cascade-mc-kind') || {}).value || 'major';
+  // Blank means the default exchange, which is what the picker shows first and
+  // what every campaign started before multi-venue means.
+  var exchange = (document.getElementById('cf-cascade-exchange') || {}).value || '';
   // The server forces this too; saying it here keeps the confirm text honest.
   if (mcKind === 'minor') timeframe = '5m';
 
@@ -9892,7 +9946,7 @@ async function cfCascadeStartCampaign() {
   }
   if (mode === 'live') {
     var confirmed = await cfConfirm(
-      '<p><strong>LIVE mode places real orders on Binance Spot with real money.</strong></p>'
+      '<p><strong>LIVE mode places real orders on ' + _escapeHtml(_cfCascadeExchangeLabel(exchange)) + ' with real money.</strong></p>'
       + '<p>' + _escapeHtml(symbol.trim().toUpperCase()) + ' ' + _escapeHtml(timeframe)
       + ' · ' + _escapeHtml(mcKind) + ' MC'
       + ' — capital $' + _escapeHtml(String(capital)) + '</p>'
@@ -9909,7 +9963,8 @@ async function cfCascadeStartCampaign() {
     mother_low: motherLow,
     mode: mode,
     timeframe: timeframe,
-    mc_kind: mcKind
+    mc_kind: mcKind,
+    exchange: exchange
   };
   if (motherTimeRaw) {
     var parsed = Date.parse(motherTimeRaw);
