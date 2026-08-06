@@ -863,6 +863,100 @@ class ChartViewTests(unittest.TestCase):
         self.assertEqual(chart["mother_high"], 178.42)
 
 
+class JournalAndPortfolioTests(unittest.TestCase):
+    """The buyer's own book, never ours."""
+
+    def setUp(self):
+        from executor.feed_client import FollowedCampaign
+        from executor.orders import CampaignOrders
+
+        client = FeedClient(public_keys={}, keyset_fetched_at=NOW, now_fn=lambda: NOW)
+        self.exchange = FakeExchange()
+        self.runtime = ExecutorRuntime(
+            client=client,
+            adapter=self.exchange,
+            market=FakeMarket(),
+            config=RuntimeConfig(capital_usd=5000.0),
+            now_fn=lambda: NOW,
+        )
+        client.campaigns["c1"] = FollowedCampaign(
+            campaign_id="c1",
+            symbol="SOLUSDT",
+            exchange="binance",
+            created_at=int(NOW),
+            mother_high=178.42,
+            mother_low=174.10,
+            mother_timestamp=1,
+            timeframe="5m",
+            state="TRENDLINE_ACTIVE",
+            model_version=21,
+            joined=True,
+        )
+        self.orders = self.runtime.book.track(
+            CampaignOrders(campaign_id="c1", symbol="SOLUSDT", mother_high=178.42, exchange="binance")
+        )
+
+    def _close_round(self, entry, exit_price, qty=0.5):
+        self.orders.on_entry_filled(Fill(price=entry, quantity=qty, timestamp=int(NOW)))
+        self.orders.on_exit_filled(exit_price, ts=int(NOW) + 60)
+
+    def test_the_journal_totals_come_from_the_buyers_own_rounds(self):
+        from executor.ui import journal_view
+
+        self._close_round(100.0, 110.0)
+        self._close_round(100.0, 95.0)
+        view = journal_view(self.runtime)
+        self.assertEqual(view["totals"]["closed"], 2)
+        self.assertEqual(view["totals"]["wins"], 1)
+        self.assertEqual(view["totals"]["win_rate_pct"], 50.0)
+        self.assertAlmostEqual(view["totals"]["net_usd"], sum(t["net_est_usd"] for t in view["trades"]), places=2)
+
+    def test_roi_is_on_what_the_round_tied_up_not_on_capital(self):
+        """The rest of the capital was never at risk in this trade."""
+        from executor.ui import journal_view
+
+        self._close_round(100.0, 110.0, qty=1.0)
+        trade = journal_view(self.runtime)["trades"][0]
+        self.assertAlmostEqual(trade["invested_usd"], 100.0)
+        self.assertAlmostEqual(trade["roi_pct"], trade["net_est_usd"] / 100.0 * 100, places=2)
+
+    def test_the_equity_curve_accumulates_in_the_order_they_closed(self):
+        from executor.ui import journal_view
+
+        self._close_round(100.0, 110.0)
+        self._close_round(100.0, 105.0)
+        equity = journal_view(self.runtime)["equity"]
+        self.assertEqual([p["n"] for p in equity], [1, 2])
+        self.assertGreater(equity[1]["cumulative"], equity[0]["cumulative"])
+
+    def test_the_portfolio_reports_only_what_this_machine_holds(self):
+        from executor.ui import portfolio_view
+
+        self.orders.on_entry_filled(Fill(price=160.0, quantity=0.5, timestamp=int(NOW)))
+        self.runtime.last_prices["SOLUSDT"] = 170.0
+        view = portfolio_view(self.runtime, self.exchange)
+        self.assertEqual(len(view["holdings"]), 1)
+        holding = view["holdings"][0]
+        self.assertAlmostEqual(holding["invested_usd"], 80.0)
+        self.assertAlmostEqual(holding["value_usd"], 85.0)
+        self.assertAlmostEqual(view["unrealised_usd"], 5.0)
+
+    def test_a_venue_that_will_not_answer_does_not_blank_the_page(self):
+        from executor.ui import portfolio_view
+
+        class Silent(FakeExchange):
+            def free_balance(self, asset):
+                raise RuntimeError("venue down")
+
+        view = portfolio_view(self.runtime, Silent())
+        self.assertIsNone(view["free_quote"])
+        self.assertIn("holdings", view)
+
+    def test_both_pages_exist_and_are_reachable(self):
+        for marker in ('id="page-portfolio"', 'id="page-journal"', 'data-page="portfolio"', 'data-page="journal"'):
+            self.assertIn(marker, PAGE, marker)
+
+
 class ChartEndpointTests(unittest.TestCase):
     def setUp(self):
         self.state = UIState()

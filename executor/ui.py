@@ -129,15 +129,28 @@ class UIState:
         self._events: deque = deque(maxlen=EVENT_KEEP)
         self._wake_message: str = ""
         self._connection: dict = {"state": "starting"}
+        self._journal: dict = {}
+        self._portfolio: dict = {}
         self._power = power
 
-    def set_status(self, status: dict, campaigns: Optional[list] = None, rounds: Optional[list] = None) -> None:
+    def set_status(
+        self,
+        status: dict,
+        campaigns: Optional[list] = None,
+        rounds: Optional[list] = None,
+        journal: Optional[dict] = None,
+        portfolio: Optional[dict] = None,
+    ) -> None:
         with self._lock:
             self._status = dict(status or {})
             if campaigns is not None:
                 self._campaigns = list(campaigns)
             if rounds is not None:
                 self._rounds = list(rounds)
+            if journal is not None:
+                self._journal = dict(journal)
+            if portfolio is not None:
+                self._portfolio = dict(portfolio)
 
     def set_identity(self, identity: dict) -> None:
         with self._lock:
@@ -163,6 +176,8 @@ class UIState:
                 "lines": running_status(status, power=self._power) if status else [],
                 "campaigns": list(self._campaigns),
                 "rounds": list(self._rounds),
+                "journal": dict(self._journal),
+                "portfolio": dict(self._portfolio),
                 "identity": dict(self._identity),
                 "uptime_sec": int(time.time() - self._started_at),
                 "events": list(self._events),
@@ -295,6 +310,105 @@ def worth_logging(kind: str, detail: dict) -> bool:
         if detail.get("skipped_as_old") or detail.get("skipped_unsubscribed"):
             return False
     return kind in LOGGED_EVENTS
+
+
+def journal_view(runtime) -> dict:
+    """Every round this machine closed, and what it adds up to.
+
+    The parent's Trade Journal over the buyer's OWN fills. Their entries,
+    their fees, their exits — we never had any of them, and a journal built
+    from our numbers would be a statement about a trade they did not make.
+    """
+    rounds = runtime.rounds_view(limit=500)
+    trades, equity, running = [], [], 0.0
+    for index, row in enumerate(reversed(rounds)):
+        invested = float(row.get("avg_entry") or 0) * float(row.get("quantity") or 0)
+        net = float(row.get("net_est_usd") or 0)
+        running += net
+        equity.append({"n": index + 1, "closed_ts": row.get("closed_ts"), "cumulative": round(running, 4)})
+        trades.append(
+            {
+                **row,
+                "trade_no": index + 1,
+                "invested_usd": round(invested, 4),
+                # ROI on what this round actually tied up, not on capital: the
+                # rest of the capital was never at risk in this trade.
+                "roi_pct": round(net / invested * 100, 2) if invested else None,
+            }
+        )
+    by_coin: dict = {}
+    for trade in trades:
+        row = by_coin.setdefault(
+            trade["symbol"], {"symbol": trade["symbol"], "trades": 0, "wins": 0, "net_usd": 0.0, "fees_usd": 0.0}
+        )
+        row["trades"] += 1
+        row["wins"] += 1 if float(trade.get("net_est_usd") or 0) > 0 else 0
+        row["net_usd"] = round(row["net_usd"] + float(trade.get("net_est_usd") or 0), 4)
+        row["fees_usd"] = round(row["fees_usd"] + float(trade.get("fees_est_usd") or 0), 4)
+    wins = len([t for t in trades if float(t.get("net_est_usd") or 0) > 0])
+    return {
+        "trades": list(reversed(trades)),
+        "equity": equity,
+        "by_coin": sorted(by_coin.values(), key=lambda r: r["net_usd"], reverse=True),
+        "totals": {
+            "closed": len(trades),
+            "wins": wins,
+            "win_rate_pct": round(wins / len(trades) * 100, 1) if trades else None,
+            "net_usd": round(running, 2),
+            "fees_usd": round(sum(float(t.get("fees_est_usd") or 0) for t in trades), 4),
+        },
+    }
+
+
+def portfolio_view(runtime, adapter) -> dict:
+    """What this machine is holding, and what it is worth right now.
+
+    Deliberately short. The parent's Portfolio answers "what is my account
+    doing"; a buyer's machine only knows the part of the account IT touched,
+    and pretending otherwise — by reporting a whole exchange balance as though
+    this software put it there — would be the wrong claim.
+    """
+    holdings, unrealised, invested_total = [], 0.0, 0.0
+    for campaign_id, orders in runtime.book.campaigns.items():
+        if orders.base_qty <= 0:
+            continue
+        last = float(runtime.last_prices.get(orders.symbol) or 0.0)
+        invested = orders.avg_entry * orders.base_qty
+        value = last * orders.base_qty if last else 0.0
+        unrealised += (value - invested) if last else 0.0
+        invested_total += invested
+        holdings.append(
+            {
+                "campaign_id": campaign_id,
+                "symbol": orders.symbol,
+                "quantity": orders.base_qty,
+                "avg_entry": orders.avg_entry,
+                "last_price": last or None,
+                "invested_usd": round(invested, 4),
+                "value_usd": round(value, 4) if last else None,
+                "unrealised_usd": round(value - invested, 4) if last else None,
+                "target": orders.exit_price,
+                # The one genuinely bad state, and it belongs on this page.
+                "protected": bool(orders.exit_resting) or orders.base_qty <= 0,
+            }
+        )
+    free_quote = None
+    try:
+        free_quote = float(adapter.free_balance(runtime._config.quote_asset))
+    except Exception as exc:  # a venue hiccup must not blank the page
+        _log.warning("free balance unavailable: %s", exc)
+    realised = round(sum(float(r.get("net_est_usd") or 0) for r in runtime.rounds_view(limit=500)), 2)
+    return {
+        "holdings": sorted(holdings, key=lambda h: h["invested_usd"], reverse=True),
+        "free_quote": free_quote,
+        "quote_asset": runtime._config.quote_asset,
+        "invested_usd": round(invested_total, 2),
+        "unrealised_usd": round(unrealised, 2),
+        "realised_usd": realised,
+        "armed_exposure_usd": runtime.book.armed_exposure_usd(),
+        "unprotected": runtime.book.unprotected(),
+        "capital_usd": runtime._config.capital_usd,
+    }
 
 
 def chart_view(runtime, market, campaign_id: str, timeframe: str = "") -> Optional[dict]:
@@ -1209,6 +1323,9 @@ PAGE = """<!doctype html>
      on what is trading, but never hidden — coin may still be held there. */
   .camp.is-closed { opacity:.72; }
   .camp.is-closed:hover { opacity:1; }
+  /* Numbers right-aligned and tabular, so a column of money reads as a column
+     rather than as ragged text. */
+  table th.n, table td.n { text-align:right; font-variant-numeric:tabular-nums; }
   .rungs { padding:2px 20px 16px; overflow-x:auto; }
   table.ladder { border-collapse:collapse; width:100%; font:12.5px/1.9 var(--font-mono); }
   table.ladder th { font:600 10px/1.9 var(--font-display); letter-spacing:.08em; text-transform:uppercase;
@@ -1352,6 +1469,8 @@ PAGE = """<!doctype html>
   <button class="nav-tab active" data-page="home">Home</button>
   <button class="nav-tab" data-page="console"><span class="live-dot" id="dot"></span>Console</button>
   <button class="nav-tab" data-page="campaigns">Campaigns</button>
+  <button class="nav-tab" data-page="portfolio">Portfolio</button>
+  <button class="nav-tab" data-page="journal">Journal</button>
   <button class="nav-tab" data-page="rounds">Rounds</button>
   <button class="nav-tab" data-page="setup">Setup</button>
   <button class="nav-tab" data-page="guide">Guide</button>
@@ -1532,6 +1651,64 @@ PAGE = """<!doctype html>
   <div class="section-h" id="closed-h" hidden><h2>Closed campaigns</h2><span style="color:var(--muted);font-size:12.5px">
     ended — target hit, mother broken, stopped, or halted. Anything still held here is still being managed.</span></div>
   <div id="cards-closed"></div>
+</div></section>
+
+<!-- ══════════ PORTFOLIO ══════════
+     Deliberately short. The parent's Portfolio answers "what is my account
+     doing"; this machine only knows the part of the account IT touched, and
+     reporting a whole exchange balance as though this software put it there
+     would be the wrong claim. -->
+<section class="page" id="page-portfolio"><div class="wrap">
+  <div class="section-h"><h2>Portfolio</h2><span style="color:var(--muted);font-size:12.5px">
+    what this machine is holding, and what it is worth right now</span></div>
+  <div class="stats-grid">
+    <div class="stat"><div class="l">Held value</div><div class="v" id="pf-value">—</div>
+      <div class="s" id="pf-invested"></div></div>
+    <div class="stat"><div class="l">Unrealised</div><div class="v" id="pf-unreal">—</div>
+      <div class="s">on what is open now</div></div>
+    <div class="stat"><div class="l">Realised</div><div class="v" id="pf-real">—</div>
+      <div class="s">closed rounds, after fees</div></div>
+    <div class="stat"><div class="l">Open positions</div><div class="v" id="pf-open">—</div>
+      <div class="s" id="pf-free"></div></div>
+  </div>
+  <div class="line bad" id="pf-unprotected" hidden></div>
+  <div class="panel" style="overflow-x:auto">
+    <table id="pf-table"><thead><tr>
+      <th>Coin</th><th class="n">Quantity</th><th class="n">Avg entry</th><th class="n">Last</th>
+      <th class="n">Invested</th><th class="n">Value</th><th class="n">Unrealised</th><th>Exit</th>
+    </tr></thead><tbody id="pf-rows"></tbody></table>
+  </div>
+  <div class="empty panel" id="pf-empty">Holding nothing — no coin has been bought yet.</div>
+</div></section>
+
+<!-- ══════════ JOURNAL ══════════ -->
+<section class="page" id="page-journal"><div class="wrap">
+  <div class="section-h"><h2>Trade journal</h2><span style="color:var(--muted);font-size:12.5px">
+    every round this machine closed — your entries, your fees, your exits</span></div>
+  <div class="stats-grid">
+    <div class="stat"><div class="l">Closed</div><div class="v" id="j-closed">—</div></div>
+    <div class="stat"><div class="l">Win rate</div><div class="v" id="j-win">—</div>
+      <div class="s" id="j-wins"></div></div>
+    <div class="stat"><div class="l">Net</div><div class="v" id="j-net">—</div>
+      <div class="s">after fees</div></div>
+    <div class="stat"><div class="l">Fees paid</div><div class="v" id="j-fees">—</div></div>
+  </div>
+  <div class="section-h"><h2 style="font-size:14px">Equity curve</h2></div>
+  <div class="panel" style="padding:14px 18px"><canvas id="j-equity" style="height:200px"></canvas></div>
+  <div class="section-h"><h2 style="font-size:14px">By coin</h2></div>
+  <div class="panel" style="overflow-x:auto">
+    <table id="j-coin-table"><thead><tr>
+      <th>Coin</th><th class="n">Trades</th><th class="n">Won</th><th class="n">Fees</th><th class="n">Net</th>
+    </tr></thead><tbody id="j-coins"></tbody></table>
+  </div>
+  <div class="section-h"><h2 style="font-size:14px">Closed trades</h2></div>
+  <div class="panel" style="overflow-x:auto">
+    <table id="j-table"><thead><tr>
+      <th>#</th><th>Closed</th><th>Coin</th><th class="n">Qty</th><th class="n">Avg buy</th>
+      <th class="n">Invested</th><th class="n">Sell</th><th class="n">Fee</th><th class="n">P&amp;L</th><th class="n">ROI</th>
+    </tr></thead><tbody id="j-rows"></tbody></table>
+  </div>
+  <div class="empty panel" id="j-empty">No rounds closed yet — the journal fills as targets are hit.</div>
 </div></section>
 
 <!-- ══════════ ROUNDS ══════════ -->
@@ -1988,6 +2165,72 @@ function render(s) {
     tbody.appendChild(tr);
   });
 
+  /* portfolio */
+  const pf = s.portfolio || {};
+  const held = pf.holdings || [];
+  $("pf-value").textContent = held.length
+    ? money(held.reduce((sum, h) => sum + (h.value_usd || h.invested_usd || 0), 0)) : "—";
+  $("pf-invested").textContent = pf.invested_usd ? money(pf.invested_usd) + " invested" : "";
+  $("pf-unreal").textContent = held.length ? money(pf.unrealised_usd) : "—";
+  $("pf-unreal").className = "v " + (pf.unrealised_usd > 0 ? "up" : pf.unrealised_usd < 0 ? "down" : "");
+  $("pf-real").textContent = money(pf.realised_usd || 0);
+  $("pf-real").className = "v " + (pf.realised_usd > 0 ? "up" : pf.realised_usd < 0 ? "down" : "");
+  $("pf-open").textContent = held.length;
+  $("pf-free").textContent = pf.free_quote != null
+    ? money(pf.free_quote) + " " + (pf.quote_asset || "") + " free" : "";
+  /* The one genuinely bad state gets a line of its own, not a table cell. */
+  const bare = pf.unprotected || [];
+  $("pf-unprotected").hidden = !bare.length;
+  if (bare.length) $("pf-unprotected").textContent =
+    "Holding coin with no sell order against it: " + bare.join(", ") + ". Placing one now.";
+  $("pf-empty").hidden = held.length > 0;
+  $("pf-table").hidden = held.length === 0;
+  const pfRows = $("pf-rows"); pfRows.replaceChildren();
+  held.forEach(h => {
+    const tr = document.createElement("tr");
+    const u = h.unrealised_usd;
+    tr.innerHTML = `<td>${h.symbol}</td><td class="n">${px(h.quantity)}</td>` +
+      `<td class="n">${px(h.avg_entry)}</td><td class="n">${h.last_price ? px(h.last_price) : "—"}</td>` +
+      `<td class="n">${money(h.invested_usd)}</td><td class="n">${h.value_usd != null ? money(h.value_usd) : "—"}</td>` +
+      `<td class="n ${u > 0 ? "up" : u < 0 ? "down" : ""}">${u != null ? money(u) : "—"}</td>` +
+      `<td>${h.target ? px(h.target) : (h.protected ? "resting" : "placing…")}</td>`;
+    pfRows.appendChild(tr);
+  });
+
+  /* journal */
+  const j = s.journal || {}, jt = j.totals || {}, trades = j.trades || [];
+  $("j-closed").textContent = jt.closed != null ? jt.closed : "—";
+  $("j-win").textContent = jt.win_rate_pct != null ? jt.win_rate_pct + "%" : "—";
+  $("j-wins").textContent = jt.closed ? jt.wins + " of " + jt.closed : "";
+  $("j-net").textContent = money(jt.net_usd || 0);
+  $("j-net").className = "v " + (jt.net_usd > 0 ? "up" : jt.net_usd < 0 ? "down" : "");
+  $("j-fees").textContent = money(jt.fees_usd || 0);
+  $("j-empty").hidden = trades.length > 0;
+  $("j-table").hidden = trades.length === 0;
+  $("j-coin-table").hidden = trades.length === 0;
+  const jRows = $("j-rows"); jRows.replaceChildren();
+  trades.forEach(t => {
+    const tr = document.createElement("tr");
+    const net = Number(t.net_est_usd || 0);
+    tr.innerHTML = `<td>#${t.trade_no}</td>` +
+      `<td>${t.closed_ts ? new Date(t.closed_ts * 1000).toLocaleString() : "—"}</td>` +
+      `<td>${t.symbol}</td><td class="n">${px(t.quantity)}</td><td class="n">${px(t.avg_entry)}</td>` +
+      `<td class="n">${money(t.invested_usd)}</td><td class="n">${px(t.exit_price)}</td>` +
+      `<td class="n">${money(t.fees_est_usd)}</td>` +
+      `<td class="n ${net >= 0 ? "up" : "down"}">${money(net)}</td>` +
+      `<td class="n">${t.roi_pct != null ? t.roi_pct + "%" : "—"}</td>`;
+    jRows.appendChild(tr);
+  });
+  const jCoins = $("j-coins"); jCoins.replaceChildren();
+  (j.by_coin || []).forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.symbol}</td><td class="n">${c.trades}</td>` +
+      `<td class="n">${c.wins}</td><td class="n">${money(c.fees_usd)}</td>` +
+      `<td class="n ${c.net_usd >= 0 ? "up" : "down"}">${money(c.net_usd)}</td>`;
+    jCoins.appendChild(tr);
+  });
+  drawEquity(j.equity || []);
+
   /* events + setup */
   const ev = $("events"); ev.replaceChildren();
   (s.events || []).forEach(e => {
@@ -2308,6 +2551,46 @@ $("ch-close").addEventListener("click", () => $("modal").classList.remove("on"))
 $("modal").addEventListener("click", e => { if (e.target.id === "modal") $("modal").classList.remove("on"); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") $("modal").classList.remove("on"); });
 window.addEventListener("resize", () => { drawChart(); clearCross(); });
+
+/* Cumulative net after each closed round. Deliberately plain: no axis, no
+   grid — the numbers are in the table above it, and this only has to answer
+   "is the line going up". Zero is drawn, because a curve that never crosses
+   its own start line is a curve that has not made money. */
+function drawEquity(points) {
+  const cv = $("j-equity");
+  if (!cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const cs = getComputedStyle(document.documentElement);
+  const tok = n => (cs.getPropertyValue(n) || "").trim();
+  if (points.length < 2) {
+    g.fillStyle = tok("--muted"); g.font = "12px " + tok("--font-body");
+    g.fillText(points.length ? "One round closed — a curve needs two." : "Nothing closed yet.", 12, H / 2);
+    return;
+  }
+  const values = points.map(p => p.cumulative).concat([0]);
+  const lo = Math.min(...values), hi = Math.max(...values), span = (hi - lo) || 1;
+  const pad = 14;
+  const X = i => pad + i * ((W - pad * 2) / (points.length - 1));
+  const Y = v => pad + (hi - v) / span * (H - pad * 2);
+  g.save();
+  g.strokeStyle = tok("--border-hi") || "#334"; g.setLineDash([3, 4]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(pad, Y(0)); g.lineTo(W - pad, Y(0)); g.stroke();
+  g.restore();
+  const end = points[points.length - 1].cumulative;
+  const colour = end >= 0 ? tok("--green") : tok("--red");
+  g.save(); g.strokeStyle = colour; g.lineWidth = 1.8; g.beginPath();
+  points.forEach((p, i) => (i ? g.lineTo(X(i), Y(p.cumulative)) : g.moveTo(X(i), Y(p.cumulative))));
+  g.stroke();
+  g.globalAlpha = .12; g.fillStyle = colour;
+  g.lineTo(X(points.length - 1), Y(0)); g.lineTo(X(0), Y(0)); g.closePath(); g.fill();
+  g.restore();
+}
 
 /* ══ crosshair ══
    On its own canvas, so a pointer move repaints one cheap layer instead of

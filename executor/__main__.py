@@ -136,9 +136,15 @@ class Executor:
                 # Awake exactly while something can fill unwatched.
                 sync_inhibitor(self.inhibitor, armed_exposure_usd=status["armed_exposure_usd"])
                 if self._ui_state is not None:
-                    from executor.ui import campaigns_view
+                    from executor.ui import campaigns_view, journal_view, portfolio_view
 
-                    self._ui_state.set_status(status, campaigns_view(self.runtime), self.runtime.rounds_view())
+                    self._ui_state.set_status(
+                        status,
+                        campaigns_view(self.runtime),
+                        self.runtime.rounds_view(),
+                        journal_view(self.runtime),
+                        portfolio_view(self.runtime, self.adapter),
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
