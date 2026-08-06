@@ -30,7 +30,7 @@ import time
 from typing import Optional
 
 from executor.config import SAMPLE, ConfigError, ExecutorConfig, build_adapter, load
-from executor.market import ExchangeMarketData
+from executor.market import ExchangeMarketData, MarketStrip
 from executor.power import SleepInhibitor, detect, sync_inhibitor
 from executor.report import irreducible_risk
 from executor.runtime import ExecutorRuntime, RuntimeConfig
@@ -71,6 +71,7 @@ class Executor:
         self.inhibitor = SleepInhibitor()
         self._stopping = asyncio.Event()
         self._ui_state = None  # set by ui.wire() when the page is on
+        self._strip = None  # the top quotes, built on the first tick that has an adapter
 
     def _on_status(self, kind: str, detail: dict) -> None:
         if kind in ("connected", "synced", "stopped", "clock_warning", "halt", "bad_signature", "disconnected"):
@@ -145,6 +146,9 @@ class Executor:
                         journal_view(self.runtime),
                         portfolio_view(self.runtime, self.adapter),
                     )
+                    if self._strip is None:
+                        self._strip = MarketStrip(self._market_for_ui())
+                    self._ui_state.set_market(self._strip.snapshot())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

@@ -131,6 +131,7 @@ class UIState:
         self._connection: dict = {"state": "starting"}
         self._journal: dict = {}
         self._portfolio: dict = {}
+        self._market: dict = {}
         self._power = power
 
     def set_status(
@@ -151,6 +152,13 @@ class UIState:
                 self._journal = dict(journal)
             if portfolio is not None:
                 self._portfolio = dict(portfolio)
+
+    def set_market(self, market: dict) -> None:
+        """The top strip's quotes. Its own setter because it is on its own
+        clock — it must not make the page wait for a tick, or a tick wait for
+        it."""
+        with self._lock:
+            self._market = dict(market or {})
 
     def set_identity(self, identity: dict) -> None:
         with self._lock:
@@ -178,6 +186,7 @@ class UIState:
                 "rounds": list(self._rounds),
                 "journal": dict(self._journal),
                 "portfolio": dict(self._portfolio),
+                "market": dict(self._market),
                 "identity": dict(self._identity),
                 "uptime_sec": int(time.time() - self._started_at),
                 "events": list(self._events),
@@ -1066,15 +1075,60 @@ PAGE = """<!doctype html>
   .set-hint { font-style:normal; font-size:11px; font-weight:400; letter-spacing:0;
     text-transform:none; color:var(--dim); }
 
-  /* Top strip: the coins this machine follows, and its own clock. */
-  .ticker { display:flex; gap:2px; margin-left:auto; }
-  .tick { padding:5px 12px; border-left:1px solid var(--border); text-align:center; min-width:86px; }
-  .tick:first-child { border-left:0; }
-  .tick .t-sym { font:700 9.5px/1.4 var(--font-display); letter-spacing:.1em; color:var(--dim); }
-  .tick .t-px { font:600 13px/1.3 var(--font-mono); color:var(--text); }
-  .clock { font:12.5px/1 var(--font-mono); color:var(--muted); padding:6px 12px;
+  /* Top strip: the desk's four quotes, drawn exactly as the terminal draws
+     its own — one boxed strip, a cell per coin, price over change. */
+  .topbar-ticker { display:flex; align-items:center; margin:0 auto;
+    width:clamp(348px, 36vw, 452px); max-width:100%; min-width:0;
+    background:rgba(255,255,255,0.025); border:1px solid var(--border);
+    border-radius:9px; overflow:hidden; }
+  html[data-theme="light"] .topbar-ticker { background:rgba(248,250,252,0.8);
+    border-color:rgba(15,23,42,0.06); }
+  .ticker-cell { padding:5px 11px; text-align:center; flex:1 1 0; min-width:0;
+    border-right:1px solid rgba(255,255,255,0.035); transition:background .15s; cursor:default; }
+  .ticker-cell:last-child { border-right:none; }
+  .ticker-cell:hover { background:rgba(255,255,255,0.03); }
+  html[data-theme="light"] .ticker-cell { border-right-color:rgba(15,23,42,0.04); }
+  html[data-theme="light"] .ticker-cell:hover { background:rgba(15,23,42,0.02); }
+  .tc-label { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:1.2px;
+    font-weight:700; margin-bottom:2px; }
+  .tc-price { font-family:var(--font-mono); font-weight:600; font-size:13px; line-height:1;
+    letter-spacing:-.2px; min-height:13px; font-variant-numeric:tabular-nums; color:var(--text);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* Which of the four this machine is actually working. The strip used to BE
+     that list, and losing it would have been a real loss. */
+  .tc-note { font-size:8.5px; letter-spacing:.09em; text-transform:uppercase; font-weight:600;
+    color:var(--accent); margin-top:2px; min-height:11px; opacity:.7; }
+  .tc-change { font-family:var(--font-mono); font-size:10px; font-weight:500; margin-top:1px;
+    color:var(--muted); font-variant-numeric:tabular-nums; }
+  .tc-change.up { color:var(--green); } .tc-change.down { color:var(--red); }
+  .clock { font:12.5px/1 var(--font-mono); color:var(--muted); padding:6px 12px; margin-left:10px;
     border:1px solid var(--border); border-radius:9px; white-space:nowrap; }
-  @media (max-width:1100px) { .ticker, .clock { display:none; } }
+
+  /* The headings sit on their own row beneath the quotes: four tabs and a
+     four-cell strip do not fit one line at any width worth designing for. */
+  .navrow { border-top:1px solid var(--border); }
+  .navrow-inner { max-width:1240px; margin:0 auto; padding:0 18px; display:flex;
+    align-items:stretch; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .navrow-inner::-webkit-scrollbar { display:none; }
+  @media (max-width:900px) { .clock { display:none; } }
+  @media (max-width:820px) {
+    /* Below this the brand and the strip cannot share a line, so the strip
+       takes one of its own rather than disappearing off a phone entirely.
+       A quarter of a phone is not much room for a five-figure price, so the
+       digits tighten — a truncated price is worse than a small one. */
+    .topbar-ticker { order:9; flex:1 0 100%; width:auto; margin:0 0 9px; }
+    .ticker-cell { padding:5px 4px; }
+    .tc-price { font-size:11.5px; letter-spacing:-.4px; }
+    .tc-change { font-size:9.5px; }
+  }
+  @media (max-width:520px) {
+    /* Four headings, one line, no sideways scroll to discover the fourth.
+       The last one keeps its noun and drops the rest — the page it opens
+       names both halves on its own sub-tabs anyway. */
+    .navrow-inner { padding:0 10px; gap:0; }
+    .nav-tab { padding:12px 7px; font-size:12.5px; gap:5px; }
+    .nav-more { display:none; }
+  }
 
   /* The guide fills the page under its tab, framed like a panel rather than
      bleeding to the window edges the way a whole-page iframe did. */
@@ -1496,16 +1550,30 @@ PAGE = """<!doctype html>
       <div class="brand-sub">by CryptoForge · Signal · Execution</div>
     </div>
   </div>
-  <!-- The prices this machine is actually watching, and the time it thinks it
-       is. Both belong at the top: the first is what every rung is measured
-       against, and the second is how a buyer catches a clock that has drifted
-       — which is the one local fault that silently breaks a signed handshake. -->
-  <div class="ticker" id="ticker"></div>
+  <!-- The desk's four quotes, at THIS machine's venue, and the time it thinks
+       it is. Both belong at the top: the first is the market every rung is
+       measured against, and the second is how a buyer catches a clock that has
+       drifted — the one local fault that silently breaks a signed handshake.
+       Symbols are pinned to market.STRIP_SYMBOLS by a test. -->
+  <div class="topbar-ticker" id="ticker">
+    <div class="ticker-cell" data-sym="BTCUSDT">
+      <div class="tc-label">BTC</div><div class="tc-price">—</div>
+      <div class="tc-note"></div><div class="tc-change">—</div>
+    </div>
+    <div class="ticker-cell" data-sym="ETHUSDT">
+      <div class="tc-label">ETH</div><div class="tc-price">—</div>
+      <div class="tc-note"></div><div class="tc-change">—</div>
+    </div>
+    <div class="ticker-cell" data-sym="PAXGUSDT">
+      <div class="tc-label">PAXG</div><div class="tc-price">—</div>
+      <div class="tc-note"></div><div class="tc-change">—</div>
+    </div>
+    <div class="ticker-cell" data-sym="SOLUSDT">
+      <div class="tc-label">SOL</div><div class="tc-price">—</div>
+      <div class="tc-note"></div><div class="tc-change">—</div>
+    </div>
+  </div>
   <div class="clock" id="clock" title="this machine's own clock">—</div>
-  <button class="nav-tab active" data-page="home">Home</button>
-  <button class="nav-tab" data-page="console"><span class="live-dot" id="dot"></span>Console</button>
-  <button class="nav-tab" data-page="campaigns">Campaigns</button>
-  <button class="nav-tab" data-page="setup">Setup &amp; guide</button>
   <div class="topbar-right">
     <button class="icon-btn" id="btn-theme" title="Light or dark" aria-label="Light or dark">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
@@ -1525,7 +1593,15 @@ PAGE = """<!doctype html>
     <div class="ap-h">Type</div>
     <div class="ap-row" id="ap-fonts"></div>
   </div>
-</div></div>
+</div>
+<div class="navrow"><div class="navrow-inner">
+  <button class="nav-tab active" data-page="home">Home</button>
+  <button class="nav-tab" data-page="console"><span class="live-dot" id="dot"></span>Console</button>
+  <button class="nav-tab" data-page="campaigns">Campaigns</button>
+  <!-- One flex item, not two: the tab's own gap sits between the live dot and
+       its label, and a second item would open that gap mid-phrase. -->
+  <button class="nav-tab" data-page="setup"><span>Setup<span class="nav-more"> &amp; guide</span></span></button>
+</div></div></div>
 
 <!-- ══════════ HOME ══════════ -->
 <section class="page on" id="page-home">
@@ -1872,6 +1948,15 @@ const money = v => (v < 0 ? "-$" : "$") + Math.abs(Number(v || 0)).toLocaleStrin
                    {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const px = v => v == null ? "—" : Number(v).toLocaleString(undefined, {maximumFractionDigits: 4});
 const ago = s => s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : (s / 3600).toFixed(1) + "h";
+/* Quote precision, the terminal's: cents on a dollar-and-up coin, more digits
+   as the price gets smaller, so a cheap coin is not quoted as $0.00. */
+const usdPx = v => {
+  const n = Number(v);
+  if (!n || isNaN(n)) return "—";
+  if (n >= 1) return "$" + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  if (n >= 0.01) return "$" + n.toFixed(4);
+  return "$" + n.toFixed(6);
+};
 const openLadders = new Set();
 const openFolds = new Set();
 /* Matches the parent's _CF_CHART_MAX_STRUCTURES. */
@@ -2207,29 +2292,30 @@ function render(s) {
     tbody.appendChild(tr);
   });
 
-  /* Top strip: the coins this machine actually follows, at its own venue's
-     prices. Not a market ticker — only what it is watching. */
-  const prices = st.prices || {};
-  const ticker = $("ticker");
-  const wanted = Object.keys(prices).sort().slice(0, 4);
-  if (wanted.join(",") !== ticker.dataset.syms) {
-    ticker.dataset.syms = wanted.join(",");
-    ticker.replaceChildren();
-    wanted.forEach(sym => {
-      const el = document.createElement("div"); el.className = "tick";
-      el.innerHTML = `<div class="t-sym">${sym.replace(/USDT$/, "")}</div>` +
-                     `<div class="t-px" data-px="${sym}">—</div>`;
-      ticker.appendChild(el);
-    });
-  }
-  wanted.forEach(sym => {
-    const cell = ticker.querySelector(`[data-px="${sym}"]`);
-    if (cell) cell.textContent = px(prices[sym]);
-  });
-
   /* portfolio */
   const pf = s.portfolio || {};
   const held = pf.holdings || [];
+
+  /* Top strip: the four the desk quotes, priced at THIS machine's venue —
+     a CoinDCX buyer reading Binance's BTC would be reading a price they
+     cannot trade. The note line says which of the four this machine is
+     actually working, which is what the strip used to be on its own. */
+  const watching = st.prices || {};
+  const holding = new Set(held.map(h => h.symbol));
+  document.querySelectorAll("#ticker .ticker-cell").forEach(cell => {
+    const sym = cell.dataset.sym;
+    const row = (s.market || {}).rows ? (s.market.rows[sym] || null) : null;
+    const price = row ? Number(row.price) || 0 : 0;
+    cell.querySelector(".tc-price").textContent = price > 0 ? usdPx(price) : "—";
+    const chg = cell.querySelector(".tc-change");
+    if (price > 0 && row.change_pct !== undefined && row.change_pct !== null) {
+      const c = Number(row.change_pct) || 0;
+      chg.textContent = (c >= 0 ? "+" : "") + c.toFixed(2) + "%";
+      chg.className = "tc-change " + (c >= 0 ? "up" : "down");
+    } else { chg.textContent = "—"; chg.className = "tc-change"; }
+    cell.querySelector(".tc-note").textContent =
+      holding.has(sym) ? "holding" : (sym in watching ? "following" : "");
+  });
   $("pf-value").textContent = held.length
     ? money(held.reduce((sum, h) => sum + (h.value_usd || h.invested_usd || 0), 0)) : "—";
   $("pf-invested").textContent = pf.invested_usd ? money(pf.invested_usd) + " invested" : "";

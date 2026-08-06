@@ -12,6 +12,9 @@ leads report.py — it is the number the buyer is actually relying on.
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import threading
 import unittest
 import urllib.request
@@ -47,6 +50,17 @@ class UIStateTests(unittest.TestCase):
         state = UIState(power=WINDOWS)
         state.set_status({"armed_exposure_usd": 7.25, "opening_new": True})
         self.assertIn("2 seconds", state.snapshot()["advice"])
+
+    def test_the_quotes_have_their_own_setter(self):
+        """On their own clock: the page must not wait for a tick to show a
+        price, and a tick must not wait for a quote."""
+        self.state.set_market({"rows": {"BTCUSDT": {"price": 121000.0, "change_pct": 1.2}}})
+        self.assertEqual(self.state.snapshot()["market"]["rows"]["BTCUSDT"]["price"], 121000.0)
+        self.state.set_status({"armed_exposure_usd": 1.0, "opening_new": True})
+        self.assertIn("BTCUSDT", self.state.snapshot()["market"]["rows"])
+
+    def test_a_page_with_no_quotes_yet_is_still_a_page(self):
+        self.assertEqual(self.state.snapshot()["market"], {})
 
     def test_the_disclosure_is_always_present(self):
         self.assertIn("may still", self.state.snapshot()["disclosure"])
@@ -970,6 +984,48 @@ class JournalAndPortfolioTests(unittest.TestCase):
             self.assertIn(marker, PAGE, marker)
         self.assertIn('src="/guide.html"', PAGE)
         self.assertNotIn('data-page="guide"', PAGE)
+
+    @unittest.skipUnless(shutil.which("node"), "node not available")
+    def test_the_pages_script_actually_parses(self):
+        """One redeclared name takes the WHOLE page down — no prices, no
+        campaigns, no buttons — and every string assertion in this file still
+        passes, because the text is all there. Paid for once: a second
+        `const followed` blanked the console.
+        """
+        blocks = re.findall(r"<script>(.*?)</script>", PAGE, re.S)
+        self.assertTrue(blocks, "the page has no script to check")
+        for index, block in enumerate(blocks):
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+                handle.write(block)
+                path = handle.name
+            try:
+                done = subprocess.run(["node", "--check", path], capture_output=True, text=True)
+            finally:
+                os.unlink(path)
+            self.assertEqual(done.returncode, 0, f"script block {index}:\n{done.stderr}")
+
+    def test_the_top_strip_quotes_the_four_the_desk_quotes(self):
+        """Pinned to market.STRIP_SYMBOLS: the cells are written in the page
+        and the fetch is written in Python, and a coin added to one and not
+        the other is a cell that never fills."""
+        from executor.market import STRIP_SYMBOLS
+
+        for symbol in STRIP_SYMBOLS:
+            self.assertIn(f'data-sym="{symbol}"', PAGE, symbol)
+        self.assertEqual(PAGE.count('class="ticker-cell"'), len(STRIP_SYMBOLS))
+
+    def test_the_headings_moved_below_the_quotes(self):
+        """Four tabs and a four-cell strip do not share a line at any width
+        worth designing for."""
+        self.assertIn('<div class="navrow"><div class="navrow-inner">', PAGE)
+        head, _, tail = PAGE.partition('<div class="navrow">')
+        self.assertIn('id="ticker"', head)
+        self.assertIn('data-page="console"', tail)
+
+    def test_a_quote_is_never_invented_for_a_coin_the_venue_will_not_price(self):
+        """The cell is drawn from the market snapshot alone — never from the
+        last trade price, which is a different number on a different venue."""
+        self.assertIn('cell.querySelector(".tc-price").textContent = price > 0 ? usdPx(price) : "—"', PAGE)
 
     def test_both_strips_use_the_same_sub_tab_machinery(self):
         """One implementation, so a fix to how a tab behaves reaches both."""
