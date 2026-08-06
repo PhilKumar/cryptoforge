@@ -23,6 +23,11 @@ class BaseBroker:
     # venue by accident — the futures and Delta clients would raise on their
     # first entry, mid-campaign, with money committed.
     supports_cascade = False
+    # The fastest candle a campaign may run on here. Fees are charged per
+    # round trip, so a dearer venue needs a deeper fall before the target
+    # beats its own commission — and the fastest timeframes are where falls
+    # are shallowest. "5m" means no restriction.
+    min_timeframe = "5m"
     # Commission per side, in percent, used to model fees when the venue does
     # not report a per-order figure. It belongs to the exchange, not the engine:
     # a target priced with one venue's rate on another venue's book sells below

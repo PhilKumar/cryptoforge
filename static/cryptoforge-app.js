@@ -8323,6 +8323,51 @@ function _cfCascadeRenderExchanges(list) {
       + _escapeHtml(x.label) + _escapeHtml(note) + '</option>';
   }).join('');
   if (chosen) select.value = chosen;
+  if (!select.dataset.cfBound) {
+    select.dataset.cfBound = '1';
+    select.addEventListener('change', _cfCascadeApplyVenueTimeframes);
+  }
+  _cfCascadeApplyVenueTimeframes();
+}
+
+function _cfCascadeApplyVenueTimeframes() {
+  // A venue with a floor cannot trade the fastest rungs, so disable them
+  // rather than let the server reject the form after the fact. The engine
+  // still enforces it — this only saves a wasted attempt.
+  var select = document.getElementById('cf-cascade-exchange');
+  var tf = document.getElementById('cf-cascade-timeframe');
+  if (!tf) return;
+  var name = select ? select.value : '';
+  var venue = _cfCascadeExchanges.filter(function (x) {
+    return name ? x.name === name : x.is_default;
+  })[0];
+  var ladder = ['5m', '15m', '1h', '4h', '1d', '1w'];
+  var floor = ladder.indexOf((venue && venue.min_timeframe) || '5m');
+  if (floor < 0) floor = 0;
+  var blocked = false;
+  [].forEach.call(tf.options, function (opt) {
+    var idx = ladder.indexOf(String(opt.value).toLowerCase());
+    var tooFast = idx >= 0 && idx < floor;
+    opt.disabled = tooFast;
+    if (tooFast && tf.value === opt.value) blocked = true;
+  });
+  // A disabled option left selected would post anyway. Move up to the floor.
+  if (blocked) {
+    for (var i = 0; i < tf.options.length; i++) {
+      if (!tf.options[i].disabled) { tf.value = tf.options[i].value; break; }
+    }
+  }
+  var kind = document.getElementById('cf-cascade-mc-kind');
+  if (kind) {
+    // A minor MC is 5m by definition, so a venue that cannot trade 5m cannot
+    // take one either.
+    [].forEach.call(kind.options, function (opt) {
+      if (String(opt.value) === 'minor') {
+        opt.disabled = floor > 0;
+        if (opt.disabled && kind.value === 'minor') kind.value = 'major';
+      }
+    });
+  }
 }
 
 function _cfCascadeExchangeLabel(name) {

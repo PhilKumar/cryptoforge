@@ -58,6 +58,12 @@ class CoinDCXSpotClient(BaseBroker):
     supports_funding = False
     # Stop-limit buys with client order ids, and a free/locked spot wallet.
     supports_cascade = True
+    # 15m and above only. At 0.2% per side a round's geometric target does
+    # not clear its own fee until the fall passes ~1.6% (against ~0.8% on
+    # Binance at 0.1%), and 5m falls are rarely that deep — so a 5m campaign
+    # here would spend its life priced by the fee floor rather than by its
+    # own geometry. Phil's call, 2026-08-06.
+    min_timeframe = "15m"
     # Twice Binance's 0.1%, and confirmed two independent ways.
     #
     # Measured: every BTCUSDT fill on the live account was charged exactly

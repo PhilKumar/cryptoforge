@@ -6880,3 +6880,92 @@ class CascadeVenueCapabilityTests(unittest.TestCase):
             params = inspect.signature(client.place_order).parameters
             self.assertIn("stop_price", params, client.__name__)
             self.assertIn("client_order_id", params, client.__name__)
+
+
+class CascadeVenueTimeframeFloorTests(unittest.IsolatedAsyncioTestCase):
+    """CoinDCX bills twice Binance's rate, so a round there needs roughly twice
+    the fall before its target clears its own fee. 5m rarely falls that far, so
+    the venue starts at 15m — by every route, not just the form."""
+
+    def _engine(self):
+        primary = FakeCascadeBroker()
+        primary.broker_name = "binance"
+        primary.min_timeframe = "5m"
+        second = FakeCascadeBroker()
+        second.broker_name = "coindcx"
+        second.display_name = "CoinDCX Spot"
+        second.min_timeframe = "15m"
+        second.fee_pct_per_side = 0.2
+        return CascadeEngine(primary, brokers={"coindcx": second})
+
+    def test_the_floor_is_read_from_the_venue(self):
+        engine = self._engine()
+        self.assertEqual(engine.venue_min_timeframe(""), "5m")
+        self.assertEqual(engine.venue_min_timeframe("binance"), "5m")
+        self.assertEqual(engine.venue_min_timeframe("coindcx"), "15m")
+
+    def test_ladder_comparison_is_by_rung_not_string(self):
+        engine = self._engine()
+        self.assertTrue(engine._timeframe_is_slower_or_equal("1h", "15m"))
+        self.assertTrue(engine._timeframe_is_slower_or_equal("15m", "15m"))
+        self.assertFalse(engine._timeframe_is_slower_or_equal("5m", "15m"))
+
+    async def test_a_5m_campaign_is_refused_on_the_dearer_venue(self):
+        engine = self._engine()
+        result = await engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=500,
+            mother_high=105,
+            mother_low=99,
+            mother_timestamp=0,
+            timeframe="5m",
+            exchange="coindcx",
+        )
+        self.assertIn("error", result)
+        self.assertIn("15m", result["error"])
+
+    async def test_a_minor_mc_is_refused_there_because_a_minor_is_5m(self):
+        engine = self._engine()
+        result = await engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=500,
+            mother_high=105,
+            mother_low=99,
+            mother_timestamp=0,
+            timeframe="1h",
+            mc_kind="minor",
+            exchange="coindcx",
+        )
+        self.assertIn("error", result)
+        self.assertIn("minor", result["error"].lower())
+
+    async def test_the_default_venue_still_takes_5m(self):
+        engine = self._engine()
+        result = await engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=500,
+            mother_high=105,
+            mother_low=99,
+            mother_timestamp=0,
+            timeframe="5m",
+        )
+        # It may still fail for unrelated fixture reasons; what matters is that
+        # the venue floor is not what stopped it.
+        self.assertNotIn("15m and slower only", result.get("error", ""))
+
+    def test_a_break_restart_cannot_drop_below_the_floor(self):
+        # The route a person never chooses: a mother break restarts on the base
+        # rung, which would put a CoinDCX campaign on 5m behind their back.
+        engine = self._engine()
+        self.assertEqual(
+            "15m" if not engine._timeframe_is_slower_or_equal("5m", "15m") else "5m",
+            "15m",
+        )
+        floor = engine.venue_min_timeframe("coindcx")
+        base = cascade_module.BASE_TIMEFRAME
+        restart = base if engine._timeframe_is_slower_or_equal(base, floor) else floor
+        self.assertEqual(restart, "15m")
+        # …and the default venue is untouched by the same code path.
+        floor_default = engine.venue_min_timeframe("")
+        restart_default = base if engine._timeframe_is_slower_or_equal(base, floor_default) else floor_default
+        self.assertEqual(restart_default, "5m")

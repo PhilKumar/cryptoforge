@@ -2064,6 +2064,26 @@ class CascadeEngine:
 
     # ── capital groups ───────────────────────────────────────────
 
+    def venue_min_timeframe(self, exchange: str = "") -> str:
+        """The fastest candle a campaign may run on at this venue.
+
+        A dearer venue needs a deeper fall before a round's target clears its
+        own commission, and the fastest timeframes are where falls are
+        shallowest — so the floor is a property of the exchange, not a setting.
+        """
+        name = str(exchange or "").strip().lower()
+        client = self.broker if (not name or name == self.primary_broker_name) else self.brokers.get(name)
+        raw = str(getattr(client, "min_timeframe", BASE_TIMEFRAME) or BASE_TIMEFRAME).strip().lower()
+        return raw if raw in ESCALATION_LADDER else BASE_TIMEFRAME
+
+    @staticmethod
+    def _timeframe_is_slower_or_equal(timeframe: str, floor: str) -> bool:
+        """True when `timeframe` sits at or above `floor` on the ladder."""
+        try:
+            return ESCALATION_LADDER.index(timeframe) >= ESCALATION_LADDER.index(floor)
+        except ValueError:
+            return True  # unknown rungs are validated elsewhere
+
     def broker_for(self, campaign: "Campaign"):
         """The exchange client this campaign's orders and balances belong to.
 
@@ -2115,6 +2135,7 @@ class CascadeEngine:
                     "is_default": name == self.primary_broker_name,
                     "configured": bool(checker()) if callable(checker) else False,
                     "fee_pct_per_side": float(getattr(client, "fee_pct_per_side", FEE_PCT_PER_SIDE)),
+                    "min_timeframe": self.venue_min_timeframe(name),
                 }
             )
         out.sort(key=lambda row: (not row["is_default"], row["name"]))
@@ -2322,6 +2343,17 @@ class CascadeEngine:
         mother_low = _coerce_float(mother_low)
         if not symbol:
             return {"error": "Symbol is required"}
+        venue_floor = self.venue_min_timeframe(exchange)
+        if not self._timeframe_is_slower_or_equal(timeframe, venue_floor):
+            venue_label = str(getattr(venue, "display_name", "This exchange"))
+            extra = " A minor MC is 5m by definition, so this venue cannot take one." if mc_kind == "minor" else ""
+            return {
+                "error": (
+                    f"{venue_label} trades {venue_floor} and slower only — its commission needs a deeper "
+                    f"fall than a {timeframe} campaign usually makes before the target clears its own "
+                    f"fee.{extra} Pick {venue_floor} or higher."
+                )
+            }
         if timeframe not in CAMPAIGN_START_TIMEFRAMES:
             return {
                 "error": (
@@ -5655,6 +5687,13 @@ class CascadeEngine:
                 )
                 return None
 
+        # Never below the venue's floor — the successor inherits the parent's
+        # exchange, so it inherits that exchange's fastest tradable candle too.
+        restart_timeframe = BASE_TIMEFRAME
+        floor = self.venue_min_timeframe(parent.exchange)
+        if not self._timeframe_is_slower_or_equal(restart_timeframe, floor):
+            restart_timeframe = floor
+
         child = Campaign(
             campaign_id=uuid.uuid4().hex[:10],
             seq=self._next_seq(),
@@ -5668,8 +5707,12 @@ class CascadeEngine:
             # major mother candle breaks above, the whole campaign stops and
             # restarts from that high on 5m. A 1D campaign does not spawn
             # another 1D campaign — the break is a fresh start at a new high.
-            timeframe=BASE_TIMEFRAME,
-            start_timeframe=BASE_TIMEFRAME,
+            # A break restarts on the base rung — but never below the venue's
+            # own floor. A CoinDCX successor dropping to 5m would put money on
+            # a timeframe that exchange is deliberately not traded on, by a
+            # route the person never chose.
+            timeframe=restart_timeframe,
+            start_timeframe=restart_timeframe,
             escalates=True,
             # The KIND is inherited, not derived from that 5m. Restarting on 5m
             # used to mean "minor", so every successor was labelled a minor —
@@ -5720,7 +5763,7 @@ class CascadeEngine:
             "start",
             f"Auto-started from the break of campaign #{parent.seq} — new mother candle "
             f"high {candle.high:,.2f} / low {candle.low:,.2f} ({child.mode.upper()}, "
-            f"generation {child.generation}), restarting on {BASE_TIMEFRAME}"
+            f"generation {child.generation}), restarting on {restart_timeframe}"
             + (f" from a {parent.timeframe} break" if parent.timeframe != BASE_TIMEFRAME else "")
             + ". Nothing carried over.",
         )
