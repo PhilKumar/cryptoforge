@@ -168,6 +168,39 @@ def min_rung_usd(min_notional_usd: float) -> float:
     return float(min_notional_usd) * (1.0 + RUNG_BUFFER_PCT)
 
 
+# The engine's own ladder, duplicated here because the executor ships without
+# `engine.cascade`. Order is what makes "at or above the floor" answerable.
+TIMEFRAME_LADDER = ("5m", "15m", "1h", "4h", "1d", "1w")
+
+# The slowest rung a venue will carry, mirroring `broker/*.py: min_timeframe`.
+# CoinDCX is 15m and up: at 0.2% a side a round's target does not clear its own
+# commission until the fall passes ~1.6%, and 5m falls are rarely that deep, so
+# a 5m campaign there would be priced by the fee floor rather than its geometry.
+# It also simply does not serve 5m candles for these pairs — a buyer set that
+# way gets a 422 on every tick.
+VENUE_MIN_TIMEFRAME = {"binance": "5m", "coindcx": "15m"}
+
+
+def venue_min_timeframe(exchange: str) -> str:
+    return VENUE_MIN_TIMEFRAME.get(str(exchange or "").strip().lower(), TIMEFRAME_LADDER[0])
+
+
+def timeframe_allowed_on(timeframe: str, exchange: str) -> bool:
+    """Can this venue carry geometry drawn on this timeframe?"""
+    floor = venue_min_timeframe(exchange)
+    try:
+        return TIMEFRAME_LADDER.index(str(timeframe).strip().lower()) >= TIMEFRAME_LADDER.index(floor)
+    except ValueError:
+        # An unknown rung is not ours to refuse here; the venue will say so.
+        return True
+
+
+def timeframes_for(exchange: str) -> tuple:
+    """Every rung this venue can carry, slowest floor first."""
+    floor = venue_min_timeframe(exchange)
+    return TIMEFRAME_LADDER[TIMEFRAME_LADDER.index(floor) :]
+
+
 def fee_pct_for(exchange: str) -> float:
     """This buyer's commission per side. Unknown venues take the safer rate.
 

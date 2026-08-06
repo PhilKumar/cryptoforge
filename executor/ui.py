@@ -30,6 +30,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Optional
 
+from executor import model
 from executor.config import ConfigError, save_settings
 from executor.power import PlatformPower, suspend_advice
 from executor.report import irreducible_risk, running_status
@@ -846,6 +847,8 @@ PAGE = """<!doctype html>
   .set-row input:focus, .set-row select:focus { outline:none; border-color:var(--border-acc); }
   html[data-theme="light"] .set-row input, html[data-theme="light"] .set-row select { background:#fff; }
   .set-pending { margin-top:10px; font-size:12.5px; line-height:1.5; color:var(--accent); }
+  .set-hint { font-style:normal; font-size:11px; font-weight:400; letter-spacing:0;
+    text-transform:none; color:var(--dim); }
 
   .page { display:none; position:relative; z-index:1; }
   .page.on { display:block; animation:fadeIn .25s ease; }
@@ -1423,7 +1426,7 @@ PAGE = """<!doctype html>
       <p class="set-note">Takes effect immediately. Campaigns already running keep their exits —
          narrowing what you follow never abandons a position.</p>
       <div class="set-row">
-        <label>Timeframes<input id="set-tf" placeholder="5m, 15m — blank means all"></label>
+        <label>Timeframes<input id="set-tf" placeholder="blank means all"><em class="set-hint" id="set-tf-hint"></em></label>
         <label>Drawn on<input id="set-src" placeholder="binance, coindcx — blank means all"></label>
         <label>Coins<input id="set-sym" placeholder="BTCUSDT, SOLUSDT — blank means all"></label>
       </div>
@@ -1767,6 +1770,11 @@ function render(s) {
     $("set-sym").value = (id.symbols || []).join(", ");
     $("set-ex").value = id.pending_exchange || id.exchange || "binance";
   }
+  /* The venue's own limit, stated before it is hit rather than after. */
+  const carries = id.venue_timeframes || [];
+  $("set-tf-hint").textContent = carries.length
+    ? (id.pending_exchange || id.exchange) + " carries " + carries.join(", ")
+    : "";
   const pending = id.pending_exchange && id.pending_exchange !== id.exchange;
   $("set-pending").hidden = !pending;
   if (pending) $("set-pending").textContent =
@@ -1959,6 +1967,12 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
                 "signal_exchanges": list(executor.config.signal_exchanges),
                 "symbols": list(executor.config.symbols),
                 "pending_exchange": getattr(executor.config, "_pending_exchange", ""),
+                # What the venue about to be used can actually carry — the
+                # pending one if a change is waiting, since that is the
+                # constraint the buyer is now choosing against.
+                "venue_timeframes": list(
+                    model.timeframes_for(getattr(executor.config, "_pending_exchange", "") or executor.config.exchange)
+                ),
             }
         )
 
@@ -1973,6 +1987,20 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         unknown = [v for v in venues if v not in SUPPORTED_EXCHANGES]
         if unknown:
             return f"Not a venue we publish from: {', '.join(unknown)}. Use {' or '.join(SUPPORTED_EXCHANGES)}."
+        # A timeframe this machine's own venue cannot carry is not a choice,
+        # it is a machine that fails every tick fetching candles that do not
+        # exist. Refused here, where the buyer can see why.
+        # The venue that will be in force, not the one running now: with a
+        # change pending, saving a timeframe the NEW venue cannot serve is a
+        # machine that boots straight into a failing tick.
+        trading_on = getattr(executor.config, "_pending_exchange", "") or executor.config.exchange
+        impossible = [tf for tf in timeframes if not model.timeframe_allowed_on(tf, trading_on)]
+        if impossible:
+            allowed = ", ".join(model.timeframes_for(trading_on))
+            return (
+                f"{trading_on} cannot trade {', '.join(impossible)} — it carries {allowed}. "
+                f"Either pick from those, or change this machine's exchange first."
+            )
         if runtime is None:
             return "Not connected yet — try once the feed is synced."
         message = runtime.set_subscription(timeframes=timeframes, source_exchanges=venues, symbols=symbols)
@@ -2014,14 +2042,36 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
                 f"{executor.config.exchange}. Use Stand down, wait for it to be flat, then change venue — "
                 "switching now would leave coin on the old exchange with nothing watching it."
             )
+        # The signal choice travels with the venue. A CoinDCX machine following
+        # 5m Binance geometry is not a preference, it is a machine that cannot
+        # fetch the candles it needs — so the timeframes are lifted to what the
+        # new venue carries, and said out loud rather than done quietly.
+        changes = {"exchange": wanted}
+        note = ""
+        stranded = [tf for tf in executor.config.timeframes if not model.timeframe_allowed_on(tf, wanted)]
+        if stranded:
+            floor = model.venue_min_timeframe(wanted)
+            kept = [tf for tf in executor.config.timeframes if tf not in stranded]
+            changes["timeframes"] = kept + [floor] if floor not in kept else kept
+            note = (
+                f" Your {', '.join(stranded)} choice moved to {floor}, because {wanted} does not carry anything faster."
+            )
         try:
-            path = save_settings(executor.config, {"exchange": wanted})
+            path = save_settings(executor.config, changes)
         except ConfigError as exc:
             return f"Could not save the change: {exc}"
+        if "timeframes" in changes:
+            executor.config.timeframes = changes["timeframes"]
+            if runtime is not None:
+                runtime.set_subscription(
+                    timeframes=changes["timeframes"],
+                    source_exchanges=executor.config.signal_exchanges,
+                    symbols=executor.config.symbols,
+                )
         executor.config._pending_exchange = wanted
         _refresh_identity()
         return (
-            f"Saved to {path}. Stop this machine and start it again to trade on {wanted} — "
+            f"Saved to {path}.{note} Stop this machine and start it again to trade on {wanted} — "
             f"its API keys must be {wanted}'s, from the environment as usual."
         )
 

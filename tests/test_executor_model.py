@@ -48,11 +48,45 @@ class ModelContractTests(unittest.TestCase):
         self.assertEqual(model.FEE_PCT_PER_SIDE, engine.FEE_PCT_PER_SIDE)
         self.assertEqual(model.RUNG_BUFFER_PCT, engine.RUNG_BUFFER_PCT)
 
+    def test_the_timeframe_ladder_matches(self):
+        self.assertEqual(model.TIMEFRAME_LADDER, engine.ESCALATION_LADDER)
+
+    def test_every_venue_floor_matches_its_broker(self):
+        """A drift here puts a buyer on a timeframe their venue does not serve
+        — which is a 422 on every tick, not a wrong-looking number."""
+        from broker.base import BaseBroker
+        from broker.coindcx_spot import CoinDCXSpotClient
+
+        self.assertEqual(model.venue_min_timeframe("binance"), BaseBroker.min_timeframe)
+        self.assertEqual(model.venue_min_timeframe("coindcx"), CoinDCXSpotClient.min_timeframe)
+
     def test_the_executor_does_not_import_the_engine(self):
         """It ships to buyers' machines. The geometry engine does not."""
         source = open(model.__file__, encoding="utf-8").read()
         self.assertNotIn("engine.cascade", source.replace("`engine.cascade`", ""))
         self.assertNotIn("from engine", source)
+
+
+class VenueTimeframeTests(unittest.TestCase):
+    """A venue's floor, mirrored so the buyer's machine can enforce it too."""
+
+    def test_coindcx_carries_nothing_faster_than_15m(self):
+        self.assertFalse(model.timeframe_allowed_on("5m", "coindcx"))
+        self.assertTrue(model.timeframe_allowed_on("15m", "coindcx"))
+        self.assertTrue(model.timeframe_allowed_on("1h", "coindcx"))
+
+    def test_binance_carries_the_whole_ladder(self):
+        for timeframe in model.TIMEFRAME_LADDER:
+            self.assertTrue(model.timeframe_allowed_on(timeframe, "binance"), timeframe)
+
+    def test_the_offered_list_starts_at_the_venues_floor(self):
+        self.assertEqual(model.timeframes_for("coindcx")[0], "15m")
+        self.assertEqual(model.timeframes_for("binance")[0], "5m")
+
+    def test_an_unknown_rung_is_not_refused_here(self):
+        """The venue is the authority on its own intervals; refusing one we
+        have simply never heard of would be us guessing."""
+        self.assertTrue(model.timeframe_allowed_on("2h", "coindcx"))
 
 
 class BandLedgerTests(unittest.TestCase):

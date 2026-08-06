@@ -208,6 +208,13 @@ Leave both `[]` and you follow everything we publish. Anything you did not
 subscribe to is listed on your console with the reason, so a coin that never
 trades is never a mystery.
 
+**Your exchange decides which timeframes you can follow.** CoinDCX carries
+15m and slower, never 5m — partly because its commission is twice Binance's,
+so a 5m round there would spend its life priced by fees rather than by its own
+shape, and partly because it simply does not publish 5m candles for these
+pairs. Your console shows what your venue carries, refuses a choice it cannot
+serve, and moves your timeframes up for you if you switch to a slower venue.
+
 **You can change all of this later without editing the file.** The Setup page
 of your console has a Settings panel. Signal choices there apply immediately;
 anything already running keeps its exits. Changing your exchange is written

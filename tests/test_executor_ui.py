@@ -10,6 +10,7 @@ leads report.py — it is the number the buyer is actually relying on.
 """
 
 import json
+import os
 import re
 import threading
 import unittest
@@ -373,7 +374,6 @@ class ActionEndpointTests(unittest.TestCase):
         """The runtime carries its own config, built at startup. Updating only
         that left the page showing boot values while the machine followed
         something else — the change looked ignored when it had been applied."""
-        import os
         import tempfile
 
         from executor.config import ExecutorConfig
@@ -426,6 +426,102 @@ class ActionEndpointTests(unittest.TestCase):
         self.assertEqual(identity["timeframes"], ["15m"])
         self.assertEqual(identity["following"], "15m · drawn on coindcx · all coins")
         self.assertEqual(config.timeframes, ["15m"])
+
+    def _settings_harness(self, **config_kwargs):
+        """A wired UI over a stub executor, for driving the settings actions."""
+        import tempfile
+
+        from executor.config import ExecutorConfig
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        config = ExecutorConfig(
+            server_url="http://localhost",
+            buyer_id="b",
+            root_public_key="k",
+            state_dir=directory.name,
+            source_path=os.path.join(directory.name, "config.json"),
+            **config_kwargs,
+        )
+
+        class StubRuntime:
+            def __init__(self):
+                self.subscriptions = []
+
+            def set_subscription(self, **kwargs):
+                self.subscriptions.append(kwargs)
+                return "Now following."
+
+            def venue_change_blockers(self):
+                return []
+
+        class StubExecutor:
+            def __init__(self):
+                self.config = config
+                self.runtime = StubRuntime()
+                self.identity = mock.Mock(public_key_b64=lambda: "pk")
+                self.transport = mock.Mock()
+
+            def _on_status(self, kind, detail):
+                pass
+
+            def _market_for_ui(self):
+                return None
+
+        executor = StubExecutor()
+        server = ui.wire(executor, port=0)
+        self.addCleanup(server.stop)
+        port = server._server.server_address[1]
+
+        def post(action, payload):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/action",
+                data=json.dumps({"action": action, "payload": payload}).encode(),
+                method="POST",
+                headers={"Content-Type": "application/json", "X-Cascade-UI": "1"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read())["message"]
+
+        return executor, post
+
+    def test_changing_venue_carries_the_signal_choice_with_it(self):
+        """A CoinDCX machine following 5m is not a preference — it is a
+        machine that fails every tick fetching candles that do not exist."""
+        executor, post = self._settings_harness(exchange="binance", timeframes=["5m"])
+        message = post("set_exchange", {"exchange": "coindcx"})
+        self.assertIn("moved to 15m", message)
+        self.assertEqual(executor.config.timeframes, ["15m"])
+        self.assertEqual(executor.runtime.subscriptions[-1]["timeframes"], ["15m"])
+
+    def test_a_venue_that_can_carry_the_choice_leaves_it_alone(self):
+        executor, post = self._settings_harness(exchange="binance", timeframes=["1h"])
+        message = post("set_exchange", {"exchange": "coindcx"})
+        self.assertNotIn("moved to", message)
+        self.assertEqual(executor.config.timeframes, ["1h"])
+
+    def test_a_timeframe_this_venue_cannot_trade_is_refused(self):
+        executor, post = self._settings_harness(exchange="coindcx")
+        message = post("set_subscription", {"timeframes": "5m"})
+        self.assertIn("cannot trade 5m", message)
+        self.assertIn("15m", message)
+        self.assertEqual(executor.config.timeframes, [])
+
+    def test_a_pending_venue_governs_what_may_be_chosen(self):
+        """The guard has to ask about the venue that will be in force. Asking
+        about the running one let 5m be saved while a CoinDCX change was
+        pending — a machine that boots straight into a failing tick."""
+        executor, post = self._settings_harness(exchange="binance", timeframes=["15m"])
+        post("set_exchange", {"exchange": "coindcx"})
+        message = post("set_subscription", {"timeframes": "5m"})
+        self.assertIn("cannot trade 5m", message)
+        self.assertEqual(executor.config.timeframes, ["15m"])
+
+    def test_the_page_says_what_the_venue_carries(self):
+        executor, post = self._settings_harness(exchange="coindcx")
+        identity = executor._ui_state.snapshot()["identity"]
+        self.assertEqual(identity["venue_timeframes"][0], "15m")
+        self.assertNotIn("5m", identity["venue_timeframes"])
 
     def test_a_settings_action_receives_what_to_set(self):
         """Switches take no argument and settings do; one signature carries
