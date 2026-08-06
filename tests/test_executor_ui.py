@@ -972,10 +972,39 @@ class JournalAndPortfolioTests(unittest.TestCase):
         """Not three tabs: they answer the same question at different ranges —
         what is held now, what closed, what it added up to — and splitting
         them made the buyer navigate to assemble one picture."""
-        for marker in ('id="block-portfolio"', 'id="block-journal"', 'id="block-rounds"', 'id="console-tabs"'):
+        for marker in ('id="page-portfolio"', 'id="page-journal"', 'id="block-rounds"'):
             self.assertIn(marker, PAGE, marker)
-        for gone in ('data-page="portfolio"', 'data-page="journal"', 'data-page="rounds"'):
-            self.assertNotIn(gone, PAGE, gone)
+        for marker in ('data-page="portfolio"', 'data-page="journal"'):
+            self.assertIn(marker, PAGE, marker)
+        # Rounds is the one that stays on the console, so it never gets a tab.
+        self.assertNotIn('data-page="rounds"', PAGE)
+        self.assertNotIn('id="console-tabs"', PAGE)
+
+    def test_the_journal_page_repaints_its_canvas_on_arrival(self):
+        """A canvas sized while its page is hidden has no width to draw into,
+        so the curve is blank until something asks for it again."""
+        self.assertIn('if (name === "journal") drawEquity(', PAGE)
+
+    def test_each_control_explains_itself(self):
+        """Three buttons that move money — or stop it moving — with names
+        short enough to be guessed wrong."""
+        self.assertEqual(PAGE.count('class="info" type="button"'), 3)
+        self.assertIn(".info:hover::after, .info:focus::after", PAGE)
+        for wrapper in ('id="ctl-pause"', 'id="ctl-resume"', 'id="ctl-stand-down"'):
+            self.assertIn(wrapper, PAGE, wrapper)
+        # The wrapper is what hides, or the mark would stand there alone.
+        self.assertIn('$("ctl-pause").hidden', PAGE)
+        self.assertIn('$("ctl-resume").hidden', PAGE)
+        # An author `display` beats the UA's [hidden], and without this rule
+        # the console offered Pause and Resume at the same time.
+        self.assertIn(".ctl[hidden] { display:none; }", PAGE)
+
+    def test_the_venue_is_asked_before_what_depends_on_it(self):
+        """A venue's floor decides which timeframes the other block will even
+        accept, so it reads first."""
+        venue = PAGE.index("Which exchange you trade on")
+        signals = PAGE.index("Which signals you follow")
+        self.assertLess(venue, signals)
 
     def test_setup_and_the_guide_are_sub_tabs_of_one_page(self):
         """Side by side made each half too narrow to read; behind separate
@@ -984,6 +1013,9 @@ class JournalAndPortfolioTests(unittest.TestCase):
             self.assertIn(marker, PAGE, marker)
         self.assertIn('src="/guide.html"', PAGE)
         self.assertNotIn('data-page="guide"', PAGE)
+        # The guide leads: a machine that is not set up yet is one whose owner
+        # has not read this.
+        self.assertIn('[["guide", "Guide"], ["setup", "Setup"]]', PAGE)
 
     @unittest.skipUnless(shutil.which("node"), "node not available")
     def test_the_pages_script_actually_parses(self):
@@ -1027,10 +1059,10 @@ class JournalAndPortfolioTests(unittest.TestCase):
         last trade price, which is a different number on a different venue."""
         self.assertIn('cell.querySelector(".tc-price").textContent = price > 0 ? usdPx(price) : "—"', PAGE)
 
-    def test_both_strips_use_the_same_sub_tab_machinery(self):
-        """One implementation, so a fix to how a tab behaves reaches both."""
+    def test_there_is_one_sub_tab_implementation(self):
+        """Setup is the only page with sub-sections now; if a second ever
+        gets them, it uses this one rather than growing its own."""
         self.assertEqual(PAGE.count("function subTabs("), 1)
-        self.assertIn('subTabs("console-tabs"', PAGE)
         self.assertIn('subTabs("setup-tabs"', PAGE)
 
 

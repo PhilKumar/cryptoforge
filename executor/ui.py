@@ -1106,10 +1106,18 @@ PAGE = """<!doctype html>
 
   /* The headings sit on their own row beneath the quotes: four tabs and a
      four-cell strip do not fit one line at any width worth designing for. */
-  .navrow { border-top:1px solid var(--border); }
+  .navrow { border-top:1px solid var(--border); position:relative; }
   .navrow-inner { max-width:1240px; margin:0 auto; padding:0 18px; display:flex;
     align-items:stretch; gap:2px; overflow-x:auto; scrollbar-width:none; }
   .navrow-inner::-webkit-scrollbar { display:none; }
+  /* Six headings do not fit a phone, so the strip scrolls — and says so. A cut
+     with no fade reads as a rendering fault rather than as more to the right. */
+  .navrow::after { content:''; position:absolute; right:0; top:0; bottom:0; width:32px;
+    pointer-events:none; opacity:0; transition:opacity .15s;
+    background:linear-gradient(90deg, rgba(13,18,34,0), rgba(13,18,34,0.97)); }
+  html[data-theme="light"] .navrow::after {
+    background:linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.95)); }
+  @media (max-width:820px) { .navrow::after { opacity:1; } }
   @media (max-width:900px) { .clock { display:none; } }
   @media (max-width:820px) {
     /* Below this the brand and the strip cannot share a line, so the strip
@@ -1340,7 +1348,29 @@ PAGE = """<!doctype html>
   .exposure .num { font-family:var(--font-mono); font-size:clamp(26px,4vw,40px); font-weight:700;
                    letter-spacing:-0.5px; font-variant-numeric:tabular-nums; }
   .exposure .why { color:var(--dim); max-width:340px; }
-  .controls { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 6px; }
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 6px; align-items:center; }
+  /* These three buttons move money — or stop it moving — and their names are
+     short enough to be guessed wrong. The mark explains on hover AND on
+     focus, because a phone has no hover and a tap that only moves focus is
+     the whole gesture there. */
+  .ctl { position:relative; display:inline-flex; align-items:center; gap:6px; }
+  /* An author `display` beats the UA's [hidden], and without this the console
+     offered Pause and Resume at the same time. */
+  .ctl[hidden] { display:none; }
+  .info { width:17px; height:17px; border-radius:50%; flex:none; cursor:help; padding:0;
+    display:inline-flex; align-items:center; justify-content:center;
+    font:700 11px/1 var(--font-display); color:var(--muted);
+    background:none; border:1px solid var(--border); transition:all .15s; }
+  .info:hover, .info:focus-visible { color:var(--accent); border-color:var(--border-acc); }
+  .info::after { content:attr(data-tip); position:absolute; left:0; top:calc(100% + 8px);
+    width:max-content; max-width:min(320px, calc(100vw - 48px)); z-index:60;
+    padding:10px 13px; border-radius:11px; font:400 12.5px/1.55 var(--font-body);
+    letter-spacing:0; text-transform:none; text-align:left; color:var(--text);
+    background:#0b1424; border:1px solid var(--border-hi);
+    box-shadow:0 18px 40px rgba(2,6,23,.5);
+    opacity:0; visibility:hidden; transform:translateY(-4px); transition:opacity .14s, transform .14s; }
+  .info:hover::after, .info:focus::after { opacity:1; visibility:visible; transform:none; }
+  html[data-theme="light"] .info::after { background:#fff; box-shadow:0 16px 34px rgba(15,23,42,.14); }
   .toast { color:var(--muted); font-size:13px; min-height:20px; margin:8px 2px 10px; }
   .wake { margin:0 0 16px; padding:16px 18px; border-radius:14px;
     background:linear-gradient(180deg, rgba(251,191,36,.14), rgba(180,83,9,.10));
@@ -1598,6 +1628,8 @@ PAGE = """<!doctype html>
   <button class="nav-tab active" data-page="home">Home</button>
   <button class="nav-tab" data-page="console"><span class="live-dot" id="dot"></span>Console</button>
   <button class="nav-tab" data-page="campaigns">Campaigns</button>
+  <button class="nav-tab" data-page="portfolio">Portfolio</button>
+  <button class="nav-tab" data-page="journal">Journal</button>
   <!-- One flex item, not two: the tab's own gap sits between the live dot and
        its label, and a second item would open that gap mid-phrase. -->
   <button class="nav-tab" data-page="setup"><span>Setup<span class="nav-more"> &amp; guide</span></span></button>
@@ -1723,10 +1755,24 @@ PAGE = """<!doctype html>
     </div>
   </div>
   <div class="controls">
-    <button class="act" id="btn-pause" data-action="pause" hidden>Pause opening</button>
-    <button class="act solid" id="btn-resume" data-action="resume" hidden>Resume opening</button>
-    <button class="act danger" id="btn-stand-down" data-action="stand_down"
-      title="Cancel all buy orders now, leave every sell protecting. Pauses opening.">Stand down</button>
+    <span class="ctl" id="ctl-pause" hidden>
+      <button class="act" id="btn-pause" data-action="pause">Pause opening</button>
+      <button class="info" type="button" aria-label="What Pause opening does"
+        data-tip="Stops new rungs being placed. Buy orders already resting stay where they are, and every
+                  sell order protecting coin you hold keeps working — pausing never abandons a position.">i</button>
+    </span>
+    <span class="ctl" id="ctl-resume" hidden>
+      <button class="act solid" id="btn-resume" data-action="resume">Resume opening</button>
+      <button class="info" type="button" aria-label="What Resume opening does"
+        data-tip="Lets this machine place new rungs again. Campaigns that started while it was paused are
+                  picked up on the next tick, at the levels that are live then — not the ones it missed.">i</button>
+    </span>
+    <span class="ctl" id="ctl-stand-down">
+      <button class="act danger" id="btn-stand-down" data-action="stand_down">Stand down</button>
+      <button class="info" type="button" aria-label="What Stand down does"
+        data-tip="Cancels every resting BUY immediately and pauses opening, so nothing can be bought while
+                  you are away. Sell orders protecting coin you already hold are left exactly as they are.">i</button>
+    </span>
   </div>
   <div class="toast" id="toast"></div>
   <div class="wake" id="wake" hidden>
@@ -1744,11 +1790,30 @@ PAGE = """<!doctype html>
   <div class="section-h"><h2>Recent activity</h2></div>
   <div class="panel events" id="events" style="padding:14px 18px"></div>
 
-  <!-- Portfolio, Journal and Rounds live INSIDE the console, as sections of
-       one page rather than three tabs. They answer the same question at
-       different ranges — what is held now, what closed, what it added up to —
-       and splitting them made the buyer navigate to assemble one picture. -->
-  <div class="sub-tabs" id="console-tabs"></div>
+  <!-- Rounds stays on the console: it is the running tally of what this
+       machine has finished, and it belongs beside what it is doing now.
+       Portfolio and Journal are headings of their own — the strip has the
+       room, and each is a page a buyer opens deliberately. -->
+<div class="console-block" id="block-rounds">
+  <div class="section-h"><h2>Closed rounds</h2><span style="color:var(--muted);font-size:12.5px">
+    estimated, after your venue's headline commission</span></div>
+  <div class="stats-grid">
+    <div class="stat"><div class="l">Rounds closed</div><div class="v" id="r-count">0</div></div>
+    <div class="stat"><div class="l">Net (est)</div><div class="v" id="r-net">$0.00</div></div>
+  </div>
+  <div class="panel" style="overflow-x:auto">
+    <table id="rounds-table" hidden>
+      <thead><tr><th>Closed</th><th>Symbol</th><th>Qty</th><th>Entry → Exit</th><th>Gross</th><th>Fees (est)</th><th>Net (est)</th></tr></thead>
+      <tbody id="rounds"></tbody>
+    </table>
+    <div class="empty" id="rounds-empty">No rounds have closed yet on this machine.</div>
+  </div>
+</div>
+  <div class="disclosure" id="disclosure"></div>
+</div></section>
+
+<!-- ══════════ PORTFOLIO ══════════ -->
+<section class="page" id="page-portfolio"><div class="wrap">
 <div class="console-block" id="block-portfolio">
   <div class="section-h"><h2>Portfolio</h2><span style="color:var(--muted);font-size:12.5px">
     what this machine is holding, and what it is worth right now</span></div>
@@ -1771,7 +1836,10 @@ PAGE = """<!doctype html>
   </div>
   <div class="empty panel" id="pf-empty">Holding nothing — no coin has been bought yet.</div>
 </div>
+</div></section>
 
+<!-- ══════════ JOURNAL ══════════ -->
+<section class="page" id="page-journal"><div class="wrap">
 <div class="console-block" id="block-journal">
   <div class="section-h"><h2>Trade journal</h2><span style="color:var(--muted);font-size:12.5px">
     every round this machine closed — your entries, your fees, your exits</span></div>
@@ -1800,23 +1868,6 @@ PAGE = """<!doctype html>
   </div>
   <div class="empty panel" id="j-empty">No rounds closed yet — the journal fills as targets are hit.</div>
 </div>
-
-<div class="console-block" id="block-rounds">
-  <div class="section-h"><h2>Closed rounds</h2><span style="color:var(--muted);font-size:12.5px">
-    estimated, after your venue's headline commission</span></div>
-  <div class="stats-grid">
-    <div class="stat"><div class="l">Rounds closed</div><div class="v" id="r-count">0</div></div>
-    <div class="stat"><div class="l">Net (est)</div><div class="v" id="r-net">$0.00</div></div>
-  </div>
-  <div class="panel" style="overflow-x:auto">
-    <table id="rounds-table" hidden>
-      <thead><tr><th>Closed</th><th>Symbol</th><th>Qty</th><th>Entry → Exit</th><th>Gross</th><th>Fees (est)</th><th>Net (est)</th></tr></thead>
-      <tbody id="rounds"></tbody>
-    </table>
-    <div class="empty" id="rounds-empty">No rounds have closed yet on this machine.</div>
-  </div>
-</div>
-  <div class="disclosure" id="disclosure"></div>
 </div></section>
 
 <!-- ══════════ CAMPAIGNS ══════════ -->
@@ -1862,23 +1913,11 @@ PAGE = """<!doctype html>
     <div class="stat"><div class="l">Platform note</div><div class="v" id="su-advice" style="font-size:12.5px;font-weight:400;color:var(--dim)">—</div></div>
   </div>
   <div class="section-h"><h2>Settings</h2></div>
+  <!-- Venue first, left: it is the more fundamental of the two and the one
+       that cannot be changed on a whim, so it reads before the choice that
+       depends on it — a venue's floor is what decides which timeframes the
+       field beside it will even accept. -->
   <div class="settings">
-    <div class="set-block">
-      <h3>Which signals you follow</h3>
-      <p class="set-note">Takes effect immediately. Campaigns already running keep their exits —
-         narrowing what you follow never abandons a position.</p>
-      <div class="set-row">
-        <label>Timeframes<input id="set-tf" placeholder="blank means all"><em class="set-hint" id="set-tf-hint"></em></label>
-        <label>Drawn on<input id="set-src" readonly tabindex="-1"><em class="set-hint">always your exchange — you fill at its prices</em></label>
-        <label>Coins<input id="set-sym" placeholder="blank means all"><em class="set-hint">e.g. BTCUSDT, SOLUSDT</em></label>
-        <label>Capital (USD)<input id="set-cap" type="number" min="0" step="100">
-          <em class="set-hint">every rung is sized from this</em></label>
-      </div>
-      <div class="set-foot">
-        <button class="act solid" id="btn-save-signals">Save signal choice</button>
-        <span class="set-msg" id="set-signals-msg"></span>
-      </div>
-    </div>
     <div class="set-block">
       <h3>Which exchange you trade on</h3>
       <p class="set-note">Applied at the next start, and only from a flat book: your coin and your
@@ -1896,6 +1935,22 @@ PAGE = """<!doctype html>
         <span class="set-msg" id="set-exchange-msg"></span>
       </div>
       <div class="set-pending" id="set-pending" hidden></div>
+    </div>
+    <div class="set-block">
+      <h3>Which signals you follow</h3>
+      <p class="set-note">Takes effect immediately. Campaigns already running keep their exits —
+         narrowing what you follow never abandons a position.</p>
+      <div class="set-row">
+        <label>Timeframes<input id="set-tf" placeholder="blank means all"><em class="set-hint" id="set-tf-hint"></em></label>
+        <label>Drawn on<input id="set-src" readonly tabindex="-1"><em class="set-hint">always your exchange — you fill at its prices</em></label>
+        <label>Coins<input id="set-sym" placeholder="blank means all"><em class="set-hint">e.g. BTCUSDT, SOLUSDT</em></label>
+        <label>Capital (USD)<input id="set-cap" type="number" min="0" step="100">
+          <em class="set-hint">every rung is sized from this</em></label>
+      </div>
+      <div class="set-foot">
+        <button class="act solid" id="btn-save-signals">Save signal choice</button>
+        <span class="set-msg" id="set-signals-msg"></span>
+      </div>
     </div>
   </div>
   <div class="disclosure" id="setup-disclosure"></div>
@@ -1959,6 +2014,9 @@ const usdPx = v => {
 };
 const openLadders = new Set();
 const openFolds = new Set();
+/* Declared up here because opening the page straight at #journal calls show()
+   before the poll has ever run, and show() repaints the equity curve from it. */
+let lastSnapshot = {};
 /* Matches the parent's _CF_CHART_MAX_STRUCTURES. */
 const MAX_STRUCTURES = 3;
 
@@ -1966,8 +2024,16 @@ const MAX_STRUCTURES = 3;
 function show(name) {
   document.querySelectorAll(".page").forEach(p => p.classList.toggle("on", p.id === "page-" + name));
   document.querySelectorAll(".nav-tab").forEach(t => t.classList.toggle("active", t.dataset.page === name));
+  /* On a phone the strip scrolls, so the heading that was just chosen has to
+     be brought into it — otherwise the page changes and the tab that did it
+     is still off the edge. */
+  const chosen = document.querySelector('.nav-tab[data-page="' + name + '"]');
+  if (chosen && chosen.scrollIntoView) chosen.scrollIntoView({block: "nearest", inline: "nearest"});
   history.replaceState(null, "", "#" + name);
   window.scrollTo(0, 0);
+  /* The equity curve is canvas, and a canvas sized while its page is hidden
+     has no width to draw into — it has to be repainted on arrival. */
+  if (name === "journal") drawEquity((lastSnapshot.journal || {}).equity || []);
 }
 document.querySelectorAll(".nav-tab").forEach(t => t.addEventListener("click", () => show(t.dataset.page)));
 
@@ -2061,6 +2127,11 @@ window.addEventListener("resize", sizeGuide);
 sizeGuide();
 document.querySelectorAll("[data-goto]").forEach(b => b.addEventListener("click", () => show(b.dataset.goto)));
 if (location.hash.length > 1) show(location.hash.slice(1));
+/* A hash typed or followed while the page is already open changes nothing on
+   its own — the document does not reload — so the page has to route it. */
+window.addEventListener("hashchange", () => {
+  if (location.hash.length > 1) show(location.hash.slice(1));
+});
 
 async function act(name, button, payload) {
   button.disabled = true;
@@ -2140,8 +2211,10 @@ function render(s) {
     $("pnl-v").style.color = net >= 0 ? "var(--green)" : "var(--red)";
     $("pnl-l").textContent = st.rounds_closed + " round(s) · est., after venue fees";
   }
-  $("btn-pause").hidden = !!st.paused;
-  $("btn-resume").hidden = !st.paused;
+  /* The wrapper, not the button — hiding the button alone would leave its
+     explanation mark standing on its own. */
+  $("ctl-pause").hidden = !!st.paused;
+  $("ctl-resume").hidden = !st.paused;
   const waiting = st.awaiting_confirmation || s.wake_message;
   $("wake").hidden = !waiting;
   $("wake-text").textContent = st.awaiting_confirmation || s.wake_message || "";
@@ -2418,7 +2491,6 @@ function render(s) {
 }
 /* ══ chart ══ */
 let chartData = null;
-let lastSnapshot = {};
 let chartScale = null;   /* set by drawChart; read by the crosshair */
 let chartCid = "", chartTf = "";
 function drawChart() {
@@ -2826,13 +2898,10 @@ function subTabs(stripId, entries, onShow) {
   paint();
   return {paint: paint, showing: () => current};
 }
-const consoleTabs = subTabs("console-tabs",
-  [["portfolio", "Portfolio"], ["journal", "Journal"], ["rounds", "Rounds"]],
-  /* The curve is canvas: it has to be repainted when its tab appears, because
-     a canvas sized while hidden has no width to draw into. */
-  key => { if (key === "journal") drawEquity((lastSnapshot.journal || {}).equity || []); });
-/* The frame can only be measured once it is on screen. */
-subTabs("setup-tabs", [["setup", "Setup"], ["guide", "Guide"]], key => { if (key === "guide") sizeGuide(); });
+/* The guide comes first: a machine that is not set up yet is a machine whose
+   owner has not read this. The frame can only be measured once it is on
+   screen, so it is sized from here. */
+subTabs("setup-tabs", [["guide", "Guide"], ["setup", "Setup"]], key => { if (key === "guide") sizeGuide(); });
 
 poll(); setInterval(poll, 3000);
 
