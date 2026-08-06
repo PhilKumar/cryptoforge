@@ -225,6 +225,39 @@ class UIServerTests(unittest.TestCase):
                     f"off-machine {attr}: {ref}",
                 )
 
+    def test_the_console_is_installable(self):
+        """Manifest, worker and icons all served by the executor itself — a
+        buyer unzips a package, and every asset that is a FILE is one more
+        thing that can go missing and turn Install into a grey square."""
+        status, body = self._get("/manifest.webmanifest")
+        self.assertEqual(status, 200)
+        manifest = json.loads(body)
+        self.assertEqual(manifest["display"], "standalone")
+        # Relative, because the buyer may move the UI with --ui-port and an
+        # absolute URL would open an installed window on a dead port.
+        self.assertEqual(manifest["start_url"], ".")
+        for entry in manifest["icons"]:
+            self.assertFalse(entry["src"].startswith("/"), entry["src"])
+            icon_status, icon_body = self._get("/" + entry["src"])
+            self.assertEqual(icon_status, 200, entry["src"])
+            self.assertTrue(icon_body.startswith(b"\x89PNG\r\n\x1a\n"), entry["src"])
+
+        worker_status, worker = self._get("/sw.js")
+        self.assertEqual(worker_status, 200)
+        self.assertIn(b"addEventListener('fetch'", worker)
+
+    def test_the_worker_never_answers_from_cache_for_live_state(self):
+        """A cached /api/state is yesterday's positions presented as today's."""
+        _, worker = self._get("/sw.js")
+        self.assertIn(b"/api/", worker)
+        text = worker.decode()
+        guard = text[text.index("if (url.pathname.startsWith('/api/')") :]
+        self.assertTrue(guard.lstrip().startswith("if (url.pathname.startsWith('/api/')) return;"))
+
+    def test_the_page_asks_to_be_installed(self):
+        self.assertIn('<link rel="manifest" href="/manifest.webmanifest">', PAGE)
+        self.assertIn('navigator.serviceWorker.register("/sw.js")', PAGE)
+
     def test_the_guide_is_served_as_a_whole_document(self):
         status, body = self._get("/guide.html")
         self.assertEqual(status, 200)

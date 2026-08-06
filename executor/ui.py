@@ -30,7 +30,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Optional
 
-from executor import model
+from executor import model, pwa
 from executor.config import ConfigError, save_settings
 from executor.power import PlatformPower, suspend_advice
 from executor.report import irreducible_risk, running_status
@@ -256,6 +256,15 @@ LOGGED_EVENTS = ("halt", "bad_signature", "clock_warning", "stopped", "campaign"
 # the page offers exactly what the config will accept.
 SUPPORTED_EXCHANGES = ("binance", "coindcx")
 
+# Install icons, drawn on demand. Apple ignores the manifest and wants its own
+# link tag, which is why the 192 is served under two names.
+_ICONS = {
+    "/icon-192.png": (192, False),
+    "/icon-512.png": (512, False),
+    "/icon-maskable-512.png": (512, True),
+    "/apple-touch-icon.png": (192, False),
+}
+
 
 def _as_list(value) -> list:
     """A comma-separated box or a JSON list, both ending up as clean items."""
@@ -369,6 +378,9 @@ class UIServer:
             def log_message(self, *args):  # quiet; the executor has its own log
                 pass
 
+            def _port_hint(self) -> int:
+                return self.server.server_address[1]
+
             def _local(self) -> bool:
                 """Loopback peer AND a loopback Host header.
 
@@ -409,6 +421,26 @@ class UIServer:
                     body = guide_document()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
+                elif self.path == "/manifest.webmanifest":
+                    body = pwa.manifest(self._port_hint())
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/manifest+json")
+                elif self.path == "/sw.js":
+                    body = pwa.service_worker()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/javascript; charset=utf-8")
+                elif self.path in _ICONS:
+                    size, maskable = _ICONS[self.path]
+                    body = pwa.icon(size, maskable=maskable)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    # Drawn from constants, so they change only when the
+                    # executor does — and they are asked for on every install.
+                    self.send_header("Cache-Control", "public, max-age=604800, immutable")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 elif self.path.startswith("/assets/fonts/"):
                     body = font_css(self.path[len("/assets/fonts/") :].removesuffix(".css"))
                     if body is None:
@@ -504,6 +536,8 @@ PAGE = """<!doctype html>
 <title>Cascade — by CryptoForge</title>
 <meta name="theme-color" content="#040814">
 <link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http%3A//www.w3.org/2000/svg'%3E%3Crect width='32' height='32' rx='7' fill='%23040814'/%3E%3Crect x='7' y='10' width='4' height='12' rx='1' fill='%23f59e0b'/%3E%3Crect x='14' y='6' width='4' height='16' rx='1' fill='%2322d3ee'/%3E%3Crect x='21' y='13' width='4' height='9' rx='1' fill='%232dd4bf'/%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/fonts/core.css">
 <script>
 /* The terminal's boot script, same storage keys and same defaults, so a buyer
@@ -2026,6 +2060,18 @@ async function poll() {
   }
 }
 poll(); setInterval(poll, 3000);
+
+/* Installable, so the console can live in its own window with its own icon
+   instead of a tab that gets closed by accident on a machine that is supposed
+   to keep trading. Loopback counts as a secure context, so this registers on
+   127.0.0.1 without a certificate.
+
+   Failure is silent on purpose: the page works identically uninstalled, and a
+   scary console error about a service worker would be the buyer's first
+   impression of a product that is running perfectly. */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
 </script>
 </body>
 </html>
