@@ -215,7 +215,26 @@ class ExecutorRuntime:
                 report.opened_blocked.append(campaign_id)
 
             if entries_allowed:
-                report.notes.extend(self._advance(campaign_id, orders, followed))
+                try:
+                    report.notes.extend(self._advance(campaign_id, orders, followed))
+                except Exception as exc:
+                    # Contained per campaign, like every other venue call in
+                    # this class. Raising here escaped the loop, so one venue
+                    # refusing one symbol's candles — a coin it does not list,
+                    # an interval it does not serve, a bad minute on the wire —
+                    # abandoned every campaign after it in the pass, INCLUDING
+                    # the exit orders protecting coin already held.
+                    #
+                    # Entries stop for this campaign this tick, deliberately:
+                    # without candles we cannot know which rungs were crossed,
+                    # and guessing that is how money gets placed at the wrong
+                    # price. Its exit still goes in below.
+                    _log.warning("could not advance %s: %s", campaign_id, exc)
+                    entries_allowed = False
+                    report.notes.append(
+                        f"{campaign_id}: could not read {orders.symbol} {followed.timeframe} candles — {exc}. "
+                        "Opening nothing new here this tick; its exit is still managed."
+                    )
             elif not may_open and reason:
                 report.notes.append(f"{campaign_id}: {reason}")
 
@@ -381,10 +400,18 @@ class ExecutorRuntime:
         for campaign_id, orders in self.book.campaigns.items():
             if orders.exit_price is None or orders.base_qty <= 0:
                 continue
+            try:
+                market_price = float(self._market.last_price(orders.symbol))
+            except Exception as exc:
+                # Same containment as the tick. This runs on WAKE, when the
+                # most is at stake: one symbol's price failing must not stop
+                # the other positions catching their targets up.
+                _log.warning("no price for %s on wake: %s", orders.symbol, exc)
+                continue
             intent = tp_catchup_intent(
                 campaign_id,
                 target=orders.exit_price,
-                market_price=self._market.last_price(orders.symbol),
+                market_price=market_price,
                 quantity=orders.base_qty,
             )
             if intent:

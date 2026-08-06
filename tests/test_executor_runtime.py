@@ -235,6 +235,70 @@ class SyncTests(RuntimeHarness):
         self.assertAlmostEqual(runtime.book.get("casc_SOLUSDT_1").median_bar_pct, 0.002)
 
 
+class CandleFailureTests(RuntimeHarness):
+    """One venue refusing one symbol's candles must not stop the pass.
+
+    Found live: a CoinDCX machine following 5m geometry got 422 from
+    /market_data/candles every tick, and the raise escaped the campaign loop.
+    """
+
+    def _market_that_fails(self, bad_symbol):
+        market = self.market
+
+        class Selective:
+            def last_price(self, symbol):
+                return market.last_price(symbol)
+
+            def closed_candles_since(self, symbol, timeframe, since_ts):
+                if symbol == bad_symbol:
+                    raise RuntimeError(f"422 Unprocessable Entity for {symbol} {timeframe}")
+                return market.closed_candles_since(symbol, timeframe, since_ts)
+
+        return Selective()
+
+    def test_a_candle_failure_does_not_abandon_the_other_campaigns(self):
+        self._open(campaign_id="sol", symbol="SOLUSDT")
+        self._open(campaign_id="btc", symbol="BTCUSDT")
+        self.market.candles = [self._red(1785400900, 160.0)]
+        runtime = self._runtime()
+        runtime._market = self._market_that_fails("SOLUSDT")
+        runtime.sync()
+
+        report = runtime.tick()  # must not raise
+        self.assertTrue(any("could not read SOLUSDT" in note for note in report.notes))
+        # SOLUSDT is tracked first, so before the fix the loop never reached
+        # BTCUSDT at all. Its price being read is the proof that it did.
+        self.assertIn("BTCUSDT", runtime.last_prices)
+
+    def test_the_failing_campaign_still_gets_its_exit_placed(self):
+        """The whole point. It holds coin; the candles are only needed to open
+        more, never to protect what is already there."""
+        self._open(campaign_id="sol", symbol="SOLUSDT")
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.on_fill("sol", Fill(price=162.0, quantity=0.05, timestamp=40))
+        runtime._market = self._market_that_fails("SOLUSDT")
+
+        report = runtime.tick()
+        self.assertTrue(any("exit is still managed" in note for note in report.notes))
+        sells = [call for call in self.exchange.placed if call.side == "sell"]
+        self.assertEqual(len(sells), 1)
+
+    def test_no_entry_is_placed_from_candles_we_could_not_read(self):
+        """Without candles we cannot know which rungs were crossed, and
+        guessing is how money lands at the wrong price."""
+        self._open(campaign_id="sol", symbol="SOLUSDT")
+        self._leg(campaign_id="sol", symbol="SOLUSDT")
+        self.market.candles = [self._red(1785400900, 160.0)]
+        runtime = self._runtime()
+        runtime._market = self._market_that_fails("SOLUSDT")
+        runtime.sync()
+
+        runtime.tick()
+        buys = [call for call in self.exchange.placed if call.side == "buy"]
+        self.assertEqual(buys, [])
+
+
 class SettingsTests(RuntimeHarness):
     """The buyer changing their own mind, from their own console."""
 
@@ -499,6 +563,29 @@ class SleepAndWakeTests(RuntimeHarness):
         report = runtime.on_wake({"shutdown_at": NOW - 8 * 3600, "slept_armed": False})
         self.assertEqual(report["message"].count("Away for"), 1)
         self.assertIn("8.0h", report["message"])
+
+    def test_a_dead_price_on_wake_does_not_strand_the_other_positions(self):
+        """Wake is when the most is at stake: one symbol's price failing must
+        not stop the others catching their targets up, or produce no report."""
+        self._open(campaign_id="sol", symbol="SOLUSDT")
+        self._open(campaign_id="btc", symbol="BTCUSDT")
+        runtime = self._runtime()
+        runtime.sync()
+        for campaign_id in ("sol", "btc"):
+            runtime.on_fill(campaign_id, Fill(price=162.0, quantity=0.05, timestamp=40))
+            runtime.book.get(campaign_id).exit_price = 170.0
+
+        class DeadPrice:
+            def last_price(self, symbol):
+                raise RuntimeError("venue down")
+
+            def closed_candles_since(self, symbol, timeframe, since_ts):
+                return []
+
+        runtime._market = DeadPrice()
+        report = runtime.on_wake({"shutdown_at": NOW - 3600, "slept_armed": False})
+        self.assertIn("message", report)
+        self.assertEqual(sorted(report["protected"]), ["btc", "sol"])
 
     def test_a_long_gap_protects_the_position_but_asks_before_trading(self):
         self._open()
