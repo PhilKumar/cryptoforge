@@ -684,6 +684,8 @@ Collecting websockets&gt;=12
   "exchange": <span class="hi">"binance"</span>,
   "capital_usd": <span class="hi">3000</span>,
   "symbols": [],
+  "timeframes": <span class="hi">["5m"]</span>,
+  "signal_exchanges": <span class="hi">["binance"]</span>,
   "tick_seconds": 20
 }</span></div>
           </div>
@@ -697,6 +699,8 @@ Collecting websockets&gt;=12
                 <tr><td>exchange</td><td><code>binance</code> or <code>coindcx</code> — whichever you use.</td></tr>
                 <tr><td>capital_usd</td><td><strong>The money you are putting behind this</strong>, in dollars.</td></tr>
                 <tr><td>symbols</td><td>Leave as <code>[]</code>, which means "follow everything".</td></tr>
+                <tr><td>timeframes</td><td><strong>Which signals you subscribed to.</strong> A 5-minute signal moves faster and asks for more entries in a day than a 15-minute one. Put what you bought; <code>[]</code> follows all of them.</td></tr>
+                <tr><td>signal_exchanges</td><td>Whose chart the signals are drawn from. Binance's SOLUSDT and CoinDCX's SOLUSDT are the same coin but not the same candles.</td></tr>
                 <tr><td>tick_seconds</td><td>Leave at <code>20</code>.</td></tr>
               </tbody>
             </table>

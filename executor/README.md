@@ -173,6 +173,8 @@ keeping the quote marks exactly where they are:
   "exchange": "binance",
   "capital_usd": 3000,
   "symbols": [],
+  "timeframes": [],
+  "signal_exchanges": [],
   "tick_seconds": 20
 }
 ```
@@ -185,7 +187,26 @@ keeping the quote marks exactly where they are:
 | `exchange` | `binance` or `coindcx` — whichever you use. |
 | `capital_usd` | **The money you're putting behind this**, in dollars. Read the note below — this one matters more than it looks. |
 | `symbols` | Leave as `[]`, which means "follow everything". |
+| `timeframes` | **Which signals you subscribed to** — see below. `[]` means all of them. |
+| `signal_exchanges` | Which venue's chart the signals are drawn from. `[]` means all of them. |
 | `tick_seconds` | Leave at `20`. |
+
+**About `timeframes` and `signal_exchanges`.** Not every signal is the same
+product. A 5-minute signal moves faster and asks for more entries in a day
+than a 15-minute one, and the two are drawn on different venues' charts —
+Binance's SOLUSDT and CoinDCX's SOLUSDT are not the same series of candles,
+even though they are the same coin.
+
+Put in what you subscribed to. Two examples:
+
+```
+"timeframes": ["15m"],  "signal_exchanges": ["coindcx"]
+"timeframes": ["5m"],   "signal_exchanges": ["binance"]
+```
+
+Leave both `[]` and you follow everything we publish. Anything you did not
+subscribe to is listed on your console with the reason, so a coin that never
+trades is never a mystery.
 
 **About `capital_usd`.** This isn't a safety limit you probably won't reach. It
 is the number every order size is worked out from. Put 3000 and it will trade

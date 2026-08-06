@@ -242,6 +242,7 @@ def campaigns_view(runtime) -> list:
                 "state": "skipped",
                 "skip_reason": followed.skip_reason,
                 "skipped_as_old": followed.skipped_as_old,
+                "skipped_unsubscribed": followed.skipped_unsubscribed,
             }
         )
     return rows
@@ -257,9 +258,12 @@ def worth_logging(kind: str, detail: dict) -> bool:
     one connect emits one per campaign the server has ever run, which is how
     the log came to be a hundred repetitions of the same sentence. The folded
     count on the status line carries that fact instead.
+    A signal outside the buyer's subscription is the same kind of non-event:
+    for a buyer on one product it is most of the feed, every connect.
     """
-    if kind == "campaign" and not detail.get("joined") and detail.get("skipped_as_old"):
-        return False
+    if kind == "campaign" and not detail.get("joined"):
+        if detail.get("skipped_as_old") or detail.get("skipped_unsubscribed"):
+            return False
     return kind in LOGGED_EVENTS
 
 
@@ -1372,6 +1376,7 @@ PAGE = """<!doctype html>
     <div class="stat"><div class="l">Buyer</div><div class="v" id="su-buyer" style="font-size:15px">—</div></div>
     <div class="stat"><div class="l">Exchange</div><div class="v" id="su-exchange" style="font-size:15px">—</div></div>
     <div class="stat"><div class="l">Signal</div><div class="v" id="su-conn" style="font-size:15px">—</div></div>
+    <div class="stat"><div class="l">Subscribed to</div><div class="v" id="su-following" style="font-size:12.5px;font-weight:400;color:var(--dim)">—</div></div>
     <div class="stat"><div class="l">Platform note</div><div class="v" id="su-advice" style="font-size:12.5px;font-weight:400;color:var(--dim)">—</div></div>
   </div>
   <div class="disclosure" id="setup-disclosure"></div>
@@ -1580,18 +1585,23 @@ function render(s) {
      one fact, not a page of alerts — fold them into a single line and keep
      individual cards for reasons that ask something of the buyer. */
   const old = all.filter(cp => cp.skipped_as_old);
-  const campaigns = all.filter(cp => !cp.skipped_as_old);
+  const unsub = all.filter(cp => cp.skipped_unsubscribed);
+  const campaigns = all.filter(cp => !cp.skipped_as_old && !cp.skipped_unsubscribed);
   $("cards-empty").hidden = all.length > 0;
-  if (old.length) {
+  const foldInto = (rows, headline) => {
+    if (!rows.length) return;
     const fold = document.createElement("div"); fold.className = "camp panel";
     const syms = {};
-    old.forEach(cp => { syms[cp.symbol] = (syms[cp.symbol] || 0) + 1; });
+    rows.forEach(cp => { syms[cp.symbol] = (syms[cp.symbol] || 0) + 1; });
     const bySym = Object.entries(syms).map(([k, n]) => `${k} ${n}`).join(" · ");
-    fold.innerHTML = `<details><summary>${old.length} older campaign${old.length > 1 ? "s" : ""} not followed — ` +
-      `they started before this machine was watching, and a ladder only makes sense from its mother` +
-      `</summary><div class="cell"><div class="l">by symbol</div><div class="v">${bySym}</div></div></details>`;
+    fold.innerHTML = `<details><summary>${headline(rows.length)}</summary>` +
+      `<div class="cell"><div class="l">by symbol</div><div class="v">${bySym}</div></div></details>`;
     cards.appendChild(fold);
-  }
+  };
+  foldInto(old, n => `${n} older campaign${n > 1 ? "s" : ""} not followed — they started before this machine ` +
+    `was watching, and a ladder only makes sense from its mother`);
+  foldInto(unsub, n => `${n} signal${n > 1 ? "s" : ""} outside your subscription — you follow ` +
+    `${st.subscription || "a subset of what we publish"}`);
   campaigns.forEach(cp => {
     const card = document.createElement("div"); card.className = "camp panel";
     const tag = cp.halted ? ["halt", "halted"] : cp.state === "skipped" ? ["skip", "skipped"]
@@ -1669,6 +1679,7 @@ function render(s) {
   $("su-buyer").textContent = id.buyer_id || "—";
   $("su-exchange").textContent = id.exchange || "—";
   $("su-conn").textContent = c.state || "—";
+  $("su-following").textContent = id.following || "—";
   $("su-advice").textContent = s.advice || "Nothing to flag on this platform.";
 }
 /* ══ chart ══ */
@@ -1831,6 +1842,10 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         {
             "buyer_id": executor.config.buyer_id,
             "exchange": executor.config.exchange,
+            # What this subscription covers. Shown because a buyer looking at a
+            # quiet console should be able to tell "I did not subscribe to
+            # that" from "something is broken".
+            "following": executor.config.subscription_line,
             # The public half only — it is the one thing the server holds, and
             # the Setup page shows it so "send us your key" is a copy, not a
             # terminal session.

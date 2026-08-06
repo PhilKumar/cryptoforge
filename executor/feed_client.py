@@ -81,6 +81,9 @@ class FollowedCampaign:
     timeframe: str
     state: str
     model_version: int
+    # What it was BORN on: an escalating campaign changes `timeframe` mid-life,
+    # and the buyer's subscription is to the product they were sold.
+    start_timeframe: str = ""
     min_notional_usd: float = 5.0
     tick_size: float = 0.01
     # Published on campaign.opened. The buy-stop raise allowance is measured in
@@ -93,6 +96,10 @@ class FollowedCampaign:
     # was watching. That is the normal condition of almost every campaign a
     # buyer ever sees, so the UI folds these into one line instead of a page.
     skipped_as_old: bool = False
+    # True when it is simply not what this buyer subscribed to. Also bulk and
+    # also routine — most of the feed, for a buyer on one product — so the UI
+    # folds these too, on their own line rather than mixed in with the old.
+    skipped_unsubscribed: bool = False
     halted: str = ""
     legs: Dict[int, FollowedLeg] = field(default_factory=dict)
     trendlines: Dict[int, dict] = field(default_factory=dict)
@@ -121,12 +128,22 @@ class FeedClient:
         max_join_age_sec: int = MAX_JOIN_AGE_SEC,
         on_event: Optional[Callable[[str, dict], None]] = None,
         resumed_campaign_ids: Iterable[str] = (),
+        timeframes: Iterable[str] = (),
+        source_exchanges: Iterable[str] = (),
     ):
         self._keys = dict(public_keys)
         self._keyset_fetched_at = float(keyset_fetched_at)
         self._now = now_fn
         self._max_join_age = int(max_join_age_sec)
         self._on_event = on_event
+        # Which signals this buyer subscribed to, by the timeframe the geometry
+        # is drawn on and the venue whose candles drew it. Empty means all of
+        # them. These are a CHOICE, not a safety rail: a 5m campaign and a 15m
+        # one are different products — different pace, different number of
+        # entries a day — and a buyer on a venue that only suits the slower one
+        # should not be handed the faster one by default.
+        self._timeframes = {str(tf).strip().lower() for tf in timeframes if str(tf).strip()}
+        self._source_exchanges = {str(x).strip().lower() for x in source_exchanges if str(x).strip()}
         # Campaigns this machine had already joined before it stopped. The join
         # window asks "did we see this start?", and for these the answer is yes
         # — the process restarting does not un-see it. Without this a buyer who
@@ -242,6 +259,10 @@ class FeedClient:
             mother_low=float(payload.get("mother_low") or 0.0),
             mother_timestamp=int(payload.get("mother_timestamp") or 0),
             timeframe=str(payload.get("timeframe") or ""),
+            # What it was BORN on. A campaign that escalates changes `timeframe`
+            # mid-life, and the buyer chose the product they were sold, not
+            # whatever it grew into.
+            start_timeframe=str(payload.get("start_timeframe") or payload.get("timeframe") or ""),
             state=str(payload.get("state") or ""),
             model_version=int(envelope.get("model_version") or 0),
             min_notional_usd=float((payload.get("advisory") or {}).get("min_notional_usd") or 5.0),
@@ -256,6 +277,12 @@ class FeedClient:
             campaign.skip_reason = (
                 f"Drawn under model v{campaign.model_version}; this executor understands v{model.MODEL_VERSION}."
             )
+        elif not self._subscribed_to(campaign):
+            # Not an error and not a refusal — a subscription. Said plainly so
+            # a buyer wondering why a coin never trades can see the answer
+            # rather than suspect the machine.
+            campaign.skip_reason = self._not_subscribed_reason(campaign)
+            campaign.skipped_unsubscribed = True
         else:
             age = self._now() - campaign.created_at
             # Resuming is not joining late: we were in this one before the
@@ -280,7 +307,32 @@ class FeedClient:
                 "joined": campaign.joined,
                 "reason": campaign.skip_reason,
                 "skipped_as_old": campaign.skipped_as_old,
+                "skipped_unsubscribed": campaign.skipped_unsubscribed,
             },
+        )
+
+    def _subscribed_to(self, campaign: "FollowedCampaign") -> bool:
+        """Is this one of the signals this buyer asked for?
+
+        Matched on the timeframe the campaign was BORN on and the venue whose
+        candles drew it — the two things that make a 15m CoinDCX signal a
+        different product from a 5m Binance one. An empty set means the buyer
+        chose everything, which is the default and a real choice too.
+        """
+        born = (campaign.start_timeframe or campaign.timeframe).strip().lower()
+        if self._timeframes and born not in self._timeframes:
+            return False
+        if self._source_exchanges and campaign.exchange.strip().lower() not in self._source_exchanges:
+            return False
+        return True
+
+    def _not_subscribed_reason(self, campaign: "FollowedCampaign") -> str:
+        born = (campaign.start_timeframe or campaign.timeframe).strip().lower()
+        if self._timeframes and born not in self._timeframes:
+            return f"You follow {'/'.join(sorted(self._timeframes))} signals; this one is {born or 'unlabelled'}."
+        return (
+            f"You follow signals drawn on {'/'.join(sorted(self._source_exchanges))}; "
+            f"this one is drawn on {campaign.exchange or 'an unnamed venue'}."
         )
 
     def _on_trendline_set(self, envelope: dict, payload: dict) -> None:

@@ -317,6 +317,22 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(folded), 1)
         self.assertFalse(any("Not following" in line for line in lines))
 
+    def test_signals_outside_the_subscription_fold_into_one_line(self):
+        """Filtering by product recreated the same wall of alerts the age
+        fold removed. It folds too, on its own line."""
+        lines = running_status(
+            {
+                "armed_exposure_usd": 0.0,
+                "opening_new": True,
+                "skipped_unsubscribed": 141,
+                "subscription": "15m · drawn on coindcx · all coins",
+            }
+        )
+        folded = [line for line in lines if "141 signals outside your subscription" in line]
+        self.assertEqual(len(folded), 1)
+        self.assertIn("15m · drawn on coindcx", folded[0])
+        self.assertFalse(any("Not following" in line for line in lines))
+
     def test_an_actionable_skip_still_gets_its_own_line(self):
         lines = running_status(
             {
@@ -376,6 +392,37 @@ class FirstStartMarkerTests(unittest.TestCase):
             root_public_key="k",
             state_dir=self._dir.name,
         )
+
+    def test_the_subscription_reads_from_the_file_and_the_environment(self):
+        """Which signals a buyer bought is config, not a code change."""
+        import json as _json
+        import os as _os
+
+        from executor.config import load
+
+        path = _os.path.join(self._dir.name, "config.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            _json.dump(
+                {
+                    "server_url": "http://localhost",
+                    "buyer_id": "b",
+                    "root_public_key": "k",
+                    "timeframes": ["15M"],
+                    "signal_exchanges": ["CoinDCX"],
+                },
+                handle,
+            )
+        config = load(path, environ={})
+        self.assertEqual(config.timeframes, ["15m"])
+        self.assertEqual(config.signal_exchanges, ["coindcx"])
+
+        overridden = load(path, environ={"CASCADE_TIMEFRAMES": "5m, 1h"})
+        self.assertEqual(overridden.timeframes, ["5m", "1h"])
+
+    def test_an_unsubscribed_default_follows_everything(self):
+        config = self._config()
+        self.assertEqual(config.timeframes, [])
+        self.assertEqual(config.redacted()["timeframes"], ["(all)"])
 
     def test_the_marker_lives_beside_the_shutdown_record(self):
         config = self._config()

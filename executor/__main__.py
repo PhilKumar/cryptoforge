@@ -64,6 +64,8 @@ class Executor:
             connect_fn=_connect,
             on_status=self._on_status,
             resumed_campaign_ids=self._joined_ids,
+            timeframes=config.timeframes,
+            source_exchanges=config.signal_exchanges,
         )
         self.runtime: Optional[ExecutorRuntime] = None
         self.inhibitor = SleepInhibitor()
@@ -165,6 +167,7 @@ class Executor:
                 quote_asset=self.config.quote_asset,
                 symbols=list(self.config.symbols),
                 exchange=self.config.exchange,
+                subscription_line=self.config.subscription_line,
             ),
         )
 

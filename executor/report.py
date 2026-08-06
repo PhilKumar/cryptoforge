@@ -106,6 +106,13 @@ def running_status(status: dict, *, power: Optional[PlatformPower] = None) -> Li
             "started before this machine was watching. New ones are joined as they open."
         )
 
+    unsubscribed = int(status.get("skipped_unsubscribed") or 0)
+    if unsubscribed:
+        covers = status.get("subscription") or "what you subscribed to"
+        lines.append(
+            f"{unsubscribed} signal{'s' if unsubscribed > 1 else ''} outside your subscription — you follow {covers}."
+        )
+
     if power:
         advice = suspend_advice(power, armed_exposure_usd=exposure)
         if advice:

@@ -72,6 +72,9 @@ class RuntimeConfig:
     # fee floor under their target, the commission netted off their rounds —
     # is priced here, because this is where they actually pay.
     exchange: str = "binance"
+    # What this subscription covers, for the status line. The filtering itself
+    # happens in the feed client, at the join decision.
+    subscription_line: str = ""
 
 
 @dataclass
@@ -472,12 +475,15 @@ class ExecutorRuntime:
             "skipped": {
                 c.campaign_id: c.skip_reason
                 for c in self._client.campaigns.values()
-                if c.skip_reason and not c.skipped_as_old
+                if c.skip_reason and not (c.skipped_as_old or c.skipped_unsubscribed)
             },
-            # Folded, not listed: predating this machine is the normal state
-            # of almost every campaign a buyer ever sees, and a page of
-            # per-campaign alerts buried the lines that ask for attention.
+            # Folded, not listed. Both of these are the normal state of most of
+            # the feed for any one buyer — predating this machine, or simply
+            # not the product they bought — and a page of per-campaign alerts
+            # buried the lines that ask for attention.
             "skipped_as_old": len([c for c in self._client.campaigns.values() if c.skipped_as_old]),
+            "skipped_unsubscribed": len([c for c in self._client.campaigns.values() if c.skipped_unsubscribed]),
+            "subscription": self._config.subscription_line,
             "opening_new": may_open,
             "posture_reason": reason,
             # The single most useful number in the product: knowable, changing

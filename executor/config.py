@@ -35,6 +35,17 @@ class ExecutorConfig:
     exchange: str = "binance"
     capital_usd: float = 0.0
     symbols: List[str] = field(default_factory=list)
+    # Which signals this subscription is for. Empty means all of them.
+    #
+    # A 5m campaign and a 15m one are different products, not settings: they
+    # differ in pace, in how many entries a day they ask for, and in which
+    # venues can carry them at all. A buyer whose exchange suits the slower
+    # one should not be handed the faster one because nobody asked.
+    timeframes: List[str] = field(default_factory=list)
+    # The venue whose CANDLES drew the geometry — not where this machine
+    # trades, which is `exchange` below. Binance SOLUSDT and CoinDCX SOLUSDT
+    # are not the same series.
+    signal_exchanges: List[str] = field(default_factory=list)
     quote_asset: str = "USDT"
     tick_seconds: int = 20
     # Secrets, never written back out. See `redacted()`.
@@ -76,6 +87,19 @@ class ExecutorConfig:
         """
         return os.path.join(os.path.expanduser(self.state_dir), "started.json")
 
+    @property
+    def subscription_line(self) -> str:
+        """The signals this machine is subscribed to, in one phrase.
+
+        Shown wherever a buyer might otherwise read a quiet console as broken:
+        "I did not buy that" and "something is wrong" look identical until
+        somebody says which.
+        """
+        tf = "/".join(self.timeframes) if self.timeframes else "all timeframes"
+        venue = "/".join(self.signal_exchanges) if self.signal_exchanges else "all venues"
+        coins = ", ".join(self.symbols) if self.symbols else "all coins"
+        return f"{tf} · drawn on {venue} · {coins}"
+
     def redacted(self) -> dict:
         """Safe to print, log, or paste into a support conversation."""
         return {
@@ -84,6 +108,8 @@ class ExecutorConfig:
             "exchange": self.exchange,
             "capital_usd": self.capital_usd,
             "symbols": self.symbols or ["(all)"],
+            "timeframes": self.timeframes or ["(all)"],
+            "signal_exchanges": self.signal_exchanges or ["(all)"],
             "tick_seconds": self.tick_seconds,
             "state_dir": self.state_dir,
             "api_key": f"…{self.api_key[-4:]}" if self.api_key else "(not set)",
@@ -149,6 +175,8 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
         exchange=str(env.get("CASCADE_EXCHANGE") or data.get("exchange") or "binance").lower(),
         capital_usd=float(env.get("CASCADE_CAPITAL_USD") or data.get("capital_usd") or 0.0),
         symbols=list(data.get("symbols") or []),
+        timeframes=[str(tf).strip().lower() for tf in (data.get("timeframes") or []) if str(tf).strip()],
+        signal_exchanges=[str(x).strip().lower() for x in (data.get("signal_exchanges") or []) if str(x).strip()],
         quote_asset=str(data.get("quote_asset") or "USDT").upper(),
         tick_seconds=int(env.get("CASCADE_TICK_SECONDS") or data.get("tick_seconds") or 20),
         api_key=str(env.get("CASCADE_API_KEY") or data.get("api_key") or ""),
@@ -157,6 +185,12 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
     )
     if env.get("CASCADE_SYMBOLS"):
         config.symbols = [s.strip().upper() for s in str(env["CASCADE_SYMBOLS"]).split(",") if s.strip()]
+    if env.get("CASCADE_TIMEFRAMES"):
+        config.timeframes = [t.strip().lower() for t in str(env["CASCADE_TIMEFRAMES"]).split(",") if t.strip()]
+    if env.get("CASCADE_SIGNAL_EXCHANGES"):
+        config.signal_exchanges = [
+            x.strip().lower() for x in str(env["CASCADE_SIGNAL_EXCHANGES"]).split(",") if x.strip()
+        ]
     return config
 
 
@@ -178,5 +212,9 @@ SAMPLE = {
     "exchange": "binance",
     "capital_usd": 3000,
     "symbols": [],
+    # Empty means every signal. Narrow it to the product you subscribed to:
+    # e.g. ["15m"] with "signal_exchanges": ["coindcx"], or ["5m"] on binance.
+    "timeframes": [],
+    "signal_exchanges": [],
     "tick_seconds": 20,
 }

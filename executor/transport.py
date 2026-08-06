@@ -213,6 +213,8 @@ class FeedTransport:
         now_fn: Callable[[], float] = time.time,
         sleep_fn: Optional[Callable] = None,
         resumed_campaign_ids: Iterable[str] = (),
+        timeframes: Iterable[str] = (),
+        source_exchanges: Iterable[str] = (),
     ):
         self._base_url = base_url.rstrip("/")
         self._identity = identity
@@ -223,6 +225,11 @@ class FeedTransport:
         # Handed to the one FeedClient below, so campaigns we were already in
         # survive a restart instead of reading as arrivals we missed.
         self._resumed = tuple(resumed_campaign_ids)
+        # Which signals this subscription covers. Also handed to the one
+        # long-lived client, for the same reason: a filter that changed on
+        # reconnect would follow different things after a dropped wifi.
+        self._timeframes = tuple(timeframes)
+        self._source_exchanges = tuple(source_exchanges)
         self._sleep = sleep_fn or asyncio.sleep
         self.client: Optional[FeedClient] = None
         self.stopped_reason: str = ""
@@ -245,6 +252,8 @@ class FeedTransport:
                 now_fn=self._now,
                 on_event=lambda kind, detail: self._status(kind, detail),
                 resumed_campaign_ids=self._resumed,
+                timeframes=self._timeframes,
+                source_exchanges=self._source_exchanges,
             )
             return
         self.client._keys = dict(keys)

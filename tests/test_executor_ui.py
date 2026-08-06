@@ -135,6 +135,7 @@ class CampaignViewTests(unittest.TestCase):
         from executor.ui import worth_logging
 
         self.assertFalse(worth_logging("campaign", {"joined": False, "skipped_as_old": True}))
+        self.assertFalse(worth_logging("campaign", {"joined": False, "skipped_unsubscribed": True}))
         self.assertTrue(worth_logging("campaign", {"joined": True}))
         self.assertTrue(worth_logging("campaign", {"joined": False, "reason": "model v22"}))
         self.assertTrue(worth_logging("halt", {"campaign_id": "c1"}))

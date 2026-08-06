@@ -95,7 +95,9 @@ class ClientHarness(unittest.TestCase):
         )
         self.seq = 0
 
-    def send(self, msg_type, payload, *, campaign_id="casc_SOLUSDT_1", symbol="SOLUSDT", seq=None, signer=None):
+    def send(
+        self, msg_type, payload, *, campaign_id="casc_SOLUSDT_1", symbol="SOLUSDT", seq=None, signer=None, client=None
+    ):
         if seq is None:
             self.seq += 1
             seq = self.seq
@@ -108,7 +110,7 @@ class ClientHarness(unittest.TestCase):
             model_version=MODEL_VERSION,
             emitted_at=int(self.clock[0]),
         )
-        return self.client.handle_frame((signer or self.signer).frame(envelope))
+        return (client or self.client).handle_frame((signer or self.signer).frame(envelope))
 
     def open_campaign(self, **overrides):
         self.send("campaign.opened", _campaign_payload(**overrides))
@@ -269,6 +271,67 @@ class HaltTests(ClientHarness):
             ),
         )
         self.assertIn("below the line", self.client.campaigns["casc_SOLUSDT_1"].halted)
+
+    def test_a_buyer_follows_only_the_timeframe_they_subscribed_to(self):
+        """A 5m campaign and a 15m one are different products. The buyer on
+        the slower one must not be handed the faster by default."""
+        client = FeedClient(
+            public_keys=self.keys,
+            keyset_fetched_at=NOW,
+            now_fn=lambda: self.clock[0],
+            timeframes=["15m"],
+        )
+        self.send("campaign.opened", _campaign_payload(timeframe="5m", start_timeframe="5m"), client=client)
+        self.send(
+            "campaign.opened",
+            _campaign_payload(campaign_id="slow", timeframe="15m", start_timeframe="15m"),
+            campaign_id="slow",
+            client=client,
+        )
+        self.assertFalse(client.campaigns["casc_SOLUSDT_1"].joined)
+        self.assertIn("you follow 15m", client.campaigns["casc_SOLUSDT_1"].skip_reason.lower())
+        self.assertTrue(client.campaigns["slow"].joined)
+
+    def test_the_subscription_matches_the_timeframe_it_was_born_on(self):
+        """An escalating campaign changes `timeframe` mid-life; the buyer
+        bought the product they were sold."""
+        client = FeedClient(
+            public_keys=self.keys,
+            keyset_fetched_at=NOW,
+            now_fn=lambda: self.clock[0],
+            timeframes=["5m"],
+        )
+        self.send("campaign.opened", _campaign_payload(timeframe="15m", start_timeframe="5m"), client=client)
+        self.assertTrue(client.campaigns["casc_SOLUSDT_1"].joined)
+
+    def test_a_buyer_can_follow_only_one_venues_geometry(self):
+        client = FeedClient(
+            public_keys=self.keys,
+            keyset_fetched_at=NOW,
+            now_fn=lambda: self.clock[0],
+            source_exchanges=["coindcx"],
+        )
+        self.send("campaign.opened", _campaign_payload(exchange="binance"), client=client)
+        campaign = client.campaigns["casc_SOLUSDT_1"]
+        self.assertFalse(campaign.joined)
+        self.assertIn("drawn on binance", campaign.skip_reason)
+
+    def test_an_unfiltered_buyer_still_follows_everything(self):
+        """Empty is a real choice, and it is the default."""
+        self.open_campaign()
+        self.assertTrue(self.client.campaigns["casc_SOLUSDT_1"].joined)
+
+    def test_a_signal_they_did_not_buy_is_not_filed_as_too_old(self):
+        """It folds into the older-campaigns line otherwise, which would read
+        as 'you missed it' rather than 'you did not subscribe to it'."""
+        client = FeedClient(
+            public_keys=self.keys,
+            keyset_fetched_at=NOW,
+            now_fn=lambda: self.clock[0],
+            timeframes=["15m"],
+        )
+        self.send("campaign.opened", _campaign_payload(start_timeframe="5m"), client=client)
+        self.assertFalse(client.campaigns["casc_SOLUSDT_1"].skipped_as_old)
 
     def test_a_replayed_trendline_is_not_rejudged(self):
         """An engine restart re-announces every line, and the log keeps old
