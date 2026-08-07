@@ -192,159 +192,12 @@ window.addEventListener('unhandledrejection', function (event) {
    ═══════════════════════════════════════════════════════════════════ */
 
 (function _initToastSystem() {
-  // Inject styles once
-  if (document.getElementById('_af-toast-styles')) return;
-
-  const style = document.createElement('style');
-  style.id = '_af-toast-styles';
-  style.textContent = `
-    #_af-toast-container {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      z-index: 9999;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      pointer-events: none;
-      max-width: min(420px, calc(100vw - 40px));
-    }
-
-    ._af-toast {
-      pointer-events: all;
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 13px 16px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.08);
-      border-top: 1px solid rgba(255,255,255,0.13);
-      backdrop-filter: blur(32px) saturate(1.3);
-      -webkit-backdrop-filter: blur(32px) saturate(1.3);
-      box-shadow:
-        0 0 0 0.5px rgba(255,255,255,0.05),
-        0 8px 32px rgba(0,0,0,0.55),
-        inset 0 1px 0 rgba(255,255,255,0.08);
-      font-family: 'Manrope', system-ui, sans-serif;
-      font-size: 13.5px;
-      line-height: 1.45;
-      color: #dde3ee;
-      cursor: default;
-      position: relative;
-      overflow: hidden;
-      /* Enter animation */
-      opacity: 0;
-      transform: translateX(24px);
-      transition:
-        opacity 0.28s cubic-bezier(0.22,1,0.36,1),
-        transform 0.28s cubic-bezier(0.22,1,0.36,1),
-        box-shadow 0.2s ease;
-    }
-
-    ._af-toast.visible {
-      opacity: 1;
-      transform: translateX(0);
-    }
-
-    ._af-toast.dismissing {
-      opacity: 0 !important;
-      transform: translateX(24px) !important;
-      transition:
-        opacity 0.22s ease,
-        transform 0.22s ease,
-        max-height 0.22s ease 0.18s,
-        margin 0.22s ease 0.18s,
-        padding 0.22s ease 0.18s !important;
-      max-height: 0 !important;
-      padding-top: 0 !important;
-      padding-bottom: 0 !important;
-      overflow: hidden;
-    }
-
-    /* Colour variants */
-    ._af-toast._af-success {
-      background: linear-gradient(160deg, rgba(15,30,22,0.95), rgba(10,22,16,0.92));
-      border-left: 3px solid #34d399;
-    }
-    ._af-toast._af-danger {
-      background: linear-gradient(160deg, rgba(30,15,15,0.95), rgba(22,10,10,0.92));
-      border-left: 3px solid #f87171;
-    }
-    ._af-toast._af-warn {
-      background: linear-gradient(160deg, rgba(30,25,10,0.95), rgba(22,18,8,0.92));
-      border-left: 3px solid #fbbf24;
-    }
-    ._af-toast._af-info {
-      background: linear-gradient(160deg, rgba(15,22,36,0.95), rgba(10,16,28,0.92));
-      border-left: 3px solid #4f8ef7;
-    }
-    ._af-toast._af-neutral {
-      background: linear-gradient(160deg, rgba(18,26,42,0.95), rgba(13,18,32,0.92));
-      border-left: 3px solid rgba(255,255,255,0.2);
-    }
-
-    /* Top shimmer line */
-    ._af-toast::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0; height: 1px;
-      opacity: 0.6;
-    }
-    ._af-toast._af-success::before { background: linear-gradient(90deg, transparent, rgba(52,211,153,0.5), transparent); }
-    ._af-toast._af-danger::before  { background: linear-gradient(90deg, transparent, rgba(248,113,113,0.5), transparent); }
-    ._af-toast._af-warn::before    { background: linear-gradient(90deg, transparent, rgba(251,191,36,0.5), transparent); }
-    ._af-toast._af-info::before    { background: linear-gradient(90deg, transparent, rgba(79,142,247,0.5), transparent); }
-
-    ._af-toast-icon {
-      font-size: 16px;
-      flex-shrink: 0;
-      line-height: 1.45;
-      margin-top: 1px;
-    }
-
-    ._af-toast-body { flex: 1; min-width: 0; }
-
-    ._af-toast-title {
-      font-weight: 700;
-      font-size: 13px;
-      margin-bottom: 2px;
-      letter-spacing: 0.01em;
-    }
-    ._af-toast._af-success ._af-toast-title { color: #34d399; }
-    ._af-toast._af-danger  ._af-toast-title { color: #f87171; }
-    ._af-toast._af-warn    ._af-toast-title { color: #fbbf24; }
-    ._af-toast._af-info    ._af-toast-title { color: #4f8ef7; }
-    ._af-toast._af-neutral ._af-toast-title { color: rgba(221,227,238,0.7); }
-
-    ._af-toast-msg {
-      font-size: 13px;
-      color: rgba(221,227,238,0.72);
-      word-break: break-word;
-    }
-
-    ._af-toast-close {
-      background: none; border: none; cursor: pointer;
-      color: rgba(221,227,238,0.30); font-size: 16px; line-height: 1;
-      padding: 0 2px; flex-shrink: 0; align-self: flex-start;
-      transition: color 0.15s;
-      font-family: monospace;
-    }
-    ._af-toast-close:hover { color: rgba(221,227,238,0.75); }
-
-    /* Progress bar */
-    ._af-toast-progress {
-      position: absolute; bottom: 0; left: 0;
-      height: 2px; border-radius: 0 0 12px 12px;
-      transform-origin: left;
-      transition: transform linear;
-    }
-    ._af-toast._af-success ._af-toast-progress { background: rgba(52,211,153,0.5); }
-    ._af-toast._af-danger  ._af-toast-progress { background: rgba(248,113,113,0.5); }
-    ._af-toast._af-warn    ._af-toast-progress { background: rgba(251,191,36,0.5); }
-    ._af-toast._af-info    ._af-toast-progress { background: rgba(79,142,247,0.5); }
-    ._af-toast._af-neutral ._af-toast-progress { background: rgba(255,255,255,0.15); }
-  `;
-  document.head.appendChild(style);
+  // The toast CSS lives in /static/error-handler.css. It used to be injected
+  // here as a <style> element, which the app's CSP (`style-src-elem 'self'`)
+  // silently dropped — the tag reached the DOM but never became a stylesheet,
+  // so every toast rendered unstyled: container static instead of fixed, no
+  // z-index, transparent background. Do not move it back inline.
+  if (document.getElementById('_af-toast-container')) return;
 
   // Create container
   const container = document.createElement('div');
@@ -687,17 +540,9 @@ function widgetLoading(container, opts = {}) {
   `).join('');
 
   // Inject keyframes once
-  if (!document.getElementById('_af-shimmer-style')) {
-    const s = document.createElement('style');
-    s.id = '_af-shimmer-style';
-    s.textContent = `
-      @keyframes _af-shimmer {
-        0%   { background-position: 200% 0; }
-        100% { background-position: -200% 0; }
-      }
-    `;
-    document.head.appendChild(s);
-  }
+  // The @keyframes moved to /static/error-handler.css for the same reason as
+  // the toast rules above: an injected <style> is blocked by style-src-elem,
+  // so the shimmer never animated.
 
   container.innerHTML = `
     <div style="
