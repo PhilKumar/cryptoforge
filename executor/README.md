@@ -121,7 +121,11 @@ the program uses. Four of them it cannot run without; the last three are only
 for the browser setup page and the menu-bar icon, and it runs fine without
 them. It'll print a lot of text. Wait for the cursor to come back.
 
-## Step 5 — Create your ID and send it to us
+## Step 5 — Create your ID and send it to us (the long way)
+
+> The setup page in the next section does this for you and shows the code with
+> a Copy button, so you can skip straight there if you'd rather not type.
+
 
 ```
 python3 -m executor --register
@@ -150,17 +154,19 @@ new line.
 another line of nonsense (the *root key*). You need both for the next step, so
 wait for that email before carrying on.
 
-## Steps 6 and 7 — the short way
+## Steps 5, 6 and 7 — the short way
 
-Everything in the next two sections — the settings file, and your exchange
-keys — can be done from a page in your browser instead. Run this:
+Everything in the last three sections — sending us your ID, the settings file,
+and your exchange keys — can be done from one page in your browser instead.
+Run this:
 
 ```
 python3 -m executor --setup
 ```
 
-A page opens with six boxes. Fill them in, press **Check and save**, and it
-does the rest: it asks your exchange whether the keys really work *before* it
+A page opens in two steps. The first shows the code we need from you, with a
+button to copy it — that is step 5 done. The second is six boxes: fill them in
+once our reply arrives, press **Check and save**, and it does the rest: it asks your exchange whether the keys really work *before* it
 saves anything, then puts them in your computer's own password store — your
 Keychain on a Mac, Credential Manager on Windows — rather than in a file.
 

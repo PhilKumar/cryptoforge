@@ -537,7 +537,7 @@ def _run_setup(config, *, port: int, path: Optional[str], asked: bool) -> int:
     useful to do in the meantime: without a server URL there is no feed to
     connect, and without a key there is nothing to place.
     """
-    server = setup.SetupServer(port=port, config_path=path)
+    server = setup.SetupServer(port=port, config_path=path, key_path=config.buyer_key_path)
     problem = server.start()
     if problem:
         _say(problem)

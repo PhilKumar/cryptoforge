@@ -10,6 +10,7 @@ a sentence assuring them it is in the Keychain.
 
 import json
 import os
+import re
 import tempfile
 import unittest
 
@@ -278,6 +279,47 @@ class KeyringBackendTests(unittest.TestCase):
         self.keyring.get_keyring = lambda: Keyring()
         os.environ["CASCADE_NO_KEYRING"] = "1"
         self.assertFalse(secrets.available())
+
+
+class PageScriptTests(unittest.TestCase):
+    """The setup page's script must parse.
+
+    It is one inline <script>, so a single syntax error kills the whole block —
+    the key never appears, the copy button does nothing, and Save does nothing
+    either. Nothing raises server-side, so the page looks fine from Python and
+    is inert in the browser.
+
+    The bug this was written for: `PAGE` is a normal triple-quoted string, not a
+    raw one, so a `\\n` written for JavaScript is turned into a real newline by
+    Python at import — which lands in the middle of a JS string literal.
+    """
+
+    def _script(self) -> str:
+        body = setup.PAGE.split("<script>", 1)[1]
+        return body.split("</script>", 1)[0]
+
+    def test_no_string_literal_is_left_open_at_the_end_of_a_line(self):
+        for number, line in enumerate(self._script().splitlines(), 1):
+            for quote in ('"', "'"):
+                unescaped = len(re.findall(r"(?<!\\)" + quote, line))
+                self.assertEqual(
+                    unescaped % 2,
+                    0,
+                    f"line {number} leaves a {quote} string open, so the whole script fails to parse: {line.strip()}",
+                )
+
+    def test_the_mail_body_carries_an_escaped_newline_not_a_real_one(self):
+        self.assertIn("\\n", self._script(), "the JS must receive a backslash-n, not a line break")
+
+    def test_the_brackets_balance(self):
+        script = self._script()
+        for opener, closer in (("(", ")"), ("{", "}"), ("[", "]")):
+            self.assertEqual(script.count(opener), script.count(closer), f"unbalanced {opener}{closer}")
+
+    def test_every_element_the_script_reaches_for_exists_in_the_markup(self):
+        """A renamed id is the other way this page goes quietly inert."""
+        for element_id in re.findall(r'getElementById\("([^"]+)"\)', self._script()):
+            self.assertIn(f'id="{element_id}"', setup.PAGE, f"the script looks for #{element_id}, which is not there")
 
 
 if __name__ == "__main__":

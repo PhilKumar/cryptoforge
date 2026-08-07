@@ -40,6 +40,17 @@ _log = logging.getLogger("cascade.executor.setup")
 
 DEFAULT_PORT = 7756
 
+# Where a buyer sends their public key to be registered. Set this and the page
+# grows an "Email it to us" button with the key already in the body; leave it
+# empty and they get the Copy button alone, which still works but makes them
+# find the address themselves.
+#
+# Registration is deliberately NOT automatic. `POST /api/cascade/feed/subscribers`
+# is an authenticated route, because letting any machine that can reach the
+# server enrol itself would make the subscriber list something strangers can
+# add to. A human turning a key into an entitlement is the gate.
+SUPPORT_EMAIL = ""
+
 
 def needs_setup(config: ExecutorConfig) -> bool:
     """Whether this machine has enough to run at all.
@@ -220,9 +231,19 @@ class SetupServer:
     not-yet-configured machine exposes cannot reach anything that trades.
     """
 
-    def __init__(self, *, port: int = DEFAULT_PORT, config_path: Optional[str] = None):
+    def __init__(
+        self,
+        *,
+        port: int = DEFAULT_PORT,
+        config_path: Optional[str] = None,
+        key_path: Optional[str] = None,
+    ):
         self._port = port
         self._config_path = config_path
+        # Where this machine's own key lives. Given, so the page can show the
+        # public half and retire `python -m executor --register` — the last
+        # command a buyer had to type before any of this existed.
+        self._key_path = key_path
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._done = threading.Event()
@@ -231,6 +252,29 @@ class SetupServer:
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self._port}"
+
+    def public_key(self) -> str:
+        """This machine's public key, creating it on first ask.
+
+        The key is generated locally and its private half never leaves — which
+        is the same principle that keeps the exchange credentials off our
+        server. It does not depend on the buyer id, so making it before they
+        have one is safe: the id is a label carried alongside, not an input to
+        the key.
+
+        Returns '' rather than raising when there is nowhere to keep it. The
+        rest of the page still works, and a buyer with a read-only home
+        directory has a bigger problem to be told about than this one.
+        """
+        if not self._key_path:
+            return ""
+        try:
+            from executor.transport import ExecutorIdentity
+
+            return ExecutorIdentity.load_or_create(self._key_path, "unset").public_key_b64()
+        except Exception as exc:
+            _log.warning("could not create this machine's key: %s", exc)
+            return ""
 
     def start(self) -> Optional[str]:
         """Serve, or say why not."""
@@ -251,6 +295,8 @@ class SetupServer:
                         {
                             "keyring": secrets.available(),
                             "keyring_name": secrets.describe(),
+                            "public_key": outer.public_key(),
+                            "support_email": SUPPORT_EMAIL,
                             "timeframes": {
                                 venue: list(model.timeframes_for(venue)) for venue in ("binance", "coindcx")
                             },
@@ -352,16 +398,38 @@ PAGE = """<!doctype html>
   #done h2 { margin:0 0 8px; font-size:18px; color:var(--good); }
   code { background:#050a18; padding:2px 6px; border-radius:4px; font-size:13px; }
   .warn { color:var(--bad); font-size:13px; margin-top:10px; }
+  .key { font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-all;
+         background:#050a18; border:1px solid var(--line); border-radius:8px; padding:12px;
+         color:var(--text); user-select:all; }
+  .row { display:flex; gap:10px; margin:12px 0 0; flex-wrap:wrap; }
+  .row button, .row .btn { width:auto; flex:1 1 160px; padding:10px 14px; font-size:15px;
+         border-radius:8px; text-align:center; text-decoration:none; }
+  .row .btn { background:transparent; border:1px solid var(--accent); color:var(--accent);
+              font-weight:600; line-height:1.6; }
+  #copy.done { background:var(--good); }
 </style>
 </head>
 <body>
 <main>
   <h1>Set up Cascade</h1>
-  <p class="sub">Six boxes, once. Nothing here is sent to us except, later, your public key.</p>
+  <p class="sub">Two steps, once. Nothing on this page is sent to us except the code in step one.</p>
+
+  <fieldset id="reg">
+    <legend>Step 1 — send us this code</legend>
+    <p class="sub" style="margin-top:0">This machine has just made itself a key. Send us the public half —
+      the private half stays here and never leaves, which is what stops us from ever being able to act as you.</p>
+    <div class="key" id="pk">…</div>
+    <div class="row">
+      <button type="button" id="copy">Copy the code</button>
+      <a id="mail" class="btn" style="display:none">Email it to us</a>
+    </div>
+    <p class="sub">We'll reply with two things — <b>your buyer name</b> and <b>your subscription code</b> —
+      which are the first two boxes in step two. If you already have that email, carry straight on.</p>
+  </fieldset>
 
   <form id="f">
     <fieldset>
-      <legend>Your subscription</legend>
+      <legend>Step 2 — your subscription</legend>
       <label><span class="name">Server address<span class="hint">From your subscription email.</span></span>
         <input name="server_url" value="https://crypto.philforge.in" autocomplete="off"><span class="err" data-for="server_url"></span></label>
       <label><span class="name">Your buyer name<span class="hint">The name your subscription is under.</span></span>
@@ -371,7 +439,7 @@ PAGE = """<!doctype html>
     </fieldset>
 
     <fieldset>
-      <legend>Your exchange</legend>
+      <legend>Step 2 — your exchange</legend>
       <label><span class="name">Exchange</span>
         <select name="exchange"><option value="binance">Binance</option><option value="coindcx">CoinDCX</option></select>
         <span class="err" data-for="exchange"></span></label>
@@ -392,6 +460,22 @@ PAGE = """<!doctype html>
 <script>
 const f = document.getElementById("f"), go = document.getElementById("go");
 fetch("/api/setup-state", {headers:{"X-Cascade-UI":"1"}}).then(r=>r.json()).then(s=>{
+  const pk = document.getElementById("pk");
+  if (s.public_key) {
+    pk.textContent = s.public_key;
+    if (s.support_email) {
+      const mail = document.getElementById("mail");
+      mail.href = "mailto:" + s.support_email
+        + "?subject=" + encodeURIComponent("Cascade registration")
+        + "&body=" + encodeURIComponent("Please register this machine.\\n\\n" + s.public_key + "\\n");
+      mail.style.display = "";
+    }
+  } else {
+    // No key means nowhere to write one. Saying so beats a box of dots that
+    // never fills in.
+    pk.textContent = "This machine could not create its key — check that your user account can write to your home folder.";
+    pk.className = "key warn";
+  }
   const w = document.getElementById("where");
   w.textContent = s.keyring
     ? "Your key and secret go into " + s.keyring_name + ", not into a file."
@@ -399,6 +483,20 @@ fetch("/api/setup-state", {headers:{"X-Cascade-UI":"1"}}).then(r=>r.json()).then
   if (!s.keyring) { w.className = "warn"; w.textContent =
     "This computer has no password store I can use, so I cannot keep your key safely. Setting it up from the command line is the safe route here."; }
 }).catch(()=>{});
+
+document.getElementById("copy").addEventListener("click", async (e) => {
+  const text = document.getElementById("pk").textContent;
+  try { await navigator.clipboard.writeText(text); }
+  catch (err) {
+    // Clipboard permission can be refused. Select it instead so one keystroke
+    // still does the job, rather than a button that silently does nothing.
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById("pk"));
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  }
+  e.target.textContent = "Copied"; e.target.className = "done";
+  setTimeout(() => { e.target.textContent = "Copy the code"; e.target.className = ""; }, 2000);
+});
 
 f.addEventListener("submit", async (e) => {
   e.preventDefault();
