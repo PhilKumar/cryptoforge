@@ -11,10 +11,13 @@ Windows buyer is running with less protection than a Mac buyer. That has to
 surface in what they read, not sit in a comment.
 """
 
+import asyncio
 import json
 import os
+import signal
 import unittest
 
+from executor.__main__ import signal_handler
 from executor.coindcx import CoinDCXSpotAdapter
 from executor.exchange import DuplicateOrder, ExchangeError, InsufficientBalance, IntentExecutor
 from executor.orders import OrderIntent
@@ -602,3 +605,41 @@ class JoinedPersistenceTests(unittest.TestCase):
         pathlib.Path(config.joined_path).write_text("{not json")
         shell = self._shell(config)
         self.assertEqual(shell._joined_ids, set())
+
+
+class SignalHandlingTests(unittest.TestCase):
+    """Asking twice must always work, even mid-tick.
+
+    tick() blocks the event loop, so an asyncio signal handler cannot run in
+    exactly the moments a stop is slowest — which is why this is installed with
+    signal.signal and why the second interrupt does not wait for anything.
+    """
+
+    def _handler(self, stopping, *, scheduled=None, exits=None):
+        return signal_handler(
+            stopping,
+            (scheduled.append if scheduled is not None else (lambda fn: None)),
+            exit_fn=(exits.append if exits is not None else (lambda code: None)),
+            announce=lambda *a, **k: None,
+        )
+
+    def test_the_first_interrupt_asks_for_the_graceful_path(self):
+        stopping = asyncio.Event()
+        scheduled, exits = [], []
+        self._handler(stopping, scheduled=scheduled, exits=exits)(signal.SIGTERM, None)
+        self.assertEqual(exits, [], "a single interrupt must never bypass the sleep invariants")
+        self.assertEqual(len(scheduled), 1)
+        self.assertFalse(stopping.is_set(), "the flag is set on the loop, not in the handler")
+        scheduled[0]()  # what the event loop would run
+        self.assertTrue(stopping.is_set())
+
+    def test_a_second_interrupt_exits_without_waiting(self):
+        stopping = asyncio.Event()
+        stopping.set()  # the graceful path is already running
+        exits = []
+        self._handler(stopping, exits=exits)(signal.SIGTERM, None)
+        self.assertEqual(exits, [130])
+
+    def test_it_is_installed_on_both_int_and_term(self):
+        self.assertEqual(signal.SIGINT.name, "SIGINT")
+        self.assertEqual(signal.SIGTERM.name, "SIGTERM")

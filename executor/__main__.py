@@ -14,7 +14,10 @@ should not drop the feed.
 Shutdown runs the sleep invariants before exiting — cancel resting entries,
 make sure anything held has a target — and writes the record that the next
 start reads. A SIGTERM that skipped that would leave the very state the whole
-recovery design exists to prevent.
+recovery design exists to prevent. A second interrupt overrides it anyway: a
+buyer who asks twice gets an immediate exit, because a program that will not
+stop is worse than a shutdown record the next start already knows how to treat
+as a crash.
 """
 
 from __future__ import annotations
@@ -42,6 +45,35 @@ _log = logging.getLogger("cascade.executor")
 def _say(*lines) -> None:
     for line in lines:
         print(line, flush=True)
+
+
+def signal_handler(stopping, schedule, *, exit_fn=os._exit, announce=_say):
+    """Build the SIGINT/SIGTERM handler: ask once, then take the exit.
+
+    Installed with `signal.signal`, not `loop.add_signal_handler`, and that is
+    the whole point. `tick()` is synchronous — it walks the book making blocking
+    HTTP calls to the venue, each with a 15s timeout — so while a tick runs the
+    event loop is not turning. An asyncio signal handler is a loop callback, so
+    in exactly the moments a stop is slowest to arrive it cannot run at all, and
+    a second Ctrl-C only set an Event that was already set. To the buyer that is
+    a program refusing to close.
+
+    An OS-level handler runs in the main thread at the next bytecode, which a
+    socket wait yields to, so it lands mid-tick. The first interrupt asks for
+    the graceful path — the sleep invariants matter, they cancel resting buys
+    and leave targets in place. The second says the buyer has waited long
+    enough, at the price of an incomplete shutdown record, which the next start
+    already treats as a crash and recovers from.
+    """
+
+    def _on_signal(_signum, _frame):
+        if stopping.is_set():
+            announce("", "Interrupted again — exiting now. The next start will treat this as a crash.")
+            exit_fn(130)
+            return
+        schedule(stopping.set)
+
+    return _on_signal
 
 
 class Executor:
@@ -236,11 +268,13 @@ class Executor:
 
     async def run(self) -> int:
         loop = asyncio.get_running_loop()
+
+        handler = signal_handler(self._stopping, loop.call_soon_threadsafe)
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                loop.add_signal_handler(sig, self._stopping.set)
-            except NotImplementedError:
-                pass  # Windows without a proactor loop; Ctrl-C still raises.
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass  # not the main thread, or a platform without it
 
         _say(f"Cascade executor — {self.config.exchange}, ${self.config.capital_usd:,.0f}", "")
         feed = asyncio.ensure_future(self._feed())
