@@ -426,6 +426,44 @@ class PostureTests(RuntimeHarness):
         self.assertEqual(report.placed, 0)
         self.assertIn("stale", report.notes[0])
 
+    def test_a_blocked_posture_is_logged_once_not_once_per_tick(self):
+        """The activity log records the change, not the weather.
+
+        This wrote one line per campaign per tick, so three campaigns on a
+        twenty-second tick repeated the same sentence nine times a minute and
+        buried the fills underneath it.
+        """
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        runtime.sync()
+        self._send("heartbeat", {"running_campaigns": 1})
+        self.clock[0] += 91  # feed goes stale
+
+        first = runtime.tick()
+        stale_lines = [n for n in first.notes if "stale" in n]
+        self.assertEqual(len(stale_lines), 1, first.notes)
+
+        for _ in range(3):
+            again = runtime.tick()
+            self.assertEqual([n for n in again.notes if "stale" in n], [], again.notes)
+
+    def test_opening_resuming_is_logged_once(self):
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        runtime.sync()
+        self._send("heartbeat", {"running_campaigns": 1})
+        self.clock[0] += 91
+        runtime.tick()  # goes stale, logs once
+        runtime.tick()  # silent
+
+        self._send("heartbeat", {"running_campaigns": 1})  # feed is live again
+        back = runtime.tick()
+        self.assertEqual(len([n for n in back.notes if "resumed" in n]), 1, back.notes)
+        quiet = runtime.tick()
+        self.assertEqual([n for n in quiet.notes if "resumed" in n], [], quiet.notes)
+
     def test_an_expired_key_set_still_places_the_exit(self):
         """A revocation must never strand somebody's coin without a target."""
         runtime = self._holding()

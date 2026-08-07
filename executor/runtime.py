@@ -116,6 +116,9 @@ class ExecutorRuntime:
         self.awaiting_confirmation: str = ""  # the wake message, kept until confirmed
         self._stand_down_requested: bool = False
         self.last_prices: Dict[str, float] = {}
+        # The reason opening was last blocked, so the log can record the change
+        # of posture instead of restating it once per campaign per tick.
+        self._last_block_reason: str = ""
 
     # ── keeping the book in step with the feed ───────────────────
 
@@ -235,8 +238,11 @@ class ExecutorRuntime:
                         f"{campaign_id}: could not read {orders.symbol} {followed.timeframe} candles — {exc}. "
                         "Opening nothing new here this tick; its exit is still managed."
                     )
-            elif not may_open and reason:
-                report.notes.append(f"{campaign_id}: {reason}")
+            # A blocked posture is not a per-campaign event. It used to write
+            # one line per campaign per tick, so three campaigns on a 20s tick
+            # buried the fills under the same sentence 9 times a minute. The
+            # change of posture is logged once, below the loop; the campaign
+            # list and status line carry the standing state.
 
             # Exits run whatever the posture; entries only when allowed.
             # `intents()` covers both, so a blocked campaign asks for its exit
@@ -257,6 +263,24 @@ class ExecutorRuntime:
             report.placed += len(result.placed)
             report.cancelled += len(result.cancelled)
             report.skipped.extend(result.skipped)
+
+        # One line when the posture changes, not one per campaign per tick.
+        # Both directions are worth a line: a buyer needs to see that opening
+        # stopped, and needs to see that it started again without watching for
+        # the absence of a message.
+        blocking = reason if not may_open else ""
+        if blocking != self._last_block_reason:
+            if blocking:
+                held = len(report.opened_blocked)
+                where = (
+                    f" Opening nothing new on {held} campaign{'s' if held != 1 else ''}; their exits are still managed."
+                    if held
+                    else ""
+                )
+                report.notes.append(f"{blocking}{where}")
+            else:
+                report.notes.append("Opening has resumed.")
+            self._last_block_reason = blocking
         return report
 
     def _advance(self, campaign_id: str, orders: CampaignOrders, followed: FollowedCampaign) -> List[str]:
