@@ -235,7 +235,11 @@ def campaigns_view(runtime) -> list:
                 "campaign_id": campaign_id,
                 "symbol": orders.symbol,
                 "exchange": orders.exchange,
-                "state": followed.state if followed else "?",
+                # No feed entry means the snapshot did not carry it, and the
+                # only way a book campaign reaches that is by ending while this
+                # machine was down. "?" left a buyer holding coin with nothing
+                # to read; the position and its target below are still live.
+                "state": followed.state if followed else "ENDED",
                 "halted": followed.halted if followed else "",
                 "timeframe": followed.timeframe if followed else "",
                 "mother_high": orders.mother_high,

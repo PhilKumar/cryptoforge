@@ -125,6 +125,10 @@ class ExecutorRuntime:
         # The reason opening was last blocked, so the log can record the change
         # of posture instead of restating it once per campaign per tick.
         self._last_block_reason: str = ""
+        # Book campaigns the feed has stopped publishing and that have already
+        # been announced. Same rule as the posture line: say it when it becomes
+        # true, not once every twenty seconds for as long as it stays true.
+        self._unpublished_announced: set = set()
 
     # ── keeping the book in step with the feed ───────────────────
 
@@ -289,11 +293,25 @@ class ExecutorRuntime:
 
         for campaign_id, orders in list(self.book.campaigns.items()):
             followed = self._client.campaigns.get(campaign_id)
-            if not followed:
-                continue
-
-            entries_allowed = may_open and followed.active
-            if not entries_allowed and (orders.pot_usd > 0 or orders.stop_price):
+            # A campaign the feed no longer publishes used to be skipped whole,
+            # exit and all. That is the one thing this loop must never do: the
+            # coin was bought with the buyer's money and stays theirs after the
+            # geometry is over, so it keeps its target. Only ENTRIES need the
+            # feed — the ladder cannot be drawn without it — and `exit_intents`
+            # needs nothing the book does not already hold.
+            #
+            # It is reachable because the book is restored from disk: a campaign
+            # that ended on the server while this machine was down comes back
+            # here and is not in the snapshot. Within a session the feed client
+            # only ever adds campaigns, so this is a settled state rather than a
+            # flicker to debounce.
+            entries_allowed = followed is not None and may_open and followed.active
+            if followed is None:
+                report.notes.extend(self._unpublished_note(campaign_id, orders))
+            elif not entries_allowed and (orders.pot_usd > 0 or orders.stop_price):
+                # Only counted when the FEED is what is holding it back. An
+                # unpublished campaign is blocked for its own reason and would
+                # otherwise inflate the posture line's count.
                 report.opened_blocked.append(campaign_id)
 
             if entries_allowed:
@@ -361,6 +379,28 @@ class ExecutorRuntime:
                 report.notes.append("Opening has resumed.")
             self._last_block_reason = blocking
         return report
+
+    def _unpublished_note(self, campaign_id: str, orders: CampaignOrders) -> List[str]:
+        """Told once, when it is first noticed.
+
+        A standing condition, and this loop runs every twenty seconds — restated
+        each pass it would bury the fills the panel exists to show. Silent when
+        there is nothing at stake: a campaign that ended holding nothing needs no
+        announcement, only the ones still carrying the buyer's money.
+        """
+        if campaign_id in self._unpublished_announced:
+            return []
+        if orders.base_qty <= 0 and not orders.exit_resting and not orders.entry_resting:
+            return []
+        self._unpublished_announced.add(campaign_id)
+        if orders.base_qty > 0:
+            carrying = f"the {orders.symbol} you hold keeps its target"
+        else:
+            carrying = "its resting order is still watched"
+        return [
+            f"{orders.symbol}: this campaign is no longer published — it ended while this machine was away. "
+            f"Nothing new opens here; {carrying}."
+        ]
 
     def _advance(self, campaign_id: str, orders: CampaignOrders, followed: FollowedCampaign) -> List[str]:
         plan = self._client.plan(

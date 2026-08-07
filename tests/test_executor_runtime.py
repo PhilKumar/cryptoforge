@@ -905,3 +905,101 @@ class BookPersistenceTests(RuntimeHarness):
         noticed = revived.poll_fills()
         self.assertTrue(any("entry filled" in note for note in noticed))
         self.assertGreater(revived.book.campaigns["casc_SOLUSDT_1"].base_qty, 0)
+
+
+class UnpublishedCampaignTests(RuntimeHarness):
+    """A campaign the feed has stopped publishing still holds the buyer's coin.
+
+    The tick used to skip it whole — `if not followed: continue` — which took
+    its exit with it. The geometry ending is not the position ending: the coin
+    was bought with their money and stays theirs, so it keeps its target. Only
+    entries need the feed, because only the ladder cannot be drawn without it.
+
+    Reachable because the book is restored from disk: a campaign that ended on
+    the server while this machine was down comes back in the book and is not in
+    the snapshot.
+    """
+
+    def _held_but_unpublished(self):
+        """A book campaign holding coin, with no feed entry at all."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.on_fill("casc_SOLUSDT_1", Fill(price=162.0, quantity=0.05, timestamp=40))
+        runtime.book.campaigns["casc_SOLUSDT_1"].exit_resting = False
+        runtime._client.campaigns.pop("casc_SOLUSDT_1")
+        return runtime
+
+    def test_its_exit_is_still_placed(self):
+        runtime = self._held_but_unpublished()
+        runtime.tick()
+        self.assertIn("sell", self.exchange.sides)
+
+    def test_it_opens_nothing_new(self):
+        """Entries need geometry, and there is none to read."""
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime._client.campaigns.pop("casc_SOLUSDT_1")
+        self.market.candles = [
+            Candle(10, 175, 175, 162.0, 163),
+            self._red(20, 162.0),
+            self._red(30, 161.5),
+        ]
+        self.market.price = 161.55
+        report = runtime.tick()
+        self.assertEqual(report.placed, 0)
+        self.assertEqual(runtime.book.campaigns["casc_SOLUSDT_1"].pot_usd, 0.0)
+
+    def test_a_later_sibling_is_not_abandoned_with_it(self):
+        """The `continue` skipped one campaign; a raise would have skipped the
+        rest of the pass. Neither may cost a sibling its exit."""
+        self._open(campaign_id="gone", symbol="SOLUSDT")
+        self._open(campaign_id="live", symbol="SOLUSDT")
+        runtime = self._runtime()
+        runtime.sync()
+        for campaign_id in ("gone", "live"):
+            runtime.on_fill(campaign_id, Fill(price=162.0, quantity=0.05, timestamp=40))
+            runtime.book.campaigns[campaign_id].exit_resting = False
+        runtime._client.campaigns.pop("gone")
+        runtime.tick()
+        self.assertEqual(self.exchange.sides.count("sell"), 2)
+
+    def test_the_buyer_is_told_once_not_every_tick(self):
+        runtime = self._held_but_unpublished()
+        first = [n for n in runtime.tick().notes if "no longer published" in n]
+        self.assertEqual(len(first), 1)
+        self.assertIn("keeps its target", first[0])
+        for _ in range(3):
+            self.assertEqual([n for n in runtime.tick().notes if "no longer published" in n], [])
+
+    def test_a_campaign_holding_nothing_is_not_announced_at_all(self):
+        """Nothing is at stake, so the line would be noise."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime._client.campaigns.pop("casc_SOLUSDT_1")
+        self.assertEqual([n for n in runtime.tick().notes if "no longer published" in n], [])
+
+    def test_it_does_not_inflate_the_posture_line(self):
+        """`opened_blocked` counts campaigns the FEED is holding back. One
+        blocked for its own reason would overstate what the posture costs."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        orders = runtime.book.campaigns["casc_SOLUSDT_1"]
+        orders.pot_usd = 5.0
+        runtime._client.campaigns.pop("casc_SOLUSDT_1")
+        runtime.pause_opening()
+        self.assertEqual(runtime.tick().opened_blocked, [])
+
+    def test_the_console_says_ended_rather_than_a_question_mark(self):
+        from executor.ui import campaigns_view
+
+        runtime = self._held_but_unpublished()
+        runtime.tick()
+        row = next(r for r in campaigns_view(runtime) if r["campaign_id"] == "casc_SOLUSDT_1")
+        self.assertEqual(row["state"], "ENDED")
+        self.assertGreater(row["position_qty"], 0)
+        self.assertIsNotNone(row["target"])
