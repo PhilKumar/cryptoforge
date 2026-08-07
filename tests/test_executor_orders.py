@@ -383,5 +383,64 @@ class IdempotencyTests(unittest.TestCase):
         self.assertNotEqual(orders.intents(market_price=161.55)[0].client_order_id, first)
 
 
+class SerialisationTests(unittest.TestCase):
+    """to_dict/from_dict must be lossless for everything a restart cannot ask
+    someone else for."""
+
+    def test_a_full_campaign_round_trips(self):
+        orders = _orders()
+        orders.collect(Candle(1, 175, 175, 162.0, 163), _rungs((4, 4, 162.32, 6.0)))
+        orders.advance_stop(_red(2, 162.00))
+        orders.advance_stop(_red(3, 161.50))
+        orders.entry_resting = True
+        orders.held_reason = "held for a reason"
+        orders.on_entry_filled(Fill(price=162.0, quantity=0.05, timestamp=99))
+        orders.exit_intents()
+        orders.on_exit_filled(165.0, ts=120)
+        orders.collect(Candle(5, 170, 170, 160.0, 161), _rungs((5, 2, 160.5, 7.0)))
+
+        revived = CampaignOrders.from_dict(orders.to_dict())
+        self.assertEqual(revived.to_dict(), orders.to_dict())
+        self.assertEqual(revived.collected_levels, orders.collected_levels)
+        self.assertEqual(revived.reuse_below, orders.reuse_below)
+        self.assertEqual(len(revived.closed_rounds), 1)
+
+    def test_an_unset_price_comes_back_unset_not_zero(self):
+        """Every price here means "not set" by absence. Coercing a missing one
+        to 0.0 would read as a real level at zero — and `pot_line = 0.0` arms a
+        stop that should not exist."""
+        revived = CampaignOrders.from_dict(_orders().to_dict())
+        self.assertIsNone(revived.pot_line)
+        self.assertIsNone(revived.stop_price)
+        self.assertIsNone(revived.reuse_below)
+
+    def test_leg_ids_of_mixed_types_do_not_lose_the_pot(self):
+        """Leg ids arrive as JSON from the feed. Sorting a mixed batch on the
+        id itself raises, and losing the pot over a tidy-ordering detail is not
+        a trade worth making."""
+        orders = _orders()
+        orders.collected_levels = {(4, 2), ("x", 8)}
+        orders.pot_usd = 9.0
+        self.assertEqual(CampaignOrders.from_dict(orders.to_dict()).collected_levels, orders.collected_levels)
+
+    def test_an_untouched_campaign_is_not_worth_keeping(self):
+        self.assertFalse(_orders().worth_keeping())
+
+    def test_a_campaign_with_a_pot_is_worth_keeping(self):
+        orders = _orders()
+        orders.collect(Candle(1, 175, 175, 162.0, 163), _rungs((4, 4, 162.32, 6.0)))
+        self.assertTrue(orders.worth_keeping())
+
+    def test_a_flat_campaign_that_closed_a_round_is_still_worth_keeping(self):
+        """Its floor and its round history are the whole record of what this
+        buyer did here, and neither is on the exchange."""
+        orders = _orders()
+        orders.on_entry_filled(Fill(price=162.0, quantity=0.05, timestamp=99))
+        orders.on_exit_filled(165.0, ts=120)
+        self.assertEqual(orders.pot_usd, 0.0)
+        self.assertEqual(orders.base_qty, 0.0)
+        self.assertTrue(orders.worth_keeping())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -643,3 +643,92 @@ class SignalHandlingTests(unittest.TestCase):
     def test_it_is_installed_on_both_int_and_term(self):
         self.assertEqual(signal.SIGINT.name, "SIGINT")
         self.assertEqual(signal.SIGTERM.name, "SIGTERM")
+
+
+class BookFileTests(unittest.TestCase):
+    """The book on disk: written every tick, replaced atomically, and never a
+    reason to refuse to start.
+
+    A file written only on the way out is missing in the one case it exists
+    for — the crash — and a half-written one reads as no book at all, which
+    silently discards a position."""
+
+    def setUp(self):
+        import tempfile
+
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+
+    def _config(self):
+        from executor.config import ExecutorConfig
+
+        return ExecutorConfig(
+            server_url="http://localhost",
+            buyer_id="b",
+            root_public_key="k",
+            state_dir=self._dir.name,
+        )
+
+    def _shell(self, config, snapshot=None):
+        from executor.__main__ import Executor
+
+        class Runtime:
+            def book_snapshot(self):
+                return snapshot
+
+        class Shell:
+            pass
+
+        shell = Shell()
+        shell.config = config
+        shell.runtime = Runtime() if snapshot is not None else None
+        shell._load_book = lambda: Executor._load_book(shell)
+        shell._save_book = lambda: Executor._save_book(shell)
+        return shell
+
+    def test_the_book_lives_beside_the_shutdown_record(self):
+        config = self._config()
+        self.assertTrue(config.book_path.endswith("book.json"))
+        self.assertEqual(
+            os.path.dirname(config.book_path),
+            os.path.dirname(config.shutdown_record_path),
+        )
+
+    def test_a_saved_book_is_read_back_whole(self):
+        config = self._config()
+        book = {"v": 1, "campaigns": [{"campaign_id": "a", "pot_usd": 4.25}]}
+        self._shell(config, book)._save_book()
+        self.assertEqual(self._shell(config)._load_book(), book)
+
+    def test_nothing_is_written_before_the_first_tick_builds_a_runtime(self):
+        """The runtime is built lazily. Saving an empty book over a real one
+        because the process died in its first twenty seconds would throw away
+        exactly what the file is for."""
+        config = self._config()
+        self._shell(config, {"v": 1, "campaigns": []})._save_book()
+        os.remove(config.book_path)
+        self._shell(config)._save_book()  # runtime is None
+        self.assertFalse(os.path.exists(config.book_path))
+
+    def test_a_failed_write_leaves_the_previous_book_intact(self):
+        """os.replace, not a truncating open. Power lost mid-write must leave
+        the old book or the new one, never half of either."""
+        import json as _json
+
+        config = self._config()
+        good = {"v": 1, "campaigns": [{"campaign_id": "a", "pot_usd": 4.25}]}
+        self._shell(config, good)._save_book()
+
+        class Unserialisable:
+            pass
+
+        self._shell(config, {"v": 1, "campaigns": [Unserialisable()]})._save_book()
+        with open(config.book_path, encoding="utf-8") as handle:
+            self.assertEqual(_json.load(handle), good)
+
+    def test_an_unreadable_book_reads_as_absent_not_a_crash(self):
+        import pathlib
+
+        config = self._config()
+        pathlib.Path(config.book_path).write_text("{not json")
+        self.assertIsNone(self._shell(config)._load_book())

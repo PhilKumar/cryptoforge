@@ -46,6 +46,12 @@ _log = logging.getLogger("cascade.executor.runtime")
 
 Band = Tuple[float, float]
 
+# Bumped when the saved book's shape changes. A record from a different version
+# is ignored rather than half-read: starting with an empty book costs the pot,
+# which price can rebuild, while a misread one places real orders against
+# numbers that mean something else.
+BOOK_VERSION = 1
+
 
 class MarketData(Protocol):
     """The buyer's own candles, from their own venue — never ours.
@@ -162,6 +168,79 @@ class ExecutorRuntime:
             if warning:
                 notes.append(f"{campaign_id}: {warning}")
         return notes
+
+    # ── surviving a restart ──────────────────────────────────────
+
+    def book_snapshot(self) -> dict:
+        """What must be on disk for a restart to carry on rather than begin.
+
+        The birth bands ride with each campaign because they are fixed at its
+        birth and cannot be recomputed later: `_own_funded_bands` reads the book
+        as it stood the moment the campaign joined, and by the next start its
+        siblings have moved on or ended. Rebuilding them from today's book would
+        re-net a different set of bands and quietly resize every rung — the
+        ladder would come back a different shape from the one that was half paid
+        for.
+        """
+        return {
+            "v": BOOK_VERSION,
+            "campaigns": [
+                {
+                    **orders.to_dict(),
+                    "birth_bands": [[low, high] for low, high in self._birth_bands.get(campaign_id, [])],
+                }
+                for campaign_id, orders in self.book.campaigns.items()
+                if orders.worth_keeping()
+            ],
+        }
+
+    def restore_book(self, saved: Optional[dict]) -> List[str]:
+        """Put the last run's book back before anything else looks at it.
+
+        Called before `on_wake`, deliberately. The protect pass asks every
+        campaign whether it holds coin without an exit resting, and against the
+        empty book a fresh process starts with, the answer is always no — so the
+        one step that exists to put a target back on unprotected coin had
+        nothing to iterate. Restoring first is what gives it something to
+        protect.
+
+        Restored campaigns go straight into the book, which means `sync()` skips
+        them (it only builds campaigns it has not seen). That is the intent:
+        their venue rules and birth bands are already settled, and re-deriving
+        either would change a ladder that is part paid for.
+        """
+        if not saved:
+            return []
+        version = saved.get("v")
+        if version != BOOK_VERSION:
+            _log.warning("saved book is version %r, expected %r — starting empty", version, BOOK_VERSION)
+            return ["Saved positions were written by a different version and could not be read — starting fresh."]
+
+        pot = 0.0
+        holding = 0
+        for record in saved.get("campaigns") or []:
+            try:
+                orders = CampaignOrders.from_dict(record)
+            except Exception as exc:
+                # One unreadable campaign must not cost the others theirs.
+                _log.warning("could not restore %s: %s", record.get("campaign_id"), exc)
+                continue
+            self.book.track(orders)
+            self._birth_bands[orders.campaign_id] = [
+                (float(low), float(high)) for low, high in (record.get("birth_bands") or [])
+            ]
+            pot += orders.pot_usd
+            if orders.base_qty > 0:
+                holding += 1
+
+        if not self.book.campaigns:
+            return []
+        parts = [f"Picked up {len(self.book.campaigns)} campaign{'s' if len(self.book.campaigns) != 1 else ''}"]
+        if pot > 0:
+            parts.append(f"${pot:,.2f} already collected")
+        if holding:
+            parts.append(f"{holding} holding coin")
+        return [f"{', '.join(parts)} from before the restart."]
 
     def _own_funded_bands(self, symbol: str) -> List[Band]:
         """

@@ -48,6 +48,12 @@ STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
 DEFAULT_TICK_SIZE = 0.01
 
 
+def _opt_float(value) -> Optional[float]:
+    """None stays None. Every price on CampaignOrders means "not set" by absence,
+    so coercing a missing one to 0.0 would read as a real level at zero."""
+    return None if value is None else float(value)
+
+
 def max_stop_raise_usd(trigger: float, median_bar_pct: float, tick_size: float) -> float:
     """
     The allowance, as an absolute distance rather than a percent so the caller
@@ -436,6 +442,123 @@ class CampaignOrders:
         actually judge.
         """
         return round(self.pot_usd if self.entry_resting else 0.0, 2)
+
+    # ── surviving a restart ──────────────────────────────────────
+
+    def worth_keeping(self) -> bool:
+        """Whether a restart needs to remember this campaign at all.
+
+        One that never collected, never filled and never closed a round is
+        fully described by the feed and the venue, so writing it down would only
+        grow the file for nothing.
+        """
+        return bool(
+            self.pot_usd > 0
+            or self.collected_levels
+            or self.fills
+            or self.closed_rounds
+            or self.reuse_below is not None
+            or self.entry_resting
+            or self.exit_resting
+        )
+
+    def to_dict(self) -> dict:
+        """Everything a fresh process cannot ask someone else for.
+
+        The venue-derived numbers ride along — `tick_size`, `min_notional_usd`,
+        and the feed's `median_bar_pct` — because a restored campaign is put
+        straight into the book and never passes back through `sync()`, which is
+        the only place that reads them. They are the same values `sync()` wrote
+        at join time, so a restored campaign is identical to one that stayed in
+        memory rather than a differently-configured copy of it.
+        """
+        return {
+            "campaign_id": self.campaign_id,
+            "symbol": self.symbol,
+            "mother_high": self.mother_high,
+            "exchange": self.exchange,
+            "tick_size": self.tick_size,
+            "min_notional_usd": self.min_notional_usd,
+            "median_bar_pct": self.median_bar_pct,
+            # Sorted by the string of the leg id, not the id itself: it comes
+            # from the feed as JSON and a mixed batch of ints and strings would
+            # raise on comparison, which is not a reason to lose the pot.
+            "collected_levels": sorted(
+                ([leg_id, level] for leg_id, level in self.collected_levels),
+                key=lambda pair: (str(pair[0]), pair[1]),
+            ),
+            "pot_usd": self.pot_usd,
+            "pot_line": self.pot_line,
+            "last_red": self.last_red,
+            "stop_price": self.stop_price,
+            "limit_price": self.limit_price,
+            "stop_ts": self.stop_ts,
+            "entry_rev": self.entry_rev,
+            "entry_resting": self.entry_resting,
+            "held_reason": self.held_reason,
+            "fills": [
+                {
+                    "price": fill.price,
+                    "quantity": fill.quantity,
+                    "timestamp": fill.timestamp,
+                    "client_order_id": fill.client_order_id,
+                }
+                for fill in self.fills
+            ],
+            "exit_resting": self.exit_resting,
+            "exit_price": self.exit_price,
+            "exit_rev": self.exit_rev,
+            "reuse_below": self.reuse_below,
+            "closed_rounds": [dict(row) for row in self.closed_rounds],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CampaignOrders":
+        """Rebuild one campaign's book.
+
+        `entry_resting` and `exit_resting` come back as written, including True.
+        They are claims about the exchange, not facts, and restoring them true
+        is what makes the next `poll_fills` ask about those order ids — which is
+        how a fill that happened while the process was down gets noticed at all.
+        Restoring them false would silently drop that fill and re-place over the
+        top of a live order.
+        """
+        orders = cls(
+            campaign_id=str(data["campaign_id"]),
+            symbol=str(data["symbol"]),
+            mother_high=float(data.get("mother_high") or 0.0),
+            exchange=str(data.get("exchange") or ""),
+            tick_size=float(data.get("tick_size") or DEFAULT_TICK_SIZE),
+            min_notional_usd=float(data.get("min_notional_usd") or 5.0),
+            median_bar_pct=float(data.get("median_bar_pct") or 0.0),
+        )
+        orders.collected_levels = {
+            (pair[0], pair[1]) for pair in (data.get("collected_levels") or []) if len(pair) == 2
+        }
+        orders.pot_usd = float(data.get("pot_usd") or 0.0)
+        orders.pot_line = _opt_float(data.get("pot_line"))
+        orders.last_red = _opt_float(data.get("last_red"))
+        orders.stop_price = _opt_float(data.get("stop_price"))
+        orders.limit_price = _opt_float(data.get("limit_price"))
+        orders.stop_ts = int(data.get("stop_ts") or 0)
+        orders.entry_rev = int(data.get("entry_rev") or 0)
+        orders.entry_resting = bool(data.get("entry_resting"))
+        orders.held_reason = str(data.get("held_reason") or "")
+        orders.fills = [
+            Fill(
+                price=float(row["price"]),
+                quantity=float(row["quantity"]),
+                timestamp=int(row.get("timestamp") or 0),
+                client_order_id=str(row.get("client_order_id") or ""),
+            )
+            for row in (data.get("fills") or [])
+        ]
+        orders.exit_resting = bool(data.get("exit_resting"))
+        orders.exit_price = _opt_float(data.get("exit_price"))
+        orders.exit_rev = int(data.get("exit_rev") or 0)
+        orders.reuse_below = _opt_float(data.get("reuse_below"))
+        orders.closed_rounds = [dict(row) for row in (data.get("closed_rounds") or [])]
+        return orders
 
 
 class OrderBook:

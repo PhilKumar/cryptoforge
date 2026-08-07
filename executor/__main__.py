@@ -141,6 +141,38 @@ class Executor:
         except Exception as exc:
             _log.warning("could not write the joined-campaigns record: %s", exc)
 
+    def _load_book(self) -> Optional[dict]:
+        try:
+            if os.path.exists(self.config.book_path):
+                with open(self.config.book_path, encoding="utf-8") as handle:
+                    return json.load(handle)
+        except Exception as exc:
+            # Unreadable is treated as absent: the cost is the old behaviour —
+            # the pot has to be earned again — and never a refusal to start.
+            _log.warning("could not read the saved book: %s", exc)
+        return None
+
+    def _save_book(self) -> None:
+        """Written every tick, not only at shutdown.
+
+        The case this exists for is the crash, and a file written on the way out
+        is missing in exactly that case. Written through a temp file and
+        `os.replace` so a machine losing power mid-write leaves either the old
+        book or the new one, never half of either — a truncated book reads as no
+        book, which silently discards a position.
+        """
+        if self.runtime is None:
+            return
+        path = self.config.book_path
+        temp = f"{path}.tmp"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(temp, "w", encoding="utf-8") as handle:
+                json.dump(self.runtime.book_snapshot(), handle)
+            os.replace(temp, path)
+        except Exception as exc:
+            _log.warning("could not write the saved book: %s", exc)
+
     # ── the two tasks ────────────────────────────────────────────
 
     async def _feed(self) -> None:
@@ -157,6 +189,14 @@ class Executor:
                     continue
                 if self.runtime is None:
                     self.runtime = self._build_runtime()
+                    # Build, restore, then wake — in that order. `on_wake`'s
+                    # protect pass asks every campaign whether it holds coin
+                    # with no exit resting, and against the empty book a fresh
+                    # process starts with, that question has no answers. The
+                    # step that exists to put a target back on unprotected coin
+                    # needs the book restored before it runs.
+                    for note in self.runtime.restore_book(self._load_book()):
+                        self._note(note)
                     self._resume()
                 for note in self.runtime.poll_fills():
                     self._note(note)
@@ -181,6 +221,9 @@ class Executor:
                     if self._strip is None:
                         self._strip = MarketStrip(self._market_for_ui())
                     self._ui_state.set_market(self._strip.snapshot())
+                # Last, so what is on disk is the book as it stood after this
+                # pass placed and noticed everything it was going to.
+                self._save_book()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -264,6 +307,9 @@ class Executor:
                 json.dump(result["record"], handle)
         except Exception as exc:
             _log.error("could not write the shutdown record: %s", exc)
+        # After the invariants ran, so the saved book agrees with the exchange
+        # about which entries were just cancelled.
+        self._save_book()
         _say("", result["message"])
 
     async def run(self) -> int:

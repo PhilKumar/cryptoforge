@@ -732,3 +732,176 @@ class BuyerGateTests(RuntimeHarness):
         runtime.pause_opening()
         runtime.tick()
         self.assertIn("sell", self.exchange.sides)
+
+
+class BookPersistenceTests(RuntimeHarness):
+    """The pot must survive a restart.
+
+    Nothing else can rebuild it. The feed publishes geometry, not what this
+    buyer collected against it; the exchange knows the coin but not which rungs
+    paid for it, nor where the floor from their last round sits. Losing the file
+    means a fall that was half paid for has to be earned again from wherever
+    price happens to be — and the levels already crossed are not coming back.
+    """
+
+    def _collected(self):
+        """A runtime whose one campaign has money in the pot."""
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        self.market.candles = [Candle(10, 175, 175, 162.0, 163.0)]
+        runtime.tick()
+        orders = runtime.book.campaigns["casc_SOLUSDT_1"]
+        self.assertGreater(orders.pot_usd, 0, "the fixture must actually collect something")
+        return runtime, orders
+
+    def test_the_pot_survives_a_restart(self):
+        runtime, before = self._collected()
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        after = revived.book.campaigns["casc_SOLUSDT_1"]
+        self.assertEqual(after.pot_usd, before.pot_usd)
+        self.assertEqual(after.collected_levels, before.collected_levels)
+
+    def test_a_restored_rung_is_not_collected_a_second_time(self):
+        """The pot coming back is only half of it. If the crossed levels did
+        not come back with it, the same fall would be paid for twice."""
+        runtime, before = self._collected()
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        revived.tick()  # the same candles are still in the market
+        self.assertEqual(revived.book.campaigns["casc_SOLUSDT_1"].pot_usd, before.pot_usd)
+
+    def test_a_position_and_its_round_history_survive(self):
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.on_fill("casc_SOLUSDT_1", Fill(price=162.0, quantity=0.05, timestamp=40))
+        runtime.on_fill("casc_SOLUSDT_1", Fill(price=161.0, quantity=0.05, timestamp=50), side="sell")
+
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        orders = revived.book.campaigns["casc_SOLUSDT_1"]
+        self.assertEqual(len(orders.closed_rounds), 1)
+        self.assertEqual(orders.reuse_below, 161.0)
+        self.assertEqual(len(revived.rounds_view()), 1)
+
+    def test_the_floor_survives_so_the_next_round_cannot_re_enter_above_it(self):
+        """`reuse_below` is the new-low rule. Losing it lets the next round
+        arm at or above the price the last one exited at, which is the one
+        thing this strategy must never do."""
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.book.campaigns["casc_SOLUSDT_1"].reuse_below = 160.0
+        runtime.book.campaigns["casc_SOLUSDT_1"].pot_usd = 0.01  # so it is worth writing down
+
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        self.market.candles = [Candle(10, 175, 175, 162.0, 163.0)]
+        revived.tick()
+        self.assertEqual(
+            revived.book.campaigns["casc_SOLUSDT_1"].pot_usd,
+            0.01,
+            "a low of 162 is above the 160 floor and must collect nothing",
+        )
+
+    def test_a_held_position_is_protected_on_wake(self):
+        """The point of restoring BEFORE on_wake. Against an empty book the
+        protect pass has nothing to iterate, so coin held through a crash came
+        back with no target on it."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.on_fill("casc_SOLUSDT_1", Fill(price=162.0, quantity=0.05, timestamp=40))
+        runtime.book.campaigns["casc_SOLUSDT_1"].exit_resting = False
+
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        report = revived.on_wake(None)
+        self.assertEqual(report["protected"], ["casc_SOLUSDT_1"])
+        self.assertIn("sell", self.exchange.sides)
+
+    def test_the_birth_bands_survive_so_the_ladder_keeps_its_shape(self):
+        """Fixed at birth and not recomputable later: by the next start the
+        siblings they were measured against have moved on. Rebuilding them
+        would re-net different bands and quietly resize every rung."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.book.campaigns["casc_SOLUSDT_1"].pot_usd = 3.0
+        runtime._birth_bands["casc_SOLUSDT_1"] = [(150.0, 178.0)]
+
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        self.assertEqual(revived._birth_bands["casc_SOLUSDT_1"], [(150.0, 178.0)])
+
+    def test_sync_does_not_overwrite_a_restored_campaign(self):
+        """It rebuilds what it does not recognise. A restored campaign it does
+        recognise must be left alone, pot and all."""
+        runtime, before = self._collected()
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        revived.sync()
+        self.assertEqual(revived.book.campaigns["casc_SOLUSDT_1"].pot_usd, before.pot_usd)
+
+    def test_an_untouched_campaign_is_not_written_down(self):
+        """It is fully described by the feed, so keeping it grows the file for
+        nothing."""
+        self._open()
+        runtime = self._runtime()
+        runtime.sync()
+        self.assertEqual(runtime.book_snapshot()["campaigns"], [])
+
+    def test_a_book_from_another_version_is_ignored_rather_than_half_read(self):
+        runtime, _ = self._collected()
+        saved = runtime.book_snapshot()
+        saved["v"] = 999
+        revived = self._runtime()
+        notes = revived.restore_book(saved)
+        self.assertEqual(revived.book.campaigns, {})
+        self.assertIn("different version", notes[0])
+
+    def test_one_unreadable_campaign_does_not_cost_the_others_theirs(self):
+        self._open(campaign_id="a", symbol="SOLUSDT")
+        self._open(campaign_id="b", symbol="SOLUSDT")
+        runtime = self._runtime()
+        runtime.sync()
+        runtime.book.campaigns["a"].pot_usd = 2.0
+        runtime.book.campaigns["b"].pot_usd = 3.0
+        saved = runtime.book_snapshot()
+        del saved["campaigns"][0]["campaign_id"]
+
+        revived = self._runtime()
+        revived.restore_book(saved)
+        self.assertEqual(list(revived.book.campaigns), ["b"])
+
+    def test_a_resting_order_comes_back_resting_so_its_fill_is_noticed(self):
+        """Restoring the flag as False would silently drop a fill that landed
+        while the process was down, and re-place over a live order."""
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        self.market.candles = [
+            Candle(10, 175, 175, 162.0, 163),
+            self._red(20, 162.0),
+            self._red(30, 161.5),
+        ]
+        self.market.price = 161.55
+        runtime.tick()
+        orders = runtime.book.campaigns["casc_SOLUSDT_1"]
+        self.assertTrue(orders.entry_resting)
+
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        restored = revived.book.campaigns["casc_SOLUSDT_1"]
+        self.assertTrue(restored.entry_resting)
+        self.assertEqual(restored.entry_client_order_id(), orders.entry_client_order_id())
+
+        self.exchange.orders[orders.entry_client_order_id()].status = "FILLED"
+        self.exchange.orders[orders.entry_client_order_id()].filled_qty = 0.05
+        self.exchange.orders[orders.entry_client_order_id()].avg_fill_price = 162.0
+        noticed = revived.poll_fills()
+        self.assertTrue(any("entry filled" in note for note in noticed))
+        self.assertGreater(revived.book.campaigns["casc_SOLUSDT_1"].base_qty, 0)

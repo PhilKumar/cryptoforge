@@ -94,6 +94,18 @@ class ExecutorConfig:
         return os.path.join(os.path.expanduser(self.state_dir), "joined.json")
 
     @property
+    def book_path(self) -> str:
+        """The pot, the position and the round history, so a restart keeps them.
+
+        None of it can be rebuilt from anywhere else. The feed publishes
+        geometry, not what this buyer collected against it; the exchange knows
+        the coin but not which rungs paid for it, where the floor from their
+        last round sits, or how much of a fall is already in the pot. Losing the
+        file means the fall has to be earned again from wherever price is now.
+        """
+        return os.path.join(os.path.expanduser(self.state_dir), "book.json")
+
+    @property
     def started_marker_path(self) -> str:
         """Written once, on the first start, and never removed.
 
