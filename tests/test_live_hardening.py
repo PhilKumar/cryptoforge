@@ -513,11 +513,26 @@ class FeedFactoryTests(unittest.IsolatedAsyncioTestCase):
         feed._poll_interval_sec = 0.01
 
         seen = []
-        feed.on_ticker = lambda symbol, ticker: seen.append((symbol, ticker.get("mark_price")))
+        ticked = asyncio.Event()
+
+        def on_ticker(symbol, ticker):
+            seen.append((symbol, ticker.get("mark_price")))
+            ticked.set()
+
+        feed.on_ticker = on_ticker
 
         await feed.connect()
         await feed.subscribe_ticker("BTCUSDT")
-        await asyncio.sleep(0.05)
+        # Wait for the tick, not for a duration. `_poll_loop` hands the broker
+        # call off to a worker thread, so one tick costs a full executor round
+        # trip — and `IsolatedAsyncioTestCase` runs the loop in debug mode,
+        # which makes that slower again. Run alone it lands in under 10ms; run
+        # in the whole suite it did not always land inside the 50ms this used to
+        # sleep for, and `disconnect()` then cancelled the poll mid-flight, so
+        # `on_ticker` never fired at all. Roughly one full-suite run in three.
+        # The timeout is generous on purpose: it is here to fail a genuine
+        # regression rather than to time the machine.
+        await asyncio.wait_for(ticked.wait(), timeout=5)
         await feed.disconnect()
 
         self.assertTrue(seen)
