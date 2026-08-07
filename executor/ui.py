@@ -326,6 +326,43 @@ def worth_logging(kind: str, detail: dict) -> bool:
     return kind in LOGGED_EVENTS
 
 
+def event_sentence(kind: str, detail: dict) -> str:
+    """The activity line a buyer reads, instead of the JSON a developer would.
+
+    The panel used to print `[campaign] {"campaign_id": "2077619fd2",
+    "joined": true, ...}` — the raw detail dict, braces and all. Every one of
+    these is a fact with a short English form, and the log is the one surface
+    whose entire purpose is being read by the person paying for this.
+
+    Defensive `get`s throughout: a feed one version ahead may emit fields this
+    build does not know, and an activity line must never be the thing that
+    throws over it.
+    """
+    what = str(detail.get("symbol") or detail.get("campaign_id") or "a campaign")
+    timeframe = str(detail.get("timeframe") or "").strip()
+    if kind == "campaign":
+        if detail.get("joined"):
+            name = f"{what} · {timeframe}" if timeframe else what
+            return f"Joined {name} — following it from its start."
+        reason = str(detail.get("reason") or "not joined")
+        return f"Not following {what}: {reason}"
+    if kind == "closed":
+        reason = str(detail.get("reason") or "").strip()
+        return f"{what}: campaign ended{f' — {reason}' if reason else ''}. Anything held keeps its exit."
+    if kind == "halt":
+        reason = str(detail.get("reason") or "its geometry contradicted itself")
+        return f"{what} halted: {reason} Its position keeps its exit; nothing new opens there."
+    if kind == "stopped":
+        return f"Feed stopped: {detail.get('reason') or 'closed'}"
+    if kind == "clock_warning":
+        return str(detail.get("message") or "This machine's clock is drifting — check it against the top bar.")
+    if kind == "bad_signature":
+        return "A frame failed signature verification and was dropped. Nothing was acted on."
+    # A kind this build does not know reads as its raw detail — still capped,
+    # still shown, because hiding it would hide the one clue to a new problem.
+    return f"[{kind}] {json.dumps(detail, default=str)[:160]}"
+
+
 def journal_view(runtime) -> dict:
     """Every round this machine closed, and what it adds up to.
 
@@ -1621,6 +1658,15 @@ PAGE = "".join(
   .section-h h2 { font-family:var(--font-display); font-size:17px; letter-spacing:.14em;
                   text-transform:uppercase; color:var(--text); }
   .empty { color:var(--muted); font-size:13.5px; padding:18px; position:relative; z-index:1; }
+  /* Capped and scrollable. Uncapped, a day of ticks pushed the journal and
+     the disclosure below it off the bottom of the page — the panel's job is
+     the last few minutes, and the scrollbar carries the rest. */
+  .events { max-height:340px; overflow-y:auto; overscroll-behavior:contain;
+            scrollbar-width:thin; scrollbar-color:var(--border-hi) transparent;
+            padding-right:6px; }
+  .events::-webkit-scrollbar { width:8px; }
+  .events::-webkit-scrollbar-thumb { background:var(--border-hi); border-radius:999px; }
+  .events::-webkit-scrollbar-track { background:transparent; }
   .events div { color:var(--muted); font:12px/1.85 var(--font-mono); position:relative; z-index:1; }
   .events time { color:#4a5568; margin-right:10px; }
   .disclosure { margin-top:36px; color:var(--muted); font-size:12.5px;
@@ -3400,7 +3446,7 @@ def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) 
         elif kind == "stopped":
             state.set_connection("stopped", str(detail.get("reason") or "")[:120])
         if worth_logging(kind, detail):
-            state.add_event(f"[{kind}] {json.dumps(detail, default=str)[:160]}")
+            state.add_event(event_sentence(kind, detail))
 
     executor._on_status = on_status
     executor.transport._on_status = on_status

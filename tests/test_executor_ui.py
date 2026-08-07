@@ -1158,3 +1158,97 @@ class ChartEndpointTests(unittest.TestCase):
 
     def test_an_unknown_campaign_is_a_404(self):
         self.assertEqual(self._get("/api/chart?cid=nope")[0], 404)
+
+
+class EventSentenceTests(unittest.TestCase):
+    """The activity log is read by the buyer, so it speaks English, not JSON.
+
+    The panel used to print the raw detail dict for every joined campaign —
+    braces, field names and all — which buried the fills between machine
+    output nobody asked for.
+    """
+
+    def test_a_joined_campaign_reads_as_a_sentence(self):
+        from executor.ui import event_sentence
+
+        line = event_sentence(
+            "campaign", {"campaign_id": "2077619fd2", "symbol": "SOLUSDT", "timeframe": "5m", "joined": True}
+        )
+        self.assertEqual(line, "Joined SOLUSDT · 5m — following it from its start.")
+
+    def test_no_logged_kind_prints_braces(self):
+        """The whole point. Every kind the log accepts has an English form."""
+        from executor.ui import LOGGED_EVENTS, event_sentence
+
+        detail = {
+            "campaign_id": "abc123",
+            "symbol": "BTCUSDT",
+            "timeframe": "5m",
+            "joined": True,
+            "reason": "model v22",
+            "message": "clock is 3s off",
+        }
+        for kind in LOGGED_EVENTS:
+            line = event_sentence(kind, detail)
+            self.assertNotIn("{", line, f"{kind} still prints JSON: {line}")
+            self.assertNotIn('"', line, f"{kind} still prints JSON: {line}")
+
+    def test_a_campaign_with_no_symbol_falls_back_to_its_id(self):
+        """Old feeds do not send the symbol; the line must still say something."""
+        from executor.ui import event_sentence
+
+        self.assertIn("2077619fd2", event_sentence("campaign", {"campaign_id": "2077619fd2", "joined": True}))
+
+    def test_a_refusal_carries_its_reason(self):
+        from executor.ui import event_sentence
+
+        line = event_sentence(
+            "campaign", {"symbol": "ADAUSDT", "joined": False, "reason": "model v22 is newer than this build"}
+        )
+        self.assertEqual(line, "Not following ADAUSDT: model v22 is newer than this build")
+
+    def test_an_unknown_kind_still_shows_its_detail(self):
+        """A feed one version ahead may say something new; hiding it would
+        hide the one clue to a new problem."""
+        from executor.ui import event_sentence
+
+        line = event_sentence("margin_call", {"campaign_id": "x"})
+        self.assertIn("margin_call", line)
+        self.assertIn("x", line)
+
+    def test_the_wired_log_gets_the_sentence_not_the_json(self):
+        """End to end through the wiring, since that is where the JSON came from."""
+        from executor import ui
+
+        class Executor:
+            class config:
+                buyer_id = "b"
+                exchange = "binance"
+                subscription_line = "5m"
+                timeframes = ["5m"]
+                signal_exchanges = ["binance"]
+                symbols = []
+                capital_usd = 3000.0
+
+            class identity:
+                @staticmethod
+                def public_key_b64():
+                    return "PK"
+
+            class transport:
+                _on_status = None
+
+            runtime = None
+            _on_status = staticmethod(lambda kind, detail: None)
+
+        executor = Executor()
+        server = ui.wire(executor, port=0)
+        try:
+            executor._on_status(
+                "campaign", {"campaign_id": "c1", "symbol": "SOLUSDT", "timeframe": "5m", "joined": True}
+            )
+            events = executor._ui_state.snapshot()["events"]
+            self.assertEqual(events[0]["line"], "Joined SOLUSDT · 5m — following it from its start.")
+        finally:
+            if server:
+                server.stop()

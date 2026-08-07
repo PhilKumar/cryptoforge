@@ -304,6 +304,10 @@ class FeedClient:
             "campaign",
             {
                 "campaign_id": campaign_id,
+                # The two facts a buyer recognises a campaign BY. The id is for
+                # machines; nobody scans an activity log for hex.
+                "symbol": campaign.symbol,
+                "timeframe": campaign.timeframe,
                 "joined": campaign.joined,
                 "reason": campaign.skip_reason,
                 "skipped_as_old": campaign.skipped_as_old,
@@ -425,7 +429,12 @@ class FeedClient:
         # decision against their own fills.
         self._emit(
             "closed",
-            {"campaign_id": campaign.campaign_id, "reason": payload.get("reason"), "flatten": False},
+            {
+                "campaign_id": campaign.campaign_id,
+                "symbol": campaign.symbol,
+                "reason": payload.get("reason"),
+                "flatten": False,
+            },
         )
 
     # ── what the buyer's ladder should look like ─────────────────────
