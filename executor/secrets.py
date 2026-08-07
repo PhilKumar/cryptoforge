@@ -60,6 +60,7 @@ def _keyring():
         return None
     try:
         import keyring
+        from keyring.backends import fail
         from keyring.errors import NoKeyringError
     except Exception:  # pragma: no cover - depends on the buyer's machine
         return None
@@ -67,10 +68,18 @@ def _keyring():
         backend = keyring.get_keyring()
     except NoKeyringError:  # pragma: no cover
         return None
-    # keyring falls back to a "fail" backend rather than raising on import when
-    # nothing real is installed. Storing into that succeeds and loses the value,
-    # which is exactly the silent failure rule 2 is about.
-    if type(backend).__name__ in ("FailKeyring", "Keyring"):  # pragma: no cover
+    # keyring installs a "fail" backend rather than raising when nothing real is
+    # available, and writing into that one loses the value — the silent failure
+    # rule 2 exists to prevent.
+    #
+    # Tested by IDENTITY, not by class name. The fail backend's class is called
+    # `Keyring` — and so is the macOS one, `keyring.backends.macOS.Keyring`.
+    # Matching on the name rejected the real Keychain on every Mac, which is
+    # exactly the machine this was written for.
+    if isinstance(backend, fail.Keyring):
+        return None
+    # A chainer with nothing viable behind it reports priority 0 or less.
+    if getattr(backend, "priority", 1) <= 0:  # pragma: no cover - Linux, mostly
         return None
     return keyring
 

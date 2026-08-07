@@ -194,5 +194,91 @@ class CredentialPrecedenceTests(unittest.TestCase):
         self.assertEqual((config.api_key, config.api_secret), ("stored-key", "stored-secret"))
 
 
+class KeyringBackendTests(unittest.TestCase):
+    """Which backend counts as a real one.
+
+    The fail backend's class is called `Keyring`. So is the macOS one —
+    `keyring.backends.macOS.Keyring`. A check written on the class NAME
+    therefore rejects the real Keychain on every Mac, which is the machine this
+    was written for, and the app reports "no password store" while sitting on
+    one. Identity, never the name.
+    """
+
+    def setUp(self):
+        import sys
+        import types
+
+        self._saved = {name: sys.modules.get(name) for name in list(sys.modules) if name.startswith("keyring")}
+        self.addCleanup(self._restore)
+
+        fail_mod = types.ModuleType("keyring.backends.fail")
+
+        class Keyring:  # the FAIL backend, whose name collides with the real one
+            priority = 0
+
+        fail_mod.Keyring = Keyring
+
+        backends = types.ModuleType("keyring.backends")
+        backends.fail = fail_mod
+        errors = types.ModuleType("keyring.errors")
+
+        class NoKeyringError(Exception):
+            pass
+
+        errors.NoKeyringError = NoKeyringError
+
+        self.keyring = types.ModuleType("keyring")
+        self.keyring.backends = backends
+        self.keyring.errors = errors
+        self.fail_cls = Keyring
+
+        sys.modules["keyring"] = self.keyring
+        sys.modules["keyring.backends"] = backends
+        sys.modules["keyring.backends.fail"] = fail_mod
+        sys.modules["keyring.errors"] = errors
+        os.environ.pop("CASCADE_NO_KEYRING", None)
+
+    def _restore(self):
+        import sys
+
+        for name in [n for n in list(sys.modules) if n.startswith("keyring")]:
+            del sys.modules[name]
+        for name, module in self._saved.items():
+            if module is not None:
+                sys.modules[name] = module
+        os.environ["CASCADE_NO_KEYRING"] = "1"
+
+    def test_a_real_backend_named_keyring_is_accepted(self):
+        """This is the macOS Keychain, and rejecting it was the bug."""
+
+        class Keyring:  # same name as the fail backend, different class
+            priority = 5
+
+        self.keyring.get_keyring = lambda: Keyring()
+        self.assertTrue(secrets.available())
+
+    def test_the_fail_backend_is_rejected(self):
+        """Writing into it succeeds and loses the value."""
+        self.keyring.get_keyring = lambda: self.fail_cls()
+        self.assertFalse(secrets.available())
+
+    def test_a_chainer_with_nothing_behind_it_is_rejected(self):
+        class Chainer:
+            priority = 0
+
+        self.keyring.get_keyring = lambda: Chainer()
+        self.assertFalse(secrets.available())
+
+    def test_the_kill_switch_wins_over_a_working_backend(self):
+        """Tests must never reach into the login keychain of whoever runs them."""
+
+        class Keyring:
+            priority = 5
+
+        self.keyring.get_keyring = lambda: Keyring()
+        os.environ["CASCADE_NO_KEYRING"] = "1"
+        self.assertFalse(secrets.available())
+
+
 if __name__ == "__main__":
     unittest.main()

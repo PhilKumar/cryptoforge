@@ -37,3 +37,6 @@ tools/.paper_prove_cache/
 # would have published it. The tool tells you to delete these once they are on
 # the server; this is the guard for the gap in between.
 out/
+
+# Installer output — the app bundle, dmg and generated icons
+build/

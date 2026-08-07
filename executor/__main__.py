@@ -39,6 +39,7 @@ from executor.market import ExchangeMarketData, MarketStrip
 from executor.power import SleepInhibitor, detect, sync_inhibitor
 from executor.report import irreducible_risk
 from executor.runtime import ExecutorRuntime, RuntimeConfig
+from executor.singleton import AlreadyRunning, InstanceLock, lock_path
 from executor.transport import ExecutorIdentity, FeedTransport, KeySetStore, TransportStopped
 
 _log = logging.getLogger("cascade.executor")
@@ -494,6 +495,17 @@ def main(argv=None) -> int:
     if args.check:
         return asyncio.run(_check(config))
 
+    # Before anything opens a socket or a key. Two executors share an account
+    # and a state directory but not a book, so both would collect the same
+    # rungs and both would place — double the intended position, on top of a
+    # record neither can trust.
+    lock = InstanceLock(lock_path(config.state_dir))
+    try:
+        lock.acquire()
+    except AlreadyRunning as exc:
+        _say(str(exc))
+        return 3
+
     executor = Executor(config)
     server = None
     if not args.no_ui:
@@ -515,6 +527,7 @@ def main(argv=None) -> int:
     finally:
         if server:
             server.stop()
+        lock.release()
 
 
 def _run_setup(config, *, port: int, path: Optional[str], asked: bool) -> int:
