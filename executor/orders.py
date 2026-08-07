@@ -400,6 +400,47 @@ class CampaignOrders:
         self.last_red = None
         self.stop_price = None
 
+    # ── the campaign is over ─────────────────────────────────────
+
+    def abandon_entry_intents(self, reason: str) -> List[OrderIntent]:
+        """Take the resting buy off the exchange. Nothing about the exit.
+
+        Deliberately separate from `sleep_intents`, which cancels for the
+        opposite reason: sleeping means "not now", and the entry is re-placed on
+        the next tick after wake. This means "not ever" — the ladder that priced
+        that trigger is finished — so the cancel is paired with `abandon_entry`
+        rather than with a re-place.
+        """
+        if not self.entry_resting:
+            return []
+        return [
+            OrderIntent(
+                action="cancel",
+                kind="entry",
+                client_order_id=self.entry_client_order_id(),
+                reason=reason,
+            )
+        ]
+
+    def abandon_entry(self) -> None:
+        """Clear the whole entry side once the cancel has landed.
+
+        The pot goes with the order. It is money set aside against rungs that
+        will never be published again, and leaving it on the books would show a
+        buyer capital pending on a campaign that cannot spend it — while the
+        stop price beside it named a trigger that can no longer fire.
+
+        The position and its target are untouched, and so is `closed_rounds`:
+        this ends the buying, not the holding.
+        """
+        self.pot_usd = 0.0
+        self.pot_line = None
+        self.last_red = None
+        self.stop_price = None
+        self.limit_price = None
+        self.entry_resting = False
+        self.held_reason = ""
+
     # ── the twin sleep invariants ────────────────────────────────
 
     def sleep_intents(self) -> List[OrderIntent]:

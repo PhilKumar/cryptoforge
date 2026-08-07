@@ -52,6 +52,10 @@ Band = Tuple[float, float]
 # numbers that mean something else.
 BOOK_VERSION = 1
 
+# Why a buy is cancelled when its campaign stops being published. Not the sleep
+# reason: sleeping means "not now" and re-places on wake, this means "not ever".
+EN_ROUTE_TO_NOWHERE = "the campaign that priced this trigger has ended"
+
 
 class MarketData(Protocol):
     """The buyer's own candles, from their own venue — never ours.
@@ -350,12 +354,29 @@ class ExecutorRuntime:
                 except Exception:
                     prices[orders.symbol] = self.last_prices.get(orders.symbol, 0.0)
             self.last_prices[orders.symbol] = prices[orders.symbol]
-            intents = orders.intents(prices[orders.symbol]) if entries_allowed else orders.exit_intents()
+            if entries_allowed:
+                intents = orders.intents(prices[orders.symbol])
+            else:
+                intents = orders.exit_intents()
+                if followed is None:
+                    # The ladder that priced this trigger is finished, so a buy
+                    # resting on it is waiting to spend money on geometry that
+                    # no longer exists. Cancelled ahead of the exit: it is the
+                    # order that can still cost something.
+                    intents = orders.abandon_entry_intents(EN_ROUTE_TO_NOWHERE) + intents
             if not intents:
                 continue
             result = IntentExecutor(self._adapter, orders.symbol, quote_asset=self._config.quote_asset).apply(
                 intents, our_resting_exit_qty=self._resting_exit_qty(orders)
             )
+            # Cleared only once the exchange confirms the cancel. Clearing on
+            # the attempt would drop the pot while the order was still live.
+            if followed is None and orders.entry_client_order_id() in result.cancelled:
+                spent = orders.pot_usd
+                orders.abandon_entry()
+                report.notes.append(
+                    f"{orders.symbol}: cancelled the resting buy on the campaign that ended — ${spent:,.2f} released."
+                )
             orders.entry_resting = bool(result.resting_entry) or orders.entry_resting
             report.placed += len(result.placed)
             report.cancelled += len(result.cancelled)
@@ -387,19 +408,19 @@ class ExecutorRuntime:
         each pass it would bury the fills the panel exists to show. Silent when
         there is nothing at stake: a campaign that ended holding nothing needs no
         announcement, only the ones still carrying the buyer's money.
+
+        A resting buy does not count as something at stake here: it is cancelled
+        this same pass and gets its own line, which says more than this one
+        would.
         """
         if campaign_id in self._unpublished_announced:
             return []
-        if orders.base_qty <= 0 and not orders.exit_resting and not orders.entry_resting:
+        if orders.base_qty <= 0 and not orders.exit_resting:
             return []
         self._unpublished_announced.add(campaign_id)
-        if orders.base_qty > 0:
-            carrying = f"the {orders.symbol} you hold keeps its target"
-        else:
-            carrying = "its resting order is still watched"
         return [
             f"{orders.symbol}: this campaign is no longer published — it ended while this machine was away. "
-            f"Nothing new opens here; {carrying}."
+            f"Nothing new opens here; the {orders.symbol} you hold keeps its target."
         ]
 
     def _advance(self, campaign_id: str, orders: CampaignOrders, followed: FollowedCampaign) -> List[str]:

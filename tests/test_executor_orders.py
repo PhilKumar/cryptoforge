@@ -442,5 +442,38 @@ class SerialisationTests(unittest.TestCase):
         self.assertTrue(orders.worth_keeping())
 
 
+class AbandonEntryTests(unittest.TestCase):
+    """Ending the buying, not the holding."""
+
+    def test_nothing_to_cancel_when_no_buy_is_resting(self):
+        self.assertEqual(_orders().abandon_entry_intents("over"), [])
+
+    def test_the_cancel_names_the_resting_order(self):
+        orders = _orders()
+        orders.collect(Candle(1, 175, 175, 162.0, 163), _rungs((4, 4, 162.32, 6.0)))
+        orders.advance_stop(_red(2, 162.00))
+        orders.advance_stop(_red(3, 161.50))
+        orders.entry_resting = True
+        intent = orders.abandon_entry_intents("over")[0]
+        self.assertEqual(intent.action, "cancel")
+        self.assertEqual(intent.kind, "entry")
+        self.assertEqual(intent.client_order_id, orders.entry_client_order_id())
+
+    def test_the_position_and_the_journal_are_untouched(self):
+        orders = _orders()
+        orders.collect(Candle(1, 175, 175, 162.0, 163), _rungs((4, 4, 162.32, 6.0)))
+        orders.on_entry_filled(Fill(price=162.0, quantity=0.05, timestamp=99))
+        orders.on_exit_filled(165.0, ts=120)
+        orders.on_entry_filled(Fill(price=161.0, quantity=0.04, timestamp=130))
+        orders.pot_usd, orders.entry_resting = 6.0, True
+
+        orders.abandon_entry()
+        self.assertEqual(orders.base_qty, 0.04)
+        self.assertEqual(len(orders.closed_rounds), 1)
+        self.assertEqual(orders.reuse_below, 165.0)
+        self.assertEqual(orders.pot_usd, 0.0)
+        self.assertFalse(orders.entry_resting)
+
+
 if __name__ == "__main__":
     unittest.main()

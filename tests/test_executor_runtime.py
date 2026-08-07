@@ -1003,3 +1003,107 @@ class UnpublishedCampaignTests(RuntimeHarness):
         self.assertEqual(row["state"], "ENDED")
         self.assertGreater(row["position_qty"], 0)
         self.assertIsNotNone(row["target"])
+
+
+class AbandonedEntryTests(RuntimeHarness):
+    """A buy resting on a campaign the feed has stopped publishing is waiting
+    to spend money on geometry that no longer exists. It comes off.
+
+    The opposite of the sleep cancel, which means "not now" and re-places on
+    wake. This means "not ever", so the pot goes with the order.
+    """
+
+    def _resting_then_unpublished(self):
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        self.market.candles = [
+            Candle(10, 175, 175, 162.0, 163),
+            self._red(20, 162.0),
+            self._red(30, 161.5),
+        ]
+        self.market.price = 161.55
+        runtime.tick()
+        orders = runtime.book.campaigns["casc_SOLUSDT_1"]
+        self.assertTrue(orders.entry_resting, "the fixture must leave a buy resting")
+        self.assertGreater(orders.pot_usd, 0)
+        self.market.candles = []
+        runtime._client.campaigns.pop("casc_SOLUSDT_1")
+        return runtime, orders
+
+    def test_the_resting_buy_is_cancelled(self):
+        runtime, orders = self._resting_then_unpublished()
+        entry_id = orders.entry_client_order_id()
+        report = runtime.tick()
+        self.assertEqual(report.cancelled, 1)
+        self.assertNotIn(entry_id, self.exchange.orders)
+        self.assertFalse(orders.entry_resting)
+
+    def test_the_pot_and_the_armed_stop_go_with_it(self):
+        """Capital pending on a campaign that cannot spend it, and a trigger
+        that can never fire, are both fiction on the buyer's page."""
+        runtime, orders = self._resting_then_unpublished()
+        runtime.tick()
+        self.assertEqual(orders.pot_usd, 0.0)
+        self.assertIsNone(orders.stop_price)
+        self.assertIsNone(orders.pot_line)
+        self.assertEqual(runtime.status()["armed_exposure_usd"], 0.0)
+
+    def test_the_buyer_is_told_what_was_released(self):
+        runtime, orders = self._resting_then_unpublished()
+        spent = orders.pot_usd
+        notes = [n for n in runtime.tick().notes if "cancelled the resting buy" in n]
+        self.assertEqual(len(notes), 1)
+        self.assertIn(f"${spent:,.2f}", notes[0])
+
+    def test_it_is_not_retried_every_tick(self):
+        runtime, _ = self._resting_then_unpublished()
+        runtime.tick()
+        for _ in range(3):
+            report = runtime.tick()
+            self.assertEqual(report.cancelled, 0)
+            self.assertEqual([n for n in report.notes if "cancelled the resting buy" in n], [])
+
+    def test_a_held_position_keeps_its_target_through_the_cancel(self):
+        """This ends the buying, not the holding."""
+        runtime, orders = self._resting_then_unpublished()
+        runtime.on_fill("casc_SOLUSDT_1", Fill(price=162.0, quantity=0.05, timestamp=40))
+        orders.entry_resting = True  # a second rung was still resting when it ended
+        orders.pot_usd = 6.0
+        runtime.tick()
+        self.assertEqual(orders.base_qty, 0.05)
+        self.assertTrue(orders.exit_resting)
+        self.assertIn("sell", self.exchange.sides)
+
+    def test_a_published_campaign_keeps_its_resting_buy(self):
+        """The guard is the feed entry, not the posture. A paused or stale
+        campaign is coming back; an ended one is not."""
+        self._open()
+        self._leg()
+        runtime = self._runtime()
+        self.market.candles = [
+            Candle(10, 175, 175, 162.0, 163),
+            self._red(20, 162.0),
+            self._red(30, 161.5),
+        ]
+        self.market.price = 161.55
+        runtime.tick()
+        orders = runtime.book.campaigns["casc_SOLUSDT_1"]
+        runtime.pause_opening()
+        report = runtime.tick()
+        self.assertEqual(report.cancelled, 0)
+        self.assertTrue(orders.entry_resting)
+        self.assertGreater(orders.pot_usd, 0)
+
+    def test_the_cleared_entry_survives_a_restart(self):
+        """The abandonment must be written down, or the next start restores a
+        pot and a trigger for a campaign that is over."""
+        runtime, _ = self._resting_then_unpublished()
+        runtime.tick()
+        revived = self._runtime()
+        revived.restore_book(runtime.book_snapshot())
+        restored = revived.book.campaigns.get("casc_SOLUSDT_1")
+        if restored is not None:  # kept only if something else is still at stake
+            self.assertEqual(restored.pot_usd, 0.0)
+            self.assertIsNone(restored.stop_price)
+            self.assertFalse(restored.entry_resting)
