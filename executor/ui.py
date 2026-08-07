@@ -343,6 +343,8 @@ def event_sentence(kind: str, detail: dict) -> str:
     if kind == "campaign":
         if detail.get("joined"):
             name = f"{what} · {timeframe}" if timeframe else what
+            if detail.get("late"):
+                return f"Joined {name} — late, and safely: its fall had not started, so nothing was missed."
             return f"Joined {name} — following it from its start."
         reason = str(detail.get("reason") or "not joined")
         return f"Not following {what}: {reason}"

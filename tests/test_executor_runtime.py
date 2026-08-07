@@ -1107,3 +1107,33 @@ class AbandonedEntryTests(RuntimeHarness):
             self.assertEqual(restored.pot_usd, 0.0)
             self.assertIsNone(restored.stop_price)
             self.assertFalse(restored.entry_resting)
+
+
+class LateAdoptionTests(RuntimeHarness):
+    """Tonight's miss, replayed: a campaign born during a feed outage arrives
+    minutes late, legless. The tick must adopt it, book it, and trade it like
+    one seen at birth."""
+
+    def test_the_tick_adopts_and_books_a_late_legless_campaign(self):
+        self._open(created_at=int(NOW) - 900)  # the birth frame arrived late
+        runtime = self._runtime()
+        runtime.tick()
+        self.assertNotIn("casc_SOLUSDT_1", runtime.book.campaigns, "must not join before it settles")
+
+        self.clock[0] += 91
+        runtime.tick()
+        self.assertIn("casc_SOLUSDT_1", runtime.book.campaigns, "settled and legless — adopted")
+
+        # The fall starts AFTER adoption; the ladder collects it like any other.
+        self._leg()
+        self.market.candles = [Candle(10, 175, 175, 162.0, 163)]
+        runtime.tick()
+        self.assertGreater(runtime.book.campaigns["casc_SOLUSDT_1"].pot_usd, 0)
+
+    def test_a_late_campaign_whose_fall_already_started_stays_out(self):
+        self._open(created_at=int(NOW) - 900)
+        self._leg()  # the replay carried a leg: the fall predates us
+        runtime = self._runtime()
+        self.clock[0] += 200
+        runtime.tick()
+        self.assertNotIn("casc_SOLUSDT_1", runtime.book.campaigns)

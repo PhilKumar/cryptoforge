@@ -632,3 +632,106 @@ class VenueFeeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AdoptionTests(ClientHarness):
+    """A late frame is not an old fall.
+
+    The join window guards against laddering into the middle of a fall — but it
+    also refused campaigns whose BIRTH FRAME arrived late: a feed-server
+    restart or a wifi blip at the wrong moment meant the replay delivered the
+    birth minutes afterwards, and four real SOLUSDT campaigns were permanently
+    missed on 2026-08-07 exactly this way. A campaign with no legs has offered
+    nothing yet, so joining it late puts the buyer where a birth-time join
+    would have.
+    """
+
+    def _skipped_old(self, **overrides):
+        campaign = self.open_campaign(created_at=int(NOW) - 900, **overrides)
+        self.assertTrue(campaign.skipped_as_old, "fixture must start refused")
+        return campaign
+
+    def test_a_legless_old_campaign_is_adopted_after_the_settle_wait(self):
+        campaign = self._skipped_old()
+        self.clock[0] += 91
+        adopted = self.client.adopt_latecomers()
+        self.assertEqual(adopted, ["casc_SOLUSDT_1"])
+        self.assertTrue(campaign.joined)
+        self.assertFalse(campaign.skipped_as_old)
+        self.assertEqual(campaign.skip_reason, "")
+
+    def test_nothing_is_adopted_before_it_has_settled(self):
+        """Frames for one campaign arrive in order, but the adopter runs on the
+        tick thread — legs may still be in flight behind the birth."""
+        self._skipped_old()
+        self.clock[0] += 30
+        self.assertEqual(self.client.adopt_latecomers(), [])
+
+    def test_a_campaign_with_a_leg_is_never_adopted(self):
+        """A leg means the fall has started, and that is the case the join
+        window has always been right about."""
+        self._skipped_old()
+        self.send("leg.opened", _leg_payload())
+        self.clock[0] += 200
+        self.assertEqual(self.client.adopt_latecomers(), [])
+        self.assertFalse(self.client.campaigns["casc_SOLUSDT_1"].joined)
+
+    def test_a_finished_campaign_is_never_adopted(self):
+        campaign = self._skipped_old()
+        campaign.state = "MOTHER_BROKEN"
+        self.clock[0] += 200
+        self.assertEqual(self.client.adopt_latecomers(), [])
+
+    def test_a_halted_campaign_is_never_adopted(self):
+        campaign = self._skipped_old()
+        campaign.halted = "levels disagree"
+        self.clock[0] += 200
+        self.assertEqual(self.client.adopt_latecomers(), [])
+
+    def test_an_unsubscribed_campaign_is_never_adopted(self):
+        """Not what this buyer bought — lateness has nothing to do with it."""
+        client = FeedClient(
+            public_keys=self.keys, keyset_fetched_at=NOW, now_fn=lambda: self.clock[0], timeframes=["15m"]
+        )
+        self.send("campaign.opened", _campaign_payload(created_at=int(NOW) - 900), client=client)
+        self.clock[0] += 200
+        self.assertEqual(client.adopt_latecomers(), [])
+        self.assertFalse(client.campaigns["casc_SOLUSDT_1"].joined)
+
+    def test_a_stale_feed_defers_adoption_to_a_later_pass(self):
+        """Same gate a birth-time join gets. Idempotent, so the next entitled
+        pass picks it up rather than losing it."""
+        self._skipped_old()
+        self.send("heartbeat", {})  # staleness is measured from here on
+        self.clock[0] += 120  # past the settle wait, but the feed is now stale
+        self.assertEqual(self.client.adopt_latecomers(), [])
+        self.send("heartbeat", {})  # freshens the feed
+        adopted = self.client.adopt_latecomers()
+        self.assertEqual(adopted, ["casc_SOLUSDT_1"])
+
+    def test_adoption_announces_itself_as_late_and_safe(self):
+        self._skipped_old()
+        self.clock[0] += 91
+        self.send("heartbeat", {})
+        self.client.adopt_latecomers()
+        kind, detail = self.events[-1]
+        self.assertEqual(kind, "campaign")
+        self.assertTrue(detail["joined"])
+        self.assertTrue(detail["late"])
+        from executor.ui import event_sentence
+
+        line = event_sentence(kind, detail)
+        self.assertIn("late, and safely", line)
+        self.assertIn("SOLUSDT", line)
+        self.assertNotIn("{", line)
+
+    def test_an_adopted_campaign_ladders_like_a_fresh_one(self):
+        """The point of adopting at all: plan() serves it a real ladder."""
+        self._skipped_old()
+        self.clock[0] += 91
+        self.send("heartbeat", {})
+        self.client.adopt_latecomers()
+        self.send("leg.opened", _leg_payload())
+        plan = self.client.plan("casc_SOLUSDT_1", capital_usd=3000.0)
+        self.assertFalse(plan.get("refused"))
+        self.assertTrue(plan["legs"][0]["rungs"])

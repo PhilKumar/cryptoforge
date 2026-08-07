@@ -44,6 +44,13 @@ KEYSET_CACHE_TTL_SEC = 24 * 3600
 # Join-at-start. A campaign older than this when we hear about it is one we
 # missed the beginning of, and the ladder only makes sense from its mother.
 MAX_JOIN_AGE_SEC = 300
+
+# How long a too-old campaign must sit quiet before it may be adopted anyway.
+# Longer than a snapshot or replay burst takes to finish delivering: the frames
+# for one campaign arrive in order, but the adopter runs on the tick thread,
+# and adopting in the gap between a campaign frame and its first leg frame
+# would join a fall that is about to be revealed as already under way.
+ADOPT_SETTLE_SEC = 90
 # Refuse to open anything new if entitlement has not been confirmed this long.
 # Otherwise "pull the network cable" is a way to keep trading forever.
 ENTITLEMENT_GRACE_SEC = 24 * 3600
@@ -91,6 +98,10 @@ class FollowedCampaign:
     # filter on every market — which is the exact bug the bar-scaling fixed.
     median_bar_pct: float = 0.0
     joined: bool = False
+    # When THIS machine first heard of it — the local clock, not created_at.
+    # The adoption rule needs to know how long the campaign has sat here
+    # quietly, which is a different question from how old the campaign is.
+    first_seen_at: float = 0.0
     skip_reason: str = ""
     # True when the ONLY thing wrong is age: it started before this machine
     # was watching. That is the normal condition of almost every campaign a
@@ -269,6 +280,7 @@ class FeedClient:
             tick_size=float((payload.get("advisory") or {}).get("tick_size") or 0.01),
             median_bar_pct=float(payload.get("median_bar_pct") or 0.0),
         )
+        campaign.first_seen_at = float(self._now())
         self.campaigns[campaign_id] = campaign
 
         if campaign.model_version != model.MODEL_VERSION:
@@ -314,6 +326,58 @@ class FeedClient:
                 "skipped_unsubscribed": campaign.skipped_unsubscribed,
             },
         )
+
+    def adopt_latecomers(self) -> List[str]:
+        """Join old-by-the-clock campaigns whose fall has not actually started.
+
+        The join window measures age in wall-clock seconds, and that is the
+        right guard against laddering into the middle of a fall — but it also
+        refused campaigns whose birth frame arrived LATE: a feed-server restart
+        or a wifi blip at the wrong moment meant the replay delivered the birth
+        minutes afterwards, and the window read "late frame" as "old fall". A
+        campaign with NO legs has offered nothing yet — no rung has been
+        crossed, no money was ever due — so joining it now puts the buyer in
+        exactly the position they would hold had they seen the birth live.
+
+        The settle wait matters: frames for one campaign arrive in order, but
+        this runs on the tick thread. A campaign whose legs are still in flight
+        must not be adopted in the gap before they land, so nothing is adopted
+        until it has sat here quiet for ADOPT_SETTLE_SEC.
+
+        Idempotent and retried by every tick: when the feed is not entitled to
+        open (stale, expired keys), the candidate simply stays skipped until a
+        pass where it is.
+        """
+        adopted: List[str] = []
+        may_open, _ = self.may_open_new
+        if not may_open:
+            return adopted
+        now = float(self._now())
+        for campaign in self.campaigns.values():
+            if not campaign.skipped_as_old or campaign.halted or campaign.legs:
+                continue
+            if campaign.state in {"COMPLETED", "MOTHER_BROKEN", "STOPPED"}:
+                continue
+            if now - campaign.first_seen_at < ADOPT_SETTLE_SEC:
+                continue
+            campaign.joined = True
+            campaign.skipped_as_old = False
+            campaign.skip_reason = ""
+            adopted.append(campaign.campaign_id)
+            self._emit(
+                "campaign",
+                {
+                    "campaign_id": campaign.campaign_id,
+                    "symbol": campaign.symbol,
+                    "timeframe": campaign.timeframe,
+                    "joined": True,
+                    "late": True,
+                    "reason": "",
+                    "skipped_as_old": False,
+                    "skipped_unsubscribed": False,
+                },
+            )
+        return adopted
 
     def set_subscription(self, *, timeframes: Iterable[str], source_exchanges: Iterable[str]) -> None:
         """Change which signals are followed, without a restart.

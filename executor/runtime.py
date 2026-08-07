@@ -139,6 +139,14 @@ class ExecutorRuntime:
     def sync(self) -> List[str]:
         """Give every newly joined campaign an order book of its own."""
         notes = []
+        # First, let the client reconsider campaigns it refused only for
+        # arriving late. Done here rather than on the socket thread so a
+        # campaign whose legs are still in flight has had time to land — see
+        # FeedClient.adopt_latecomers. getattr: tests drive sync on stub
+        # clients that never grew the method.
+        adopt = getattr(self._client, "adopt_latecomers", None)
+        if adopt is not None:
+            adopt()
         for campaign_id, campaign in self._client.campaigns.items():
             if campaign_id in self.book.campaigns or not campaign.joined:
                 continue
