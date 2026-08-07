@@ -2130,7 +2130,9 @@
   }
   .table-title-group { display: flex; flex-direction: column; gap: 4px; }
   .table-title { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--text); }
-  .table-meta { font-size: 11px; color: var(--muted); }
+  /* --text-dim, not --muted: this sits on the lighter Market card where
+     --muted measured 3.04:1. --text-dim gives 5.16:1 there. */
+  .table-meta { font-size: 11px; color: var(--text-dim); }
   .table-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .table-search-input {
     width: 220px;
@@ -3632,6 +3634,8 @@
     background: linear-gradient(180deg, rgba(22,30,50,0.94), rgba(10,16,30,0.98));
     box-shadow: 0 16px 30px rgba(2,6,23,0.22), inset 0 1px 0 rgba(255,255,255,0.08);
   }
+  /* #c4b5fd is legible on the dark card but measured 1.81:1 once the light
+     theme puts it on white — see the light override further down. */
   .live-empty-rail-kicker {
     margin-bottom: 5px;
     font-size: 10px;
@@ -4025,10 +4029,12 @@
   [data-theme="light"] .table-row-label,
   [data-theme="light"] .table-datetime-date,
   [data-theme="light"] .table-value-main { color: #0f172a; }
+  /* #64748b measured 3.90-4.02:1 on the tinted table cards, under the 4.5 floor
+     for text this small. #475569 is the same slate a step darker: 6.20:1. */
   [data-theme="light"] .table-note,
   [data-theme="light"] .table-datetime-time,
   [data-theme="light"] .table-meta,
-  [data-theme="light"] .table-value-sub { color: #64748b; }
+  [data-theme="light"] .table-value-sub { color: #475569; }
   [data-theme="light"] .table-input-sm {
     background: #ffffff;
     border-color: rgba(15,23,42,0.10);
@@ -4866,7 +4872,9 @@
   flex: 1;
   min-width: 120px;
   font-size: 12px;
-  color: var(--muted);
+  /* --text-dim, not --muted: the scalp strip is a lighter card than the grounds
+     --muted is tuned against, where it measured 4.22:1. This gives 6.67:1. */
+  color: var(--text-dim);
 }
 .cf-scalp-session-pill {
   display: flex;
@@ -5254,7 +5262,16 @@
 }
 
 [data-theme="light"] .mission-eyebrow {
-  color: var(--accent2);
+  /* --accent2 resolves to #ea580c here, which measured 3.47-3.50:1 on the
+     near-white card. Same orange, one step down the ramp: 5.05:1. */
+  color: #c2410c;
+}
+
+[data-theme="light"] .live-empty-rail-kicker {
+  /* The dark theme's #c4b5fd lavender lands on white here and measured 1.81:1
+     — the label was there but barely readable. Violet-700 keeps the hue and
+     gives 6.98:1. */
+  color: #6d28d9;
 }
 
 [data-theme="light"] .mission-copy,
@@ -6242,14 +6259,17 @@ h1, h2, h3, h4, h5, h6,
 [data-theme="light"] .btn-primary,
 [data-theme="light"] .page-btn.active,
 [data-theme="light"] .filter-pill-all.active {
-  --btn-bg: linear-gradient(180deg, #06b6d4 0%, #0891b2 100%);
+  /* White on #06b6d4 measured 2.73:1. Deepening the ramp to cyan-700/800
+     keeps the button unmistakably cyan and gives white 5.4:1. */
+  --btn-bg: linear-gradient(180deg, #0e7490 0%, #155e75 100%);
   --btn-color: #ffffff;
-  --btn-border: rgba(8,145,178,0.54);
+  --btn-border: rgba(21,94,117,0.58);
 }
 [data-theme="light"] .btn-success {
-  --btn-bg: linear-gradient(180deg, #14b8a6 0%, #0f766e 100%);
+  /* White on #14b8a6 measured 3.15:1; teal-700/800 gives 5.5:1. */
+  --btn-bg: linear-gradient(180deg, #0f766e 0%, #115e59 100%);
   --btn-color: #ffffff;
-  --btn-border: rgba(15,118,110,0.42);
+  --btn-border: rgba(17,94,89,0.46);
 }
 [data-theme="light"] .btn-warning {
   --btn-bg: linear-gradient(180deg, #f59e0b 0%, #b45309 100%);
@@ -6273,7 +6293,8 @@ h1, h2, h3, h4, h5, h6,
 }
 [data-theme="light"] .asset-pill:hover,
 [data-theme="light"] .asset-pill.active {
-  color: #0e7490;
+  /* 4.45:1 against the pill's own pale tint — a rounding away from the floor. */
+  color: #155e75;
   border-color: rgba(8,145,178,0.30);
   background: linear-gradient(135deg, rgba(8,145,178,0.09), rgba(217,119,6,0.06));
 }
