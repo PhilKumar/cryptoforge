@@ -211,6 +211,17 @@
     transform: translateY(-1px);
   }
   input[type="date"] { min-width: 0; box-sizing: border-box; }
+  /* `input, select { width: 100% }` above was stretching checkboxes across the
+     whole field: #b-compounding measured 217px wide and 13px tall, which is a
+     hard thing to hit and looks like a bug. Boxes are square again, and on
+     touch widths they grow to the 24px minimum — a checkbox is one of the few
+     controls where a bigger box is simply better on a phone. */
+  input[type="checkbox"], input[type="radio"] { width: auto; }
+  @media (max-width: 768px) {
+    input[type="checkbox"], input[type="radio"], .tbl-cb {
+      width: 24px; height: 24px; min-width: 24px; min-height: 24px;
+    }
+  }
   select { cursor: pointer; }
   .broker-control-strip {
     display: flex;
@@ -3325,6 +3336,9 @@
     color: var(--text-dim); cursor: pointer;
     border-radius: 8px; padding: 4px 10px;
     font-size: 11px; font-weight: 600; font-family: inherit;
+    /* 4px padding + an 11px line + borders landed on 23px, one short of the
+       24px minimum. The height is the only thing that moves. */
+    min-height: 24px;
   }
   .cf-alert-dismiss-all:hover { border-color: var(--accent); color: var(--text); }
   .cf-alert-stack-body {
@@ -7295,7 +7309,8 @@ html[data-theme="light"] .journal-entry-notes section {
     line-height: 1;
     transition: background .16s ease, color .16s ease;
   }
-  .cf-tf-option { padding: 6px 11px; font-size: 11.5px; font-family: var(--font-mono); }
+  /* 6px padding on an 11.5px line came to 23.5px — just under the minimum. */
+  .cf-tf-option { padding: 6px 11px; font-size: 11.5px; font-family: var(--font-mono); min-height: 24px; }
   .cf-mode-option:hover,
   .cf-tf-option:hover { color: var(--text); }
   .cf-mode-option.is-active,
@@ -8053,7 +8068,12 @@ html[data-theme="light"] .journal-entry-notes section {
    The Cascade start form carried three paragraphs of rules under its fields.
    Each mattered at the moment of choosing that one field, so it lives on the
    label behind an (i) — hover for mouse, click/focus for touch and keyboard. */
+/* The painted circle stays 15px — a 24px disc beside a KPI label would read as
+   a button rather than a footnote. The ::after below is an invisible 24x24
+   square centred on it, so the tap target meets the minimum while the drawing
+   and the layout are untouched. */
 .cf-info {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -8071,6 +8091,15 @@ html[data-theme="light"] .journal-entry-notes section {
   cursor: help;
   vertical-align: middle;
   flex: none;
+}
+.cf-info::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
 }
 .cf-info:hover,
 .cf-info:focus-visible {
