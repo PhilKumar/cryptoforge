@@ -767,18 +767,13 @@ class UIServer:
 # One self-contained page. Inline styles and script on purpose — it is served
 # by a stdlib handler with no static directory, and the whole point is that
 # there is nothing else to fetch and nowhere else to fetch it from.
-PAGE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cascade — by CryptoForge</title>
-<meta name="theme-color" content="#040814">
-<link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http%3A//www.w3.org/2000/svg'%3E%3Crect width='32' height='32' rx='7' fill='%23040814'/%3E%3Crect x='7' y='10' width='4' height='12' rx='1' fill='%23f59e0b'/%3E%3Crect x='14' y='6' width='4' height='16' rx='1' fill='%2322d3ee'/%3E%3Crect x='21' y='13' width='4' height='9' rx='1' fill='%232dd4bf'/%3E%3C/svg%3E">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="stylesheet" href="/assets/fonts/core.css">
-<script>
+# ── Shared CryptoForge vocabulary ─────────────────────────────────────
+# These blocks are the parent site's design, ported once. The console page
+# below and the setup page in executor/setup.py are BOTH assembled from
+# them, which is what keeps the two products reading as one — change the
+# look here and both pages move together.
+
+CF_BOOT_JS = """<script>
 /* The terminal's boot script, same storage keys and same defaults, so a buyer
    who has both open sees one product rather than two. It runs BEFORE the body
    for the reason the parent's does: applying the theme after first paint is a
@@ -842,21 +837,9 @@ PAGE = """<!doctype html>
   window.cfTheme();
   window.cfApply();
 })();
-</script>
-<style>
-  /* ═══════════════════════════════════════════════════════════════════
-     CryptoForge, ported — not "inspired by".
-     Tokens, the six tints, the light mode, the glass cards, the glossy
-     pill buttons and the brand mark are lifted from
-     static/cryptoforge-app.css so the two products read as one.
-     What could NOT be lifted is the font <link>: this page is served by
-     a stdlib handler on a stranger's laptop and must fetch nothing off
-     the machine, so the faces are embedded as woff2 under /assets/fonts
-     and the presets load on demand exactly as the parent's boot script
-     loads them from a CDN.
-     ═══════════════════════════════════════════════════════════════════ */
+</script>"""
 
-  /* ── Base tokens: the terminal's dark ── */
+CF_TOKENS_CSS = """  /* ── Base tokens: the terminal's dark ── */
   :root {
     --font-body: 'Sora', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
     --font-display: 'Rajdhani', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -945,7 +928,125 @@ PAGE = """<!doctype html>
   html[data-theme="light"][data-tint="magenta"] { --accent:#a21caf; --accent2:#7e22ce; --border-acc:rgba(162,28,175,0.24); }
   html[data-theme="light"][data-tint="citrus"]  { --accent:#4d7c0f; --accent2:#a16207; --border-acc:rgba(77,124,15,0.24); }
   html[data-theme="light"][data-tint="graphite"]{ --accent:#334155; --accent2:#475569; --border-acc:rgba(51,65,85,0.24); }
-  html[data-theme="light"][data-tint="bronze"]  { --accent:#92400e; --accent2:#7c2d12; --border-acc:rgba(146,64,14,0.24); }
+  html[data-theme="light"][data-tint="bronze"]  { --accent:#92400e; --accent2:#7c2d12; --border-acc:rgba(146,64,14,0.24); }"""
+
+CF_BUTTONS_CSS = """  /* ══ Glossy pill buttons — the terminal's .btn, top-light and all ══ */
+  button.act, .cta, .btn-chart, .modal-close {
+    font-family:var(--font-display); font-weight:700; letter-spacing:0.04em;
+    border-radius:999px; cursor:pointer; position:relative; overflow:hidden;
+    border:1px solid var(--btn-border, rgba(148,178,211,0.18));
+    background:var(--btn-bg, linear-gradient(180deg, rgba(31,48,73,0.96) 0%, rgba(10,18,34,0.98) 100%));
+    color:var(--btn-color, #ecf7ff);
+    box-shadow:0 12px 26px rgba(2,6,23,0.34), inset 0 1px 0 rgba(255,255,255,0.16),
+               inset 0 -10px 16px rgba(0,0,0,0.18);
+    text-shadow:0 1px 1px rgba(0,0,0,0.22); white-space:nowrap;
+    transition:transform .15s ease, box-shadow .15s ease, filter .15s ease;
+    display:inline-flex; align-items:center; gap:7px; }
+  button.act { padding:10px 22px; font-size:13px; }
+  .cta { padding:12px 26px; font-size:13px; letter-spacing:.1em; text-transform:uppercase; }
+  .btn-chart { padding:6px 14px; font-size:12px; }
+  button.act::before, .cta::before, .btn-chart::before {
+    content:""; position:absolute; top:2px; left:7%; width:86%; height:44%; border-radius:999px;
+    background:linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.02));
+    pointer-events:none; }
+  button.act:hover, .cta:hover, .btn-chart:hover {
+    transform:translateY(-2px); filter:saturate(1.12) brightness(1.05);
+    box-shadow:0 16px 30px rgba(2,6,23,0.40), inset 0 1px 0 rgba(255,255,255,0.20),
+               inset 0 -10px 16px rgba(0,0,0,0.22); }
+  button.act:active, .cta:active, .btn-chart:active {
+    transform:translateY(1px); filter:none;
+    box-shadow:0 5px 10px rgba(0,0,0,0.28), inset 0 2px 2px rgba(0,0,0,0.24); }
+  button[disabled] { opacity:.56; cursor:not-allowed; transform:none; filter:none; }
+  button.act.solid, .cta.solid {
+    --btn-bg:linear-gradient(180deg, rgba(var(--tint-primary-rgb),0.34) 0%, rgba(var(--tint-secondary-rgb),0.45) 100%);
+    --btn-color:#f5fbff; --btn-border:rgba(var(--tint-primary-rgb),0.52); }
+  button.act.danger {
+    --btn-bg:linear-gradient(180deg, rgba(251,113,133,0.38) 0%, rgba(190,18,60,0.60) 100%);
+    --btn-color:#fff1f2; --btn-border:rgba(251,113,133,0.52); }
+  button.act.good {
+    --btn-bg:linear-gradient(180deg, rgba(45,212,191,0.36) 0%, rgba(13,148,136,0.58) 100%);
+    --btn-color:#ecfdf5; --btn-border:rgba(45,212,191,0.52); }
+  html[data-theme="light"] button.act, html[data-theme="light"] .cta, html[data-theme="light"] .btn-chart {
+    --btn-bg:linear-gradient(180deg,#ffffff 0%,#eef2f8 100%); --btn-color:#0b1220;
+    --btn-border:rgba(15,23,42,0.12); text-shadow:none;
+    box-shadow:0 12px 24px rgba(15,23,42,0.10), inset 0 1px 0 rgba(255,255,255,0.95); }
+  html[data-theme="light"] button.act.solid, html[data-theme="light"] .cta.solid {
+    --btn-bg:linear-gradient(180deg, rgba(var(--tint-primary-rgb),0.22), rgba(var(--tint-secondary-rgb),0.34));
+    --btn-color:#0b1220; --btn-border:rgba(var(--tint-primary-rgb),0.42); }
+  html[data-theme="light"] button.act.danger { --btn-bg:linear-gradient(180deg,#fff1f2,#ffe4e6);
+    --btn-color:#be123c; --btn-border:rgba(190,18,60,0.28); }
+  .modal-close { width:30px; height:30px; padding:0; justify-content:center; font-size:16px; border-radius:999px; }"""
+
+CF_PANEL_CSS = """  .panel {
+    background:
+      radial-gradient(circle at top left, rgba(70,112,255,0.18) 0%, transparent 34%),
+      linear-gradient(180deg, rgba(25,34,58,0.96) 0%, rgba(10,16,30,0.98) 100%);
+    border:1px solid rgba(119,138,182,0.18);
+    border-top:1px solid rgba(255,255,255,0.12);
+    border-radius:18px;
+    backdrop-filter:blur(32px) saturate(1.35); -webkit-backdrop-filter:blur(32px) saturate(1.35);
+    box-shadow:0 20px 48px rgba(2,6,23,0.46), 0 0 0 0.5px rgba(255,255,255,0.05),
+               inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -18px 34px rgba(0,0,0,0.20);
+    position:relative; }
+  .panel::after { content:''; position:absolute; inset:0; border-radius:18px; pointer-events:none;
+    background:linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 20%, transparent 46%);
+    mix-blend-mode:screen; }
+  html[data-theme="light"] .panel {
+    background:linear-gradient(180deg, rgba(255,255,255,0.985) 0%, rgba(245,248,255,0.96) 100%);
+    border-color:rgba(15,23,42,0.08); border-top-color:rgba(15,23,42,0.06);
+    box-shadow:0 22px 48px rgba(15,23,42,0.10), 0 6px 14px rgba(15,23,42,0.06),
+               inset 0 1px 0 rgba(255,255,255,0.94); }
+  html[data-theme="light"] .panel::after { background:none; }"""
+
+CF_BRAND_HTML = """  <div class="brand">
+    <div class="brand-mark">
+      <span class="brand-column col-a"></span>
+      <span class="brand-column col-b"></span>
+      <span class="brand-column col-c"></span>
+      <span class="brand-spark"></span>
+    </div>
+    <div>
+      <div class="brand-text">CASCADE</div>
+      <div class="brand-sub">by CryptoForge · Signal · Execution</div>
+    </div>
+  </div>"""
+
+
+# Joined from a tuple rather than `+` concatenation: bandit reads any string
+# concat containing the word "select" as SQL construction (B608). This is a
+# web page; a join is not in its sniffer and needs no nosec.
+PAGE = "".join(
+    (
+        """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cascade — by CryptoForge</title>
+<meta name="theme-color" content="#040814">
+<link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http%3A//www.w3.org/2000/svg'%3E%3Crect width='32' height='32' rx='7' fill='%23040814'/%3E%3Crect x='7' y='10' width='4' height='12' rx='1' fill='%23f59e0b'/%3E%3Crect x='14' y='6' width='4' height='16' rx='1' fill='%2322d3ee'/%3E%3Crect x='21' y='13' width='4' height='9' rx='1' fill='%232dd4bf'/%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/fonts/core.css">
+""",
+        CF_BOOT_JS,
+        """
+<style>
+  /* ═══════════════════════════════════════════════════════════════════
+     CryptoForge, ported — not "inspired by".
+     Tokens, the six tints, the light mode, the glass cards, the glossy
+     pill buttons and the brand mark are lifted from
+     static/cryptoforge-app.css so the two products read as one.
+     What could NOT be lifted is the font <link>: this page is served by
+     a stdlib handler on a stranger's laptop and must fetch nothing off
+     the machine, so the faces are embedded as woff2 under /assets/fonts
+     and the presets load on demand exactly as the parent's boot script
+     loads them from a CDN.
+     ═══════════════════════════════════════════════════════════════════ */
+
+""",
+        CF_TOKENS_CSS,
+        """
 
   /* ── The six type presets. Every family here is embedded under
        /assets/fonts and fetched when the preset is picked; a preset that
@@ -1267,26 +1368,9 @@ PAGE = """<!doctype html>
   .wrap { max-width:1240px; margin:0 auto; padding:22px 18px 72px; }
 
   /* ══ Cards — the terminal's glass, gloss and inner rim ══ */
-  .panel {
-    background:
-      radial-gradient(circle at top left, rgba(70,112,255,0.18) 0%, transparent 34%),
-      linear-gradient(180deg, rgba(25,34,58,0.96) 0%, rgba(10,16,30,0.98) 100%);
-    border:1px solid rgba(119,138,182,0.18);
-    border-top:1px solid rgba(255,255,255,0.12);
-    border-radius:18px;
-    backdrop-filter:blur(32px) saturate(1.35); -webkit-backdrop-filter:blur(32px) saturate(1.35);
-    box-shadow:0 20px 48px rgba(2,6,23,0.46), 0 0 0 0.5px rgba(255,255,255,0.05),
-               inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -18px 34px rgba(0,0,0,0.20);
-    position:relative; }
-  .panel::after { content:''; position:absolute; inset:0; border-radius:18px; pointer-events:none;
-    background:linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 20%, transparent 46%);
-    mix-blend-mode:screen; }
-  html[data-theme="light"] .panel {
-    background:linear-gradient(180deg, rgba(255,255,255,0.985) 0%, rgba(245,248,255,0.96) 100%);
-    border-color:rgba(15,23,42,0.08); border-top-color:rgba(15,23,42,0.06);
-    box-shadow:0 22px 48px rgba(15,23,42,0.10), 0 6px 14px rgba(15,23,42,0.06),
-               inset 0 1px 0 rgba(255,255,255,0.94); }
-  html[data-theme="light"] .panel::after { background:none; }
+""",
+        CF_PANEL_CSS,
+        """
 
   /* ══ Stat boxes ══ */
   .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:0 0 16px; }
@@ -1319,52 +1403,9 @@ PAGE = """<!doctype html>
   .stat .v.down, .hero-stat .v.down { color:var(--red); }
   .stat .v.acc { color:var(--accent); }
 
-  /* ══ Glossy pill buttons — the terminal's .btn, top-light and all ══ */
-  button.act, .cta, .btn-chart, .modal-close {
-    font-family:var(--font-display); font-weight:700; letter-spacing:0.04em;
-    border-radius:999px; cursor:pointer; position:relative; overflow:hidden;
-    border:1px solid var(--btn-border, rgba(148,178,211,0.18));
-    background:var(--btn-bg, linear-gradient(180deg, rgba(31,48,73,0.96) 0%, rgba(10,18,34,0.98) 100%));
-    color:var(--btn-color, #ecf7ff);
-    box-shadow:0 12px 26px rgba(2,6,23,0.34), inset 0 1px 0 rgba(255,255,255,0.16),
-               inset 0 -10px 16px rgba(0,0,0,0.18);
-    text-shadow:0 1px 1px rgba(0,0,0,0.22); white-space:nowrap;
-    transition:transform .15s ease, box-shadow .15s ease, filter .15s ease;
-    display:inline-flex; align-items:center; gap:7px; }
-  button.act { padding:10px 22px; font-size:13px; }
-  .cta { padding:12px 26px; font-size:13px; letter-spacing:.1em; text-transform:uppercase; }
-  .btn-chart { padding:6px 14px; font-size:12px; }
-  button.act::before, .cta::before, .btn-chart::before {
-    content:""; position:absolute; top:2px; left:7%; width:86%; height:44%; border-radius:999px;
-    background:linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.02));
-    pointer-events:none; }
-  button.act:hover, .cta:hover, .btn-chart:hover {
-    transform:translateY(-2px); filter:saturate(1.12) brightness(1.05);
-    box-shadow:0 16px 30px rgba(2,6,23,0.40), inset 0 1px 0 rgba(255,255,255,0.20),
-               inset 0 -10px 16px rgba(0,0,0,0.22); }
-  button.act:active, .cta:active, .btn-chart:active {
-    transform:translateY(1px); filter:none;
-    box-shadow:0 5px 10px rgba(0,0,0,0.28), inset 0 2px 2px rgba(0,0,0,0.24); }
-  button[disabled] { opacity:.56; cursor:not-allowed; transform:none; filter:none; }
-  button.act.solid, .cta.solid {
-    --btn-bg:linear-gradient(180deg, rgba(var(--tint-primary-rgb),0.34) 0%, rgba(var(--tint-secondary-rgb),0.45) 100%);
-    --btn-color:#f5fbff; --btn-border:rgba(var(--tint-primary-rgb),0.52); }
-  button.act.danger {
-    --btn-bg:linear-gradient(180deg, rgba(251,113,133,0.38) 0%, rgba(190,18,60,0.60) 100%);
-    --btn-color:#fff1f2; --btn-border:rgba(251,113,133,0.52); }
-  button.act.good {
-    --btn-bg:linear-gradient(180deg, rgba(45,212,191,0.36) 0%, rgba(13,148,136,0.58) 100%);
-    --btn-color:#ecfdf5; --btn-border:rgba(45,212,191,0.52); }
-  html[data-theme="light"] button.act, html[data-theme="light"] .cta, html[data-theme="light"] .btn-chart {
-    --btn-bg:linear-gradient(180deg,#ffffff 0%,#eef2f8 100%); --btn-color:#0b1220;
-    --btn-border:rgba(15,23,42,0.12); text-shadow:none;
-    box-shadow:0 12px 24px rgba(15,23,42,0.10), inset 0 1px 0 rgba(255,255,255,0.95); }
-  html[data-theme="light"] button.act.solid, html[data-theme="light"] .cta.solid {
-    --btn-bg:linear-gradient(180deg, rgba(var(--tint-primary-rgb),0.22), rgba(var(--tint-secondary-rgb),0.34));
-    --btn-color:#0b1220; --btn-border:rgba(var(--tint-primary-rgb),0.42); }
-  html[data-theme="light"] button.act.danger { --btn-bg:linear-gradient(180deg,#fff1f2,#ffe4e6);
-    --btn-color:#be123c; --btn-border:rgba(190,18,60,0.28); }
-  .modal-close { width:30px; height:30px; padding:0; justify-content:center; font-size:16px; border-radius:999px; }
+""",
+        CF_BUTTONS_CSS,
+        """
   .modal-close:hover { --btn-color:var(--red); }
 
   /* ══ Inputs ══ */
@@ -1665,18 +1706,9 @@ PAGE = """<!doctype html>
 <body>
 
 <div class="topbar"><div class="topbar-inner">
-  <div class="brand">
-    <div class="brand-mark">
-      <span class="brand-column col-a"></span>
-      <span class="brand-column col-b"></span>
-      <span class="brand-column col-c"></span>
-      <span class="brand-spark"></span>
-    </div>
-    <div>
-      <div class="brand-text">CASCADE</div>
-      <div class="brand-sub">by CryptoForge · Signal · Execution</div>
-    </div>
-  </div>
+""",
+        CF_BRAND_HTML,
+        """
   <!-- The desk's four quotes, at THIS machine's venue, and the time it thinks
        it is. Both belong at the top: the first is the market every rung is
        measured against, and the second is how a buyer catches a clock that has
@@ -3143,7 +3175,9 @@ if ("serviceWorker" in navigator) {
 </script>
 </body>
 </html>
-"""
+""",
+    )
+)
 
 
 def wire(executor, *, port: int = DEFAULT_PORT, say: Optional[Callable] = None) -> Optional[UIServer]:

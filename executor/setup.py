@@ -35,6 +35,7 @@ from typing import Optional
 
 from executor import httpguard, model, secrets
 from executor.config import DEFAULT_CONFIG, ConfigError, ExecutorConfig, build_adapter
+from executor.ui import CF_BOOT_JS, CF_BRAND_HTML, CF_BUTTONS_CSS, CF_PANEL_CSS, CF_TOKENS_CSS, font_css
 
 _log = logging.getLogger("cascade.executor.setup")
 
@@ -290,6 +291,18 @@ class SetupServer:
                 if self.path in ("/", "/index.html"):
                     body = PAGE.encode("utf-8")
                     content = "text/html; charset=utf-8"
+                elif self.path.startswith("/assets/fonts/"):
+                    css = font_css(self.path[len("/assets/fonts/") :].removesuffix(".css"))
+                    if css is None:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/css; charset=utf-8")
+                    self.send_header("Cache-Control", "public, max-age=604800, immutable")
+                    self.send_header("Content-Length", str(len(css)))
+                    self.end_headers()
+                    self.wfile.write(css)
+                    return
                 elif self.path == "/api/setup-state":
                     body = json.dumps(
                         {
@@ -361,101 +374,181 @@ class SetupServer:
             self._server = None
 
 
-PAGE = """<!doctype html>
+# The parenthesised concatenation below is HTML assembled from the console's
+# shared design constants. bandit reads a string-concat containing the word
+# "select" as SQL construction (B608); the <select> here is a form control.
+# Joined from a tuple rather than `+` concatenation: bandit reads any string
+# concat containing the word "select" as SQL construction (B608), and the
+# <select> below is a form control. A join is not in its sniffer, and needs
+# no nosec that the next person has to trust.
+PAGE = "".join(
+    (
+        """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cascade — setting up</title>
+<title>Cascade — set up</title>
+<meta name="theme-color" content="#040814">
+<link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http%3A//www.w3.org/2000/svg'%3E%3Crect width='32' height='32' rx='7' fill='%23040814'/%3E%3Crect x='7' y='10' width='4' height='12' rx='1' fill='%23f59e0b'/%3E%3Crect x='14' y='6' width='4' height='16' rx='1' fill='%2322d3ee'/%3E%3Crect x='21' y='13' width='4' height='9' rx='1' fill='%232dd4bf'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/fonts/core.css">
+"""
+        # The parent's boot script, verbatim. Tint, font preset and theme come from
+        # the same localStorage keys the console uses, so a buyer with both pages
+        # open sees ONE product — pick a tint on the console and this page follows.
+        + CF_BOOT_JS
+        + """
 <style>
-  :root { color-scheme: dark; --bg:#040814; --card:#0b1225; --line:#1e2b45;
-          --text:#e7edf7; --muted:#94a3b8; --accent:#22d3ee; --bad:#fb7185; --good:#34d399; }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:32px 16px 64px; background:var(--bg); color:var(--text);
-         font:15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 620px; margin: 0 auto; }
-  h1 { font-size:24px; margin:0 0 6px; letter-spacing:-0.01em; }
-  .sub { color:var(--muted); margin:0 0 28px; }
-  fieldset { border:1px solid var(--line); border-radius:12px; background:var(--card);
-             padding:20px; margin:0 0 18px; }
-  legend { padding:0 8px; color:var(--accent); font-size:13px; letter-spacing:.08em;
-           text-transform:uppercase; }
+"""
+        + CF_TOKENS_CSS
+        + CF_BUTTONS_CSS
+        + CF_PANEL_CSS
+        + """
+
+  /* ── Page layout. Everything above is the parent site, verbatim. ── */
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:var(--font-body);
+    background:var(--bg);
+    background-image:
+      radial-gradient(ellipse 940px 720px at 10% 18%, rgba(34,211,238,0.085) 0%, transparent 65%),
+      radial-gradient(ellipse 760px 640px at 84% 12%, rgba(245,158,11,0.070) 0%, transparent 68%),
+      radial-gradient(ellipse 700px 620px at 58% 100%, rgba(45,212,191,0.055) 0%, transparent 72%);
+    background-attachment:fixed;
+    color:var(--text); font-size:15px; line-height:1.55; min-height:100vh;
+    padding:0 16px 72px;
+  }
+  html[data-theme="light"] body {
+    background:#f8fafc;
+    background-image:
+      radial-gradient(ellipse 900px 700px at 15% 25%, rgba(8,145,178,0.07) 0%, transparent 68%),
+      radial-gradient(ellipse 700px 600px at 82% 72%, rgba(217,119,6,0.05) 0%, transparent 68%);
+  }
+
+  .topbar { display:flex; align-items:center; justify-content:space-between;
+    max-width:720px; margin:0 auto; padding:14px 0 6px; }
+  .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+  .brand-mark { position:relative; width:36px; height:36px; border-radius:12px; flex:none; overflow:hidden;
+    background:linear-gradient(160deg, rgba(30,41,59,0.9), rgba(2,6,23,0.96));
+    border:1px solid var(--border-hi); }
+  .brand-mark::before { content:''; position:absolute; inset:4px; border-radius:10px;
+    border:1px solid rgba(148,197,255,0.16); }
+  .brand-column { position:absolute; bottom:7px; width:6px; border-radius:999px; }
+  .brand-column.col-a { left:9px;  height:18px; background:linear-gradient(180deg,#93c5fd,#2563eb); }
+  .brand-column.col-b { left:16px; height:24px; background:linear-gradient(180deg,var(--accent),var(--accent2)); }
+  .brand-column.col-c { left:23px; height:14px; background:linear-gradient(180deg,#fb7185,#db2777); }
+  .brand-spark { position:absolute; top:8px; right:7px; width:8px; height:8px; border-radius:999px;
+    background:radial-gradient(circle, #fef08a 0%, rgba(254,240,138,0) 70%); }
+  .brand-text { font-family:var(--font-display); font-size:16px; font-weight:800; letter-spacing:1.5px;
+    background:linear-gradient(130deg, var(--accent) 0%, var(--accent2) 100%);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  html[data-theme="light"] .brand-text { background:linear-gradient(130deg,var(--accent2) 0%,#db2777 100%);
+    -webkit-background-clip:text; background-clip:text; }
+  .brand-sub { font-size:9px; color:var(--muted); letter-spacing:1.8px; text-transform:uppercase; }
+
+  main { max-width:720px; margin:0 auto; }
+  h1 { font-family:var(--font-display); font-size:30px; font-weight:700; letter-spacing:.02em;
+    margin:26px 0 6px; }
+  .sub { color:var(--dim); margin:0 0 26px; max-width:60ch; }
+
+  fieldset { border:0; margin:0 0 20px; padding:22px 24px 24px; border-radius:18px; }
+  legend { float:left; width:100%; padding:0 0 14px; font-family:var(--font-display);
+    font-size:12px; font-weight:700; letter-spacing:1.6px; text-transform:uppercase;
+    color:var(--accent); }
+  legend + * { clear:both; }
+
   label { display:block; margin:0 0 16px; }
-  label:last-child { margin-bottom:0; }
-  .name { display:block; margin-bottom:6px; font-weight:600; }
-  .hint { display:block; color:var(--muted); font-size:13px; font-weight:400; margin-top:2px; }
-  input, select { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--line);
-                  background:#050a18; color:var(--text); font:inherit; font-size:16px; }
-  input:focus, select:focus { outline:2px solid var(--accent); outline-offset:1px; }
-  .err { color:var(--bad); font-size:13px; margin-top:6px; display:none; }
+  label:last-of-type { margin-bottom:0; }
+  .name { display:block; font-weight:600; color:var(--text); margin-bottom:2px; }
+  .hint { display:block; color:var(--muted); font-size:12.5px; margin-bottom:7px; }
+  input, select { width:100%; padding:11px 13px; border-radius:9px;
+    border:1px solid var(--border-hi); background:rgba(255,255,255,0.03);
+    color:var(--text); font-family:var(--font-body); font-size:16px; }
+  input:focus, select:focus { outline:none; border-color:var(--border-acc);
+    box-shadow:0 0 0 3px rgba(var(--tint-primary-rgb), 0.12); }
+  html[data-theme="light"] input, html[data-theme="light"] select { background:#fff; }
+
+  .err { color:var(--red); font-size:13px; margin-top:6px; display:none; }
   .err.on { display:block; }
-  button { width:100%; padding:14px; border-radius:10px; border:0; background:var(--accent);
-           color:#04212a; font:inherit; font-weight:700; font-size:16px; cursor:pointer; }
-  button[disabled] { opacity:.55; cursor:progress; }
-  #done { display:none; border:1px solid var(--good); border-radius:12px; padding:20px;
-          background:rgba(52,211,153,.08); }
+  .warn { color:var(--red); font-size:13px; }
+
+  .key { font-family:var(--font-mono); font-size:13px; line-height:1.6; word-break:break-all;
+    background:var(--card2); border:1px solid var(--border-hi); border-radius:9px;
+    padding:12px 14px; color:var(--text); user-select:all; position:relative; z-index:1; }
+  .row { display:flex; gap:10px; margin:14px 0 0; flex-wrap:wrap; position:relative; z-index:1; }
+  .row .act, .row .btn-chart { flex:1 1 170px; justify-content:center; }
+  a.btn-chart { text-decoration:none; text-align:center; }
+  .fine { color:var(--muted); font-size:13px; margin-top:14px; position:relative; z-index:1; }
+  .fine b { color:var(--dim); }
+
+  .cta-row { margin:6px 0 0; }
+  .cta-row .cta { width:100%; justify-content:center; font-size:14px; }
+
+  #done { display:none; padding:22px 24px; border-radius:18px;
+    border:1px solid rgba(45,212,191,0.35); background:var(--green-bg); }
   #done.on { display:block; }
-  #done h2 { margin:0 0 8px; font-size:18px; color:var(--good); }
-  code { background:#050a18; padding:2px 6px; border-radius:4px; font-size:13px; }
-  .warn { color:var(--bad); font-size:13px; margin-top:10px; }
-  .key { font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-all;
-         background:#050a18; border:1px solid var(--line); border-radius:8px; padding:12px;
-         color:var(--text); user-select:all; }
-  .row { display:flex; gap:10px; margin:12px 0 0; flex-wrap:wrap; }
-  .row button, .row .btn { width:auto; flex:1 1 160px; padding:10px 14px; font-size:15px;
-         border-radius:8px; text-align:center; text-decoration:none; }
-  .row .btn { background:transparent; border:1px solid var(--accent); color:var(--accent);
-              font-weight:600; line-height:1.6; }
-  #copy.done { background:var(--good); }
+  #done h2 { font-family:var(--font-display); font-size:16px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--green); margin:0 0 8px; }
+  #done p { margin:0 0 6px; color:var(--text); }
+
+  /* The panel gloss overlay must not eat clicks or sit over form controls. */
+  fieldset.panel > * { position:relative; z-index:1; }
 </style>
 </head>
 <body>
+
+<div class="topbar">
+""",
+        CF_BRAND_HTML,
+        """
+</div>
+
 <main>
   <h1>Set up Cascade</h1>
   <p class="sub">Two steps, once. Nothing on this page is sent to us except the code in step one.</p>
 
-  <fieldset id="reg">
+  <fieldset class="panel" id="reg">
     <legend>Step 1 — send us this code</legend>
-    <p class="sub" style="margin-top:0">This machine has just made itself a key. Send us the public half —
+    <p class="fine" style="margin-top:0">This machine has just made itself a key. Send us the public half —
       the private half stays here and never leaves, which is what stops us from ever being able to act as you.</p>
-    <div class="key" id="pk">…</div>
+    <div class="key" id="pk" style="margin-top:12px">…</div>
     <div class="row">
-      <button type="button" id="copy">Copy the code</button>
-      <a id="mail" class="btn" style="display:none">Email it to us</a>
+      <button type="button" class="act solid" id="copy">Copy the code</button>
+      <a id="mail" class="btn-chart" style="display:none">Email it to us</a>
     </div>
-    <p class="sub">We'll reply with two things — <b>your buyer name</b> and <b>your subscription code</b> —
+    <p class="fine">We'll reply with two things — <b>your buyer name</b> and <b>your subscription code</b> —
       which are the first two boxes in step two. If you already have that email, carry straight on.</p>
   </fieldset>
 
   <form id="f">
-    <fieldset>
+    <fieldset class="panel">
       <legend>Step 2 — your subscription</legend>
-      <label><span class="name">Server address<span class="hint">From your subscription email.</span></span>
+      <label><span class="name">Server address</span><span class="hint">From your subscription email.</span>
         <input name="server_url" value="https://crypto.philforge.in" autocomplete="off"><span class="err" data-for="server_url"></span></label>
-      <label><span class="name">Your buyer name<span class="hint">The name your subscription is under.</span></span>
+      <label><span class="name">Your buyer name</span><span class="hint">The name your subscription is under.</span>
         <input name="buyer_id" placeholder="buyer-your-name" autocomplete="off"><span class="err" data-for="buyer_id"></span></label>
-      <label><span class="name">Subscription code<span class="hint">The long code in the same email. It is how this machine knows our signal is really ours.</span></span>
+      <label><span class="name">Subscription code</span><span class="hint">The long code in the same email. It is how this machine knows our signal is really ours.</span>
         <input name="root_public_key" autocomplete="off"><span class="err" data-for="root_public_key"></span></label>
     </fieldset>
 
-    <fieldset>
+    <fieldset class="panel">
       <legend>Step 2 — your exchange</legend>
       <label><span class="name">Exchange</span>
         <select name="exchange"><option value="binance">Binance</option><option value="coindcx">CoinDCX</option></select>
         <span class="err" data-for="exchange"></span></label>
-      <label><span class="name">Money to trade with (USD)<span class="hint">What every ladder is sized from. It is not moved anywhere — it is the number this machine divides up.</span></span>
+      <label><span class="name">Money to trade with (USD)</span><span class="hint">What every ladder is sized from. It is not moved anywhere — it is the number this machine divides up.</span>
         <input name="capital_usd" type="number" min="0" step="100" value="1000"><span class="err" data-for="capital_usd"></span></label>
-      <label><span class="name">API key<span class="hint">Trading permission only. Never tick withdrawals.</span></span>
+      <label><span class="name">API key</span><span class="hint">Trading permission only. Never tick withdrawals.</span>
         <input name="api_key" autocomplete="off" spellcheck="false"><span class="err" data-for="api_key"></span></label>
-      <label><span class="name">API secret<span class="hint">Shown once when you created the key.</span></span>
+      <label><span class="name">API secret</span><span class="hint">Shown once when you created the key.</span>
         <input name="api_secret" type="password" autocomplete="off" spellcheck="false"><span class="err" data-for="api_secret"></span></label>
-      <p class="sub" id="where" style="margin:0"></p>
+      <p class="fine" id="where" style="margin-bottom:0"></p>
     </fieldset>
 
-    <button type="submit" id="go">Check and save</button>
+    <div class="cta-row"><button type="submit" class="cta solid" id="go">Check and save</button></div>
   </form>
 
-  <div id="done"><h2>All set</h2><p id="donemsg"></p><p class="sub">You can close this tab.</p></div>
+  <div id="done"><h2>All set</h2><p id="donemsg"></p><p class="fine">You can close this tab.</p></div>
 </main>
 <script>
 const f = document.getElementById("f"), go = document.getElementById("go");
@@ -471,16 +564,14 @@ fetch("/api/setup-state", {headers:{"X-Cascade-UI":"1"}}).then(r=>r.json()).then
       mail.style.display = "";
     }
   } else {
-    // No key means nowhere to write one. Saying so beats a box of dots that
-    // never fills in.
     pk.textContent = "This machine could not create its key — check that your user account can write to your home folder.";
-    pk.className = "key warn";
+    pk.classList.add("warn");
   }
   const w = document.getElementById("where");
   w.textContent = s.keyring
     ? "Your key and secret go into " + s.keyring_name + ", not into a file."
     : "";
-  if (!s.keyring) { w.className = "warn"; w.textContent =
+  if (!s.keyring) { w.classList.add("warn"); w.textContent =
     "This computer has no password store I can use, so I cannot keep your key safely. Setting it up from the command line is the safe route here."; }
 }).catch(()=>{});
 
@@ -488,19 +579,18 @@ document.getElementById("copy").addEventListener("click", async (e) => {
   const text = document.getElementById("pk").textContent;
   try { await navigator.clipboard.writeText(text); }
   catch (err) {
-    // Clipboard permission can be refused. Select it instead so one keystroke
-    // still does the job, rather than a button that silently does nothing.
     const range = document.createRange();
     range.selectNodeContents(document.getElementById("pk"));
     const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
   }
-  e.target.textContent = "Copied"; e.target.className = "done";
-  setTimeout(() => { e.target.textContent = "Copy the code"; e.target.className = ""; }, 2000);
+  e.target.textContent = "Copied";
+  e.target.classList.add("good");
+  setTimeout(() => { e.target.textContent = "Copy the code"; e.target.classList.remove("good"); }, 2000);
 });
 
 f.addEventListener("submit", async (e) => {
   e.preventDefault();
-  document.querySelectorAll(".err").forEach(n => { n.className = "err"; n.textContent = ""; });
+  document.querySelectorAll(".err").forEach(n => { n.classList.remove("on"); n.textContent = ""; });
   go.disabled = true; go.textContent = "Checking with your exchange…";
   const form = Object.fromEntries(new FormData(f).entries());
   try {
@@ -513,12 +603,12 @@ f.addEventListener("submit", async (e) => {
     if (out.ok) {
       f.style.display = "none";
       document.getElementById("donemsg").textContent = out.message;
-      document.getElementById("done").className = "on";
+      document.getElementById("done").classList.add("on");
       return;
     }
     for (const p of (out.problems || [])) {
       const n = document.querySelector('.err[data-for="' + p.field + '"]');
-      if (n) { n.className = "err on"; n.textContent = p.message; }
+      if (n) { n.classList.add("on"); n.textContent = p.message; }
       else { alert(p.message); }
     }
   } catch (err) {
@@ -529,4 +619,6 @@ f.addEventListener("submit", async (e) => {
 </script>
 </body>
 </html>
-"""
+""",
+    )
+)

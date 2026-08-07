@@ -294,32 +294,68 @@ class PageScriptTests(unittest.TestCase):
     Python at import — which lands in the middle of a JS string literal.
     """
 
+    def _scripts(self) -> list:
+        """Every inline script block — the parent's boot script, then the page's own."""
+        return [part.split("</script>", 1)[0] for part in setup.PAGE.split("<script>")[1:]]
+
     def _script(self) -> str:
-        body = setup.PAGE.split("<script>", 1)[1]
-        return body.split("</script>", 1)[0]
+        """The page's own script — the last block. The one before it is
+        CF_BOOT_JS, shared with the console."""
+        return self._scripts()[-1]
+
+    @staticmethod
+    def _without_comments(script: str) -> str:
+        """Strip /* */ and // comments, which may legitimately hold apostrophes."""
+        out = re.sub(r"/\*.*?\*/", "", script, flags=re.S)
+        return re.sub(r"^\s*//.*$", "", out, flags=re.M)
 
     def test_no_string_literal_is_left_open_at_the_end_of_a_line(self):
-        for number, line in enumerate(self._script().splitlines(), 1):
-            for quote in ('"', "'"):
-                unescaped = len(re.findall(r"(?<!\\)" + quote, line))
-                self.assertEqual(
-                    unescaped % 2,
-                    0,
-                    f"line {number} leaves a {quote} string open, so the whole script fails to parse: {line.strip()}",
-                )
+        for index, script in enumerate(self._scripts()):
+            for number, line in enumerate(self._without_comments(script).splitlines(), 1):
+                for quote in ('"', "'"):
+                    unescaped = len(re.findall(r"(?<!\\)" + quote, line))
+                    self.assertEqual(
+                        unescaped % 2,
+                        0,
+                        f"script {index} line {number} leaves a {quote} string open, "
+                        f"so the whole block fails to parse: {line.strip()}",
+                    )
 
     def test_the_mail_body_carries_an_escaped_newline_not_a_real_one(self):
         self.assertIn("\\n", self._script(), "the JS must receive a backslash-n, not a line break")
 
     def test_the_brackets_balance(self):
-        script = self._script()
-        for opener, closer in (("(", ")"), ("{", "}"), ("[", "]")):
-            self.assertEqual(script.count(opener), script.count(closer), f"unbalanced {opener}{closer}")
+        for index, script in enumerate(self._scripts()):
+            body = self._without_comments(script)
+            for opener, closer in (("(", ")"), ("{", "}"), ("[", "]")):
+                self.assertEqual(body.count(opener), body.count(closer), f"script {index}: unbalanced {opener}{closer}")
 
     def test_every_element_the_script_reaches_for_exists_in_the_markup(self):
-        """A renamed id is the other way this page goes quietly inert."""
-        for element_id in re.findall(r'getElementById\("([^"]+)"\)', self._script()):
-            self.assertIn(f'id="{element_id}"', setup.PAGE, f"the script looks for #{element_id}, which is not there")
+        """A renamed id is the other way this page goes quietly inert.
+
+        `cf-font-preset` is exempt: the boot script CREATES that element and
+        looks it up on later calls, so its absence from the markup is the
+        design rather than a break.
+        """
+        created_at_runtime = {"cf-font-preset"}
+        for script in self._scripts():
+            for element_id in re.findall(r'getElementById\("([^"]+)"\)', script):
+                if element_id in created_at_runtime:
+                    continue
+                self.assertIn(
+                    f'id="{element_id}"', setup.PAGE, f"the script looks for #{element_id}, which is not there"
+                )
+
+    def test_the_page_is_assembled_from_the_consoles_own_blocks(self):
+        """The drift tripwire. Both pages must carry the parent site's design
+        from ONE copy — the constants in executor/ui.py — so a token or tint
+        change moves them together. If this fails, someone re-transcribed the
+        vocabulary instead of importing it."""
+        from executor import ui
+
+        for name in ("CF_BOOT_JS", "CF_TOKENS_CSS", "CF_BUTTONS_CSS", "CF_PANEL_CSS", "CF_BRAND_HTML"):
+            self.assertIn(getattr(ui, name), setup.PAGE, f"{name} is not in the setup page verbatim")
+            self.assertIn(getattr(ui, name), ui.PAGE, f"{name} is not in the console page verbatim")
 
 
 if __name__ == "__main__":
