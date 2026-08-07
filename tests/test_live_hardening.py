@@ -31,6 +31,25 @@ from engine.ws_feed import PollingMarketFeed, create_market_feed
 _DEFAULT_PRODUCT = object()
 
 
+async def wait_until(predicate, *, timeout: float = 10.0, poll: float = 0.01) -> bool:
+    """Wait for an engine to reach a state, rather than for a stopwatch.
+
+    Anything driven by a monitor loop arrives when its passes and its thread
+    hand-offs allow, which is not a duration a test can name in advance — and a
+    fixed sleep that is generous alone can still be short inside a full-suite
+    run. Returns False rather than raising so the caller supplies its own
+    message, and re-checks once after the deadline so a state reached during the
+    last poll is not called a timeout.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(poll)
+    return bool(predicate())
+
+
 class FakeLiveBroker:
     def __init__(self, *, product=_DEFAULT_PRODUCT, position=None, entry_fill=101.5, exit_fill=102.25):
         self.product = {"id": 11} if product is _DEFAULT_PRODUCT else product
@@ -1177,7 +1196,15 @@ class ScalpEngineHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(engine.open_trades)
 
         engine.start()
-        await asyncio.sleep(1.3)
+        # The monitor loop reaches the 105.5 tick when its passes and its
+        # `to_thread` price reads allow — about half a second here, against the
+        # 1.3s this used to sleep for unconditionally. Waiting on the state both
+        # removes the margin question and gives the time back: the fake ticker
+        # repeats its last price forever, so there is no exhaustion to race.
+        self.assertTrue(
+            await wait_until(lambda: bool(engine.open_trades)),
+            "the guardrail entry never fired",
+        )
 
         self.assertFalse(engine.pending_entries)
         self.assertEqual(len(engine.open_trades), 1)
