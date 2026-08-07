@@ -5,3 +5,10 @@ cryptography>=42      # the buyer's own ed25519 key, and verifying our signature
 httpx>=0.27           # fetching the signed key set
 requests>=2.31        # the exchange REST calls
 websockets>=12        # the feed socket
+
+# Optional, and the code runs without either. Both exist so the packaged app
+# can be double-clicked instead of typed at: there is no terminal in an .app to
+# export an API key in, and no window to keep it running.
+keyring>=24           # the exchange key, in Keychain / Credential Manager
+pystray>=0.19         # the menu-bar / system-tray icon
+Pillow>=10            # pystray draws the icon through it

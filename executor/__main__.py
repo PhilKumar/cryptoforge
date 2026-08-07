@@ -30,8 +30,10 @@ import os
 import signal
 import sys
 import time
+import webbrowser
 from typing import Optional
 
+from executor import setup
 from executor.config import SAMPLE, ConfigError, ExecutorConfig, build_adapter, load
 from executor.market import ExchangeMarketData, MarketStrip
 from executor.power import SleepInhibitor, detect, sync_inhibitor
@@ -104,6 +106,9 @@ class Executor:
         self._stopping = asyncio.Event()
         self._ui_state = None  # set by ui.wire() when the page is on
         self._strip = None  # the top quotes, built on the first tick that has an adapter
+        # Set once `run()` is on a loop, so a host that owns the main thread —
+        # the tray — can ask this to stop from outside it. See `request_stop`.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def _on_status(self, kind: str, detail: dict) -> None:
         if kind in ("connected", "synced", "stopped", "clock_warning", "halt", "bad_signature", "disconnected"):
@@ -312,8 +317,31 @@ class Executor:
         self._save_book()
         _say("", result["message"])
 
+    def request_stop(self) -> None:
+        """Ask this to wind down, from any thread.
+
+        Both callers are off the loop: the tray's Quit item, and the OS signal
+        handler when the tray owns the main thread. `asyncio.Event` is not
+        thread-safe, and setting one from outside its loop can leave the waiter
+        asleep — the program would then look like it is refusing to close, which
+        is the exact failure `signal_handler` exists to prevent.
+
+        Before the loop exists there is nothing to hand work to, so the Event is
+        set directly: nothing is waiting on it yet, and `run()` checks it as
+        soon as it starts.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            self._stopping.set()
+            return
+        try:
+            loop.call_soon_threadsafe(self._stopping.set)
+        except RuntimeError:  # loop closed between the check and the call
+            self._stopping.set()
+
     async def run(self) -> int:
         loop = asyncio.get_running_loop()
+        self._loop = loop
 
         handler = signal_handler(self._stopping, loop.call_soon_threadsafe)
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -416,6 +444,9 @@ def main(argv=None) -> int:
     parser.add_argument("--sample-config", action="store_true", help="print a starter config file")
     parser.add_argument("--no-ui", action="store_true", help="run without the local status page")
     parser.add_argument("--ui-port", type=int, default=7757, help="port for the local status page")
+    parser.add_argument("--setup", action="store_true", help="fill in the config from a page in your browser")
+    parser.add_argument("--setup-port", type=int, default=setup.DEFAULT_PORT, help="port for the setup page")
+    parser.add_argument("--tray", action="store_true", help="keep running under a menu-bar icon")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -430,6 +461,20 @@ def main(argv=None) -> int:
 
     try:
         config = load(args.config)
+        # Asked for, or simply needed. A machine with nothing configured used to
+        # print "Missing: server_url, buyer_id, …" and exit 2, which is a
+        # correct message and a dead end for anyone who was never going to open
+        # a text editor. It now offers the page instead.
+        # Offered automatically only on the plain run path. `--check` and
+        # `--register` are things a buyer runs deliberately, often from a
+        # script or while reading the guide, and a command that answers by
+        # opening a browser and blocking is not one they asked for.
+        wants_setup = args.setup or (not args.register and not args.check and setup.needs_setup(config))
+        if wants_setup:
+            done = _run_setup(config, port=args.setup_port, path=args.config, asked=args.setup)
+            if done != 0:
+                return done
+            config = load(args.config)
         if args.register:
             # Deliberately before validate(): a buyer registers their key
             # BEFORE they have a subscription, so demanding a full config here
@@ -456,10 +501,57 @@ def main(argv=None) -> int:
 
         server = wire(executor, port=args.ui_port, say=_say)
     try:
+        if args.tray:
+            from executor.tray import TrayUnavailable, run_with_tray
+
+            try:
+                return run_with_tray(executor, console_url=server.url if server else "")
+            except TrayUnavailable as exc:
+                # Not fatal. A machine that can trade but cannot draw an icon
+                # should trade — refusing to start over the menu bar would be
+                # the tail wagging the dog.
+                _say(f"{exc}", "")
         return asyncio.run(executor.run())
     finally:
         if server:
             server.stop()
+
+
+def _run_setup(config, *, port: int, path: Optional[str], asked: bool) -> int:
+    """Serve the setup page and wait for the buyer to finish it.
+
+    Blocks rather than returning to a half-configured start. There is nothing
+    useful to do in the meantime: without a server URL there is no feed to
+    connect, and without a key there is nothing to place.
+    """
+    server = setup.SetupServer(port=port, config_path=path)
+    problem = server.start()
+    if problem:
+        _say(problem)
+        return 2
+    if asked:
+        _say("", "Setup is open at " + server.url)
+    else:
+        _say(
+            "",
+            "This machine has not been set up yet, so I have opened the page that does it:",
+            f"    {server.url}",
+            "",
+            "It asks for six things and takes about a minute. Nothing trades until it is done.",
+        )
+    try:
+        webbrowser.open(server.url)
+    except Exception:  # pragma: no cover - a headless box has nothing to open
+        pass
+    try:
+        server.wait()
+    except KeyboardInterrupt:
+        _say("", "Setup cancelled. Nothing was saved.")
+        return 130
+    finally:
+        server.stop()
+    _say("", server.result.get("message", "Set up."))
+    return 0
 
 
 if __name__ == "__main__":

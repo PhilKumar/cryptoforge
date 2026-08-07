@@ -31,7 +31,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Optional
 
-from executor import model, pwa
+from executor import httpguard, model, pwa
 from executor.config import ConfigError, save_settings
 from executor.power import PlatformPower, suspend_advice
 from executor.report import irreducible_risk, running_status
@@ -619,17 +619,9 @@ class UIServer:
                 return self.server.server_address[1]
 
             def _local(self) -> bool:
-                """Loopback peer AND a loopback Host header.
-
-                The peer check is a belt on top of the bind. The Host check is
-                DNS-rebinding defence: a hostile page can point its own domain
-                at 127.0.0.1 and then fetch it same-origin, and the one thing
-                the browser faithfully reports is the Host it asked for.
-                """
-                if self.client_address[0] not in ("127.0.0.1", "::1"):
-                    return False
-                host = (self.headers.get("Host") or "").split(":")[0].lower()
-                return host in ("127.0.0.1", "localhost", "[::1]", "::1")
+                # Shared with the setup server — see executor/httpguard.py for
+                # why loopback alone is not the boundary it looks like.
+                return httpguard.is_local(self)
 
             def do_GET(self):
                 if not self._local():
@@ -715,8 +707,8 @@ class UIServer:
                 if not self._local():
                     self.send_error(403)
                     return
-                if self.headers.get("X-Cascade-UI") != "1":
-                    self.send_error(403, "missing X-Cascade-UI header")
+                if not httpguard.is_ours(self):
+                    self.send_error(403, f"missing {httpguard.UI_HEADER} header")
                     return
                 if self.path != "/api/action":
                     self.send_error(404)

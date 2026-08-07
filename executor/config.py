@@ -19,6 +19,8 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from executor import secrets
+
 DEFAULT_DIR = "~/.cascade-executor"
 DEFAULT_CONFIG = f"{DEFAULT_DIR}/config.json"
 
@@ -159,8 +161,9 @@ class ExecutorConfig:
         ]
         if missing:
             raise ConfigError(
-                "Missing: " + ", ".join(missing) + ". API credentials come from "
-                "CASCADE_API_KEY / CASCADE_API_SECRET unless they are in the config file."
+                "Missing: " + ", ".join(missing) + ". Run `python -m executor --setup` to fill "
+                "these in from a page in your browser, or set CASCADE_API_KEY / CASCADE_API_SECRET "
+                "in the environment yourself."
             )
         if self.exchange not in ("binance", "coindcx"):
             raise ConfigError(f"Unknown exchange {self.exchange!r}. Supported: binance, coindcx.")
@@ -170,12 +173,21 @@ class ExecutorConfig:
             raise ConfigError("tick_seconds under 5 will rate-limit the exchange without trading better.")
 
 
-def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> ExecutorConfig:
+def load(
+    path: Optional[str] = None,
+    *,
+    environ: Optional[dict] = None,
+    secrets_lookup: Optional[callable] = None,
+) -> ExecutorConfig:
     """
     Read the config file, then let the environment win.
 
     Environment last on purpose: it is where the secrets belong, and it is what
     a container or a launch agent can set without rewriting a file.
+
+    `secrets_lookup` is the OS credential store, injectable so a test can say
+    what it holds without reaching into the login keychain of whoever is
+    running the suite.
     """
     env = os.environ if environ is None else environ
     resolved = os.path.abspath(os.path.expanduser(path or env.get("CASCADE_CONFIG") or DEFAULT_CONFIG))
@@ -189,6 +201,21 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
     elif path:
         raise ConfigError(f"No config at {resolved}")
 
+    # Credentials, in the order a machine should be believed: what the buyer
+    # exported wins, then what they chose to put in the file themselves, and
+    # only then the OS credential store the setup screen writes to. Both halves
+    # move together — a key from one place paired with a secret from another is
+    # a signature that will not verify, and the exchange's error for that says
+    # nothing a buyer could act on.
+    buyer_id = str(env.get("CASCADE_BUYER_ID") or data.get("buyer_id") or "")
+    key = str(env.get("CASCADE_API_KEY") or "")
+    secret = str(env.get("CASCADE_API_SECRET") or "")
+    if not (key and secret):
+        key = str(data.get("api_key") or "")
+        secret = str(data.get("api_secret") or "")
+    if not (key and secret):
+        key, secret = (secrets_lookup or secrets.load)(buyer_id)
+
     config = ExecutorConfig(
         server_url=str(env.get("CASCADE_SERVER_URL") or data.get("server_url") or ""),
         buyer_id=str(env.get("CASCADE_BUYER_ID") or data.get("buyer_id") or ""),
@@ -200,8 +227,8 @@ def load(path: Optional[str] = None, *, environ: Optional[dict] = None) -> Execu
         signal_exchanges=[str(x).strip().lower() for x in (data.get("signal_exchanges") or []) if str(x).strip()],
         quote_asset=str(data.get("quote_asset") or "USDT").upper(),
         tick_seconds=int(env.get("CASCADE_TICK_SECONDS") or data.get("tick_seconds") or 20),
-        api_key=str(env.get("CASCADE_API_KEY") or data.get("api_key") or ""),
-        api_secret=str(env.get("CASCADE_API_SECRET") or data.get("api_secret") or ""),
+        api_key=key,
+        api_secret=secret,
         state_dir=str(env.get("CASCADE_STATE_DIR") or data.get("state_dir") or DEFAULT_DIR),
         source_path=resolved,
     )

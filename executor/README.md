@@ -110,14 +110,16 @@ On a Mac, if the `executor` folder is on your Desktop, this also works:
 cd ~/Desktop
 ```
 
-## Step 4 — Install the four pieces it needs
+## Step 4 — Install the pieces it needs
 
 ```
 python3 -m pip install -r executor/requirements.txt
 ```
 
-This downloads four small, standard, well-known bits of software that the
-program uses. It'll print a lot of text. Wait for the cursor to come back.
+This downloads a handful of small, standard, well-known bits of software that
+the program uses. Four of them it cannot run without; the last three are only
+for the browser setup page and the menu-bar icon, and it runs fine without
+them. It'll print a lot of text. Wait for the cursor to come back.
 
 ## Step 5 — Create your ID and send it to us
 
@@ -148,7 +150,27 @@ new line.
 another line of nonsense (the *root key*). You need both for the next step, so
 wait for that email before carrying on.
 
-## Step 6 — Fill in your details
+## Steps 6 and 7 — the short way
+
+Everything in the next two sections — the settings file, and your exchange
+keys — can be done from a page in your browser instead. Run this:
+
+```
+python3 -m executor --setup
+```
+
+A page opens with six boxes. Fill them in, press **Check and save**, and it
+does the rest: it asks your exchange whether the keys really work *before* it
+saves anything, then puts them in your computer's own password store — your
+Keychain on a Mac, Credential Manager on Windows — rather than in a file.
+
+If you'd rather see exactly what is being written, the two sections below do
+the same thing by hand. **Do one or the other, not both.**
+
+Either way, `python3 -m executor` on its own will offer you that page whenever
+it finds this machine has not been set up yet.
+
+## Step 6 — Fill in your details (the long way)
 
 Make yourself a settings file:
 
@@ -228,7 +250,7 @@ as though it has $3,000 to work with. Put your real figure.
 
 Save the file and close it.
 
-## Step 7 — Give it your exchange keys
+## Step 7 — Give it your exchange keys (the long way)
 
 Go to your exchange, create an API key with **trading ticked and withdrawals
 NOT ticked** (see the section above), and copy the two long strings it gives
@@ -280,6 +302,21 @@ If one says FAIL:
 Don't go past this step until all three say PASS.
 
 ## Step 9 — Start it
+
+If you would rather it sat in your menu bar than in a terminal window — so you
+can close the window and leave it running — add `--tray`:
+
+```
+python3 -m executor --tray
+```
+
+You get a small icon at the top of the screen (or in the tray, on Windows). It
+tells you what is being watched and how much could fill if the machine stopped,
+and it has **Open console**, **Pause opening** and **Quit** on it. Quit winds
+everything down properly first — it cancels resting buy orders and makes sure
+anything you're holding has a sell order on it — and only then does the icon
+go away. If the icon is still there, it hasn't finished yet.
+
 
 ```
 python3 -m executor
