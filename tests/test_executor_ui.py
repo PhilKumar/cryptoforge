@@ -276,7 +276,12 @@ class UIServerTests(unittest.TestCase):
         self.assertIn("Closed campaigns", page)
         script = page[page.index('const cards = $("cards")') :]
         self.assertIn('const ENDED = ["COMPLETED", "MOTHER_BROKEN", "STOPPED"]', script)
-        self.assertIn("closed.forEach(cp => drawCard(cp, closedMount))", script)
+        # A compact table, the way the parent's Closed Campaigns reads — except
+        # a campaign still holding coin, which keeps its full card: a position
+        # being managed must not shrink into a row a buyer scrolls past.
+        self.assertIn("stillHolding.forEach(cp => drawCard(cp, closedMount))", script)
+        self.assertIn("const done = closed.filter(cp => !((cp.position_qty || 0) > 0))", script)
+        self.assertIn("<th>Ended</th>", script)
 
     def test_the_wake_bar_shows_that_it_was_answered(self):
         """A bar that looks identical before and after the click leaves the

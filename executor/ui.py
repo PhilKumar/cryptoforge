@@ -2527,7 +2527,38 @@ function render(s) {
     mount.appendChild(card);
   };
   campaigns.forEach(cp => drawCard(cp, cards));
-  closed.forEach(cp => drawCard(cp, closedMount));
+  /* Closed campaigns as one compact table, the way the parent's Closed
+     Campaigns reads — a log, not a column of full-height cards. Full cards
+     made four ended campaigns taller than the live section above them. The
+     one exception keeps its card: an ended campaign STILL HOLDING coin is not
+     history, it is a position being managed, and it must not shrink into a
+     row a buyer scrolls past. */
+  const stillHolding = closed.filter(cp => (cp.position_qty || 0) > 0);
+  const done = closed.filter(cp => !((cp.position_qty || 0) > 0));
+  stillHolding.forEach(cp => drawCard(cp, closedMount));
+  if (done.length) {
+    const wrap = document.createElement("div");
+    wrap.className = "camp panel";
+    const row = cp => {
+      const ended = cp.halted ? "halted" : (cp.state || "").toLowerCase().replace(/_/g, " ");
+      const net = Number(cp.rounds_net_est_usd || 0);
+      const tone = cp.rounds ? (net >= 0 ? "up" : "down") : "";
+      return `<tr>` +
+        `<td>${cp.symbol}</td><td>${cp.timeframe || ""}</td>` +
+        `<td><span class="pill ${cp.halted ? "halt" : "skip"}" title="${cp.halted || ""}">${ended}</span></td>` +
+        `<td class="n">${cp.pot_usd ? "$" + Number(cp.pot_usd).toFixed(2) : "—"}</td>` +
+        `<td class="n">${cp.rounds || "—"}</td>` +
+        `<td class="n ${tone}">${cp.rounds ? "$" + net.toFixed(2) : "—"}</td>` +
+        `<td><button class="btn-chart" data-chart="${cp.campaign_id}" data-sym="${cp.symbol}">Chart</button></td></tr>`;
+    };
+    wrap.innerHTML = `<div class="rungs" style="padding-top:12px"><table class="ladder">` +
+      `<thead><tr><th>Symbol</th><th>TF</th><th>Ended</th><th class="n">Collected</th>` +
+      `<th class="n">Rounds</th><th class="n">Net $</th><th></th></tr></thead>` +
+      `<tbody>${done.map(row).join("")}</tbody></table></div>`;
+    wrap.querySelectorAll("button[data-chart]").forEach(b =>
+      b.addEventListener("click", () => openChart(b.getAttribute("data-chart"), b.getAttribute("data-sym"))));
+    closedMount.appendChild(wrap);
+  }
 
   /* rounds */
   const rounds = s.rounds || [];
