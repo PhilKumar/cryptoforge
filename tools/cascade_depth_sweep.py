@@ -386,6 +386,7 @@ class Replay:
         escalate: bool = True,
         minors: int = 0,
         minor_gap: float = MINOR_GAP_PCT,
+        minor_swing: int = MINOR_SWING_BARS,
         cap_tf: str = "",
         retire: str = "park",
         escalate_on: str = "bars",
@@ -404,6 +405,7 @@ class Replay:
         # far below every live mother a new one has to sit. 0 is today.
         self.minors = minors
         self.minor_gap = minor_gap
+        self.minor_swing = minor_swing
         # The rung a campaign may not climb past, and what to do with the coin
         # it is holding when it outgrows even that.
         self.cap_tf = cap_tf
@@ -500,11 +502,11 @@ class Replay:
         A swing high confirmed MINOR_SWING_BARS bars each side, sitting under
         both the current price and every live mother by at least minor_gap.
         """
-        pivot = index - MINOR_SWING_BARS
-        if pivot <= MINOR_SWING_BARS:
+        pivot = index - self.minor_swing
+        if pivot <= self.minor_swing:
             return None
         high = self.rows[pivot][2]
-        window = self.rows[pivot - MINOR_SWING_BARS : index + 1]
+        window = self.rows[pivot - self.minor_swing : index + 1]
         if any(row[2] > high for row in window):
             return None
         # It has to be a high price has since failed to hold, not the top of a
@@ -850,9 +852,22 @@ class Replay:
 
 
 def run_one(args: tuple) -> dict:
-    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire, escalate_on, compound, compound_live = (
-        args
-    )
+    (
+        symbol,
+        config,
+        capital,
+        months,
+        escalate,
+        trail,
+        minors,
+        cap_tf,
+        retire,
+        escalate_on,
+        compound,
+        compound_live,
+        minor_gap,
+        minor_swing,
+    ) = args
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
 
@@ -882,6 +897,8 @@ def run_one(args: tuple) -> dict:
         cascade,
         escalate=escalate,
         minors=minors,
+        minor_gap=minor_gap,
+        minor_swing=minor_swing,
         cap_tf=cap_tf,
         retire=retire,
         escalate_on=escalate_on,
@@ -898,7 +915,7 @@ def run_one(args: tuple) -> dict:
     if trail > 0:
         suffix += f" · trail {trail:g}"
     if minors:
-        suffix += f" · +{minors} minor MC"
+        suffix += f" · +{minors} minor MC @{minor_gap * 100:g}%/{minor_swing}bar"
     if cap_tf:
         suffix += f" · cap {cap_tf}/{retire}"
     if escalate_on != "bars":
@@ -938,6 +955,18 @@ def main() -> int:
         action="append",
         type=int,
         help="repeatable; how many minor MCs may run alongside the major chain (0 = today)",
+    )
+    parser.add_argument(
+        "--minor-gap",
+        type=float,
+        default=MINOR_GAP_PCT,
+        help="how far under every live mother a new minor must sit, as a fraction (0.05 = 5%%)",
+    )
+    parser.add_argument(
+        "--minor-swing",
+        type=int,
+        default=MINOR_SWING_BARS,
+        help="5m bars either side that make a high a swing high (12 = an hour)",
     )
     parser.add_argument(
         "--cap-tf",
@@ -1002,6 +1031,8 @@ def main() -> int:
             climb,
             args.compound,
             args.compound_live,
+            args.minor_gap,
+            args.minor_swing,
         )
         for symbol in symbols
         for config in configs
