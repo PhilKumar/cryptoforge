@@ -2178,10 +2178,12 @@ PAGE = "".join(
       <!-- The bars change; the geometry does not. It was drawn on the
            campaign's own timeframe and is never re-derived here. -->
       <span class="tf-toggle" id="ch-tfs"></span>
+      <!-- The parent's zoom group, in its order: minus, the live zoom level
+           (click resets), plus. -->
       <span class="tf-toggle" id="ch-zoom">
         <button id="ch-zout" title="Zoom out" aria-label="Zoom out">−</button>
+        <button id="ch-zlevel" title="Reset zoom" aria-label="Reset zoom">100%</button>
         <button id="ch-zin" title="Zoom in" aria-label="Zoom in">+</button>
-        <button id="ch-zfit" title="Fit the whole window" aria-label="Fit the whole window">fit</button>
       </span>
       <span class="pill live" id="ch-pos" hidden></span>
       <button class="modal-close" id="ch-close">×</button>
@@ -2702,11 +2704,54 @@ function render(s) {
 /* ══ chart ══ */
 let chartData = null;
 let chartScale = null;   /* set by drawChart; read by the crosshair */
-/* The zoom window, as candle indices into chartData.candles. Null = fit all.
-   Lives outside drawChart because the chart repaints on resize and the view
-   must survive the repaint — the same reason the ladders keep openLadders. */
-let chartWin = null;
+/* The view, as the parent's Canvas chart keeps it: a continuous time/price
+   viewport, not a candle slice. Null = fit on the next draw. Lives outside
+   drawChart because the chart repaints on resize and the view must survive
+   the repaint — the same reason the ladders keep openLadders. */
+let chartView = null;
+let chartDrag = null;
 let chartCid = "", chartTf = "";
+
+function chartBarSec() {
+  const d = chartData;
+  if (!d) return 60;
+  if (d.bucket_sec) return d.bucket_sec;
+  const c = d.candles || [];
+  return c.length > 1 ? Math.max(c[1][0] - c[0][0], 1) : 60;
+}
+
+/* The parent's fit rule, exactly: candles, mother, leg bounds and the target
+   set the frame; the working STOP and the average do NOT — the stop is an
+   order at a rung, and letting it stretch the axis squashed the candles into
+   the top third of a mostly-empty chart. Marks outside the frame are named in
+   the footer instead of bending the frame to reach. */
+function chartFit() {
+  const d = chartData, candles = (d && d.candles) || [];
+  if (!candles.length) return null;
+  let lo = Infinity, hi = -Infinity;
+  candles.forEach(c => { lo = Math.min(lo, c[3]); hi = Math.max(hi, c[2]); });
+  [d.mother_high, d.target].forEach(v => {
+    if (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  });
+  (d.legs || []).forEach(leg => {
+    if (leg.touch_high) hi = Math.max(hi, leg.touch_high);
+    if (leg.low) lo = Math.min(lo, leg.low);
+  });
+  const span = (hi - lo) || Math.max(Math.abs(hi) * 0.02, 1), padP = span * 0.06;
+  const bar = chartBarSec();
+  return {tMin: candles[0][0], tMax: candles[candles.length - 1][0] + bar,
+          pMin: lo - padP, pMax: hi + padP};
+}
+
+function setChartView(next) {
+  if (!next) return;
+  const tSpan = next.tMax - next.tMin, pSpan = next.pMax - next.pMin;
+  if (!isFinite(tSpan) || !isFinite(pSpan) || tSpan <= 0 || pSpan <= 0) return;
+  chartView = {tMin: next.tMin, tMax: next.tMax, pMin: next.pMin, pMax: next.pMax};
+  const fit = chartFit(), level = $("ch-zlevel");
+  if (fit && level) level.textContent = Math.round((fit.tMax - fit.tMin) / tSpan * 100) + "%";
+  drawChart();
+}
 function drawChart() {
   const d = chartData, cv = $("chart");
   if (!d || !cv) return;
@@ -2746,57 +2791,38 @@ function drawChart() {
   });
 
   const allCandles = d.candles || [];
-  /* Clamp the window every paint: a repaint after a timeframe switch may find
-     indices from the previous, longer array. */
-  if (chartWin) {
-    chartWin.i0 = Math.max(0, Math.min(chartWin.i0, allCandles.length - 2));
-    chartWin.i1 = Math.max(chartWin.i0 + 1, Math.min(chartWin.i1, allCandles.length - 1));
-  }
-  const candles = chartWin ? allCandles.slice(chartWin.i0, chartWin.i1 + 1) : allCandles;
-  if (!candles.length) {
+  if (!allCandles.length) {
     g.fillStyle = PAL.axis; g.font = "13px " + MONO;
     g.fillText("No candles from your exchange yet.", 16, H / 2);
     return;
   }
+  if (!chartView) chartView = chartFit();
+  const v = chartView, bar = chartBarSec();
+  const candles = allCandles.filter(c => c[0] + bar > v.tMin && c[0] < v.tMax);
 
   /* Labels live in a LEFT gutter, the way they do on the parent's chart and on
      TradingView: the eye reads level-then-price instead of hunting past every
      candle to the right edge. The right margin is the price axis alone. */
   const padL = 132, padR = 58, padT = 18, padB = 30;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const n = candles.length, cw = plotW / n;
+  const minP = v.pMin, maxP = v.pMax;
+  const cw = plotW * bar / (v.tMax - v.tMin);
 
-  /* Scale to PRICE, never to the deepest rung: L8 is eight leg-ranges down and
-     would flatten every candle into a line. Rungs inside the band are drawn;
-     ones below it are counted in the note under the chart. */
-  let lo = Infinity, hi = -Infinity;
-  candles.forEach(c => { lo = Math.min(lo, c[3]); hi = Math.max(hi, c[2]); });
-  /* The parent's scale rule, exactly: candles, mother, leg bounds and the
-     target set the frame. The working STOP and the average do NOT — the stop
-     is an order at a rung, and letting it stretch the axis squashed the
-     candles into the top third of a mostly-empty chart. Marks outside the
-     frame are named in the footer instead of bending the frame to reach. */
-  [d.mother_high, d.target].forEach(v => {
-    if (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
-  });
-  (d.legs || []).forEach(leg => {
-    if (leg.touch_high) hi = Math.max(hi, leg.touch_high);
-    if (leg.low) lo = Math.min(lo, leg.low);
-  });
-  const span = (hi - lo) || 1, padP = span * 0.06;
-  const maxP = hi + padP, minP = lo - padP;
-
-  const X = i => padL + i * cw + cw / 2;
+  const Xt = t => padL + (t - v.tMin) / (v.tMax - v.tMin) * plotW;
+  const X = c => Xt(c[0] + bar / 2);   /* a candle is drawn at its bar's centre */
   const Y = p => padT + (maxP - p) / (maxP - minP) * plotH;
-  const t0 = candles[0][0], t1 = candles[n - 1][0];
-  const Xt = t => t1 === t0 ? X(0) : padL + cw / 2 + ((t - t0) / (t1 - t0)) * (plotW - cw);
+  const t0 = v.tMin, t1 = v.tMax;
   const inView = p => p >= minP && p <= maxP;
-  /* Carried out of here so the crosshair can invert a pointer position back
-     into a price and a candle without re-deriving any of the projection. */
-  chartScale = {padL, padT, plotW, plotH, minP, maxP, cw, n, W, H,
+  const inSpan = t => t >= v.tMin && t <= v.tMax;
+  /* Carried out of here so the crosshair and the drag model can invert a
+     pointer position back into a price, a time and a candle without
+     re-deriving any of the projection. */
+  chartScale = {padL, padT, plotW, plotH, minP, maxP, cw, n: allCandles.length, W, H,
                 priceAt: y => maxP - (y - padT) / plotH * (maxP - minP),
-                indexAt: x => Math.round((x - padL - cw / 2) / cw)};
-  const fmt = v => Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+                tAt: x => v.tMin + (x - padL) / plotW * (v.tMax - v.tMin),
+                indexAt: x => Math.round(
+                  (v.tMin + (x - padL) / plotW * (v.tMax - v.tMin) - bar / 2 - allCandles[0][0]) / bar)};
+  const fmt = v2 => Number(v2).toLocaleString(undefined, {maximumFractionDigits: 2});
 
   /* price gridlines + right axis */
   g.save(); g.font = "9.5px " + MONO; g.textAlign = "left";
@@ -2806,21 +2832,29 @@ function drawChart() {
     g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
     g.fillStyle = PAL.axis; g.fillText(fmt(p), padL + plotW + 6, y + 3);
   }
-  /* time axis */
-  const ticks = Math.min(6, n);
+  /* time axis: ticks are times across the viewport, not candle indices —
+     panned or stretched views have no candle at the edge to borrow a label
+     from. Spans past a day carry the date. */
+  const ticks = 6, tSpanSec = v.tMax - v.tMin;
   g.textAlign = "center"; g.fillStyle = PAL.axis;
   for (let t = 0; t < ticks; t++) {
-    const i = Math.round((n - 1) * (t / Math.max(ticks - 1, 1)));
-    const label = new Date(candles[i][0] * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-    g.fillText(label, Math.min(Math.max(X(i), padL + 18), padL + plotW - 18), H - 10);
+    const tt = v.tMin + tSpanSec * (t + 0.5) / ticks, dt = new Date(tt * 1000);
+    const label = tSpanSec > 86400
+      ? dt.toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"})
+      : dt.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    g.fillText(label, Xt(tt), H - 10);
   }
   g.restore();
 
   /* candles, and the mother candle marked as a column the way the parent does
-     — the horizontal high line alone disappears once a chart is rolled up. */
+     — the horizontal high line alone disappears once a chart is rolled up.
+     Clipped to the plot: a viewport edge slices through a bar, and the sliced
+     half must not paint over the gutters. */
   const bodyW = Math.max(Math.min(cw * 0.65, 9), 1);
-  candles.forEach((c, i) => {
-    const up = c[4] >= c[1], col = up ? PAL.up : PAL.down, x = X(i);
+  g.save();
+  g.beginPath(); g.rect(padL, padT, plotW, plotH); g.clip();
+  candles.forEach(c => {
+    const up = c[4] >= c[1], col = up ? PAL.up : PAL.down, x = X(c);
     g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1;
     g.beginPath(); g.moveTo(x, Y(c[2])); g.lineTo(x, Y(c[3])); g.stroke();
     const yTop = Y(Math.max(c[1], c[4])), yBot = Y(Math.min(c[1], c[4]));
@@ -2836,6 +2870,7 @@ function drawChart() {
       g.restore();
     }
   });
+  g.restore();
 
   /* Gutter labels, nudged apart so two levels a few ticks apart stay legible.
      The overshoot is deliberate — an exact +10 can land, in floating point,
@@ -2877,7 +2912,10 @@ function drawChart() {
     return keep;
   };
 
-  /* every trendline, coloured by creation order and marked when active */
+  /* every trendline, coloured by creation order and marked when active.
+     Clipped: a price-stretched view can put part of a line outside the plot. */
+  g.save();
+  g.beginPath(); g.rect(padL, padT, plotW, plotH); g.clip();
   recent(d.trendlines).forEach(tl => {
     if (!tl.a1_ts || !tl.a2_ts || tl.a2_ts === tl.a1_ts) return;
     const slope = (tl.a2_p - tl.a1_p) / (tl.a2_ts - tl.a1_ts);
@@ -2900,6 +2938,7 @@ function drawChart() {
     }
     g.restore();
   });
+  g.restore();  /* end trendline clip — the fib labels live in the left gutter */
 
   /* every fib: 0/1 frame the swing faintly, 2/4/8 are the rungs money sits on.
      Colour is keyed to leg id, not position, so a fib keeps its hue as others
@@ -2932,13 +2971,13 @@ function drawChart() {
     g.lineTo(x + 5, y); g.closePath(); g.fill(); g.stroke(); g.restore();
   };
   (d.fills || []).forEach(f => {
-    if (!f.price || !inView(f.price)) return;
+    if (!f.price || !inView(f.price) || !inSpan(f.ts)) return;
     arrow(Xt(f.ts), Y(f.price) + 10, false, PAL.buyMark);
   });
   /* Sells: mirrored above the candle and labelled with the round's P&L — the
      one number the record is kept for. */
   (d.exits || []).forEach(x => {
-    if (!x.price || !inView(x.price)) return;
+    if (!x.price || !inView(x.price) || !inSpan(x.ts)) return;
     const cx = Xt(x.ts), cy = Y(x.price) - 10, pnl = Number(x.pnl) || 0;
     arrow(cx, cy, true, PAL.sellMark);
     g.save(); g.fillStyle = PAL.sellMark; g.font = "9.5px " + MONO; g.textAlign = "center";
@@ -2947,65 +2986,109 @@ function drawChart() {
   });
 }
 
-/* ── Zoom & pan, the parent's centre-zoom model ──────────────────────
-   Wheel zooms about the cursor, drag pans, double-click and "fit" reset.
-   All of it edits chartWin (candle indices) and repaints — the projection
-   math never changes, only which slice it sees. */
-function zoomBy(factor, centerFrac) {
-  const all = (chartData && chartData.candles) || [];
-  if (all.length < 10) return;
-  const cur = chartWin || {i0: 0, i1: all.length - 1};
-  const span = cur.i1 - cur.i0 + 1;
-  const next = Math.round(Math.max(10, Math.min(all.length, span * factor)));
-  if (next >= all.length) { chartWin = null; drawChart(); return; }
-  const center = cur.i0 + span * (centerFrac === undefined ? 0.5 : centerFrac);
-  let i0 = Math.round(center - next * (centerFrac === undefined ? 0.5 : centerFrac));
-  i0 = Math.max(0, Math.min(i0, all.length - next));
-  chartWin = {i0, i1: i0 + next - 1};
-  drawChart();
+/* ── Zoom, pan and axis stretch — the parent's interaction model, exactly.
+   Plot drag pans BOTH axes; the axis gutters are deliberately separate so
+   price stretching can never move time and vice versa. Wheel zooms TIME only
+   — vertical scale is reserved for deliberate price-axis drags. Double-click
+   resets the region it lands on: price gutter → price fit, time gutter →
+   time fit, plot → full fit.
+   Listeners live on the WRAP, like the crosshair's: #chart-cross is
+   pointer-events:none (so hovers reach the canvas below), which means
+   nothing bound to it ever fires. */
+function chartPoint(e) {
+  const s = chartScale;
+  if (!s) return null;
+  const box = $("chart").getBoundingClientRect();
+  if (!box.width || !box.height) return null;
+  const x = e.clientX - box.left, y = e.clientY - box.top;
+  return {x, y,
+    plot: x >= s.padL && x <= s.padL + s.plotW && y >= s.padT && y <= s.padT + s.plotH,
+    priceAxis: x > s.padL + s.plotW && y >= s.padT && y <= s.padT + s.plotH,
+    timeAxis: y > s.padT + s.plotH && x >= s.padL && x <= s.padL + s.plotW};
 }
-function panBy(candleDelta) {
-  const all = (chartData && chartData.candles) || [];
-  if (!chartWin || !all.length) return;
-  const span = chartWin.i1 - chartWin.i0 + 1;
-  let i0 = Math.max(0, Math.min(chartWin.i0 + candleDelta, all.length - span));
-  chartWin = {i0, i1: i0 + span - 1};
-  drawChart();
+function chartTimeZoom(step, anchorX) {  /* step > 1 zooms out */
+  const v = chartView, s = chartScale;
+  if (!v || !s) return;
+  const oldSpan = v.tMax - v.tMin;
+  const newSpan = Math.max(chartBarSec() / 2, Math.min(oldSpan * 60, oldSpan * step));
+  const x = anchorX === undefined ? s.padL + s.plotW / 2 : anchorX;
+  const at = s.tAt(x), ratio = (at - v.tMin) / oldSpan;
+  setChartView({tMin: at - ratio * newSpan, tMax: at + (1 - ratio) * newSpan,
+                pMin: v.pMin, pMax: v.pMax});
 }
 (function wireZoom() {
-  /* Listeners live on the WRAP, like the crosshair's: #chart-cross is
-     pointer-events:none (so hovers reach the canvas below), which means
-     nothing bound to it ever fires. */
   const host = $("chart-wrap");
   if (!host) return;
-  host.addEventListener("wheel", e => {
-    e.preventDefault();
-    const rect = $("chart").getBoundingClientRect();
-    const frac = chartScale
-      ? Math.max(0, Math.min(1, (e.clientX - rect.left - chartScale.padL) / chartScale.plotW))
-      : 0.5;
-    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, frac);
-  }, {passive: false});
-  let dragging = null;
+  const endDrag = e => {
+    if (!chartDrag) return;
+    chartDrag = null;
+    host.style.cursor = "";
+    try { host.releasePointerCapture(e.pointerId); } catch (err) {}
+  };
   host.addEventListener("pointerdown", e => {
+    const pt = chartPoint(e), v = chartView;
+    if (!pt || !v || (!pt.plot && !pt.priceAxis && !pt.timeAxis)) return;
     e.preventDefault();
-    dragging = {x: e.clientX, moved: false};
+    chartDrag = {
+      kind: pt.plot ? "pan" : (pt.priceAxis ? "price" : "time"),
+      x: pt.x, y: pt.y,
+      view: {tMin: v.tMin, tMax: v.tMax, pMin: v.pMin, pMax: v.pMax},
+      anchorT: chartScale.tAt(pt.x), anchorP: chartScale.priceAt(pt.y)
+    };
+    host.style.cursor = pt.plot ? "grabbing" : (pt.priceAxis ? "ns-resize" : "ew-resize");
     try { host.setPointerCapture(e.pointerId); } catch (err) {}
+    clearCross();
   });
   host.addEventListener("pointermove", e => {
-    if (!dragging || !chartScale || !chartWin) return;
-    const dx = e.clientX - dragging.x;
-    const perCandle = chartScale.plotW / Math.max(chartScale.n, 1);
-    const delta = Math.round(-dx / Math.max(perCandle, 0.5));
-    if (delta) { panBy(delta); dragging.x = e.clientX; dragging.moved = true; }
+    const pt = chartPoint(e);
+    if (!pt) return;
+    if (!chartDrag) {
+      host.style.cursor = pt.plot ? "crosshair"
+        : (pt.priceAxis ? "ns-resize" : (pt.timeAxis ? "ew-resize" : ""));
+      return;  /* the crosshair has its own mousemove listener */
+    }
+    const start = chartDrag.view, s = chartScale;
+    const tSpan = start.tMax - start.tMin, pSpan = start.pMax - start.pMin;
+    if (chartDrag.kind === "pan") {
+      const dt = -(pt.x - chartDrag.x) / s.plotW * tSpan;
+      const dp = (pt.y - chartDrag.y) / s.plotH * pSpan;
+      setChartView({tMin: start.tMin + dt, tMax: start.tMax + dt,
+                    pMin: start.pMin + dp, pMax: start.pMax + dp});
+    } else if (chartDrag.kind === "price") {
+      /* Pulling the price axis upward zooms in (a tighter price range);
+         pulling it downward zooms out. Intentionally opposite to screen Y,
+         which increases downward — the parent's rule, verbatim. */
+      const span = pSpan * Math.exp((pt.y - chartDrag.y) / 160);
+      const ratio = (chartDrag.anchorP - start.pMin) / pSpan;
+      setChartView({tMin: start.tMin, tMax: start.tMax,
+                    pMin: chartDrag.anchorP - ratio * span,
+                    pMax: chartDrag.anchorP + (1 - ratio) * span});
+    } else {
+      const span = Math.max(chartBarSec() / 2, tSpan * Math.exp((chartDrag.x - pt.x) / 160));
+      const ratio = (chartDrag.anchorT - start.tMin) / tSpan;
+      setChartView({tMin: chartDrag.anchorT - ratio * span,
+                    tMax: chartDrag.anchorT + (1 - ratio) * span,
+                    pMin: start.pMin, pMax: start.pMax});
+    }
   });
-  const drop = () => { dragging = null; };
-  host.addEventListener("pointerup", drop);
-  host.addEventListener("pointercancel", drop);
-  host.addEventListener("dblclick", () => { chartWin = null; drawChart(); });
-  $("ch-zin").addEventListener("click", () => zoomBy(0.6));
-  $("ch-zout").addEventListener("click", () => zoomBy(1.6));
-  $("ch-zfit").addEventListener("click", () => { chartWin = null; drawChart(); });
+  host.addEventListener("pointerup", endDrag);
+  host.addEventListener("pointercancel", endDrag);
+  host.addEventListener("wheel", e => {
+    const pt = chartPoint(e);
+    if (!pt || !pt.plot) return;
+    e.preventDefault();
+    chartTimeZoom(e.deltaY < 0 ? 1 / 1.08 : 1.08, pt.x);
+  }, {passive: false});
+  host.addEventListener("dblclick", e => {
+    const pt = chartPoint(e), fit = chartFit(), v = chartView;
+    if (!pt || !fit || !v) return;
+    if (pt.priceAxis) setChartView({tMin: v.tMin, tMax: v.tMax, pMin: fit.pMin, pMax: fit.pMax});
+    else if (pt.timeAxis) setChartView({tMin: fit.tMin, tMax: fit.tMax, pMin: v.pMin, pMax: v.pMax});
+    else if (pt.plot) setChartView(fit);
+  });
+  $("ch-zin").addEventListener("click", () => chartTimeZoom(1 / 1.4));
+  $("ch-zout").addEventListener("click", () => chartTimeZoom(1.4));
+  $("ch-zlevel").addEventListener("click", () => setChartView(chartFit()));
 })();
 
 async function openChart(cid, symbol, tf) {
@@ -3051,7 +3134,9 @@ async function openChart(cid, symbol, tf) {
                + Math.max((d.trendlines || []).length - MAX_STRUCTURES, 0);
   /* Draw FIRST: the note reads chartScale.minP for the off-view stop, and
      chartScale does not exist until drawChart has computed the frame. */
-  chartWin = null;
+  chartView = null;
+  const level = $("ch-zlevel");
+  if (level) level.textContent = "100%";
   drawChart();
   $("ch-note").textContent =
     "Geometry from the signal; candles, fills and target are your own machine's." +
@@ -3272,6 +3357,7 @@ function clearCross() {
 }
 function drawCross(clientX, clientY) {
   const cv = $("chart-cross"), main = $("chart");
+  if (chartDrag) return;  /* mid-drag the hand is steering, not asking */
   if (!chartScale || !chartData || !(chartData.candles || []).length) return;
   const box = main.getBoundingClientRect();
   const x = clientX - box.left, y = clientY - box.top;
