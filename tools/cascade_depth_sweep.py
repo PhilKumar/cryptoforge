@@ -113,6 +113,30 @@ CONFIGS: Dict[str, dict] = {
     **{f"solo-{level}": {"levels": (level,), "alloc": {level: 1.0}, "label": f"L{level} alone"} for level in FULL},
 }
 
+# ── minor mother candles ──────────────────────────────────────────
+#
+# The major chain anchors at a top and, when the market keeps falling, sits
+# underwater with its target far overhead — SOL closed its last round in July
+# 2025 and spent the next twelve months holding a bag. A MINOR MC is the answer
+# Phil marks by hand: a lower high, inside a move already running, with a target
+# close enough to actually be reached on the way down.
+#
+# Nothing here is new engine behaviour — mc_kind="minor" already exists and is
+# always a 5m campaign. What the backtest has to invent is WHERE Phil would
+# mark one, since live he picks them off the chart. The rule used:
+#
+#   a 5m swing high, confirmed by MINOR_SWING_BARS bars either side, that sits
+#   at least MINOR_GAP_PCT below every live campaign's mother high and below
+#   the current price, taken only while fewer than --minors minors are alive.
+#
+# Confirmation-by-hindsight is deliberate: the swing is only anchored once the
+# bars after it have printed, so the campaign starts strictly in the past, the
+# way Phil marks one after a high has clearly failed.
+
+MINOR_SWING_BARS = 12  # an hour of 5m either side makes a high a swing high
+MINOR_GAP_PCT = 0.05  # a new minor must sit 5% under every live mother
+
+
 # ── the trailing target ───────────────────────────────────────────
 
 
@@ -246,6 +270,14 @@ class RunResult:
     unreached_rungs: int = 0
     unreached_rung_usd: float = 0.0
     escalated: int = 0
+    # The minor-MC half of the book, so "did the minors carry the fall" is
+    # answerable without unpicking the totals.
+    minors: int = 0  # how many were allowed to run at once
+    minor_campaigns: int = 0
+    minor_rounds: int = 0
+    minor_pnl: float = 0.0
+    minor_stranded_cost: float = 0.0
+    minor_stranded_value: float = 0.0
     per_level_fills: Dict[str, int] = field(default_factory=dict)
     per_level_usd: Dict[str, float] = field(default_factory=dict)
     monthly: Dict[str, float] = field(default_factory=dict)
@@ -270,7 +302,16 @@ class RunResult:
 class Replay:
     """Two years of 5m candles through the live state machine."""
 
-    def __init__(self, symbol: str, rows: List[tuple], capital: float, cascade, escalate: bool = True):
+    def __init__(
+        self,
+        symbol: str,
+        rows: List[tuple],
+        capital: float,
+        cascade,
+        escalate: bool = True,
+        minors: int = 0,
+        minor_gap: float = MINOR_GAP_PCT,
+    ):
         self.cascade = cascade
         self.symbol = symbol
         self.rows = rows
@@ -279,6 +320,10 @@ class Replay:
         # climb to weekly candles. Switching it off pins every campaign to 5m,
         # which is the only way to ask the ladder question on its own.
         self.escalate = escalate
+        # How many minor MCs may run alongside the major chain at once, and how
+        # far below every live mother a new one has to sit. 0 is today.
+        self.minors = minors
+        self.minor_gap = minor_gap
         self.meta = SYMBOL_META.get(symbol, {"tick": 0.01, "min_notional": 5.0})
         self.engine = cascade.CascadeEngine(_OfflineBroker(symbol, self.meta))
         # Per-campaign aggregation state for its own timeframe.
@@ -300,13 +345,18 @@ class Replay:
             return 0.0
         return pcts[len(pcts) // 2]
 
-    def _seed_campaign(self, index: int) -> None:
-        """Anchor a fresh campaign by hand, the way Phil starts one."""
+    def _seed_campaign(self, index: int, mother: Optional[int] = None, kind: str = "major") -> None:
+        """Anchor a fresh campaign by hand, the way Phil starts one.
+
+        `mother` is the bar the campaign is anchored to, which for a minor MC is
+        a confirmed swing high some bars back rather than the current one.
+        """
         cascade = self.cascade
-        ts, o, h, low, c = self.rows[index]
+        mother_index = index if mother is None else mother
+        ts, o, h, low, c = self.rows[mother_index]
         median_bar = self._median_bar_pct(index)
         campaign = cascade.Campaign(
-            campaign_id=f"seed{index}",
+            campaign_id=f"seed{index}" if kind == "major" else f"minor{index}",
             seq=self.engine._next_seq(),
             symbol=self.symbol,
             capital_usd=self.capital,
@@ -317,7 +367,7 @@ class Replay:
             timeframe=cascade.BASE_TIMEFRAME,
             start_timeframe=cascade.BASE_TIMEFRAME,
             escalates=True,
-            mc_kind="major",
+            mc_kind=kind,
             exchange="",
             min_notional_usd=self.meta["min_notional"],
             min_fib_range_pct=cascade.min_fib_range_for(self.symbol, median_bar),
@@ -332,8 +382,42 @@ class Replay:
         self.engine._candles[campaign.campaign_id] = [
             cascade.Candle(ts, o, h, low, c, timeframe=cascade.BASE_TIMEFRAME)
         ]
+        # A minor is marked in hindsight, so the bars between its mother and
+        # now are history the campaign has already lived through — feed them in
+        # rather than starting it blind at the current price.
+        if mother_index < index:
+            for row in self.rows[mother_index + 1 : index]:
+                self.engine._candles[campaign.campaign_id].append(
+                    cascade.Candle(row[0], row[1], row[2], row[3], row[4], timeframe=cascade.BASE_TIMEFRAME)
+                )
         self.result.manual_starts += 1
+        if kind == "minor":
+            self.result.minor_campaigns += 1
         self._register(campaign, index)
+
+    def _minor_anchor(self, index: int) -> Optional[int]:
+        """The bar a new minor MC should hang from, or None.
+
+        A swing high confirmed MINOR_SWING_BARS bars each side, sitting under
+        both the current price and every live mother by at least minor_gap.
+        """
+        pivot = index - MINOR_SWING_BARS
+        if pivot <= MINOR_SWING_BARS:
+            return None
+        high = self.rows[pivot][2]
+        window = self.rows[pivot - MINOR_SWING_BARS : index + 1]
+        if any(row[2] > high for row in window):
+            return None
+        # It has to be a high price has since failed to hold, not the top of a
+        # market that is currently making new ones.
+        if self.rows[index][4] >= high * (1 - self.minor_gap):
+            return None
+        for campaign in self.engine.campaigns.values():
+            if campaign.state in self.cascade.FINAL_STATES:
+                continue
+            if high > campaign.mother_high * (1 - self.minor_gap):
+                return None
+        return pivot
 
     def _register(self, campaign, index: int) -> None:
         """First sight of a campaign: give it a bucket and a fresh measurement.
@@ -384,6 +468,7 @@ class Replay:
 
     def _harvest(self, campaign, last_close: float) -> None:
         result = self.result
+        minor = str(campaign.mc_kind or "major").lower() == "minor"
         result.fibs += sum(1 for leg in campaign.legs if leg.fib is not None)
         if any(leg.fib is not None for leg in campaign.legs):
             result.drew_structure += 1
@@ -393,6 +478,9 @@ class Replay:
         for rnd in campaign.rounds:
             result.rounds += 1
             result.net_pnl += rnd.pnl
+            if minor:
+                result.minor_rounds += 1
+                result.minor_pnl += rnd.pnl
             result.gross_pnl += rnd.pnl_gross
             result.fees += rnd.fees_usd
             result.wins += 1 if rnd.pnl > 0 else 0
@@ -419,6 +507,9 @@ class Replay:
             result.per_level_usd[key] = round(result.per_level_usd.get(key, 0.0) + fill.price * fill.quantity, 2)
             result.stranded_cost += fill.price * fill.quantity
             result.stranded_value += last_close * fill.quantity
+            if minor:
+                result.minor_stranded_cost += fill.price * fill.quantity
+                result.minor_stranded_value += last_close * fill.quantity
             deepest = fill.price if deepest is None else min(deepest, fill.price)
         # Money the ladder set aside that the market never took. A rung priced
         # at or below zero is geometry that cannot exist; a rung merely never
@@ -499,19 +590,28 @@ class Replay:
 
             # Harvest and drop anything that ended, so neither the campaign dict
             # nor the per-candle loop grows with two years of history.
-            alive = 0
+            majors = minors_alive = 0
             for cid, campaign in list(engine.campaigns.items()):
                 if campaign.state in final_states:
                     self._harvest(campaign, close)
                     del engine.campaigns[cid]
                     engine._candles.pop(cid, None)
                     self.buckets.pop(cid, None)
+                elif str(campaign.mc_kind or "major").lower() == "minor":
+                    minors_alive += 1
                 else:
-                    alive += 1
+                    majors += 1
             if engine.closed_campaigns:
                 engine.closed_campaigns.clear()
-            if not alive:
+            # The major chain is re-anchored on its own account: with minors
+            # running, "some campaign is alive" would let the major line die
+            # out and never come back.
+            if not majors:
                 self._seed_campaign(index)
+            elif minors_alive < self.minors:
+                anchor = self._minor_anchor(index)
+                if anchor is not None:
+                    self._seed_campaign(index, mother=anchor, kind="minor")
 
             if index % 12 == 0:  # hourly sample of what capital is doing
                 deployed = sum(c.spent_usd for c in engine.campaigns.values())
@@ -538,7 +638,7 @@ class Replay:
 
 
 def run_one(args: tuple) -> dict:
-    symbol, config, capital, months, escalate, trail = args
+    symbol, config, capital, months, escalate, trail, minors = args
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
 
@@ -552,11 +652,17 @@ def run_one(args: tuple) -> dict:
     cascade.STOP_ENTRY_LEVELS = tuple(cfg["levels"][:-1])
 
     rows = load_history(symbol, months)
-    replay = Replay(symbol, rows, capital, cascade, escalate=escalate)
+    replay = Replay(symbol, rows, capital, cascade, escalate=escalate, minors=minors)
     replay.result.trail = trail
+    replay.result.minors = minors
     result = replay.run(config, cfg)
+    suffix = ""
     if trail > 0:
-        result.label = f"{cfg['label']} · trail {trail:g}"
+        suffix += f" · trail {trail:g}"
+    if minors:
+        suffix += f" · +{minors} minor MC"
+    if suffix:
+        result.label = cfg["label"] + suffix
     payload = {k: v for k, v in result.__dict__.items()}
     payload["open_pnl"] = result.open_pnl
     payload["total_pnl"] = result.total_pnl
@@ -581,6 +687,12 @@ def main() -> int:
         help="repeatable; trailing target, giveback as a multiple of the target distance "
         "(0 = today's fixed 0.25 target). e.g. --trail 0 --trail 0.5",
     )
+    parser.add_argument(
+        "--minors",
+        action="append",
+        type=int,
+        help="repeatable; how many minor MCs may run alongside the major chain (0 = today)",
+    )
     parser.add_argument("--out", default="depth_sweep.json", help="filename under tools/.sweep_out")
     args = parser.parse_args()
 
@@ -593,17 +705,20 @@ def main() -> int:
 
     escalate = not args.no_escalate
     trails = args.trail if args.trail is not None else [0.0]
+    minors = args.minors if args.minors is not None else [0]
     jobs = [
-        (symbol, config, args.capital, args.months, escalate, trail)
+        (symbol, config, args.capital, args.months, escalate, trail, minor)
         for symbol in symbols
         for config in configs
         for trail in trails
+        for minor in minors
     ]
     workers = args.jobs or min(len(jobs), mp.cpu_count())
     print(
         f"{len(jobs)} runs on {workers} workers — {args.months} months, ${args.capital:,.0f} per campaign, "
         f"escalation {'on' if escalate else 'OFF (5m throughout)'}, "
-        f"targets {', '.join('fixed' if t <= 0 else f'trail {t:g}' for t in trails)}\n"
+        f"targets {', '.join('fixed' if t <= 0 else f'trail {t:g}' for t in trails)}, "
+        f"minor MCs {', '.join(str(m) for m in minors)}\n"
     )
 
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -619,7 +734,7 @@ def main() -> int:
             )
 
     order = {name: i for i, name in enumerate(CONFIGS)}
-    results.sort(key=lambda r: (r["symbol"], order.get(r["config"], 99), r.get("trail", 0.0)))
+    results.sort(key=lambda r: (r["symbol"], order.get(r["config"], 99), r.get("minors", 0), r.get("trail", 0.0)))
     path = os.path.join(OUT_DIR, args.out)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(results, handle, indent=2)
@@ -633,17 +748,17 @@ def report(results: List[dict]) -> None:
         rows = [r for r in results if r["symbol"] == symbol]
         print(f"\n{symbol}  —  {rows[0]['bars']:,} 5m bars, ${rows[0]['capital']:,.0f} per campaign")
         head = (
-            f"  {'ladder':<38} {'realised':>10} {'net P&L':>10} {'ret%':>7} {'rounds':>7} "
-            f"{'$/round':>8} {'med hold h':>11} {'in pos%':>8} {'open bag':>10}"
+            f"  {'ladder':<40} {'realised':>10} {'net P&L':>10} {'rounds':>7} "
+            f"{'$/round':>8} {'peak $':>9} {'open bag':>11} {'minor rnds':>11} {'minor P&L':>10}"
         )
         print(head)
         print("  " + "-" * (len(head) - 2))
         for r in rows:
             per_round = r["net_pnl"] / r["rounds"] if r["rounds"] else 0.0
             print(
-                f"  {r['label']:<38} ${r['net_pnl']:>9,.2f} ${r['total_pnl']:>9,.2f} "
-                f"{r['return_pct']:>6.1f}% {r['rounds']:>7,} ${per_round:>7,.2f} "
-                f"{r['median_hold_hours']:>11,.1f} {r['time_in_position_pct']:>7.1f}% ${r['open_pnl']:>9,.2f}"
+                f"  {r['label']:<40} ${r['net_pnl']:>9,.2f} ${r['total_pnl']:>9,.2f} "
+                f"{r['rounds']:>7,} ${per_round:>7,.2f} ${r['peak_deployed']:>8,.0f} "
+                f"${r['open_pnl']:>10,.2f} {r.get('minor_rounds', 0):>11,} ${r.get('minor_pnl', 0.0):>9,.2f}"
             )
 
 
