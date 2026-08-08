@@ -157,6 +157,29 @@ RETIRE_MODES = ("park", "sell", "hold")
 ESCALATION_RUNGS = ("5m", "15m", "1h", "4h", "1d", "1w")
 
 
+# ── what makes a campaign climb ───────────────────────────────────
+#
+# Today escalation is a CLOCK: 200 bars since the mother candle and the campaign
+# moves up a rung, so it is on 1H after two days and 1D after thirty-three,
+# whether it booked twenty targets on 5m or none. The reason in the engine is a
+# charting one — past 200 bars the mother slides off the left edge of its own
+# chart — which ended up deciding trading behaviour.
+#
+#   bars       that clock, exactly as it runs today
+#   structure  Phil's rule: stay on the rung while it is still working. Climb
+#              only once the rung has BOOKED a profit and price has then broken
+#              the low that was standing when that round closed. A rung that is
+#              still paying is never abandoned; a rung whose floor has gone has
+#              been outgrown by the move, which is the thing the timeframe is
+#              supposed to track.
+#
+# `reuse_below` is already exactly that low — _close_round sets it to the
+# lowest low in the campaign's history at the moment the round closes, and the
+# engine uses it to decide when spent levels come back onto the ladder.
+
+ESCALATE_MODES = ("bars", "structure")
+
+
 # ── the trailing target ───────────────────────────────────────────
 
 
@@ -172,11 +195,16 @@ def _restore(cascade) -> None:
     global _PRISTINE_TP_CHECK
     if _PRISTINE_TP_CHECK is None:
         _PRISTINE_TP_CHECK = cascade.CascadeEngine._paper_tp_check
+    global _PRISTINE_BARS
+    if _PRISTINE_BARS is None:
+        _PRISTINE_BARS = cascade.ESCALATION_BARS
     cascade.CascadeEngine._paper_tp_check = _PRISTINE_TP_CHECK
     cascade.ESCALATION_LADDER = ESCALATION_RUNGS
+    cascade.ESCALATION_BARS = _PRISTINE_BARS
 
 
 _PRISTINE_TP_CHECK = None
+_PRISTINE_BARS = None
 
 
 def _install_trail(cascade, giveback: float) -> None:
@@ -357,6 +385,7 @@ class Replay:
         minor_gap: float = MINOR_GAP_PCT,
         cap_tf: str = "",
         retire: str = "park",
+        escalate_on: str = "bars",
     ):
         self.cascade = cascade
         self.symbol = symbol
@@ -375,6 +404,9 @@ class Replay:
         self.cap_tf = cap_tf
         self.retire = retire
         self.parked: Dict[str, object] = {}
+        # Per-campaign, per-rung bookkeeping for the structure gate.
+        self.escalate_on = escalate_on
+        self.rungs: Dict[str, dict] = {}
         self.meta = SYMBOL_META.get(symbol, {"tick": 0.01, "min_notional": 5.0})
         self.engine = cascade.CascadeEngine(_OfflineBroker(symbol, self.meta))
         # Per-campaign aggregation state for its own timeframe.
@@ -470,6 +502,25 @@ class Replay:
                 return None
         return pivot
 
+    def _may_climb(self, campaign, candle) -> bool:
+        """Phil's gate: this rung booked a profit, and its floor has since gone.
+
+        Returns True only on the bar the rung is judged to have been outgrown.
+        Once armed it stays armed, because the engine still insists on a clean
+        bucket boundary and may refuse the climb for a few bars.
+        """
+        state = self.rungs.get(campaign.campaign_id)
+        if state is None or state["tf"] != campaign.timeframe:
+            # New rung (or a new campaign): the count starts again here.
+            state = {"tf": campaign.timeframe, "rounds": len(campaign.rounds), "floor": None}
+            self.rungs[campaign.campaign_id] = state
+        if state["floor"] is None:
+            if len(campaign.rounds) <= state["rounds"]:
+                return False  # nothing booked on this rung yet — it is still working
+            # reuse_below is the low that was standing when the round closed.
+            state["floor"] = campaign.reuse_below or campaign.rounds[-1].exit_price
+        return candle.low < state["floor"]
+
     def _outgrew_cap(self, campaign, candle) -> bool:
         """True once a campaign sitting on the capped rung would have climbed.
 
@@ -481,6 +532,10 @@ class Replay:
             return False
         if campaign.pending_stop_price is not None:
             return False  # mid-arm; let the buy stop resolve first
+        if self.escalate_on == "structure":
+            # Retire on whatever would have promoted it, so the cap and the
+            # climb are judged by the same rule.
+            return self._may_climb(campaign, candle)
         seconds = campaign.timeframe_sec
         bars = (candle.timestamp + seconds - campaign.mother_timestamp) / seconds
         return bars > self.cascade.ESCALATION_BARS
@@ -675,7 +730,8 @@ class Replay:
                 engine._process_candle(campaign, candle)
                 campaign.last_processed_ts = candle.timestamp
                 if campaign.state in active_states:
-                    engine._maybe_escalate(campaign, candle)
+                    if self.escalate_on == "bars" or self._may_climb(campaign, candle):
+                        engine._maybe_escalate(campaign, candle)
                     if self.cap_tf and self._outgrew_cap(campaign, candle):
                         self._retire(campaign, close)
 
@@ -752,7 +808,7 @@ class Replay:
 
 
 def run_one(args: tuple) -> dict:
-    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire = args
+    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire, escalate_on = args
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
 
@@ -764,6 +820,10 @@ def run_one(args: tuple) -> dict:
         # Shortening the ladder is all it takes: `can_escalate` and
         # `next_timeframe_up` both read it, so nothing climbs past the cap.
         cascade.ESCALATION_LADDER = ESCALATION_RUNGS[: ESCALATION_RUNGS.index(cap_tf) + 1]
+    if escalate_on == "structure":
+        # The gate is the Replay's, not the engine's: stand the clock down so
+        # the only thing deciding a climb is whether the rung was outgrown.
+        cascade.ESCALATION_BARS = 0
     cascade.CASCADE_LEVELS = tuple(cfg["levels"])
     cascade.LEVEL_ALLOCATION = dict(cfg["alloc"])
     # Every rung but the deepest goes in as a buy stop above a falling market;
@@ -771,7 +831,17 @@ def run_one(args: tuple) -> dict:
     cascade.STOP_ENTRY_LEVELS = tuple(cfg["levels"][:-1])
 
     rows = load_history(symbol, months)
-    replay = Replay(symbol, rows, capital, cascade, escalate=escalate, minors=minors, cap_tf=cap_tf, retire=retire)
+    replay = Replay(
+        symbol,
+        rows,
+        capital,
+        cascade,
+        escalate=escalate,
+        minors=minors,
+        cap_tf=cap_tf,
+        retire=retire,
+        escalate_on=escalate_on,
+    )
     replay.result.trail = trail
     replay.result.minors = minors
     replay.result.cap_tf = cap_tf
@@ -784,6 +854,8 @@ def run_one(args: tuple) -> dict:
         suffix += f" · +{minors} minor MC"
     if cap_tf:
         suffix += f" · cap {cap_tf}/{retire}"
+    if escalate_on != "bars":
+        suffix += " · climb on structure"
     if suffix:
         result.label = cfg["label"] + suffix
     payload = {k: v for k, v in result.__dict__.items()}
@@ -828,6 +900,13 @@ def main() -> int:
         choices=RETIRE_MODES,
         help=f"repeatable; what a retiring campaign does with coin it still holds ({'/'.join(RETIRE_MODES)})",
     )
+    parser.add_argument(
+        "--escalate-on",
+        action="append",
+        choices=ESCALATE_MODES,
+        help="repeatable; 'bars' is today's 200-bar clock, 'structure' climbs only once the rung "
+        "booked a profit and price then broke the low standing at that close",
+    )
     parser.add_argument("--out", default="depth_sweep.json", help="filename under tools/.sweep_out")
     args = parser.parse_args()
 
@@ -847,14 +926,16 @@ def main() -> int:
         if cap and cap not in ESCALATION_RUNGS:
             print(f"unknown --cap-tf {cap!r}; have: {', '.join(ESCALATION_RUNGS)}")
             return 1
+    climbs = args.escalate_on if args.escalate_on is not None else ["bars"]
     jobs = [
-        (symbol, config, args.capital, args.months, escalate, trail, minor, cap, retire)
+        (symbol, config, args.capital, args.months, escalate, trail, minor, cap, retire, climb)
         for symbol in symbols
         for config in configs
         for trail in trails
         for minor in minors
         for cap in caps
         for retire in (retires if cap else ["park"])
+        for climb in climbs
     ]
     workers = args.jobs or min(len(jobs), mp.cpu_count())
     print(
