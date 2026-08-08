@@ -2702,7 +2702,12 @@ function drawChart() {
      ones below it are counted in the note under the chart. */
   let lo = Infinity, hi = -Infinity;
   candles.forEach(c => { lo = Math.min(lo, c[3]); hi = Math.max(hi, c[2]); });
-  [d.mother_high, d.avg_entry, d.target, d.stop_price].forEach(v => {
+  /* The parent's scale rule, exactly: candles, mother, leg bounds and the
+     target set the frame. The working STOP and the average do NOT — the stop
+     is an order at a rung, and letting it stretch the axis squashed the
+     candles into the top third of a mostly-empty chart. Marks outside the
+     frame are named in the footer instead of bending the frame to reach. */
+  [d.mother_high, d.target].forEach(v => {
     if (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
   });
   (d.legs || []).forEach(leg => {
@@ -2914,11 +2919,15 @@ async function openChart(cid, symbol, tf) {
      comparing the chart with the ladder is never quietly missing rows. */
   const hidden = Math.max((d.legs || []).length - MAX_STRUCTURES, 0)
                + Math.max((d.trendlines || []).length - MAX_STRUCTURES, 0);
+  /* Draw FIRST: the note reads chartScale.minP for the off-view stop, and
+     chartScale does not exist until drawChart has computed the frame. */
+  drawChart();
   $("ch-note").textContent =
     "Geometry from the signal; candles, fills and target are your own machine's." +
     (deep ? "  " + deep + " deeper rung(s) sit below this view — the chart scales to price, not to L8." : "") +
+    (d.stop_price && chartScale && d.stop_price < chartScale.minP
+      ? "  Your working stop (" + d.stop_price.toFixed(2) + ") sits below this view too." : "") +
     (hidden ? "  " + hidden + " older structure(s) are traded but not drawn — the newest three are." : "");
-  drawChart();
 }
 $("ch-close").addEventListener("click", () => $("modal").classList.remove("on"));
 $("modal").addEventListener("click", e => { if (e.target.id === "modal") $("modal").classList.remove("on"); });
