@@ -29,6 +29,8 @@ node_modules/
 runs.json
 strategies.json
 tools/.backtest_cache/
+tools/.history_cache/
+tools/.sweep_out/
 tools/.paper_prove_cache/
 
 # Minted feed signing keys. `cascade_feed_keyset.py` writes the SERVER'S PRIVATE

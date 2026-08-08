@@ -4850,7 +4850,16 @@ class CascadeEngine:
             f"{f', {leg.netted_pct:.3f}% netted off as already funded' if leg.netted_pct > 0 else ''}"
             f"{', escalated' if leg.escalated else ''}). Ladder re-split by price — "
             + (
-                ", ".join(f"F{o.leg_id} L{o.level} ${o.usd_notional:g} @ {o.price:,.2f}" for o in funded)
+                # A rung whose level would price at or below zero has no price at
+                # all — plan_leg_orders stores None for it. That only happens on
+                # a leg wide enough that its deepest multiple falls through zero,
+                # which the 2/4/8 ladder never reaches but a deeper one does. It
+                # is unbuyable either way; say so rather than dying in the log.
+                ", ".join(
+                    f"F{o.leg_id} L{o.level} ${o.usd_notional:g} @ "
+                    + (f"{o.price:,.2f}" if o.price else "below zero — unbuyable")
+                    for o in funded
+                )
                 if funded
                 else f"pool ${campaign.total_allocation_usd:,.2f} still under one rung, nothing placeable yet"
             ),
