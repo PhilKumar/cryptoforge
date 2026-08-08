@@ -1618,6 +1618,12 @@ PAGE = "".join(
      rather than as ragged text. */
   table th.n, table td.n { text-align:right; font-variant-numeric:tabular-nums; }
   .rungs { padding:2px 20px 16px; overflow-x:auto; }
+  /* The closed-campaigns log. Its own wrapper: .rungs borrowed 20px sides from
+     the ladder's place inside a padded card, and as a direct child of a bare
+     panel the first column ran under the rounded corner. */
+  .closed-log { padding:12px 26px 18px; overflow-x:auto; }
+  .closed-log table.ladder td:first-child, .closed-log table.ladder th:first-child { padding-left:2px; }
+  .closed-log td .btn-chart { margin:2px 0; }
   table.ladder { border-collapse:collapse; width:100%; font:12.5px/1.9 var(--font-mono); }
   table.ladder th { font:600 10px/1.9 var(--font-display); letter-spacing:.08em; text-transform:uppercase;
     color:var(--dim); text-align:left; padding:0 14px 4px 0; border-bottom:1px solid var(--border); }
@@ -2551,7 +2557,7 @@ function render(s) {
         `<td class="n ${tone}">${cp.rounds ? "$" + net.toFixed(2) : "—"}</td>` +
         `<td><button class="btn-chart" data-chart="${cp.campaign_id}" data-sym="${cp.symbol}">Chart</button></td></tr>`;
     };
-    wrap.innerHTML = `<div class="rungs" style="padding-top:12px"><table class="ladder">` +
+    wrap.innerHTML = `<div class="closed-log"><table class="ladder">` +
       `<thead><tr><th>Symbol</th><th>TF</th><th>Ended</th><th class="n">Collected</th>` +
       `<th class="n">Rounds</th><th class="n">Net $</th><th></th></tr></thead>` +
       `<tbody>${done.map(row).join("")}</tbody></table></div>`;
