@@ -347,6 +347,9 @@ class RunResult:
     minor_stranded_value: float = 0.0
     cap_tf: str = ""
     retire: str = ""
+    compound: bool = False
+    final_capital: float = 0.0
+    equity: List[list] = field(default_factory=list)  # [timestamp, pot] each time it changes
     retired: int = 0  # campaigns that outgrew the capped rung
     retired_holding: int = 0  # ...and were still holding coin when they did
     retired_sold_at_target: int = 0  # parked ones that later reached the target
@@ -386,6 +389,7 @@ class Replay:
         cap_tf: str = "",
         retire: str = "park",
         escalate_on: str = "bars",
+        compound: bool = False,
     ):
         self.cascade = cascade
         self.symbol = symbol
@@ -407,6 +411,13 @@ class Replay:
         # Per-campaign, per-rung bookkeeping for the structure gate.
         self.escalate_on = escalate_on
         self.rungs: Dict[str, dict] = {}
+        # Compounding: every closed round's P&L goes back into the pot, and the
+        # NEXT campaign is sized against the bigger number. Live campaigns keep
+        # the size they were born with — resizing a running ladder underneath
+        # itself is not something the engine is asked to do.
+        self.compound = compound
+        self.round_counts: Dict[str, int] = {}
+        self.equity: List[list] = []
         self.meta = SYMBOL_META.get(symbol, {"tick": 0.01, "min_notional": 5.0})
         self.engine = cascade.CascadeEngine(_OfflineBroker(symbol, self.meta))
         # Per-campaign aggregation state for its own timeframe.
@@ -501,6 +512,22 @@ class Replay:
             if high > campaign.mother_high * (1 - self.minor_gap):
                 return None
         return pivot
+
+    def _bank(self, ts: int) -> None:
+        """Move any newly closed round's P&L into the pot the next campaign uses."""
+        moved = 0.0
+        for cid, campaign in list(self.engine.campaigns.items()) + list(self.parked.items()):
+            seen = self.round_counts.get(cid, 0)
+            if len(campaign.rounds) <= seen:
+                continue
+            moved += sum(rnd.pnl for rnd in campaign.rounds[seen:])
+            self.round_counts[cid] = len(campaign.rounds)
+        if not moved:
+            return
+        # A pot cannot go below the exchange's minimum order or nothing can be
+        # bought again and the run is over for the wrong reason.
+        self.capital = max(self.meta["min_notional"] * 4, self.capital + moved)
+        self.equity.append([ts, round(self.capital, 2)])
 
     def _may_climb(self, campaign, candle) -> bool:
         """Phil's gate: this rung booked a profit, and its floor has since gone.
@@ -750,6 +777,9 @@ class Replay:
                     engine._candles.pop(cid, None)
                     del self.parked[cid]
 
+            if self.compound:
+                self._bank(ts)
+
             # Harvest and drop anything that ended, so neither the campaign dict
             # nor the per-candle loop grows with two years of history.
             majors = minors_alive = 0
@@ -795,6 +825,8 @@ class Replay:
         for campaign in list(self.parked.values()):
             self._harvest(campaign, last_close)
 
+        result.final_capital = self.capital
+        result.equity = self.equity
         result.bars = len(rows)
         result.avg_deployed = self._deployed_total / result.deployed_samples if result.deployed_samples else 0.0
         result.time_in_position_pct = (
@@ -808,7 +840,7 @@ class Replay:
 
 
 def run_one(args: tuple) -> dict:
-    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire, escalate_on = args
+    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire, escalate_on, compound = args
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
 
@@ -841,10 +873,12 @@ def run_one(args: tuple) -> dict:
         cap_tf=cap_tf,
         retire=retire,
         escalate_on=escalate_on,
+        compound=compound,
     )
     replay.result.trail = trail
     replay.result.minors = minors
     replay.result.cap_tf = cap_tf
+    replay.result.compound = compound
     replay.result.retire = retire if cap_tf else ""
     result = replay.run(config, cfg)
     suffix = ""
@@ -856,6 +890,8 @@ def run_one(args: tuple) -> dict:
         suffix += f" · cap {cap_tf}/{retire}"
     if escalate_on != "bars":
         suffix += " · climb on structure"
+    if compound:
+        suffix += " · compounding"
     if suffix:
         result.label = cfg["label"] + suffix
     payload = {k: v for k, v in result.__dict__.items()}
@@ -907,6 +943,11 @@ def main() -> int:
         help="repeatable; 'bars' is today's 200-bar clock, 'structure' climbs only once the rung "
         "booked a profit and price then broke the low standing at that close",
     )
+    parser.add_argument(
+        "--compound",
+        action="store_true",
+        help="put every closed round's P&L back in the pot, so the next campaign is sized bigger",
+    )
     parser.add_argument("--out", default="depth_sweep.json", help="filename under tools/.sweep_out")
     args = parser.parse_args()
 
@@ -928,7 +969,7 @@ def main() -> int:
             return 1
     climbs = args.escalate_on if args.escalate_on is not None else ["bars"]
     jobs = [
-        (symbol, config, args.capital, args.months, escalate, trail, minor, cap, retire, climb)
+        (symbol, config, args.capital, args.months, escalate, trail, minor, cap, retire, climb, args.compound)
         for symbol in symbols
         for config in configs
         for trail in trails
