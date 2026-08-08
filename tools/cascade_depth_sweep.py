@@ -137,7 +137,46 @@ MINOR_SWING_BARS = 12  # an hour of 5m either side makes a high a swing high
 MINOR_GAP_PCT = 0.05  # a new minor must sit 5% under every live mother
 
 
+# ── capping the escalation ladder ─────────────────────────────────
+#
+# Today a campaign climbs 5m -> 15m -> 1h -> 4h -> 1d -> 1w and, once it is on
+# a weekly candle anchored at a top, it effectively never dies. --cap-tf stops
+# the climb at a chosen rung; when a campaign has outgrown even that rung it is
+# RETIRED and a fresh 5m campaign is anchored in its place. What happens to coin
+# it is still holding is the whole question, so it is a separate switch:
+#
+#   park  keep the old campaign alive for one purpose only — its 0.25 target
+#         stays live and it sells if price ever gets there. It buys nothing
+#         more. The fresh 5m campaign starts immediately alongside it.
+#   sell  dump the position at the market price on the retiring bar, take
+#         whatever loss that is, and start clean.
+#   hold  walk away holding it: the position is never sold, and lands in the
+#         stranded bag. The pessimistic floor.
+
+RETIRE_MODES = ("park", "sell", "hold")
+ESCALATION_RUNGS = ("5m", "15m", "1h", "4h", "1d", "1w")
+
+
 # ── the trailing target ───────────────────────────────────────────
+
+
+def _restore(cascade) -> None:
+    """Undo the previous job's patches.
+
+    A pool worker runs many jobs in one process, so both the trailing target
+    (a patched method) and a capped ladder (a rebound module constant) survive
+    into the NEXT job unless they are put back. Left unfixed this silently
+    reports a trailed run as the fixed baseline, and crashes the second capped
+    job because the ladder it indexes into has already been cut down.
+    """
+    global _PRISTINE_TP_CHECK
+    if _PRISTINE_TP_CHECK is None:
+        _PRISTINE_TP_CHECK = cascade.CascadeEngine._paper_tp_check
+    cascade.CascadeEngine._paper_tp_check = _PRISTINE_TP_CHECK
+    cascade.ESCALATION_LADDER = ESCALATION_RUNGS
+
+
+_PRISTINE_TP_CHECK = None
 
 
 def _install_trail(cascade, giveback: float) -> None:
@@ -278,6 +317,11 @@ class RunResult:
     minor_pnl: float = 0.0
     minor_stranded_cost: float = 0.0
     minor_stranded_value: float = 0.0
+    cap_tf: str = ""
+    retire: str = ""
+    retired: int = 0  # campaigns that outgrew the capped rung
+    retired_holding: int = 0  # ...and were still holding coin when they did
+    retired_sold_at_target: int = 0  # parked ones that later reached the target
     per_level_fills: Dict[str, int] = field(default_factory=dict)
     per_level_usd: Dict[str, float] = field(default_factory=dict)
     monthly: Dict[str, float] = field(default_factory=dict)
@@ -311,6 +355,8 @@ class Replay:
         escalate: bool = True,
         minors: int = 0,
         minor_gap: float = MINOR_GAP_PCT,
+        cap_tf: str = "",
+        retire: str = "park",
     ):
         self.cascade = cascade
         self.symbol = symbol
@@ -324,6 +370,11 @@ class Replay:
         # far below every live mother a new one has to sit. 0 is today.
         self.minors = minors
         self.minor_gap = minor_gap
+        # The rung a campaign may not climb past, and what to do with the coin
+        # it is holding when it outgrows even that.
+        self.cap_tf = cap_tf
+        self.retire = retire
+        self.parked: Dict[str, object] = {}
         self.meta = SYMBOL_META.get(symbol, {"tick": 0.01, "min_notional": 5.0})
         self.engine = cascade.CascadeEngine(_OfflineBroker(symbol, self.meta))
         # Per-campaign aggregation state for its own timeframe.
@@ -418,6 +469,44 @@ class Replay:
             if high > campaign.mother_high * (1 - self.minor_gap):
                 return None
         return pivot
+
+    def _outgrew_cap(self, campaign, candle) -> bool:
+        """True once a campaign sitting on the capped rung would have climbed.
+
+        Same measure the engine escalates on — bars since the mother on the
+        current rung — so retirement happens exactly where the next escalation
+        would have, not at some new threshold invented here.
+        """
+        if campaign.timeframe != self.cap_tf:
+            return False
+        if campaign.pending_stop_price is not None:
+            return False  # mid-arm; let the buy stop resolve first
+        seconds = campaign.timeframe_sec
+        bars = (candle.timestamp + seconds - campaign.mother_timestamp) / seconds
+        return bars > self.cascade.ESCALATION_BARS
+
+    def _retire(self, campaign, price: float) -> None:
+        """Take a campaign off the ladder and let a fresh 5m one replace it."""
+        result = self.result
+        result.retired += 1
+        holding = campaign.filled_base_qty > 0
+        if holding:
+            result.retired_holding += 1
+        if not holding:
+            campaign.state = "COMPLETED"
+            return
+        if self.retire == "sell":
+            # Whatever it is worth on this bar, loss included.
+            self.engine._close_round(campaign, price)
+            campaign.state = "COMPLETED"
+            return
+        if self.retire == "hold":
+            campaign.state = "STOPPED"  # never sold; _harvest counts it stranded
+            return
+        # park: out of the engine's hands, but its target stays live.
+        self.engine.campaigns.pop(campaign.campaign_id, None)
+        self.buckets.pop(campaign.campaign_id, None)
+        self.parked[campaign.campaign_id] = campaign
 
     def _register(self, campaign, index: int) -> None:
         """First sight of a campaign: give it a bucket and a fresh measurement.
@@ -587,6 +676,23 @@ class Replay:
                 campaign.last_processed_ts = candle.timestamp
                 if campaign.state in active_states:
                     engine._maybe_escalate(campaign, candle)
+                    if self.cap_tf and self._outgrew_cap(campaign, candle):
+                        self._retire(campaign, close)
+
+            # A parked campaign has stopped laddering; the only thing left for
+            # it to do is sell into its own target.
+            for cid, campaign in list(self.parked.items()):
+                bar = cascade.Candle(ts, base[1], high, base[3], close, timeframe=cascade.BASE_TIMEFRAME)
+                # One candle deep, kept current: _close_round reads the last
+                # candle for its timestamp, and a parked campaign that kept its
+                # whole history would carry two years of bars per park.
+                engine._candles[cid] = [bar]
+                engine._paper_tp_check(campaign, bar)
+                if campaign.filled_base_qty <= 0:
+                    result.retired_sold_at_target += 1
+                    self._harvest(campaign, close)
+                    engine._candles.pop(cid, None)
+                    del self.parked[cid]
 
             # Harvest and drop anything that ended, so neither the campaign dict
             # nor the per-candle loop grows with two years of history.
@@ -614,7 +720,12 @@ class Replay:
                     self._seed_campaign(index, mother=anchor, kind="minor")
 
             if index % 12 == 0:  # hourly sample of what capital is doing
-                deployed = sum(c.spent_usd for c in engine.campaigns.values())
+                # Parked campaigns are out of the engine's dict but their coin
+                # is still bought and paid for — leaving them out would report
+                # a capped ladder as using far less money than it does.
+                deployed = sum(c.spent_usd for c in engine.campaigns.values()) + sum(
+                    c.spent_usd for c in self.parked.values()
+                )
                 result.deployed_samples += 1
                 self._deployed_total += deployed
                 result.peak_deployed = max(result.peak_deployed, deployed)
@@ -623,6 +734,9 @@ class Replay:
 
         last_close = rows[-1][4]
         for campaign in list(engine.campaigns.values()):
+            self._harvest(campaign, last_close)
+        # A parked campaign whose target never came is a bag like any other.
+        for campaign in list(self.parked.values()):
             self._harvest(campaign, last_close)
 
         result.bars = len(rows)
@@ -638,13 +752,18 @@ class Replay:
 
 
 def run_one(args: tuple) -> dict:
-    symbol, config, capital, months, escalate, trail, minors = args
+    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire = args
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
 
     cfg = CONFIGS[config]
+    _restore(cascade)
     if trail > 0:
         _install_trail(cascade, trail)
+    if cap_tf:
+        # Shortening the ladder is all it takes: `can_escalate` and
+        # `next_timeframe_up` both read it, so nothing climbs past the cap.
+        cascade.ESCALATION_LADDER = ESCALATION_RUNGS[: ESCALATION_RUNGS.index(cap_tf) + 1]
     cascade.CASCADE_LEVELS = tuple(cfg["levels"])
     cascade.LEVEL_ALLOCATION = dict(cfg["alloc"])
     # Every rung but the deepest goes in as a buy stop above a falling market;
@@ -652,15 +771,19 @@ def run_one(args: tuple) -> dict:
     cascade.STOP_ENTRY_LEVELS = tuple(cfg["levels"][:-1])
 
     rows = load_history(symbol, months)
-    replay = Replay(symbol, rows, capital, cascade, escalate=escalate, minors=minors)
+    replay = Replay(symbol, rows, capital, cascade, escalate=escalate, minors=minors, cap_tf=cap_tf, retire=retire)
     replay.result.trail = trail
     replay.result.minors = minors
+    replay.result.cap_tf = cap_tf
+    replay.result.retire = retire if cap_tf else ""
     result = replay.run(config, cfg)
     suffix = ""
     if trail > 0:
         suffix += f" · trail {trail:g}"
     if minors:
         suffix += f" · +{minors} minor MC"
+    if cap_tf:
+        suffix += f" · cap {cap_tf}/{retire}"
     if suffix:
         result.label = cfg["label"] + suffix
     payload = {k: v for k, v in result.__dict__.items()}
@@ -693,6 +816,18 @@ def main() -> int:
         type=int,
         help="repeatable; how many minor MCs may run alongside the major chain (0 = today)",
     )
+    parser.add_argument(
+        "--cap-tf",
+        action="append",
+        help="repeatable; highest rung a campaign may climb to before it retires and a "
+        f"fresh 5m one replaces it (one of {', '.join(ESCALATION_RUNGS)}; omit for today's full ladder)",
+    )
+    parser.add_argument(
+        "--retire",
+        action="append",
+        choices=RETIRE_MODES,
+        help=f"repeatable; what a retiring campaign does with coin it still holds ({'/'.join(RETIRE_MODES)})",
+    )
     parser.add_argument("--out", default="depth_sweep.json", help="filename under tools/.sweep_out")
     args = parser.parse_args()
 
@@ -706,19 +841,28 @@ def main() -> int:
     escalate = not args.no_escalate
     trails = args.trail if args.trail is not None else [0.0]
     minors = args.minors if args.minors is not None else [0]
+    caps = args.cap_tf if args.cap_tf is not None else [""]
+    retires = args.retire if args.retire is not None else ["park"]
+    for cap in caps:
+        if cap and cap not in ESCALATION_RUNGS:
+            print(f"unknown --cap-tf {cap!r}; have: {', '.join(ESCALATION_RUNGS)}")
+            return 1
     jobs = [
-        (symbol, config, args.capital, args.months, escalate, trail, minor)
+        (symbol, config, args.capital, args.months, escalate, trail, minor, cap, retire)
         for symbol in symbols
         for config in configs
         for trail in trails
         for minor in minors
+        for cap in caps
+        for retire in (retires if cap else ["park"])
     ]
     workers = args.jobs or min(len(jobs), mp.cpu_count())
     print(
         f"{len(jobs)} runs on {workers} workers — {args.months} months, ${args.capital:,.0f} per campaign, "
         f"escalation {'on' if escalate else 'OFF (5m throughout)'}, "
         f"targets {', '.join('fixed' if t <= 0 else f'trail {t:g}' for t in trails)}, "
-        f"minor MCs {', '.join(str(m) for m in minors)}\n"
+        f"minor MCs {', '.join(str(m) for m in minors)}, "
+        f"ladder cap {', '.join(c or 'none' for c in caps)}\n"
     )
 
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -734,7 +878,16 @@ def main() -> int:
             )
 
     order = {name: i for i, name in enumerate(CONFIGS)}
-    results.sort(key=lambda r: (r["symbol"], order.get(r["config"], 99), r.get("minors", 0), r.get("trail", 0.0)))
+    results.sort(
+        key=lambda r: (
+            r["symbol"],
+            order.get(r["config"], 99),
+            r.get("cap_tf", ""),
+            r.get("retire", ""),
+            r.get("minors", 0),
+            r.get("trail", 0.0),
+        )
+    )
     path = os.path.join(OUT_DIR, args.out)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(results, handle, indent=2)
@@ -748,17 +901,18 @@ def report(results: List[dict]) -> None:
         rows = [r for r in results if r["symbol"] == symbol]
         print(f"\n{symbol}  —  {rows[0]['bars']:,} 5m bars, ${rows[0]['capital']:,.0f} per campaign")
         head = (
-            f"  {'ladder':<40} {'realised':>10} {'net P&L':>10} {'rounds':>7} "
-            f"{'$/round':>8} {'peak $':>9} {'open bag':>11} {'minor rnds':>11} {'minor P&L':>10}"
+            f"  {'ladder':<44} {'realised':>10} {'net P&L':>10} {'rounds':>7} "
+            f"{'$/round':>8} {'peak $':>9} {'open bag':>11} {'retired':>9} {'sold@tgt':>9}"
         )
         print(head)
         print("  " + "-" * (len(head) - 2))
         for r in rows:
             per_round = r["net_pnl"] / r["rounds"] if r["rounds"] else 0.0
+            retired = f"{r.get('retired_holding', 0)}/{r.get('retired', 0)}"
             print(
-                f"  {r['label']:<40} ${r['net_pnl']:>9,.2f} ${r['total_pnl']:>9,.2f} "
+                f"  {r['label']:<44} ${r['net_pnl']:>9,.2f} ${r['total_pnl']:>9,.2f} "
                 f"{r['rounds']:>7,} ${per_round:>7,.2f} ${r['peak_deployed']:>8,.0f} "
-                f"${r['open_pnl']:>10,.2f} {r.get('minor_rounds', 0):>11,} ${r.get('minor_pnl', 0.0):>9,.2f}"
+                f"${r['open_pnl']:>10,.2f} {retired:>9} {r.get('retired_sold_at_target', 0):>9,}"
             )
 
 
