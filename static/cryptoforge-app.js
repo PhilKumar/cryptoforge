@@ -8230,6 +8230,7 @@ function cfInitCascadePage() {
   // Once, on open — deliberately not on the 3s poll. Nothing here changes tick
   // to tick, and repainting it would wipe a half-typed registration.
   if (typeof cfFeedBuyersLoad === 'function') cfFeedBuyersLoad();
+  if (typeof cfFeedCatalogLoad === 'function') cfFeedCatalogLoad();
 }
 
 var _cfCascadeOrigShowPage = showPage;
@@ -12255,6 +12256,77 @@ function _cfFeedBuyersMeta(rows) {
   }).length;
   meta.textContent = rows.length + ' registered · ' + active + ' active · ' + live + ' connected now'
     + (soon ? ' · ' + soon + ' expiring within 5 days' : '');
+}
+
+/* ── The publish catalogue: which symbols buyers may follow ─────────── */
+var _cfFeedCatalogBusy = false;
+
+function _cfFeedCatalogRender(rows) {
+  var host = document.getElementById('cf-feed-catalog');
+  if (!host) return;
+  if (!rows.length) {
+    host.innerHTML = '<div class="cf-table-empty-cell">No live campaigns yet — symbols appear here as the engine runs them.</div>';
+    return;
+  }
+  host.innerHTML = rows.map(function(r) {
+    var live = r.live_campaigns
+      ? ' · ' + r.live_campaigns + ' live campaign' + (r.live_campaigns === 1 ? '' : 's')
+      : '';
+    return '<label class="cf-feed-catalog-row">'
+      + '<input type="checkbox" class="tbl-chk" data-symbol="' + _escapeHtml(r.symbol) + '"'
+      + (r.published ? ' checked' : '') + ' data-cf-change="cfFeedCatalogToggle(this)">'
+      + '<span class="cf-feed-catalog-sym">' + _escapeHtml(r.symbol) + '</span>'
+      + '<span class="cf-feed-catalog-note">' + (r.published ? 'published' : 'not published') + live + '</span>'
+      + '</label>';
+  }).join('');
+}
+
+async function cfFeedCatalogLoad() {
+  var host = document.getElementById('cf-feed-catalog');
+  try {
+    var res = await cfApiFetch('/api/cascade/feed/published-symbols');
+    var data = await cfReadApiPayload(res);
+    if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Could not read the catalogue'));
+    _cfFeedCatalogRender(Array.isArray(data.symbols) ? data.symbols : []);
+  } catch (err) {
+    if (host) host.innerHTML = '<div class="cf-table-empty-cell">' + _escapeHtml(String(err.message || err)) + '</div>';
+  }
+}
+
+async function cfFeedCatalogToggle(box) {
+  if (_cfFeedCatalogBusy) { box.checked = !box.checked; return; }
+  var symbol = box.getAttribute('data-symbol') || '';
+  if (!box.checked) {
+    var ok = await cfConfirm(
+      'Buyers will see no NEW ' + symbol + ' campaigns. Campaigns already announced finish naturally, '
+      + 'so nobody holding ' + symbol + ' is cut off mid-trade.',
+      'Stop publishing ' + symbol + '?'
+    );
+    if (!ok) { box.checked = true; return; }
+  }
+  _cfFeedCatalogBusy = true;
+  try {
+    // The FULL list, not a toggle: two tabs must not interleave their way to
+    // a catalogue neither of them asked for.
+    var unpublished = Array.prototype.slice
+      .call(document.querySelectorAll('#cf-feed-catalog input[data-symbol]'))
+      .filter(function(b) { return !b.checked; })
+      .map(function(b) { return b.getAttribute('data-symbol'); });
+    var res = await cfApiFetch('/api/cascade/feed/published-symbols', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ unpublished: unpublished })
+    });
+    var data = await cfReadApiPayload(res);
+    if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Could not save'));
+    _cfFeedCatalogRender(Array.isArray(data.symbols) ? data.symbols : []);
+    cfToast(symbol + (box.checked ? ' is published to buyers again.' : ' will announce nothing new to buyers.'), 'success');
+  } catch (err) {
+    cfToast(String(err.message || err), 'error');
+    await cfFeedCatalogLoad();
+  } finally {
+    _cfFeedCatalogBusy = false;
+  }
 }
 
 async function cfFeedBuyersLoad() {

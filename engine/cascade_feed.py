@@ -826,10 +826,17 @@ def build_snapshot(
     head_by_symbol: Dict[str, int],
     publish_modes: Iterable[str] = ("live",),
     default_exchange: str = "",
+    symbol_gate: Optional[Callable[[str], bool]] = None,
+    announced_ids: Optional[set] = None,
 ) -> List[dict]:
     """
     Current geometry for everything running, as signed frames — so a cold
     executor does not have to replay history it would ignore anyway.
+
+    `symbol_gate` is the publish catalogue: campaigns of an unchecked symbol
+    are left out UNLESS this process already announced them (`announced_ids`),
+    in which case they keep being served to their natural end — a buyer may be
+    holding a position laddered from one.
 
     These carry the symbol's current head as their `seq`. They are a rendering
     of the present, not entries in the log, so they consume no seq of their
@@ -837,6 +844,8 @@ def build_snapshot(
     exactly there.
     """
     modes = {str(mode).lower() for mode in publish_modes}
+    gate = symbol_gate or (lambda _symbol: True)
+    announced = announced_ids or set()
     frames = []
 
     def emit(msg_type, symbol, campaign_id, payload):
@@ -855,6 +864,8 @@ def build_snapshot(
 
     for campaign in campaigns or []:
         if str(campaign.get("mode") or "").lower() not in modes:
+            continue
+        if campaign.get("campaign_id") not in announced and not gate(str(campaign.get("symbol") or "")):
             continue
         symbol = campaign.get("symbol") or ""
         campaign_id = campaign.get("campaign_id") or ""
@@ -908,6 +919,7 @@ class CascadeFeedPublisher:
         default_exchange: str = "",
         on_error: Optional[Callable[[str, Exception], None]] = None,
         now_fn: Callable[[], float] = time.time,
+        symbol_gate: Optional[Callable[[str], bool]] = None,
     ):
         self._log = log
         self._signer = signer
@@ -918,6 +930,13 @@ class CascadeFeedPublisher:
         self._modes = {str(mode).lower() for mode in publish_modes}
         self._on_error = on_error
         self._now = now_fn
+        # Which symbols may be ANNOUNCED. Checked only for campaigns not yet
+        # seen: one already announced keeps publishing to its natural end,
+        # because buyers may be holding positions laddered from it, and a feed
+        # that goes silent under a held position is the failure mode every
+        # executor treats as an emergency. The catalogue decision therefore
+        # bites at the next campaign, never mid-flight.
+        self._symbol_gate = symbol_gate or (lambda _symbol: True)
         self._seen: Dict[str, dict] = {}
         self._last_prune = 0.0
 
@@ -935,7 +954,17 @@ class CascadeFeedPublisher:
         return frames
 
     def _eligible(self, campaign: dict) -> bool:
-        return bool(campaign.get("campaign_id")) and str(campaign.get("mode") or "").lower() in self._modes
+        if not campaign.get("campaign_id") or str(campaign.get("mode") or "").lower() not in self._modes:
+            return False
+        if campaign.get("campaign_id") in self._seen:
+            return True  # announced already — it finishes what it started
+        return bool(self._symbol_gate(str(campaign.get("symbol") or "")))
+
+    def announced_campaign_ids(self) -> set:
+        """Campaigns this process has already published. The snapshot uses this
+        to keep serving an in-flight campaign whose symbol was unchecked after
+        it was announced — same kindness, same reason."""
+        return set(self._seen)
 
     def _publish_campaign(self, campaign: dict) -> List[dict]:
         campaign_id = campaign["campaign_id"]

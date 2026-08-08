@@ -966,3 +966,82 @@ class VenueTests(unittest.TestCase):
         frames = publisher.publish({"campaigns": [_loaded_campaign().to_dict()], "closed_campaigns": []})
         opened = verify_frame(frames[0], {signer.kid: signer.public_key_b64()})
         self.assertEqual(opened["payload"]["exchange"], "binance")
+
+
+class PublishCatalogueTests(unittest.TestCase):
+    """Phil follows BTC for himself; buyers get SOL and ETH.
+
+    The gate bites at the ANNOUNCEMENT and never mid-flight: a campaign that
+    was published finishes its life on the feed, because buyers may be holding
+    positions laddered from it, and a feed that goes silent under a held
+    position is the failure every executor treats as an emergency.
+    """
+
+    def setUp(self):
+        self.store = FakeStore()
+        self.signer = FeedSigner.generate("cf-feed-2026a")
+        self.keys = {self.signer.kid: self.signer.public_key_b64()}
+        self.blocked = set()
+        self.log = FeedLog(self.store)
+        self.publisher = CascadeFeedPublisher(
+            self.log,
+            self.signer,
+            model_version=MODEL_VERSION,
+            symbol_gate=lambda symbol: symbol not in self.blocked,
+        )
+
+    def _status(self, campaign):
+        return {"campaigns": [campaign.to_dict()], "closed_campaigns": []}
+
+    def _types(self, frames):
+        return [verify_frame(frame, self.keys)["type"] for frame in frames]
+
+    def test_an_unchecked_symbol_is_never_announced(self):
+        self.blocked.add("SOLUSDT")
+        campaign = _loaded_campaign()
+        self.assertEqual(self.publisher.publish(self._status(campaign)), [])
+        self.assertEqual(self.log.since("SOLUSDT", 0), [])
+
+    def test_a_campaign_announced_before_the_uncheck_finishes_its_life(self):
+        """The kindness rule, and the whole reason the gate checks _seen."""
+        campaign = _loaded_campaign()
+        self.publisher.publish(self._status(campaign))
+        self.blocked.add("SOLUSDT")
+        campaign.state = "MOTHER_BROKEN"
+        campaign.close_reason = "mother_broken"
+        campaign.closed_at = "2026-08-03 21:10:00"
+        self.publisher.publish({"campaigns": [], "closed_campaigns": [campaign.to_dict()]})
+        stream = [verify_frame(f, self.keys)["type"] for f in self.log.since("SOLUSDT", 0)]
+        self.assertEqual(stream[-1], "campaign.closed", "buyers in it must hear how it ended")
+
+    def test_rechecking_lets_the_next_campaign_through(self):
+        self.blocked.add("SOLUSDT")
+        campaign = _loaded_campaign()
+        self.assertEqual(self.publisher.publish(self._status(campaign)), [])
+        self.blocked.clear()
+        types = self._types(self.publisher.publish(self._status(campaign)))
+        self.assertIn("campaign.opened", types)
+
+    def test_the_snapshot_honours_the_same_catalogue(self):
+        """A cold executor connecting must not see what the stream withholds."""
+        campaign = _loaded_campaign().to_dict()
+        frames = build_snapshot(
+            [campaign],
+            self.signer,
+            model_version=MODEL_VERSION,
+            head_by_symbol={"SOLUSDT": 7},
+            symbol_gate=lambda symbol: symbol != "SOLUSDT",
+        )
+        self.assertEqual(frames, [])
+
+    def test_the_snapshot_still_serves_a_campaign_announced_before_the_uncheck(self):
+        campaign = _loaded_campaign().to_dict()
+        frames = build_snapshot(
+            [campaign],
+            self.signer,
+            model_version=MODEL_VERSION,
+            head_by_symbol={"SOLUSDT": 7},
+            symbol_gate=lambda symbol: symbol != "SOLUSDT",
+            announced_ids={campaign["campaign_id"]},
+        )
+        self.assertTrue(frames, "buyers holding it still need its geometry on reconnect")

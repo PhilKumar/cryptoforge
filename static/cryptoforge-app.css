@@ -8300,6 +8300,17 @@ html[data-theme="light"] .journal-entry-notes section {
   border-bottom: 1px solid var(--border);
   background: rgba(148, 178, 211, 0.035);
 }
+/* ── The publish catalogue ── */
+.cf-feed-catalog { display: flex; flex-direction: column; gap: 2px; padding: 6px 4px 10px; }
+.cf-feed-catalog-row { display: flex; align-items: center; gap: 12px; padding: 9px 12px;
+  border-radius: 10px; cursor: pointer; }
+.cf-feed-catalog-row:hover { background: rgba(255,255,255,0.03); }
+[data-theme="light"] .cf-feed-catalog-row:hover { background: rgba(15,23,42,0.04); }
+.cf-feed-catalog-sym { font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+  color: var(--text); min-width: 110px; }
+.cf-feed-catalog-note { color: var(--muted); font-size: 12.5px; }
+.cf-feed-catalog-row input:not(:checked) ~ .cf-feed-catalog-sym { color: var(--muted); }
+
 .cf-feed-form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

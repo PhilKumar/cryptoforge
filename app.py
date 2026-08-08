@@ -7684,6 +7684,47 @@ def _load_feed_keyset() -> tuple[Optional[dict], Optional[dict]]:
         return None, None
 
 
+# ── The publish catalogue: which symbols buyers may follow ────────────
+# Phil's engine may run BTC for himself while selling only SOL and ETH. Stored
+# as a BLOCKLIST so a new symbol he starts following defaults to published —
+# the same behaviour the feed has always had — and unchecking is the deliberate
+# act. The gate bites at campaign.opened only: a campaign already announced
+# finishes its life on the feed, because buyers may be holding positions
+# laddered from it (see CascadeFeedPublisher._eligible).
+_FEED_UNPUBLISHED_FILE = os.path.join(_STATE_DIR, "feed_unpublished_symbols.json")
+_feed_unpublished_cache: Optional[set] = None
+
+
+def _feed_unpublished_symbols() -> set:
+    global _feed_unpublished_cache
+    if _feed_unpublished_cache is None:
+        try:
+            with open(_FEED_UNPUBLISHED_FILE, encoding="utf-8") as handle:
+                _feed_unpublished_cache = {str(x).upper() for x in json.load(handle) if str(x).strip()}
+        except FileNotFoundError:
+            _feed_unpublished_cache = set()
+        except Exception as exc:
+            # Unreadable must fail OPEN (publish everything), matching the
+            # feed's lifelong default — failing closed would silently cut every
+            # buyer off over a corrupt file.
+            _logger.error("[FEED] could not read %s: %s", _FEED_UNPUBLISHED_FILE, exc)
+            _feed_unpublished_cache = set()
+    return _feed_unpublished_cache
+
+
+def _save_feed_unpublished(symbols: set) -> None:
+    global _feed_unpublished_cache
+    temporary = f"{_FEED_UNPUBLISHED_FILE}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(sorted(symbols), handle)
+    os.replace(temporary, _FEED_UNPUBLISHED_FILE)
+    _feed_unpublished_cache = set(symbols)
+
+
+def _feed_symbol_gate(symbol: str) -> bool:
+    return str(symbol or "").upper() not in _feed_unpublished_symbols()
+
+
 _cascade_feed_publisher = None
 _cascade_feed_publisher_checked = False
 
@@ -7728,6 +7769,7 @@ def _get_cascade_feed_publisher():
             # about whose candles the geometry was drawn from.
             default_exchange=_active_broker_name(),
             on_error=lambda what, exc: _logger.error("[FEED] %s failed: %s", what, exc),
+            symbol_gate=_feed_symbol_gate,
         )
         _logger.info("[FEED] publishing under kid %s", kid)
         return _cascade_feed_publisher
@@ -7811,6 +7853,8 @@ async def cascade_feed_stream(ws: WebSocket):
             model_version=CASCADE_MODEL_VERSION,
             head_by_symbol=heads,
             default_exchange=_active_broker_name(),
+            symbol_gate=_feed_symbol_gate,
+            announced_ids=publisher.announced_campaign_ids(),
         ):
             await ws.send_json({"type": "snapshot", "frame": frame})
         await ws.send_json({"type": "snapshot.end", "heads": heads})
@@ -7956,6 +8000,52 @@ async def cascade_feed_subscriber_add(request: Request):
     else:
         record = subscribers.add(buyer_id, public_key, label=str(label or ""), expires_at=expires_at)
     return {"status": "ok", "subscriber": record}
+
+
+@app.get("/api/cascade/feed/published-symbols")
+async def cascade_feed_published_symbols():
+    """The publish catalogue: every symbol the engine runs, and whether buyers
+    may follow NEW campaigns on it. Live counts ride along so unchecking one
+    with campaigns in flight is an informed act — those finish naturally."""
+    unpublished = _feed_unpublished_symbols()
+    live: dict = {}
+    try:
+        eng = _get_cascade_engine()
+        for campaign in eng.get_status().get("campaigns") or []:
+            symbol = str(campaign.get("symbol") or "").upper()
+            if symbol and str(campaign.get("mode") or "").lower() == "live":
+                live[symbol] = live.get(symbol, 0) + 1
+    except Exception as exc:
+        _logger.error("[FEED] could not read engine symbols: %s", exc)
+    symbols = sorted(set(live) | unpublished)
+    return {
+        "symbols": [
+            {"symbol": symbol, "published": symbol not in unpublished, "live_campaigns": live.get(symbol, 0)}
+            for symbol in symbols
+        ]
+    }
+
+
+@app.post("/api/cascade/feed/published-symbols")
+async def cascade_feed_published_symbols_set(request: Request):
+    """Replace the blocklist. Takes the full list rather than a toggle so two
+    browser tabs cannot interleave their way to a state neither asked for."""
+    check_rate_limit("feed_published", max_calls=20, window_sec=60)
+    body = await _read_json_body(request)
+    raw = body.get("unpublished")
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="unpublished must be a list of symbols")
+    cleaned = set()
+    for item in raw:
+        symbol = str(item or "").strip().upper()
+        if not symbol:
+            continue
+        if not all(ch.isalnum() for ch in symbol) or len(symbol) > 20:
+            raise HTTPException(status_code=400, detail=f"{symbol!r} is not a symbol")
+        cleaned.add(symbol)
+    _save_feed_unpublished(cleaned)
+    _logger.info("[FEED] publish catalogue changed: unpublished=%s", sorted(cleaned) or "(none)")
+    return await cascade_feed_published_symbols()
 
 
 @app.delete("/api/cascade/feed/subscribers/{buyer_id}")

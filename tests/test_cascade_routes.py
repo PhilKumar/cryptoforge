@@ -1200,3 +1200,104 @@ class _BrokenRazorpay:
         from engine.billing import BillingRefused
 
         raise BillingRefused("Razorpay refused the fetch (500).", status_code=502)
+
+
+class PublishedSymbolsRouteTests(unittest.IsolatedAsyncioTestCase):
+    """The publish catalogue: Phil follows BTC for himself, sells SOL and ETH.
+
+    Stored as a blocklist so a symbol he starts following tomorrow defaults to
+    published — the behaviour the feed has always had — and unchecking is the
+    deliberate act.
+    """
+
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_db = self.app_module._STATE_DB_FILE
+        self._orig_file = self.app_module._FEED_UNPUBLISHED_FILE
+        self._orig_cache = self.app_module._feed_unpublished_cache
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        self.app_module._FEED_UNPUBLISHED_FILE = os.path.join(self._tmp.name, "unpublished.json")
+        self.app_module._feed_unpublished_cache = None
+        self.addCleanup(self._restore)
+        self.app_module._rate_limits.clear()
+        self.transport = httpx.ASGITransport(app=self.app_module.app)
+
+    def _restore(self):
+        self.app_module._STATE_DB_FILE = self._orig_db
+        self.app_module._FEED_UNPUBLISHED_FILE = self._orig_file
+        self.app_module._feed_unpublished_cache = self._orig_cache
+
+    @asynccontextmanager
+    async def _client(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            self._headers = {
+                "X-CSRF-Token": client.cookies.get("cryptoforge_csrf") or "",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            yield client
+
+    async def test_the_catalogue_needs_a_session(self):
+        """It decides what paying buyers receive — exactly what the PIN is for."""
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            self.assertEqual((await client.get("/api/cascade/feed/published-symbols")).status_code, 401)
+            self.assertEqual(
+                (await client.post("/api/cascade/feed/published-symbols", json={"unpublished": []})).status_code, 401
+            )
+
+    async def test_everything_is_published_until_someone_says_otherwise(self):
+        async with self._client() as client:
+            response = await client.post(
+                "/api/cascade/feed/published-symbols", json={"unpublished": []}, headers=self._headers
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(self.app_module._feed_symbol_gate("BTCUSDT"))
+
+    async def test_unchecking_a_symbol_survives_a_cache_reset(self):
+        """The publisher reads the gate on every emit; the file is what a
+        restarted server reads. Both must agree."""
+        async with self._client() as client:
+            await client.post(
+                "/api/cascade/feed/published-symbols",
+                json={"unpublished": ["btcusdt"]},
+                headers=self._headers,
+            )
+        self.assertFalse(self.app_module._feed_symbol_gate("BTCUSDT"), "case must not matter")
+        self.assertTrue(self.app_module._feed_symbol_gate("SOLUSDT"))
+        self.app_module._feed_unpublished_cache = None  # a restart
+        self.assertFalse(self.app_module._feed_symbol_gate("BTCUSDT"))
+
+    async def test_the_reply_reports_publish_state_per_symbol(self):
+        async with self._client() as client:
+            response = await client.post(
+                "/api/cascade/feed/published-symbols",
+                json={"unpublished": ["BTCUSDT"]},
+                headers=self._headers,
+            )
+        rows = {row["symbol"]: row["published"] for row in response.json()["symbols"]}
+        self.assertFalse(rows["BTCUSDT"])
+
+    async def test_rubbish_is_refused_wholesale(self):
+        """Half-applied catalogues are worse than refused ones."""
+        async with self._client() as client:
+            response = await client.post(
+                "/api/cascade/feed/published-symbols",
+                json={"unpublished": ["BTC/USDT; DROP TABLE"]},
+                headers=self._headers,
+            )
+            self.assertEqual(response.status_code, 400)
+            response = await client.post(
+                "/api/cascade/feed/published-symbols", json={"unpublished": "BTCUSDT"}, headers=self._headers
+            )
+            self.assertEqual(response.status_code, 400)
+        self.assertTrue(self.app_module._feed_symbol_gate("BTCUSDT"), "a refused write must change nothing")
+
+    async def test_an_unreadable_blocklist_fails_open(self):
+        """Publish everything rather than silently cutting every buyer off
+        over a corrupt file — failing open IS the feed's lifelong default."""
+        with open(self.app_module._FEED_UNPUBLISHED_FILE, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        self.app_module._feed_unpublished_cache = None
+        self.assertTrue(self.app_module._feed_symbol_gate("BTCUSDT"))
