@@ -13,6 +13,9 @@ define the ladder: CASCADE_LEVELS, LEVEL_ALLOCATION, STOP_ENTRY_LEVELS.
     .venv/bin/python tools/cascade_depth_sweep.py --symbol SOLUSDT
     .venv/bin/python tools/cascade_depth_sweep.py --config current
 
+It also answers the other half of the question — not "how deep should the
+ladder go" but "should the target let go" — with --trail (see _install_trail).
+
 What is faithful to live, and what is not
 -----------------------------------------
 Faithful: geometry (trendlines, fibs, the size gate scaled per instrument),
@@ -110,6 +113,68 @@ CONFIGS: Dict[str, dict] = {
     **{f"solo-{level}": {"levels": (level,), "alloc": {level: 1.0}, "label": f"L{level} alone"} for level in FULL},
 }
 
+# ── the trailing target ───────────────────────────────────────────
+
+
+def _install_trail(cascade, giveback: float) -> None:
+    """Replace the fixed 0.25 target with one that lets a winner run.
+
+    Live, the target is a resting sell at `avg_entry + 0.25 x (mother_high -
+    avg_entry)` and a round ends the moment it trades. Trailing keeps the same
+    line but treats it as the ARMING price rather than the exit: once a candle
+    trades through it, the round stays open and a stop follows the running high
+    down by `giveback` x the target distance, never dropping below the target
+    itself. So the worst a trailed round can do is exit exactly where the fixed
+    one did — per round. Not per campaign: holding on keeps the levels the
+    round bought off the ladder for longer and leaves the position exposed to a
+    mother break, and only the two-year run can price that.
+
+    giveback is measured in units of the target's own distance, not in percent,
+    so it means the same thing on a $60,000 BTC leg and a $70 SOL one. At 0.5
+    the stop starts rising only after price has run half a target beyond the
+    target; at 1.0 it needs a full extra target first.
+
+    Candle resolution is read pessimistically at both ends: the candle that
+    arms the trail can never also be the one that gets stopped out of it, and
+    the stop a candle can be taken at is always the one the PREVIOUS candle
+    left behind, so an intrabar spike never books a better exit than it earned.
+    """
+    compute_tp_price = cascade.compute_tp_price
+
+    def _trailing_tp_check(self, campaign, closed_candle) -> None:
+        if campaign.filled_base_qty <= 0:
+            campaign.trail_peak = None
+            campaign.trail_stop = None
+            return
+        # A fill on this candle moves the average, so it moves the target the
+        # trail was hung from. Drop the trail and let it re-arm off the new one.
+        if any(fill.timestamp >= closed_candle.timestamp for fill in campaign.all_fills):
+            campaign.trail_peak = None
+            campaign.trail_stop = None
+            return
+        tp = compute_tp_price(campaign)
+        distance = (tp or 0.0) - (campaign.avg_entry_price or 0.0)
+        if not tp or distance <= 0:
+            return
+        stop = getattr(campaign, "trail_stop", None)
+        if stop is not None:
+            if closed_candle.low <= stop:
+                self._close_round(campaign, stop)
+                campaign.trail_peak = None
+                campaign.trail_stop = None
+                return
+            peak = max(getattr(campaign, "trail_peak", None) or 0.0, closed_candle.high)
+            campaign.trail_peak = peak
+            campaign.trail_stop = max(tp, peak - giveback * distance)
+            return
+        if closed_candle.high < tp:
+            return
+        campaign.trail_peak = closed_candle.high
+        campaign.trail_stop = max(tp, closed_candle.high - giveback * distance)
+
+    cascade.CascadeEngine._paper_tp_check = _trailing_tp_check
+
+
 # Real Binance spot filters for the two pairs.
 SYMBOL_META = {
     "BTCUSDT": {"tick": 0.01, "min_notional": 5.0},
@@ -148,6 +213,7 @@ class RunResult:
     config: str
     label: str
     capital: float
+    trail: float = 0.0  # 0 = the fixed target; otherwise the giveback multiple
     bars: int = 0
     campaigns: int = 0
     manual_starts: int = 0
@@ -472,11 +538,13 @@ class Replay:
 
 
 def run_one(args: tuple) -> dict:
-    symbol, config, capital, months, escalate = args
+    symbol, config, capital, months, escalate, trail = args
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
 
     cfg = CONFIGS[config]
+    if trail > 0:
+        _install_trail(cascade, trail)
     cascade.CASCADE_LEVELS = tuple(cfg["levels"])
     cascade.LEVEL_ALLOCATION = dict(cfg["alloc"])
     # Every rung but the deepest goes in as a buy stop above a falling market;
@@ -485,7 +553,10 @@ def run_one(args: tuple) -> dict:
 
     rows = load_history(symbol, months)
     replay = Replay(symbol, rows, capital, cascade, escalate=escalate)
+    replay.result.trail = trail
     result = replay.run(config, cfg)
+    if trail > 0:
+        result.label = f"{cfg['label']} · trail {trail:g}"
     payload = {k: v for k, v in result.__dict__.items()}
     payload["open_pnl"] = result.open_pnl
     payload["total_pnl"] = result.total_pnl
@@ -503,6 +574,13 @@ def main() -> int:
     parser.add_argument(
         "--no-escalate", action="store_true", help="pin every campaign to 5m instead of climbing the ladder"
     )
+    parser.add_argument(
+        "--trail",
+        action="append",
+        type=float,
+        help="repeatable; trailing target, giveback as a multiple of the target distance "
+        "(0 = today's fixed 0.25 target). e.g. --trail 0 --trail 0.5",
+    )
     parser.add_argument("--out", default="depth_sweep.json", help="filename under tools/.sweep_out")
     args = parser.parse_args()
 
@@ -514,11 +592,18 @@ def main() -> int:
             return 1
 
     escalate = not args.no_escalate
-    jobs = [(symbol, config, args.capital, args.months, escalate) for symbol in symbols for config in configs]
+    trails = args.trail if args.trail is not None else [0.0]
+    jobs = [
+        (symbol, config, args.capital, args.months, escalate, trail)
+        for symbol in symbols
+        for config in configs
+        for trail in trails
+    ]
     workers = args.jobs or min(len(jobs), mp.cpu_count())
     print(
         f"{len(jobs)} runs on {workers} workers — {args.months} months, ${args.capital:,.0f} per campaign, "
-        f"escalation {'on' if escalate else 'OFF (5m throughout)'}\n"
+        f"escalation {'on' if escalate else 'OFF (5m throughout)'}, "
+        f"targets {', '.join('fixed' if t <= 0 else f'trail {t:g}' for t in trails)}\n"
     )
 
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -526,14 +611,15 @@ def main() -> int:
     with mp.Pool(workers) as pool:
         for payload in pool.imap_unordered(run_one, jobs):
             results.append(payload)
+            target = "fixed" if payload.get("trail", 0.0) <= 0 else f"trail {payload['trail']:g}"
             print(
-                f"  done {payload['symbol']:<9} {payload['config']:<13} "
+                f"  done {payload['symbol']:<9} {payload['config']:<13} {target:<10} "
                 f"net ${payload['total_pnl']:>10,.2f}  {payload['rounds']:>5} rounds  "
                 f"({payload['seconds']:.0f}s)"
             )
 
     order = {name: i for i, name in enumerate(CONFIGS)}
-    results.sort(key=lambda r: (r["symbol"], order.get(r["config"], 99)))
+    results.sort(key=lambda r: (r["symbol"], order.get(r["config"], 99), r.get("trail", 0.0)))
     path = os.path.join(OUT_DIR, args.out)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(results, handle, indent=2)
@@ -547,17 +633,17 @@ def report(results: List[dict]) -> None:
         rows = [r for r in results if r["symbol"] == symbol]
         print(f"\n{symbol}  —  {rows[0]['bars']:,} 5m bars, ${rows[0]['capital']:,.0f} per campaign")
         head = (
-            f"  {'ladder':<26} {'net P&L':>10} {'ret%':>7} {'rounds':>7} {'win%':>6} "
-            f"{'fills':>6} {'peak $':>9} {'in pos%':>8} {'open bag':>10}"
+            f"  {'ladder':<38} {'realised':>10} {'net P&L':>10} {'ret%':>7} {'rounds':>7} "
+            f"{'$/round':>8} {'med hold h':>11} {'in pos%':>8} {'open bag':>10}"
         )
         print(head)
         print("  " + "-" * (len(head) - 2))
         for r in rows:
-            wins = r["wins"] / r["rounds"] * 100 if r["rounds"] else 0.0
+            per_round = r["net_pnl"] / r["rounds"] if r["rounds"] else 0.0
             print(
-                f"  {r['label']:<26} ${r['total_pnl']:>9,.2f} {r['return_pct']:>6.1f}% {r['rounds']:>7,} "
-                f"{wins:>5.1f}% {r['fills']:>6,} ${r['peak_deployed']:>8,.0f} "
-                f"{r['time_in_position_pct']:>7.1f}% ${r['open_pnl']:>9,.2f}"
+                f"  {r['label']:<38} ${r['net_pnl']:>9,.2f} ${r['total_pnl']:>9,.2f} "
+                f"{r['return_pct']:>6.1f}% {r['rounds']:>7,} ${per_round:>7,.2f} "
+                f"{r['median_hold_hours']:>11,.1f} {r['time_in_position_pct']:>7.1f}% ${r['open_pnl']:>9,.2f}"
             )
 
 
