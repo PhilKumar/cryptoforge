@@ -390,6 +390,7 @@ class Replay:
         retire: str = "park",
         escalate_on: str = "bars",
         compound: bool = False,
+        compound_live: bool = False,
     ):
         self.cascade = cascade
         self.symbol = symbol
@@ -416,6 +417,10 @@ class Replay:
         # the size they were born with — resizing a running ladder underneath
         # itself is not something the engine is asked to do.
         self.compound = compound
+        # ...unless the win is fed back into the campaign that earned it, in
+        # which case its NEXT fib is funded at the bigger size. Legs already
+        # drawn keep the pool they were built with — their money is committed.
+        self.compound_live = compound_live
         self.round_counts: Dict[str, int] = {}
         self.equity: List[list] = []
         self.meta = SYMBOL_META.get(symbol, {"tick": 0.01, "min_notional": 5.0})
@@ -520,8 +525,13 @@ class Replay:
             seen = self.round_counts.get(cid, 0)
             if len(campaign.rounds) <= seen:
                 continue
-            moved += sum(rnd.pnl for rnd in campaign.rounds[seen:])
+            gained = sum(rnd.pnl for rnd in campaign.rounds[seen:])
+            moved += gained
             self.round_counts[cid] = len(campaign.rounds)
+            if self.compound_live and gained:
+                # The win goes straight back into the campaign that earned it.
+                campaign.capital_usd = max(self.meta["min_notional"] * 4, campaign.capital_usd + gained)
+                self.cascade.replan_ladder(campaign)
         if not moved:
             return
         # A pot cannot go below the exchange's minimum order or nothing can be
@@ -840,7 +850,9 @@ class Replay:
 
 
 def run_one(args: tuple) -> dict:
-    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire, escalate_on, compound = args
+    symbol, config, capital, months, escalate, trail, minors, cap_tf, retire, escalate_on, compound, compound_live = (
+        args
+    )
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
 
@@ -874,6 +886,7 @@ def run_one(args: tuple) -> dict:
         retire=retire,
         escalate_on=escalate_on,
         compound=compound,
+        compound_live=compound_live,
     )
     replay.result.trail = trail
     replay.result.minors = minors
@@ -891,7 +904,9 @@ def run_one(args: tuple) -> dict:
     if escalate_on != "bars":
         suffix += " · climb on structure"
     if compound:
-        suffix += " · compounding"
+        suffix += " · compounding into the next campaign"
+    if compound_live:
+        suffix += " · compounding into the same campaign"
     if suffix:
         result.label = cfg["label"] + suffix
     payload = {k: v for k, v in result.__dict__.items()}
@@ -948,6 +963,11 @@ def main() -> int:
         action="store_true",
         help="put every closed round's P&L back in the pot, so the next campaign is sized bigger",
     )
+    parser.add_argument(
+        "--compound-live",
+        action="store_true",
+        help="feed each win back into the campaign that earned it, so its next fib is funded bigger",
+    )
     parser.add_argument("--out", default="depth_sweep.json", help="filename under tools/.sweep_out")
     args = parser.parse_args()
 
@@ -969,7 +989,20 @@ def main() -> int:
             return 1
     climbs = args.escalate_on if args.escalate_on is not None else ["bars"]
     jobs = [
-        (symbol, config, args.capital, args.months, escalate, trail, minor, cap, retire, climb, args.compound)
+        (
+            symbol,
+            config,
+            args.capital,
+            args.months,
+            escalate,
+            trail,
+            minor,
+            cap,
+            retire,
+            climb,
+            args.compound,
+            args.compound_live,
+        )
         for symbol in symbols
         for config in configs
         for trail in trails
