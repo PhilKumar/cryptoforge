@@ -2973,22 +2973,26 @@ function panBy(candleDelta) {
   drawChart();
 }
 (function wireZoom() {
-  const cv = $("chart-cross");  /* the top canvas gets the pointer events */
-  if (!cv) return;
-  cv.addEventListener("wheel", e => {
+  /* Listeners live on the WRAP, like the crosshair's: #chart-cross is
+     pointer-events:none (so hovers reach the canvas below), which means
+     nothing bound to it ever fires. */
+  const host = $("chart-wrap");
+  if (!host) return;
+  host.addEventListener("wheel", e => {
     e.preventDefault();
-    const rect = cv.getBoundingClientRect();
+    const rect = $("chart").getBoundingClientRect();
     const frac = chartScale
       ? Math.max(0, Math.min(1, (e.clientX - rect.left - chartScale.padL) / chartScale.plotW))
       : 0.5;
     zoomBy(e.deltaY > 0 ? 1.25 : 0.8, frac);
   }, {passive: false});
   let dragging = null;
-  cv.addEventListener("pointerdown", e => {
+  host.addEventListener("pointerdown", e => {
+    e.preventDefault();
     dragging = {x: e.clientX, moved: false};
-    cv.setPointerCapture(e.pointerId);
+    try { host.setPointerCapture(e.pointerId); } catch (err) {}
   });
-  cv.addEventListener("pointermove", e => {
+  host.addEventListener("pointermove", e => {
     if (!dragging || !chartScale || !chartWin) return;
     const dx = e.clientX - dragging.x;
     const perCandle = chartScale.plotW / Math.max(chartScale.n, 1);
@@ -2996,9 +3000,9 @@ function panBy(candleDelta) {
     if (delta) { panBy(delta); dragging.x = e.clientX; dragging.moved = true; }
   });
   const drop = () => { dragging = null; };
-  cv.addEventListener("pointerup", drop);
-  cv.addEventListener("pointercancel", drop);
-  cv.addEventListener("dblclick", () => { chartWin = null; drawChart(); });
+  host.addEventListener("pointerup", drop);
+  host.addEventListener("pointercancel", drop);
+  host.addEventListener("dblclick", () => { chartWin = null; drawChart(); });
   $("ch-zin").addEventListener("click", () => zoomBy(0.6));
   $("ch-zout").addEventListener("click", () => zoomBy(1.6));
   $("ch-zfit").addEventListener("click", () => { chartWin = null; drawChart(); });
