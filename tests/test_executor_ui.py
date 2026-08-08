@@ -806,7 +806,7 @@ class ChartViewTests(unittest.TestCase):
         re-derived here — only what sits under it changes."""
         from executor.ui import chart_view
 
-        native = chart_view(self.runtime, self.market, "c1")
+        native = chart_view(self.runtime, self.market, "c1", "5m")
         slower = chart_view(self.runtime, self.market, "c1", "1h")
         self.assertEqual(slower["timeframe"], "1h")
         self.assertEqual(slower["native_timeframe"], native["timeframe"])
@@ -814,13 +814,27 @@ class ChartViewTests(unittest.TestCase):
         self.assertEqual(slower["trendlines"], native["trendlines"])
         self.assertEqual(slower["mother_high"], native["mother_high"])
 
+    def test_no_choice_means_the_whole_campaign_fits(self):
+        """The parent's auto rule. The venue serves ~200 bars per fetch, so a
+        campaign a few days old had pushed its own mother candle off the left
+        edge of its native view — and the mother is the bar every line on the
+        chart is measured from. Default rolls up until the window reaches it."""
+        from executor.ui import chart_view
+
+        chart = chart_view(self.runtime, self.market, "c1")
+        # The harness clock puts the mother ~4.3 days back: 5m and 15m windows
+        # cannot reach it; 1h can, and 1h is the smallest that can.
+        self.assertEqual(chart["timeframe"], "1h")
+        self.assertEqual(chart["auto_timeframe"], "1h")
+        self.assertEqual(chart["native_timeframe"], "5m")
+
     def test_a_timeframe_the_venue_will_not_serve_falls_back(self):
         """An empty chart with no explanation is worse than the campaign's own
         bars, which are always available."""
         from executor.ui import chart_view
 
         chart = chart_view(self.runtime, self.market, "c1", "3d")
-        self.assertEqual(chart["timeframe"], chart["native_timeframe"])
+        self.assertEqual(chart["timeframe"], chart["auto_timeframe"])
         self.assertTrue(chart["candles"])
 
     def test_a_closed_round_becomes_a_sell_mark(self):

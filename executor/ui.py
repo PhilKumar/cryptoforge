@@ -290,6 +290,7 @@ SUPPORTED_EXCHANGES = ("binance", "coindcx")
 # Bars the chart will show. The geometry never changes with these — it was
 # drawn on the campaign's own timeframe — only the candles under it do.
 CHART_TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h")
+CHART_TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
 
 _ICONS = {
     "/icon-192.png": (192, False),
@@ -536,9 +537,22 @@ def chart_view(runtime, market, campaign_id: str, timeframe: str = "") -> Option
     # will not serve falls back to the campaign's own, rather than an empty
     # chart with no explanation.
     native = followed.timeframe or "5m"
-    wanted = str(timeframe or "").strip().lower() or native
+    native_sec = CHART_TF_SEC.get(native, 300)
+    # No explicit choice means AUTO, the parent's rule: the smallest timeframe
+    # (the campaign's own or coarser) whose window still reaches back past the
+    # mother candle. The venue serves the last ~200 bars per fetch, so on 5m a
+    # campaign older than ~16 hours had pushed its own mother off the left edge
+    # — and the mother is the one bar every line on the chart is measured from.
+    # An explicit finer choice is still honoured: "show me the entries inside
+    # that bar" is a real question, and the footer says what fell off.
+    span = max(runtime._now() - float(followed.mother_timestamp or 0), 0.0)
+    auto = next(
+        (name for name in CHART_TIMEFRAMES if CHART_TF_SEC[name] >= native_sec and span <= CHART_TF_SEC[name] * 190),
+        CHART_TIMEFRAMES[-1],
+    )
+    wanted = str(timeframe or "").strip().lower() or auto
     if wanted not in CHART_TIMEFRAMES:
-        wanted = native
+        wanted = auto
     try:
         candles = market.closed_candles_since(followed.symbol, wanted, 0)
     except Exception as exc:
@@ -607,7 +621,9 @@ def chart_view(runtime, market, campaign_id: str, timeframe: str = "") -> Option
         "timeframe": wanted,
         "native_timeframe": native,
         "timeframes": list(CHART_TIMEFRAMES),
-        "candles": [[c.timestamp, c.open, c.high, c.low, c.close] for c in candles[-160:]],
+        "candles": [[c.timestamp, c.open, c.high, c.low, c.close] for c in candles[-200:]],
+        "bucket_sec": CHART_TF_SEC.get(wanted, native_sec),
+        "auto_timeframe": auto,
         "mother_high": followed.mother_high,
         "mother_low": followed.mother_low,
         "mother_timestamp": followed.mother_timestamp,
@@ -2162,6 +2178,11 @@ PAGE = "".join(
       <!-- The bars change; the geometry does not. It was drawn on the
            campaign's own timeframe and is never re-derived here. -->
       <span class="tf-toggle" id="ch-tfs"></span>
+      <span class="tf-toggle" id="ch-zoom">
+        <button id="ch-zout" title="Zoom out" aria-label="Zoom out">−</button>
+        <button id="ch-zin" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="ch-zfit" title="Fit the whole window" aria-label="Fit the whole window">fit</button>
+      </span>
       <span class="pill live" id="ch-pos" hidden></span>
       <button class="modal-close" id="ch-close">×</button>
     </div>
@@ -2681,6 +2702,10 @@ function render(s) {
 /* ══ chart ══ */
 let chartData = null;
 let chartScale = null;   /* set by drawChart; read by the crosshair */
+/* The zoom window, as candle indices into chartData.candles. Null = fit all.
+   Lives outside drawChart because the chart repaints on resize and the view
+   must survive the repaint — the same reason the ladders keep openLadders. */
+let chartWin = null;
 let chartCid = "", chartTf = "";
 function drawChart() {
   const d = chartData, cv = $("chart");
@@ -2720,7 +2745,14 @@ function drawChart() {
     }
   });
 
-  const candles = d.candles || [];
+  const allCandles = d.candles || [];
+  /* Clamp the window every paint: a repaint after a timeframe switch may find
+     indices from the previous, longer array. */
+  if (chartWin) {
+    chartWin.i0 = Math.max(0, Math.min(chartWin.i0, allCandles.length - 2));
+    chartWin.i1 = Math.max(chartWin.i0 + 1, Math.min(chartWin.i1, allCandles.length - 1));
+  }
+  const candles = chartWin ? allCandles.slice(chartWin.i0, chartWin.i1 + 1) : allCandles;
   if (!candles.length) {
     g.fillStyle = PAL.axis; g.font = "13px " + MONO;
     g.fillText("No candles from your exchange yet.", 16, H / 2);
@@ -2793,7 +2825,7 @@ function drawChart() {
     g.beginPath(); g.moveTo(x, Y(c[2])); g.lineTo(x, Y(c[3])); g.stroke();
     const yTop = Y(Math.max(c[1], c[4])), yBot = Y(Math.min(c[1], c[4]));
     g.fillRect(x - bodyW / 2, yTop, bodyW, Math.max(yBot - yTop, 1));
-    if (d.mother_timestamp && c[0] === d.mother_timestamp) {
+    if (d.mother_timestamp && d.mother_timestamp >= c[0] && d.mother_timestamp < c[0] + (d.bucket_sec || 1)) {
       g.save();
       g.globalAlpha = 0.09; g.fillStyle = PAL.mother;
       g.fillRect(x - Math.max(bodyW, 6) / 2 - 3, padT + 1, Math.max(bodyW, 6) + 6, plotH - 2);
@@ -2915,6 +2947,63 @@ function drawChart() {
   });
 }
 
+/* ── Zoom & pan, the parent's centre-zoom model ──────────────────────
+   Wheel zooms about the cursor, drag pans, double-click and "fit" reset.
+   All of it edits chartWin (candle indices) and repaints — the projection
+   math never changes, only which slice it sees. */
+function zoomBy(factor, centerFrac) {
+  const all = (chartData && chartData.candles) || [];
+  if (all.length < 10) return;
+  const cur = chartWin || {i0: 0, i1: all.length - 1};
+  const span = cur.i1 - cur.i0 + 1;
+  const next = Math.round(Math.max(10, Math.min(all.length, span * factor)));
+  if (next >= all.length) { chartWin = null; drawChart(); return; }
+  const center = cur.i0 + span * (centerFrac === undefined ? 0.5 : centerFrac);
+  let i0 = Math.round(center - next * (centerFrac === undefined ? 0.5 : centerFrac));
+  i0 = Math.max(0, Math.min(i0, all.length - next));
+  chartWin = {i0, i1: i0 + next - 1};
+  drawChart();
+}
+function panBy(candleDelta) {
+  const all = (chartData && chartData.candles) || [];
+  if (!chartWin || !all.length) return;
+  const span = chartWin.i1 - chartWin.i0 + 1;
+  let i0 = Math.max(0, Math.min(chartWin.i0 + candleDelta, all.length - span));
+  chartWin = {i0, i1: i0 + span - 1};
+  drawChart();
+}
+(function wireZoom() {
+  const cv = $("chart-cross");  /* the top canvas gets the pointer events */
+  if (!cv) return;
+  cv.addEventListener("wheel", e => {
+    e.preventDefault();
+    const rect = cv.getBoundingClientRect();
+    const frac = chartScale
+      ? Math.max(0, Math.min(1, (e.clientX - rect.left - chartScale.padL) / chartScale.plotW))
+      : 0.5;
+    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, frac);
+  }, {passive: false});
+  let dragging = null;
+  cv.addEventListener("pointerdown", e => {
+    dragging = {x: e.clientX, moved: false};
+    cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!dragging || !chartScale || !chartWin) return;
+    const dx = e.clientX - dragging.x;
+    const perCandle = chartScale.plotW / Math.max(chartScale.n, 1);
+    const delta = Math.round(-dx / Math.max(perCandle, 0.5));
+    if (delta) { panBy(delta); dragging.x = e.clientX; dragging.moved = true; }
+  });
+  const drop = () => { dragging = null; };
+  cv.addEventListener("pointerup", drop);
+  cv.addEventListener("pointercancel", drop);
+  cv.addEventListener("dblclick", () => { chartWin = null; drawChart(); });
+  $("ch-zin").addEventListener("click", () => zoomBy(0.6));
+  $("ch-zout").addEventListener("click", () => zoomBy(1.6));
+  $("ch-zfit").addEventListener("click", () => { chartWin = null; drawChart(); });
+})();
+
 async function openChart(cid, symbol, tf) {
   $("modal").classList.add("on");
   $("ch-sym").textContent = symbol || "";
@@ -2958,13 +3047,17 @@ async function openChart(cid, symbol, tf) {
                + Math.max((d.trendlines || []).length - MAX_STRUCTURES, 0);
   /* Draw FIRST: the note reads chartScale.minP for the off-view stop, and
      chartScale does not exist until drawChart has computed the frame. */
+  chartWin = null;
   drawChart();
   $("ch-note").textContent =
     "Geometry from the signal; candles, fills and target are your own machine's." +
     (deep ? "  " + deep + " deeper rung(s) sit below this view — the chart scales to price, not to L8." : "") +
     (d.stop_price && chartScale && d.stop_price < chartScale.minP
       ? "  Your working stop (" + d.stop_price.toFixed(2) + ") sits below this view too." : "") +
-    (hidden ? "  " + hidden + " older structure(s) are traded but not drawn — the newest three are." : "");
+    (hidden ? "  " + hidden + " older structure(s) are traded but not drawn — the newest three are." : "") +
+    (d.mother_timestamp && (d.candles || []).length && d.mother_timestamp < d.candles[0][0]
+      ? "  The mother candle is left of this view — " + (d.auto_timeframe || "a coarser") + " fits the whole campaign."
+      : "");
 }
 $("ch-close").addEventListener("click", () => $("modal").classList.remove("on"));
 $("modal").addEventListener("click", e => { if (e.target.id === "modal") $("modal").classList.remove("on"); });
