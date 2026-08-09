@@ -191,23 +191,55 @@ test.describe('Cascade closed-rounds ledger', () => {
       .toContainText('$0.05 of it estimated');
   });
 
-  test('paper rounds never reach the money ledger', async ({ page }) => {
+  test('paper rounds are listed but never counted in the money', async ({ page }) => {
     await login(page);
-    // The same three rounds, on a PAPER campaign. Their $77.85 deployed and
-    // +$0.31 realised used to be added to the live totals, which made the
-    // account read bigger and busier than it is.
+    // Three rounds on a PAPER campaign, $77.85 deployed and +$0.31 realised.
+    // That used to be added to the live totals, which made the account read
+    // bigger than it is. Excluding the ROWS as well was the overcorrection:
+    // 26 trades read as 20 and looked like six had gone missing.
     await serveStatus(page, statusWith([ledgerRound(1), ledgerRound(2), ledgerRound(3)], 'paper'));
     await page.evaluate(() => (window as any).showPage(
       'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
     ));
     await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
 
-    await expect(page.locator('#cf-cascade-ledger-body tr')).toHaveCount(1);
-    await expect(page.locator('#cf-cascade-ledger-body')).toContainText('No closed rounds yet');
+    // Every row still there, and each one says why it is not in the total.
+    const rows = page.locator('#cf-cascade-ledger-body tr');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.first()).toContainText('paper — not counted');
+
     const meta = page.locator('#cf-cascade-ledger-meta');
-    await expect(meta).not.toContainText('deployed');
-    // The campaign itself is untouched — only the money ledger skips it.
-    await expect(page.locator('#cf-cascade-campaigns')).toContainText('SOL');
+    await expect(meta, 'no paper money in the deployed figure').toContainText('0 live rounds closed');
+    await expect(meta).toContainText('$0.00 deployed');
+    await expect(meta).toContainText('+$0.00 realised');
+    await expect(meta, 'the rows below are accounted for').toContainText('plus 3 paper rounds listed below');
+    await expect(meta).not.toContainText('$77.85');
+  });
+
+  test('a live and a paper campaign side by side: all rows, live-only totals', async ({ page }) => {
+    await login(page);
+    const status = statusWith([ledgerRound(1, { invested_usd: 10.00, pnl: 0.40, fees_usd: 0.01 })], 'live');
+    // A second campaign in the same payload, on paper, with much bigger numbers.
+    (status.campaigns as Array<Record<string, unknown>>).push({
+      ...(status.campaigns as Array<Record<string, unknown>>)[0],
+      campaign_id: 'e2e-paper-fixture', seq: 2, symbol: 'BTCUSDT', mode: 'paper',
+      rounds: [ledgerRound(9, { invested_usd: 900.00, pnl: 45.00, fees_usd: 0.90 })],
+    });
+    await serveStatus(page, status);
+    await page.evaluate(() => (window as any).showPage(
+      'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
+    ));
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+
+    await expect(page.locator('#cf-cascade-ledger-body tr')).toHaveCount(2);
+    const meta = page.locator('#cf-cascade-ledger-meta');
+    await expect(meta).toContainText('1 live round closed at target');
+    await expect(meta).toContainText('$10.00 deployed');
+    await expect(meta).toContainText('+$0.40 realised');
+    await expect(meta).toContainText('plus 1 paper round listed below');
+    // The paper campaign's $900 and $45 are visible in its row and in no total.
+    await expect(meta).not.toContainText('910.00');
+    await expect(meta).not.toContainText('45.40');
   });
 });
 

@@ -9859,11 +9859,6 @@ function _cfCascadeCollectRounds(status) {
     pool.forEach(function(campaign) {
       var id = String((campaign || {}).campaign_id || '');
       if (!id || byId[id]) return;
-      // This panel is a money ledger. A paper round's P&L is not money, and
-      // mixing it into "$926.34 deployed · +$30.06 realised" made the account
-      // look bigger and busier than it is. Paper campaigns are still shown in
-      // full on the campaign cards and in their own event logs.
-      if (String(campaign.mode || '').toLowerCase() === 'paper') return;
       byId[id] = campaign;
       order.push(id);
     });
@@ -9876,8 +9871,15 @@ function _cfCascadeCollectRounds(status) {
     // Ended-ness comes from the campaign's own state, not from which pool it
     // was found in — that was how a finished campaign still read "running".
     var ended = _cfCascadeCampaignHasEnded(campaign);
+    // Paper rounds are LISTED but never counted. Their P&L is not money, and
+    // adding it to "$926.34 deployed · +$30.06 realised" made the account read
+    // bigger and busier than it is — but dropping the rows entirely just looked
+    // like six trades had gone missing, which is worse.
+    var paper = String(campaign.mode || '').toLowerCase() === 'paper';
     rounds.forEach(function(round) {
-      out.push({ campaign: campaign, round: round, symbol: String(campaign.symbol || ''), ended: ended });
+      out.push({
+        campaign: campaign, round: round, symbol: String(campaign.symbol || ''), ended: ended, paper: paper,
+      });
     });
   });
   // Candle close time first; it is the only field that means the same thing in
@@ -9942,14 +9944,18 @@ function _cfCascadeRenderLedgerRows() {
       + '</td></tr>';
     _cfCascadeRenderLedgerPager(0, 0);
     if (meta) {
-      meta.textContent = 'Every LIVE round that reached its target, across every campaign — '
-        + 'running and ended alike. Paper campaigns are left out. Nothing has closed yet.';
+      meta.textContent = 'Every round that reached its target, across every campaign — '
+        + 'running and ended alike. Paper rounds are listed but never counted in the '
+        + 'totals. Nothing has closed yet.';
     }
     return;
   }
 
-  var invested = 0, realised = 0, wins = 0, feesPaid = 0, feesEstimated = 0;
+  var invested = 0, realised = 0, wins = 0, feesPaid = 0, feesEstimated = 0, counted = 0, paperRows = 0;
   rows.forEach(function(row) {
+    // Every row is shown; only real money is added up.
+    if (row.paper) { paperRows++; return; }
+    counted++;
     invested += Number(row.round.invested_usd) || 0;
     realised += Number(row.round.pnl) || 0;
     if ((Number(row.round.pnl) || 0) > 0) wins++;
@@ -9980,11 +9986,14 @@ function _cfCascadeRenderLedgerRows() {
     var when = Number(r.closed_ts) > 0
       ? _cfCascadeIst(r.closed_ts) + '<div class="table-meta">IST</div>'
       : _escapeHtml(String(r.closed_at || '--')) + '<div class="table-meta">server clock</div>';
-    return '<tr>'
+    // A paper row is dimmed and says so, because its numbers are real-looking
+    // but are not in any of the totals above it.
+    return '<tr' + (row.paper ? ' style="opacity:0.55;"' : '') + '>'
       + '<td style="white-space:nowrap;">' + when + '</td>'
       + '<td>' + _escapeHtml(row.symbol) + '</td>'
       + '<td>' + _escapeHtml(num)
-        + (row.ended ? '<div class="table-meta">ended</div>' : '<div class="table-meta">running</div>') + '</td>'
+        + (row.ended ? '<div class="table-meta">ended</div>' : '<div class="table-meta">running</div>')
+        + (row.paper ? '<div class="table-meta">paper — not counted</div>' : '') + '</td>'
       + '<td>#' + _escapeHtml(String(r.round_id)) + '</td>'
       + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'
       + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
@@ -10004,12 +10013,18 @@ function _cfCascadeRenderLedgerRows() {
 
   if (meta) {
     var tone = realised >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
-    meta.innerHTML = rows.length + ' live round' + (rows.length === 1 ? '' : 's') + ' closed at target · '
+    meta.innerHTML = counted + ' live round' + (counted === 1 ? '' : 's') + ' closed at target · '
       + '$' + _cfCascadeUsd(invested) + ' deployed · '
       + '<strong style="color:' + tone + ';">' + (realised >= 0 ? '+' : '') + '$'
       + _cfCascadeUsd(realised) + ' realised</strong>'
       + (invested > 0 ? ' (' + (realised / invested * 100).toFixed(2) + '%)' : '')
-      + ' · ' + wins + '/' + rows.length + ' in profit'
+      + ' · ' + wins + '/' + counted + ' in profit'
+      // Said out loud, so a table of 26 rows under a total of 20 is explained
+      // rather than looking like six of them quietly went missing.
+      + (paperRows > 0
+        ? ' · <span class="table-meta">plus ' + paperRows + ' paper round'
+          + (paperRows === 1 ? '' : 's') + ' listed below, not counted</span>'
+        : '')
       + (feesPaid > 0
         ? ' · after $' + _cfCascadeUsd(feesPaid) + ' fees'
           + (feesEstimated > 0

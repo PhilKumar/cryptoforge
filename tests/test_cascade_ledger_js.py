@@ -44,7 +44,8 @@ const status = JSON.parse(process.argv[2]);
 const rows = _cfCascadeCollectRounds(status);
 console.log(JSON.stringify(rows.map(r => ({
   campaign_id: r.campaign.campaign_id, round_id: r.round.round_id,
-  symbol: r.symbol, ended: r.ended, invested: r.round.invested_usd, pnl: r.round.pnl
+  symbol: r.symbol, ended: r.ended, paper: !!r.paper,
+  invested: r.round.invested_usd, pnl: r.round.pnl
 }))));
 """
 
@@ -122,9 +123,11 @@ class CascadeLedgerDedupeTests(unittest.TestCase):
         # a campaign with no id cannot be keyed, and must not crash the ledger
         self.assertEqual(self.collect({"campaigns": [{"symbol": "X", "rounds": [_round()]}]}), [])
 
-    def test_paper_rounds_are_left_out_of_the_money_ledger(self):
+    def test_paper_rounds_are_listed_but_flagged(self):
         """The panel reads "$926.34 deployed · +$30.06 realised". Paper money is
-        not money, and mixing it in overstated both."""
+        not money and must not be in that sum — but dropping the ROWS made 26
+        trades read as 20 and looked like data loss. Listed, flagged, uncounted.
+        """
         live = {
             "campaign_id": "btc36",
             "symbol": "BTCUSDT",
@@ -140,18 +143,23 @@ class CascadeLedgerDedupeTests(unittest.TestCase):
             "rounds": [_round(2, 500.00, 25.00)],
         }
         rows = self.collect({"campaigns": [live, paper], "closed_campaigns": []})
-        self.assertEqual([r["campaign_id"] for r in rows], ["btc36"])
-        self.assertAlmostEqual(sum(r["invested"] for r in rows), 7.60, places=2)
+        self.assertEqual(sorted(r["campaign_id"] for r in rows), ["btc36", "sol99"])
+        self.assertEqual({r["campaign_id"]: r["paper"] for r in rows}, {"btc36": False, "sol99": True})
+        # The totals line adds only the unflagged rows.
+        counted = [r for r in rows if not r["paper"]]
+        self.assertAlmostEqual(sum(r["invested"] for r in counted), 7.60, places=2)
+        self.assertAlmostEqual(sum(r["pnl"] for r in counted), 0.03, places=2)
 
-        # An archived paper campaign is just as excluded as a running one.
+        # An archived paper campaign is flagged just the same as a running one.
         rows = self.collect({"campaigns": [], "closed_campaigns": [{**paper, "state": "STOPPED"}]})
-        self.assertEqual(rows, [])
+        self.assertEqual([r["paper"] for r in rows], [True])
 
-    def test_a_campaign_with_no_mode_is_treated_as_live(self):
-        """Older stored campaigns predate the field; dropping them would erase
-        history that really was real money."""
+    def test_a_campaign_with_no_mode_counts_as_real_money(self):
+        """Older stored campaigns predate the field; flagging them paper would
+        erase history that really was real money."""
         old = {"campaign_id": "old1", "symbol": "SOLUSDT", "state": "COMPLETED", "rounds": [_round()]}
-        self.assertEqual(len(self.collect({"campaigns": [old], "closed_campaigns": []})), 1)
+        rows = self.collect({"campaigns": [old], "closed_campaigns": []})
+        self.assertEqual([r["paper"] for r in rows], [False])
 
     def test_rounds_stay_newest_first(self):
         a = {"campaign_id": "a", "symbol": "SOLUSDT", "state": "STOPPED", "rounds": [_round(1)]}
