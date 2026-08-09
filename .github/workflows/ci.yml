@@ -33,11 +33,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
           # Pinned: an unpinned ruff drifts away from the pre-commit hook
           # and fails checks that pass locally. Bump both together.
-          pip install ruff==0.15.5 bandit pytest
+          pip install ruff==0.15.5 bandit pip-audit pytest
 
       - name: Ruff lint
         run: ruff check .
@@ -58,11 +58,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Python dependency audit
+        run: pip-audit -r requirements.txt --progress-spinner off
+
       - name: Import check (smoke test)
         env:
           DELTA_API_KEY: "dummy"
           DELTA_API_SECRET: "dummy"
+          BINANCE_API_KEY: ""
+          BINANCE_API_SECRET: ""
+          COINDCX_API_KEY: ""
+          COINDCX_API_SECRET: ""
           CRYPTOFORGE_PIN: "test-pin-not-real"
+          CRYPTOFORGE_TOTP_SECRET: ""
+          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_CHAT_ID: ""
+          DISCORD_WEBHOOK_URL: ""
+          CRYPTOFORGE_STATE_DIR: "/tmp/cryptoforge-ci-state"
         run: |
           python -c "
           import sys, os
@@ -78,6 +90,15 @@ jobs:
         env:
           DELTA_API_KEY: "dummy"
           DELTA_API_SECRET: "dummy"
+          BINANCE_API_KEY: ""
+          BINANCE_API_SECRET: ""
+          COINDCX_API_KEY: ""
+          COINDCX_API_SECRET: ""
           CRYPTOFORGE_PIN: "test-pin-not-real"
+          CRYPTOFORGE_TOTP_SECRET: ""
+          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_CHAT_ID: ""
+          DISCORD_WEBHOOK_URL: ""
+          CRYPTOFORGE_STATE_DIR: "/tmp/cryptoforge-ci-state"
         run: |
-          pytest tests/ -v --tb=short 2>/dev/null || echo "No tests yet — add tests/ to unlock this stage"
+          pytest tests/ -v --tb=short

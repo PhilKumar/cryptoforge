@@ -8,7 +8,8 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-load_dotenv()
+_CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_CONFIG_DIR, ".env"))
 
 # ── Delta Exchange API Credentials ──────────────────────────
 DELTA_API_KEY = os.getenv("DELTA_API_KEY", "YOUR_API_KEY_HERE")

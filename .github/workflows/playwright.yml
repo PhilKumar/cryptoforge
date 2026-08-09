@@ -41,7 +41,8 @@ jobs:
       - name: Install Playwright deps
         working-directory: e2e-tests
         run: |
-          npm install
+          npm ci
+          npm audit --audit-level=high
           npx playwright install --with-deps chromium
 
       # ── Start CryptoForge server ──
@@ -50,6 +51,15 @@ jobs:
           CRYPTOFORGE_PIN: "123456"
           DELTA_API_KEY: "e2e-dummy"
           DELTA_API_SECRET: "e2e-dummy-secret"
+          BINANCE_API_KEY: ""
+          BINANCE_API_SECRET: ""
+          COINDCX_API_KEY: ""
+          COINDCX_API_SECRET: ""
+          CRYPTOFORGE_TOTP_SECRET: ""
+          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_CHAT_ID: ""
+          DISCORD_WEBHOOK_URL: ""
+          CRYPTOFORGE_STATE_DIR: "/tmp/cryptoforge-e2e-state"
         run: |
           uvicorn app:app --host 0.0.0.0 --port 8001 &
           echo "Waiting for server..."
@@ -110,7 +120,7 @@ jobs:
       - name: Verify deployment
         run: |
           sleep 3
-          ssh deploy-target "curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health && echo ' ✅ Health OK' || echo ' ❌ Health FAILED'"
+          ssh deploy-target "cd ~/cryptoforge && test \"\$(git rev-parse HEAD)\" = \"${GITHUB_SHA}\" && curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health >/dev/null && echo 'Deployment commit and health verified'"
 
       - name: Post-deploy summary
         if: always()

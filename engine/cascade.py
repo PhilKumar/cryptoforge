@@ -1923,14 +1923,17 @@ class CascadeEngine:
         if self._lock_handle is not None:
             return True
         # Opening and locking fail for opposite reasons and must not share a
-        # handler. A missing directory is an OSError too, and folding it in
-        # here read as "another process is trading" — which would silently stop
-        # this one placing orders, including the exit on an open position.
+        # handler. If the lock itself is unusable, fail closed: allowing two
+        # blue-green workers to trade the same account has already produced
+        # duplicate orders. The engine keeps monitoring and will retry on its
+        # next cycle once the filesystem problem is repaired.
         try:
             handle = open(self._lock_path, "a+")
         except Exception as exc:
-            _log.warning("[CASCADE] write lock unusable (%s); trading without it", exc)
-            return True
+            if not self._lock_warned:
+                _log.error("[CASCADE] write lock unusable (%s); order writes are blocked", exc)
+                self._lock_warned = True
+            return False
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -1942,6 +1945,7 @@ class CascadeEngine:
         handle.write(f"{os.getpid()}\n")
         handle.flush()
         self._lock_handle = handle
+        self._lock_warned = False
         return True
 
     def _release_write_lock(self) -> None:

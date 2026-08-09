@@ -30,6 +30,24 @@ class SQLiteJSONStore:
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
+        self._restrict_db_permissions()
+
+    def _restrict_db_permissions(self) -> None:
+        """Keep trading/session state private even outside systemd's UMask.
+
+        Do not chmod the parent directory here: callers legitimately use shared
+        temporary directories in tests. Deployment owns the application state
+        directory and applies its directory mode separately.
+        """
+        if not os.path.exists(self.db_path):
+            return
+        try:
+            os.chmod(self.db_path, 0o600)
+        except OSError:
+            # Some read-only/network filesystems do not support chmod. The
+            # health check still reports writability and deployment verifies
+            # the production state directory separately.
+            pass
 
     @contextmanager
     def _connect(self):

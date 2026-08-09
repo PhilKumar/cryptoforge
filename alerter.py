@@ -41,6 +41,17 @@ _inflight: set = set()
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def reload_from_env() -> None:
+    """Refresh alert destinations after the runtime environment is updated."""
+    global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DISCORD_WEBHOOK_URL, _TELEGRAM_OK, _DISCORD_OK
+
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+    DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+    _TELEGRAM_OK = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+    _DISCORD_OK = bool(DISCORD_WEBHOOK_URL)
+
+
 def _ist_timestamp() -> str:
     return datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S IST")
 

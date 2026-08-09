@@ -1220,6 +1220,13 @@ def _is_https_request(request: Request) -> bool:
     return proto == "https"
 
 
+def _is_direct_loopback_request(request: Request) -> bool:
+    """True only for a direct local probe, never for a request proxied by nginx."""
+    client_host = str(getattr(getattr(request, "client", None), "host", "") or "")
+    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+    return client_host in {"127.0.0.1", "::1"} and not forwarded
+
+
 def _is_same_origin_request(request: Request) -> bool:
     expected_origin = str(request.base_url).rstrip("/")
     origin = (request.headers.get("origin") or "").rstrip("/")
@@ -1299,7 +1306,6 @@ async def require_auth(request: Request):
         "/api/auth/login",
         "/api/auth/status",
         "/api/health",
-        "/api/ready",
         # Public keys, and an executor must be able to fetch them before it has
         # proved anything about itself.
         "/api/cascade/feed/keys",
@@ -1316,6 +1322,8 @@ async def require_auth(request: Request):
         "/sw.js",
         "/apple-touch-icon.png",
     ):
+        return
+    if path == "/api/ready" and _is_direct_loopback_request(request):
         return
     if path.startswith("/static"):
         return
@@ -1345,7 +1353,6 @@ async def auth_middleware(request: Request, call_next):
         "/api/auth/status",
         "/health",
         "/api/health",
-        "/api/ready",
         "/api/cascade/feed/keys",
         "/api/billing/razorpay/webhook",
         "/robots.txt",
@@ -1356,7 +1363,7 @@ async def auth_middleware(request: Request, call_next):
         "/sw.js",
         "/apple-touch-icon.png",
     )
-    if path in public or path.startswith("/static"):
+    if path in public or path.startswith("/static") or (path == "/api/ready" and _is_direct_loopback_request(request)):
         return await _call_next_or_client_closed(request, call_next)
     if path.startswith("/api/"):
         token = _get_session_token(request)
@@ -1602,6 +1609,10 @@ class StrategyPayload(BaseModel):
     exit_conditions: Optional[List[dict]] = None
     candle_interval: str = "5m"
     deploy_config: Optional[dict] = None
+    # UI confirmation is not an authorization boundary, but requiring the
+    # acknowledgement in the request prevents accidental/direct API starts
+    # that bypass the live deployment checklist entirely.
+    live_acknowledged: bool = False
 
 
 def _build_backtest_assumptions(payload: StrategyPayload) -> List[str]:
@@ -2601,6 +2612,7 @@ def _reload_runtime_config_from_env() -> None:
         config.DELTA_WS_URL = "wss://socket.india.delta.exchange"
     AUTH_PIN = os.getenv("CRYPTOFORGE_PIN") or os.getenv("CRYPTOFORGE_PASSWORD") or AUTH_PIN
     SESSION_SECRET = os.getenv("SESSION_SECRET", SESSION_SECRET)
+    alerter.reload_from_env()
 
 
 async def _rebind_broker_bound_engines() -> None:
@@ -2780,6 +2792,7 @@ def _runtime_has_activity(summary: Optional[dict] = None) -> bool:
         or payload.get("scalp_running")
         or payload.get("scalp_open_trades")
         or payload.get("scalp_pending_entries")
+        or payload.get("cascade_active_campaigns")
     )
 
 
@@ -3021,6 +3034,8 @@ def _production_readiness_payload() -> dict:
             and _route_available("/api/auth/logout", "POST"),
             {
                 "session_auth": True,
+                "totp_enabled": _totp_enabled(),
+                "persistent_session_secret": bool(os.getenv("SESSION_SECRET")),
                 "csrf_for_writes": True,
                 "rate_limited_write_routes": ["admin_config_update", "broker_switch", "scalp_enter", "scalp_exit"],
                 "headers": [
@@ -3033,6 +3048,18 @@ def _production_readiness_payload() -> dict:
                 ],
                 "allowed_origins": list(_ALLOWED_ORIGINS),
             },
+            warnings=[
+                *(
+                    []
+                    if _totp_enabled()
+                    else ["TOTP is not configured; the trading console is protected by one factor."]
+                ),
+                *(
+                    []
+                    if os.getenv("SESSION_SECRET")
+                    else ["SESSION_SECRET is not configured; sessions are invalidated when the process restarts."]
+                ),
+            ],
         ),
         _production_check(
             "data_safety",
@@ -3220,22 +3247,6 @@ async def health():
         "status": summary["status"],
         "time": summary["time"],
         "ready": summary["ready"],
-        "broker": summary["broker"],
-        "broker_configured": summary["broker_configured"],
-        "delta_configured": summary["delta_configured"],
-        "live_running": bool(summary["runtime"]["live_running_runs"]),
-        "paper_running": bool(summary["runtime"]["paper_running_runs"]),
-        "scalp_running": bool(summary["runtime"]["scalp_running"]),
-        "state_store": {
-            "exists": summary["state_store"]["exists"],
-            "writable": summary["state_store"]["writable"],
-            "size_bytes": summary["state_store"]["size_bytes"],
-        },
-        "recovery_required": bool(
-            summary["recovery"]["live_candidates"]
-            or summary["recovery"]["paper_candidates"]
-            or summary["recovery"]["scalp_recovery_required"]
-        ),
     }
     # Only present once a key set is installed, so an install that never sells
     # signals stays quiet. A key set nobody re-signs eventually stops every
@@ -3315,6 +3326,7 @@ async def emergency_stop(request: Request):
     results = {}
     stopped = 0
     scalp_closed = 0
+    failures = 0
 
     for run_id, engine in list(paper_engines.items()):
         try:
@@ -3326,6 +3338,7 @@ async def emergency_stop(request: Request):
                 results[f"paper:{run_id}"] = "not_running"
         except Exception as e:
             results[f"paper:{run_id}"] = f"error: {str(e)}"
+            failures += 1
 
     for run_id, engine in list(live_engines.items()):
         try:
@@ -3337,6 +3350,7 @@ async def emergency_stop(request: Request):
                 results[f"live:{run_id}"] = "not_running"
         except Exception as e:
             results[f"live:{run_id}"] = f"error: {str(e)}"
+            failures += 1
 
     # Stop scalp mode too, closing any open scalp positions before halting the engine.
     scalp_engine = globals().get("_scalp_engine")
@@ -3352,14 +3366,17 @@ async def emergency_stop(request: Request):
                     scalp_closed += 1
                 else:
                     results[f"scalp:trade:{trade_id}"] = result.get("message", "error")
+                    failures += 1
             except Exception as e:
                 results[f"scalp:trade:{trade_id}"] = f"error: {str(e)}"
+                failures += 1
         try:
             if getattr(scalp_engine, "_running", False):
                 scalp_engine.stop()
                 results["scalp:engine"] = "stopped"
         except Exception as e:
             results["scalp:engine"] = f"error: {str(e)}"
+            failures += 1
 
     # Stop cascade campaigns: cancel resting orders (entries + TP), never
     # market-sell holdings — the spot position simply remains in the wallet.
@@ -3371,9 +3388,13 @@ async def emergency_stop(request: Request):
                 results[f"cascade:campaign:{campaign.campaign_id}"] = (
                     "stopped" if result.get("status") == "ok" else result.get("error", "error")
                 )
-                stopped += 1
+                if result.get("status") == "ok":
+                    stopped += 1
+                else:
+                    failures += 1
             except Exception as e:
                 results[f"cascade:campaign:{campaign.campaign_id}"] = f"error: {str(e)}"
+                failures += 1
         try:
             if getattr(cascade_engine, "_running", False):
                 cascade_engine.stop()
@@ -3381,6 +3402,7 @@ async def emergency_stop(request: Request):
             _persist_cascade_runtime_snapshot(cascade_engine)
         except Exception as e:
             results["cascade:engine"] = f"error: {str(e)}"
+            failures += 1
 
     # Cancel all tasks
     for name, tasks_dict in [("live", _live_tasks), ("paper", _paper_tasks)]:
@@ -3391,16 +3413,24 @@ async def emergency_stop(request: Request):
                     await task_ref
                 except asyncio.CancelledError:
                     pass
+                except Exception as e:
+                    results[f"{name}:task:{run_id}"] = f"error: {str(e)}"
+                    failures += 1
     _live_tasks.clear()
     _paper_tasks.clear()
     live_engines.clear()
     paper_engines.clear()
 
     return {
-        "status": "ok",
+        "status": "ok" if failures == 0 else "partial",
         "stopped": stopped,
         "scalp_closed": scalp_closed,
-        "message": f"Emergency stop executed — {stopped} engine(s) stopped, {scalp_closed} scalp trade(s) closed",
+        "failed": failures,
+        "message": (
+            f"Emergency stop executed — {stopped} engine(s) stopped, {scalp_closed} scalp trade(s) closed"
+            + (f", {failures} action(s) need attention" if failures else "")
+        ),
+        "holdings_policy": "Cascade spot holdings are not market-sold; resting orders are cancelled and holdings remain in the wallet.",
         "results": results,
         "timestamp": str(datetime.now()),
     }
@@ -4246,6 +4276,11 @@ async def api_run_backtest(payload: StrategyPayload, request: Request = None):
 # ── Live Engine ───────────────────────────────────────────────────
 @app.post("/api/live/start")
 async def live_start(payload: StrategyPayload):
+    if not payload.live_acknowledged:
+        raise HTTPException(
+            status_code=400,
+            detail="Live trading requires an explicit live-risk acknowledgement.",
+        )
     runtime = _normalize_strategy_runtime(
         indicators=payload.indicators,
         entry_conditions=payload.entry_conditions,
@@ -6909,6 +6944,11 @@ async def websocket_endpoint(ws: WebSocket):
     ws_clients.append(ws)
     try:
         while True:
+            # Do not let a long-lived socket outlast a logout, idle timeout or
+            # explicit session revocation in another tab.
+            if not _validate_session(token, request=ws):
+                await ws.close(code=4001, reason="Session expired")
+                break
             paper_sts = {rid: e.get_status() for rid, e in paper_engines.items()}
             live_sts = {rid: e.get_status() for rid, e in live_engines.items()}
             try:

@@ -545,13 +545,31 @@ function setQuickAsset(symbol, pillEl) {
 }
 
 // ── Custom Modal System ────────────────────────────────────
+function _cfSafeModalFragment(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = String(html == null ? '' : html);
+  const allowed = new Set(['B', 'BR', 'CODE', 'EM', 'LI', 'P', 'STRONG', 'UL']);
+  Array.from(tpl.content.querySelectorAll('*')).forEach(function(node) {
+    if (!allowed.has(node.tagName)) {
+      node.replaceWith(document.createTextNode(node.textContent || ''));
+      return;
+    }
+    Array.from(node.attributes).forEach(function(attr) { node.removeAttribute(attr.name); });
+  });
+  return tpl.content.cloneNode(true);
+}
+
 function cfModal(title, msg, icon, buttons) {
   return new Promise(resolve => {
+    const previousFocus = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'cf-modal-overlay';
 
     const modal = document.createElement('div');
     modal.className = 'cf-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.tabIndex = -1;
 
     const iconEl = document.createElement('div');
     iconEl.className = 'cf-modal-icon';
@@ -559,16 +577,16 @@ function cfModal(title, msg, icon, buttons) {
 
     const titleEl = document.createElement('div');
     titleEl.className = 'cf-modal-title';
+    titleEl.id = 'cf-modal-title-' + Date.now() + '-' + Math.random().toString(16).slice(2);
     titleEl.textContent = title;                  // safe — no innerHTML
+    modal.setAttribute('aria-labelledby', titleEl.id);
 
     const msgEl = document.createElement('div');
     msgEl.className = 'cf-modal-msg';
     if (msg instanceof Node) {
       msgEl.appendChild(msg);
     } else if (msg && typeof msg === 'object' && typeof msg.html === 'string') {
-      const tpl = document.createElement('template');
-      tpl.innerHTML = msg.html;
-      msgEl.appendChild(tpl.content.cloneNode(true));
+      msgEl.appendChild(_cfSafeModalFragment(msg.html));
     } else {
       msgEl.textContent = msg == null ? '' : String(msg);
     }
@@ -590,12 +608,37 @@ function cfModal(title, msg, icon, buttons) {
     modal.appendChild(actionsEl);
     overlay.appendChild(modal);
 
+    let settled = false;
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      overlay.remove();
+      if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+      resolve(value);
+    }
     overlay.addEventListener('click', function(e) {
       var btn = e.target.closest('[data-idx]');
-      if (btn) { overlay.remove(); resolve(parseInt(btn.dataset.idx)); }
-      if (e.target === overlay) { overlay.remove(); resolve(-1); }
+      if (btn) finish(parseInt(btn.dataset.idx));
+      if (e.target === overlay) finish(-1);
+    });
+    overlay.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(-1);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const focusable = Array.from(modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+        .filter(function(node) { return !node.disabled && node.getClientRects().length; });
+      if (!focusable.length) { e.preventDefault(); modal.focus(); return; }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     });
     document.body.appendChild(overlay);
+    const firstButton = modal.querySelector('button');
+    (firstButton || modal).focus();
   });
 }
 async function cfAlert(msg, title, icon, allowHtml) {
@@ -913,7 +956,7 @@ function cfInitAlerts() {
   setTimeout(cfLoadAlerts, 1200);
   // The WebSocket delivers alerts live; this catches the ones raised while the
   // socket was down, the laptop asleep or the tab in the background.
-  setInterval(cfLoadAlerts, 45000);
+  setInterval(function() { if (!document.hidden) cfLoadAlerts(); }, 45000);
   document.addEventListener('visibilitychange', function() {
     if (!document.hidden) cfLoadAlerts();
   });
@@ -1253,13 +1296,16 @@ async function doLogout() {
 
 // ── Emergency Stop ─────────────────────────────────────────
 async function emergencyStop() {
-  const ok = await cfConfirm('This will immediately kill all running paper, live, and scalp flows. Are you sure?', 'Emergency Stop', '🚨');
+  const ok = await cfConfirm(
+    'This stops paper, live, scalp, and Cascade automation. Cascade resting orders are cancelled, but spot holdings remain in the wallet and are <b>not</b> market-sold. Are you sure?',
+    'Emergency Stop', '🚨', true
+  );
   if (!ok) return;
   try {
     const r = await cfApiFetch('/api/emergency-stop', { method: 'POST' });
     const d = await r.json();
-    cfToast(d.message || 'All engines stopped', 'success');
-    setTimeout(function() { location.reload(); }, 1000);
+    cfToast(d.message || 'Emergency stop completed', d.status === 'ok' ? 'success' : 'error');
+    setTimeout(function() { location.reload(); }, d.status === 'ok' ? 1000 : 3000);
   } catch(e) { cfToast('Emergency stop failed: ' + e.message, 'error'); }
 }
 
@@ -3362,6 +3408,7 @@ async function startLive() {
     margin_mode: document.getElementById('deploy-margin-mode') ? document.getElementById('deploy-margin-mode').value : 'cross',
     sl_reference: document.getElementById('deploy-sl-ref') ? document.getElementById('deploy-sl-ref').value : 'signal',
     tp_reference: document.getElementById('deploy-tp-ref') ? document.getElementById('deploy-tp-ref').value : 'signal',
+    live_acknowledged: true,
   };
   try {
     const r = await cfApiFetch('/api/live/start', {
@@ -5210,7 +5257,9 @@ function _exportLiveTradeSelection(runId) {
 function startLiveMonitor() {
   loadLiveMonitor();
   if (_liveMonitorInterval) clearInterval(_liveMonitorInterval);
-  _liveMonitorInterval = setInterval(loadLiveMonitor, 5000);
+  _liveMonitorInterval = setInterval(function() {
+    if (!document.hidden && document.getElementById('live-page').classList.contains('active-page')) loadLiveMonitor();
+  }, 5000);
 }
 
 function stopLiveMonitor() {
@@ -6464,9 +6513,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.addEventListener('resize', cfSyncScalpLogPanelHeight);
 
-  setInterval(refreshTopbarTicker, 30000);
-  setInterval(pollLiveStatus, 10000);
-  setInterval(function() { if (document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData(); }, 60000);
+  setInterval(function() { if (!document.hidden) refreshTopbarTicker(); }, 30000);
+  setInterval(function() { if (!document.hidden) pollLiveStatus(); }, 10000);
+  setInterval(function() {
+    if (!document.hidden && document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData();
+  }, 60000);
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) return;
+    refreshTopbarTicker();
+    pollLiveStatus();
+    if (document.getElementById('portfolio-page').classList.contains('active-page')) loadPortfolioData();
+    if (document.getElementById('live-page').classList.contains('active-page')) loadLiveMonitor();
+    if (document.getElementById('scalp-page').classList.contains('active-page')) cfRefreshScalpWorkspace({ reconcile: 'auto' });
+    if (document.getElementById('cascade-page').classList.contains('active-page')) cfLoadCascadeStatus(false);
+  });
   // Restore the initial page and seed browser history so minimal-ui back/refresh works in the installed app
   var savedTab = localStorage.getItem('cf_active_tab');
   var initialPageId = cfPageIdFromLocation();
@@ -7193,11 +7253,11 @@ function cfInitScalpPage() {
   cfSyncScalpLogPanelHeight();
   if (!_cfScalpPollTimer) {
     _cfScalpPollTimer = setInterval(function() {
-      if (!cfScalpWsFresh()) cfLoadScalpStatus();
+      if (!document.hidden && !cfScalpWsFresh()) cfLoadScalpStatus();
     }, 2000);
   }
   if (!_cfScalpActivityTimer) {
-    _cfScalpActivityTimer = setInterval(function() { cfLoadScalpActivity(false); }, 15000);
+    _cfScalpActivityTimer = setInterval(function() { if (!document.hidden) cfLoadScalpActivity(false); }, 15000);
   }
 }
 
@@ -8225,7 +8285,7 @@ var _cfCascadeLastStatus = null;
 function cfInitCascadePage() {
   cfLoadCascadeStatus(false);
   if (!_cfCascadePollTimer) {
-    _cfCascadePollTimer = setInterval(function() { cfLoadCascadeStatus(false); }, 3000);
+    _cfCascadePollTimer = setInterval(function() { if (!document.hidden) cfLoadCascadeStatus(false); }, 3000);
   }
   // Once, on open — deliberately not on the 3s poll. Nothing here changes tick
   // to tick, and repainting it would wipe a half-typed registration.

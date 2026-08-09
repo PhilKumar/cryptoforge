@@ -442,7 +442,7 @@ class BinanceSpotClient(BaseBroker):
             _binance_log.warning("[BINANCE SPOT] Wallet error: %s", exc)
             return {"error": str(exc)}
 
-    def _balance_position(self, wallet_row: dict) -> dict | None:
+    def _balance_position(self, wallet_row: dict, tradable_pairs: Optional[set] = None) -> dict | None:
         asset = str(wallet_row.get("asset_symbol") or "").upper()
         total_qty = self.coerce_float(wallet_row.get("total_balance"), 0.0)
         if not asset or asset == self.quote_asset or total_qty <= 0:
@@ -456,7 +456,8 @@ class BinanceSpotClient(BaseBroker):
         # moved to the market-data host, where those symbols return 400 instead
         # of quietly resolving. Unlisted means unpriceable: skip the call and
         # leave the balance at zero value, exactly as a failed ticker did.
-        if pair not in self._tradable_pairs():
+        listed = self._tradable_pairs() if tradable_pairs is None else tradable_pairs
+        if pair not in listed:
             mark_price = 0.0
         else:
             ticker = self.get_ticker(pair)
@@ -485,7 +486,15 @@ class BinanceSpotClient(BaseBroker):
         wallet = self.get_wallet()
         if not isinstance(wallet, list):
             return []
-        return [position for position in (self._balance_position(row) for row in wallet) if position]
+        # Resolve exchangeInfo once per portfolio refresh. On an exchangeInfo
+        # outage, retrying it for every wallet asset multiplied one upstream
+        # failure into dozens of slow calls. Major pairs are a bounded fallback
+        # so core holdings can still be valued without probing arbitrary junk
+        # assets credited to testnet accounts.
+        tradable_pairs = self._tradable_pairs()
+        if not tradable_pairs:
+            tradable_pairs = {f"{asset}{self.quote_asset}" for asset in self._MAJOR_ASSETS}
+        return [position for position in (self._balance_position(row, tradable_pairs) for row in wallet) if position]
 
     def get_position(self, product_id: str, strict: bool = False) -> dict:
         pair = self.to_broker_symbol(product_id)

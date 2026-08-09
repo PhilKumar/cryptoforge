@@ -325,6 +325,7 @@ class BinanceSpotClientTests(unittest.TestCase):
         with (
             patch.object(client, "_is_configured", return_value=True),
             patch.object(client, "_account", return_value=account),
+            patch.object(client, "_tradable_pairs", return_value={"BTCUSDT"}),
             patch.object(client, "get_ticker", return_value={"mark_price": 70000.0}),
         ):
             wallet = client.get_wallet()
@@ -454,7 +455,10 @@ class BinanceSpotClientTests(unittest.TestCase):
             {"asset_symbol": "USDT", "total_balance": "100"},
             {"asset_symbol": "PEPE", "total_balance": "1000000"},  # non-major holding
         ]
-        with patch.object(client, "get_wallet", return_value=wallet):
+        with (
+            patch.object(client, "get_wallet", return_value=wallet),
+            patch.object(client, "_tradable_pairs", return_value={"PEPEUSDT"}),
+        ):
             symbols = client._order_history_symbols()
         self.assertIn("BTCUSDT", symbols)  # majors always covered
         self.assertIn("PEPEUSDT", symbols)  # held asset added

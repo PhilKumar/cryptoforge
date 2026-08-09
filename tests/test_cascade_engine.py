@@ -2998,12 +2998,11 @@ class CascadeSingleWriterTests(unittest.TestCase):
         with open(self.lock) as handle:
             self.assertEqual(handle.read().strip(), str(os.getpid()))
 
-    def test_an_unusable_lock_path_does_not_stop_trading(self):
-        """A broken lock must not silently disable the engine — losing the
-        exit on an open position is worse than the race it guards against."""
+    def test_an_unusable_lock_path_fails_closed(self):
+        """A broken lock must never create two live order writers."""
         engine = self._engine()
         engine._lock_path = os.path.join(self.tmp, "no-such-dir", "writer.lock")
-        self.assertTrue(engine._acquire_write_lock())
+        self.assertFalse(engine._acquire_write_lock())
 
 
 class CascadeLotSizeResidueTests(unittest.IsolatedAsyncioTestCase):

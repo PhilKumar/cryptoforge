@@ -223,7 +223,7 @@ class DeltaWSFeed:
                 self._ws = await self._session.ws_connect(
                     self._ws_url,
                     heartbeat=HEARTBEAT_INTERVAL,
-                    receive_timeout=60,
+                    timeout=aiohttp.ClientWSTimeout(ws_receive=60),
                 )
 
                 self._connected = True

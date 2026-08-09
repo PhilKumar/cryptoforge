@@ -16,8 +16,10 @@ async function expectActivePage(page: Page, pageId: string, navId: string) {
 }
 
 const shellPages = [
+  { hash: '#journal', nav: '#nav-journal', section: 'journal-page', probe: '#cf-journal-body' },
   { hash: '#dashboard', nav: '#nav-dashboard', section: 'dashboard-page', probe: '#dash-runs-table' },
   { hash: '#portfolio', nav: '#nav-portfolio', section: 'portfolio-page', probe: '#pf-positions-table' },
+  { hash: '#cascade', nav: '#nav-cascade', section: 'cascade-page', probe: '#cf-cascade-trades' },
   { hash: '#builder', nav: '#nav-builder', section: 'builder-page', probe: '#backtest-run-btn' },
   { hash: '#live', nav: '#nav-live', section: 'live-page', probe: '#live-panels-container' },
   { hash: '#scalp', nav: '#nav-scalp', section: 'scalp-page', probe: '#cf-scalp-active-table' },
@@ -192,5 +194,32 @@ test.describe('Comprehensive Site Audit', () => {
     const secretLeaks = data.fields.filter((field) => field.secret && field.value);
     expect(secretLeaks).toEqual([]);
     expect(data.fields.some((field) => field.key === 'CRYPTOFORGE_BROKER')).toBe(true);
+  });
+
+  test('core pages do not create document-level overflow at phone and tablet widths', async ({ page }) => {
+    for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 }]) {
+      await page.setViewportSize(viewport);
+      for (const shellPage of shellPages) {
+        await page.goto('/app' + shellPage.hash, { waitUntil: 'domcontentloaded' });
+        await expectActivePage(page, shellPage.section, shellPage.nav.slice(1));
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(overflow, `${shellPage.section} overflows at ${viewport.width}px`).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  test('dialogs are named and keyboard-operable', async ({ page }) => {
+    await page.click('#topbar-appearance-btn');
+    const appearance = page.getByRole('dialog', { name: 'Appearance' });
+    await expect(appearance).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(appearance).toBeHidden();
+
+    await page.evaluate(() => { void (window as any).cfAlert('Keyboard audit', 'Audit dialog', 'ℹ️'); });
+    const alert = page.getByRole('dialog', { name: 'Audit dialog' });
+    await expect(alert).toBeVisible();
+    await expect(alert.getByRole('button', { name: 'OK' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(alert).toBeHidden();
   });
 });

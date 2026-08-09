@@ -63,7 +63,7 @@ jobs:
       - name: Verify deployment
         run: |
           sleep 3
-          ssh deploy-target "curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health && echo ' ✅ Health OK' || echo ' ❌ Health FAILED'"
+          ssh deploy-target "cd ~/cryptoforge && test \"\$(git rev-parse HEAD)\" = \"${GITHUB_SHA}\" && curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health >/dev/null && echo 'Deployment commit and health verified'"
 
       - name: Post-deploy summary
         if: always()
