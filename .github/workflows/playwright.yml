@@ -113,11 +113,34 @@ jobs:
             StrictHostKeyChecking accept-new
           EOF
 
+      # cd-deploy.sh exits 75 when it refuses to restart the service because
+      # real trading is in flight. That is the gate working, not a broken
+      # build, so it must not paint a green test run red — a red mark that
+      # means "everything is fine" is worse than no mark at all.
       - name: Run zero-downtime deploy
+        id: deploy
         run: |
+          set +e
           ssh deploy-target "cd ~/cryptoforge && git fetch origin main && git reset --hard origin/main && bash deploy/cd-deploy.sh"
+          status=$?
+          set -e
+          if [[ "$status" -eq 75 ]]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "### Deploy skipped — trading was in flight" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Open positions or resting orders on the active port, so the service was" >> "$GITHUB_STEP_SUMMARY"
+            echo "left running untouched. The new code IS checked out on the box, and the" >> "$GITHUB_STEP_SUMMARY"
+            echo "front end is served from disk — so HTML/JS changes are already live and" >> "$GITHUB_STEP_SUMMARY"
+            echo "only the Python process is still on the old build." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Re-run this job once the book is flat to finish the deploy." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=Deploy skipped::Trading in flight — service untouched, re-run when flat"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Verify deployment
+        if: steps.deploy.outputs.skipped != 'true'
         run: |
           sleep 3
           ssh deploy-target "cd ~/cryptoforge && test \"\$(git rev-parse HEAD)\" = \"${GITHUB_SHA}\" && curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health >/dev/null && echo 'Deployment commit and health verified'"

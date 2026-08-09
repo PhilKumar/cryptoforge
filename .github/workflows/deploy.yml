@@ -56,11 +56,28 @@ jobs:
             StrictHostKeyChecking accept-new
           EOF
 
+      # Exit 75 is cd-deploy.sh refusing to restart while trading is in flight.
+      # It is the gate working, so it reports as a skip rather than a failure —
+      # see the same handling in playwright.yml.
       - name: Run zero-downtime deploy
+        id: deploy
         run: |
+          set +e
           ssh deploy-target "cd ~/cryptoforge && git fetch origin main && git reset --hard origin/main && bash deploy/cd-deploy.sh"
+          status=$?
+          set -e
+          if [[ "$status" -eq 75 ]]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "### Deploy skipped — trading was in flight" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The service was left running untouched. Re-run this job once the book is flat." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=Deploy skipped::Trading in flight — service untouched, re-run when flat"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Verify deployment
+        if: steps.deploy.outputs.skipped != 'true'
         run: |
           sleep 3
           ssh deploy-target "cd ~/cryptoforge && test \"\$(git rev-parse HEAD)\" = \"${GITHUB_SHA}\" && curl -sf http://127.0.0.1:\$(cat ~/.cryptoforge-active-port)/api/health >/dev/null && echo 'Deployment commit and health verified'"

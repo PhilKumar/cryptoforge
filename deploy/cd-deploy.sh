@@ -23,6 +23,14 @@ LOG_TAG="[DEPLOY]"
 log()  { echo "$LOG_TAG $(date '+%H:%M:%S') $*"; }
 die()  { log "ERROR: $*"; exit 1; }
 
+# Refusing to deploy because real trading is in flight is a correct outcome, not
+# a broken build. Exiting 1 for it painted every push red on a green test run,
+# which trained the eye to ignore the colour — the opposite of what a signal is
+# for. This exit code lets the workflow report it as SKIPPED and stay green,
+# while a genuine deployment fault still exits 1 through die().
+EXIT_DEPLOY_SKIPPED=75
+skip() { log "SKIPPED: $*"; exit "$EXIT_DEPLOY_SKIPPED"; }
+
 health_check() {
     local port=$1
     for i in $(seq 1 "$HEALTH_TIMEOUT"); do
@@ -42,10 +50,19 @@ runtime_is_active() {
     printf '%s' "$payload" | "$VENV/bin/python" -c '
 import json, sys
 runtime = json.load(sys.stdin).get("runtime", {})
+# What this gate is protecting: a source deploy restarts the process and
+# rebinds broker clients, so it must never land in the middle of a position or
+# a resting order. It is about POSITIONS AND ORDERS, not about which loops
+# happen to be spinning.
+#
+# A scalp engine with nothing open is therefore NOT a reason to block. It used
+# to be, and since it stays up long after its last trade closes, it held every
+# deploy indefinitely with zero trades and zero pending entries to protect —
+# while the only control that could stop it was hidden in the UI. Its OPEN
+# TRADES and PENDING ENTRIES still block, which is the case that matters.
 active = bool(
     runtime.get("live_running_runs")
     or runtime.get("paper_running_runs")
-    or runtime.get("scalp_running")
     or runtime.get("scalp_open_trades")
     or runtime.get("scalp_pending_entries")
     or runtime.get("cascade_active_campaigns")
@@ -84,7 +101,7 @@ log "Active: port $ACTIVE_PORT → Deploying to: port $STANDBY_PORT"
 runtime_status=0
 runtime_is_active "$ACTIVE_PORT" || runtime_status=$?
 if [[ "$runtime_status" -eq 0 ]]; then
-    die "Active trading runtime detected on port $ACTIVE_PORT. Stop it and verify broker state before deploying."
+    skip "Open positions or resting orders on port $ACTIVE_PORT. The code is on the box and will go out on the next deploy once they are flat; the running service is untouched."
 fi
 if [[ "$runtime_status" -eq 2 ]] && sudo fuser "${ACTIVE_PORT}/tcp" >/dev/null 2>&1; then
     die "The active worker on port $ACTIVE_PORT did not return runtime state. Deployment is blocked closed."
