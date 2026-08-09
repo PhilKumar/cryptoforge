@@ -1295,6 +1295,37 @@ async function doLogout() {
 }
 
 // ── Emergency Stop ─────────────────────────────────────────
+//
+// The button stops paper, live, SCALP and Cascade — but its visibility only
+// ever asked about paper and live runs. With scalp the only thing running, the
+// one control that can stop it was hidden, and there is no scalp-only endpoint
+// anywhere: the engine could not be stopped from the UI at all. That froze
+// deployment too, since cd-deploy.sh refuses to restart the process while any
+// runtime is live, and scalp_running alone is enough to hold it.
+//
+// SCALP therefore summons the button. CASCADE deliberately does NOT, even
+// though Emergency Stop would halt it: every campaign already carries its own
+// Stop on its strip, and cascade runs more or less continuously — so keying
+// off it would park a fixed, pulsing, z-index 9999 button over the top-right
+// corner permanently, where it swallows clicks meant for the page beneath.
+//
+// Each poll knows about its own engine and nothing else, so they report into a
+// shared picture rather than each overwriting the whole answer: the live poll
+// finding no runs must not re-hide a button a running scalp engine needs.
+var _cfRuntimeLive = { paper: false, live: false, scalp: false };
+
+function cfUpdateKillSwitch(patch) {
+  if (patch) {
+    Object.keys(patch).forEach(function(key) {
+      if (key in _cfRuntimeLive) _cfRuntimeLive[key] = !!patch[key];
+    });
+  }
+  var btn = document.getElementById('kill-switch-btn');
+  if (!btn) return;
+  var anyRunning = _cfRuntimeLive.paper || _cfRuntimeLive.live || _cfRuntimeLive.scalp;
+  btn.classList.toggle('hidden', !anyRunning);
+}
+
 async function emergencyStop() {
   const ok = await cfConfirm(
     'This stops paper, live, scalp, and Cascade automation. Cascade resting orders are cancelled, but spot holdings remain in the wallet and are <b>not</b> market-sold. Are you sure?',
@@ -2044,7 +2075,7 @@ async function loadDashboard() {
     if (liveCard) liveCard.classList.toggle('live-active', !!d.live_running);
 
     // Kill switch visibility
-    document.getElementById('kill-switch-btn').classList.toggle('hidden', !d.paper_running && !d.live_running);
+    cfUpdateKillSwitch({ paper: d.paper_running, live: d.live_running });
 
     // Active engines
     var engCard = document.getElementById('dash-engines-card');
@@ -3457,8 +3488,7 @@ async function pollLiveStatus() {
     const live = await liveR.json();
 
     // Kill switch visibility
-    var killBtn = document.getElementById('kill-switch-btn');
-    if (killBtn) killBtn.classList.toggle('hidden', !paper.running && !live.running);
+    cfUpdateKillSwitch({ paper: paper.running, live: live.running });
 
 
   } catch(e) { console.error('pollLiveStatus error:', e); }
@@ -3555,8 +3585,7 @@ function connectWS() {
             }
           }
         }
-        var killBtn = document.getElementById('kill-switch-btn');
-        if (killBtn) killBtn.classList.toggle('hidden', !data.paper_running && !data.live_running);
+        cfUpdateKillSwitch({ paper: data.paper_running, live: data.live_running });
         return;
       }
       if (data.source === 'scalp' && data.type === 'scalp_status') {
@@ -7718,6 +7747,9 @@ function cfApplyScalpStatus(d) {
   try {
     const status = d || {};
     _cfLatestScalpStatus = status;
+    // The scalp engine is a runtime Emergency Stop can halt, so it has to be
+    // able to summon the button — nothing else in the UI can stop it.
+    cfUpdateKillSwitch({ scalp: status.running });
     const payloadOpen = Array.isArray(status.open_trades) ? status.open_trades : [];
     const pending = Array.isArray(status.pending_entries) ? status.pending_entries : [];
     const exec = status.execution_metrics || {};
