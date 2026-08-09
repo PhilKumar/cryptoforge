@@ -2055,8 +2055,8 @@ class CascadeEngine:
         if dedupe_sec > 0:
             now = time.monotonic()
             key = dedupe_key or title
-            last = self._alert_state.get(key, 0.0)
-            if now - last < dedupe_sec:
+            last = self._alert_state.get(key)
+            if last is not None and now - last < dedupe_sec:
                 return
             self._alert_state[key] = now
         try:

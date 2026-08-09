@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -5703,6 +5704,14 @@ class CascadeMissingPositionFalseAlarmTests(unittest.IsolatedAsyncioTestCase):
 
 class CascadeAlertDedupeTests(unittest.TestCase):
     """Deduping on the title alone lets one campaign's alert mute its siblings."""
+
+    def test_the_first_alert_is_sent_even_just_after_process_boot(self):
+        sent = []
+        engine = _mk_engine()
+        engine.on_alert = lambda t, b, lv: sent.append((t, b))
+        with patch.object(cascade_module.time, "monotonic", return_value=10.0):
+            engine._alert("Cascade engine STALLED", "first", dedupe_sec=1800)
+        self.assertEqual(sent, [("Cascade engine STALLED", "first")])
 
     def test_two_campaigns_raising_the_same_title_both_get_through(self):
         sent = []
