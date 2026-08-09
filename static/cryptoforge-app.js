@@ -9859,6 +9859,11 @@ function _cfCascadeCollectRounds(status) {
     pool.forEach(function(campaign) {
       var id = String((campaign || {}).campaign_id || '');
       if (!id || byId[id]) return;
+      // This panel is a money ledger. A paper round's P&L is not money, and
+      // mixing it into "$926.34 deployed · +$30.06 realised" made the account
+      // look bigger and busier than it is. Paper campaigns are still shown in
+      // full on the campaign cards and in their own event logs.
+      if (String(campaign.mode || '').toLowerCase() === 'paper') return;
       byId[id] = campaign;
       order.push(id);
     });
@@ -9937,8 +9942,8 @@ function _cfCascadeRenderLedgerRows() {
       + '</td></tr>';
     _cfCascadeRenderLedgerPager(0, 0);
     if (meta) {
-      meta.textContent = 'Every round that reached its target, across every campaign — '
-        + 'running and ended alike. Nothing has closed yet.';
+      meta.textContent = 'Every LIVE round that reached its target, across every campaign — '
+        + 'running and ended alike. Paper campaigns are left out. Nothing has closed yet.';
     }
     return;
   }
@@ -9999,7 +10004,7 @@ function _cfCascadeRenderLedgerRows() {
 
   if (meta) {
     var tone = realised >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
-    meta.innerHTML = rows.length + ' round' + (rows.length === 1 ? '' : 's') + ' closed at target · '
+    meta.innerHTML = rows.length + ' live round' + (rows.length === 1 ? '' : 's') + ' closed at target · '
       + '$' + _cfCascadeUsd(invested) + ' deployed · '
       + '<strong style="color:' + tone + ';">' + (realised >= 0 ? '+' : '') + '$'
       + _cfCascadeUsd(realised) + ' realised</strong>'

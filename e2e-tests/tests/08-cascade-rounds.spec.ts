@@ -67,7 +67,11 @@ function round_(id: number, opts: { fees?: number } = {}) {
   };
 }
 
-function statusWith(rounds: Array<Record<string, unknown>>) {
+// `mode` is a parameter because the closed-round LEDGER is a money ledger and
+// skips paper campaigns outright. The card tests below want the paper default
+// they have always had; the ledger test has to ask for a live one or it renders
+// an empty table and every assertion below it is meaningless.
+function statusWith(rounds: Array<Record<string, unknown>>, mode = 'paper') {
   const fees = rounds.reduce((s, r) => s + Number(r.fees_usd || 0), 0);
   const pnl = rounds.reduce((s, r) => s + Number(r.pnl || 0), 0);
   return {
@@ -79,7 +83,7 @@ function statusWith(rounds: Array<Record<string, unknown>>) {
         campaign_id: 'e2e-rounds-fixture',
         seq: 1,
         symbol: 'SOLUSDT',
-        mode: 'paper',
+        mode,
         state: 'TRENDLINE_ACTIVE',
         mc_kind: 'major',
         timeframe: '5m',
@@ -159,7 +163,7 @@ test.describe('Cascade closed-rounds ledger', () => {
     const legacy = ledgerRound(3, { closed_ts: T0 + 100 });
     delete (legacy as Record<string, unknown>).fees_usd;
     delete (legacy as Record<string, unknown>).fees_estimated;
-    await serveStatus(page, statusWith([measured, modelled, legacy]));
+    await serveStatus(page, statusWith([measured, modelled, legacy], 'live'));
     await page.evaluate(() => (window as any).showPage(
       'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
     ));
@@ -185,6 +189,25 @@ test.describe('Cascade closed-rounds ledger', () => {
     await expect(meta).toContainText('after $0.09 fees');
     await expect(meta, 'the total admits how much of itself is modelled')
       .toContainText('$0.05 of it estimated');
+  });
+
+  test('paper rounds never reach the money ledger', async ({ page }) => {
+    await login(page);
+    // The same three rounds, on a PAPER campaign. Their $77.85 deployed and
+    // +$0.31 realised used to be added to the live totals, which made the
+    // account read bigger and busier than it is.
+    await serveStatus(page, statusWith([ledgerRound(1), ledgerRound(2), ledgerRound(3)], 'paper'));
+    await page.evaluate(() => (window as any).showPage(
+      'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
+    ));
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+
+    await expect(page.locator('#cf-cascade-ledger-body tr')).toHaveCount(1);
+    await expect(page.locator('#cf-cascade-ledger-body')).toContainText('No closed rounds yet');
+    const meta = page.locator('#cf-cascade-ledger-meta');
+    await expect(meta).not.toContainText('deployed');
+    // The campaign itself is untouched — only the money ledger skips it.
+    await expect(page.locator('#cf-cascade-campaigns')).toContainText('SOL');
   });
 });
 

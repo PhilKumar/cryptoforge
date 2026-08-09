@@ -122,6 +122,37 @@ class CascadeLedgerDedupeTests(unittest.TestCase):
         # a campaign with no id cannot be keyed, and must not crash the ledger
         self.assertEqual(self.collect({"campaigns": [{"symbol": "X", "rounds": [_round()]}]}), [])
 
+    def test_paper_rounds_are_left_out_of_the_money_ledger(self):
+        """The panel reads "$926.34 deployed · +$30.06 realised". Paper money is
+        not money, and mixing it in overstated both."""
+        live = {
+            "campaign_id": "btc36",
+            "symbol": "BTCUSDT",
+            "mode": "live",
+            "state": "TRENDLINE_ACTIVE",
+            "rounds": [_round(1, 7.60, 0.03)],
+        }
+        paper = {
+            "campaign_id": "sol99",
+            "symbol": "SOLUSDT",
+            "mode": "paper",
+            "state": "TRENDLINE_ACTIVE",
+            "rounds": [_round(2, 500.00, 25.00)],
+        }
+        rows = self.collect({"campaigns": [live, paper], "closed_campaigns": []})
+        self.assertEqual([r["campaign_id"] for r in rows], ["btc36"])
+        self.assertAlmostEqual(sum(r["invested"] for r in rows), 7.60, places=2)
+
+        # An archived paper campaign is just as excluded as a running one.
+        rows = self.collect({"campaigns": [], "closed_campaigns": [{**paper, "state": "STOPPED"}]})
+        self.assertEqual(rows, [])
+
+    def test_a_campaign_with_no_mode_is_treated_as_live(self):
+        """Older stored campaigns predate the field; dropping them would erase
+        history that really was real money."""
+        old = {"campaign_id": "old1", "symbol": "SOLUSDT", "state": "COMPLETED", "rounds": [_round()]}
+        self.assertEqual(len(self.collect({"campaigns": [old], "closed_campaigns": []})), 1)
+
     def test_rounds_stay_newest_first(self):
         a = {"campaign_id": "a", "symbol": "SOLUSDT", "state": "STOPPED", "rounds": [_round(1)]}
         b = {"campaign_id": "b", "symbol": "BTCUSDT", "state": "STOPPED", "rounds": [_round(5)]}
