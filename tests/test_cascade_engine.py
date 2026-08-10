@@ -4765,6 +4765,28 @@ class CascadeFrozenChartTests(unittest.IsolatedAsyncioTestCase):
         # still has to show what entered the trade.
         self.assertEqual([e["price"] for e in data["entries"]], [100.0])
 
+    async def test_a_frozen_chart_never_reads_the_newest_page(self):
+        """Phil's journal bug (2026-08-10): viewed days after the trade, the
+        broker's most-recent page held only candles NEWER than the trade, the
+        cutoff trim erased every one of them, and the never-trim-to-nothing
+        guard then showed a live chart under a "since mother candle" label.
+        A frozen record must page from the mother and stop at its own end."""
+        engine = _mk_engine()
+        campaign = self._ended(engine)
+        calls = []
+
+        async def _paged(symbol, since, timeframe):
+            calls.append((symbol, since, timeframe))
+            return [Candle(ts, 100.0, 101.0, 99.0, 100.0) for ts in range(600, 60000, 300)]
+
+        engine._fetch_closed_candles = _paged
+        data = await engine.get_chart_data(campaign.campaign_id)
+        self.assertTrue(calls, "a frozen chart must page from the mother, not read the newest page")
+        self.assertTrue(data["frozen"])
+        self.assertTrue(data["candles"])
+        # Everything shown belongs to the trade's own window (exit 1800 + tail).
+        self.assertLessEqual(max(c["t"] for c in data["candles"]), 1800 + 6 * 300)
+
 
 class CascadeBreakWindowMotherTests(unittest.TestCase):
     """The successor's mother is the highest candle of the 15m break window."""

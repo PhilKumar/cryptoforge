@@ -3117,12 +3117,17 @@ class CascadeEngine:
         cutoff = window_end + _CHART_TAIL_BUCKETS * tf_sec
         return [c for c in rows if c.timestamp <= cutoff][-max_candles:]
 
-    async def _chart_candles(self, campaign: Campaign, max_candles: int) -> List[Candle]:
+    async def _chart_candles(self, campaign: Campaign, max_candles: int, end_ts: int = 0) -> List[Candle]:
         """Closed candles from the mother candle forward, in the campaign's own
         timeframe — the same candles the engine stepped, so the chart and the
-        geometry can never disagree."""
+        geometry can never disagree.
+
+        `end_ts` (when set) is the newest candle timestamp the view may show —
+        a frozen journal record passes its trade-end cutoff here.
+        """
         tf_sec = campaign.timeframe_sec
         now = int(time.time())
+        window_end = min(int(end_ts) or now, now)
         # One klines call returns the most RECENT page and nothing older. A
         # caller asking for the whole campaign (a replay passes 100000) on a
         # campaign older than one page therefore used to get a history that
@@ -3132,11 +3137,24 @@ class CascadeEngine:
         # days, so this was reachable by any campaign that ran a long weekend.
         # Page for it instead. A view-sized request still takes one call,
         # because the most recent page is exactly what it wanted.
+        #
+        # A FROZEN view (a journal record of a finished trade) must never read
+        # the most-recent page either: viewed days later, every candle on that
+        # page is newer than the trade, the caller's cutoff trim erases all of
+        # them, and its never-trim-to-nothing guard then shows a live feed
+        # under a "since mother candle" label. Page from the mother instead
+        # whenever the window does not end at "now".
+        frozen = window_end < now - tf_sec * 2
         span_bars = (now - campaign.mother_timestamp) // max(tf_sec, 1)
-        if span_bars > KLINE_PAGE_BARS and max_candles > KLINE_PAGE_BARS:
+        if frozen or (span_bars > KLINE_PAGE_BARS and max_candles > KLINE_PAGE_BARS):
             paged = await self._fetch_closed_candles(
                 campaign.symbol, campaign.mother_timestamp - tf_sec, campaign.timeframe
             )
+            if frozen:
+                trimmed = [c for c in paged if c.timestamp <= window_end]
+                # Never trim to nothing: a trade that ended before its first
+                # closed candle still deserves a chart.
+                paged = trimmed or paged
             return paged[-max_candles:]
         try:
             df = await self.broker_for(campaign).async_get_candles(campaign.symbol, resolution=campaign.timeframe)
@@ -3719,9 +3737,13 @@ class CascadeEngine:
                 requested, bucket_sec = auto_timeframe, options[auto_timeframe]
                 mother_forced_visible = True
         if not drilled_in:
-            # Pull enough base candles that the rolled-up view still spans the window.
+            # Pull enough base candles that the rolled-up view still spans the
+            # window — and for a finished trade, END the fetch at the trade's
+            # own cutoff, or the fetch returns the newest page and a frozen
+            # journal chart silently turns into a live one.
             raw_needed = max_candles * max(bucket_sec // base_sec, 1)
-            history = await self._chart_candles(campaign, raw_needed)
+            fetch_end = trade_end_ts + _CHART_TAIL_BUCKETS * bucket_sec if trade_end_ts else 0
+            history = await self._chart_candles(campaign, raw_needed, end_ts=fetch_end)
             if not history:
                 history = self._candles.get(campaign_id) or []
             view = self._aggregate_candles(history, bucket_sec, base_sec)
