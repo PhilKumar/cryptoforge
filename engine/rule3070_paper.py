@@ -46,9 +46,17 @@ LOCK_PATH = os.path.join(OUT, "paper.lock")
 
 
 def configure() -> None:
-    """The locked config — the exact rules the full-history verdict ran."""
+    """The locked config — the exact rules the reproducible verdict ran.
+
+    Phil, 2026-08-11 night, after the funding audit: the tradeable version is
+    the SAFE one — the book may never hold more than HALF the purse at once.
+    That rule cut the 9-year backtest from a fantasy $1M (earned 100% all-in
+    at every crash bottom) to an honest +$17,761 on BTC's $2,000 with money
+    always free in hand. This is the version paper has to prove.
+    """
     sim.CAPITAL_USD = CAPITAL
     sim.ENFORCE_BUDGET = True
+    sim.BUDGET_CAP_FRAC = 0.5  # never more than half the purse in the market
     sim.MIN_NET_MARGIN = 0.0035
     sim.MAX_BANDS = 2
     sim.COMPOUND_AT_HALF = True

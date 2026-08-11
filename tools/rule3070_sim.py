@@ -100,6 +100,32 @@ _FOLD_IDX = 0
 _CYCLE_BASE = 0.0
 _PUMPED_TOTAL = 0.0
 _PUMP_EVENTS: list = []
+# Phil, 2026-08-11 evening, after the $1,053 audit: "one fall = one budget".
+# Every ladder inside one fall (the major and all minors born under it) spends
+# from the SAME envelope — fall% of capital measured from the major's mother to
+# the family's lowest low — instead of each minor minting a fresh pot. This is
+# the same accounting his live Cascade already uses: percent of the fall is
+# funded once, never re-funded at the same levels; only a NEW low grows it.
+FAMILY_BUDGET = False
+# Fraction of the purse the whole book may deploy at once (1.0 = the old
+# behaviour). Phil, 2026-08-11: "how much is 50% budget gate?" — at 0.5 the
+# engine keeps half the purse in reserve no matter how deep the crash goes.
+BUDGET_CAP_FRAC = 1.0
+# And a new minor may only be born when every ladder of the fall has finished
+# its 4 buys and is holding for its target — "only if the 4 buys done and
+# target not hit, then only it goes for the next minor mother."
+SPAWN_ONLY_EXHAUSTED = False
+_FAMILIES: dict = {}
+_NEXT_FAMILY = 0
+
+
+def _new_family(top: float, low: float) -> int:
+    global _NEXT_FAMILY
+    _NEXT_FAMILY += 1
+    _FAMILIES[_NEXT_FAMILY] = {"top": top, "low": low, "spent": 0.0}
+    return _NEXT_FAMILY
+
+
 # Scanner state at the end of the last run_ladder — read-only, for consoles
 LAST_SCAN: dict = {}
 
@@ -137,6 +163,7 @@ class Campaign:
     worst_dd_usd: float = 0.0  # deepest paper loss while the ladder was held
     capital_at_fill: float = 0.0  # the purse when the first buy landed
     is_minor: bool = False  # a bounce-top campaign inside a busy major
+    family_id: int = 0  # the fall this ladder belongs to (one fall = one budget)
     status: str = "DETECTED"
     events: List[str] = field(default_factory=list)
 
@@ -243,6 +270,9 @@ def _step(c: Campaign, ts, o, h, lo, cl) -> bool:
     new_low = False
     if lo < c.lowest_low:
         c.lowest_low, c.lowest_low_ts, new_low = lo, ts, True
+        fam = _FAMILIES.get(c.family_id)
+        if fam is not None and lo < fam["low"]:
+            fam["low"] = lo
         if c._band == 1 and c._pending == "70%" and c._armed:
             c.fibB_low_anchor = lo
 
@@ -299,9 +329,27 @@ def _step(c: Campaign, ts, o, h, lo, cl) -> bool:
         base = CAPITAL_USD if not c.is_minor else max(CAPITAL_USD - _MAJOR_COMMITTED, 0.0)
         unit = base / 50.0 if c.fall_pct > 50 else base / 100.0
         usd = max(c.fall_pct * unit * split, MIN_ORDER_USD)
+        if FAMILY_BUDGET:
+            fam = _FAMILIES.get(c.family_id)
+            if fam is not None:
+                fam_fall = (fam["top"] - min(fam["low"], c.lowest_low)) / fam["top"] * 100.0
+                fam_unit = CAPITAL_USD / 50.0 if fam_fall > 50 else CAPITAL_USD / 100.0
+                remaining = fam_fall * fam_unit - fam["spent"]
+                if remaining < MIN_ORDER_USD:
+                    # this fall's money is fully spent — wait, but keep the
+                    # target live (the PAXG deadlock lesson)
+                    if not TARGET_AT_FILL_ONLY:
+                        c.target = c.target_price() if c.fills else None
+                    if c.fills and c.target and h >= c.target:
+                        c.status = "TARGET HIT"
+                        c.target_ts = ts
+                        c.end_ts = ts
+                        return False
+                    return True
+                usd = min(usd, remaining)
         if ENFORCE_BUDGET:
             global _COMMITTED
-            if _COMMITTED + usd > CAPITAL_USD:
+            if _COMMITTED + usd > CAPITAL_USD * BUDGET_CAP_FRAC:
                 # No free money — the order stays armed and waits. But the
                 # TARGET must stay live: skipping it here deadlocked a full
                 # book (nobody could buy, and the sell that would free the
@@ -319,6 +367,9 @@ def _step(c: Campaign, ts, o, h, lo, cl) -> bool:
         if not c.fills:
             c.capital_at_fill = CAPITAL_USD
         c.fills.append(Fill(ts, entry, usd, f"{c._pending} b{c._band}"))
+        fam = _FAMILIES.get(c.family_id)
+        if fam is not None:
+            fam["spent"] += usd
         c.target = c.target_price()
         buy_low = c.lowest_low
         # The fibs SLIDE down with the buys keeping their ORIGINAL leg size
@@ -383,7 +434,9 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
     local_pos, local_high = 0, h[0]
     dip_local: Optional[tuple] = None
 
-    global _COMMITTED, _MAJOR_COMMITTED, _PROFIT_BANK, CAPITAL_USD, _FOLD_IDX, _CYCLE_BASE
+    global _COMMITTED, _MAJOR_COMMITTED, _PROFIT_BANK, CAPITAL_USD, _FOLD_IDX, _CYCLE_BASE, _NEXT_FAMILY
+    _FAMILIES.clear()
+    _NEXT_FAMILY = 0
     _PROFIT_BANK = 0.0
     _FOLD_IDX = 0
     _CYCLE_BASE = CAPITAL_USD
@@ -466,6 +519,17 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
                     ts_now = df.index[pos]
                     working = sum(1 for cc in active if not cc.fills or ts_now - cc.fills[0].ts <= GRAD_HOLD)
                     slot_free = working < MAX_ACTIVE_MINORS
+                parent = None
+                if busy:
+                    parent = next((cc for cc in active if cc.mother_ts == df.index[stand_pos]), None)
+                    if slot_free and SPAWN_ONLY_EXHAUSTED:
+                        fam_id = parent.family_id if parent else None
+                        kin = [cc for cc in active if fam_id is None or cc.family_id == fam_id]
+                        # one working ladder per fall: the next minor is born
+                        # only when every sibling has all 4 buys in and is
+                        # holding for its target
+                        if any(not cc._exhausted for cc in kin):
+                            slot_free = False
                 if slot_free and m_pos < dip_pos and df.index[m_pos] not in taken:
                     c = Campaign(
                         mother_ts=df.index[m_pos],
@@ -477,6 +541,10 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
                     )
                     c._line = c.reference
                     c.is_minor = busy
+                    if busy and parent is not None:
+                        c.family_id = parent.family_id
+                    else:
+                        c.family_id = _new_family(m_high, lo[dip_pos])
                     campaigns.append(c)
                     active.append(c)
                     local_pos, local_high = pos, h[pos]
