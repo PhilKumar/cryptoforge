@@ -185,6 +185,11 @@
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h6v6"/><path d="M9 10h6v6"/><path d="M15 16h6v4"/><path d="M3 20h18"/></svg></span>
       <span class="tab-label">Cascade</span>
     </button>
+    <button id="nav-rule3070" class="nav-tab" data-cf-click="showPage('rule3070-page', this)">
+      <span class="live-dot" id="rule3070-tab-dot"></span>
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M7 5v7l3 3"/><path d="M17 5v10a4 4 0 0 1-4 4"/><path d="M3 21h18"/></svg></span>
+      <span class="tab-label">30-70</span>
+    </button>
     <button id="nav-dashboard" class="nav-tab" data-cf-click="showPage('dashboard-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
       <span class="tab-label">Dashboard</span>
@@ -1288,6 +1293,126 @@
 <!-- ═══════════════════════════════════════════════════════
      SCALP PAGE
      ═══════════════════════════════════════════════════════ -->
+<div id="rule3070-page" class="page-section">
+  <div class="allocator-header">
+    <div>
+      <h2>The 30-70 Rule</h2>
+      <div class="table-meta">Mother candle &rarr; the V after it &rarr; entry a quarter of the fall back up. Buys alternate 30/70 down the sliding fibs — four buys, then hold; one target (average buy + a quarter of the fall) sells everything. Locked money rules: 0.35% fee gate, full-budget discipline, 25% profit reinvestment. This console trades it on PAPER with the very engine the nine-year backtest proved — same code, bar for bar.</div>
+    </div>
+    <div class="cf-engine-chip" id="cf-r37-engine-chip" data-state="idle">
+      <span class="cf-engine-dot" aria-hidden="true"></span>
+      <span class="cf-engine-label">Paper</span>
+      <strong id="cf-r37-engine-state">Idle</strong>
+    </div>
+  </div>
+
+  <div class="stats-grid" style="margin-bottom:20px;">
+    <div class="stat-box">
+      <div class="stat-label">Purse</div>
+      <div class="stat-value" id="cf-r37-purse" style="color:var(--accent);">$—</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-symbol">BTCUSDT · paper</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Paper P&amp;L (closed)</div>
+      <div class="stat-value" id="cf-r37-closed-net">$0.00</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-closed-count">0 wins</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Open Paper Trades</div>
+      <div class="stat-value" id="cf-r37-open-count" style="color:var(--accent2);">0</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-open-cost">holding $0.00</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Unrealised</div>
+      <div class="stat-value" id="cf-r37-unrealised">$0.00</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">open trades, marked to last close</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Last Tick</div>
+      <div class="stat-value" id="cf-r37-last-close" style="color:var(--accent);">—</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-last-tick">waiting for the engine</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Paper Since</div>
+      <div class="stat-value" id="cf-r37-since" style="font-size:16px;">—</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">only trades after this count</div>
+    </div>
+  </div>
+
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Controls</h3>
+        <div class="table-meta">Start runs the paper engine inside the site (a tick 10s after every 5m close). Reset archives the journal and starts a fresh paper clock — it never touches real money or the Cascade engine.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <button type="button" class="btn btn-primary btn-sm" id="cf-r37-start-btn" data-cf-click="cfR37Start()">Start Paper</button>
+        <button type="button" class="btn btn-danger btn-sm" id="cf-r37-stop-btn" data-cf-click="cfR37Stop()" hidden>Stop</button>
+        <button type="button" class="btn btn-outline btn-sm" id="cf-r37-reset-btn" data-cf-click="cfR37Reset()">Reset Paper</button>
+      </div>
+    </div>
+    <div class="table-meta" id="cf-r37-error" style="padding:0 14px 12px;"></div>
+  </section>
+
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Open Paper Trades</h3>
+        <div class="table-meta">Every ladder holding paper coin right now — its cost, its target, and what it is worth at the last close.</div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th>Mother</th>
+              <th>Kind</th>
+              <th class="num">Buys</th>
+              <th class="num">Invested</th>
+              <th class="num">Target</th>
+              <th class="num">Unrealised</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="cf-r37-opens-body">
+            <tr><td colspan="7" class="cf-table-empty-cell">No open paper trades — the engine is waiting for its entry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Paper Journal</h3>
+        <div class="table-meta">Every paper buy and every target hit, newest first — the permanent record the live decision will be judged on.</div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Event</th>
+              <th>Mother</th>
+              <th class="num">Price</th>
+              <th class="num">Amount</th>
+              <th class="num">Net</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="cf-r37-journal-body">
+            <tr><td colspan="7" class="cf-table-empty-cell">No paper trades yet — the first buy will appear here the moment the market gives one.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
 <div id="cascade-page" class="page-section">
   <div class="allocator-header">
     <div>

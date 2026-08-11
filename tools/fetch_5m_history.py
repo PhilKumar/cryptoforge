@@ -20,7 +20,7 @@ import io
 import json
 import os
 import zipfile
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import List, Tuple
 
 import requests
@@ -68,11 +68,17 @@ def fetch_month(symbol: str, ym: str) -> List[Tuple[int, float, float, float, fl
 def load(symbol: str, months: int = 24, end: date | None = None, refetch: bool = False) -> List[tuple]:
     os.makedirs(CACHE_DIR, exist_ok=True)
     path = os.path.join(CACHE_DIR, f"{symbol}_5m.json")
+    wanted = months_back(months, end or date.today())
+    # The cache is one file however deep it is, so a caller asking for 24
+    # months must get 24 even when 36 are stored — and a cache shallower than
+    # the ask falls through to a fetch instead of silently short-changing it.
+    first_year, first_month = (int(x) for x in wanted[0].split("-"))
+    start_ts = int(datetime(first_year, first_month, 1, tzinfo=timezone.utc).timestamp())
     if os.path.exists(path) and not refetch:
         with open(path, "r", encoding="utf-8") as handle:
-            return [tuple(row) for row in json.load(handle)]
-
-    wanted = months_back(months, end or date.today())
+            rows = [tuple(row) for row in json.load(handle)]
+        if rows and rows[0][0] <= start_ts + 86400:
+            return [row for row in rows if row[0] >= start_ts]
     seen: dict = {}
     for ym in wanted:
         rows = fetch_month(symbol, ym)

@@ -12571,3 +12571,195 @@ async function cfFeedBuyerSetStatus(buyerId, status) {
     if (meta) meta.textContent = String(err.message || err);
   }
 }
+
+// ── The 30-70 Rule — paper console ─────────────────────────────────
+//
+// The panel is a window onto engine/rule3070_paper.py: the locked 30-70
+// engine replayed over a rolling 90-day window every 5 minutes. Everything
+// here is paper; the Cascade engine and real money are never touched.
+
+var _cfR37PollTimer = null;
+
+function cfInitRule3070Page() {
+  cfR37Load(false);
+  if (!_cfR37PollTimer) {
+    _cfR37PollTimer = setInterval(function() { if (!document.hidden) cfR37Load(false); }, 5000);
+  }
+}
+
+var _cfR37OrigShowPage = showPage;
+showPage = function(pageId, btn, options) {
+  if (pageId !== 'rule3070-page' && _cfR37PollTimer) {
+    clearInterval(_cfR37PollTimer);
+    _cfR37PollTimer = null;
+  }
+  _cfR37OrigShowPage(pageId, btn, options);
+  if (pageId === 'rule3070-page') cfInitRule3070Page();
+};
+
+function _cfR37Usd(value) {
+  if (value == null || value === '' || !isFinite(Number(value))) return '$—';
+  var num = Number(value);
+  var sign = num < 0 ? '−' : '';
+  return sign + '$' + Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _cfR37Ist(epochSec) {
+  if (!epochSec) return '—';
+  return new Date(epochSec * 1000).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false
+  });
+}
+
+function _cfR37SetError(message) {
+  var node = document.getElementById('cf-r37-error');
+  if (node) node.textContent = message || '';
+}
+
+async function cfR37Load(showToast) {
+  try {
+    var response = await cfApiFetch('/api/rule3070/status', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, '30-70 status unavailable'));
+    cfR37RenderStatus(data);
+    var jr = await cfApiFetch('/api/rule3070/journal?limit=200', { cache: 'no-store' });
+    var jdata = await cfReadApiPayload(jr);
+    if (jr.ok) cfR37RenderJournal(jdata.events || []);
+    if (showToast) cfToast('30-70 status refreshed', 'success');
+  } catch (err) {
+    _cfR37SetError(String(err.message || err));
+  }
+}
+
+function cfR37RenderStatus(s) {
+  var running = !!s.running;
+  var chip = document.getElementById('cf-r37-engine-chip');
+  if (chip) chip.setAttribute('data-state', running ? 'running' : (s.start_ts ? 'stopped' : 'idle'));
+  var stateNode = document.getElementById('cf-r37-engine-state');
+  if (stateNode) stateNode.textContent = running ? 'Running' : (s.start_ts ? 'Stopped' : 'Idle');
+  var dot = document.getElementById('rule3070-tab-dot');
+  if (dot) dot.classList.toggle('active', running);
+  var startBtn = document.getElementById('cf-r37-start-btn');
+  var stopBtn = document.getElementById('cf-r37-stop-btn');
+  if (startBtn) startBtn.hidden = running;
+  if (stopBtn) stopBtn.hidden = !running;
+
+  var set = function(id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
+  set('cf-r37-purse', s.purse != null ? _cfR37Usd(s.purse) : '$—');
+  set('cf-r37-symbol', (s.symbol || 'BTCUSDT') + ' · paper');
+  var closed = s.closed || {};
+  var netNode = document.getElementById('cf-r37-closed-net');
+  if (netNode) {
+    netNode.textContent = _cfR37Usd(closed.net || 0);
+    netNode.style.color = (closed.net || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+  }
+  set('cf-r37-closed-count', (closed.count || 0) + (closed.count === 1 ? ' win' : ' wins'));
+  var opens = s.opens || {};
+  set('cf-r37-open-count', String(opens.count || 0));
+  set('cf-r37-open-cost', 'holding ' + _cfR37Usd(opens.cost || 0));
+  var un = document.getElementById('cf-r37-unrealised');
+  if (un) {
+    un.textContent = _cfR37Usd(opens.unrealised || 0);
+    un.style.color = (opens.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+  }
+  set('cf-r37-last-close', s.last_close != null ? Number(s.last_close).toLocaleString('en-US') : '—');
+  set('cf-r37-last-tick', s.last_tick_ts ? ('tick ' + _cfR37Ist(s.last_tick_ts) + ' IST · ' + (s.bars || 0).toLocaleString('en-US') + ' bars') : 'waiting for the engine');
+  set('cf-r37-since', s.start_ts ? _cfR37Ist(s.start_ts) + ' IST' : '—');
+
+  var problems = [];
+  if (s.writer_conflict) problems.push('Another paper writer is running (' + s.writer_conflict + ') — stop the terminal runner before starting the console.');
+  if (s.last_error) problems.push('Last tick failed: ' + s.last_error);
+  _cfR37SetError(problems.join('  '));
+
+  var body = document.getElementById('cf-r37-opens-body');
+  if (body) {
+    var rows = (opens.rows || []);
+    if (!rows.length) {
+      var note = opens.warmup_holding
+        ? 'No open PAPER trades. (' + opens.warmup_holding + ' warm-up ladder(s) from before the paper clock are holding — they never count.)'
+        : 'No open paper trades — the engine is waiting for its entry.';
+      body.innerHTML = '<tr><td colspan="7" class="cf-table-empty-cell">' + _escapeHtml(note) + '</td></tr>';
+    } else {
+      body.innerHTML = rows.map(function(o) {
+        return '<tr>'
+          + '<td>' + _escapeHtml(o.mother || '') + '</td>'
+          + '<td>' + (o.minor ? 'minor' : 'major') + '</td>'
+          + '<td class="num">' + (o.buys || 0) + '</td>'
+          + '<td class="num">' + _cfR37Usd(o.cost) + '</td>'
+          + '<td class="num">' + (o.target ? Number(o.target).toLocaleString('en-US') : '—') + '</td>'
+          + '<td class="num" style="color:' + ((o.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + _cfR37Usd(o.unrealised) + '</td>'
+          + '<td>' + _escapeHtml((o.status || '').replace('OPEN (', '').replace(')', '')) + '</td>'
+          + '</tr>';
+      }).join('');
+    }
+  }
+}
+
+function cfR37RenderJournal(events) {
+  var body = document.getElementById('cf-r37-journal-body');
+  if (!body) return;
+  if (!events.length) {
+    body.innerHTML = '<tr><td colspan="7" class="cf-table-empty-cell">No paper trades yet — the first buy will appear here the moment the market gives one.</td></tr>';
+    return;
+  }
+  body.innerHTML = events.map(function(e) {
+    var isBuy = e.kind === 'BUY';
+    var detail = isBuy
+      ? ((e.minor ? 'minor · ' : 'major · ') + (e.label || '') + ' · fall ' + (e.fall_pct != null ? e.fall_pct + '%' : '—') + ' · target ' + (e.target ? Number(e.target).toLocaleString('en-US') : '—'))
+      : ((e.minor ? 'minor · ' : 'major · ') + (e.buys || 0) + ' buy ladder sold');
+    return '<tr>'
+      + '<td>' + _escapeHtml(e.when || '') + '</td>'
+      + '<td style="color:' + (isBuy ? 'var(--accent)' : 'var(--green)') + ';font-weight:600;">' + (isBuy ? 'BUY' : 'TARGET') + '</td>'
+      + '<td>' + _escapeHtml(e.mother || '') + '</td>'
+      + '<td class="num">' + (e.price ? Number(e.price).toLocaleString('en-US') : '—') + '</td>'
+      + '<td class="num">' + _cfR37Usd(isBuy ? e.usd : e.cost) + '</td>'
+      + '<td class="num" style="color:' + ((e.net || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (isBuy ? '—' : _cfR37Usd(e.net)) + '</td>'
+      + '<td>' + _escapeHtml(detail) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function cfR37Start() {
+  try {
+    var response = await cfApiFetch('/api/rule3070/start', { method: 'POST' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not start the paper trader'));
+    cfR37RenderStatus(data);
+    cfToast('30-70 paper trader started', 'success');
+  } catch (err) {
+    _cfR37SetError(String(err.message || err));
+    cfToast(String(err.message || err), 'error');
+  }
+}
+
+async function cfR37Stop() {
+  try {
+    var response = await cfApiFetch('/api/rule3070/stop', { method: 'POST' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not stop the paper trader'));
+    cfR37RenderStatus(data);
+    cfToast('30-70 paper trader stopped', 'success');
+  } catch (err) {
+    _cfR37SetError(String(err.message || err));
+    cfToast(String(err.message || err), 'error');
+  }
+}
+
+async function cfR37Reset() {
+  var ok = await cfConfirm(
+    'Reset the paper clock? The current journal is archived (never deleted) and paper trading starts fresh from now. The engine must be stopped first.',
+    'Reset 30-70 paper',
+    'warning'
+  );
+  if (!ok) return;
+  try {
+    var response = await cfApiFetch('/api/rule3070/reset', { method: 'POST' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not reset'));
+    cfToast('Paper clock reset — journal archived', 'success');
+    cfR37Load(false);
+  } catch (err) {
+    _cfR37SetError(String(err.message || err));
+    cfToast(String(err.message || err), 'error');
+  }
+}

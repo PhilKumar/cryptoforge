@@ -142,6 +142,12 @@ async def _shutdown_runtime_engines() -> None:
             await cascade_engine.shutdown()
         except Exception as exc:
             _logger.warning("Failed to shutdown cascade engine during app shutdown: %s", exc)
+    rule3070 = globals().get("_rule3070_service")
+    if rule3070 is not None:
+        try:
+            rule3070.stop()
+        except Exception as exc:
+            _logger.warning("Failed to stop 30-70 paper service during app shutdown: %s", exc)
     _shutdown_save_engines()
 
 
@@ -8483,3 +8489,55 @@ async def cascade_reconcile():
     result = await eng.reconcile()
     _persist_cascade_runtime_snapshot(eng)
     return result
+
+
+# ── The 30-70 Rule — paper console ──────────────────────────────────
+#
+# The paper trader replays the locked 30-70 engine (tools/rule3070_sim) over a
+# rolling 90-day window every 5 minutes — the same engine the nine-year
+# backtest proved, so the console can never drift from it. One writer at a
+# time: a pid lockfile refuses to start while the CLI runner holds the files.
+
+
+def _get_rule3070_service():
+    svc = globals().get("_rule3070_service")
+    if svc is None:
+        from engine.rule3070_paper import Rule3070PaperService
+
+        svc = Rule3070PaperService()
+        globals()["_rule3070_service"] = svc
+    return svc
+
+
+@app.get("/api/rule3070/status")
+async def rule3070_status():
+    return _get_rule3070_service().status()
+
+
+@app.get("/api/rule3070/journal")
+async def rule3070_journal(limit: int = 200):
+    return {"events": _get_rule3070_service().journal(limit=max(1, min(1000, int(limit))))}
+
+
+@app.post("/api/rule3070/start")
+async def rule3070_start():
+    check_rate_limit("rule3070_start", max_calls=3, window_sec=10)
+    try:
+        return await asyncio.to_thread(_get_rule3070_service().start)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/rule3070/stop")
+async def rule3070_stop():
+    check_rate_limit("rule3070_stop", max_calls=3, window_sec=10)
+    return await asyncio.to_thread(_get_rule3070_service().stop)
+
+
+@app.post("/api/rule3070/reset")
+async def rule3070_reset():
+    check_rate_limit("rule3070_reset", max_calls=2, window_sec=30)
+    try:
+        return await asyncio.to_thread(_get_rule3070_service().reset)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))

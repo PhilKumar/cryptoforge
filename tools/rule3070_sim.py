@@ -72,6 +72,34 @@ MAX_BANDS = 2
 # of price. Binance costs 0.2% round trip; below that a "win" is a donation.
 # 0 = off. A deeper low raises the margin, so waiting is self-correcting.
 MIN_NET_MARGIN = 0.0
+# MAX_ACTIVE_MINORS — Phil's cascade orchestration (2026-08-11): ONE working
+# line at a time. A campaign occupies the slot while hunting or freshly
+# filled; once it has held past GRAD_HOLD (cascade's 200-bar 5m + 15m clock
+# to 1h) it is a background MAJOR and the slot frees for the next line.
+# 0 = unlimited (the original minors free-for-all).
+MAX_ACTIVE_MINORS = 0
+GRAD_HOLD = pd.Timedelta(hours=67)
+# COMPOUND_AT_HALF — Phil's reinvestment rule (2026-08-11): closed profit
+# banks up, and the moment the bank reaches 50% of the capital it folds IN —
+# $2,000 earns $1,000 and the purse becomes $3,000 (next fold at $1,500).
+# The growing purse is what lets minors keep working while bags hold the
+# original capital. Fee-aware: profit banks NET of 0.1%/side.
+COMPOUND_AT_HALF = False
+# The fold schedule: the Nth fold happens when the bank reaches schedule[N]
+# of capital; the last entry repeats forever. Phil's staged rule (2026-08-11):
+# first fold at 50%, second at 100% (the purse doubles), then 25% thereafter.
+COMPOUND_SCHEDULE = (0.5,)
+# COMPOUND_PUMP — Phil's full money rule (2026-08-11): profit folds at 25%,
+# and each time profit has grown the purse 50% past the cycle's start, HE
+# PUMPS IN fresh money equal to 100% of the purse (doubling it). Pumps are
+# DEPOSITS, not profit — _PUMPED_TOTAL keeps them honest in the report.
+COMPOUND_PUMP = False
+FEE_PER_SIDE = 0.001
+_PROFIT_BANK = 0.0
+_FOLD_IDX = 0
+_CYCLE_BASE = 0.0
+_PUMPED_TOTAL = 0.0
+_PUMP_EVENTS: list = []
 
 
 @dataclass
@@ -105,6 +133,7 @@ class Campaign:
     target_ts: Optional[pd.Timestamp] = None
     end_ts: Optional[pd.Timestamp] = None
     worst_dd_usd: float = 0.0  # deepest paper loss while the ladder was held
+    capital_at_fill: float = 0.0  # the purse when the first buy landed
     is_minor: bool = False  # a bounce-top campaign inside a busy major
     status: str = "DETECTED"
     events: List[str] = field(default_factory=list)
@@ -271,8 +300,22 @@ def _step(c: Campaign, ts, o, h, lo, cl) -> bool:
         if ENFORCE_BUDGET:
             global _COMMITTED
             if _COMMITTED + usd > CAPITAL_USD:
-                return True  # no free money — the order stays armed and waits
+                # No free money — the order stays armed and waits. But the
+                # TARGET must stay live: skipping it here deadlocked a full
+                # book (nobody could buy, and the sell that would free the
+                # money was the very check being skipped — 56 PAXG trades sat
+                # below target through a 100% gold rally, found 2026-08-11).
+                if not TARGET_AT_FILL_ONLY:
+                    c.target = c.target_price() if c.fills else None
+                if c.fills and c.target and h >= c.target:
+                    c.status = "TARGET HIT"
+                    c.target_ts = ts
+                    c.end_ts = ts
+                    return False
+                return True
             _COMMITTED += usd
+        if not c.fills:
+            c.capital_at_fill = CAPITAL_USD
         c.fills.append(Fill(ts, entry, usd, f"{c._pending} b{c._band}"))
         c.target = c.target_price()
         buy_low = c.lowest_low
@@ -338,7 +381,11 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
     local_pos, local_high = 0, h[0]
     dip_local: Optional[tuple] = None
 
-    global _COMMITTED, _MAJOR_COMMITTED
+    global _COMMITTED, _MAJOR_COMMITTED, _PROFIT_BANK, CAPITAL_USD, _FOLD_IDX, _CYCLE_BASE
+    _PROFIT_BANK = 0.0
+    _FOLD_IDX = 0
+    _CYCLE_BASE = CAPITAL_USD
+    _PUMP_EVENTS.clear()
     for pos in range(1, n):
         ts = df.index[pos]
 
@@ -350,8 +397,26 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
         for c in active:
             if _step(c, ts, None, h[pos], lo[pos], cl[pos]):
                 still.append(c)
-            elif c.mother_ts == df.index[stand_pos]:
-                ended_current_mother = True
+            else:
+                if c.mother_ts == df.index[stand_pos]:
+                    ended_current_mother = True
+                if COMPOUND_AT_HALF and c.status == "TARGET HIT" and c.fills:
+                    cost = sum(f.usd for f in c.fills)
+                    qty = sum(f.usd / f.price for f in c.fills)
+                    _PROFIT_BANK += qty * c.target - cost - FEE_PER_SIDE * (cost + qty * c.target)
+                    fold = COMPOUND_SCHEDULE[min(_FOLD_IDX, len(COMPOUND_SCHEDULE) - 1)]
+                    if _PROFIT_BANK >= fold * CAPITAL_USD:
+                        CAPITAL_USD += _PROFIT_BANK
+                        _PROFIT_BANK = 0.0
+                        _FOLD_IDX += 1
+                    if COMPOUND_PUMP and CAPITAL_USD >= 1.5 * _CYCLE_BASE:
+                        # profit grew the purse 50% past the cycle start —
+                        # Phil doubles it with fresh money and a new cycle begins
+                        global _PUMPED_TOTAL
+                        _PUMPED_TOTAL += CAPITAL_USD
+                        _PUMP_EVENTS.append((ts, CAPITAL_USD))
+                        CAPITAL_USD *= 2
+                        _CYCLE_BASE = CAPITAL_USD
         active = still
         if ended_current_mother:
             scan_from, dip_pos, dip_mother = pos + 1, None, None
@@ -394,7 +459,12 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
                 # under the local bounce top instead.
                 m_pos, m_high = dip_local if busy else dip_mother
                 taken = {c.mother_ts for c in active}
-                if m_pos < dip_pos and df.index[m_pos] not in taken:
+                slot_free = True
+                if busy and MAX_ACTIVE_MINORS:
+                    ts_now = df.index[pos]
+                    working = sum(1 for cc in active if not cc.fills or ts_now - cc.fills[0].ts <= GRAD_HOLD)
+                    slot_free = working < MAX_ACTIVE_MINORS
+                if slot_free and m_pos < dip_pos and df.index[m_pos] not in taken:
                     c = Campaign(
                         mother_ts=df.index[m_pos],
                         mother_high=m_high,
