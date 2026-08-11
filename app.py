@@ -8524,6 +8524,10 @@ async def cascade_reconcile():
 # time: a pid lockfile refuses to start while the CLI runner holds the files.
 
 
+class Rule3070SymbolPayload(BaseModel):
+    symbol: str = "BTCUSDT"
+
+
 def _get_rule3070_service():
     svc = globals().get("_rule3070_service")
     if svc is None:
@@ -8558,12 +8562,23 @@ async def rule3070_chart(mother: str, end_ts: int = 0, timeframe: str = "auto"):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@app.post("/api/rule3070/select")
+async def rule3070_select(payload: Rule3070SymbolPayload):
+    """Select an isolated paper book. A running writer cannot be retargeted."""
+    try:
+        return await asyncio.to_thread(_get_rule3070_service().select_symbol, payload.symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 @app.post("/api/rule3070/start")
-async def rule3070_start():
+async def rule3070_start(payload: Optional[Rule3070SymbolPayload] = None):
     check_rate_limit("rule3070_start", max_calls=3, window_sec=10)
     try:
-        return await asyncio.to_thread(_get_rule3070_service().start)
-    except RuntimeError as exc:
+        return await asyncio.to_thread(_get_rule3070_service().start, payload.symbol if payload else None)
+    except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
 

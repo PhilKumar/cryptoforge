@@ -76,11 +76,11 @@ const CHART = {
   }
 };
 
-function status(running: boolean) {
+function status(running: boolean, symbol = 'BTCUSDT') {
   const now = Math.floor(Date.now() / 1000);
   return {
     running,
-    symbol: 'BTCUSDT',
+    symbol,
     capital: 2000,
     purse: 2000,
     start_ts: now - 7200,
@@ -171,11 +171,52 @@ test.describe('30-70 console', () => {
     await open3070(page, true);
     await expect(page.locator('#cf-r37-stop-btn')).toBeVisible();
     await expect(page.locator('#cf-r37-start-btn')).toBeHidden();
+    await expect(page.locator('#cf-r37-symbol-select')).toBeDisabled();
+    await expect(page.locator('#cf-r37-symbol-select option')).toHaveCount(6);
 
     await page.unroute('**/api/rule3070/status**');
     await page.route('**/api/rule3070/status**', (route) => route.fulfill({ json: status(false) }));
     await expect(page.locator('#cf-r37-stop-btn')).toBeHidden({ timeout: 10_000 });
     await expect(page.locator('#cf-r37-start-btn')).toBeVisible();
+  });
+
+  test('instrument selector switches to an isolated paper book', async ({ page }) => {
+    await open3070(page, false);
+    await page.unroute('**/api/rule3070/status**');
+
+    let selected = 'BTCUSDT';
+    await page.route('**/api/rule3070/status**', (route) =>
+      route.fulfill({ json: status(false, selected) }));
+    await page.route('**/api/rule3070/select', async (route) => {
+      selected = (route.request().postDataJSON() as { symbol: string }).symbol;
+      await route.fulfill({ json: status(false, selected) });
+    });
+    let started = '';
+    await page.route('**/api/rule3070/start', async (route) => {
+      started = (route.request().postDataJSON() as { symbol: string }).symbol;
+      await route.fulfill({ json: status(true, started) });
+    });
+
+    const picker = page.locator('#cf-r37-symbol-select');
+    await expect(picker.locator('option')).toHaveText([
+      'BTC / USDT · Bitcoin',
+      'ETH / USDT · Ethereum',
+      'SOL / USDT · Solana',
+      'XRP / USDT · Ripple',
+      'DOGE / USDT · Dogecoin',
+      'PAXG / USDT · PAX Gold'
+    ]);
+    await picker.selectOption('ETHUSDT');
+
+    await expect(picker).toHaveValue('ETHUSDT');
+    await expect(page.locator('#cf-r37-symbol')).toHaveText('ETHUSDT · paper');
+    await expect(page.locator('#cf-r37-symbol-note')).toContainText('own paper clock and journal');
+    expect(selected).toBe('ETHUSDT');
+
+    await page.locator('#cf-r37-start-btn').click();
+    await expect(picker).toBeDisabled();
+    await expect(page.locator('#cf-r37-symbol-note')).toContainText('ETHUSDT is running');
+    expect(started).toBe('ETHUSDT');
   });
 
   test('open, warm-up and journal rows all render with their charts', async ({ page }) => {

@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260723-1">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260812-1">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-18">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -1308,18 +1308,34 @@
     </div>
   </div>
 
-  <section class="card table-panel">
-    <div class="table-toolbar">
-      <div class="table-title-group">
-        <h3 class="table-title">Controls <button type="button" class="cf-info" tabindex="0" data-cf-info="Start runs the paper engine inside the site: one tick ten seconds after every 5-minute candle closes. Stop halts it and keeps everything. Reset archives the journal with a timestamp and starts a fresh paper clock — it never deletes, and it never touches real money or the Cascade engine." aria-label="What the controls do">i</button></h3>
+  <section class="card table-panel cf-r37-control-panel" aria-labelledby="cf-r37-controls-title">
+    <div class="cf-r37-control-layout">
+      <div class="cf-r37-control-copy">
+        <span class="cf-r37-control-kicker">Paper engine</span>
+        <h3 class="table-title" id="cf-r37-controls-title">V-Rule Controls <button type="button" class="cf-info" tabindex="0" data-cf-info="Choose one instrument, then start its independent paper book. Start runs one tick ten seconds after every 5-minute candle closes. Stop keeps everything. Reset archives only the selected instrument's journal and starts its paper clock fresh. Real money and Cascade are never touched." aria-label="What the V-Rule controls do">i</button></h3>
+        <p>Choose the market to monitor, then manage its independent paper session.</p>
       </div>
-      <div class="admin-inline-actions">
-        <button type="button" class="btn btn-primary btn-sm" id="cf-r37-start-btn" data-cf-click="cfR37Start()">Start Paper</button>
-        <button type="button" class="btn btn-danger btn-sm" id="cf-r37-stop-btn" data-cf-click="cfR37Stop()" hidden>Stop</button>
-        <button type="button" class="btn btn-outline btn-sm" id="cf-r37-reset-btn" data-cf-click="cfR37Reset()">Reset Paper</button>
+      <div class="cf-r37-control-console">
+        <label class="cf-r37-symbol-field" for="cf-r37-symbol-select">
+          <span>Instrument</span>
+          <select id="cf-r37-symbol-select" data-cf-change="cfR37SelectSymbol(this.value)" aria-describedby="cf-r37-symbol-note">
+            <option value="BTCUSDT" selected>BTC / USDT · Bitcoin</option>
+            <option value="ETHUSDT">ETH / USDT · Ethereum</option>
+            <option value="SOLUSDT">SOL / USDT · Solana</option>
+            <option value="XRPUSDT">XRP / USDT · Ripple</option>
+            <option value="DOGEUSDT">DOGE / USDT · Dogecoin</option>
+            <option value="PAXGUSDT">PAXG / USDT · PAX Gold</option>
+          </select>
+          <small id="cf-r37-symbol-note">Each instrument keeps its own paper clock and journal.</small>
+        </label>
+        <div class="cf-r37-control-actions">
+          <button type="button" class="btn btn-primary btn-sm" id="cf-r37-start-btn" data-cf-click="cfR37Start()">Start Paper</button>
+          <button type="button" class="btn btn-danger btn-sm" id="cf-r37-stop-btn" data-cf-click="cfR37Stop()" hidden>Stop Paper</button>
+          <button type="button" class="btn btn-outline btn-sm" id="cf-r37-reset-btn" data-cf-click="cfR37Reset()">Reset Paper</button>
+        </div>
       </div>
     </div>
-    <div class="table-meta" id="cf-r37-error" style="padding:0 14px 12px;"></div>
+    <div class="cf-r37-control-error" id="cf-r37-error" role="status"></div>
   </section>
 
   <div class="stats-grid" style="margin-bottom:20px;">
@@ -2465,7 +2481,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260809-1" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260812-1" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 </body>
 </html>

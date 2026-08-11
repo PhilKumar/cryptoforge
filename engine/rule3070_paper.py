@@ -47,6 +47,31 @@ OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 STATE_PATH = os.path.join(OUT, "paper_state.json")
 JOURNAL_PATH = os.path.join(OUT, "paper_journal.jsonl")
 LOCK_PATH = os.path.join(OUT, "paper.lock")
+REPLAY_LOCK = threading.Lock()
+
+# The V-Rule console deliberately follows the same six-instrument universe as
+# the rest of CryptoForge.  One paper writer may run at a time, but every
+# instrument owns a separate clock and journal so switching never mixes books.
+SUPPORTED_SYMBOLS = (
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "PAXGUSDT",
+)
+
+
+def normalize_symbol(symbol: str) -> str:
+    value = str(symbol or "").strip().upper()
+    if value not in SUPPORTED_SYMBOLS:
+        raise ValueError(f"Unsupported V-Rule instrument: {value or 'empty'}")
+    return value
+
+
+def _read_json(path: str) -> dict:
+    with open(path) as fh:
+        return json.load(fh)
 
 
 def configure() -> None:
@@ -253,7 +278,7 @@ class Rule3070PaperService:
     """Background paper trader with start/stop/reset for the console."""
 
     def __init__(self, symbol: str = "BTCUSDT"):
-        self.symbol = symbol
+        self.symbol = normalize_symbol(symbol)
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -269,15 +294,61 @@ class Rule3070PaperService:
         self._watch: dict = {}
         self._priming = False
         self._primed_at = 0.0
+        self._selection_generation = 0
         self._activity: List[dict] = []  # newest last; the console reads it reversed
+
+    @property
+    def state_path(self) -> str:
+        # Preserve the original BTC filenames so the active paper book shown in
+        # the existing console continues without a migration or reset.
+        name = "paper_state.json" if self.symbol == "BTCUSDT" else f"paper_state_{self.symbol}.json"
+        return os.path.join(OUT, name)
+
+    @property
+    def journal_path(self) -> str:
+        name = "paper_journal.jsonl" if self.symbol == "BTCUSDT" else f"paper_journal_{self.symbol}.jsonl"
+        return os.path.join(OUT, name)
+
+    @property
+    def lock_path(self) -> str:
+        return os.path.join(OUT, "paper.lock")
+
+    def _select_symbol_unlocked(self, symbol: str) -> None:
+        self._selection_generation += 1
+        self.symbol = normalize_symbol(symbol)
+        self._status = {"running": False, "symbol": self.symbol}
+        self._seen = set()
+        self._state = {}
+        self._closed_count = 0
+        self._closed_net = 0.0
+        self._opens = []
+        self._last_error = ""
+        self._campaigns = []
+        self._df = None
+        self._watch = {}
+        self._priming = False
+        self._primed_at = 0.0
+        self._activity = []
+        self._load_closed_totals()
+
+    def select_symbol(self, symbol: str) -> dict:
+        """Choose the paper book shown by the console while the writer is idle."""
+        selected = normalize_symbol(symbol)
+        with self._lock:
+            running = bool(self._thread and self._thread.is_alive())
+            if running and selected != self.symbol:
+                raise RuntimeError(f"Stop the {self.symbol} paper trader before changing instruments")
+            if selected != self.symbol:
+                self._select_symbol_unlocked(selected)
+            return self.status()
 
     # -- lifecycle ---------------------------------------------------
 
     def _prepare(self) -> None:
         self._acquire_writer_lock()
         os.makedirs(OUT, exist_ok=True)
-        if os.path.exists(STATE_PATH):
-            self._state = json.load(open(STATE_PATH))
+        if os.path.exists(self.state_path):
+            self._state = _read_json(self.state_path)
         else:
             self._state = {"start_ts": int(time.time()), "seen": []}
         # Fixed once, then never moved: the replay must see the same history on
@@ -288,10 +359,14 @@ class Rule3070PaperService:
         self._seen = set(self._state.get("seen", []))
         self._load_closed_totals()
 
-    def start(self) -> dict:
+    def start(self, symbol: Optional[str] = None) -> dict:
         with self._lock:
             if self._thread and self._thread.is_alive():
+                if symbol and normalize_symbol(symbol) != self.symbol:
+                    raise RuntimeError(f"Stop the {self.symbol} paper trader before changing instruments")
                 return self.status()
+            if symbol and normalize_symbol(symbol) != self.symbol:
+                self._select_symbol_unlocked(symbol)
             self._prepare()
             self._stop.clear()
             self._thread = threading.Thread(target=self._loop, name="rule3070-paper", daemon=True)
@@ -341,7 +416,7 @@ class Rule3070PaperService:
             if self._thread and self._thread.is_alive():
                 raise RuntimeError("Stop the paper trader before resetting it")
             stamp = time.strftime("%Y%m%d-%H%M%S")
-            for path in (STATE_PATH, JOURNAL_PATH):
+            for path in (self.state_path, self.journal_path):
                 if os.path.exists(path):
                     os.rename(path, f"{path}.{stamp}")
             self._seen = set()
@@ -356,9 +431,10 @@ class Rule3070PaperService:
 
     def _acquire_writer_lock(self) -> None:
         os.makedirs(OUT, exist_ok=True)
-        if os.path.exists(LOCK_PATH):
+        if os.path.exists(self.lock_path):
             try:
-                other = int(open(LOCK_PATH).read().strip() or 0)
+                with open(self.lock_path) as fh:
+                    other = int(fh.read().strip() or 0)
             except ValueError:
                 other = 0
             if other and other != os.getpid() and _pid_alive(other):
@@ -366,13 +442,17 @@ class Rule3070PaperService:
                     f"Another paper writer is running (pid {other}) — stop it first "
                     f"(the nohup CLI runner and the site console must not write together)"
                 )
-        with open(LOCK_PATH, "w") as fh:
+        with open(self.lock_path, "w") as fh:
             fh.write(str(os.getpid()))
 
     def _release_writer_lock(self) -> None:
         try:
-            if os.path.exists(LOCK_PATH) and int(open(LOCK_PATH).read().strip() or 0) == os.getpid():
-                os.remove(LOCK_PATH)
+            owner = 0
+            if os.path.exists(self.lock_path):
+                with open(self.lock_path) as fh:
+                    owner = int(fh.read().strip() or 0)
+            if owner == os.getpid():
+                os.remove(self.lock_path)
         except (ValueError, OSError):
             pass
 
@@ -380,22 +460,23 @@ class Rule3070PaperService:
 
     def _write_state(self) -> None:
         self._state["seen"] = sorted(self._seen)
-        with open(STATE_PATH, "w") as fh:
+        with open(self.state_path, "w") as fh:
             json.dump(self._state, fh)
 
     def _load_closed_totals(self) -> None:
         self._closed_count = 0
         self._closed_net = 0.0
-        if not os.path.exists(JOURNAL_PATH):
+        if not os.path.exists(self.journal_path):
             return
-        for line in open(JOURNAL_PATH):
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if row.get("kind") == "TARGET":
-                self._closed_count += 1
-                self._closed_net += float(row.get("net") or 0.0)
+        with open(self.journal_path) as journal:
+            for line in journal:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("kind") == "TARGET":
+                    self._closed_count += 1
+                    self._closed_net += float(row.get("net") or 0.0)
 
     # -- the loop ----------------------------------------------------
 
@@ -417,9 +498,9 @@ class Rule3070PaperService:
     def _history_start(self) -> int:
         if self._state.get("history_start_ts"):
             return int(self._state["history_start_ts"])
-        if os.path.exists(STATE_PATH):
+        if os.path.exists(self.state_path):
             try:
-                st = json.load(open(STATE_PATH))
+                st = _read_json(self.state_path)
                 if st.get("history_start_ts"):
                     return int(st["history_start_ts"])
                 if st.get("start_ts"):
@@ -430,12 +511,15 @@ class Rule3070PaperService:
 
     def _tick(self) -> None:
         df = fetch_window(self.symbol, since_ts=self._history_start())
-        events, opens, campaigns = harvest(df, int(self._state["start_ts"]), self._seen)
+        with REPLAY_LOCK:
+            events, opens, campaigns = harvest(df, int(self._state["start_ts"]), self._seen)
+            watch = build_watch(campaigns, df)
+            purse = round(float(sim.CAPITAL_USD), 2)
         self._campaigns, self._df = campaigns, df
-        self._watch = build_watch(campaigns, df)
+        self._watch = watch
         for e in events:
             self._seen.add(e["key"])
-            with open(JOURNAL_PATH, "a") as jf:
+            with open(self.journal_path, "a") as jf:
                 jf.write(json.dumps(e) + "\n")
             if e["kind"] == "TARGET":
                 self._closed_count += 1
@@ -459,7 +543,7 @@ class Rule3070PaperService:
             "running": True,
             "symbol": self.symbol,
             "capital": CAPITAL,
-            "purse": round(float(sim.CAPITAL_USD), 2),
+            "purse": purse,
             "start_ts": int(self._state["start_ts"]),
             "last_tick_ts": int(time.time()),
             "last_close": round(float(df["close"].iloc[-1]), 2) if len(df) else None,
@@ -486,23 +570,32 @@ class Rule3070PaperService:
             return
         self._primed_at = now
         self._priming = True
+        generation = self._selection_generation
+        symbol = self.symbol
+        state_path = self.state_path
+        history_start = self._history_start()
 
         def run():
             try:
-                df = fetch_window(self.symbol, since_ts=self._history_start())
+                df = fetch_window(symbol, since_ts=history_start)
                 start_ts = 0
-                if os.path.exists(STATE_PATH):
+                if os.path.exists(state_path):
                     try:
-                        start_ts = int(json.load(open(STATE_PATH)).get("start_ts") or 0)
+                        start_ts = int(_read_json(state_path).get("start_ts") or 0)
                     except (json.JSONDecodeError, OSError):
                         start_ts = 0
-                _, opens, campaigns = harvest(df, start_ts, set())
+                with REPLAY_LOCK:
+                    _, opens, campaigns = harvest(df, start_ts, set())
+                    watch = build_watch(campaigns, df)
+                    purse = round(float(sim.CAPITAL_USD), 2)
+                if generation != self._selection_generation or symbol != self.symbol:
+                    return
                 self._campaigns, self._df, self._opens = campaigns, df, opens
-                self._watch = build_watch(campaigns, df)
+                self._watch = watch
                 self._status.setdefault("symbol", self.symbol)
                 self._status["last_close"] = round(float(df["close"].iloc[-1]), 2)
                 self._status["bars"] = int(len(df))
-                self._status["purse"] = round(float(sim.CAPITAL_USD), 2)
+                self._status["purse"] = purse
                 near = self._watch.get("nearest_pct")
                 self._note(
                     "scan",
@@ -512,9 +605,11 @@ class Rule3070PaperService:
                     + " · engine not started",
                 )
             except Exception as exc:  # noqa: BLE001
-                self._last_error = f"scan failed: {exc}"
+                if generation == self._selection_generation:
+                    self._last_error = f"scan failed: {exc}"
             finally:
-                self._priming = False
+                if generation == self._selection_generation:
+                    self._priming = False
 
         threading.Thread(target=run, name="rule3070-prime", daemon=True).start()
 
@@ -525,10 +620,11 @@ class Rule3070PaperService:
         snap = dict(self._status)
         snap["running"] = running
         snap.setdefault("symbol", self.symbol)
+        snap["available_symbols"] = list(SUPPORTED_SYMBOLS)
         snap.setdefault("capital", CAPITAL)
-        if not snap.get("start_ts") and os.path.exists(STATE_PATH):
+        if not snap.get("start_ts") and os.path.exists(self.state_path):
             try:
-                snap["start_ts"] = int(json.load(open(STATE_PATH)).get("start_ts") or 0)
+                snap["start_ts"] = int(_read_json(self.state_path).get("start_ts") or 0)
             except (json.JSONDecodeError, OSError):
                 pass
         paper_opens = [o for o in self._opens if o.get("paper")]
@@ -554,10 +650,11 @@ class Rule3070PaperService:
         return snap
 
     def _writer_conflict(self) -> str:
-        if not os.path.exists(LOCK_PATH):
+        if not os.path.exists(self.lock_path):
             return ""
         try:
-            other = int(open(LOCK_PATH).read().strip() or 0)
+            with open(self.lock_path) as fh:
+                other = int(fh.read().strip() or 0)
         except (ValueError, OSError):
             return ""
         if other and other != os.getpid() and _pid_alive(other):
@@ -580,12 +677,13 @@ class Rule3070PaperService:
         if not campaigns or df is None:
             df = fetch_window(self.symbol, since_ts=self._history_start())
             start_ts = 0
-            if os.path.exists(STATE_PATH):
+            if os.path.exists(self.state_path):
                 try:
-                    start_ts = int(json.load(open(STATE_PATH)).get("start_ts") or 0)
+                    start_ts = int(_read_json(self.state_path).get("start_ts") or 0)
                 except (json.JSONDecodeError, OSError):
                     start_ts = 0
-            _, _, campaigns = harvest(df, start_ts, set())
+            with REPLAY_LOCK:
+                _, _, campaigns = harvest(df, start_ts, set())
             self._campaigns, self._df = campaigns, df
         want = str(mother)
         target_c = None
@@ -741,12 +839,13 @@ class Rule3070PaperService:
         }
 
     def journal(self, limit: int = 200) -> List[dict]:
-        if not os.path.exists(JOURNAL_PATH):
+        if not os.path.exists(self.journal_path):
             return []
         rows = []
-        for line in open(JOURNAL_PATH):
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+        with open(self.journal_path) as journal:
+            for line in journal:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
         return rows[-limit:][::-1]
