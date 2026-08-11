@@ -151,8 +151,33 @@ async def _shutdown_runtime_engines() -> None:
     _shutdown_save_engines()
 
 
+async def _wake_cascade_on_boot() -> None:
+    """Restore and start the cascade engine without waiting for a page view.
+
+    The engine is built lazily by _get_cascade_engine, and nothing on the boot
+    path touched it: /api/health and /api/ready both read the global without
+    constructing it. So after a restart the live campaigns sat unwatched until
+    a browser happened to open the Cascade page — 45 seconds on 2026-08-11,
+    unbounded if nobody looks. A buy stop filling in that window would have had
+    no TP placed against it.
+
+    Blue-green safety is already handled: the monitor loop takes the writer
+    lock per cycle and sits out while the outgoing instance still holds it, so
+    starting earlier only means this instance is ready the moment that lock
+    frees. Failures stay contained here — a broker that cannot be reached must
+    not stop the app from serving.
+    """
+    try:
+        _get_cascade_engine()
+    except Exception as exc:
+        _logger.error("[CASCADE] boot restore failed; engine stays asleep: %s", exc)
+
+
 @asynccontextmanager
 async def _app_lifespan(_: FastAPI):
+    boot_task = asyncio.create_task(_wake_cascade_on_boot())
+    _inflight_tasks.add(boot_task)
+    boot_task.add_done_callback(_inflight_tasks.discard)
     try:
         yield
     finally:
