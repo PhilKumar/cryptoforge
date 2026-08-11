@@ -253,6 +253,10 @@
   }
 
   /* ── Buttons ── */
+  /* `.btn` sets display:inline-flex, which outranks the browser's own
+     [hidden] rule — so every `button.btn` marked hidden in JS stayed on
+     screen (the 30-70 Stop button sat next to Start while stopped). */
+  .btn[hidden] { display: none; }
   .btn {
     padding: 10px 22px;
     border-radius: 999px;

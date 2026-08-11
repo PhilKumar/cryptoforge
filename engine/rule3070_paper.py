@@ -27,7 +27,15 @@ import tools.rule3070_sim as sim
 
 _logger = logging.getLogger("cryptoforge.rule3070")
 
-WINDOW_DAYS = 90
+# History the engine is given. NOT a rolling window: the replay starts a fixed
+# number of days BEFORE the paper clock and grows forward from there, so no
+# mother, fib or open ladder can ever silently drop off the left edge — and it
+# is exactly how a live start behaves. Whatever history you hand the engine at
+# switch-on is the history it has; structure evolves organically after that.
+# 30 days of warm-up: long enough for a standing mother and some Vs, short
+# enough that the mother is a top you would actually trade against today.
+WARMUP_DAYS = 30
+WINDOW_DAYS = 90  # the CLI/one-off path with no paper clock to anchor to
 CAPITAL = 2000.0
 KLINES = "https://api.binance.com/api/v3/klines"
 IST = "Asia/Kolkata"
@@ -47,10 +55,10 @@ def configure() -> None:
     sim.COMPOUND_SCHEDULE = (0.25,)
 
 
-def fetch_window(symbol: str, days: int = WINDOW_DAYS) -> pd.DataFrame:
-    """The trailing `days` of CLOSED 5m candles, oldest first."""
+def fetch_window(symbol: str, days: int = WINDOW_DAYS, since_ts: int = 0) -> pd.DataFrame:
+    """CLOSED 5m candles, oldest first — from `since_ts`, else trailing `days`."""
     end = int(time.time() * 1000)
-    start = end - days * 86400 * 1000
+    start = int(since_ts) * 1000 if since_ts else end - days * 86400 * 1000
     rows: list = []
     cursor = start
     while cursor < end:
@@ -77,6 +85,14 @@ def fetch_window(symbol: str, days: int = WINDOW_DAYS) -> pd.DataFrame:
     return df
 
 
+def campaign_id(c) -> str:
+    """Mother + V start. The mother alone is NOT unique: when a trade ends and
+    the mother still stands, the next V under the SAME mother starts the next
+    campaign — so a mother-keyed journal silently swallowed the second trade's
+    buys as duplicates, and a mother-keyed chart drew whichever came first."""
+    return f"{int(c.mother_ts.timestamp())}-{int(c.swing_low_ts.timestamp())}"
+
+
 def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
     """Replay the window; return (new events, open-position summaries, campaigns)."""
     configure()
@@ -86,10 +102,11 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
     opens: List[dict] = []
     for c in campaigns:
         mother = c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M")
+        cid = campaign_id(c)
         for f in c.fills:
             if f.ts.timestamp() < start_ts:
                 continue
-            key = f"fill:{mother}:{f.label}"
+            key = f"fill:{cid}:{f.label}"
             if key in seen:
                 continue
             events.append(
@@ -98,6 +115,7 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
                     "key": key,
                     "ts": int(f.ts.timestamp()),
                     "mts": int(c.mother_ts.timestamp()),
+                    "cid": cid,
                     "when": f.ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
                     "mother": mother,
                     "label": f.label,
@@ -121,6 +139,7 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
                             "key": key,
                             "ts": int(c.target_ts.timestamp()),
                             "mts": int(c.mother_ts.timestamp()),
+                            "cid": cid,
                             "when": c.target_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
                             "mother": mother,
                             "price": round(c.target, 2),
@@ -137,6 +156,7 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
                 {
                     "mother": mother,
                     "mts": int(c.mother_ts.timestamp()),
+                    "cid": cid,
                     "cost": round(cost, 2),
                     "unrealised": round(qty * last_close - cost, 2),
                     "target": round(c.target or 0.0, 2),
@@ -173,6 +193,7 @@ def build_watch(campaigns: list, df: pd.DataFrame) -> dict:
             {
                 "mother": c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
                 "mts": int(c.mother_ts.timestamp()),
+                "cid": campaign_id(c),
                 "mother_high": round(c.mother_high, 2),
                 "entry": round(entry, 2),
                 "away_pct": round((price - entry) / price * 100, 3),
@@ -190,7 +211,7 @@ def build_watch(campaigns: list, df: pd.DataFrame) -> dict:
         "greens": scan.get("greens", 0),
         "armed_count": len(armed),
         "armed_near": sum(1 for r in armed if abs(r["away_pct"]) <= 1.0),
-        "armed": armed[:12],
+        "armed": armed[:60],
         "nearest_pct": armed[0]["away_pct"] if armed else None,
     }
     if scan.get("mother_ts") is not None:
@@ -234,6 +255,7 @@ class Rule3070PaperService:
         self._campaigns: list = []  # last replay, for charts and details
         self._df: Optional[pd.DataFrame] = None
         self._watch: dict = {}
+        self._priming = False
         self._activity: List[dict] = []  # newest last; the console reads it reversed
 
     # -- lifecycle ---------------------------------------------------
@@ -245,6 +267,10 @@ class Rule3070PaperService:
             self._state = json.load(open(STATE_PATH))
         else:
             self._state = {"start_ts": int(time.time()), "seen": []}
+        # Fixed once, then never moved: the replay must see the same history on
+        # every tick, or a mother could age out from under an open ladder.
+        if not self._state.get("history_start_ts"):
+            self._state["history_start_ts"] = int(self._state["start_ts"]) - WARMUP_DAYS * 86400
             self._write_state()
         self._seen = set(self._state.get("seen", []))
         self._load_closed_totals()
@@ -375,8 +401,22 @@ class Rule3070PaperService:
         self._activity.append({"ts": int(time.time()), "kind": kind, "text": text})
         del self._activity[:-80]
 
+    def _history_start(self) -> int:
+        if self._state.get("history_start_ts"):
+            return int(self._state["history_start_ts"])
+        if os.path.exists(STATE_PATH):
+            try:
+                st = json.load(open(STATE_PATH))
+                if st.get("history_start_ts"):
+                    return int(st["history_start_ts"])
+                if st.get("start_ts"):
+                    return int(st["start_ts"]) - WARMUP_DAYS * 86400
+            except (json.JSONDecodeError, OSError):
+                pass
+        return 0
+
     def _tick(self) -> None:
-        df = fetch_window(self.symbol)
+        df = fetch_window(self.symbol, since_ts=self._history_start())
         events, opens, campaigns = harvest(df, int(self._state["start_ts"]), self._seen)
         self._campaigns, self._df = campaigns, df
         self._watch = build_watch(campaigns, df)
@@ -415,8 +455,53 @@ class Rule3070PaperService:
 
     # -- reads -------------------------------------------------------
 
+    def prime(self) -> None:
+        """Fill the watch state once, read-only, without starting the trader.
+
+        A stopped console had nothing on it at all — no mother, no armed
+        orders, no price — which reads as a broken page rather than an engine
+        that has not been switched on. The replay is read-only (harvest never
+        writes the journal), so this is safe with another writer running.
+        """
+        if self._watch or self._priming or (self._thread and self._thread.is_alive()):
+            return
+        self._priming = True
+
+        def run():
+            try:
+                df = fetch_window(self.symbol, since_ts=self._history_start())
+                start_ts = 0
+                if os.path.exists(STATE_PATH):
+                    try:
+                        start_ts = int(json.load(open(STATE_PATH)).get("start_ts") or 0)
+                    except (json.JSONDecodeError, OSError):
+                        start_ts = 0
+                _, opens, campaigns = harvest(df, start_ts, set())
+                self._campaigns, self._df, self._opens = campaigns, df, opens
+                self._watch = build_watch(campaigns, df)
+                self._status.setdefault("symbol", self.symbol)
+                self._status["last_close"] = round(float(df["close"].iloc[-1]), 2)
+                self._status["bars"] = int(len(df))
+                self._status["purse"] = round(float(sim.CAPITAL_USD), 2)
+                near = self._watch.get("nearest_pct")
+                self._note(
+                    "scan",
+                    f"read-only scan at ${self._watch.get('price', 0):,.2f} — "
+                    f"{self._watch.get('armed_count', 0)} orders armed"
+                    + (f", nearest {near:+.2f}% away" if near is not None else "")
+                    + " · engine not started",
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._last_error = f"scan failed: {exc}"
+            finally:
+                self._priming = False
+
+        threading.Thread(target=run, name="rule3070-prime", daemon=True).start()
+
     def status(self) -> dict:
         running = bool(self._thread and self._thread.is_alive())
+        if not running:
+            self.prime()
         snap = dict(self._status)
         snap["running"] = running
         snap.setdefault("symbol", self.symbol)
@@ -432,11 +517,11 @@ class Rule3070PaperService:
             "count": len(paper_opens),
             "cost": round(sum(o["cost"] for o in paper_opens), 2),
             "unrealised": round(sum(o["unrealised"] for o in paper_opens), 2),
-            "rows": paper_opens[:20],
+            "rows": paper_opens[:200],
             "warmup_holding": len(warmup),
             "warmup_cost": round(sum(o["cost"] for o in warmup), 2),
             "warmup_unrealised": round(sum(o["unrealised"] for o in warmup), 2),
-            "warmup_rows": warmup[-20:][::-1],
+            "warmup_rows": warmup[-200:][::-1],
         }
         snap["watch"] = self._watch
         snap["activity"] = self._activity[-40:][::-1]
@@ -459,15 +544,21 @@ class Rule3070PaperService:
             return f"pid {other}"
         return ""
 
-    def chart(self, mother, end_ts: int = 0, pad: int = 36) -> dict:
-        """Candles and the engine's own lines for one campaign.
+    def chart(self, mother, end_ts: int = 0, timeframe: str = "auto", pad: int = 36) -> dict:
+        """One campaign in the payload the Cascade chart renderer already speaks.
+
+        There is one chart on this site. Rather than draw a second one, the
+        30-70's geometry is expressed in Cascade's vocabulary — the mother is a
+        mother, each fib is a leg whose 0/1 are its anchors, buys are entries
+        and the sale is an exit — so the 30-70 inherits the crosshair, the
+        zoom, the timeframes and every fix that chart will ever get.
 
         Works while stopped too: with no cached replay a read-only one is run
         (harvest never writes the journal), so the console can always draw.
         """
         campaigns, df = self._campaigns, self._df
         if not campaigns or df is None:
-            df = fetch_window(self.symbol)
+            df = fetch_window(self.symbol, since_ts=self._history_start())
             start_ts = 0
             if os.path.exists(STATE_PATH):
                 try:
@@ -479,12 +570,17 @@ class Rule3070PaperService:
         want = str(mother)
         target_c = None
         for c in campaigns:
-            if (
-                str(int(c.mother_ts.timestamp())) == want
-                or c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M") == want
-            ):
+            if campaign_id(c) == want:
                 target_c = c
                 break
+        if target_c is None:  # older journal rows keyed by mother alone
+            for c in campaigns:
+                if (
+                    str(int(c.mother_ts.timestamp())) == want
+                    or c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M") == want
+                ):
+                    target_c = c
+                    break
         if target_c is None:
             raise KeyError(f"No campaign with mother {mother!r} in the current window")
         c = target_c
@@ -497,67 +593,130 @@ class Rule3070PaperService:
             end_pos = min(len(df) - 1, int(idx.get_indexer([c.end_ts], method="nearest")[0]) + pad)
         lo_pos = max(0, m_pos - pad)
         win = df.iloc[lo_pos : end_pos + 1]
-        # A months-old open ladder spans tens of thousands of 5m bars — roll
-        # them up so the chart stays readable, the way Cascade's Auto does.
-        bucket = 1
-        while len(win) / bucket > 500:
-            bucket *= 2
-        tf_label = "5m" if bucket == 1 else f"{bucket * 5}m" if bucket * 5 < 60 else f"{bucket * 5 // 60}h"
+
+        # Roll-up: 'auto' picks the smallest bucket that still fits the whole
+        # trade on one screen, the way the Cascade chart's Auto does. A months
+        # -old ladder is 20,000 5m bars and unreadable at any zoom.
+        buckets = {"5m": 1, "15m": 3, "1h": 12, "4h": 48, "1d": 288}
+        requested = str(timeframe or "auto").lower()
+        if requested in buckets:
+            bucket, tf_label = buckets[requested], requested
+        else:
+            bucket, tf_label = 1, "5m"
+            for label, size in buckets.items():
+                bucket, tf_label = size, label
+                if len(win) / size <= 500:
+                    break
         candles = []
         for i in range(0, len(win), bucket):
             chunk = win.iloc[i : i + bucket]
+            t0 = int(chunk.index[0].timestamp())
             candles.append(
-                [
-                    int(chunk.index[0].timestamp()),
-                    round(float(chunk["open"].iloc[0]), 2),
-                    round(float(chunk["high"].max()), 2),
-                    round(float(chunk["low"].min()), 2),
-                    round(float(chunk["close"].iloc[-1]), 2),
-                ]
+                {
+                    "t": t0,
+                    "o": round(float(chunk["open"].iloc[0]), 2),
+                    "h": round(float(chunk["high"].max()), 2),
+                    "l": round(float(chunk["low"].min()), 2),
+                    "c": round(float(chunk["close"].iloc[-1]), 2),
+                    "is_mother": t0 <= int(c.mother_ts.timestamp()) < t0 + bucket * 300,
+                }
             )
-        lines = {
-            "mother": round(c.mother_high, 2),
-            "swing_low": round(c.swing_low, 2),
-            "swing_high": round(c.swing_high, 2),
-            "s2": round(c.fibS2, 2),
-            "b2": round(c.fibB2, 2),
-            "reference": round(c.reference, 2),
-            "target": round(c.target, 2) if c.target else None,
-            "avg_buy": round(c.avg_buy, 2) if c.fills else None,
-            "entry": round(c.entry_price(), 2)
-            if c._touched and not c.fills or (c.fills and not c._exhausted)
-            else None,
-            "bands": [
-                {"kind": kind, "band": band, "price": round(price, 2), "ts": int(ts.timestamp())}
-                for kind, band, price, ts in c.band_lines
-            ],
-        }
-        fills = [
+        candles = candles[-1500:]
+
+        # Fib-S is leg 1 (blue), Fib-B is leg 2 (green) — the renderer colours a
+        # leg by its id, so the two fibs read apart without a word of legend.
+        legs = [
             {
-                "ts": int(f.ts.timestamp()),
-                "when": f.ts.tz_convert(IST).strftime("%d %b %H:%M"),
-                "price": round(f.price, 2),
-                "usd": round(f.usd, 2),
-                "label": f.label,
-            }
-            for f in c.fills
+                "leg_id": 1,
+                "touch_high": round(c.swing_high, 2),
+                "touch_timestamp": int(c.swing_high_ts.timestamp()),
+                "low": round(c.swing_low, 2),
+                "levels": {"2": round(c.level("S", 2), 2), "4": round(c.level("S", 4), 2)},
+                "orders": [],
+            },
+            {
+                "leg_id": 2,
+                # Its 0 IS the mother line and its 1 is usually the same low as
+                # the V fib's. Sending them again drew two lines at one price
+                # with two labels fighting for the same slot, so the duplicates
+                # are dropped and only this fib's own 2 and 4 are added.
+                "touch_high": None,
+                "touch_timestamp": int(c.mother_ts.timestamp()),
+                "low": (
+                    round(c.fibB_low_anchor, 2)
+                    if c.fibB_low_anchor and abs(c.fibB_low_anchor - c.swing_low) > 0.01
+                    else None
+                ),
+                "levels": {"2": round(c.level("B", 2), 2), "4": round(c.level("B", 4), 2)},
+                "orders": [],
+            },
         ]
+        entries = [{"t": int(f.ts.timestamp()), "price": round(f.price, 2), "usd": round(f.usd, 2)} for f in c.fills]
+        cost = sum(f.usd for f in c.fills)
+        exits = []
+        if c.status == "TARGET HIT" and c.target_ts is not None and c.fills:
+            qty = sum(f.usd / f.price for f in c.fills)
+            exits.append(
+                {
+                    "t": int(c.target_ts.timestamp()),
+                    "price": round(c.target, 2),
+                    "pnl": round(qty * c.target - cost - 0.001 * (cost + qty * c.target), 2),
+                    "avg_entry": round(c.avg_buy, 2),
+                }
+            )
+        pending_entry = c.entry_price() if c._touched and not c._exhausted else 0.0
         start_ts_state = int(self._state.get("start_ts") or 0) if self._state else 0
-        meta = {
-            "mother_when": c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
-            "v_type": c.v_type,
-            "fall_pct": round(c.fall_pct, 2),
-            "pot_usd": round(c.pot_usd, 2),
-            "status": c.status,
-            "minor": bool(c.is_minor),
-            "paper": bool(c.fills and c.fills[0].ts.timestamp() >= start_ts_state) if start_ts_state else False,
-            "target_when": c.target_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M") if c.target_ts is not None else None,
-            "cost": round(sum(f.usd for f in c.fills), 2) if c.fills else 0.0,
-            "touch_when": c.touch_ts.tz_convert(IST).strftime("%d %b %H:%M") if c.touch_ts is not None else None,
+        frozen = bool(end_ts) or c.status == "TARGET HIT" or c.status.startswith("CANCELLED")
+        return {
+            "status": "ok",
+            "campaign_id": campaign_id(c),
             "symbol": self.symbol,
+            "state": c.status,
+            "mode": "paper",
+            "mother": {"t": int(c.mother_ts.timestamp()), "high": round(c.mother_high, 2)},
             "timeframe": tf_label,
+            "timeframe_auto": requested not in buckets,
+            "timeframe_options": ["5m", "15m", "1h", "4h", "1d"],
+            "campaign_timeframe": "5m",
+            "candles": candles,
+            "trendlines": [],
+            "legs": legs,
+            "fills": [{"timestamp": e["t"], "price": e["price"]} for e in entries],
+            "entries": entries,
+            "exits": exits,
+            "avg_entry_price": round(c.avg_buy, 2) if c.fills else None,
+            "tp_price": round(c.target, 2) if c.target else None,
+            # The armed buy, drawn white. Cascade has no equivalent — its orders
+            # rest on fib levels — so the renderer gained one optional line.
+            "entry_price": round(pending_entry, 2) if pending_entry else None,
+            "last_price": round(float(df["close"].iloc[-1]), 2),
+            "frozen": frozen,
+            "trade_end_ts": int(c.target_ts.timestamp()) if c.target_ts is not None else 0,
+            "close_reason": c.status if frozen else "",
+            # 30-70 specifics the Cascade payload has no home for
+            "r37": {
+                "v_type": c.v_type,
+                "fall_pct": round(c.fall_pct, 2),
+                "pot_usd": round(c.pot_usd, 2),
+                "minor": bool(c.is_minor),
+                "cost": round(cost, 2),
+                "paper": bool(c.fills and c.fills[0].ts.timestamp() >= start_ts_state) if start_ts_state else False,
+                "mother_when": c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
+                "touch_when": c.touch_ts.tz_convert(IST).strftime("%d %b %H:%M") if c.touch_ts is not None else None,
+                "target_when": (
+                    c.target_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M") if c.target_ts is not None else None
+                ),
+                "buys": [
+                    {
+                        "when": f.ts.tz_convert(IST).strftime("%d %b %H:%M"),
+                        "price": round(f.price, 2),
+                        "usd": round(f.usd, 2),
+                        "label": f.label,
+                    }
+                    for f in c.fills
+                ],
+            },
         }
-        return {"candles": candles, "lines": lines, "fills": fills, "meta": meta}
 
     def journal(self, limit: int = 200) -> List[dict]:
         if not os.path.exists(JOURNAL_PATH):

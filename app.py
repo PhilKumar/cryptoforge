@@ -8520,10 +8520,10 @@ async def rule3070_journal(limit: int = 200):
 
 
 @app.get("/api/rule3070/chart")
-async def rule3070_chart(mother: str, end_ts: int = 0):
+async def rule3070_chart(mother: str, end_ts: int = 0, timeframe: str = "auto"):
     """Candles + the engine's own lines for one 30-70 campaign."""
     try:
-        return await asyncio.to_thread(_get_rule3070_service().chart, mother, int(end_ts))
+        return await asyncio.to_thread(_get_rule3070_service().chart, mother, int(end_ts), str(timeframe or "auto"))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

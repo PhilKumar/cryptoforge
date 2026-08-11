@@ -10386,6 +10386,10 @@ function cfCascadeRoundBackdrop(event) {
 }
 
 // ═══ CASCADE CHART ══════════════════════════════════════════════
+// Which engine's chart is on screen: 'cascade' or 'rule3070'. Both send the
+// same payload, so everything below — canvas, crosshair, zoom, timeframes,
+// fullscreen — is shared, and only the fetch URL and the legend differ.
+var _cfChartSource = 'cascade';
 var _cfCascadeChartId = '';
 // 'full' = the live cascade view (chart + trendline/leg/order tables). 'journal'
 // = a clean static snapshot of just the chart, for the trade record — no tables.
@@ -10553,6 +10557,7 @@ function _cfCascadeChartSvg(d) {
     if (leg.low) lo = Math.min(lo, leg.low);
   });
   if (d.tp_price) { hi = Math.max(hi, d.tp_price); lo = Math.min(lo, d.tp_price); }
+  if (d.entry_price) { hi = Math.max(hi, d.entry_price); lo = Math.min(lo, d.entry_price); }
   var span = (hi - lo) || 1, padP = span * 0.06;
   var maxP = hi + padP, minP = lo - padP;
 
@@ -10732,6 +10737,9 @@ function _cfCascadeChartSvg(d) {
     hline(Number(d.avg_entry_price), PAL.avg,
       (frozen ? 'AVG ENTRY (' : 'AVG ENTRY · open (') + fmt(d.avg_entry_price) + ')', '4,4', 1.1);
   }
+  // The armed buy waiting on the tape (30-70 only — Cascade rests its orders
+  // on fib levels, which are already drawn).
+  if (d.entry_price) hline(Number(d.entry_price), PAL.buyMark, 'ENTRY (' + fmt(d.entry_price) + ')', null, 1.2);
 
   // Entries. On a finished trade these come from `entries`, which also carries
   // the buys of rounds that already closed — campaign.all_fills is emptied the
@@ -10935,6 +10943,10 @@ function _cfChartCanvasFit(c) {
     hi = Math.max(hi, Number(d.tp_price));
     lo = Math.min(lo, Number(d.tp_price));
   }
+  if (d.entry_price) {
+    hi = Math.max(hi, Number(d.entry_price));
+    lo = Math.min(lo, Number(d.entry_price));
+  }
   var priceSpan = (hi - lo) || Math.max(Math.abs(hi) * 0.02, 1);
   var padP = priceSpan * 0.06;
   var first = Number(candles[0].t), last = Number(candles[candles.length - 1].t);
@@ -10956,7 +10968,7 @@ function _cfChartCanvasPaintKey(d) {
     candles: d.candles || [], mother: d.mother || null,
     legs: d.legs || [], trendlines: d.trendlines || [],
     fills: d.fills || [], entries: d.entries || [], exits: d.exits || [],
-    avg_entry_price: d.avg_entry_price, tp_price: d.tp_price,
+    avg_entry_price: d.avg_entry_price, tp_price: d.tp_price, entry_price: d.entry_price,
     frozen: !!d.frozen, snapshot: !!d.snapshot, timeframe: d.timeframe
   });
 }
@@ -11210,6 +11222,8 @@ function _cfChartCanvasFibs(c, p, PAL, labels) {
     (frozen ? 'SOLD AT (' : 'TARGET · open (') + fmt(d.tp_price) + ')', [6, 3], 1.2) ? 1 : 0;
   if (d.avg_entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.avg_entry_price), PAL.avg,
     (frozen ? 'AVG ENTRY (' : 'AVG ENTRY · open (') + fmt(d.avg_entry_price) + ')', [4, 4], 1.1) ? 1 : 0;
+  if (d.entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.entry_price), PAL.buyMark,
+    'ENTRY (' + fmt(d.entry_price) + ')', [], 1.2) ? 1 : 0;
   return count;
 }
 
@@ -11384,7 +11398,52 @@ function _cfChartCanvasBindInteraction(c) {
     c.host.addEventListener(name, fn, opts);
     c.handlers.push([name, fn, opts]);
   }
+  // Two fingers pinch. Without this a phone could only pan: the wheel handler
+  // is the only zoom on desktop, and touch devices have no wheel — so the
+  // chart opened at whatever the fit gave you and could never be inspected.
+  c.pointers = {};
+  c.pinch = null;
+  function pinchStart() {
+    var ids = Object.keys(c.pointers);
+    if (ids.length !== 2 || !c.viewport || !c.projection) return;
+    var a = c.pointers[ids[0]], b = c.pointers[ids[1]], v = c.viewport, p = c.projection;
+    c.drag = null;
+    c.host.style.cursor = '';
+    c.pinch = {
+      dx: Math.abs(a.x - b.x), dy: Math.abs(a.y - b.y),
+      dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+      anchorTime: p.tAt((a.x + b.x) / 2), anchorPrice: p.pAt((a.y + b.y) / 2),
+      viewport: { tMin: v.tMin, tMax: v.tMax, pMin: v.pMin, pMax: v.pMax }
+    };
+    _cfChartCanvasClearCrosshair(c);
+  }
+  function pinchMove() {
+    var ids = Object.keys(c.pointers);
+    if (!c.pinch || ids.length !== 2) return false;
+    var a = c.pointers[ids[0]], b = c.pointers[ids[1]], z = c.pinch;
+    var start = z.viewport, tSpan0 = start.tMax - start.tMin, pSpan0 = start.pMax - start.pMin;
+    var dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    var overall = z.dist / dist;
+    // Spread horizontally and time stretches; vertically and price does. A
+    // diagonal pinch does both, which is what a two-finger zoom should feel
+    // like. An axis the fingers barely separate on follows the overall scale
+    // instead of amplifying jitter.
+    var dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+    var tScale = z.dx > 30 && dx > 4 ? z.dx / dx : overall;
+    var pScale = z.dy > 30 && dy > 4 ? z.dy / dy : overall;
+    var minSpan = Math.max(_cfChartCanvasBarSeconds(c.data || {}, (c.data || {}).candles || []) / 2, 1);
+    var tSpan = Math.max(minSpan, tSpan0 * tScale), pSpan = pSpan0 * pScale;
+    var tRatio = (z.anchorTime - start.tMin) / (tSpan0 || 1);
+    var pRatio = (z.anchorPrice - start.pMin) / (pSpan0 || 1);
+    _cfChartCanvasSetViewport(c, {
+      tMin: z.anchorTime - tRatio * tSpan, tMax: z.anchorTime + (1 - tRatio) * tSpan,
+      pMin: z.anchorPrice - pRatio * pSpan, pMax: z.anchorPrice + (1 - pRatio) * pSpan
+    });
+    return true;
+  }
   function endDrag(event) {
+    if (event && event.pointerId !== undefined) delete c.pointers[event.pointerId];
+    if (Object.keys(c.pointers).length < 2) c.pinch = null;
     if (!c.drag) return;
     c.drag = null;
     c.host.style.cursor = '';
@@ -11392,6 +11451,8 @@ function _cfChartCanvasBindInteraction(c) {
   }
   bind('pointerdown', function (event) {
     var point = _cfChartCanvasPoint(c, event), v = c.viewport;
+    if (point) c.pointers[event.pointerId] = { x: point.x, y: point.y };
+    if (Object.keys(c.pointers).length >= 2) { pinchStart(); return; }
     if (!point || !v || (!point.plot && !point.priceAxis && !point.timeAxis)) return;
     c.drag = {
       kind: point.plot ? 'pan' : (point.priceAxis ? 'price' : 'time'),
@@ -11407,6 +11468,8 @@ function _cfChartCanvasBindInteraction(c) {
   bind('pointermove', function (event) {
     var point = _cfChartCanvasPoint(c, event);
     if (!point) return;
+    if (c.pointers[event.pointerId]) { c.pointers[event.pointerId].x = point.x; c.pointers[event.pointerId].y = point.y; }
+    if (pinchMove()) return;
     if (!c.drag) {
       c.host.style.cursor = point.plot ? 'crosshair' : (point.priceAxis ? 'ns-resize' : (point.timeAxis ? 'ew-resize' : ''));
       _cfChartCanvasDrawCrosshair(c, point);
@@ -11502,6 +11565,7 @@ function _cfCascadeChartHtml(d) {
   }
   var P = _cfChartPalette();
   var journal = _cfCascadeChartMode === 'journal';
+  if (_cfChartSource === 'rule3070') return _cfR37ChartHtml(d, P);
   var hidden = Math.max((d.legs || []).length - _CF_CHART_MAX_STRUCTURES, 0)
     + Math.max((d.trendlines || []).length - _CF_CHART_MAX_STRUCTURES, 0);
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
@@ -11863,9 +11927,16 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
   _cfCascadeMarkEngine();
   if (!keepCanvas) body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
   try {
-    var response = await cfApiFetch('/api/cascade/campaigns/' + encodeURIComponent(campaignId)
-      + '/chart?timeframe=' + encodeURIComponent(_cfCascadeChartTf)
-      + (_cfCascadeChartEndTs ? '&end_ts=' + _cfCascadeChartEndTs : ''), { cache: 'no-store' });
+    // One chart, two engines feeding it. The 30-70 speaks the same payload, so
+    // it gets the same crosshair, zoom, timeframes and every future fix.
+    var url = _cfChartSource === 'rule3070'
+      ? '/api/rule3070/chart?mother=' + encodeURIComponent(campaignId)
+        + '&timeframe=' + encodeURIComponent(_cfCascadeChartTf)
+        + (_cfCascadeChartEndTs ? '&end_ts=' + _cfCascadeChartEndTs : '')
+      : '/api/cascade/campaigns/' + encodeURIComponent(campaignId)
+        + '/chart?timeframe=' + encodeURIComponent(_cfCascadeChartTf)
+        + (_cfCascadeChartEndTs ? '&end_ts=' + _cfCascadeChartEndTs : '');
+    var response = await cfApiFetch(url, { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
     _cfCascadeChartData = data;
@@ -11882,8 +11953,15 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
     // never disagree.
     if (data.mother_forced_visible && data.timeframe) _cfCascadeChartTf = data.timeframe;
     _cfCascadeMarkTimeframe(_cfCascadeChartTf, data.timeframe);
+    var title = document.getElementById('cf-cascade-chart-title');
+    if (title) title.textContent = _cfChartSource === 'rule3070' ? '30-70 Trade Chart' : 'Campaign Chart';
     var meta = document.getElementById('cf-cascade-chart-meta');
-    if (meta) {
+    if (meta && _cfChartSource === 'rule3070') {
+      var r = data.r37 || {};
+      meta.textContent = data.symbol + ' · ' + (r.minor ? 'minor' : 'major') + ' · ' + r.v_type
+        + ' · fall ' + r.fall_pct + '% · pot ' + _cfR37Usd(r.pot_usd)
+        + ' · ' + (data.candles || []).length + ' ' + data.timeframe + ' candles · ' + data.state;
+    } else if (meta) {
       var cands = data.candles || [];
       var motherT = data.mother && data.mother.t;
       var engineTf = data.campaign_timeframe || '5m';
@@ -11947,6 +12025,7 @@ function cfCascadeHideChart() {
   _cfChartCanvasTeardown();
   _cfCascadeChartId = '';
   _cfCascadeChartData = null;
+  _cfChartSource = 'cascade';
 }
 
 // Clicking the dim area behind the dialog closes it; clicks inside do not.
@@ -12710,10 +12789,11 @@ function cfR37RenderStatus(s) {
           + '<td class="num">' + (o.target ? Number(o.target).toLocaleString('en-US') : '—') + '</td>'
           + '<td class="num" style="color:' + ((o.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + _cfR37Usd(o.unrealised) + '</td>'
           + '<td>' + _escapeHtml((o.status || '').replace('OPEN (', '').replace(')', '')) + '</td>'
-          + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + (o.mts || 0) + ', 0)">Chart</button></td>'
+          + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(\'' + _escapeHtml(o.cid || String(o.mts || 0)) + '\', 0)">Chart</button></td>'
           + '</tr>';
       }).join('');
     }
+    _renderTablePager('cf-r37-opens-table', 'cf-r37-opens-table', 'cf-r37-opens-pagination');
   }
 
   cfR37RenderWarmup(opens);
@@ -12732,7 +12812,7 @@ function _cfR37LadderRow(o) {
     + '<td class="num">' + (o.target ? Number(o.target).toLocaleString('en-US') : '—') + '</td>'
     + '<td class="num" style="color:' + ((o.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + _cfR37Usd(o.unrealised) + '</td>'
     + '<td>' + _escapeHtml((o.status || '').replace('OPEN (', '').replace(')', '')) + '</td>'
-    + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + (o.mts || 0) + ', 0)">Chart</button></td>'
+    + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(\'' + _escapeHtml(o.cid || String(o.mts || 0)) + '\', 0)">Chart</button></td>'
     + '</tr>';
 }
 
@@ -12749,6 +12829,7 @@ function cfR37RenderWarmup(opens) {
       + _cfR37Usd(opens.warmup_cost || 0) + ', ' + _cfR37Usd(opens.warmup_unrealised || 0) + ' unrealised';
   }
   body.innerHTML = rows.map(_cfR37LadderRow).join('');
+  _renderTablePager('cf-r37-warmup-table', 'cf-r37-warmup-table', 'cf-r37-warmup-pagination');
 }
 
 function cfR37RenderWatch(s) {
@@ -12776,6 +12857,7 @@ function cfR37RenderWatch(s) {
     body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">'
       + (s.running ? 'Nothing armed — the engine is still waiting for a V to confirm.' : 'Engine stopped — press Start Paper to scan.')
       + '</td></tr>';
+    _renderTablePager('cf-r37-armed-table', 'cf-r37-armed-table', 'cf-r37-armed-pagination');
     return;
   }
   body.innerHTML = armed.map(function(a) {
@@ -12790,9 +12872,10 @@ function cfR37RenderWatch(s) {
       + '<td class="num">' + Number(a.fall_pct).toFixed(2) + '%</td>'
       + '<td class="num">' + _cfR37Usd(a.pot) + '</td>'
       + '<td>' + _escapeHtml(a.pending || '') + '</td>'
-      + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + (a.mts || 0) + ', 0)">Chart</button></td>'
+      + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(\'' + _escapeHtml(a.cid || String(a.mts || 0)) + '\', 0)">Chart</button></td>'
       + '</tr>';
   }).join('');
+  _renderTablePager('cf-r37-armed-table', 'cf-r37-armed-table', 'cf-r37-armed-pagination');
 }
 
 var _cfR37SeenEventTs = null;
@@ -12829,6 +12912,7 @@ function cfR37RenderJournal(events) {
   if (!body) return;
   if (!events.length) {
     body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">No paper trades yet — the first buy will appear here the moment the market gives one.</td></tr>';
+    _renderTablePager('cf-r37-journal-table', 'cf-r37-journal-table', 'cf-r37-journal-pagination');
     return;
   }
   body.innerHTML = events.map(function(e) {
@@ -12844,9 +12928,10 @@ function cfR37RenderJournal(events) {
       + '<td class="num">' + _cfR37Usd(isBuy ? e.usd : e.cost) + '</td>'
       + '<td class="num" style="color:' + ((e.net || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (isBuy ? '—' : _cfR37Usd(e.net)) + '</td>'
       + '<td>' + _escapeHtml(detail) + '</td>'
-      + '<td>' + (e.mts ? '<button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + e.mts + ', ' + (isBuy ? 0 : (e.ts || 0)) + ')">Chart</button>' : '') + '</td>'
+      + '<td>' + ((e.cid || e.mts) ? '<button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(\'' + _escapeHtml(e.cid || String(e.mts)) + '\', ' + (isBuy ? 0 : (e.ts || 0)) + ')">Chart</button>' : '') + '</td>'
       + '</tr>';
   }).join('');
+  _renderTablePager('cf-r37-journal-table', 'cf-r37-journal-table', 'cf-r37-journal-pagination');
 }
 
 async function cfR37Start() {
@@ -12895,169 +12980,50 @@ async function cfR37Reset() {
 }
 
 // ── 30-70 trade chart ──────────────────────────────────────────────
-
-var _cfR37ChartKey = null;
-var _cfR37ChartEnd = 0;
-
-function _cfR37CssColor(name, fallback) {
-  var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
+// ── 30-70 charts: the Cascade chart, fed 30-70 geometry ──────────
+// There is one chart renderer on this site. The 30-70 endpoint speaks the same
+// payload, so opening a 30-70 trade opens the Cascade chart with the source
+// flipped — crosshair, wheel zoom, axis drag, timeframes, fullscreen and every
+// future fix come along for free.
+function cfR37ShowChart(mother, endTs) {
+  _cfChartSource = 'rule3070';
+  _cfCascadeChartTf = 'auto';
+  return cfCascadeShowChart(String(mother), endTs ? 'journal' : 'full', null, endTs || 0);
 }
 
-function cfR37ChartBackdrop(event) {
-  if (event && event.target && event.target.id === 'cf-r37-chart-overlay') cfR37HideChart();
-}
-
-function cfR37HideChart() {
-  var overlay = document.getElementById('cf-r37-chart-overlay');
-  if (overlay) overlay.style.display = 'none';
-  _cfR37ChartKey = null;
-}
-
-function cfR37RefreshChart() {
-  if (_cfR37ChartKey != null) cfR37ShowChart(_cfR37ChartKey, _cfR37ChartEnd);
-}
-
-async function cfR37ShowChart(mother, endTs) {
-  var overlay = document.getElementById('cf-r37-chart-overlay');
-  var body = document.getElementById('cf-r37-chart-body');
-  var detail = document.getElementById('cf-r37-chart-detail');
-  if (!overlay || !body) return;
-  // The overlay lives inside the 30-70 page section, which is display:none on
-  // other tabs — reparent to <body> so it is a true top-level modal (the same
-  // lesson the Cascade chart paid for).
-  if (overlay.parentNode !== document.body) document.body.appendChild(overlay);
-  _cfR37ChartKey = mother;
-  _cfR37ChartEnd = Number(endTs) || 0;
-  overlay.style.display = '';
-  body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
-  if (detail) detail.innerHTML = '';
-  try {
-    var response = await cfApiFetch('/api/rule3070/chart?mother=' + encodeURIComponent(mother)
-      + (_cfR37ChartEnd ? '&end_ts=' + _cfR37ChartEnd : ''), { cache: 'no-store' });
-    var data = await cfReadApiPayload(response);
-    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
-    cfR37RenderChart(data);
-  } catch (err) {
-    body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(String(err.message || err)) + '</div>';
-  }
-}
-
-function cfR37RenderChart(data) {
-  var body = document.getElementById('cf-r37-chart-body');
-  var detail = document.getElementById('cf-r37-chart-detail');
-  var meta = document.getElementById('cf-r37-chart-meta');
-  var candles = data.candles || [];
-  if (!candles.length) { body.innerHTML = '<div class="cf-table-empty-cell">No candles in window</div>'; return; }
-  var m = data.meta || {};
-  if (meta) meta.textContent = (m.symbol || 'BTCUSDT') + ' ' + (m.timeframe || '5m') + ' · mother ' + (m.mother_when || '') + ' IST · '
-    + (m.v_type || '') + ' · fall ' + (m.fall_pct != null ? m.fall_pct + '%' : '—') + ' · ' + (m.status || '');
-
-  var W = Math.max(760, Math.min(1400, (body.clientWidth || 900) - 8));
-  var H = 430, padR = 86, padB = 26, padT = 10;
-  var canvas = document.createElement('canvas');
-  var dpr = window.devicePixelRatio || 1;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-  var ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  var lines = data.lines || {};
-  var lows = candles.map(function(c) { return c[3]; });
-  var highs = candles.map(function(c) { return c[2]; });
-  var lineVals = [lines.mother, lines.swing_low, lines.swing_high, lines.s2, lines.b2, lines.reference, lines.target, lines.avg_buy, lines.entry]
-    .filter(function(v) { return v != null; });
-  var lo = Math.min.apply(null, lows.concat(lineVals));
-  var hi = Math.max.apply(null, highs.concat(lineVals));
-  var span = (hi - lo) || 1; lo -= span * 0.04; hi += span * 0.04;
-  var n = candles.length;
-  var plotW = W - padR, plotH = H - padB - padT;
-  var xOf = function(i) { return (i + 0.5) * (plotW / n); };
-  var yOf = function(p) { return padT + (hi - p) / (hi - lo) * plotH; };
-
-  var green = _cfR37CssColor('--green', '#2ecc71');
-  var red = _cfR37CssColor('--red', '#e74c3c');
-  var muted = _cfR37CssColor('--muted', '#8a8f98');
-  var accent = _cfR37CssColor('--accent', '#d9a441');
-  var text = _cfR37CssColor('--text', '#e8e8e8');
-
-  var cw = Math.max(1, Math.min(9, plotW / n * 0.7));
-  for (var i = 0; i < n; i++) {
-    var c = candles[i];
-    var up = c[4] >= c[1];
-    ctx.strokeStyle = up ? green : red;
-    ctx.fillStyle = up ? green : red;
-    ctx.beginPath();
-    ctx.moveTo(xOf(i), yOf(c[2]));
-    ctx.lineTo(xOf(i), yOf(c[3]));
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    var byTop = yOf(Math.max(c[1], c[4]));
-    var byBot = yOf(Math.min(c[1], c[4]));
-    ctx.fillRect(xOf(i) - cw / 2, byTop, cw, Math.max(1, byBot - byTop));
-  }
-
-  function hline(price, color, label, dashed) {
-    if (price == null) return;
-    ctx.strokeStyle = color;
-    ctx.setLineDash(dashed ? [5, 4] : []);
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(0, yOf(price));
-    ctx.lineTo(plotW, yOf(price));
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = color;
-    ctx.font = '11px -apple-system, sans-serif';
-    ctx.fillText(label + ' ' + Number(price).toLocaleString('en-US'), plotW + 4, yOf(price) + 4);
-  }
-  hline(lines.mother, '#a06bd6', 'MOTHER', false);
-  hline(lines.swing_high, muted, 'swing hi', true);
-  hline(lines.swing_low, muted, 'swing lo', true);
-  hline(lines.s2, '#e67e22', 'S2', false);
-  hline(lines.b2, '#c0392b', 'B2', false);
-  hline(lines.reference, text, 'REF', true);
-  hline(lines.entry, '#3d9be9', 'entry', true);
-  hline(lines.avg_buy, accent, 'avg buy', true);
-  hline(lines.target, green, 'TARGET', false);
-
-  var fills = data.fills || [];
-  var byTs = {};
-  candles.forEach(function(c, i) { byTs[c[0]] = i; });
-  var nearest = function(ts) {
-    if (byTs[ts] != null) return byTs[ts];
-    var best = 0, bd = Infinity;
-    for (var i = 0; i < n; i++) { var d = Math.abs(candles[i][0] - ts); if (d < bd) { bd = d; best = i; } }
-    return best;
-  };
-  fills.forEach(function(f) {
-    var x = xOf(nearest(f.ts)), y = yOf(f.price);
-    ctx.fillStyle = green;
-    ctx.beginPath();
-    ctx.moveTo(x, y - 10); ctx.lineTo(x - 6, y + 2); ctx.lineTo(x + 6, y + 2);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = text;
-    ctx.font = '10px -apple-system, sans-serif';
-    ctx.fillText(f.label, x - 14, y + 14);
-  });
-
-  body.innerHTML = '';
-  body.appendChild(canvas);
-
-  if (detail) {
-    var rows = fills.map(function(f) {
-      return '<tr><td>' + _escapeHtml(f.when) + '</td><td>' + _escapeHtml(f.label) + '</td>'
-        + '<td class="num">' + Number(f.price).toLocaleString('en-US') + '</td>'
-        + '<td class="num">' + _cfR37Usd(f.usd) + '</td></tr>';
-    }).join('');
-    detail.innerHTML =
-      '<div class="table-meta" style="margin:4px 0 8px;">'
-      + (m.minor ? 'Minor' : 'Major') + ' · pot ' + _cfR37Usd(m.pot_usd)
-      + ' · invested ' + _cfR37Usd(m.cost)
-      + (m.touch_when ? ' · reference touched ' + _escapeHtml(m.touch_when) : '')
-      + (m.target_when ? ' · target hit ' + _escapeHtml(m.target_when) + ' IST' : '')
-      + (m.paper ? ' · PAPER TRADE' : ' · warm-up (before the paper clock — never counted)')
-      + '</div>'
-      + (rows ? '<div class="table-surface"><div class="table-scroll"><table class="trade-table"><thead><tr><th>When</th><th>Buy</th><th class="num">Price</th><th class="num">Amount</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : '');
-  }
+// The 30-70 has no trendlines and no order book — its legend and its detail
+// table are its own; everything below the legend is the shared renderer.
+function _cfR37ChartHtml(d, P) {
+  var r = d.r37 || {};
+  var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
+    + '<span style="color:' + P.mother + ';">┄ mother</span> &nbsp; '
+    + '<span style="color:' + P.fibs[0] + ';">— fib from the V (0/1/2/4)</span> &nbsp; '
+    + '<span style="color:' + P.fibs[1] + ';">— fib from the mother</span> &nbsp; '
+    + '<span style="color:' + P.buyMark + ';">— entry · ▲ buys</span> &nbsp; '
+    + '<span style="color:' + P.tp + ';">┄ target</span> &nbsp; '
+    + '<span style="color:' + P.sellMark + ';">▼ sold</span>'
+    + (d.frozen ? ' &nbsp; <span class="admin-pill" data-state="info">FROZEN RECORD</span>' : '')
+    + '</div>';
+  var html = legend + (_CF_CHART_ENGINE === 'canvas' ? _cfCascadeChartCanvasHtml() : _cfCascadeChartSvg(d));
+  var buys = (r.buys || []).map(function (b) {
+    return '<tr><td>' + _escapeHtml(b.when) + '</td><td>' + _escapeHtml(b.label) + '</td>'
+      + '<td class="num">' + Number(b.price).toLocaleString('en-US') + '</td>'
+      + '<td class="num">' + _cfR37Usd(b.usd) + '</td></tr>';
+  }).join('');
+  html += '<div class="cf-cascade-chart-tables">'
+    + '<div class="table-meta" style="padding:8px 0;">'
+    + (r.minor ? 'Minor' : 'Major') + ' · ' + _escapeHtml(String(r.v_type || ''))
+    + ' · fall ' + r.fall_pct + '% · pot ' + _cfR37Usd(r.pot_usd)
+    + ' · invested ' + _cfR37Usd(r.cost)
+    + (r.touch_when ? ' · reference touched ' + _escapeHtml(r.touch_when) : '')
+    + (r.target_when ? ' · sold ' + _escapeHtml(r.target_when) : '')
+    + (r.paper ? ' · PAPER TRADE' : ' · warm-up (never counted)')
+    + '</div>'
+    + (buys
+      ? '<div class="table-surface"><div class="table-scroll"><table class="trade-table"><thead><tr>'
+        + '<th>When</th><th>Buy</th><th class="num">Price</th><th class="num">Amount</th>'
+        + '</tr></thead><tbody>' + buys + '</tbody></table></div></div>'
+      : '<div class="table-meta" style="padding:0 0 8px;">No buy has filled yet — the white ENTRY line is where the first one rests.</div>')
+    + '</div>';
+  return html;
 }
