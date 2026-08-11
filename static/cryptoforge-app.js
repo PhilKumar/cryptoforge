@@ -11954,7 +11954,7 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
     if (data.mother_forced_visible && data.timeframe) _cfCascadeChartTf = data.timeframe;
     _cfCascadeMarkTimeframe(_cfCascadeChartTf, data.timeframe);
     var title = document.getElementById('cf-cascade-chart-title');
-    if (title) title.textContent = _cfChartSource === 'rule3070' ? '30-70 Trade Chart' : 'Campaign Chart';
+    if (title) title.textContent = _cfChartSource === 'rule3070' ? 'V-Rule Trade Chart' : 'Campaign Chart';
     var meta = document.getElementById('cf-cascade-chart-meta');
     if (meta && _cfChartSource === 'rule3070') {
       var r = data.r37 || {};
