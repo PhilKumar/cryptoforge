@@ -8510,8 +8510,13 @@ def _get_rule3070_service():
 
 
 @app.get("/api/rule3070/status")
-async def rule3070_status():
-    return _get_rule3070_service().status()
+async def rule3070_status(scan: int = 0):
+    """`scan=1` lets a STOPPED console fill itself with one read-only replay.
+
+    Only the 30-70 page asks for it, and only on open: the replay costs ~20s of
+    CPU in this process, which also serves the live Cascade engine.
+    """
+    return await asyncio.to_thread(_get_rule3070_service().status, bool(scan))
 
 
 @app.get("/api/rule3070/journal")

@@ -12662,7 +12662,10 @@ var _cfR37TickTimer = null;
 var _cfR37NextTick = 0;
 
 function cfInitRule3070Page() {
-  cfR37Load(false);
+  // Only the first load asks the server to scan (a stopped engine has no watch
+  // state until something replays the tape). The 5s poll never does — that
+  // replay is expensive and this process also runs the live Cascade engine.
+  cfR37Load(false, true);
   if (!_cfR37PollTimer) {
     _cfR37PollTimer = setInterval(function() { if (!document.hidden) cfR37Load(false); }, 5000);
   }
@@ -12716,9 +12719,9 @@ function _cfR37SetError(message) {
   if (node) node.textContent = message || '';
 }
 
-async function cfR37Load(showToast) {
+async function cfR37Load(showToast, scan) {
   try {
-    var response = await cfApiFetch('/api/rule3070/status', { cache: 'no-store' });
+    var response = await cfApiFetch('/api/rule3070/status' + (scan ? '?scan=1' : ''), { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
     if (!response.ok) throw new Error(cfApiErrorDetail(data, '30-70 status unavailable'));
     cfR37RenderStatus(data);

@@ -256,6 +256,7 @@ class Rule3070PaperService:
         self._df: Optional[pd.DataFrame] = None
         self._watch: dict = {}
         self._priming = False
+        self._primed_at = 0.0
         self._activity: List[dict] = []  # newest last; the console reads it reversed
 
     # -- lifecycle ---------------------------------------------------
@@ -462,9 +463,16 @@ class Rule3070PaperService:
         orders, no price — which reads as a broken page rather than an engine
         that has not been switched on. The replay is read-only (harvest never
         writes the journal), so this is safe with another writer running.
+
+        ONLY the console asks for this (status?scan=1). It is a ~20s CPU-bound
+        replay of a month of candles: hanging it off every /status call meant
+        any route sweep — or any other page — could start one, and this process
+        also runs the live Cascade engine. One at a time, once every 10 min.
         """
-        if self._watch or self._priming or (self._thread and self._thread.is_alive()):
+        now = time.time()
+        if self._watch or self._priming or (self._thread and self._thread.is_alive()) or now - self._primed_at < 600:
             return
+        self._primed_at = now
         self._priming = True
 
         def run():
@@ -498,9 +506,9 @@ class Rule3070PaperService:
 
         threading.Thread(target=run, name="rule3070-prime", daemon=True).start()
 
-    def status(self) -> dict:
+    def status(self, scan: bool = False) -> dict:
         running = bool(self._thread and self._thread.is_alive())
-        if not running:
+        if scan and not running:
             self.prime()
         snap = dict(self._status)
         snap["running"] = running
@@ -631,7 +639,9 @@ class Rule3070PaperService:
                 "touch_high": round(c.swing_high, 2),
                 "touch_timestamp": int(c.swing_high_ts.timestamp()),
                 "low": round(c.swing_low, 2),
-                "levels": {"2": round(c.level("S", 2), 2), "4": round(c.level("S", 4), 2)},
+                # Only level 2 exists for this rule: reference = max(S2, B2) is
+                # the whole trigger, and nothing is ever measured at 4.
+                "levels": {"2": round(c.level("S", 2), 2)},
                 "orders": [],
             },
             {
@@ -647,7 +657,7 @@ class Rule3070PaperService:
                     if c.fibB_low_anchor and abs(c.fibB_low_anchor - c.swing_low) > 0.01
                     else None
                 ),
-                "levels": {"2": round(c.level("B", 2), 2), "4": round(c.level("B", 4), 2)},
+                "levels": {"2": round(c.level("B", 2), 2)},
                 "orders": [],
             },
         ]

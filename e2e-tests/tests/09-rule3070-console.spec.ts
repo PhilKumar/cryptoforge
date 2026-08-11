@@ -128,7 +128,7 @@ function status(running: boolean) {
 }
 
 async function open3070(page: Page, running: boolean) {
-  await page.route('**/api/rule3070/status', (route) =>
+  await page.route('**/api/rule3070/status**', (route) =>
     route.fulfill({ json: status(running) }));
   await page.route('**/api/rule3070/journal**', (route) =>
     route.fulfill({ json: { events: [
@@ -170,8 +170,8 @@ test.describe('30-70 console', () => {
     await expect(page.locator('#cf-r37-stop-btn')).toBeVisible();
     await expect(page.locator('#cf-r37-start-btn')).toBeHidden();
 
-    await page.unroute('**/api/rule3070/status');
-    await page.route('**/api/rule3070/status', (route) => route.fulfill({ json: status(false) }));
+    await page.unroute('**/api/rule3070/status**');
+    await page.route('**/api/rule3070/status**', (route) => route.fulfill({ json: status(false) }));
     await expect(page.locator('#cf-r37-stop-btn')).toBeHidden({ timeout: 10_000 });
     await expect(page.locator('#cf-r37-start-btn')).toBeVisible();
   });
