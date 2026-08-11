@@ -7338,11 +7338,13 @@ html[data-theme="light"] .journal-entry-notes section {
     background: rgba(12,20,36,0.72);
   }
   .cf-mode-toggle { width: 100%; }
-  .cf-mode-option,
   /* Strategy sub-nav: the Cascade / V-Rule switch at the top of each
-     strategy page — same segmented look as the chart's TF toggle. */
-  .cf-strat-subnav { margin-bottom: 16px; display: inline-flex; }
+     strategy page — same segmented look as the chart's TF toggle. It is a
+     CONTAINER, not an option; landing it inside the option selector list
+     below stripped Paper/Live back to raw browser buttons. */
+  .cf-strat-subnav { margin-bottom: 16px; }
 
+  .cf-mode-option,
   .cf-tf-option {
     flex: 1;
     appearance: none;

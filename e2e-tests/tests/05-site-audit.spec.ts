@@ -222,4 +222,37 @@ test.describe('Comprehensive Site Audit', () => {
     await page.keyboard.press('Escape');
     await expect(alert).toBeHidden();
   });
+
+  // Adding .cf-strat-subnav INSIDE the `.cf-mode-option, .cf-tf-option` selector
+  // list silently handed Paper/Live the sub-nav's rule instead of the button
+  // rule, and they rendered as raw browser buttons on a live page. No Python
+  // test can see that, and nothing else here reads a computed style, so the
+  // segmented toggles get their own guard.
+  test('segmented toggles are styled, not raw browser buttons', async ({ page }) => {
+    await page.click('#nav-strategies');
+    await expectActivePage(page, 'cascade-page', 'nav-strategies');
+
+    const toggles = [
+      { selector: '.cf-mode-option', label: 'Paper/Live mode' },
+      { selector: '.cf-strat-subnav .cf-tf-option', label: 'Cascade/V-Rule sub-nav' },
+    ];
+
+    for (const toggle of toggles) {
+      const painted = await page.locator(toggle.selector).first().evaluate((el) => {
+        const style = window.getComputedStyle(el as HTMLElement);
+        return {
+          appearance: style.appearance,
+          borderRadius: parseFloat(style.borderRadius) || 0,
+          paddingLeft: parseFloat(style.paddingLeft) || 0,
+          borderTopWidth: parseFloat(style.borderTopWidth) || 0,
+        };
+      });
+      // A default <button> keeps appearance:auto, a hairline border and no
+      // radius; every one of ours is flattened and re-padded by the rule.
+      expect(painted.appearance, `${toggle.label} kept the native button look`).toBe('none');
+      expect(painted.borderRadius, `${toggle.label} lost its rounded corners`).toBeGreaterThan(0);
+      expect(painted.paddingLeft, `${toggle.label} lost its padding`).toBeGreaterThan(4);
+      expect(painted.borderTopWidth, `${toggle.label} kept the native border`).toBe(0);
+    }
+  });
 });
