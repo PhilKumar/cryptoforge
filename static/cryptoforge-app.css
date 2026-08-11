@@ -7339,6 +7339,10 @@ html[data-theme="light"] .journal-entry-notes section {
   }
   .cf-mode-toggle { width: 100%; }
   .cf-mode-option,
+  /* Strategy sub-nav: the Cascade / V-Rule switch at the top of each
+     strategy page — same segmented look as the chart's TF toggle. */
+  .cf-strat-subnav { margin-bottom: 16px; display: inline-flex; }
+
   .cf-tf-option {
     flex: 1;
     appearance: none;

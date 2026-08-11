@@ -1019,7 +1019,19 @@ function cfPageTabName(pageId) {
 }
 
 function cfNavButtonForPage(pageId) {
+  // Cascade and the V-Rule live as two pages under ONE nav tab (Phil,
+  // 2026-08-11: "Make strategy as a single tab").
+  if (pageId === 'cascade-page' || pageId === 'rule3070-page') {
+    return document.getElementById('nav-strategies');
+  }
   return document.getElementById('nav-' + cfPageTabName(pageId));
+}
+
+// The Strategies tab reopens whichever strategy page was used last.
+function cfOpenStrategies(btn) {
+  var last = localStorage.getItem('cf-strat-sub');
+  if (last !== 'cascade-page' && last !== 'rule3070-page') last = 'cascade-page';
+  showPage(last, btn);
 }
 
 function cfPageIdFromLocation() {
@@ -1102,6 +1114,9 @@ function showPage(pageId, btn, options) {
   window.scrollTo(0, 0);
   // Persist active tab
   localStorage.setItem('cf_active_tab', tabName);
+  if (pageId === 'cascade-page' || pageId === 'rule3070-page') {
+    localStorage.setItem('cf-strat-sub', pageId);
+  }
   cfSyncPageHistory(pageId, opts);
 
   if (pageId === 'dashboard-page') { loadBrokerSettings(true); refreshBrokerState(true); loadDashboard(); }

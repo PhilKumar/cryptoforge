@@ -19,7 +19,7 @@ const shellPages = [
   { hash: '#journal', nav: '#nav-journal', section: 'journal-page', probe: '#cf-journal-body' },
   { hash: '#dashboard', nav: '#nav-dashboard', section: 'dashboard-page', probe: '#dash-runs-table' },
   { hash: '#portfolio', nav: '#nav-portfolio', section: 'portfolio-page', probe: '#pf-positions-table' },
-  { hash: '#cascade', nav: '#nav-cascade', section: 'cascade-page', probe: '#cf-cascade-trades' },
+  { hash: '#cascade', nav: '#nav-strategies', section: 'cascade-page', probe: '#cf-cascade-trades' },
   { hash: '#builder', nav: '#nav-builder', section: 'builder-page', probe: '#backtest-run-btn' },
   { hash: '#live', nav: '#nav-live', section: 'live-page', probe: '#live-panels-container' },
   { hash: '#scalp', nav: '#nav-scalp', section: 'scalp-page', probe: '#cf-scalp-active-table' },

@@ -141,7 +141,9 @@ async function open3070(page: Page, running: boolean) {
   await page.goto('/app');
   for (const digit of PIN.split('')) await page.click(`button.key[data-val="${digit}"]`);
   await page.waitForSelector('.nav-tab', { timeout: 15_000 });
-  await page.click('#nav-rule3070');
+  await page.click('#nav-strategies');
+  // Strategies opens on the last-used sub-page; make sure we are on the V-Rule
+  await page.evaluate(() => (window as any).showPage('rule3070-page', document.getElementById('nav-strategies')));
   await expect(page.locator('#rule3070-page')).toBeVisible();
   await expect(page.locator('#cf-r37-watch-price')).toContainText('64,010');
 }
@@ -193,7 +195,7 @@ test.describe('30-70 console', () => {
     await page.locator('#cf-r37-armed-body button').first().click();
 
     await expect(page.locator('#cf-cascade-chart-overlay')).toBeVisible();
-    await expect(page.locator('#cf-cascade-chart-title')).toHaveText('30-70 Trade Chart');
+    await expect(page.locator('#cf-cascade-chart-title')).toHaveText('V-Rule Trade Chart');
     await expect(page.locator('#cf-cascade-chart-meta')).toContainText('failed V');
     // The shared renderer's own furniture: timeframe buttons and a live canvas.
     await expect(page.locator('#cf-cascade-chart-tf .cf-tf-option').first()).toBeVisible();

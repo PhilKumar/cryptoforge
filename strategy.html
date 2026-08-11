@@ -180,15 +180,11 @@
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></span>
       <span class="tab-label">Portfolio</span>
     </button>
-    <button id="nav-cascade" class="nav-tab" data-cf-click="showPage('cascade-page', this)">
+    <button id="nav-strategies" class="nav-tab" data-cf-click="cfOpenStrategies(this)">
       <span class="live-dot" id="cascade-tab-dot"></span>
-      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h6v6"/><path d="M9 10h6v6"/><path d="M15 16h6v4"/><path d="M3 20h18"/></svg></span>
-      <span class="tab-label">Cascade</span>
-    </button>
-    <button id="nav-rule3070" class="nav-tab" data-cf-click="showPage('rule3070-page', this)">
       <span class="live-dot" id="rule3070-tab-dot"></span>
-      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l8 16 8-16"/></svg></span>
-      <span class="tab-label">V-Rule</span>
+      <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h6v6"/><path d="M9 10h6v6"/><path d="M15 16h6v4"/><path d="M3 20h18"/></svg></span>
+      <span class="tab-label">Strategies</span>
     </button>
     <button id="nav-dashboard" class="nav-tab" data-cf-click="showPage('dashboard-page', this)">
       <span class="tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
@@ -1294,6 +1290,12 @@
      SCALP PAGE
      ═══════════════════════════════════════════════════════ -->
 <div id="rule3070-page" class="page-section">
+  <div class="cf-tf-toggle cf-strat-subnav" role="tablist" aria-label="Strategy">
+    <button type="button" class="cf-tf-option" role="tab" aria-selected="false"
+            data-cf-click="showPage('cascade-page', document.getElementById('nav-strategies'))">Cascade</button>
+    <button type="button" class="cf-tf-option is-active" role="tab" aria-selected="true"
+            data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">V-Rule</button>
+  </div>
   <div class="allocator-header">
     <div>
       <h2>The V-Rule <button type="button" class="cf-info" tabindex="0" data-cf-info="A mother candle marks the top. After it falls, a V forms (a dip, two greens, a red). The book may NEVER hold more than half the purse at once — the safety rule the honest backtest was chosen on. The entry sits a quarter of the fall back up and trails the low down; buys alternate 30% and 70% of the pot down the sliding fibs, four buys maximum, then it holds. One target sells the whole ladder at the average buy plus a quarter of the fall. Money rules: pot is the fall percent of capital, a 0.35% fee gate, full-budget discipline and 25% profit reinvestment. This console runs it on PAPER using the same engine the nine-year backtest proved, bar for bar." aria-label="How the 30-70 Rule works">i</button></h2>
@@ -1495,6 +1497,12 @@
 </div>
 
 <div id="cascade-page" class="page-section">
+  <div class="cf-tf-toggle cf-strat-subnav" role="tablist" aria-label="Strategy">
+    <button type="button" class="cf-tf-option is-active" role="tab" aria-selected="true"
+            data-cf-click="showPage('cascade-page', document.getElementById('nav-strategies'))">Cascade</button>
+    <button type="button" class="cf-tf-option" role="tab" aria-selected="false"
+            data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">V-Rule</button>
+  </div>
   <div class="allocator-header">
     <div>
       <h2>Cascade Campaigns</h2>
