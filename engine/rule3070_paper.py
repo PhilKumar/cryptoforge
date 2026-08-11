@@ -97,6 +97,7 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
                     "kind": "BUY",
                     "key": key,
                     "ts": int(f.ts.timestamp()),
+                    "mts": int(c.mother_ts.timestamp()),
                     "when": f.ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
                     "mother": mother,
                     "label": f.label,
@@ -119,6 +120,7 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
                             "kind": "TARGET",
                             "key": key,
                             "ts": int(c.target_ts.timestamp()),
+                            "mts": int(c.mother_ts.timestamp()),
                             "when": c.target_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
                             "mother": mother,
                             "price": round(c.target, 2),
@@ -134,6 +136,7 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
             opens.append(
                 {
                     "mother": mother,
+                    "mts": int(c.mother_ts.timestamp()),
                     "cost": round(cost, 2),
                     "unrealised": round(qty * last_close - cost, 2),
                     "target": round(c.target or 0.0, 2),
@@ -169,6 +172,8 @@ class Rule3070PaperService:
         self._closed_net = 0.0
         self._opens: List[dict] = []
         self._last_error = ""
+        self._campaigns: list = []  # last replay, for charts and details
+        self._df: Optional[pd.DataFrame] = None
 
     # -- lifecycle ---------------------------------------------------
 
@@ -307,7 +312,8 @@ class Rule3070PaperService:
 
     def _tick(self) -> None:
         df = fetch_window(self.symbol)
-        events, opens, _ = harvest(df, int(self._state["start_ts"]), self._seen)
+        events, opens, campaigns = harvest(df, int(self._state["start_ts"]), self._seen)
+        self._campaigns, self._df = campaigns, df
         for e in events:
             self._seen.add(e["key"])
             with open(JOURNAL_PATH, "a") as jf:
@@ -366,6 +372,106 @@ class Rule3070PaperService:
         if other and other != os.getpid() and _pid_alive(other):
             return f"pid {other}"
         return ""
+
+    def chart(self, mother, end_ts: int = 0, pad: int = 36) -> dict:
+        """Candles and the engine's own lines for one campaign.
+
+        Works while stopped too: with no cached replay a read-only one is run
+        (harvest never writes the journal), so the console can always draw.
+        """
+        campaigns, df = self._campaigns, self._df
+        if not campaigns or df is None:
+            df = fetch_window(self.symbol)
+            start_ts = 0
+            if os.path.exists(STATE_PATH):
+                try:
+                    start_ts = int(json.load(open(STATE_PATH)).get("start_ts") or 0)
+                except (json.JSONDecodeError, OSError):
+                    start_ts = 0
+            _, _, campaigns = harvest(df, start_ts, set())
+            self._campaigns, self._df = campaigns, df
+        want = str(mother)
+        target_c = None
+        for c in campaigns:
+            if (
+                str(int(c.mother_ts.timestamp())) == want
+                or c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M") == want
+            ):
+                target_c = c
+                break
+        if target_c is None:
+            raise KeyError(f"No campaign with mother {mother!r} in the current window")
+        c = target_c
+        idx = df.index
+        m_pos = int(idx.get_indexer([c.mother_ts], method="nearest")[0])
+        end_pos = len(df) - 1
+        if end_ts:
+            end_pos = int(idx.get_indexer([pd.Timestamp(int(end_ts), unit="s", tz="UTC")], method="nearest")[0])
+        elif c.end_ts is not None:
+            end_pos = min(len(df) - 1, int(idx.get_indexer([c.end_ts], method="nearest")[0]) + pad)
+        lo_pos = max(0, m_pos - pad)
+        win = df.iloc[lo_pos : end_pos + 1]
+        # A months-old open ladder spans tens of thousands of 5m bars — roll
+        # them up so the chart stays readable, the way Cascade's Auto does.
+        bucket = 1
+        while len(win) / bucket > 500:
+            bucket *= 2
+        tf_label = "5m" if bucket == 1 else f"{bucket * 5}m" if bucket * 5 < 60 else f"{bucket * 5 // 60}h"
+        candles = []
+        for i in range(0, len(win), bucket):
+            chunk = win.iloc[i : i + bucket]
+            candles.append(
+                [
+                    int(chunk.index[0].timestamp()),
+                    round(float(chunk["open"].iloc[0]), 2),
+                    round(float(chunk["high"].max()), 2),
+                    round(float(chunk["low"].min()), 2),
+                    round(float(chunk["close"].iloc[-1]), 2),
+                ]
+            )
+        lines = {
+            "mother": round(c.mother_high, 2),
+            "swing_low": round(c.swing_low, 2),
+            "swing_high": round(c.swing_high, 2),
+            "s2": round(c.fibS2, 2),
+            "b2": round(c.fibB2, 2),
+            "reference": round(c.reference, 2),
+            "target": round(c.target, 2) if c.target else None,
+            "avg_buy": round(c.avg_buy, 2) if c.fills else None,
+            "entry": round(c.entry_price(), 2)
+            if c._touched and not c.fills or (c.fills and not c._exhausted)
+            else None,
+            "bands": [
+                {"kind": kind, "band": band, "price": round(price, 2), "ts": int(ts.timestamp())}
+                for kind, band, price, ts in c.band_lines
+            ],
+        }
+        fills = [
+            {
+                "ts": int(f.ts.timestamp()),
+                "when": f.ts.tz_convert(IST).strftime("%d %b %H:%M"),
+                "price": round(f.price, 2),
+                "usd": round(f.usd, 2),
+                "label": f.label,
+            }
+            for f in c.fills
+        ]
+        start_ts_state = int(self._state.get("start_ts") or 0) if self._state else 0
+        meta = {
+            "mother_when": c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
+            "v_type": c.v_type,
+            "fall_pct": round(c.fall_pct, 2),
+            "pot_usd": round(c.pot_usd, 2),
+            "status": c.status,
+            "minor": bool(c.is_minor),
+            "paper": bool(c.fills and c.fills[0].ts.timestamp() >= start_ts_state) if start_ts_state else False,
+            "target_when": c.target_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M") if c.target_ts is not None else None,
+            "cost": round(sum(f.usd for f in c.fills), 2) if c.fills else 0.0,
+            "touch_when": c.touch_ts.tz_convert(IST).strftime("%d %b %H:%M") if c.touch_ts is not None else None,
+            "symbol": self.symbol,
+            "timeframe": tf_label,
+        }
+        return {"candles": candles, "lines": lines, "fills": fills, "meta": meta}
 
     def journal(self, limit: int = 200) -> List[dict]:
         if not os.path.exists(JOURNAL_PATH):

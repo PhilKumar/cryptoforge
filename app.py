@@ -8519,6 +8519,15 @@ async def rule3070_journal(limit: int = 200):
     return {"events": _get_rule3070_service().journal(limit=max(1, min(1000, int(limit))))}
 
 
+@app.get("/api/rule3070/chart")
+async def rule3070_chart(mother: str, end_ts: int = 0):
+    """Candles + the engine's own lines for one 30-70 campaign."""
+    try:
+        return await asyncio.to_thread(_get_rule3070_service().chart, mother, int(end_ts))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @app.post("/api/rule3070/start")
 async def rule3070_start():
     check_rate_limit("rule3070_start", max_calls=3, window_sec=10)

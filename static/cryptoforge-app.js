@@ -12678,7 +12678,7 @@ function cfR37RenderStatus(s) {
       var note = opens.warmup_holding
         ? 'No open PAPER trades. (' + opens.warmup_holding + ' warm-up ladder(s) from before the paper clock are holding — they never count.)'
         : 'No open paper trades — the engine is waiting for its entry.';
-      body.innerHTML = '<tr><td colspan="7" class="cf-table-empty-cell">' + _escapeHtml(note) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">' + _escapeHtml(note) + '</td></tr>';
     } else {
       body.innerHTML = rows.map(function(o) {
         return '<tr>'
@@ -12689,6 +12689,7 @@ function cfR37RenderStatus(s) {
           + '<td class="num">' + (o.target ? Number(o.target).toLocaleString('en-US') : '—') + '</td>'
           + '<td class="num" style="color:' + ((o.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + _cfR37Usd(o.unrealised) + '</td>'
           + '<td>' + _escapeHtml((o.status || '').replace('OPEN (', '').replace(')', '')) + '</td>'
+          + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + (o.mts || 0) + ', 0)">Chart</button></td>'
           + '</tr>';
       }).join('');
     }
@@ -12699,7 +12700,7 @@ function cfR37RenderJournal(events) {
   var body = document.getElementById('cf-r37-journal-body');
   if (!body) return;
   if (!events.length) {
-    body.innerHTML = '<tr><td colspan="7" class="cf-table-empty-cell">No paper trades yet — the first buy will appear here the moment the market gives one.</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">No paper trades yet — the first buy will appear here the moment the market gives one.</td></tr>';
     return;
   }
   body.innerHTML = events.map(function(e) {
@@ -12715,6 +12716,7 @@ function cfR37RenderJournal(events) {
       + '<td class="num">' + _cfR37Usd(isBuy ? e.usd : e.cost) + '</td>'
       + '<td class="num" style="color:' + ((e.net || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (isBuy ? '—' : _cfR37Usd(e.net)) + '</td>'
       + '<td>' + _escapeHtml(detail) + '</td>'
+      + '<td>' + (e.mts ? '<button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + e.mts + ', ' + (isBuy ? 0 : (e.ts || 0)) + ')">Chart</button>' : '') + '</td>'
       + '</tr>';
   }).join('');
 }
@@ -12761,5 +12763,173 @@ async function cfR37Reset() {
   } catch (err) {
     _cfR37SetError(String(err.message || err));
     cfToast(String(err.message || err), 'error');
+  }
+}
+
+// ── 30-70 trade chart ──────────────────────────────────────────────
+
+var _cfR37ChartKey = null;
+var _cfR37ChartEnd = 0;
+
+function _cfR37CssColor(name, fallback) {
+  var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+function cfR37ChartBackdrop(event) {
+  if (event && event.target && event.target.id === 'cf-r37-chart-overlay') cfR37HideChart();
+}
+
+function cfR37HideChart() {
+  var overlay = document.getElementById('cf-r37-chart-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _cfR37ChartKey = null;
+}
+
+function cfR37RefreshChart() {
+  if (_cfR37ChartKey != null) cfR37ShowChart(_cfR37ChartKey, _cfR37ChartEnd);
+}
+
+async function cfR37ShowChart(mother, endTs) {
+  var overlay = document.getElementById('cf-r37-chart-overlay');
+  var body = document.getElementById('cf-r37-chart-body');
+  var detail = document.getElementById('cf-r37-chart-detail');
+  if (!overlay || !body) return;
+  // The overlay lives inside the 30-70 page section, which is display:none on
+  // other tabs — reparent to <body> so it is a true top-level modal (the same
+  // lesson the Cascade chart paid for).
+  if (overlay.parentNode !== document.body) document.body.appendChild(overlay);
+  _cfR37ChartKey = mother;
+  _cfR37ChartEnd = Number(endTs) || 0;
+  overlay.style.display = '';
+  body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
+  if (detail) detail.innerHTML = '';
+  try {
+    var response = await cfApiFetch('/api/rule3070/chart?mother=' + encodeURIComponent(mother)
+      + (_cfR37ChartEnd ? '&end_ts=' + _cfR37ChartEnd : ''), { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
+    cfR37RenderChart(data);
+  } catch (err) {
+    body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">' + _escapeHtml(String(err.message || err)) + '</div>';
+  }
+}
+
+function cfR37RenderChart(data) {
+  var body = document.getElementById('cf-r37-chart-body');
+  var detail = document.getElementById('cf-r37-chart-detail');
+  var meta = document.getElementById('cf-r37-chart-meta');
+  var candles = data.candles || [];
+  if (!candles.length) { body.innerHTML = '<div class="cf-table-empty-cell">No candles in window</div>'; return; }
+  var m = data.meta || {};
+  if (meta) meta.textContent = (m.symbol || 'BTCUSDT') + ' ' + (m.timeframe || '5m') + ' · mother ' + (m.mother_when || '') + ' IST · '
+    + (m.v_type || '') + ' · fall ' + (m.fall_pct != null ? m.fall_pct + '%' : '—') + ' · ' + (m.status || '');
+
+  var W = Math.max(760, Math.min(1400, (body.clientWidth || 900) - 8));
+  var H = 430, padR = 86, padB = 26, padT = 10;
+  var canvas = document.createElement('canvas');
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  var lines = data.lines || {};
+  var lows = candles.map(function(c) { return c[3]; });
+  var highs = candles.map(function(c) { return c[2]; });
+  var lineVals = [lines.mother, lines.swing_low, lines.swing_high, lines.s2, lines.b2, lines.reference, lines.target, lines.avg_buy, lines.entry]
+    .filter(function(v) { return v != null; });
+  var lo = Math.min.apply(null, lows.concat(lineVals));
+  var hi = Math.max.apply(null, highs.concat(lineVals));
+  var span = (hi - lo) || 1; lo -= span * 0.04; hi += span * 0.04;
+  var n = candles.length;
+  var plotW = W - padR, plotH = H - padB - padT;
+  var xOf = function(i) { return (i + 0.5) * (plotW / n); };
+  var yOf = function(p) { return padT + (hi - p) / (hi - lo) * plotH; };
+
+  var green = _cfR37CssColor('--green', '#2ecc71');
+  var red = _cfR37CssColor('--red', '#e74c3c');
+  var muted = _cfR37CssColor('--muted', '#8a8f98');
+  var accent = _cfR37CssColor('--accent', '#d9a441');
+  var text = _cfR37CssColor('--text', '#e8e8e8');
+
+  var cw = Math.max(1, Math.min(9, plotW / n * 0.7));
+  for (var i = 0; i < n; i++) {
+    var c = candles[i];
+    var up = c[4] >= c[1];
+    ctx.strokeStyle = up ? green : red;
+    ctx.fillStyle = up ? green : red;
+    ctx.beginPath();
+    ctx.moveTo(xOf(i), yOf(c[2]));
+    ctx.lineTo(xOf(i), yOf(c[3]));
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    var byTop = yOf(Math.max(c[1], c[4]));
+    var byBot = yOf(Math.min(c[1], c[4]));
+    ctx.fillRect(xOf(i) - cw / 2, byTop, cw, Math.max(1, byBot - byTop));
+  }
+
+  function hline(price, color, label, dashed) {
+    if (price == null) return;
+    ctx.strokeStyle = color;
+    ctx.setLineDash(dashed ? [5, 4] : []);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(0, yOf(price));
+    ctx.lineTo(plotW, yOf(price));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.font = '11px -apple-system, sans-serif';
+    ctx.fillText(label + ' ' + Number(price).toLocaleString('en-US'), plotW + 4, yOf(price) + 4);
+  }
+  hline(lines.mother, '#a06bd6', 'MOTHER', false);
+  hline(lines.swing_high, muted, 'swing hi', true);
+  hline(lines.swing_low, muted, 'swing lo', true);
+  hline(lines.s2, '#e67e22', 'S2', false);
+  hline(lines.b2, '#c0392b', 'B2', false);
+  hline(lines.reference, text, 'REF', true);
+  hline(lines.entry, '#3d9be9', 'entry', true);
+  hline(lines.avg_buy, accent, 'avg buy', true);
+  hline(lines.target, green, 'TARGET', false);
+
+  var fills = data.fills || [];
+  var byTs = {};
+  candles.forEach(function(c, i) { byTs[c[0]] = i; });
+  var nearest = function(ts) {
+    if (byTs[ts] != null) return byTs[ts];
+    var best = 0, bd = Infinity;
+    for (var i = 0; i < n; i++) { var d = Math.abs(candles[i][0] - ts); if (d < bd) { bd = d; best = i; } }
+    return best;
+  };
+  fills.forEach(function(f) {
+    var x = xOf(nearest(f.ts)), y = yOf(f.price);
+    ctx.fillStyle = green;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 10); ctx.lineTo(x - 6, y + 2); ctx.lineTo(x + 6, y + 2);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = text;
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillText(f.label, x - 14, y + 14);
+  });
+
+  body.innerHTML = '';
+  body.appendChild(canvas);
+
+  if (detail) {
+    var rows = fills.map(function(f) {
+      return '<tr><td>' + _escapeHtml(f.when) + '</td><td>' + _escapeHtml(f.label) + '</td>'
+        + '<td class="num">' + Number(f.price).toLocaleString('en-US') + '</td>'
+        + '<td class="num">' + _cfR37Usd(f.usd) + '</td></tr>';
+    }).join('');
+    detail.innerHTML =
+      '<div class="table-meta" style="margin:4px 0 8px;">'
+      + (m.minor ? 'Minor' : 'Major') + ' · pot ' + _cfR37Usd(m.pot_usd)
+      + ' · invested ' + _cfR37Usd(m.cost)
+      + (m.touch_when ? ' · reference touched ' + _escapeHtml(m.touch_when) : '')
+      + (m.target_when ? ' · target hit ' + _escapeHtml(m.target_when) + ' IST' : '')
+      + (m.paper ? ' · PAPER TRADE' : ' · warm-up (before the paper clock — never counted)')
+      + '</div>'
+      + (rows ? '<div class="table-surface"><div class="table-scroll"><table class="trade-table"><thead><tr><th>When</th><th>Buy</th><th class="num">Price</th><th class="num">Amount</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : '');
   }
 }
