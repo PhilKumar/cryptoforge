@@ -36,7 +36,11 @@ _logger = logging.getLogger("cryptoforge.rule3070")
 # enough that the mother is a top you would actually trade against today.
 WARMUP_DAYS = 30
 WINDOW_DAYS = 90  # the CLI/one-off path with no paper clock to anchor to
-CAPITAL = 2000.0
+# Phil, 2026-08-11 night: paper proves at his REAL size — $200, like the live
+# account. Everything scales by percent, but the $5.50 Binance minimum order
+# does not: at $200 the small buys clamp up to it, so paper at $200 is the
+# honest test the $2,000 backtests could not give.
+CAPITAL = 200.0
 KLINES = "https://api.binance.com/api/v3/klines"
 IST = "Asia/Kolkata"
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "out", "rule3070")
