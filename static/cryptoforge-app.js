@@ -12579,12 +12579,32 @@ async function cfFeedBuyerSetStatus(buyerId, status) {
 // here is paper; the Cascade engine and real money are never touched.
 
 var _cfR37PollTimer = null;
+var _cfR37TickTimer = null;
+var _cfR37NextTick = 0;
 
 function cfInitRule3070Page() {
   cfR37Load(false);
   if (!_cfR37PollTimer) {
     _cfR37PollTimer = setInterval(function() { if (!document.hidden) cfR37Load(false); }, 5000);
   }
+  // a once-a-second countdown to the next scan: the market can be quiet for
+  // hours, and a page with nothing moving on it reads as a dead engine
+  if (!_cfR37TickTimer) _cfR37TickTimer = setInterval(cfR37PaintCountdown, 1000);
+}
+
+function cfR37PaintCountdown() {
+  var node = document.getElementById('cf-r37-countdown');
+  var chip = document.getElementById('cf-r37-next-chip');
+  if (!node) return;
+  if (!_cfR37NextTick) {
+    node.textContent = '—';
+    if (chip) chip.setAttribute('data-state', 'idle');
+    return;
+  }
+  var left = Math.max(0, Math.round(_cfR37NextTick - Date.now() / 1000));
+  var mins = Math.floor(left / 60), secs = left % 60;
+  node.textContent = mins + ':' + (secs < 10 ? '0' : '') + secs;
+  if (chip) chip.setAttribute('data-state', 'running');
 }
 
 var _cfR37OrigShowPage = showPage;
@@ -12592,6 +12612,7 @@ showPage = function(pageId, btn, options) {
   if (pageId !== 'rule3070-page' && _cfR37PollTimer) {
     clearInterval(_cfR37PollTimer);
     _cfR37PollTimer = null;
+    if (_cfR37TickTimer) { clearInterval(_cfR37TickTimer); _cfR37TickTimer = null; }
   }
   _cfR37OrigShowPage(pageId, btn, options);
   if (pageId === 'rule3070-page') cfInitRule3070Page();
@@ -12694,6 +12715,113 @@ function cfR37RenderStatus(s) {
       }).join('');
     }
   }
+
+  cfR37RenderWarmup(opens);
+  cfR37RenderWatch(s);
+  cfR37RenderActivity(s.activity || []);
+  _cfR37NextTick = running ? (s.next_tick_ts || 0) : 0;
+  cfR37PaintCountdown();
+}
+
+function _cfR37LadderRow(o) {
+  return '<tr>'
+    + '<td>' + _escapeHtml(o.mother || '') + '</td>'
+    + '<td>' + (o.minor ? 'minor' : 'major') + '</td>'
+    + '<td class="num">' + (o.buys || 0) + '</td>'
+    + '<td class="num">' + _cfR37Usd(o.cost) + '</td>'
+    + '<td class="num">' + (o.target ? Number(o.target).toLocaleString('en-US') : '—') + '</td>'
+    + '<td class="num" style="color:' + ((o.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + _cfR37Usd(o.unrealised) + '</td>'
+    + '<td>' + _escapeHtml((o.status || '').replace('OPEN (', '').replace(')', '')) + '</td>'
+    + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + (o.mts || 0) + ', 0)">Chart</button></td>'
+    + '</tr>';
+}
+
+function cfR37RenderWarmup(opens) {
+  var card = document.getElementById('cf-r37-warmup-card');
+  var body = document.getElementById('cf-r37-warmup-body');
+  if (!card || !body) return;
+  var rows = opens.warmup_rows || [];
+  card.style.display = rows.length ? '' : 'none';
+  if (!rows.length) return;
+  var sum = document.getElementById('cf-r37-warmup-sum');
+  if (sum) {
+    sum.textContent = '· ' + (opens.warmup_holding || rows.length) + ' holding '
+      + _cfR37Usd(opens.warmup_cost || 0) + ', ' + _cfR37Usd(opens.warmup_unrealised || 0) + ' unrealised';
+  }
+  body.innerHTML = rows.map(_cfR37LadderRow).join('');
+}
+
+function cfR37RenderWatch(s) {
+  var w = s.watch || {};
+  var set = function(id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
+  var has = w.price != null;
+  set('cf-r37-watch-price', has ? '$' + Number(w.price).toLocaleString('en-US') : '$—');
+  set('cf-r37-watch-bar', has ? (w.bar_when || '') + ' IST · last closed 5m bar' : 'last closed 5m bar');
+  var m = w.mother || null;
+  set('cf-r37-watch-mother', m ? '$' + Number(m.price).toLocaleString('en-US') : '—');
+  set('cf-r37-watch-below', m ? ('price is ' + Number(m.below_pct).toFixed(2) + '% below it · set ' + m.when + ' IST')
+                              : 'the top every fall is measured from');
+  set('cf-r37-watch-stage', w.stage || '—');
+  set('cf-r37-watch-dip', w.dip ? ('dip so far $' + Number(w.dip.price).toLocaleString('en-US') + ' at ' + w.dip.when + ' IST')
+                                : 'dip → 2 greens → first red confirms');
+  set('cf-r37-watch-armed', String(w.armed_count || 0));
+  set('cf-r37-watch-nearest', w.nearest_pct != null
+    ? ((w.armed_near || 0) + ' within 1% · nearest ' + Math.abs(Number(w.nearest_pct)).toFixed(2) + '% away')
+    : (s.running ? 'no entry armed yet' : 'engine stopped'));
+
+  var body = document.getElementById('cf-r37-armed-body');
+  if (!body) return;
+  var armed = w.armed || [];
+  if (!armed.length) {
+    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">'
+      + (s.running ? 'Nothing armed — the engine is still waiting for a V to confirm.' : 'Engine stopped — press Start Paper to scan.')
+      + '</td></tr>';
+    return;
+  }
+  body.innerHTML = armed.map(function(a) {
+    var away = Number(a.away_pct);
+    var close = Math.abs(away) <= 0.25;
+    return '<tr>'
+      + '<td class="num" style="color:' + (close ? 'var(--accent2)' : 'var(--muted)') + ';font-weight:' + (close ? '600' : '400') + ';">'
+      + (away >= 0 ? '−' : '+') + Math.abs(away).toFixed(2) + '%</td>'
+      + '<td class="num">' + Number(a.entry).toLocaleString('en-US') + '</td>'
+      + '<td>' + _escapeHtml(a.mother || '') + '</td>'
+      + '<td>' + (a.minor ? 'minor' : 'major') + '</td>'
+      + '<td class="num">' + Number(a.fall_pct).toFixed(2) + '%</td>'
+      + '<td class="num">' + _cfR37Usd(a.pot) + '</td>'
+      + '<td>' + _escapeHtml(a.pending || '') + '</td>'
+      + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfR37ShowChart(' + (a.mts || 0) + ', 0)">Chart</button></td>'
+      + '</tr>';
+  }).join('');
+}
+
+var _cfR37SeenEventTs = null;
+
+function cfR37RenderActivity(lines) {
+  // A new buy or a target hit should announce itself the way Cascade does —
+  // the operator should never have to notice a table row changed.
+  var trades = lines.filter(function(a) { return a.kind === 'buy' || a.kind === 'target'; });
+  var newest = trades.length ? trades[0].ts : 0;
+  if (_cfR37SeenEventTs !== null && newest > _cfR37SeenEventTs) {
+    trades.filter(function(a) { return a.ts > _cfR37SeenEventTs; }).reverse().forEach(function(a) {
+      cfToast(a.text, a.kind === 'target' ? 'success' : 'info');
+    });
+  }
+  _cfR37SeenEventTs = newest;
+  var node = document.getElementById('cf-r37-activity');
+  if (!node) return;
+  if (!lines.length) {
+    node.innerHTML = '<div style="color:var(--muted);padding:10px 0;">No scans yet — press Start Paper.</div>';
+    return;
+  }
+  node.innerHTML = lines.map(function(a, i) {
+    var color = a.kind === 'target' ? 'var(--green)' : (a.kind === 'buy' ? 'var(--accent2)' : 'var(--muted)');
+    return '<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);'
+      + (i === 0 ? 'font-weight:600;' : '') + '">'
+      + '<span style="color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;">' + _escapeHtml(_cfR37Ist(a.ts)) + '</span>'
+      + '<span style="color:' + color + ';">' + _escapeHtml(a.text || '') + '</span>'
+      + '</div>';
+  }).join('');
 }
 
 function cfR37RenderJournal(events) {

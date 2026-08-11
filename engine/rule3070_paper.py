@@ -149,6 +149,65 @@ def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
     return events, opens, campaigns
 
 
+def build_watch(campaigns: list, df: pd.DataFrame) -> dict:
+    """What the engine is looking at between trades.
+
+    Most of the time nothing fills, and a console that only lists fills looks
+    dead. The scanner is never idle: a mother stands, a V forms, and buy
+    orders sit armed a fraction of a percent under the tape. That is the work
+    — so it gets shown.
+    """
+    if not len(df):
+        return {}
+    price = float(df["close"].iloc[-1])
+    scan = dict(sim.LAST_SCAN)
+    armed = []
+    for c in campaigns:
+        if c.fills or c.status.startswith("CANCELLED"):
+            continue
+        entry = c.entry_price()
+        # an untouched campaign has no low yet, so its "entry" is nonsense
+        if not c._touched or not entry or entry <= 0:
+            continue
+        armed.append(
+            {
+                "mother": c.mother_ts.tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
+                "mts": int(c.mother_ts.timestamp()),
+                "mother_high": round(c.mother_high, 2),
+                "entry": round(entry, 2),
+                "away_pct": round((price - entry) / price * 100, 3),
+                "pending": f"{c._pending} of band {c._band}",
+                "minor": bool(c.is_minor),
+                "fall_pct": round(c.fall_pct, 2),
+                "pot": round(c.pot_usd, 2),
+            }
+        )
+    armed.sort(key=lambda r: abs(r["away_pct"]))
+    watch = {
+        "price": round(price, 2),
+        "bar_when": df.index[-1].tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
+        "stage": scan.get("stage", ""),
+        "greens": scan.get("greens", 0),
+        "armed_count": len(armed),
+        "armed_near": sum(1 for r in armed if abs(r["away_pct"]) <= 1.0),
+        "armed": armed[:12],
+        "nearest_pct": armed[0]["away_pct"] if armed else None,
+    }
+    if scan.get("mother_ts") is not None:
+        mh = float(scan["mother_high"])
+        watch["mother"] = {
+            "price": round(mh, 2),
+            "when": scan["mother_ts"].tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
+            "below_pct": round((mh - price) / mh * 100, 2),
+        }
+    if scan.get("dip_ts") is not None:
+        watch["dip"] = {
+            "price": round(float(scan["dip_low"]), 2),
+            "when": scan["dip_ts"].tz_convert(IST).strftime("%Y-%m-%d %H:%M"),
+        }
+    return watch
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -174,6 +233,8 @@ class Rule3070PaperService:
         self._last_error = ""
         self._campaigns: list = []  # last replay, for charts and details
         self._df: Optional[pd.DataFrame] = None
+        self._watch: dict = {}
+        self._activity: List[dict] = []  # newest last; the console reads it reversed
 
     # -- lifecycle ---------------------------------------------------
 
@@ -310,10 +371,15 @@ class Rule3070PaperService:
             now = time.time()
             self._stop.wait(300 - (now % 300) + 10)
 
+    def _note(self, kind: str, text: str) -> None:
+        self._activity.append({"ts": int(time.time()), "kind": kind, "text": text})
+        del self._activity[:-80]
+
     def _tick(self) -> None:
         df = fetch_window(self.symbol)
         events, opens, campaigns = harvest(df, int(self._state["start_ts"]), self._seen)
         self._campaigns, self._df = campaigns, df
+        self._watch = build_watch(campaigns, df)
         for e in events:
             self._seen.add(e["key"])
             with open(JOURNAL_PATH, "a") as jf:
@@ -321,9 +387,20 @@ class Rule3070PaperService:
             if e["kind"] == "TARGET":
                 self._closed_count += 1
                 self._closed_net += float(e["net"])
+                self._note("target", f"TARGET HIT {e['mother']} — {e['buys']} buys, net ${e['net']:+.2f}")
+            else:
+                self._note("buy", f"BUY {e['label']} at ${e['price']:,.2f} (${e['usd']:.2f}) — mother {e['mother']}")
             _logger.info("30-70 paper %s %s", e["kind"], e.get("label") or e.get("mother"))
         if events:
             self._write_state()
+        elif self._watch:
+            near = self._watch.get("nearest_pct")
+            self._note(
+                "tick",
+                f"scanned to ${self._watch['price']:,.2f} — {self._watch['armed_count']} orders armed"
+                + (f", nearest {near:+.2f}% away" if near is not None else "")
+                + f" · {self._watch.get('stage', '')}",
+            )
         self._opens = opens
         self._status = {
             "running": True,
@@ -350,13 +427,22 @@ class Rule3070PaperService:
             except (json.JSONDecodeError, OSError):
                 pass
         paper_opens = [o for o in self._opens if o.get("paper")]
+        warmup = [o for o in self._opens if not o.get("paper")]
         snap["opens"] = {
             "count": len(paper_opens),
             "cost": round(sum(o["cost"] for o in paper_opens), 2),
             "unrealised": round(sum(o["unrealised"] for o in paper_opens), 2),
             "rows": paper_opens[:20],
-            "warmup_holding": len(self._opens) - len(paper_opens),
+            "warmup_holding": len(warmup),
+            "warmup_cost": round(sum(o["cost"] for o in warmup), 2),
+            "warmup_unrealised": round(sum(o["unrealised"] for o in warmup), 2),
+            "warmup_rows": warmup[-20:][::-1],
         }
+        snap["watch"] = self._watch
+        snap["activity"] = self._activity[-40:][::-1]
+        if running:
+            nxt = (int(time.time()) // 300) * 300 + 310
+            snap["next_tick_ts"] = nxt if nxt > time.time() else nxt + 300
         snap["closed"] = {"count": self._closed_count, "net": round(self._closed_net, 4)}
         snap["last_error"] = self._last_error
         snap["writer_conflict"] = self._writer_conflict()

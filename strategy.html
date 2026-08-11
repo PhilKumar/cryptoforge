@@ -1339,6 +1339,84 @@
     </div>
   </div>
 
+  <section class="card table-panel" id="cf-r37-watch-card">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Watching Now</h3>
+        <div class="table-meta">Between trades the engine is never idle: a mother stands, a V forms under it, and buy orders sit armed a fraction of a percent under the tape. Most of the wait looks like nothing happening — this is what it actually looks like.</div>
+      </div>
+      <div class="cf-engine-chip" id="cf-r37-next-chip" data-state="idle">
+        <span class="cf-engine-dot" aria-hidden="true"></span>
+        <span class="cf-engine-label">Next scan</span>
+        <strong id="cf-r37-countdown">—</strong>
+      </div>
+    </div>
+    <div class="stats-grid" style="padding:0 14px 14px;">
+      <div class="stat-box">
+        <div class="stat-label">Price Now</div>
+        <div class="stat-value" id="cf-r37-watch-price" style="color:var(--accent);">$—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-watch-bar">last closed 5m bar</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Standing Mother</div>
+        <div class="stat-value" id="cf-r37-watch-mother" style="font-size:18px;">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-watch-below">the top every fall is measured from</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">The V Forming</div>
+        <div class="stat-value" id="cf-r37-watch-stage" style="font-size:14px;line-height:1.35;">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-watch-dip">dip → 2 greens → first red confirms</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Armed Buy Orders</div>
+        <div class="stat-value" id="cf-r37-watch-armed" style="color:var(--accent2);">0</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="cf-r37-watch-nearest">waiting for the engine</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Armed Buy Orders</h3>
+        <div class="table-meta">Entries already placed by the rule and waiting for price. Nearest first — when one of these distances reaches zero, a paper buy prints.</div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th class="num">Move Needed</th>
+              <th class="num">Entry</th>
+              <th>Mother</th>
+              <th>Kind</th>
+              <th class="num">Fall</th>
+              <th class="num">Pot</th>
+              <th>Next Buy</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-r37-armed-body">
+            <tr><td colspan="8" class="cf-table-empty-cell">Nothing armed — the engine is still waiting for a V to confirm.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Engine Activity</h3>
+        <div class="table-meta">One line every five minutes, whether or not it trades — so a quiet market still shows a working engine.</div>
+      </div>
+    </div>
+    <div id="cf-r37-activity" style="padding:4px 14px 14px;font-size:12.5px;">
+      <div style="color:var(--muted);padding:10px 0;">No scans yet — press Start Paper.</div>
+    </div>
+  </section>
+
   <section class="card table-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
@@ -1379,6 +1457,34 @@
           <tbody id="cf-r37-opens-body">
             <tr><td colspan="8" class="cf-table-empty-cell">No open paper trades — the engine is waiting for its entry.</td></tr>
           </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card table-panel" id="cf-r37-warmup-card" style="display:none;">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Warm-up Ladders <span class="table-meta" id="cf-r37-warmup-sum"></span></h3>
+        <div class="table-meta">Trades the rule had already bought before this paper clock started. They do not count towards paper P&amp;L, but they are real structure the engine is carrying — and their charts show exactly how the rule behaves.</div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th>Mother</th>
+              <th>Kind</th>
+              <th class="num">Buys</th>
+              <th class="num">Invested</th>
+              <th class="num">Target</th>
+              <th class="num">Unrealised</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-r37-warmup-body"></tbody>
         </table>
       </div>
     </div>

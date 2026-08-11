@@ -100,6 +100,8 @@ _FOLD_IDX = 0
 _CYCLE_BASE = 0.0
 _PUMPED_TOTAL = 0.0
 _PUMP_EVENTS: list = []
+# Scanner state at the end of the last run_ladder — read-only, for consoles
+LAST_SCAN: dict = {}
 
 
 @dataclass
@@ -504,4 +506,29 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
             f"OPEN ({c._pending} of band {c._band} pending)" if c._touched or c.fills else "OPEN (waiting for touch)"
         )
         c.end_ts = df.index[-1]
+
+    # What the scanner is looking at RIGHT NOW — the standing mother and how
+    # far the next V has formed. Nothing here changes the run; it exists so a
+    # console can show the wait instead of an empty screen.
+    if dip_pos is None:
+        stage = "watching for a dip under the mother"
+    elif in_bounce:
+        stage = "bouncing — the first red candle confirms the V"
+    elif green_run >= 1:
+        stage = f"dip in — {green_run} green so far, needs 2"
+    else:
+        stage = "dip in — waiting for the first green"
+    LAST_SCAN.clear()
+    LAST_SCAN.update(
+        {
+            "mother_ts": df.index[stand_pos],
+            "mother_high": float(stand_high),
+            "stage": stage,
+            "dip_ts": df.index[dip_pos] if dip_pos is not None else None,
+            "dip_low": float(lo[dip_pos]) if dip_pos is not None else None,
+            "greens": int(green_run),
+            "bar_ts": df.index[-1],
+            "close": float(cl[-1]),
+        }
+    )
     return campaigns
