@@ -2,14 +2,13 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import asynccontextmanager
+from importlib import import_module
 from unittest.mock import patch
 
+import httpx
+
 from engine import rule3070_paper
-
-
-class _RunningThread:
-    def is_alive(self):
-        return True
 
 
 class Rule3070InstrumentTests(unittest.TestCase):
@@ -54,12 +53,27 @@ class Rule3070InstrumentTests(unittest.TestCase):
         with open(os.path.join(self.tmp.name, "paper_state.json")) as fh:
             self.assertEqual(json.load(fh), btc_state)
 
-    def test_running_writer_cannot_be_retargeted(self):
-        service = rule3070_paper.Rule3070PaperService("BTCUSDT")
-        service._thread = _RunningThread()
-        with self.assertRaisesRegex(RuntimeError, "Stop the BTCUSDT"):
-            service.select_symbol("SOLUSDT")
-        self.assertEqual(service.symbol, "BTCUSDT")
+    def test_instruments_have_independent_writer_locks(self):
+        btc = rule3070_paper.Rule3070PaperService("BTCUSDT")
+        eth = rule3070_paper.Rule3070PaperService("ETHUSDT")
+
+        self.assertEqual(btc.lock_path, os.path.join(self.tmp.name, "paper.lock"))
+        self.assertEqual(eth.lock_path, os.path.join(self.tmp.name, "paper_ETHUSDT.lock"))
+        self.assertNotEqual(btc.lock_path, eth.lock_path)
+
+    def test_two_instrument_writers_can_run_together(self):
+        btc = rule3070_paper.Rule3070PaperService("BTCUSDT")
+        eth = rule3070_paper.Rule3070PaperService("ETHUSDT")
+
+        with patch.object(rule3070_paper.Rule3070PaperService, "_loop", lambda service: service._stop.wait()):
+            try:
+                self.assertTrue(btc.start()["running"])
+                self.assertTrue(eth.start()["running"])
+                self.assertTrue(os.path.exists(btc.lock_path))
+                self.assertTrue(os.path.exists(eth.lock_path))
+            finally:
+                btc.stop()
+                eth.stop()
 
     def test_reset_archives_only_the_selected_instrument(self):
         service = rule3070_paper.Rule3070PaperService("ETHUSDT")
@@ -75,6 +89,82 @@ class Rule3070InstrumentTests(unittest.TestCase):
         self.assertTrue(os.path.exists(btc_path))
         self.assertFalse(os.path.exists(service.state_path))
         self.assertTrue(os.path.exists(service.state_path + "." + result["archived_as"]))
+
+
+class Rule3070RouteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.original_db = self.app_module._STATE_DB_FILE
+        self.original_services = getattr(self.app_module, "_rule3070_services", None)
+        self.original_totp_secret = self.app_module.TOTP_SECRET
+        self.app_module._STATE_DB_FILE = os.path.join(self.tmp.name, "state.db")
+        self.app_module.TOTP_SECRET = ""
+        self.app_module._rule3070_services = {}
+        self.app_module._rate_limits.clear()
+        self.out_patch = patch.object(rule3070_paper, "OUT", self.tmp.name)
+        self.loop_patch = patch.object(
+            rule3070_paper.Rule3070PaperService,
+            "_loop",
+            lambda service: service._stop.wait(),
+        )
+        self.out_patch.start()
+        self.loop_patch.start()
+        self.transport = httpx.ASGITransport(app=self.app_module.app)
+
+    async def asyncTearDown(self):
+        for service in self.app_module._rule3070_services.values():
+            service.stop()
+        self.app_module._STATE_DB_FILE = self.original_db
+        self.app_module.TOTP_SECRET = self.original_totp_secret
+        if self.original_services is None:
+            self.app_module.__dict__.pop("_rule3070_services", None)
+        else:
+            self.app_module._rule3070_services = self.original_services
+        self.loop_patch.stop()
+        self.out_patch.stop()
+        self.tmp.cleanup()
+
+    @asynccontextmanager
+    async def client(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            login = await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            self.assertEqual(login.status_code, 200)
+            headers = {
+                "X-CSRF-Token": client.cookies.get("cryptoforge_csrf") or "",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            yield client, headers
+
+    async def test_switching_and_starting_another_coin_keeps_btc_running(self):
+        async with self.client() as (client, headers):
+            btc = await client.post(
+                "/api/rule3070/start",
+                json={"symbol": "BTCUSDT"},
+                headers=headers,
+            )
+            eth = await client.post(
+                "/api/rule3070/start",
+                json={"symbol": "ETHUSDT"},
+                headers=headers,
+            )
+
+            self.assertEqual(btc.status_code, 200)
+            self.assertEqual(eth.status_code, 200)
+            self.assertEqual(eth.json()["running_symbols"], ["BTCUSDT", "ETHUSDT"])
+
+            stopped_eth = await client.post(
+                "/api/rule3070/stop",
+                json={"symbol": "ETHUSDT"},
+                headers=headers,
+            )
+            btc_status = await client.get("/api/rule3070/status?symbol=BTCUSDT")
+
+            self.assertEqual(stopped_eth.status_code, 200)
+            self.assertFalse(stopped_eth.json()["running"])
+            self.assertEqual(stopped_eth.json()["running_symbols"], ["BTCUSDT"])
+            self.assertTrue(btc_status.json()["running"])
+            self.assertEqual(btc_status.json()["running_symbols"], ["BTCUSDT"])
 
 
 if __name__ == "__main__":

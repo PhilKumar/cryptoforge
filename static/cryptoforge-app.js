@@ -11946,6 +11946,7 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
     // it gets the same crosshair, zoom, timeframes and every future fix.
     var url = _cfChartSource === 'rule3070'
       ? '/api/rule3070/chart?mother=' + encodeURIComponent(campaignId)
+        + '&symbol=' + encodeURIComponent(_cfR37ActiveSymbol || 'BTCUSDT')
         + '&timeframe=' + encodeURIComponent(_cfCascadeChartTf)
         + (_cfCascadeChartEndTs ? '&end_ts=' + _cfCascadeChartEndTs : '')
       : '/api/cascade/campaigns/' + encodeURIComponent(campaignId)
@@ -12736,16 +12737,23 @@ function _cfR37SetError(message) {
   if (node) node.textContent = message || '';
 }
 
+function _cfR37Query(symbol) {
+  return 'symbol=' + encodeURIComponent(symbol || _cfR37ActiveSymbol || 'BTCUSDT');
+}
+
 async function cfR37Load(showToast, scan) {
   if (_cfR37Switching) return;
+  var requestedSymbol = _cfR37ActiveSymbol;
   try {
-    var response = await cfApiFetch('/api/rule3070/status' + (scan ? '?scan=1' : ''), { cache: 'no-store' });
+    var response = await cfApiFetch('/api/rule3070/status?' + _cfR37Query(requestedSymbol)
+      + (scan ? '&scan=1' : ''), { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
     if (!response.ok) throw new Error(cfApiErrorDetail(data, '30-70 status unavailable'));
+    if (requestedSymbol !== _cfR37ActiveSymbol) return;
     cfR37RenderStatus(data);
-    var jr = await cfApiFetch('/api/rule3070/journal?limit=200', { cache: 'no-store' });
+    var jr = await cfApiFetch('/api/rule3070/journal?limit=200&' + _cfR37Query(requestedSymbol), { cache: 'no-store' });
     var jdata = await cfReadApiPayload(jr);
-    if (jr.ok) cfR37RenderJournal(jdata.events || []);
+    if (jr.ok && requestedSymbol === _cfR37ActiveSymbol) cfR37RenderJournal(jdata.events || []);
     if (showToast) cfToast('30-70 status refreshed', 'success');
   } catch (err) {
     _cfR37SetError(String(err.message || err));
@@ -12756,12 +12764,16 @@ function cfR37RenderStatus(s) {
   var running = !!s.running;
   var selectedSymbol = String(s.symbol || _cfR37ActiveSymbol || 'BTCUSDT').toUpperCase();
   _cfR37ActiveSymbol = selectedSymbol;
+  var runningSymbols = Array.isArray(s.running_symbols) ? s.running_symbols : (running ? [selectedSymbol] : []);
+  var anyRunning = runningSymbols.length > 0;
   var chip = document.getElementById('cf-r37-engine-chip');
-  if (chip) chip.setAttribute('data-state', running ? 'running' : (s.start_ts ? 'stopped' : 'idle'));
+  if (chip) chip.setAttribute('data-state', anyRunning ? 'running' : (s.start_ts ? 'stopped' : 'idle'));
   var stateNode = document.getElementById('cf-r37-engine-state');
-  if (stateNode) stateNode.textContent = running ? 'Running' : (s.start_ts ? 'Stopped' : 'Idle');
+  if (stateNode) stateNode.textContent = running
+    ? 'Running'
+    : (anyRunning ? runningSymbols.length + ' Running' : (s.start_ts ? 'Stopped' : 'Idle'));
   var dot = document.getElementById('rule3070-tab-dot');
-  if (dot) dot.classList.toggle('active', running);
+  if (dot) dot.classList.toggle('active', anyRunning);
   var startBtn = document.getElementById('cf-r37-start-btn');
   var stopBtn = document.getElementById('cf-r37-stop-btn');
   var resetBtn = document.getElementById('cf-r37-reset-btn');
@@ -12775,12 +12787,15 @@ function cfR37RenderStatus(s) {
     if (Array.from(symbolSelect.options).some(function(o) { return o.value === selectedSymbol; })) {
       symbolSelect.value = selectedSymbol;
     }
-    symbolSelect.disabled = running || _cfR37Switching;
+    symbolSelect.disabled = _cfR37Switching;
   }
   if (symbolNote) {
+    var otherRunning = runningSymbols.filter(function(symbol) { return symbol !== selectedSymbol; });
     symbolNote.textContent = running
-      ? selectedSymbol + ' is running. Stop paper trading to change instruments.'
-      : 'Each instrument keeps its own paper clock and journal.';
+      ? selectedSymbol + ' is running · switching instruments will not stop it.'
+      : (otherRunning.length
+        ? otherRunning.join(', ') + ' running in the background.'
+        : 'Each instrument keeps its own paper clock and journal.');
   }
 
   var set = function(id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
@@ -12917,19 +12932,21 @@ function cfR37RenderWatch(s) {
   _renderTablePager('cf-r37-armed-table', 'cf-r37-armed-table', 'cf-r37-armed-pagination');
 }
 
-var _cfR37SeenEventTs = null;
+var _cfR37SeenEventTs = {};
 
 function cfR37RenderActivity(lines) {
   // A new buy or a target hit should announce itself the way Cascade does —
   // the operator should never have to notice a table row changed.
   var trades = lines.filter(function(a) { return a.kind === 'buy' || a.kind === 'target'; });
   var newest = trades.length ? trades[0].ts : 0;
-  if (_cfR37SeenEventTs !== null && newest > _cfR37SeenEventTs) {
-    trades.filter(function(a) { return a.ts > _cfR37SeenEventTs; }).reverse().forEach(function(a) {
+  var symbol = _cfR37ActiveSymbol || 'BTCUSDT';
+  var seen = _cfR37SeenEventTs[symbol];
+  if (seen != null && newest > seen) {
+    trades.filter(function(a) { return a.ts > seen; }).reverse().forEach(function(a) {
       cfToast(a.text, a.kind === 'target' ? 'success' : 'info');
     });
   }
-  _cfR37SeenEventTs = newest;
+  _cfR37SeenEventTs[symbol] = newest;
   var node = document.getElementById('cf-r37-activity');
   if (!node) return;
   if (!lines.length) {
@@ -12938,7 +12955,7 @@ function cfR37RenderActivity(lines) {
   }
   node.innerHTML = lines.map(function(a, i) {
     var color = a.kind === 'target' ? 'var(--green)' : (a.kind === 'buy' ? 'var(--accent2)' : 'var(--muted)');
-    return '<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);'
+    return '<div class="cf-r37-activity-row" style="'
       + (i === 0 ? 'font-weight:600;' : '') + '">'
       + '<span style="color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;">' + _escapeHtml(_cfR37Ist(a.ts)) + '</span>'
       + '<span style="color:' + color + ';">' + _escapeHtml(a.text || '') + '</span>'
@@ -12994,7 +13011,12 @@ async function cfR37Start() {
 
 async function cfR37Stop() {
   try {
-    var response = await cfApiFetch('/api/rule3070/stop', { method: 'POST' });
+    var symbol = _cfR37ActiveSymbol;
+    var response = await cfApiFetch('/api/rule3070/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: symbol })
+    });
     var data = await cfReadApiPayload(response);
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not stop the paper trader'));
     cfR37RenderStatus(data);
@@ -13013,7 +13035,11 @@ async function cfR37Reset() {
   );
   if (!ok) return;
   try {
-    var response = await cfApiFetch('/api/rule3070/reset', { method: 'POST' });
+    var response = await cfApiFetch('/api/rule3070/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: _cfR37ActiveSymbol })
+    });
     var data = await cfReadApiPayload(response);
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not reset'));
     cfToast('Paper clock reset — journal archived', 'success');
@@ -13029,6 +13055,7 @@ async function cfR37SelectSymbol(symbol) {
   if (!requested || requested === _cfR37ActiveSymbol || _cfR37Switching) return;
   var select = document.getElementById('cf-r37-symbol-select');
   var previous = _cfR37ActiveSymbol;
+  _cfR37ActiveSymbol = requested;
   _cfR37Switching = true;
   if (select) select.disabled = true;
   _cfR37SetError('Loading ' + requested + ' paper book…');
@@ -13046,6 +13073,7 @@ async function cfR37SelectSymbol(symbol) {
     cfToast(requested + ' paper book selected', 'success');
   } catch (err) {
     _cfR37Switching = false;
+    _cfR37ActiveSymbol = previous;
     if (select) { select.value = previous; select.disabled = false; }
     _cfR37SetError(String(err.message || err));
     cfToast(String(err.message || err), 'error');

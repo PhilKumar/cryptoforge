@@ -76,11 +76,12 @@ const CHART = {
   }
 };
 
-function status(running: boolean, symbol = 'BTCUSDT') {
+function status(running: boolean, symbol = 'BTCUSDT', runningSymbols = running ? [symbol] : []) {
   const now = Math.floor(Date.now() / 1000);
   return {
     running,
     symbol,
+    running_symbols: runningSymbols,
     capital: 2000,
     purse: 2000,
     start_ts: now - 7200,
@@ -109,7 +110,12 @@ function status(running: boolean, symbol = 'BTCUSDT') {
     },
     activity: [
       { ts: now - 60, kind: 'tick', text: 'scanned to $64,010.00 — 3 orders armed' },
-      { ts: now - 360, kind: 'buy', text: 'BUY 30% b1 at $63,990.00 ($12.50)' }
+      { ts: now - 360, kind: 'buy', text: 'BUY 30% b1 at $63,990.00 ($12.50)' },
+      ...Array.from({ length: 22 }, (_, i) => ({
+        ts: now - 660 - i * 300,
+        kind: 'tick',
+        text: `scanned to $${(63990 - i).toLocaleString()} — 2 orders armed`
+      }))
     ],
     opens: {
       count: 1, cost: 12.5, unrealised: 0.25,
@@ -164,6 +170,12 @@ test.describe('30-70 console', () => {
     await expect(page.locator('#cf-r37-activity')).toContainText('3 orders armed');
     // A running engine counts down to its next scan rather than sitting still.
     await expect(page.locator('#cf-r37-countdown')).toHaveText(/^\d+:\d\d$/);
+    const activitySize = await page.locator('#cf-r37-activity').evaluate((node) => ({
+      client: node.clientHeight,
+      scroll: node.scrollHeight
+    }));
+    expect(activitySize.client).toBeLessThanOrEqual(240);
+    expect(activitySize.scroll).toBeGreaterThan(activitySize.client);
     expect(errors).toEqual([]);
   });
 
@@ -171,7 +183,7 @@ test.describe('30-70 console', () => {
     await open3070(page, true);
     await expect(page.locator('#cf-r37-stop-btn')).toBeVisible();
     await expect(page.locator('#cf-r37-start-btn')).toBeHidden();
-    await expect(page.locator('#cf-r37-symbol-select')).toBeDisabled();
+    await expect(page.locator('#cf-r37-symbol-select')).toBeEnabled();
     await expect(page.locator('#cf-r37-symbol-select option')).toHaveCount(6);
 
     await page.unroute('**/api/rule3070/status**');
@@ -180,21 +192,25 @@ test.describe('30-70 console', () => {
     await expect(page.locator('#cf-r37-start-btn')).toBeVisible();
   });
 
-  test('instrument selector switches to an isolated paper book', async ({ page }) => {
-    await open3070(page, false);
+  test('instrument selector switches books while BTC keeps running', async ({ page }) => {
+    await open3070(page, true);
     await page.unroute('**/api/rule3070/status**');
 
     let selected = 'BTCUSDT';
-    await page.route('**/api/rule3070/status**', (route) =>
-      route.fulfill({ json: status(false, selected) }));
+    const running = new Set<string>(['BTCUSDT']);
+    await page.route('**/api/rule3070/status**', (route) => {
+      const symbol = new URL(route.request().url()).searchParams.get('symbol') || selected;
+      return route.fulfill({ json: status(running.has(symbol), symbol, [...running]) });
+    });
     await page.route('**/api/rule3070/select', async (route) => {
       selected = (route.request().postDataJSON() as { symbol: string }).symbol;
-      await route.fulfill({ json: status(false, selected) });
+      await route.fulfill({ json: status(running.has(selected), selected, [...running]) });
     });
     let started = '';
     await page.route('**/api/rule3070/start', async (route) => {
       started = (route.request().postDataJSON() as { symbol: string }).symbol;
-      await route.fulfill({ json: status(true, started) });
+      running.add(started);
+      await route.fulfill({ json: status(true, started, [...running]) });
     });
 
     const picker = page.locator('#cf-r37-symbol-select');
@@ -210,13 +226,20 @@ test.describe('30-70 console', () => {
 
     await expect(picker).toHaveValue('ETHUSDT');
     await expect(page.locator('#cf-r37-symbol')).toHaveText('ETHUSDT · paper');
-    await expect(page.locator('#cf-r37-symbol-note')).toContainText('own paper clock and journal');
+    await expect(page.locator('#cf-r37-symbol-note')).toContainText('BTCUSDT running in the background');
+    await expect(page.locator('#cf-r37-engine-state')).toHaveText('1 Running');
+    await expect(page.locator('#cf-r37-start-btn')).toBeVisible();
     expect(selected).toBe('ETHUSDT');
 
     await page.locator('#cf-r37-start-btn').click();
-    await expect(picker).toBeDisabled();
-    await expect(page.locator('#cf-r37-symbol-note')).toContainText('ETHUSDT is running');
+    await expect(picker).toBeEnabled();
+    await expect(page.locator('#cf-r37-symbol-note')).toContainText('switching instruments will not stop it');
     expect(started).toBe('ETHUSDT');
+
+    await picker.selectOption('BTCUSDT');
+    await expect(page.locator('#cf-r37-stop-btn')).toBeVisible();
+    expect(running.has('BTCUSDT')).toBe(true);
+    expect(running.has('ETHUSDT')).toBe(true);
   });
 
   test('open, warm-up and journal rows all render with their charts', async ({ page }) => {

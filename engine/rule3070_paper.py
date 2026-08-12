@@ -50,8 +50,8 @@ LOCK_PATH = os.path.join(OUT, "paper.lock")
 REPLAY_LOCK = threading.Lock()
 
 # The V-Rule console deliberately follows the same six-instrument universe as
-# the rest of CryptoForge.  One paper writer may run at a time, but every
-# instrument owns a separate clock and journal so switching never mixes books.
+# the rest of CryptoForge. Every instrument owns a separate writer, clock and
+# journal, so BTC can keep running while the console views or runs another coin.
 SUPPORTED_SYMBOLS = (
     "BTCUSDT",
     "ETHUSDT",
@@ -311,7 +311,11 @@ class Rule3070PaperService:
 
     @property
     def lock_path(self) -> str:
-        return os.path.join(OUT, "paper.lock")
+        # BTC keeps the original lock name so an existing CLI/site writer is
+        # still detected across this upgrade. Other instruments can run beside
+        # it, but never have two writers for their own paper book.
+        name = "paper.lock" if self.symbol == "BTCUSDT" else f"paper_{self.symbol}.lock"
+        return os.path.join(OUT, name)
 
     def _select_symbol_unlocked(self, symbol: str) -> None:
         self._selection_generation += 1

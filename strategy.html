@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260812-1">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260812-2">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260720-18">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -1454,13 +1454,13 @@
     <div class="pagination-bar" id="cf-r37-armed-pagination" style="display:none;"></div>
   </section>
 
-  <section class="card table-panel">
+  <section class="card table-panel cf-r37-activity-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
         <h3 class="table-title">Engine Activity <button type="button" class="cf-info" tabindex="0" data-cf-info="One line every five minutes whether or not it trades, so a quiet market still shows a working engine. Buys and target hits are coloured and also raise a toast." aria-label="What Engine Activity shows">i</button></h3>
       </div>
     </div>
-    <div id="cf-r37-activity" style="padding:4px 14px 14px;font-size:12.5px;">
+    <div id="cf-r37-activity" class="cf-r37-activity-list">
       <div style="color:var(--muted);padding:10px 0;">No scans yet &mdash; press Start Paper.</div>
     </div>
   </section>
@@ -2481,7 +2481,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260812-1" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260812-2" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 </body>
 </html>

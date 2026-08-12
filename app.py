@@ -142,12 +142,15 @@ async def _shutdown_runtime_engines() -> None:
             await cascade_engine.shutdown()
         except Exception as exc:
             _logger.warning("Failed to shutdown cascade engine during app shutdown: %s", exc)
-    rule3070 = globals().get("_rule3070_service")
-    if rule3070 is not None:
+    rule3070_services = globals().get("_rule3070_services") or {}
+    legacy_rule3070 = globals().get("_rule3070_service")
+    if legacy_rule3070 is not None:
+        rule3070_services = {**rule3070_services, "legacy": legacy_rule3070}
+    for symbol, rule3070 in rule3070_services.items():
         try:
             rule3070.stop()
         except Exception as exc:
-            _logger.warning("Failed to stop 30-70 paper service during app shutdown: %s", exc)
+            _logger.warning("Failed to stop %s V-Rule paper service during app shutdown: %s", symbol, exc)
     _shutdown_save_engines()
 
 
@@ -8520,78 +8523,111 @@ async def cascade_reconcile():
 #
 # The paper trader replays the locked 30-70 engine (tools/rule3070_sim) over a
 # rolling 90-day window every 5 minutes — the same engine the nine-year
-# backtest proved, so the console can never drift from it. One writer at a
-# time: a pid lockfile refuses to start while the CLI runner holds the files.
+# backtest proved, so the console can never drift from it. Each instrument has
+# one writer and its own lock/state/journal; different instruments may run
+# together without retargeting or interrupting one another.
 
 
 class Rule3070SymbolPayload(BaseModel):
     symbol: str = "BTCUSDT"
 
 
-def _get_rule3070_service():
-    svc = globals().get("_rule3070_service")
-    if svc is None:
-        from engine.rule3070_paper import Rule3070PaperService
+def _get_rule3070_service(symbol: str = "BTCUSDT"):
+    from engine.rule3070_paper import Rule3070PaperService, normalize_symbol
 
-        svc = Rule3070PaperService()
-        globals()["_rule3070_service"] = svc
+    selected = normalize_symbol(symbol)
+    services = globals().setdefault("_rule3070_services", {})
+    svc = services.get(selected)
+    if svc is None:
+        svc = Rule3070PaperService(selected)
+        services[selected] = svc
     return svc
 
 
+def _rule3070_status(symbol: str, scan: bool = False) -> dict:
+    from engine.rule3070_paper import SUPPORTED_SYMBOLS
+
+    selected = _get_rule3070_service(symbol)
+    payload = selected.status(scan)
+    services = globals().get("_rule3070_services") or {}
+    payload["running_symbols"] = [
+        item for item in SUPPORTED_SYMBOLS if item in services and services[item].status().get("running")
+    ]
+    return payload
+
+
 @app.get("/api/rule3070/status")
-async def rule3070_status(scan: int = 0):
+async def rule3070_status(scan: int = 0, symbol: str = "BTCUSDT"):
     """`scan=1` lets a STOPPED console fill itself with one read-only replay.
 
     Only the 30-70 page asks for it, and only on open: the replay costs ~20s of
     CPU in this process, which also serves the live Cascade engine.
     """
-    return await asyncio.to_thread(_get_rule3070_service().status, bool(scan))
+    try:
+        return await asyncio.to_thread(_rule3070_status, symbol, bool(scan))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/rule3070/journal")
-async def rule3070_journal(limit: int = 200):
-    return {"events": _get_rule3070_service().journal(limit=max(1, min(1000, int(limit))))}
+async def rule3070_journal(limit: int = 200, symbol: str = "BTCUSDT"):
+    try:
+        svc = _get_rule3070_service(symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"events": svc.journal(limit=max(1, min(1000, int(limit))))}
 
 
 @app.get("/api/rule3070/chart")
-async def rule3070_chart(mother: str, end_ts: int = 0, timeframe: str = "auto"):
+async def rule3070_chart(mother: str, end_ts: int = 0, timeframe: str = "auto", symbol: str = "BTCUSDT"):
     """Candles + the engine's own lines for one 30-70 campaign."""
     try:
-        return await asyncio.to_thread(_get_rule3070_service().chart, mother, int(end_ts), str(timeframe or "auto"))
+        svc = _get_rule3070_service(symbol)
+        return await asyncio.to_thread(svc.chart, mother, int(end_ts), str(timeframe or "auto"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/rule3070/select")
 async def rule3070_select(payload: Rule3070SymbolPayload):
-    """Select an isolated paper book. A running writer cannot be retargeted."""
+    """Return another instrument's isolated book without touching any runner."""
     try:
-        return await asyncio.to_thread(_get_rule3070_service().select_symbol, payload.symbol)
+        return await asyncio.to_thread(_rule3070_status, payload.symbol, False)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.post("/api/rule3070/start")
 async def rule3070_start(payload: Optional[Rule3070SymbolPayload] = None):
     check_rate_limit("rule3070_start", max_calls=3, window_sec=10)
     try:
-        return await asyncio.to_thread(_get_rule3070_service().start, payload.symbol if payload else None)
+        symbol = payload.symbol if payload else "BTCUSDT"
+        svc = _get_rule3070_service(symbol)
+        await asyncio.to_thread(svc.start)
+        return await asyncio.to_thread(_rule3070_status, symbol, False)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.post("/api/rule3070/stop")
-async def rule3070_stop():
+async def rule3070_stop(payload: Optional[Rule3070SymbolPayload] = None):
     check_rate_limit("rule3070_stop", max_calls=3, window_sec=10)
-    return await asyncio.to_thread(_get_rule3070_service().stop)
+    try:
+        symbol = payload.symbol if payload else "BTCUSDT"
+        svc = _get_rule3070_service(symbol)
+        await asyncio.to_thread(svc.stop)
+        return await asyncio.to_thread(_rule3070_status, symbol, False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/api/rule3070/reset")
-async def rule3070_reset():
+async def rule3070_reset(payload: Optional[Rule3070SymbolPayload] = None):
     check_rate_limit("rule3070_reset", max_calls=2, window_sec=30)
     try:
-        return await asyncio.to_thread(_get_rule3070_service().reset)
-    except RuntimeError as exc:
+        symbol = payload.symbol if payload else "BTCUSDT"
+        return await asyncio.to_thread(_get_rule3070_service(symbol).reset)
+    except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
