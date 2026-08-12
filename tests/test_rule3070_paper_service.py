@@ -61,6 +61,18 @@ class Rule3070InstrumentTests(unittest.TestCase):
         self.assertEqual(eth.lock_path, os.path.join(self.tmp.name, "paper_ETHUSDT.lock"))
         self.assertNotEqual(btc.lock_path, eth.lock_path)
 
+    def test_unstarted_preview_uses_the_same_30_day_boundary_as_a_new_paper_clock(self):
+        service = rule3070_paper.Rule3070PaperService("ETHUSDT")
+        now = 1_786_502_400
+
+        with patch.object(rule3070_paper.time, "time", return_value=now):
+            self.assertEqual(service._history_start(), now - rule3070_paper.WARMUP_DAYS * 86400)
+            self.assertEqual(service._replay_start_ts(), now)
+
+        service._state = {"start_ts": now - 3600, "history_start_ts": now - 31 * 86400}
+        self.assertEqual(service._history_start(), now - 31 * 86400)
+        self.assertEqual(service._replay_start_ts(), now - 3600)
+
     def test_two_instrument_writers_can_run_together(self):
         btc = rule3070_paper.Rule3070PaperService("BTCUSDT")
         eth = rule3070_paper.Rule3070PaperService("ETHUSDT")

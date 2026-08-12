@@ -511,7 +511,27 @@ class Rule3070PaperService:
                     return int(st["start_ts"]) - WARMUP_DAYS * 86400
             except (json.JSONDecodeError, OSError):
                 pass
-        return 0
+        # An instrument that has never been started is still previewed by the
+        # console. Give that preview the exact history it would receive if the
+        # user pressed Start now. Falling back to fetch_window's 90-day CLI
+        # window made a stopped ETH book inherit May mothers in August.
+        return int(time.time()) - WARMUP_DAYS * 86400
+
+    def _replay_start_ts(self) -> int:
+        """Paper cutoff for a replay, including the not-yet-started preview.
+
+        Before a paper clock exists there cannot be paper trades. Treat now as
+        the provisional cutoff so historical fills are warm-up ladders only.
+        The old zero cutoff classified every preview fill as a paper buy.
+        """
+        if self._state.get("start_ts"):
+            return int(self._state["start_ts"])
+        if os.path.exists(self.state_path):
+            try:
+                return int(_read_json(self.state_path).get("start_ts") or time.time())
+            except (json.JSONDecodeError, OSError):
+                pass
+        return int(time.time())
 
     def _tick(self) -> None:
         df = fetch_window(self.symbol, since_ts=self._history_start())
@@ -576,18 +596,12 @@ class Rule3070PaperService:
         self._priming = True
         generation = self._selection_generation
         symbol = self.symbol
-        state_path = self.state_path
         history_start = self._history_start()
 
         def run():
             try:
                 df = fetch_window(symbol, since_ts=history_start)
-                start_ts = 0
-                if os.path.exists(state_path):
-                    try:
-                        start_ts = int(_read_json(state_path).get("start_ts") or 0)
-                    except (json.JSONDecodeError, OSError):
-                        start_ts = 0
+                start_ts = self._replay_start_ts()
                 with REPLAY_LOCK:
                     _, opens, campaigns = harvest(df, start_ts, set())
                     watch = build_watch(campaigns, df)
@@ -680,12 +694,7 @@ class Rule3070PaperService:
         campaigns, df = self._campaigns, self._df
         if not campaigns or df is None:
             df = fetch_window(self.symbol, since_ts=self._history_start())
-            start_ts = 0
-            if os.path.exists(self.state_path):
-                try:
-                    start_ts = int(_read_json(self.state_path).get("start_ts") or 0)
-                except (json.JSONDecodeError, OSError):
-                    start_ts = 0
+            start_ts = self._replay_start_ts()
             with REPLAY_LOCK:
                 _, _, campaigns = harvest(df, start_ts, set())
             self._campaigns, self._df = campaigns, df
