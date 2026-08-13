@@ -4575,7 +4575,7 @@ class CascadeInstrumentStackTests(unittest.TestCase):
     """Phase 4: one roll-up per symbol, answering "what is my total exposure
     on this instrument?" across concurrent campaigns and their capital group."""
 
-    def _campaign(self, engine, cid, symbol, capital, state="TRENDLINE_ACTIVE", mode="paper", tf="5m"):
+    def _campaign(self, engine, cid, symbol, capital, state="TRENDLINE_ACTIVE", mode="paper", tf="5m", funded=None):
         campaign = Campaign(
             campaign_id=cid,
             symbol=symbol,
@@ -4587,6 +4587,10 @@ class CascadeInstrumentStackTests(unittest.TestCase):
             state=state,
             timeframe=tf,
         )
+        # A stack reports FUNDED money, not nominal capital, so a campaign that
+        # has funded nothing weighs nothing. Default to fully funded — these
+        # tests are about how stacks group and separate, not about the cap.
+        campaign.cumulative_used_pct = (capital if funded is None else funded) * 100.0 / capital
         engine.campaigns[cid] = campaign
         return campaign
 
@@ -6673,7 +6677,7 @@ class CascadePerExchangeCapitalTests(unittest.TestCase):
         second.broker_name = "coindcx"
         return CascadeEngine(primary, brokers={"coindcx": second})
 
-    def _campaign(self, engine, cid, symbol, capital, exchange="", state="TRENDLINE_ACTIVE"):
+    def _campaign(self, engine, cid, symbol, capital, exchange="", state="TRENDLINE_ACTIVE", funded=None):
         campaign = Campaign(
             campaign_id=cid,
             symbol=symbol,
@@ -6684,6 +6688,9 @@ class CascadePerExchangeCapitalTests(unittest.TestCase):
             exchange=exchange,
         )
         campaign.state = state
+        # Fully funded by default: these tests ask whether one venue's money can
+        # leak into another's pot, and an unfunded campaign holds nothing to leak.
+        campaign.cumulative_used_pct = (capital if funded is None else funded) * 100.0 / capital
         engine.campaigns[cid] = campaign
         return campaign
 
@@ -6758,6 +6765,92 @@ class CascadePerExchangeCapitalTests(unittest.TestCase):
         engine.set_capital_group("BTCUSDT", 50, exchange="coindcx")
         engine.set_capital_group("BTCUSDT", 0, exchange="coindcx")
         self.assertEqual(list(engine.capital_group_status()), ["BTCUSDT"])
+
+
+class CascadeSharedSymbolBudgetTests(unittest.TestCase):
+    """Phil's rule: "$2000 to BTC whatever trades it comes" — ONE pot per
+    symbol, and each campaign takes what is left after the others funded.
+
+    The distinction that makes this workable, and that the parked 2026-07-28 cap
+    got wrong: a campaign holds what it has FUNDED, not its nominal capital. Two
+    $2000 campaigns that have each funded $20 hold $40 of the pot, not $4000.
+    """
+
+    def _engine(self):
+        return _mk_engine()
+
+    def _campaign(self, engine, cid, funded_usd, capital=2000.0, state="TRENDLINE_ACTIVE"):
+        campaign = Campaign(
+            campaign_id=cid,
+            symbol="BTCUSDT",
+            capital_usd=capital,
+            mother_high=105.0,
+            mother_low=99.0,
+            mother_timestamp=0,
+            state=state,
+        )
+        campaign.cumulative_used_pct = funded_usd * 100.0 / capital
+        engine.campaigns[cid] = campaign
+        return campaign
+
+    def test_two_campaigns_hold_only_what_they_funded(self):
+        # The exact prod state that started this: two live $2000 BTC campaigns
+        # that between them had funded about $57 — reported as $4,000 committed
+        # and -$2,000 free.
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        self._campaign(engine, "a", 19.83)
+        self._campaign(engine, "b", 37.13)
+        status = engine.capital_group_status()["BTCUSDT"]
+        self.assertAlmostEqual(status["committed_usd"], 56.96, places=2)
+        self.assertAlmostEqual(status["available_usd"], 1943.04, places=2)
+        # The nominal sum is still reported, just no longer as "committed".
+        self.assertAlmostEqual(status["nominal_capital_usd"], 4000.0, places=2)
+
+    def test_remaining_excludes_the_asking_campaigns_own_pool(self):
+        """A campaign extending its own ladder is not opening a second claim."""
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        self._campaign(engine, "a", 1500.0)
+        asker = self._campaign(engine, "b", 200.0)
+        # 2000 - 1500 (sibling) - 200 (its own pool) = 300 left to extend into.
+        self.assertAlmostEqual(engine.group_remaining_usd(asker), 300.0, places=6)
+
+    def test_remaining_is_none_without_a_budget(self):
+        engine = self._engine()
+        asker = self._campaign(engine, "a", 10.0)
+        self.assertIsNone(engine.group_remaining_usd(asker))
+
+    def test_an_exhausted_pot_reports_zero_not_a_negative(self):
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 100)
+        self._campaign(engine, "a", 90.0)
+        asker = self._campaign(engine, "b", 50.0)
+        self.assertEqual(engine.group_remaining_usd(asker), 0.0)
+        self.assertEqual(engine.capital_group_status()["BTCUSDT"]["available_usd"], 0.0)
+
+    def test_ended_campaigns_release_their_share(self):
+        """Capital flows back to the pot by ending, exactly as before."""
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        self._campaign(engine, "a", 1500.0, state="COMPLETED")
+        asker = self._campaign(engine, "b", 0.0)
+        self.assertAlmostEqual(engine.group_remaining_usd(asker), 2000.0, places=6)
+
+    def test_a_new_leg_is_clamped_to_the_pot_end_to_end(self):
+        """The wiring, not just the arithmetic: a leg built through the engine's
+        own remaining figure funds only what the sibling left."""
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 2000)
+        self._campaign(engine, "a", 1980.0)
+        asker = self._campaign(engine, "b", 0.0)
+        asker.mother_high = 100.0
+        leg = Leg(leg_id=1, trendline_id=1, low=95.0, touch_high=97.0, touch_timestamp=100)
+        asker.legs.append(leg)
+        build_fib_ladder_and_pool(asker, leg, engine.group_remaining_usd(asker))
+        # Wanted 5% = $100; the pot had $20.
+        self.assertAlmostEqual(leg.pool_usd, 20.0, places=6)
+        self.assertAlmostEqual(leg.capped_pct, 4.0, places=6)
 
 
 class CascadePerVenueFeeTests(unittest.TestCase):

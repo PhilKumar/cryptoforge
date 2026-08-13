@@ -119,6 +119,56 @@ class FibLadderPoolTests(unittest.TestCase):
         self.assertEqual(timeframe_for_level(campaign, deep, 4), "1h")
 
 
+class GroupBudgetCapTests(unittest.TestCase):
+    """One pot per symbol, drawn down by what campaigns actually FUND.
+
+    The 2026-07-28 cap reserved each campaign's whole nominal capital and so
+    starved every later campaign. These pin the replacement: nothing is
+    reserved, a leg simply cannot fund past what the pot has left.
+    """
+
+    def test_uncapped_when_no_budget_is_passed(self):
+        campaign = _campaign(capital=2000.0, mother_high=100.0)
+        leg = _leg(campaign, low=95.0, touch_high=97.0)
+        build_fib_ladder_and_pool(campaign, leg)
+        self.assertAlmostEqual(leg.pool_usd, 100.0)
+        self.assertEqual(leg.capped_pct, 0.0)
+
+    def test_leg_is_clamped_to_what_the_pot_has_left(self):
+        campaign = _campaign(capital=2000.0, mother_high=100.0)
+        leg = _leg(campaign, low=95.0, touch_high=97.0)
+        # Wants $100 (5% of the fall); a sibling has left only $30.
+        build_fib_ladder_and_pool(campaign, leg, group_remaining_usd=30.0)
+        self.assertAlmostEqual(leg.pool_usd, 30.0)
+        self.assertAlmostEqual(leg.allocation_pct, 1.5)
+        self.assertAlmostEqual(leg.capped_pct, 3.5)
+        # The three units must still agree, or the next leg's cap is computed
+        # off a percent that overstates what was really funded.
+        self.assertAlmostEqual(campaign.cumulative_used_pct * campaign.capital_unit_per_pct, 30.0)
+
+    def test_an_exhausted_pot_funds_nothing_and_never_goes_negative(self):
+        campaign = _campaign(capital=2000.0, mother_high=100.0)
+        leg = _leg(campaign, low=95.0, touch_high=97.0)
+        build_fib_ladder_and_pool(campaign, leg, group_remaining_usd=0.0)
+        self.assertAlmostEqual(leg.pool_usd, 0.0)
+        self.assertAlmostEqual(leg.capped_pct, 5.0)
+        self.assertGreaterEqual(campaign.cumulative_used_pct, 0.0)
+
+    def test_a_leg_inside_the_budget_is_untouched(self):
+        campaign = _campaign(capital=2000.0, mother_high=100.0)
+        leg = _leg(campaign, low=95.0, touch_high=97.0)
+        build_fib_ladder_and_pool(campaign, leg, group_remaining_usd=1500.0)
+        self.assertAlmostEqual(leg.pool_usd, 100.0)
+        self.assertEqual(leg.capped_pct, 0.0)
+
+    def test_capped_pct_survives_a_round_trip(self):
+        campaign = _campaign(capital=2000.0, mother_high=100.0)
+        leg = _leg(campaign, low=95.0, touch_high=97.0)
+        build_fib_ladder_and_pool(campaign, leg, group_remaining_usd=30.0)
+        restored = Leg.from_dict(leg.to_dict())
+        self.assertAlmostEqual(restored.capped_pct, 3.5)
+
+
 class PlanLegOrdersTests(unittest.TestCase):
     def test_every_level_keeps_its_own_twenty_thirty_fifty(self):
         campaign = _campaign(capital=2000.0, mother_high=100.0, min_notional=5.0)

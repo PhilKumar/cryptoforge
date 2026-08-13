@@ -8524,7 +8524,7 @@ function cfRenderCascadeGroups(groups) {
     var available = Number(g.available_usd) || 0;
     return '<div class="table-meta" style="display:flex;justify-content:space-between;gap:8px;">'
       + '<span><strong>' + _escapeHtml(sym) + '</strong> group fund</span>'
-      + '<span>$' + _cfCascadeUsd(g.committed_usd) + ' committed · '
+      + '<span>$' + _cfCascadeUsd(g.committed_usd) + ' funded · '
       + '<strong style="color:' + (available > 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)') + ';">$'
       + _cfCascadeUsd(available) + '</strong> free of $' + _cfCascadeUsd(g.budget_usd) + '</span>'
       + '</div>';
@@ -9555,7 +9555,7 @@ function _cfCascadeStackHeader(symbol, stack, count) {
     + (stack.live_count ? ' (' + stack.live_count + ' live)' : '')
     + (tfs ? ' · ' + _escapeHtml(tfs) : '')
     + ' · $' + _cfCascadeUsd(stack.in_position_usd) + ' in position'
-    + ' · $' + _cfCascadeUsd(stack.committed_usd) + ' committed'
+    + ' · $' + _cfCascadeUsd(stack.committed_usd) + ' funded'
     + group
     + (stack.rounds_closed
       ? ' · <strong style="color:' + pnlTone + ';">' + (pnl >= 0 ? '+' : '−') + '$'

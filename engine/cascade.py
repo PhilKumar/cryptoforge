@@ -589,6 +589,15 @@ _ENDED_POSITION_CHECK_SEC = 120
 #
 # Turn this back to True to restore the cap — nothing else needs changing, the
 # budgets are still stored, still summed and still displayed.
+#
+# LEAVE IT OFF. Since 2026-08-13 the budget is enforced where it belongs, at
+# FUNDING time: build_fib_ladder_and_pool clamps each leg to what the symbol's
+# pot has left (group_remaining_usd), measuring every campaign's hold as the
+# pool it actually funded. That gives Phil what he asked for — "$2000 to BTC
+# whatever trades it comes" — without reserving anything up front, so no
+# campaign is ever refused for capital a sibling is not using. Switching this
+# back on would re-add the nominal reservation ON TOP of that and bring back
+# the "capital group is exhausted" refusals.
 GROUP_CAP_ENFORCED = False
 
 # Does a new campaign born inside ground another has already funded skip that
@@ -1036,6 +1045,7 @@ class Leg:
     leg_pct_from_mother: Optional[float] = None  # total fall from the mother high
     allocation_pct: Optional[float] = None  # percent this leg funds (see build_fib_ladder_and_pool)
     netted_pct: float = 0.0  # percent of this leg's stretch a sibling had already funded
+    capped_pct: float = 0.0  # percent this leg wanted but the symbol's budget could not fund
     pool_usd: Optional[float] = None  # this leg's own allocation
     carry_in_usd: float = 0.0  # legacy: kept so older snapshots still load
     pool_total_usd: float = 0.0  # this fib's own contribution to the shared pool
@@ -1055,6 +1065,7 @@ class Leg:
             "leg_pct_from_mother": self.leg_pct_from_mother,
             "allocation_pct": self.allocation_pct,
             "netted_pct": self.netted_pct,
+            "capped_pct": self.capped_pct,
             "pool_usd": self.pool_usd,
             "carry_in_usd": self.carry_in_usd,
             "pool_total_usd": self.pool_total_usd,
@@ -1078,6 +1089,7 @@ class Leg:
         leg.leg_pct_from_mother = data.get("leg_pct_from_mother")
         leg.allocation_pct = data.get("allocation_pct")
         leg.netted_pct = _coerce_float(data.get("netted_pct"))
+        leg.capped_pct = _coerce_float(data.get("capped_pct"))
         leg.pool_usd = data.get("pool_usd")
         leg.carry_in_usd = _coerce_float(data.get("carry_in_usd"))
         leg.pool_total_usd = _coerce_float(data.get("pool_total_usd"))
@@ -1674,7 +1686,7 @@ def compute_tp_price(campaign: Campaign) -> Optional[float]:
     return max(geometric, floor)
 
 
-def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
+def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg, group_remaining_usd: Optional[float] = None) -> None:
     if leg.touch_high >= campaign.mother_high:
         raise CascadeModelError(
             f"leg {leg.leg_id}: touch_high {leg.touch_high} must stay below mother high {campaign.mother_high}"
@@ -1712,6 +1724,20 @@ def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg) -> None:
             free_ratio = free_span_of(span, campaign.funded_bands) / (span[1] - span[0])
             gross, allocation_pct = allocation_pct, allocation_pct * max(min(free_ratio, 1.0), 0.0)
             leg.netted_pct = max(gross - allocation_pct, 0.0)
+
+    # The symbol's budget is ONE pot shared by every campaign on it, and what a
+    # campaign holds of it is the pool it has actually funded — not its nominal
+    # capital. So this leg may only draw what the siblings have left. Capping the
+    # PERCENT (not the dollars) keeps allocation_pct, pool_usd and
+    # cumulative_used_pct the same number in three units; capping pool_usd alone
+    # would leave the percent overstating what was really funded.
+    leg.capped_pct = 0.0
+    unit = campaign.capital_unit_per_pct
+    if group_remaining_usd is not None and unit > 0 and allocation_pct > 0:
+        affordable_pct = max(_coerce_float(group_remaining_usd), 0.0) / unit
+        if allocation_pct > affordable_pct:
+            leg.capped_pct = allocation_pct - affordable_pct
+            allocation_pct = affordable_pct
 
     leg.allocation_pct = allocation_pct
     leg.pool_usd = allocation_pct * campaign.capital_unit_per_pct
@@ -2225,17 +2251,55 @@ class CascadeEngine:
             if c.symbol == symbol and c.state in ACTIVE_STATES and self.venue_of(c) == venue
         )
 
+    def group_funded_usd(self, symbol: str, exchange: str = "", exclude_id: str = "") -> float:
+        """What the symbol's ACTIVE campaigns have actually put to work.
+
+        This is the honest measure of a campaign's claim on the pot, and the one
+        the 2026-07-28 cap got wrong by using nominal capital_usd instead.
+        Capital is a RATE — capital/100 per 1% of fall — so a campaign's real
+        hold is the pool it has funded: cumulative_used_pct * capital/100. That
+        is money already spent, resting, or armed, and it survives a round
+        closing because the principal returns to the same pool and re-ladders.
+        """
+        venue = str(exchange or "").strip().lower() or self.primary_broker_name
+        symbol = str(symbol or "").strip().upper()
+        return sum(
+            c.cumulative_used_pct * c.capital_unit_per_pct
+            for c in self.campaigns.values()
+            if c.symbol == symbol
+            and c.state in ACTIVE_STATES
+            and self.venue_of(c) == venue
+            and c.campaign_id != exclude_id
+        )
+
+    def group_remaining_usd(self, campaign: "Campaign") -> Optional[float]:
+        """Budget left for THIS campaign's next leg, or None when uncapped.
+
+        The campaign's own funded pool is excluded — it is asking to extend that
+        pool, not to open a second claim beside it.
+        """
+        budget = _coerce_float(self.capital_groups.get(self._group_key(campaign.symbol, campaign.exchange)))
+        if budget <= 0:
+            return None
+        held = self.group_funded_usd(campaign.symbol, campaign.exchange, exclude_id=campaign.campaign_id)
+        return max(budget - held - campaign.cumulative_used_pct * campaign.capital_unit_per_pct, 0.0)
+
     def capital_group_status(self) -> Dict[str, dict]:
         out = {}
         for key, budget in sorted(self.capital_groups.items()):
             venue, _, symbol = key.partition(":")
-            committed = self.group_committed_usd(symbol, venue)
+            # "Committed" is what the pot has actually FUNDED, which is what the
+            # cap now enforces. Reporting the nominal sum here is what produced
+            # "$4,000 committed, -$2,000 free" against a $2,000 budget on two
+            # campaigns that between them held about $57.
+            funded = self.group_funded_usd(symbol, venue)
             out[self._group_display_key(key)] = {
                 "symbol": symbol,
                 "exchange": venue,
                 "budget_usd": budget,
-                "committed_usd": round(committed, 2),
-                "available_usd": round(budget - committed, 2),
+                "committed_usd": round(funded, 2),
+                "available_usd": round(max(budget - funded, 0.0), 2),
+                "nominal_capital_usd": round(self.group_committed_usd(symbol, venue), 2),
             }
         return out
 
@@ -2274,6 +2338,7 @@ class CascadeEngine:
                 "active_count": 0,
                 "live_count": 0,
                 "committed_usd": 0.0,
+                "nominal_capital_usd": 0.0,
                 "in_position_usd": 0.0,
                 "resting_usd": 0.0,
                 "pending_usd": 0.0,
@@ -2297,7 +2362,10 @@ class CascadeEngine:
             stack["active_count"] += 1
             if campaign.mode == "live":
                 stack["live_count"] += 1
-            stack["committed_usd"] += campaign.capital_usd
+            # Funded, not nominal — the same number the cap enforces, so the
+            # stack line and the budget line cannot disagree.
+            stack["committed_usd"] += campaign.cumulative_used_pct * campaign.capital_unit_per_pct
+            stack["nominal_capital_usd"] += campaign.capital_usd
             stack["in_position_usd"] += campaign.spent_usd
             stack["resting_usd"] += campaign.resting_usd
             stack["pending_usd"] += campaign.pending_usd
@@ -2311,10 +2379,11 @@ class CascadeEngine:
         for key, budget in self.capital_groups.items():
             stack = stacks.setdefault(self._group_display_key(key), _blank())
             stack["budget_usd"] = budget
-            stack["available_usd"] = round(budget - stack["committed_usd"], 2)
+            stack["available_usd"] = round(max(budget - stack["committed_usd"], 0.0), 2)
         for stack in stacks.values():
             for key in (
                 "committed_usd",
+                "nominal_capital_usd",
                 "in_position_usd",
                 "resting_usd",
                 "pending_usd",
@@ -4850,7 +4919,7 @@ class CascadeEngine:
         # The previous fib keeps every rung it has. This one adds its own to the
         # pool and to the ladder, and the whole ladder is re-split by price.
         try:
-            build_fib_ladder_and_pool(campaign, leg)
+            build_fib_ladder_and_pool(campaign, leg, self.group_remaining_usd(campaign))
             plan_leg_orders(campaign, leg)
         except CascadeModelError as exc:
             campaign.legs.pop()
@@ -4870,6 +4939,7 @@ class CascadeEngine:
             f"Fib {leg.leg_id} drawn on trendline {trendline_id}: 0={touch_high:g} 1={swing_low:g} "
             f"(adds {_coerce_float(leg.allocation_pct):.3f}% = ${_coerce_float(leg.pool_usd):,.2f} to the pool"
             f"{f', {leg.netted_pct:.3f}% netted off as already funded' if leg.netted_pct > 0 else ''}"
+            f"{f', {leg.capped_pct:.3f}% left unfunded — the {campaign.symbol} budget is spent' if leg.capped_pct > 0 else ''}"
             f"{', escalated' if leg.escalated else ''}). Ladder re-split by price — "
             + (
                 # A rung whose level would price at or below zero has no price at
