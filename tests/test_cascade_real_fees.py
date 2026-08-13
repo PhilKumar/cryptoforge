@@ -141,6 +141,58 @@ class CommissionLookupTests(unittest.TestCase):
         self.assertIsNone(BaseBroker().get_order_commission("SOLUSDT", "55"))
 
 
+class StopEntryTimeInForceTests(unittest.TestCase):
+    """The buy stop must reach Binance as IOC.
+
+    A GTC stop-limit that triggers without filling inside its limit does not
+    die — it becomes a plain limit under the market and fills on the way back
+    down. Binance reports status NEW either way, so this is only catchable at
+    the point the payload is built.
+    """
+
+    def _client(self):
+        client = BinanceSpotClient.__new__(BinanceSpotClient)
+        client.quote_asset = "USDT"
+        return client
+
+    def _payload_for(self, **kwargs):
+        client = self._client()
+        seen = {}
+
+        def _capture(method, path, params=None):
+            seen.update(params or {})
+            return {"orderId": 1}
+
+        with (
+            patch.object(BinanceSpotClient, "_is_configured", return_value=True),
+            patch.object(BinanceSpotClient, "to_broker_symbol", return_value="BTCUSDT"),
+            patch.object(BinanceSpotClient, "get_ticker", return_value={"last_price": 63000.0}),
+            patch.object(BinanceSpotClient, "_spot_order_quantity", return_value=({"quantity": "0.0003"}, None)),
+            patch.object(BinanceSpotClient, "_round_price_to_tick", side_effect=lambda p, v: v),
+            patch.object(BinanceSpotClient, "_attach_spot_order_fill_fields", return_value=None),
+            patch.object(BinanceSpotClient, "_signed_request", side_effect=_capture),
+        ):
+            result = client.place_order(
+                "BTCUSDT", 19.83, "buy", order_type="stop_limit", limit_price=63160.18, stop_price=63160.13, **kwargs
+            )
+        return seen, result
+
+    def test_ioc_is_sent_when_asked(self):
+        payload, _ = self._payload_for(time_in_force="IOC")
+        self.assertEqual(payload["timeInForce"], "IOC")
+        self.assertEqual(payload["type"], "STOP_LOSS_LIMIT")
+        self.assertAlmostEqual(float(payload["stopPrice"]), 63160.13)
+
+    def test_gtc_remains_the_default_for_every_other_caller(self):
+        payload, _ = self._payload_for()
+        self.assertEqual(payload["timeInForce"], "GTC")
+
+    def test_a_nonsense_time_in_force_is_refused_before_it_reaches_binance(self):
+        payload, result = self._payload_for(time_in_force="SOON")
+        self.assertIn("error", result)
+        self.assertEqual(payload, {}, "nothing should have been sent")
+
+
 class _FeeBroker:
     """Reports a fixed commission per order id."""
 

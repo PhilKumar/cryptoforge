@@ -2733,6 +2733,32 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         engine.campaigns[campaign.campaign_id] = campaign
         return campaign
 
+    async def test_the_entry_stop_goes_out_ioc(self):
+        """A GTC stop-limit that triggers but cannot fill inside its limit stays
+        on the book as a plain limit BELOW the market and fills on the way back
+        down — the one thing a buy stop exists to prevent. BTCUSDT #215 on
+        2026-08-13 triggered at 63,160.13 and sat unfilled $67 under the market.
+        IOC cancels that remainder so the sync re-arms it as a STOP.
+        """
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        engine._price_cache["SOLUSDT"] = (77.10, time.monotonic())
+
+        self.assertTrue(await engine._place_pending_stop(campaign))
+        self.assertEqual(broker.placed_orders[0]["time_in_force"], "IOC")
+
+    async def test_a_symbol_can_be_named_back_to_gtc(self):
+        """The knob exists for a book too thin to fill an IOC on the cross."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        engine._price_cache["SOLUSDT"] = (77.10, time.monotonic())
+
+        with patch.dict(cascade_module.STOP_ENTRY_TIME_IN_FORCE_BY_SYMBOL, {"SOLUSDT": "GTC"}, clear=False):
+            self.assertTrue(await engine._place_pending_stop(campaign))
+        self.assertEqual(broker.placed_orders[0]["time_in_force"], "GTC")
+
     async def test_a_cached_price_below_the_trigger_places_the_order(self):
         broker = FakeCascadeBroker()
         engine = _mk_engine(broker)

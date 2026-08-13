@@ -104,6 +104,27 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # SOL moves in bigger relative steps than BTC or PAXG, so it wants 2 cents flat
 # rather than five ticks.
 STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
+# Time-in-force for the entry stop, and why it is IOC.
+#
+# A GTC stop-limit that TRIGGERS but cannot fill inside its limit does not go
+# away — it stays on the book as an ordinary limit BELOW the market and fills on
+# the way back down. That is the exact thing a buy stop exists to prevent, and
+# it is invisible: Binance reports status NEW both before and after a trigger,
+# so only isWorking/workingTime tells them apart. Seen live on BTCUSDT #215,
+# 2026-08-13 23:31 IST — triggered at 63,160.13, never filled, left resting $67
+# under a 63,227 market.
+#
+# The gap above the trigger is a few ticks, so any quick up-move clears it. IOC
+# cancels that remainder instead of stranding it. Nothing is lost: the sync sees
+# the order come back EXPIRED, keeps the pot collected, and re-places — and the
+# re-place path raises the stop back above the market (or HOLDS it when that
+# would be buying over value). The protection was always there; a stranded GTC
+# order was simply never handed back to it.
+#
+# Per symbol, like the gap above it: a book thin enough to need a resting order
+# can be named here and get "GTC" back.
+STOP_ENTRY_TIME_IN_FORCE = "IOC"
+STOP_ENTRY_TIME_IN_FORCE_BY_SYMBOL: Dict[str, str] = {}
 # The most a buy stop may be raised above its trigger and still count as a
 # legitimate LIVE cross. When price is at or just above a freshly-set trigger
 # the stop is raised to sit just over the market — a real continuation up. But
@@ -1801,6 +1822,11 @@ def ladders_overlap(high_a: float, low_a: float, high_b: float, low_b: float) ->
     floor_a, ceiling_a = high_a - deepest * range_a, high_a - shallowest * range_a
     floor_b, ceiling_b = high_b - deepest * range_b, high_b - shallowest * range_b
     return ceiling_a >= floor_b and ceiling_b >= floor_a
+
+
+def stop_entry_time_in_force(symbol: str) -> str:
+    """Time-in-force for this symbol's entry stop. See STOP_ENTRY_TIME_IN_FORCE."""
+    return STOP_ENTRY_TIME_IN_FORCE_BY_SYMBOL.get(str(symbol or "").upper(), STOP_ENTRY_TIME_IN_FORCE)
 
 
 def rung_size_usd(campaign: Campaign) -> float:
@@ -6311,6 +6337,10 @@ class CascadeEngine:
             # ALWAYS a stop — never a limit. A stop fills only on an upward
             # cross, so it can never buy into a fall. When raised, eff_stop sits
             # just above the current price; otherwise it is the original trigger.
+            #
+            # IOC so a trigger that cannot fill inside the limit is cancelled
+            # rather than left resting under the market as a plain limit — the
+            # remainder comes back EXPIRED and re-arms as a STOP.
             result = await asyncio.to_thread(
                 lambda: self.broker_for(campaign).place_order(
                     campaign.symbol,
@@ -6320,6 +6350,7 @@ class CascadeEngine:
                     limit_price=eff_limit,
                     stop_price=eff_stop,
                     client_order_id=client_id,
+                    time_in_force=stop_entry_time_in_force(campaign.symbol),
                 )
             )
         except Exception as exc:

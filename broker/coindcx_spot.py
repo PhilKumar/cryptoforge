@@ -582,6 +582,7 @@ class CoinDCXSpotClient(BaseBroker):
         client_order_id: str = None,
         base_qty: float = None,
         stop_price: float = None,
+        time_in_force: str = None,  # accepted for one caller contract; CoinDCX has no such field
     ) -> dict:
         if not self._is_configured():
             return {"error": "API not configured"}

@@ -600,6 +600,7 @@ class BinanceSpotClient(BaseBroker):
         client_order_id: str = None,
         base_qty: float = None,
         stop_price: float = None,
+        time_in_force: str = None,
     ) -> dict:
         if not self._is_configured():
             return {"error": "API not configured"}
@@ -639,7 +640,15 @@ class BinanceSpotClient(BaseBroker):
             tick_price = self._round_price_to_tick(pair, self.coerce_float(limit_price, 0.0))
             if self.coerce_float(tick_price, 0.0) <= 0:
                 return {"error": f"Unable to resolve a valid limit price for {pair}"}
-            payload.update({"price": tick_price, "timeInForce": "GTC"})
+            # GTC unless the caller asks otherwise. IOC matters on a STOP_LOSS_LIMIT:
+            # a GTC one that triggers but cannot fill inside its limit stays on the
+            # book as a plain limit BELOW the market, which then fills on the way
+            # back down — the opposite of what a buy stop is for. IOC cancels that
+            # remainder instead, handing the decision back to whoever placed it.
+            tif = str(time_in_force or "GTC").upper()
+            if tif not in {"GTC", "IOC", "FOK"}:
+                return {"error": f"Unsupported timeInForce {tif!r} for Binance Spot"}
+            payload.update({"price": tick_price, "timeInForce": tif})
         if order_type_upper == "STOP_LOSS_LIMIT":
             if not stop_price:
                 return {"error": "Stop price is required for Binance Spot stop-limit orders"}
