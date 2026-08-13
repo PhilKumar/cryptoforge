@@ -2526,7 +2526,13 @@ function _renderTablePager(tableId, stateKey, pagerId) {
   if (!table) return;
   var tbody = table.querySelector('tbody');
   if (!tbody) return;
-  var rows = Array.from(tbody.querySelectorAll('tr'));
+  // A table may carry banner rows that are not data — a summary strip over the
+  // ladder, say. They must not be counted ("3 shown of 3" for two orders) and
+  // must not be paged away, or page 2 loses its header entirely.
+  var allRows = Array.from(tbody.querySelectorAll('tr'));
+  var pinned = allRows.filter(function(r) { return r.hasAttribute('data-pager-skip'); });
+  var rows = allRows.filter(function(r) { return !r.hasAttribute('data-pager-skip'); });
+  pinned.forEach(function(r) { r.style.display = ''; });
   var pagerKey = stateKey || tableId;
   var hostId = pagerId || (tableId + '-pagination');
   var host = document.getElementById(hostId);
@@ -12917,16 +12923,47 @@ function cfR37RenderWatch(s) {
   if (!body) return;
   var armed = w.armed || [];
   if (!armed.length) {
-    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">'
+    body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">'
       + (s.running ? 'Nothing armed — the engine is still waiting for a V to confirm.' : 'Engine stopped — press Start Paper to scan.')
       + '</td></tr>';
     _renderTablePager('cf-r37-armed-table', 'cf-r37-armed-table', 'cf-r37-armed-pagination');
     return;
   }
-  body.innerHTML = armed.map(function(a) {
+  // A banner over the ladder, the way Cascade's pot line reads: a table of
+  // percentages alone never says what the engine is DOING. This says how much
+  // is collected, what has to happen for the first one to fire, and — when
+  // nothing is close — why nothing is firing at all.
+  var potTotal = armed.reduce(function(sum, a) { return sum + (Number(a.pot) || 0); }, 0);
+  // The console runs several instruments now, so the sentence must name the one
+  // on screen — a SOL book explaining itself in terms of BTC is worse than no
+  // sentence at all.
+  var coin = String(_cfR37ActiveSymbol || 'BTCUSDT').replace(/USDT$/, '');
+  var near = armed[0];
+  var nearAway = Number(near.away_pct);
+  var nearNote = 'the nearest fills when ' + coin + ' ' + (nearAway >= 0 ? 'falls ' : 'rises ')
+    + Math.abs(nearAway).toFixed(2) + '% to ' + Number(near.entry).toLocaleString('en-US');
+  if (!(Math.abs(nearAway) <= 1.0)) {
+    nearNote += ' — nothing is within 1%, so none of these is close to firing';
+  }
+  var head = '<tr class="cf-cascade-pot" data-pager-skip><td colspan="9">'
+      + '<div class="cf-cascade-pot-row">'
+        + '<span class="cf-cascade-pot-label"><strong>' + armed.length + ' order'
+        + (armed.length === 1 ? '' : 's') + ' armed and waiting</strong>'
+        + '<span class="table-meta"> · ' + _escapeHtml(nearNote) + '</span></span>'
+        + '<strong class="cf-cascade-pot-amount">' + _cfR37Usd(potTotal) + ' collected</strong>'
+      + '</div></td></tr>';
+  body.innerHTML = head + armed.map(function(a, i) {
     var away = Number(a.away_pct);
     var close = Math.abs(away) <= 0.25;
-    return '<tr>'
+    // The same sentence the banner gives the nearest one, per row, on hover —
+    // so any row can be read without doing the percentage arithmetic by eye.
+    var why = '#' + (i + 1) + ': ' + _cfR37Usd(a.pot) + ' collected (' + (a.pending || 'next buy')
+      + ') from the ' + (a.minor ? 'minor' : 'major') + ' mother of ' + (a.mother || '?')
+      + ', now ' + Number(a.fall_pct).toFixed(2) + '% down. Buys when ' + coin + ' '
+      + (away >= 0 ? 'falls ' : 'rises ') + Math.abs(away).toFixed(2) + '% to '
+      + Number(a.entry).toLocaleString('en-US') + '.';
+    return '<tr title="' + _escapeHtml(why) + '">'
+      + '<td class="num" style="color:var(--muted);font-variant-numeric:tabular-nums;">' + (i + 1) + '</td>'
       + '<td class="num" style="color:' + (close ? 'var(--accent2)' : 'var(--muted)') + ';font-weight:' + (close ? '600' : '400') + ';">'
       + (away >= 0 ? '−' : '+') + Math.abs(away).toFixed(2) + '%</td>'
       + '<td class="num">' + Number(a.entry).toLocaleString('en-US') + '</td>'

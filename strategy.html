@@ -1433,7 +1433,7 @@
   <section class="card table-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
-        <h3 class="table-title">Armed Buy Orders <button type="button" class="cf-info" tabindex="0" data-cf-info="Entries the rule has already placed and that are waiting for price. Move Needed is how far price must travel to fill: a minus means it must fall, a plus means it must rise back through the entry. Nearest first &mdash; when one reaches zero, a paper buy prints." aria-label="What Armed Buy Orders shows">i</button></h3>
+        <h3 class="table-title">Armed Buy Orders <button type="button" class="cf-info" tabindex="0" data-cf-info="Entries the rule has already placed and that are waiting for price. Numbered nearest first, so #1 is the one that fills next. Move Needed is how far price must travel to fill: a minus means it must fall, a plus means it must rise back through the entry. The banner across the top says how much is collected and what has to happen for #1 to fire; hover any row for the same in words. When one reaches zero, a paper buy prints." aria-label="What Armed Buy Orders shows">i</button></h3>
       </div>
     </div>
     <div class="table-surface">
@@ -1441,12 +1441,13 @@
         <table class="trade-table" id="cf-r37-armed-table">
           <thead>
             <tr>
+              <th class="num">#</th>
               <th class="num">Move Needed</th><th class="num">Entry</th><th>Mother</th><th>Kind</th>
               <th class="num">Fall</th><th class="num">Pot</th><th>Next Buy</th><th></th>
             </tr>
           </thead>
           <tbody id="cf-r37-armed-body">
-            <tr><td colspan="8" class="cf-table-empty-cell">Nothing armed &mdash; the engine is still waiting for a V to confirm.</td></tr>
+            <tr><td colspan="9" class="cf-table-empty-cell">Nothing armed &mdash; the engine is still waiting for a V to confirm.</td></tr>
           </tbody>
         </table>
       </div>

@@ -165,8 +165,21 @@ test.describe('30-70 console', () => {
     await expect(page.locator('#cf-r37-watch-below')).toContainText('0.17% below');
     await expect(page.locator('#cf-r37-watch-stage')).toContainText('needs 2');
     await expect(page.locator('#cf-r37-watch-armed')).toHaveText('3');
-    await expect(page.locator('#cf-r37-armed-body tr')).toHaveCount(2);
+    // Two armed orders plus the banner row above them.
+    await expect(page.locator('#cf-r37-armed-body tr')).toHaveCount(3);
     await expect(page.locator('#cf-r37-armed-body')).toContainText('30% of band 1');
+    // The banner says what the table of percentages cannot: how much is
+    // collected and what has to happen for the first one to fire.
+    const banner = page.locator('#cf-r37-armed-body tr.cf-cascade-pot');
+    await expect(banner).toContainText('2 orders armed and waiting');
+    await expect(banner).toContainText('$26.40 collected');
+    await expect(banner).toContainText('falls 0.11% to 63,940');
+    // Numbered nearest first, so #1 is the one that fills next.
+    const firstRow = page.locator('#cf-r37-armed-body tr:not(.cf-cascade-pot)').first();
+    await expect(firstRow.locator('td').first()).toHaveText('1');
+    await expect(firstRow).toHaveAttribute('title', /Buys when BTC falls 0\.11% to 63,940/);
+    // The banner is not data: it must not be counted, and must not page away.
+    await expect(page.locator('#cf-r37-armed-pagination')).toContainText('2 shown of 2');
     await expect(page.locator('#cf-r37-activity')).toContainText('3 orders armed');
     // A running engine counts down to its next scan rather than sitting still.
     await expect(page.locator('#cf-r37-countdown')).toHaveText(/^\d+:\d\d$/);
