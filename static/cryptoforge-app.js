@@ -8665,13 +8665,22 @@ function _cfCascadeLadderRows(campaign) {
           + _cfCascadeFmt(mkt) + ' — waits for the next red close to walk it down'
         : 'armed at ' + _cfCascadeFmt(campaign.pending_stop_price) + ' · not on Binance yet';
   }
+  // The two reds arrive one at a time, and after the first the threshold MOVES:
+  // the second red has to close below that first red's close, not below the
+  // line that completed the pot. Naming the line once the first red is in reads
+  // as a stuck order, because price is usually far under the line by then.
+  var firstRed = Number(campaign.pending_last_red);
+  var oneRedIn = isFinite(firstRed) && firstRed > 0;
+  var waitNote = oneRedIn
+    ? 'one red in at ' + _cfCascadeFmt(firstRed)
+      + ' — needs the next red to close below that to set the stop'
+    : 'waiting for two reds below ' + _cfCascadeFmt(campaign.pending_line);
   var potNote = pot <= 0
     ? 'price has not reached a level yet'
     : campaign.pending_stop_price
       ? stopNote
       : campaign.pending_line
-        ? 'clears the $' + _cfCascadeUsd(rung) + ' minimum — waiting for two reds below '
-          + _cfCascadeFmt(campaign.pending_line)
+        ? 'clears the $' + _cfCascadeUsd(rung) + ' minimum — ' + waitNote
         : 'needs $' + _cfCascadeUsd(rung) + ' before it can be an order';
   // One banner across the whole strip rather than three squeezed cells. The
   // note is the longest text in the table and the ladder's narrow first column
