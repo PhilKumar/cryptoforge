@@ -15,6 +15,7 @@ from engine.cascade import (
     CAMPAIGN_START_TIMEFRAMES,
     MIN_LEG_SEPARATION_PCT,
     MODEL_VERSION,
+    RESTRUCTURE_REPLAY_PREFIX,
     Campaign,
     Candle,
     CascadeEngine,
@@ -6836,6 +6837,37 @@ class CascadeSharedSymbolBudgetTests(unittest.TestCase):
         self._campaign(engine, "a", 1500.0, state="COMPLETED")
         asker = self._campaign(engine, "b", 0.0)
         self.assertAlmostEqual(engine.group_remaining_usd(asker), 2000.0, places=6)
+
+    def test_a_restructure_clone_does_not_pay_for_itself_twice(self):
+        """A restructure replays into a clone wearing "__restructure__<id>" and
+        rebuilds the SAME pool from zero. If the accounting does not see through
+        that id, the live campaign's pool counts as a sibling's and the rebuild
+        is short by exactly its own money — invisible on a $2000 budget, fatal
+        on a tight one.
+        """
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 100)
+        live = self._campaign(engine, "aaa", 40.0)
+        self._campaign(engine, "bbb", 25.0)  # a genuine sibling
+
+        clone = Campaign.from_dict(live.to_dict())
+        clone.campaign_id = f"{RESTRUCTURE_REPLAY_PREFIX}aaa"
+        clone.cumulative_used_pct = 0.0  # _RESTRUCTURE_RESET clears the pool
+
+        # Only the real sibling's $25 is spoken for: 100 - 25 = 75.
+        self.assertAlmostEqual(engine.group_remaining_usd(clone), 75.0, places=6)
+        # Without the strip it would have been 100 - 25 - 40 = 35.
+        self.assertNotAlmostEqual(engine.group_remaining_usd(clone), 35.0, places=6)
+
+    def test_recalculate_rebuilds_against_its_own_released_pool(self):
+        """Recalc replays into the campaign itself after clearing
+        cumulative_used_pct, so its old pool must not be counted either."""
+        engine = self._engine()
+        engine.set_capital_group("BTCUSDT", 100)
+        subject = self._campaign(engine, "aaa", 40.0)
+        self._campaign(engine, "bbb", 25.0)
+        subject.cumulative_used_pct = 0.0  # what _reset_derived_state does
+        self.assertAlmostEqual(engine.group_remaining_usd(subject), 75.0, places=6)
 
     def test_a_new_leg_is_clamped_to_the_pot_end_to_end(self):
         """The wiring, not just the arithmetic: a leg built through the engine's

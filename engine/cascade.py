@@ -600,6 +600,13 @@ _ENDED_POSITION_CHECK_SEC = 120
 # the "capital group is exhausted" refusals.
 GROUP_CAP_ENFORCED = False
 
+# A restructure replays into a CLONE carrying this prefix on its id, so its
+# candles cannot collide with the live campaign's. Anything that identifies a
+# campaign for ACCOUNTING must strip it: the clone stands in for the real
+# campaign and rebuilds the same pool, so counting both would charge that money
+# to the symbol's budget twice and under-fund the rebuild.
+RESTRUCTURE_REPLAY_PREFIX = "__restructure__"
+
 # Does a new campaign born inside ground another has already funded skip that
 # ground?
 #
@@ -2281,7 +2288,13 @@ class CascadeEngine:
         budget = _coerce_float(self.capital_groups.get(self._group_key(campaign.symbol, campaign.exchange)))
         if budget <= 0:
             return None
-        held = self.group_funded_usd(campaign.symbol, campaign.exchange, exclude_id=campaign.campaign_id)
+        # A restructure clone IS the campaign it replays, wearing a temporary id
+        # so its candles stay separate. Strip the prefix or the live campaign's
+        # pool counts as a sibling's and the rebuild is short by its own money.
+        own_id = campaign.campaign_id
+        if own_id.startswith(RESTRUCTURE_REPLAY_PREFIX):
+            own_id = own_id[len(RESTRUCTURE_REPLAY_PREFIX) :]
+        held = self.group_funded_usd(campaign.symbol, campaign.exchange, exclude_id=own_id)
         return max(budget - held - campaign.cumulative_used_pct * campaign.capital_unit_per_pct, 0.0)
 
     def capital_group_status(self) -> Dict[str, dict]:
@@ -3420,7 +3433,7 @@ class CascadeEngine:
         # are carried across whole. Paper campaigns would otherwise book a
         # second, imaginary set on top of them.
         clone_mode, clone.mode = clone.mode, "live"
-        replay_id = f"__restructure__{campaign_id}"
+        replay_id = f"{RESTRUCTURE_REPLAY_PREFIX}{campaign_id}"
         clone.campaign_id = replay_id
         self._candles[replay_id] = []
         try:
