@@ -366,3 +366,141 @@
     .rv { opacity: 1; transform: none; }
     .hero-kicker, .hero-sub, .cta-row, .hero-copy h1 span { opacity: 1; filter: none; }
   }
+
+  /* ═══════════ THE LIVING LAYER (scene.js) ═══════════
+     Overlays that scene.js mounts over the chapter plates, and the SOUND
+     toggle. Everything is aria-hidden, pointer-events:none decoration; the
+     page reads identically with this whole block removed. Styles live here
+     because the landing's CSP forbids inline style. */
+  /* A canvas is a replaced element: inset:0 alone does NOT stretch it the
+     way it stretches a div — it keeps its intrinsic 300x150. Both axes must
+     be given explicitly. */
+  .scene-tape {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    z-index: 3; pointer-events: none;
+  }
+  .band-media { position: relative; }
+  .scene-lantern {
+    position: absolute; z-index: 2; pointer-events: none; border-radius: 50%;
+    background: radial-gradient(circle, rgba(227,194,92,.32) 0%, rgba(201,162,39,.10) 45%, transparent 72%);
+    filter: blur(2px); mix-blend-mode: screen;
+    animation: scene-flicker 4.2s ease-in-out infinite;
+  }
+  .scene-lantern.a { left: 6%; top: 34%; width: 24vmin; height: 24vmin; }
+  .scene-lantern.b { left: 58%; top: 18%; width: 16vmin; height: 16vmin; animation-delay: 1.7s; animation-duration: 5.1s; }
+  @keyframes scene-flicker {
+    0%, 100% { opacity: .5; transform: scale(1); }
+    18%      { opacity: .78; transform: scale(1.05); }
+    41%      { opacity: .58; transform: scale(.98); }
+    63%      { opacity: .85; transform: scale(1.07); }
+    82%      { opacity: .62; transform: scale(1.01); }
+  }
+  .scene-haze {
+    position: absolute; inset: -12% -30%; z-index: 2; pointer-events: none;
+    background: radial-gradient(50% 40% at 30% 62%, rgba(214,196,160,.14), transparent 70%);
+    mix-blend-mode: screen; filter: blur(6px);
+    animation: scene-drift 34s ease-in-out infinite alternate;
+  }
+  @keyframes scene-drift {
+    from { transform: translateX(-4%); opacity: .5; }
+    to   { transform: translateX(7%);  opacity: .85; }
+  }
+
+  /* Homma's brush: tally columns written, held, wiped, written again.
+     pathLength=100 in the SVG makes every stroke's dash cycle identical. */
+  .split-visual { position: relative; }
+  .scene-ink {
+    position: absolute; left: 50%; top: 14%; width: 36%; height: 58%;
+    z-index: 2; pointer-events: none; opacity: .85;
+  }
+  /* The painted board is written in chalk-cream, so Homma's new marks are
+     too — dark ink would read as a stain, not as writing. */
+  .scene-ink-stroke {
+    fill: none; stroke: rgba(240,230,205,.75); stroke-width: 3; stroke-linecap: round;
+    stroke-dasharray: 100; stroke-dashoffset: 100;
+    animation: scene-write 16s ease-in-out infinite;
+  }
+  .scene-ink-stroke.s1 { animation-delay: 1.1s; }
+  .scene-ink-stroke.s2 { animation-delay: 2.4s; }
+  .scene-ink-stroke.s3 { animation-delay: 3.6s; }
+  .scene-ink-stroke.s4 { animation-delay: 4.9s; }
+  .scene-ink-stroke.s5 { animation-delay: 6.3s; }
+  @keyframes scene-write {
+    0%       { stroke-dashoffset: 100; opacity: 0; }
+    6%       { opacity: .85; }
+    16%      { stroke-dashoffset: 0; }
+    58%      { stroke-dashoffset: 0; opacity: .85; }
+    68%, 100%{ stroke-dashoffset: 0; opacity: 0; }
+  }
+
+  /* The ledger candle breathes; chalk prices surface and fade on the board. */
+  .scene-flame {
+    position: absolute; right: 30%; top: 26%; width: 22vmin; height: 28vmin;
+    z-index: 2; pointer-events: none; border-radius: 50%;
+    background: radial-gradient(circle at 50% 40%, rgba(227,194,92,.4) 0%, rgba(194,69,45,.12) 48%, transparent 72%);
+    mix-blend-mode: screen; filter: blur(3px);
+    animation: scene-flicker 3.1s ease-in-out infinite;
+  }
+  .scene-chalk { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+  .scene-chalk span {
+    position: absolute; font-family: var(--mono); font-size: clamp(13px, 1.6vw, 21px);
+    font-weight: 700; letter-spacing: .14em; color: #e8dfc8;
+    text-shadow: 0 0 6px rgba(232,223,200,.35); filter: blur(.3px);
+    opacity: 0; animation: scene-chalkfade 13s ease-in-out infinite;
+  }
+  .scene-chalk .c0 { left: 18%; top: 24%; }
+  .scene-chalk .c1 { left: 26%; top: 38%; animation-delay: 3.2s; }
+  .scene-chalk .c2 { left: 15%; top: 52%; animation-delay: 6.5s; }
+  .scene-chalk .c3 { left: 27%; top: 66%; animation-delay: 9.7s; }
+  @keyframes scene-chalkfade {
+    0%, 8%   { opacity: 0; }
+    16%, 52% { opacity: .55; }
+    64%,100% { opacity: 0; }
+  }
+
+  /* The single candle plate breathes with its own glow. */
+  .scene-breathe { animation: scene-breath 7s ease-in-out infinite; }
+  @keyframes scene-breath {
+    0%, 100% { box-shadow: 0 0 34px rgba(201,162,39,.12); }
+    50%      { box-shadow: 0 0 64px rgba(201,162,39,.32); }
+  }
+
+  /* The only control: sound is opt-in, and this is the opt. */
+  .scene-sound {
+    position: fixed; right: 18px; bottom: 18px; z-index: 60;
+    padding: 9px 16px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--hairline-hi); background: rgba(12,15,20,.82);
+    color: var(--text-lo); font-family: var(--mono); font-size: 10px;
+    font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
+    backdrop-filter: blur(6px);
+    transition: color .18s ease, border-color .18s ease;
+  }
+  .scene-sound:hover { color: var(--text-hi); border-color: var(--brass); }
+  .scene-sound[aria-pressed="true"] { color: var(--brass-hi); border-color: rgba(var(--brass-rgb), .6); }
+  .scene-sound[aria-pressed="true"]::before {
+    content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 8px;
+    border-radius: 50%; background: var(--brass);
+    box-shadow: 0 0 8px rgba(var(--brass-rgb), .8);
+    animation: scene-flicker 2.6s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scene-tape, .scene-lantern, .scene-haze, .scene-ink, .scene-flame, .scene-chalk { display: none; }
+    .scene-breathe { animation: none; }
+  }
+
+  /* Candlelight drifting across the parchment half of the hero — the ink
+     chart flickers in lamplight rather than growing a rival chart. */
+  .scene-sheen {
+    position: absolute; left: 0; top: 8%; width: 55%; height: 70%;
+    z-index: 3; pointer-events: none; mix-blend-mode: soft-light;
+    background: linear-gradient(105deg,
+      transparent 20%, rgba(227,194,92,.55) 42%, rgba(227,194,92,.2) 52%, transparent 74%);
+    background-size: 300% 100%;
+    animation: scene-sheen 16s ease-in-out infinite alternate;
+    filter: blur(4px);
+  }
+  @keyframes scene-sheen {
+    from { background-position: 120% 0; opacity: .45; }
+    to   { background-position: -30% 0; opacity: .9; }
+  }
+  @media (prefers-reduced-motion: reduce) { .scene-sheen { display: none; } }

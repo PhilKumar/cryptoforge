@@ -38,7 +38,7 @@
 <body>
 
 <!-- ═══ HERO — the bridge: ink chart dissolving into the terminal ═══ -->
-<section class="hero">
+<section class="hero" data-scene="hero">
   <div class="hero-scene"><img src="/static/landing/web_05_bridge_modern.jpg" alt="An ink candlestick chart on parchment dissolving into a modern trading screen"></div>
   <div class="hero-veil"></div>
   <div class="embers"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
@@ -65,7 +65,7 @@
 </section>
 
 <!-- ═══ I · THE PORT ═══ -->
-<section class="band" id="story">
+<section class="band" id="story" data-scene="port">
   <div class="band-media"><img src="/static/landing/web_01_establishing.jpg" loading="lazy" alt="The rice port of Sakata at dawn, boats and bales along the canals"></div>
   <div class="band-copy rv">
     <div class="chapter-tag">Chapter I · The Port</div>
@@ -75,7 +75,7 @@
 </section>
 
 <!-- ═══ II · THE MERCHANT ═══ -->
-<section class="split">
+<section class="split" data-scene="merchant">
   <div class="split-grid">
     <div class="split-visual rv">
       <img src="/static/landing/web_02_merchant.jpg" loading="lazy" alt="A rice merchant with a brush reading prices on a wooden board by lantern light">
@@ -90,7 +90,7 @@
 </section>
 
 <!-- ═══ III · THE LEDGER ═══ -->
-<section class="band right">
+<section class="band right" data-scene="ledger">
   <div class="band-media"><img src="/static/landing/web_03_ledger_closeup.jpg" loading="lazy" alt="Hands writing prices in chalk on a board beside a burning candle"></div>
   <div class="band-copy rv">
     <div class="chapter-tag">Chapter III · The Ledger</div>
@@ -100,7 +100,7 @@
 </section>
 
 <!-- ═══ IV · THE SHAPE ═══ -->
-<section class="shape">
+<section class="shape" data-scene="shape">
   <div class="rv">
     <div class="chapter-tag">Chapter IV · The Shape</div>
     <h2 class="display">Then he drew it as one mark.</h2>
@@ -115,7 +115,7 @@
 </section>
 
 <!-- ═══ THE CHART: ink → light ═══ -->
-<section class="strip rv" id="chart">
+<section class="strip rv" id="chart" data-scene="terminal">
   <div class="strip-head"><div class="chapter-tag">Two and a half centuries, one chart</div></div>
   <div style="position:relative">
     <div class="strip-fade"></div>
@@ -197,7 +197,7 @@
 </section>
 
 <!-- ═══ LEDGER — ROI only ═══ -->
-<section class="terminal rv">
+<section class="terminal rv" data-scene="terminal">
   <h3>Closed Rounds</h3>
   <div class="ledger">
     <div class="ledger-head"><span>SYMBOL</span><span>ENTRY</span><span>EXIT</span><span>ROI</span></div>
@@ -222,5 +222,6 @@
 </footer>
 
 <script src="/static/landing/landing.js"></script>
+<script src="/static/landing/scene.js"></script>
 </body>
 </html>
