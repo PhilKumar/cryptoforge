@@ -371,19 +371,29 @@
      Overlays that scene.js mounts over the chapter plates, and the SOUND
      toggle. Everything is aria-hidden, pointer-events:none decoration; the
      page reads identically with this whole block removed. Styles live here
-     because the landing's CSP forbids inline style. */
-  /* A canvas is a replaced element: inset:0 alone does NOT stretch it the
-     way it stretches a div — it keeps its intrinsic 300x150. Both axes must
-     be given explicitly. */
+     because the landing's CSP forbids inline style.
+
+     PERFORMANCE IS A CONTRACT HERE. The first version of this block hung a
+     real Mac: filter:blur and mix-blend-mode layers over a Ken Burns
+     transform force the GPU to re-read the whole backdrop every frame, and
+     an animated box-shadow repaints every frame. So in this block:
+       - no filter, no backdrop-filter, no mix-blend-mode, anywhere;
+       - animation touches ONLY transform and opacity (composited);
+       - softness comes from the gradients themselves.
+     scene.js carries the matching half of the contract (prerendered canvas
+     glow, DPR 1, 24fps, and a killswitch that tears the layer down on a
+     machine that can't hold it — .scene-off is that switch). */
+  html.scene-off .scene-sound { opacity: .55; }
   .scene-tape {
+    /* A canvas is a replaced element: inset:0 alone does NOT stretch it the
+       way it stretches a div — both axes must be explicit. */
     position: absolute; inset: 0; width: 100%; height: 100%;
     z-index: 3; pointer-events: none;
   }
   .band-media { position: relative; }
   .scene-lantern {
     position: absolute; z-index: 2; pointer-events: none; border-radius: 50%;
-    background: radial-gradient(circle, rgba(227,194,92,.32) 0%, rgba(201,162,39,.10) 45%, transparent 72%);
-    filter: blur(2px); mix-blend-mode: screen;
+    background: radial-gradient(circle, rgba(227,194,92,.26) 0%, rgba(201,162,39,.08) 45%, transparent 70%);
     animation: scene-flicker 4.2s ease-in-out infinite;
   }
   .scene-lantern.a { left: 6%; top: 34%; width: 24vmin; height: 24vmin; }
@@ -397,8 +407,7 @@
   }
   .scene-haze {
     position: absolute; inset: -12% -30%; z-index: 2; pointer-events: none;
-    background: radial-gradient(50% 40% at 30% 62%, rgba(214,196,160,.14), transparent 70%);
-    mix-blend-mode: screen; filter: blur(6px);
+    background: radial-gradient(50% 40% at 30% 62%, rgba(214,196,160,.11), transparent 68%);
     animation: scene-drift 34s ease-in-out infinite alternate;
   }
   @keyframes scene-drift {
@@ -406,15 +415,29 @@
     to   { transform: translateX(7%);  opacity: .85; }
   }
 
+  /* Candlelight drifting across the parchment half of the hero. The sheen
+     element is wider than its window and MOVES (transform), rather than
+     animating background-position, which repaints. */
+  .scene-sheen {
+    position: absolute; left: -30%; top: 8%; width: 100%; height: 70%;
+    z-index: 3; pointer-events: none;
+    background: linear-gradient(105deg,
+      transparent 30%, rgba(227,194,92,.16) 46%, rgba(227,194,92,.06) 54%, transparent 72%);
+    animation: scene-sheen 16s ease-in-out infinite alternate;
+  }
+  @keyframes scene-sheen {
+    from { transform: translateX(-14%); opacity: .5; }
+    to   { transform: translateX(46%);  opacity: .95; }
+  }
+
   /* Homma's brush: tally columns written, held, wiped, written again.
-     pathLength=100 in the SVG makes every stroke's dash cycle identical. */
+     Chalk-cream, because the painted board is chalk — dark ink would read
+     as a stain. pathLength=100 makes every stroke's dash cycle identical. */
   .split-visual { position: relative; }
   .scene-ink {
     position: absolute; left: 50%; top: 14%; width: 36%; height: 58%;
     z-index: 2; pointer-events: none; opacity: .85;
   }
-  /* The painted board is written in chalk-cream, so Homma's new marks are
-     too — dark ink would read as a stain, not as writing. */
   .scene-ink-stroke {
     fill: none; stroke: rgba(240,230,205,.75); stroke-width: 3; stroke-linecap: round;
     stroke-dasharray: 100; stroke-dashoffset: 100;
@@ -437,15 +460,14 @@
   .scene-flame {
     position: absolute; right: 30%; top: 26%; width: 22vmin; height: 28vmin;
     z-index: 2; pointer-events: none; border-radius: 50%;
-    background: radial-gradient(circle at 50% 40%, rgba(227,194,92,.4) 0%, rgba(194,69,45,.12) 48%, transparent 72%);
-    mix-blend-mode: screen; filter: blur(3px);
+    background: radial-gradient(circle at 50% 40%, rgba(227,194,92,.30) 0%, rgba(194,69,45,.09) 48%, transparent 70%);
     animation: scene-flicker 3.1s ease-in-out infinite;
   }
   .scene-chalk { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
   .scene-chalk span {
     position: absolute; font-family: var(--mono); font-size: clamp(13px, 1.6vw, 21px);
     font-weight: 700; letter-spacing: .14em; color: #e8dfc8;
-    text-shadow: 0 0 6px rgba(232,223,200,.35); filter: blur(.3px);
+    text-shadow: 0 0 6px rgba(232,223,200,.35);
     opacity: 0; animation: scene-chalkfade 13s ease-in-out infinite;
   }
   .scene-chalk .c0 { left: 18%; top: 24%; }
@@ -458,21 +480,27 @@
     64%,100% { opacity: 0; }
   }
 
-  /* The single candle plate breathes with its own glow. */
-  .scene-breathe { animation: scene-breath 7s ease-in-out infinite; }
+  /* The single candle plate breathes. The glow is a pseudo-element with a
+     FIXED shadow whose opacity animates — animating box-shadow itself
+     repaints the card every frame. */
+  .scene-breathe { position: relative; }
+  .scene-breathe::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit;
+    pointer-events: none; box-shadow: 0 0 64px rgba(201,162,39,.32);
+    animation: scene-breath 7s ease-in-out infinite;
+  }
   @keyframes scene-breath {
-    0%, 100% { box-shadow: 0 0 34px rgba(201,162,39,.12); }
-    50%      { box-shadow: 0 0 64px rgba(201,162,39,.32); }
+    0%, 100% { opacity: .25; }
+    50%      { opacity: 1; }
   }
 
   /* The only control: sound is opt-in, and this is the opt. */
   .scene-sound {
     position: fixed; right: 18px; bottom: 18px; z-index: 60;
     padding: 9px 16px; border-radius: 999px; cursor: pointer;
-    border: 1px solid var(--hairline-hi); background: rgba(12,15,20,.82);
+    border: 1px solid var(--hairline-hi); background: rgba(12,15,20,.92);
     color: var(--text-lo); font-family: var(--mono); font-size: 10px;
     font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
-    backdrop-filter: blur(6px);
     transition: color .18s ease, border-color .18s ease;
   }
   .scene-sound:hover { color: var(--text-hi); border-color: var(--brass); }
@@ -484,23 +512,6 @@
     animation: scene-flicker 2.6s ease-in-out infinite;
   }
   @media (prefers-reduced-motion: reduce) {
-    .scene-tape, .scene-lantern, .scene-haze, .scene-ink, .scene-flame, .scene-chalk { display: none; }
-    .scene-breathe { animation: none; }
+    .scene-tape, .scene-lantern, .scene-haze, .scene-sheen, .scene-ink, .scene-flame, .scene-chalk { display: none; }
+    .scene-breathe::after { animation: none; }
   }
-
-  /* Candlelight drifting across the parchment half of the hero — the ink
-     chart flickers in lamplight rather than growing a rival chart. */
-  .scene-sheen {
-    position: absolute; left: 0; top: 8%; width: 55%; height: 70%;
-    z-index: 3; pointer-events: none; mix-blend-mode: soft-light;
-    background: linear-gradient(105deg,
-      transparent 20%, rgba(227,194,92,.55) 42%, rgba(227,194,92,.2) 52%, transparent 74%);
-    background-size: 300% 100%;
-    animation: scene-sheen 16s ease-in-out infinite alternate;
-    filter: blur(4px);
-  }
-  @keyframes scene-sheen {
-    from { background-position: 120% 0; opacity: .45; }
-    to   { background-position: -30% 0; opacity: .9; }
-  }
-  @media (prefers-reduced-motion: reduce) { .scene-sheen { display: none; } }

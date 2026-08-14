@@ -55,6 +55,28 @@
      sheen instead, so both halves move without fighting the artwork. */
   var hero = document.querySelector('[data-scene="hero"]');
   var tape = null, g = null, candles = [], growing = 0;
+  var heroVisible = true;   // flipped by an IntersectionObserver, never polled
+
+  /* Glow is PRERENDERED. shadowBlur per candle per frame is what hung a real
+     Mac: it is the most expensive thing a 2d canvas can do, and it ran 28
+     times a frame on a retina-sized buffer. Each colour's halo is painted
+     once into a small offscreen sprite; per frame we only drawImage-stretch
+     it, which is close to free. The tape also renders at DPR 1 — it is a
+     soft glow layer, not text — and at 24fps, only while the hero is on
+     screen. */
+  var glowSprite = {};
+  function makeGlow(col) {
+    var c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    var x = c.getContext('2d');
+    var grad = x.createRadialGradient(32, 32, 4, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(' + col + ',.55)');
+    grad.addColorStop(0.55, 'rgba(' + col + ',.18)');
+    grad.addColorStop(1, 'rgba(' + col + ',0)');
+    x.fillStyle = grad;
+    x.fillRect(0, 0, 64, 64);
+    return c;
+  }
 
   var momentum = 0;
   function newCandle(prev) {
@@ -75,6 +97,12 @@
     tape.setAttribute('aria-hidden', 'true');
     hero.appendChild(tape);
     g = tape.getContext('2d');
+    glowSprite.up = makeGlow('46,158,107');
+    glowSprite.dn = makeGlow('194,69,45');
+    new IntersectionObserver(function (entries) {
+      heroVisible = entries[0].isIntersecting;
+    }).observe(hero);
+    window.addEventListener('resize', function () { lastSize = [0, 0]; }, { passive: true });
     for (var i = 0; i < 14; i++) {
       var cd = newCandle(candles[candles.length - 1]);
       cd.t = 1;
@@ -84,15 +112,14 @@
   }
 
   function fitTape() {
-    var d = window.devicePixelRatio || 1;
     var r = tape.getBoundingClientRect();                     // CSS box, never the attribute
-    tape.width = r.width * d;
-    tape.height = r.height * d;
-    g.setTransform(d, 0, 0, d, 0, 0);
+    tape.width = r.width;                                     // DPR 1, deliberately
+    tape.height = r.height;
+    g.setTransform(1, 0, 0, 1, 0, 0);
     return [r.width, r.height];
   }
 
-  function drawCluster(w, h, x0, x1, y0, y1, pulse) {
+  function drawCluster(w, h, x0, x1, y0, y1, pulse, alpha) {
     var n = candles.length;
     var span = (x1 - x0) * w;
     var cw = span / n;
@@ -107,44 +134,44 @@
       var hY = oY + (yy(cd.h) - oY) * t;
       var lY = oY + (yy(cd.l) - oY) * t;
       var up = cd.c >= cd.o;
-      // Jade up, vermilion down, glow breathing with the pulse.
+      // Jade up, vermilion down; the halo is the prerendered sprite.
       var col = up ? '46,158,107' : '194,69,45';
+      var top = Math.min(oY, cY), bh = Math.max(3, Math.abs(cY - oY));
+      var halo = (1.6 + pulse) * bw;
+      g.globalAlpha = alpha * (0.5 + 0.4 * pulse);
+      g.drawImage(glowSprite[up ? 'up' : 'dn'],
+                  x - halo, top + bh / 2 - halo, halo * 2, halo * 2);
+      g.globalAlpha = alpha;
       g.strokeStyle = 'rgba(' + col + ',' + (0.5 + 0.3 * t) + ')';
       g.fillStyle = 'rgba(' + col + ',' + (0.30 + 0.22 * pulse) + ')';
-      g.shadowColor = 'rgba(' + col + ',.85)';
-      g.shadowBlur = 12 + pulse * 12;
       g.lineWidth = 1.4;
       g.beginPath(); g.moveTo(x, hY); g.lineTo(x, lY); g.stroke();
-      var top = Math.min(oY, cY), bh = Math.max(3, Math.abs(cY - oY));
       g.fillRect(x - bw / 2, top, bw, bh);
       g.strokeRect(x - bw / 2, top, bw, bh);
     }
-    g.shadowBlur = 0;
   }
 
   var lastSize = [0, 0];
+  var lastDraw = 0;
   function drawTape(now) {
-    var r = tape.getBoundingClientRect();
-    if (Math.abs(r.width - lastSize[0]) > 1 || Math.abs(r.height - lastSize[1]) > 1) {
-      lastSize = fitTape();
-    }
+    if (!heroVisible) return;
+    if (now - lastDraw < 41) return;                          // ~24fps is plenty for a glow
+    lastDraw = now;
+    if (!lastSize[0]) lastSize = fitTape();                   // refit only after resize
     var w = lastSize[0], h = lastSize[1];
     g.clearRect(0, 0, w, h);
     var vis = weight.hero || 0;
     if (vis < 0.02) return;
 
     var grow = candles[candles.length - 1];
-    grow.t = Math.min(1, grow.t + 0.008);
+    grow.t = Math.min(1, grow.t + 0.014);
     if (grow.t >= 1) {
       growing += 1;
       candles.push(newCandle(grow));
       if (candles.length > 14) candles.shift();
     }
     var pulse = 0.5 + 0.5 * Math.sin(now / 1400);
-    g.globalAlpha = 0.42 + 0.3 * vis;
-    g.globalCompositeOperation = 'lighter';
-    drawCluster(w, h, 0.565, 0.935, 0.20, 0.62, pulse);
-    g.globalCompositeOperation = 'source-over';
+    drawCluster(w, h, 0.565, 0.935, 0.20, 0.62, pulse, 0.42 + 0.3 * vis);
     g.globalAlpha = 1;
   }
 
@@ -370,9 +397,48 @@
     el('div', 'scene-sheen', hero);                          // candlelight over the parchment
   }
 
+  /* The killswitch. This layer hung a real machine once; it never gets to
+     do that again. After a warmup (image decode makes early frames lie), a
+     WALL-CLOCK watchdog measures achieved fps: two consecutive 2.5-second
+     windows under 15fps and the whole visual layer tears itself down —
+     canvas, overlays, CSS animations — leaving the stills and the sound
+     button, because audio is cheap. Wall-clock, not frame-count: on the
+     machine that needs this, frames arrive so slowly that a frame-counted
+     window never completes, which is exactly how the first version of this
+     watchdog failed its own test. Deltas over 900ms are treated as a hidden
+     tab or a sleeping machine and reset the window instead of counting. */
+  var born = 0, lastFrame = 0, winStart = 0, winFrames = 0, strikes = 0, defused = false;
+  function defuse() {
+    defused = true;
+    document.documentElement.classList.add('scene-off');
+    if (tape && tape.parentNode) tape.parentNode.removeChild(tape);
+    tape = null;
+    [].forEach.call(
+      document.querySelectorAll('.scene-lantern, .scene-haze, .scene-sheen, .scene-ink, .scene-flame, .scene-chalk'),
+      function (n) { n.parentNode.removeChild(n); });
+    [].forEach.call(document.querySelectorAll('.scene-breathe'),
+      function (n) { n.classList.remove('scene-breathe'); });
+  }
+
   function frame(now) {
+    if (!born) { born = now; winStart = now; }
+    if (lastFrame && now - born > 3000 && !defused) {         // warmup over
+      if (now - lastFrame > 900) {                            // hidden tab / sleep, not jank
+        winStart = now; winFrames = 0;
+      } else {
+        winFrames += 1;
+        var span = now - winStart;
+        if (span >= 2500) {
+          var fps = winFrames / (span / 1000);
+          strikes = fps < 15 ? strikes + 1 : 0;
+          if (strikes >= 2) defuse();
+          winStart = now; winFrames = 0;
+        }
+      }
+    }
+    lastFrame = now;
     smooth();
-    if (tape) drawTape(now);
+    if (!defused && tape) drawTape(now);
     mixAudio();
     requestAnimationFrame(frame);
   }
