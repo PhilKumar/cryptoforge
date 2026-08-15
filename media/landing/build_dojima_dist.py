@@ -152,11 +152,17 @@ def main() -> None:
         # ahead of the hero — so it must NOT consume a plate slot or every
         # plate after it would be misnamed.
         if mime == "png":
-            # Name by the artwork's own width rather than by document order:
-            # the favicon <link> sits in <head>, ahead of the nav, so an
-            # order-based name would hand the favicon the nav mark's filename.
+            # Name by the artwork's own SHAPE, not by document order and not by
+            # a magic pixel width. Document order would hand the favicon the nav
+            # mark's filename, because the favicon <link> sits in <head> ahead
+            # of the nav; a width table goes stale the moment the art is
+            # re-cropped, and does so silently. A tab icon is square by
+            # definition; the shield is taller than it is wide.
             width = int.from_bytes(raw[16:20], "big") if raw[12:16] == b"IHDR" else 0
-            name = {64: "mark_favicon.png", 120: "mark_philforge.png"}.get(width, f"mark_{width or len(marks)}.png")
+            height = int.from_bytes(raw[20:24], "big") if raw[12:16] == b"IHDR" else 0
+            name = "mark_favicon.png" if width == height else "mark_philforge.png"
+            if name in marks:
+                raise SystemExit(f"two PNGs claim {name} ({width}x{height}) — the shape rule no longer separates them")
             marks.append(name)
         else:
             idx = len(plates)

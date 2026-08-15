@@ -45,6 +45,24 @@ const TIPCHA = '֖'; // the cantillation mark under the kaf
       revealed: document.querySelectorAll('.epi .rv.in').length,
       navBrand: document.querySelector('nav .brand').textContent.trim(),
       footBrand: document.querySelector('footer .brand').textContent.trim(),
+      bw: (() => {
+        const a = document.querySelector('nav .brand .bw-1');
+        const b = document.querySelector('nav .brand .bw-2');
+        if (!a || !b) return { faces: 0, tracked: 0, colour: 'missing' };
+        const ca = getComputedStyle(a), cb = getComputedStyle(b);
+        const face = (c) => c.fontFamily.split(',')[0].replace(/"/g, '');
+        return {
+          faces: new Set([face(ca), face(cb)]).size,
+          tracked: parseFloat(ca.letterSpacing) / parseFloat(ca.fontSize),
+          colour: cb.color,
+        };
+      })(),
+      desks: [...document.querySelectorAll('nav .desks a')].map((a) => a.href),
+      markFit: getComputedStyle(document.querySelector('nav .brand .mark')).objectFit,
+      markRatio: (() => {
+        const r = document.querySelector('nav .brand .mark').getBoundingClientRect();
+        return r.height / r.width;
+      })(),
       title: document.title,
     };
   });
@@ -159,8 +177,23 @@ const TIPCHA = '֖'; // the cantillation mark under the kaf
   check('favicon is the PhilForge mark', !fav.missing && fav.status === 200 && /png/.test(fav.type || '') && fav.w >= 32,
     fav.missing ? 'no <link rel=icon>' : `${fav.href} ${fav.status} ${fav.type} ${fav.w}px ${fav.bytes}B`);
 
-  check('nav brand renamed', /PhilForge.s Dōjima/.test(e.navBrand), e.navBrand);
-  check('footer brand renamed', /PhilForge.s Dōjima/.test(e.footBrand), e.footBrand);
+  // The wordmark is two elements now (a letterspaced possessive over the name),
+  // so match the parts rather than one flat string with a space in it.
+  const wordmark = (s) => /PhilForge.s/.test(s) && /Dōjima/.test(s);
+  check('nav brand renamed', wordmark(e.navBrand), e.navBrand);
+  check('footer brand renamed', wordmark(e.footBrand), e.footBrand);
+  // Both parts must actually be SET — one flat fallback serif is what made it
+  // read as unstyled — and the name has to carry PhilForge's green.
+  check('wordmark is typeset, not just typed',
+    e.bw.faces === 2 && e.bw.tracked > 0.2 && /rgb\(52, 211, 153\)/.test(e.bw.colour),
+    `${e.bw.faces} faces, possessive tracked ${e.bw.tracked.toFixed(2)}em, ${e.bw.colour}`);
+  // The front door forks to two desks; a single "Enter" threw that away once.
+  check('both desks are reachable from the nav', e.desks.length === 2 &&
+    /philforge\.in\/app$/.test(e.desks[0]) && /crypto\.philforge\.in\/app$/.test(e.desks[1]),
+    e.desks.join(' , ') || 'no desk links in nav');
+  // The shield is not square. A square box cropped its point off.
+  check('mark shows the whole shield', e.markFit === 'contain' && e.markRatio > 1.05 && e.markRatio < 1.35,
+    `object-fit:${e.markFit}, drawn ${e.markRatio.toFixed(2)}:1 tall`);
   check('page title renamed', /PhilForge.s Dōjima/.test(e.title), e.title);
 
   // Centring is not free here: `p{max-width:62ch}` with no auto margins makes
