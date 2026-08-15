@@ -57,12 +57,28 @@ CANON_HOST = "https://philforge.in"
 ASSET_ATTR = re.compile(r'([a-zA-Z-]+=")(img/|film/|dojima\.)')
 ASSET_URL = re.compile(r"(url\()(img/|film/)")
 
+# Cache-busting, and the two hosts disagree about how to do it, so the page
+# carries the one token both understand. CryptoForge rewrites src=/href=
+# "/static/..." to a CONTENT hash at request time and its regex deliberately
+# strips any `?v=` already there, so the placeholder is replaced by the real
+# digest. PhilForge substitutes `__ASSET_VERSION__` literally wherever it
+# appears. Without it, PhilForge alone would serve an edited stylesheet from
+# the visitor's cache — "I am not seeing any change" with a green deploy.
+# Only src=/href= are tagged: CryptoForge's rewriter does not know poster= or
+# data-film=, and would leave the raw placeholder sitting in those URLs.
+BUSTABLE = re.compile(r'((?:src|href)="/static/landing/[^"]+?\.(?:css|js|png|jpg))(")')
+
+
+def bust(html: str) -> str:
+    return BUSTABLE.sub(lambda m: m.group(1) + "?v=__ASSET_VERSION__" + m.group(2), html)
+
 
 def rebase(html: str, base: str) -> str:
     """Point every asset reference at `base` instead of the current directory."""
     if not base:
         return html
     html = ASSET_ATTR.sub(lambda m: m.group(1) + base + m.group(2), html)
+    html = bust(html)
     html = ASSET_URL.sub(lambda m: m.group(1) + base + m.group(2), html)
     return re.sub(
         r'((?:property="og:image"|name="twitter:image") content=")(' + re.escape(base) + ")",
