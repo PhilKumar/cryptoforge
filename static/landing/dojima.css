@@ -82,6 +82,10 @@ nav.stuck{background:rgba(6,7,10,.86);backdrop-filter:blur(14px) saturate(1.2);
 .desks i{font-style:normal;color:var(--brass);opacity:.55;font-size:11px}
 .desks a{font-size:12px;letter-spacing:.02em}
 .desks a::after{bottom:-1px}
+/* An approved viewer should not have to scroll the whole story to find the
+   door. Quieter than the desks — it is a way back in, not an invitation. */
+.navviewer{color:var(--ink-lo)}
+.navviewer:hover{color:var(--brass-hi)}
 .navlinks a{font-size:13px;color:var(--ink);letter-spacing:.005em;position:relative;padding:4px 0}
 .navlinks a::after{content:"";position:absolute;left:0;right:100%;bottom:0;height:1px;
   background:var(--brass);transition:right .34s cubic-bezier(.2,.7,.2,1)}
@@ -299,15 +303,25 @@ canvas{display:block;width:100%;touch-action:pan-y}
 .sp .rows{margin-top:22px;border-top:1px solid var(--hairline)}
 .sp .row{display:flex;justify-content:space-between;gap:14px;padding:11px 0;
   border-bottom:1px solid var(--hairline);font-size:12.5px}
-.sp .row b{font-family:var(--mono);color:var(--ink-hi);font-weight:400}
+.sp .row b{font-family:var(--mono);color:var(--ink-hi);font-weight:400;text-align:right}
+/* Label OVER value, both flush left — not label-left/value-right. These cards
+   live inside .act's two-column layout, so they are ~215px wide whatever the
+   viewport does; a viewport media query never reaches them. At that measure a
+   right-aligned value wrapped mid-phrase — "NIFTY ·" above "BANKNIFTY",
+   ragged against its own label. Stacking is the only alignment that holds at
+   every width, so it is unconditional. */
+.sp .row{flex-direction:column;align-items:flex-start;gap:3px;padding:9px 0}
+.sp .row b{text-align:left}
 /* The two desks are the way in. This page is the front door of BOTH sites, so
    each card links to its own terminal by absolute URL and reads the same on
    either host. */
 a.sp{display:block;text-decoration:none;color:inherit;
   transition:background .35s ease,box-shadow .35s ease}
 a.sp:hover{background:#0E1626;box-shadow:inset 0 0 0 1px var(--hairline-hi)}
+/* .18em tracking broke this line in two inside a ~215px card and orphaned the
+   arrow on the second line; .09em holds it on one. */
 a.sp .enter{display:block;margin-top:18px;font-family:var(--mono);font-size:11px;
-  letter-spacing:.18em;text-transform:uppercase;color:var(--brass)}
+  letter-spacing:.09em;text-transform:uppercase;color:var(--brass);white-space:nowrap}
 a.sp:hover .enter{color:var(--brass-hi)}
 a.sp .enter .ar{transition:transform .3s ease;display:inline-block}
 a.sp:hover .enter .ar{transform:translateX(4px)}
