@@ -166,8 +166,7 @@ const check = (name, pass, detail) => {
     heroSrc: !!document.getElementById('heroFilm').getAttribute('src'),
     heroPlaying: (() => { const v = document.getElementById('heroFilm'); return !v.paused && v.currentTime > 0; })(),
     poster: !!document.getElementById('heroFilm').poster,
-    // The act figures must stay still images on a phone — four decoding
-    // clips is what a phone cannot take, not one.
+    // Nothing has been reached yet, so nothing but the hero may have fetched.
     actSrcs: [...document.querySelectorAll('.act-fig video[data-film]')].filter((v) => v.getAttribute('src')).length,
   }));
   check('mobile viewport honoured', mob.inner <= 400, `innerWidth=${mob.inner}`);
@@ -178,8 +177,26 @@ const check = (name, pass, detail) => {
   // It used to fetch nothing at all, which left mobile looking at stills.
   check('the hero film runs on mobile', mob.heroSrc && mob.heroPlaying && mob.poster,
     `src=${mob.heroSrc} playing=${mob.heroPlaying} poster=${mob.poster}`);
-  check('the act films stay still on mobile', mob.actSrcs === 0,
-    `${mob.actSrcs} act clips fetched`);
+  check('mobile fetches nothing it has not reached', mob.actSrcs === 0,
+    `${mob.actSrcs} act clips fetched before scrolling`);
+
+  // A phone used to get the hero and nothing else, so a re-shot act clip could
+  // never show up there. It plays now — and the contract that makes that safe
+  // is the one asserted here: scrolling to a figure starts THAT clip, and
+  // leaves exactly one playing on the whole page.
+  const act = await m.evaluate(async () => {
+    const fig = document.querySelector('.act-fig video[data-film]');
+    fig.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await new Promise((r) => setTimeout(r, 2200));
+    const all = [...document.querySelectorAll('video[data-film]')];
+    return {
+      film: (fig.getAttribute('src') || '').split('/').pop(),
+      playing: !fig.paused && fig.currentTime > 0,
+      concurrent: all.filter((v) => !v.paused).length,
+    };
+  });
+  check('an act film plays on mobile', act.playing, `${act.film || 'no src'} playing=${act.playing}`);
+  check('only one clip decodes at a time', act.concurrent === 1, `${act.concurrent} playing at once`);
 
   // Old bookmarks. This page replaced TWO landing scripts with two different
   // tab vocabularies, and shipping only one of them stranded /#market on the
