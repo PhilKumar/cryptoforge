@@ -42,8 +42,19 @@ const TIPCHA = '֖'; // the cantillation mark under the kaf
       w: Math.round(r.width), h: Math.round(r.height),
       verse: verse.textContent.replace(/\s+/g, ' ').trim(),
       cite: document.querySelector('.epi-cite').textContent.trim(),
-      src: (document.querySelector('.epi-src') || {}).textContent || '',
-      srcDir: document.querySelector('.epi-src') ? getComputedStyle(document.querySelector('.epi-src')).direction : '',
+      ...(() => {
+        const c = document.querySelector('.epi-cite');
+        const band = c.closest('.epi');
+        const cr = c.getBoundingClientRect(), br = band.getBoundingClientRect();
+        const op = parseFloat(getComputedStyle(c).opacity);
+        return {
+          citeOpacity: op,
+          citeIn: c.classList.contains('in'),
+          // the painted box must sit inside the band that may be clipping it
+          citeClipped: getComputedStyle(band).overflow !== 'visible' && cr.bottom > br.bottom,
+          citeShown: op > 0.9 && cr.height > 0,
+        };
+      })(),
       revealed: document.querySelectorAll('.epi .rv.in').length,
       navBrand: document.querySelector('nav .brand').textContent.trim(),
       footBrand: document.querySelector('footer .brand').textContent.trim(),
@@ -79,11 +90,12 @@ const TIPCHA = '֖'; // the cantillation mark under the kaf
   check('set in brass', /rgb\(232, 204, 106\)|rgb\(201, 162, 39\)/.test(e.color), e.color);
   check('verse text exact', /A feast is made for laughter, and wine makes life merry, but money is the answer for everything\./.test(e.verse), e.verse.slice(0, 60) + '…');
   check('cited', /Ecclesiastes 10:19/.test(e.cite), e.cite);
-  // The Hebrew carries its own reference. Like the word above it, this fails
-  // silently — a dropped letter or a lost RTL still occupies the same box.
-  check('Hebrew citation under the word', /\u05e7\u05b9\u05d4\u05b6\u05dc\u05b6\u05ea/.test(e.src.normalize('NFC'))
-    && /\u05d9\u05f3/.test(e.src) && e.srcDir === 'rtl',
-    JSON.stringify(e.src) + ` dir=${e.srcDir}`);
+  // "Cited" was passing on text content alone while the line was INVISIBLE:
+  // an un-revealed .rv is translated down 26px, the band clipped it, so the
+  // observer saw zero of it and never revealed it — a deadlock no scroll could
+  // break. Assert it is actually painted, not merely present.
+  check('citation is visible, not just present', e.citeShown,
+    `opacity ${e.citeOpacity}, revealed=${e.citeIn}, ${e.citeClipped ? 'CLIPPED by an ancestor' : 'inside its band'}`);
   check('epigraph reveals', e.revealed > 0, `${e.revealed} revealed`);
 
   // The epigraph opens the page, above the hero, and carries the #top anchor.
@@ -211,7 +223,7 @@ const TIPCHA = '֖'; // the cantillation mark under the kaf
     const box = wrap.getBoundingClientRect();
     const mid = box.left + parseFloat(cs.paddingLeft) +
       (box.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) / 2;
-    return ['.heb', '.epi-src', '.epi-tr', '.epi-rule', '.epi-v', '.epi-cite'].map((s) => {
+    return ['.heb', '.epi-tr', '.epi-rule', '.epi-v', '.epi-cite'].map((s) => {
       const r = document.querySelector(s).getBoundingClientRect();
       return { s, off: Math.round(Math.abs((r.left + r.right) / 2 - mid)) };
     });

@@ -102,12 +102,7 @@ nav.stuck{background:rgba(6,7,10,.86);backdrop-filter:blur(14px) saturate(1.2);
    The content is taller than this minimum on short screens, so the film keeps
    its height there. Both subtractions are measured — verify_epigraph.js fails
    if either drifts. */
-/* 412 = the epigraph above (now ~350, having gained the Hebrew citation) plus
-   the tape below (~62). This subtraction is the whole reason the headline and
-   the tape share the first screen: the hero is bottom-aligned, so any
-   min-height taller than the space actually left parks the headline a screen
-   down. Grow the epigraph by a line and this number must grow with it. */
-.hero{position:relative;min-height:calc(100svh - 412px);display:flex;align-items:flex-end;
+.hero{position:relative;min-height:calc(100svh - 392px);display:flex;align-items:flex-end;
   overflow:hidden;isolation:isolate}
 .hero-plate{position:absolute;inset:-6% -6% -6% -6%;z-index:-3;
   background-size:cover;background-position:center 42%;
@@ -348,7 +343,13 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
    system faces with a plain serif at the end. */
 .epi{border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);
   background:linear-gradient(180deg,var(--void),var(--obsidian) 52%,var(--void));
-  padding:clamp(58px,9vh,104px) 0;text-align:center;position:relative;overflow:hidden}
+  padding:clamp(58px,9vh,104px) 0;text-align:center;position:relative}
+/* NOT overflow:hidden. The band's last line — the Ecclesiastes citation — is a
+   .rv, and an un-revealed .rv is translated DOWN 26px. With only 2px of bottom
+   padding here, that painted box fell outside the clip, so the observer saw
+   zero of it, never added .in, and the transform never released: the line was
+   invisible forever and no amount of scrolling could bring it back. The clip
+   bought nothing — the ::after glow is inset:0 and cannot overflow.
 .epi::after{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(60% 70% at 50% 42%,rgba(201,162,39,.09),transparent 70%)}
 .epi .wrap{position:relative;z-index:1}
@@ -366,11 +367,6 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
   font-weight:400;letter-spacing:.01em;
   text-shadow:0 0 34px rgba(201,162,39,.30);
   max-width:none;margin:0 auto;padding-bottom:.08em}
-/* The Hebrew carries its own source, in its own script and its own numerals —
-   Kohelet 10:19. The English citation under the verse names the same place for
-   readers who cannot read the line above it; this one belongs to the word. */
-.epi-src{margin:5px auto 0;font-family:var(--heb);font-size:15px;line-height:1;
-  color:var(--brass);opacity:.72;max-width:none}
 .epi-tr{margin:4px auto 0;font-family:var(--mono);font-size:10.5px;letter-spacing:.26em;
   text-transform:uppercase;color:var(--ink-lo);max-width:none}
 .epi-rule{width:64px;height:1px;background:var(--hairline-hi);margin:8px auto}
@@ -394,15 +390,14 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
      Everything else here is air, and the Hebrew citation had to be paid for
      out of air rather than out of type sizes. */
   .epi-open{padding-top:74px;padding-bottom:0}
-  .epi-src{margin-top:2px;font-size:13px}
-  .epi-tr{margin-top:0}
-  .epi-rule{margin:4px auto}
-  .epi-cite{margin:3px auto 0}
-  .hero .wrap{padding-top:0;padding-bottom:0}
-  .hero-sub{margin-top:5px}
-  .hero-actions{margin-top:4px}
-  .tape-i{padding-top:3px;padding-bottom:3px}
-  .hero-actions .btn{padding-top:9px;padding-bottom:9px}
+  .epi-tr{margin-top:1px}
+  .epi-rule{margin:5px auto}
+  .epi-cite{margin:4px auto 0}
+  .hero .wrap{padding-top:0;padding-bottom:2px}
+  .hero-sub{margin-top:7px}
+  .hero-actions{margin-top:6px}
+  .tape-i{padding-top:4px;padding-bottom:4px}
+  .hero-actions .btn{padding-top:11px;padding-bottom:11px}
 }
 @media (max-width:700px){
   .epi-open{padding-top:66px;padding-bottom:4px}
