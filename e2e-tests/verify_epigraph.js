@@ -204,12 +204,12 @@ const TIPCHA = '֖'; // the cantillation mark under the kaf
   check('footer brand renamed', wordmark(e.footBrand), e.footBrand);
   // Both parts must actually be SET — one flat fallback serif is what made it
   // read as unstyled — and the name has to carry PhilForge's green.
-  // Two faces AND two colours: the possessive in PhilForge's green, the name
-  // in the page's display brass — the same brass the Hebrew is set in.
+  // Two faces AND two colours: the possessive in the page's display brass,
+  // the name in PhilForge's green.
   check('wordmark is typeset, not just typed',
     e.bw.faces === 2 && e.bw.tracked > 0.2
-    && /rgb\(52, 211, 153\)/.test(e.bw.possessiveColour)
-    && /rgb\(232, 204, 106\)/.test(e.bw.colour),
+    && /rgb\(232, 204, 106\)/.test(e.bw.possessiveColour)
+    && /rgb\(52, 211, 153\)/.test(e.bw.colour),
     `${e.bw.faces} faces, tracked ${e.bw.tracked.toFixed(2)}em, ` +
     `PhilForge's ${e.bw.possessiveColour} / Dōjima ${e.bw.colour}`);
   // The front door forks to two desks; a single "Enter" threw that away once.

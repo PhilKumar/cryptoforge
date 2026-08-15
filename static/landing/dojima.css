@@ -56,12 +56,11 @@ nav.stuck{background:rgba(6,7,10,.86);backdrop-filter:blur(14px) saturate(1.2);
 .brand .bw{display:flex;flex-direction:column;justify-content:center;
   line-height:1;gap:4px}
 .brand .bw-1{font-family:var(--mono);font-size:9px;letter-spacing:.3em;
-  text-transform:uppercase;color:var(--pf-green);opacity:.72}
-/* Two owners, two colours: the possessive stays PhilForge's green, the name
-   takes the page's own brass — the same display brass the Hebrew is set in,
-   so Dōjima reads as belonging to this page rather than to the app. */
+  text-transform:uppercase;color:var(--brass-hi);opacity:.72}
+/* Two owners, two colours, the other way round: the possessive carries the
+   page's brass, the name carries PhilForge's green. */
 .brand .bw-2{font-family:var(--serif);font-size:23px;letter-spacing:.005em;
-  color:var(--brass-hi)}
+  color:var(--pf-green)}
 .brand:hover .bw-1{opacity:1}
 /* Phil's own mark, cropped to the shield — the wordmark and tagline that sit
    under it in the source file are illegible below ~60px and would only repeat
