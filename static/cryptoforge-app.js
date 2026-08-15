@@ -973,6 +973,15 @@ function cfInitAlerts() {
     try { return new URL(raw, window.location.origin).pathname; } catch (e) { return raw; }
   }
 
+  // Signing out is not an expired session, but it looks exactly like one from
+  // here: the moment the cookie is gone every poller still in flight comes
+  // back 401, and this handler used to win the race and send the browser to
+  // /app — the unlock screen the person had just chosen to leave. Logout
+  // claims the flag first, so the 401s it causes are ignored.
+  window.cfBeginSignOut = function () {
+    redirectingForSession = true;
+  };
+
   function handleExpiredSession() {
     if (redirectingForSession) return;
     redirectingForSession = true;
@@ -1305,8 +1314,14 @@ function cfPriceSourceLabel(source) {
 
 // ── Logout ─────────────────────────────────────────────────
 async function doLogout() {
+  // Before the cookie goes, or the in-flight pollers' 401s become an
+  // "expired session" and drag the browser back to the unlock screen.
+  if (typeof window.cfBeginSignOut === 'function') window.cfBeginSignOut();
   await cfApiFetch('/api/auth/logout', { method: 'POST' });
-  window.location.reload();
+  // The front door, not the keypad. Reloading /app left whoever just signed
+  // out looking at the lock screen of the thing they had chosen to leave.
+  // `replace` so Back does not walk into the terminal again.
+  window.location.replace('/');
 }
 
 // ── Emergency Stop ─────────────────────────────────────────
