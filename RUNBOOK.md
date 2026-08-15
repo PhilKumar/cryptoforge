@@ -360,6 +360,22 @@ Ordered. Items 2 and 3 mostly happen by leaving it alone.
    ```
 
    Re-issue with `venv/bin/python tools/totp_setup.py`.
+
+   **The viewer door (2026-08-17).** `CRYPTOFORGE_VIEWER_PIN` — a second
+   6-digit PIN that opens the terminal read-only: every page and every number
+   (balances included, Phil's call), and the server refuses every write by
+   HTTP method plus the admin reads (`/api/admin`, `/api/ops/`, `/api/audit/`,
+   feed subscribers) by path — see `_viewer_may_call` in `app.py`. It asks for
+   no authenticator code, and it must differ from the unlock PIN; the admin
+   console (Security → Viewer PIN) enforces that, and if `.env` is hand-edited
+   to make them equal the door simply stays shut. Unset = no viewer door and
+   the login page never offers the switch. Changing or clearing it signs every
+   viewer out. Set it from the console, or:
+
+   ```bash
+   sudo sed -i 's/^CRYPTOFORGE_VIEWER_PIN=.*/CRYPTOFORGE_VIEWER_PIN=NNNNNN/' /home/ec2-user/cryptoforge/.env
+   sudo systemctl restart cryptoforge@$(cat ~/.cryptoforge-active-port)
+   ```
 6. ~~**Confirm Telegram alerts arrive.**~~ — **verified 2026-07-22.** The
    `-2010 Duplicate order sent` failure fired "Cascade order FAILED" and it was
    received. Telegram returned HTTP 200 in the same second.

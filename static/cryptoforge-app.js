@@ -95,7 +95,32 @@ function _cfResolveAssignmentValue(expr, el, event) {
   return _cfResolveValue(raw, el, event);
 }
 
+// Handlers a read-only session may not run. The server refuses the request
+// behind each of these anyway (app.py _viewer_may_call); this stops the click
+// at the page so a viewer gets the sentence, not a confirm dialog followed
+// by a 403. Buttons rendered by JS templates carry no class we could hide,
+// which is why the gate sits on the dispatcher rather than the markup.
+const _CF_VIEWER_BLOCKED = new Set([
+  'emergencyStop', 'startPaper', 'stopPaper', 'startLive', 'stopLive', 'stopEngine',
+  'openDeployModal', 'confirmDeploy', 'deployStrategyFromView', 'saveStrategy',
+  'copyStrategy', 'deleteStrategy', 'confirmMoveTo', 'runBacktest', 'validateStrategy',
+  'deleteRun', 'bulkDeleteRuns',
+  'connectBroker', 'disconnectBroker', 'toggleBrokerConnection', 'switchBroker',
+  'cfSubmitScalp', 'cfExitScalpTrade', 'cfModifyScalpTrade', 'cfAddScalpQuantity',
+  'cfReconcileScalpBroker', 'cfToggleScalpExitEditors',
+  'cfCascadeStartCampaign', 'cfCascadeStopCampaign', 'cfCascadeLiquidate', 'cfCascadeSetLive',
+  'cfCascadeDeleteCampaign', 'cfCascadeRecalculate', 'cfCascadeReconcile', 'cfCascadeRestructure',
+  'cfCascadePurgeClosed', 'cfCascadeSetMcKind', 'cfCascadeSaveCapitalGroup',
+  'cfFeedBuyerFormToggle', 'cfFeedBuyerSubmit', 'cfFeedBuyerDelete', 'cfFeedBuyerSetStatus',
+  'cfFeedCatalogToggle', 'cfR37Start', 'cfR37Stop', 'cfR37Reset', 'cfR37SelectSymbol',
+  'cfOpenAdminConsole', 'cfAdminSave', 'cfAdminSwitchBroker', 'cfAdminTestActive',
+]);
+
 function _cfInvokeNamedFunction(name, args) {
+  if (_CF_VIEWER_BLOCKED.has(name) && typeof isReadOnlyAccount === 'function' && isReadOnlyAccount()) {
+    cfReadOnlyRefused();
+    return undefined;
+  }
   const target = window[name];
   if (typeof target === 'function') {
     return target.apply(window, args);
@@ -919,6 +944,10 @@ function cfPushAlert(item) {
 }
 
 async function cfAckAlerts(payload) {
+  // A viewer's "Got it" clears the card from THEIR screen and nothing else.
+  // The server would refuse the ack anyway; more to the point, seen-state is
+  // Phil's — an alert he has not read must not be marked read by a visitor.
+  if (isReadOnlyAccount()) return true;
   try {
     var r = await cfApiFetch('/api/notifications/ack', {
       method: 'POST',
@@ -962,6 +991,39 @@ function cfInitAlerts() {
   });
 }
 
+// ── Read-only (viewer) sessions ─────────────────────────────
+// The server refuses every write for a viewer session (app.py
+// _viewer_may_call). The shell arrives with `read-only-account` already on
+// <html>, so nothing here has to wait for a network round trip; the status
+// call below only confirms it and catches a session whose role changed.
+function isReadOnlyAccount() {
+  return document.documentElement.classList.contains('read-only-account');
+}
+
+async function cfLoadAuthContext() {
+  try {
+    var r = await fetch('/api/auth/status', { credentials: 'same-origin', cache: 'no-store' });
+    if (!r.ok) return null;
+    var d = await r.json();
+    if (d && d.authenticated) {
+      document.documentElement.classList.toggle('read-only-account', d.role === 'viewer');
+    }
+    return d;
+  } catch (e) {
+    return null;
+  }
+}
+
+var _cfReadOnlyToastAt = 0;
+function cfReadOnlyRefused(detail) {
+  // One toast, not one per poller: a viewer who taps Stop on a card that
+  // fires three requests should read the sentence once.
+  var now = Date.now();
+  if (now - _cfReadOnlyToastAt < 4000) return;
+  _cfReadOnlyToastAt = now;
+  cfToast(detail || 'View-only access. You can see everything here and change nothing.', 'warning');
+}
+
 // ── Session Expiry Interceptor ─────────────────────────────
 (function() {
   const _fetch = window.fetch;
@@ -998,6 +1060,19 @@ function cfInitAlerts() {
     var path = requestPath(arguments[0]);
     if (resp.status === 401 && path.startsWith('/api/') && !path.startsWith('/api/auth/')) {
       handleExpiredSession();
+    }
+    // A viewer's refused write. Every caller still gets its 403 and handles
+    // it as it would any error; this just makes sure the reason is said in
+    // the same words wherever it happens. Cloned, so the caller's read of the
+    // body is untouched.
+    if (resp.status === 403 && path.startsWith('/api/')) {
+      try {
+        var body = await resp.clone().json();
+        if (body && body.code === 'viewer_read_only') {
+          document.documentElement.classList.add('read-only-account');
+          cfReadOnlyRefused(body.detail);
+        }
+      } catch (e) { /* not JSON, not ours */ }
     }
     return resp;
   };
@@ -6534,6 +6609,7 @@ function cfInitBrandMotion() {
 
 document.addEventListener('DOMContentLoaded', () => {
   cfInitBrandMotion();
+  cfLoadAuthContext();
   _cfPageHistoryDepth = Math.max(0, Number(window.history && window.history.state && window.history.state.cfDepth) || 0);
   cfUpdateAppNavControls();
   initCryptoSelector();
@@ -7470,6 +7546,14 @@ function cfScalpShouldReconcile(status, force) {
 async function cfReconcileScalpBroker(options) {
   var opts = options || {};
   var latest = opts.status || _cfLatestScalpStatus || {};
+  // The workspace auto-syncs on every visit to the page. For a viewer that
+  // POST would be refused and the refusal painted into the scalp status as a
+  // "reconcile_error" — a fault that is not there. Viewers read the status
+  // the engine already has.
+  if (isReadOnlyAccount()) {
+    if (opts.showToast) cfReadOnlyRefused();
+    return latest;
+  }
   var forced = !!opts.force;
   if (!forced && !cfScalpShouldReconcile(latest, false)) return latest;
   if (forced && !cfScalpHasLiveExposure(latest)) {

@@ -237,6 +237,40 @@
     position: relative; z-index: 1;
   }
 
+  /* The viewer door: a quiet text switch under the keypad. It stays [hidden]
+     until the server says a viewer PIN exists. In viewer mode the same button
+     reads "Full access" and the card carries .viewer-mode, which recolours
+     the dots so the two doors never look identical mid-entry. */
+  .unlock-mode {
+    display: inline-block;
+    margin-top: 18px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    color: var(--muted);
+    font-family: var(--font-display);
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 1.6px; text-transform: uppercase;
+    cursor: pointer;
+    position: relative; z-index: 1;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .unlock-mode[hidden] { display: none; }
+  .unlock-mode:hover { color: var(--text); border-color: rgba(255,255,255,0.28); }
+  .unlock-mode[aria-pressed="true"] {
+    color: var(--accent);
+    border-color: rgba(34,211,238,0.45);
+    background: rgba(34,211,238,0.08);
+  }
+  .unlock-card.viewer-mode .pin-dot { border-color: rgba(34,211,238,0.5); border-style: dashed; }
+  .unlock-card.viewer-mode .pin-dot.filled { border-style: solid; }
+  [data-theme="light"] .unlock-mode { border-color: rgba(15,23,42,0.14); color: #64748b; }
+  [data-theme="light"] .unlock-mode:hover { color: #0f172a; border-color: rgba(15,23,42,0.3); }
+  [data-theme="light"] .unlock-mode[aria-pressed="true"] {
+    color: #0e7490; border-color: rgba(8,145,178,0.4); background: rgba(8,145,178,0.08);
+  }
+
   @keyframes shake {
     0%, 100% { transform: translateX(0); }
     20% { transform: translateX(-10px); }

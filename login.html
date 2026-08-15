@@ -99,6 +99,12 @@
     <button class="key fn" data-val="back">&#x232b;</button>
   </div>
 
+  <!-- The viewer door. Hidden until /api/auth/status says a viewer PIN is
+       configured, so an install without one never advertises a second way in.
+       In viewer mode the keypad takes the viewer PIN and asks for no
+       authenticator code — the code is on Phil's phone, not the viewer's. -->
+  <button type="button" class="unlock-mode" id="unlock-mode" hidden aria-pressed="false">Viewer access</button>
+
   <div class="unlock-footer">Session-secured &middot; Auto-locks after 24h</div>
 </div>
 

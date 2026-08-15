@@ -71,13 +71,23 @@ let totpRequired = false;
 let stage = 'pin';          // 'pin' -> 'totp'
 let savedPin = '';
 
+// The viewer door. Off unless the server says a viewer PIN is configured; when
+// on, the switch under the keypad flips this and the keypad collects the
+// viewer PIN alone — no authenticator stage, because the code is on the
+// owner's phone and a viewer has no phone to read it from. The server decides
+// the role from the PIN it receives; this flag only shapes the keypad flow.
+let viewerLoginEnabled = false;
+let viewerMode = false;
+
 const dots = document.querySelectorAll('.pin-dot');
 const status = document.getElementById('unlock-status');
 const card = document.getElementById('unlock-card');
 const subtitle = document.querySelector('.unlock-sub');
+const modeBtn = document.getElementById('unlock-mode');
 
 const PROMPTS = {
   pin: 'Enter your 6-digit PIN',
+  viewer: 'Enter the 6-digit viewer PIN',
   totp: 'Enter the 6-digit code from your authenticator'
 };
 
@@ -85,9 +95,22 @@ function setStage(next) {
   stage = next;
   pin = '';
   updateDots();
-  status.textContent = PROMPTS[stage];
+  status.textContent = PROMPTS[stage === 'pin' && viewerMode ? 'viewer' : stage];
   status.className = 'unlock-status';
-  if (subtitle) subtitle.textContent = stage === 'totp' ? 'Two-factor code' : 'Enter PIN to unlock';
+  if (subtitle) {
+    subtitle.textContent = stage === 'totp' ? 'Two-factor code' : (viewerMode ? 'View-only access' : 'Enter PIN to unlock');
+  }
+}
+
+function setViewerMode(next) {
+  viewerMode = Boolean(next) && viewerLoginEnabled;
+  card.classList.toggle('viewer-mode', viewerMode);
+  if (modeBtn) {
+    modeBtn.setAttribute('aria-pressed', viewerMode ? 'true' : 'false');
+    modeBtn.textContent = viewerMode ? 'Full access' : 'Viewer access';
+  }
+  savedPin = '';
+  setStage('pin');
 }
 
 async function detectSecondFactor() {
@@ -96,6 +119,8 @@ async function detectSecondFactor() {
     if (!res.ok) return;
     const data = await res.json();
     totpRequired = Boolean(data && data.totp_required);
+    viewerLoginEnabled = Boolean(data && data.viewer_login_enabled);
+    if (modeBtn) modeBtn.hidden = !viewerLoginEnabled;
   } catch (e) { /* offline: fall back to PIN only, the server still enforces both */ }
 }
 
@@ -142,6 +167,11 @@ async function tryUnlock() {
     });
     if (res.ok) {
       setSuccess();
+      // Wrong door with the right PIN — a viewer PIN typed under "Full access"
+      // still opens the viewer session; say so before the page changes.
+      let role = '';
+      try { role = String(((await res.json()) || {}).role || ''); } catch (e) { /* the redirect is the same */ }
+      if (role === 'viewer') status.textContent = 'Unlocked — view only. Redirecting...';
       setTimeout(() => { window.location.href = '/app'; }, 400);
       return;
     }
@@ -157,7 +187,7 @@ async function tryUnlock() {
       setError(detail, 4000);
       return;
     }
-    setError(totpRequired ? 'Wrong PIN or code. Try again.' : 'Wrong PIN. Try again.');
+    setError((totpRequired && !viewerMode) ? 'Wrong PIN or code. Try again.' : 'Wrong PIN. Try again.');
   } catch (e) {
     setError('Connection error.');
   }
@@ -168,7 +198,7 @@ function addDigit(d) {
   pin += d;
   updateDots();
   if (pin.length !== PIN_LENGTH) return;
-  if (stage === 'pin' && totpRequired) {
+  if (stage === 'pin' && totpRequired && !viewerMode) {
     // Hold the PIN and collect the code before contacting the server, so a
     // wrong code costs one attempt rather than two.
     savedPin = pin;
@@ -204,6 +234,13 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Backspace') removeDigit();
   else if (e.key === 'Escape') clearAll();
 });
+
+if (modeBtn) {
+  modeBtn.addEventListener('click', () => {
+    if (locked) return;
+    setViewerMode(!viewerMode);
+  });
+}
 
 initLoginAppearance();
 detectSecondFactor();

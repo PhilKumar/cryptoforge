@@ -558,6 +558,77 @@ if not AUTH_PIN:
     )
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 
+# ── Viewer door (read-only) ───────────────────────────────────────
+# A second PIN that opens the terminal for looking, never for doing. Phil,
+# 2026-08-17: "Portfolio numbers can be visible here... Only nothing can be
+# started or stopped or no admin activities." So a viewer sees the balances,
+# the positions and every page, and the server refuses every write.
+#
+# Unset means there is no viewer door at all — the login page does not offer
+# it and no PIN opens it. Set it from the admin console (Security) or in .env.
+# It must differ from the unlock PIN; the admin console refuses to save it
+# equal, and if .env is hand-edited to match, the door simply stays shut
+# (see _viewer_login_enabled) rather than handing the unlock PIN a way round
+# the authenticator.
+SESSION_ROLE_ADMIN = "admin"
+SESSION_ROLE_VIEWER = "viewer"
+VIEWER_PIN = (os.getenv("CRYPTOFORGE_VIEWER_PIN") or "").strip()
+
+# Reads a viewer may not make. Everything under these prefixes is admin
+# activity — the environment file with the broker keys, the state backup
+# (which carries every session token), the readiness audit, and the feed's
+# paying subscribers. Balances and positions are deliberately NOT here.
+VIEWER_REFUSED_READ_PREFIXES = (
+    "/api/admin",
+    "/api/ops/",
+    "/api/audit/",
+    "/api/cascade/feed/subscribers",
+)
+
+# The only non-GET calls a viewer may make. Logout is theirs. /api/broker/check
+# is a read that happens to wear a POST verb — it asks the broker whether the
+# keys still work and returns the wallet, changing nothing — and the top bar's
+# "connected" light is drawn from it on every boot.
+VIEWER_WRITE_ALLOWLIST = frozenset({"/api/auth/logout", "/api/broker/check"})
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _viewer_login_enabled() -> bool:
+    return bool(VIEWER_PIN) and not secrets.compare_digest(str(VIEWER_PIN), str(AUTH_PIN))
+
+
+def _viewer_may_call(method: str, path: str) -> bool:
+    """True when a read-only session is allowed to make this request.
+
+    The gate is the METHOD, so it fails closed: a route added tomorrow is
+    refused to viewers until someone deliberately allows it here.
+    """
+    if str(method or "").upper() in _SAFE_METHODS:
+        return not path.startswith(VIEWER_REFUSED_READ_PREFIXES)
+    return path in VIEWER_WRITE_ALLOWLIST
+
+
+def _viewer_refusal(request: Request) -> Optional[JSONResponse]:
+    """The 403 a viewer gets for a call they may not make, or None."""
+    if _request_session_role(request) != SESSION_ROLE_VIEWER:
+        return None
+    if _viewer_may_call(request.method, request.url.path):
+        return None
+    _logger.info(
+        "[Auth] Viewer blocked from %s %s request_id=%s",
+        request.method.upper(),
+        request.url.path,
+        getattr(getattr(request, "state", None), "request_id", ""),
+    )
+    return JSONResponse(
+        status_code=403,
+        content={
+            "detail": "View-only access. You can see everything here and change nothing.",
+            "code": "viewer_read_only",
+        },
+    )
+
+
 # ── Optional second factor (RFC 6238 TOTP) ────────────────────────
 # Deliberately stdlib-only. requirements.txt is pinned and installed on the
 # server at deploy time, so reaching for pyotp here would mean a login path that
@@ -1101,6 +1172,7 @@ def _normalize_session_record(value, now: Optional[datetime] = None) -> Optional
             "last_seen_at": baseline.isoformat(),
             "expires_at": expires_at.isoformat(),
             "ua_hash": "",
+            "role": SESSION_ROLE_ADMIN,
         }
     if not isinstance(value, dict):
         return None
@@ -1114,7 +1186,14 @@ def _normalize_session_record(value, now: Optional[datetime] = None) -> Optional
         "last_seen_at": last_seen_at.isoformat(),
         "expires_at": expires_at.isoformat(),
         "ua_hash": str(value.get("ua_hash") or ""),
+        # Sessions minted before the viewer door existed carry no role. They
+        # were all opened with the unlock PIN, so they are admin sessions.
+        "role": _normalize_session_role(value.get("role")),
     }
+
+
+def _normalize_session_role(value) -> str:
+    return SESSION_ROLE_VIEWER if str(value or "").strip().lower() == SESSION_ROLE_VIEWER else SESSION_ROLE_ADMIN
 
 
 def _session_expired(record: dict, now: Optional[datetime] = None) -> bool:
@@ -1159,7 +1238,7 @@ def _save_sessions(sessions: dict):
         _logger.warning("Failed to save session store %s: %s", _current_state_db_file(), exc)
 
 
-def _create_session(request=None) -> str:
+def _create_session(request=None, role: str = SESSION_ROLE_ADMIN) -> str:
     sessions = _load_sessions()
     token = secrets.token_hex(32)
     now = _session_now()
@@ -1168,9 +1247,41 @@ def _create_session(request=None) -> str:
         "last_seen_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=_SESSION_ABSOLUTE_SEC)).isoformat(),
         "ua_hash": _session_user_agent_hash(request),
+        "role": _normalize_session_role(role),
     }
     _save_sessions(sessions)
     return token
+
+
+def _session_role(token: str) -> str:
+    """The role on a session record. Admin for anything unknown — callers must
+    have validated the token first; this only reads what is on it."""
+    if not token:
+        return SESSION_ROLE_ADMIN
+    record = _load_sessions().get(token) or {}
+    return _normalize_session_role(record.get("role"))
+
+
+def _request_session_role(request) -> str:
+    """The role _validate_session stashed on this request, or a fresh read."""
+    state = getattr(request, "state", None)
+    cached = getattr(state, "cf_session_role", None) if state is not None else None
+    if cached:
+        return cached
+    return _session_role(_get_session_token(request))
+
+
+def _revoke_sessions_with_role(role: str) -> int:
+    """Drop every live session of one role. Changing or clearing the viewer PIN
+    must end the sessions it opened, or the old PIN's holders stay signed in
+    for up to a day after it was taken away."""
+    role = _normalize_session_role(role)
+    sessions = _load_sessions()
+    keep = {tok: rec for tok, rec in sessions.items() if _normalize_session_role(rec.get("role")) != role}
+    dropped = len(sessions) - len(keep)
+    if dropped:
+        _save_sessions(keep)
+    return dropped
 
 
 def _destroy_session(token: str) -> None:
@@ -1211,6 +1322,15 @@ def _validate_session(token: str, request=None, touch: bool = True) -> bool:
             record["last_seen_at"] = now.isoformat()
             sessions[token] = record
             _save_sessions(sessions)
+    # Stash the role so the middleware and the routes do not each reload the
+    # session store to learn it. Tests pass bare namespaces here, hence the
+    # guard.
+    state = getattr(request, "state", None)
+    if state is not None:
+        try:
+            state.cf_session_role = _normalize_session_role(record.get("role"))
+        except Exception:
+            pass
     return True
 
 
@@ -1364,6 +1484,8 @@ async def require_auth(request: Request):
     token = _get_session_token(request)
     if not _validate_session(token, request=request):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if _request_session_role(request) == SESSION_ROLE_VIEWER and not _viewer_may_call(request.method, path):
+        raise HTTPException(status_code=403, detail="View-only access. You can see everything here and change nothing.")
 
 
 @app.middleware("http")
@@ -1403,6 +1525,11 @@ async def auth_middleware(request: Request, call_next):
         token = _get_session_token(request)
         if not _validate_session(token, request=request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        # Read-only sessions, gated once, here, by HTTP method — see
+        # _viewer_may_call. Every route is covered without being annotated.
+        refusal = _viewer_refusal(request)
+        if refusal is not None:
+            return refusal
     return await _call_next_or_client_closed(request, call_next)
 
 
@@ -2068,11 +2195,37 @@ async def serve_frontend(request: Request):
     html_path = os.path.join(_HERE, "strategy.html")
     if os.path.exists(html_path):
         with open(html_path, encoding="utf-8") as f:
-            resp = HTMLResponse(_version_static_assets(f.read()))
+            html = _version_static_assets(f.read())
+            if _request_session_role(request) == SESSION_ROLE_VIEWER:
+                html = _mark_html_read_only(html)
+            resp = HTMLResponse(html)
             resp.headers["Cache-Control"] = "no-store"
             _ensure_csrf_cookie(resp, request)
             return resp
     return HTMLResponse("<h2>strategy.html not found</h2>")
+
+
+_HTML_TAG_RE = re.compile(r"<html\b([^>]*)>", re.IGNORECASE)
+
+
+def _mark_html_read_only(html: str) -> str:
+    """Put `read-only-account` on <html> before the page ever paints.
+
+    The app also learns its role from /api/auth/status, but that arrives after
+    first paint — long enough for a viewer to see a Start button appear and
+    vanish. The class the CSS keys on is set here, in the shell itself.
+    """
+
+    def _replace(match):
+        attrs = match.group(1) or ""
+        cls = re.search(r'\bclass\s*=\s*"([^"]*)"', attrs)
+        if cls:
+            attrs = attrs.replace(cls.group(0), f'class="{(cls.group(1) + " read-only-account").strip()}"', 1)
+        else:
+            attrs = f'{attrs} class="read-only-account"'
+        return f"<html{attrs}>"
+
+    return _HTML_TAG_RE.sub(_replace, html, count=1)
 
 
 # ── Auth Endpoints ────────────────────────────────────────────────
@@ -2088,14 +2241,26 @@ async def auth_login(request: Request):
     # tells an attacker which half they got right.
     totp_counter = _verify_totp(body.get("totp") or body.get("code") or "") if _totp_enabled() else None
     totp_ok = True if not _totp_enabled() else totp_counter is not None
+    # The viewer PIN opens a read-only session and asks for no authenticator
+    # code — the code belongs to Phil's phone, and a viewer has no phone to
+    # read it from. Checked unconditionally, like the others, so a bad guess
+    # takes the same time whichever door it was aimed at. The unlock PIN
+    # without its code still gets nothing: the viewer door is a different PIN,
+    # not a way past the second factor.
+    viewer_ok = _viewer_login_enabled() and secrets.compare_digest(password, str(VIEWER_PIN))
+    role = None
     if pin_ok and totp_ok:
+        role = SESSION_ROLE_ADMIN
+    elif viewer_ok:
+        role = SESSION_ROLE_VIEWER
+    if role:
         # Spend the code only now. A failed attempt must leave it usable, or a
         # PIN typo costs you the code still showing on your phone.
-        if totp_counter is not None:
+        if role == SESSION_ROLE_ADMIN and totp_counter is not None:
             _consume_totp(totp_counter)
         _clear_login_attempts(ip)
-        token = _create_session(request=request)
-        resp = JSONResponse({"status": "ok", "message": "Login successful"})
+        token = _create_session(request=request, role=role)
+        resp = JSONResponse({"status": "ok", "message": "Login successful", "role": role})
         is_https = _is_https_request(request)
         resp.headers["Cache-Control"] = "no-store"
         resp.set_cookie(
@@ -2121,8 +2286,19 @@ async def auth_status(request: Request):
     authenticated = _validate_session(token, request=request)
     # The login page asks for this before drawing its form, so it knows whether
     # to show the authenticator field. Advertising only that a second factor is
-    # configured gives away nothing the login attempt would not.
-    resp = JSONResponse({"authenticated": authenticated, "totp_required": _totp_enabled()})
+    # configured gives away nothing the login attempt would not. Likewise
+    # "there is a viewer door" — the login page needs it to offer the switch,
+    # and knowing a second PIN exists is not knowing it.
+    payload = {
+        "authenticated": authenticated,
+        "totp_required": _totp_enabled(),
+        "viewer_login_enabled": _viewer_login_enabled(),
+    }
+    if authenticated:
+        role = _request_session_role(request)
+        payload["role"] = role
+        payload["read_only"] = role == SESSION_ROLE_VIEWER
+    resp = JSONResponse(payload)
     resp.headers["Cache-Control"] = "no-store"
     if authenticated:
         _ensure_csrf_cookie(resp, request)
@@ -2342,6 +2518,19 @@ _ADMIN_CONFIG_FIELDS = [
         "secret": False,
     },
     {"key": "CRYPTOFORGE_PIN", "label": "Unlock PIN", "section": "security", "kind": "password", "secret": True},
+    {
+        "key": "CRYPTOFORGE_VIEWER_PIN",
+        "label": "Viewer PIN",
+        "section": "security",
+        "kind": "password",
+        "secret": True,
+        "optional": True,
+        "help": (
+            "A second 6-digit PIN that opens the terminal read-only: every page and every "
+            "number, nothing can be started, stopped or changed. Must differ from the unlock PIN. "
+            "Clearing it closes the door and signs every viewer out."
+        ),
+    },
     {"key": "DELTA_API_KEY", "label": "API Key", "section": "delta", "kind": "password", "secret": True},
     {"key": "DELTA_API_SECRET", "label": "API Secret", "section": "delta", "kind": "password", "secret": True},
     {
@@ -2515,6 +2704,11 @@ def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
             raise HTTPException(status_code=400, detail="CRYPTOFORGE_PIN cannot be empty")
         if len(raw) < 4:
             raise HTTPException(status_code=400, detail="CRYPTOFORGE_PIN must be at least 4 characters")
+    if key == "CRYPTOFORGE_VIEWER_PIN" and raw:
+        # The keypad collects exactly six digits and nothing else, so anything
+        # else saved here is a door no one can open.
+        if not (len(raw) == 6 and raw.isdigit()):
+            raise HTTPException(status_code=400, detail="CRYPTOFORGE_VIEWER_PIN must be exactly 6 digits")
     if kind == "boolean":
         lowered = raw.lower()
         if lowered not in {"true", "false"}:
@@ -2608,7 +2802,7 @@ def _write_env_updates(updates: dict) -> str:
 
 
 def _reload_runtime_config_from_env() -> None:
-    global AUTH_PIN, SESSION_SECRET
+    global AUTH_PIN, SESSION_SECRET, VIEWER_PIN
 
     load_dotenv(_ENV_PATH, override=True)
 
@@ -2645,6 +2839,9 @@ def _reload_runtime_config_from_env() -> None:
         config.DELTA_BASE_URL = "https://api.india.delta.exchange/v2"
         config.DELTA_WS_URL = "wss://socket.india.delta.exchange"
     AUTH_PIN = os.getenv("CRYPTOFORGE_PIN") or os.getenv("CRYPTOFORGE_PASSWORD") or AUTH_PIN
+    # No fallback to the old value here, unlike AUTH_PIN: an empty
+    # CRYPTOFORGE_VIEWER_PIN= line means the door was closed on purpose.
+    VIEWER_PIN = (os.getenv("CRYPTOFORGE_VIEWER_PIN") or "").strip()
     SESSION_SECRET = os.getenv("SESSION_SECRET", SESSION_SECRET)
     alerter.reload_from_env()
 
@@ -2711,7 +2908,18 @@ async def _apply_admin_config_update(payload: AdminConfigUpdateRequest) -> dict:
     if not updates and not requested_active:
         return {"status": "ok", "message": "No configuration changes submitted", **_admin_config_payload()}
 
-    broker_sensitive_keys = set(updates) - {"CRYPTOFORGE_PIN"}
+    # The two PINs may never be the same value: the login route tries the
+    # unlock PIN first, so an equal viewer PIN would silently be a second
+    # unlock PIN that skips the authenticator. Compare against whichever
+    # value each will have AFTER this save.
+    next_unlock = updates.get("CRYPTOFORGE_PIN", str(AUTH_PIN or ""))
+    next_viewer = updates.get("CRYPTOFORGE_VIEWER_PIN", str(VIEWER_PIN or ""))
+    if next_viewer and next_unlock and secrets.compare_digest(next_viewer, next_unlock):
+        raise HTTPException(status_code=400, detail="The viewer PIN must differ from the unlock PIN")
+
+    # The PINs are not broker state; changing either must work while an engine
+    # is running. Everything else in .env belongs to the broker and waits.
+    broker_sensitive_keys = set(updates) - {"CRYPTOFORGE_PIN", "CRYPTOFORGE_VIEWER_PIN"}
     target_switch = requested_active and requested_active != _active_broker_name()
     if (broker_sensitive_keys or target_switch) and not runtime_locks["switchable"]:
         return JSONResponse(
@@ -2725,8 +2933,16 @@ async def _apply_admin_config_update(payload: AdminConfigUpdateRequest) -> dict:
             },
         )
 
+    viewer_pin_before = str(VIEWER_PIN or "")
     backup_path = _write_env_updates(updates)
     _reload_runtime_config_from_env()
+    if "CRYPTOFORGE_VIEWER_PIN" in updates and str(VIEWER_PIN or "") != viewer_pin_before:
+        # A changed or cleared viewer PIN ends the sessions the old one opened.
+        # Admin sessions are untouched — this is Phil, saving from one of them.
+        dropped = _revoke_sessions_with_role(SESSION_ROLE_VIEWER)
+        _logger.info(
+            "Viewer PIN %s; %d viewer session(s) signed out", "cleared" if not VIEWER_PIN else "changed", dropped
+        )
     active_target = requested_active or _active_broker_name()
     _set_active_broker(active_target, persist=True)
     if broker_sensitive_keys:
@@ -2792,6 +3008,7 @@ def _ops_state_summary() -> dict:
     broker_info = _broker_summary()
     ready_checks = {
         "auth_pin_configured": bool(AUTH_PIN),
+        "viewer_login_enabled": _viewer_login_enabled(),
         "state_store_writable": bool(store_health.get("writable")),
         "state_store_exists": bool(store_health.get("exists")),
         "broker_configured": broker_info["configured"],

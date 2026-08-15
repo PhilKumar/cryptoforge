@@ -36,7 +36,7 @@
 </div>
 
 <!-- KILL SWITCH -->
-<button type="button" class="kill-switch hidden" id="kill-switch-btn" data-cf-click="emergencyStop()" aria-label="Emergency stop all trading automation">
+<button type="button" class="read-only-hide kill-switch hidden" id="kill-switch-btn" data-cf-click="emergencyStop()" aria-label="Emergency stop all trading automation">
   🛑 <span>KILL ALL</span>
 </button>
 
@@ -85,6 +85,9 @@
     <button type="button" class="topbar-icon-btn topbar-nav-btn" id="topbar-refresh-btn" data-cf-click="cfAppRefresh()" title="Refresh" aria-label="Refresh">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 3v6h-6"></path></svg>
     </button>
+    <!-- Shown only on a viewer session (html.read-only-account, set by the
+         server in the shell). Says why every Start button is missing. -->
+    <span class="topbar-viewer-chip" id="topbar-viewer-chip" title="View-only access: every page and every number, nothing can be started, stopped or changed" aria-label="View only"><span class="topbar-viewer-chip-long">View only</span><span class="topbar-viewer-chip-short" aria-hidden="true">View</span></span>
     <div class="topbar-clock" id="topbar-clock">--:--:-- IST</div>
     <button type="button" class="topbar-icon-btn topbar-install-btn" id="install-app-btn" data-install-app hidden title="Install App" aria-label="Install App">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -96,7 +99,7 @@
     <button type="button" class="topbar-icon-btn topbar-appearance-btn" id="topbar-appearance-btn" data-cf-click="cfOpenAppearancePanel()" title="Appearance" aria-label="Appearance">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18"></path><path d="M3 12h18"></path><path d="M6.5 6.5 17.5 17.5"></path></svg>
     </button>
-    <button type="button" class="topbar-icon-btn topbar-console-btn" id="topbar-admin-btn" data-cf-click="cfOpenAdminConsole()" title="Broker & API Console" aria-label="Broker and API Console">
+    <button type="button" class="read-only-hide topbar-icon-btn topbar-console-btn" id="topbar-admin-btn" data-cf-click="cfOpenAdminConsole()" title="Broker & API Console" aria-label="Broker and API Console">
       <span class="topbar-console-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.2 2.2 0 0 1-3.11 3.11l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21.5a2.2 2.2 0 0 1-4.4 0v-.06a1.8 1.8 0 0 0-1.09-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.2 2.2 0 0 1-3.11-3.11l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.09H2.9a2.2 2.2 0 0 1 0-4.4h.06A1.8 1.8 0 0 0 4.6 8a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.2 2.2 0 0 1 3.11-3.11l.04.04A1.8 1.8 0 0 0 9.33 3.3 1.8 1.8 0 0 0 10.42 1.65V1.6a2.2 2.2 0 0 1 4.4 0v.06A1.8 1.8 0 0 0 15.91 3.3a1.8 1.8 0 0 0 1.98-.36l.04-.04a2.2 2.2 0 0 1 3.11 3.11l-.04.04A1.8 1.8 0 0 0 19.4 8c.12.36.3.68.56.94.3.3.73.47 1.17.47h.06a2.2 2.2 0 0 1 0 4.4h-.06A1.8 1.8 0 0 0 19.4 15Z"></path></svg></span>
     </button>
     <button type="button" class="topbar-icon-btn" data-cf-click="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"></path></svg></button>
@@ -223,8 +226,8 @@
     <h2>Dashboard</h2>
     <div class="broker-control-strip">
       <select class="broker-select" data-broker-select="dashboard" aria-label="Select dashboard broker"></select>
-      <button class="btn btn-outline btn-sm" data-broker-switch="dashboard" data-cf-click="switchBroker('dashboard')">Switch Broker</button>
-      <button class="btn btn-outline btn-sm broker-toggle-btn" data-cf-click="toggleBrokerConnection()" data-broker-toggle="dashboard">🔗 Connect Broker</button>
+      <button class="read-only-hide btn btn-outline btn-sm" data-broker-switch="dashboard" data-cf-click="switchBroker('dashboard')">Switch Broker</button>
+      <button class="read-only-hide btn btn-outline btn-sm broker-toggle-btn" data-cf-click="toggleBrokerConnection()" data-broker-toggle="dashboard">🔗 Connect Broker</button>
     </div>
   </div>
 
@@ -485,7 +488,7 @@
     </div>
     <div style="display:flex;gap:8px;margin-top:16px;">
       <button class="btn btn-primary btn-sm" data-cf-click="editStrategyFromView()">📝 Edit in Builder</button>
-      <button class="btn btn-success btn-sm" data-cf-click="deployStrategyFromView()"><svg class="cf-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg> Deploy</button>
+      <button class="read-only-hide btn btn-success btn-sm" data-cf-click="deployStrategyFromView()"><svg class="cf-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg> Deploy</button>
       <button class="btn btn-outline btn-sm" data-cf-click="closeViewStrategy()">Close</button>
     </div>
   </div>
@@ -563,9 +566,9 @@
   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
     <h2>Strategy Builder</h2>
     <div style="display: flex; gap: 8px;">
-      <button class="btn btn-outline btn-sm" data-cf-click="saveStrategy()">💾 Save</button>
-      <button class="btn btn-primary btn-sm" id="backtest-run-btn" data-cf-click="runBacktest()"><svg class="cf-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg> Run Backtest</button>
-      <button class="btn btn-success btn-sm" data-cf-click="openDeployModal()"><svg class="cf-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg> Deploy</button>
+      <button class="read-only-hide btn btn-outline btn-sm" data-cf-click="saveStrategy()">💾 Save</button>
+      <button class="read-only-hide btn btn-primary btn-sm" id="backtest-run-btn" data-cf-click="runBacktest()"><svg class="cf-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg> Run Backtest</button>
+      <button class="read-only-hide btn btn-success btn-sm" data-cf-click="openDeployModal()"><svg class="cf-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg> Deploy</button>
     </div>
   </div>
 
@@ -851,7 +854,7 @@
     <span class="bulk-count" id="runs-bulk-count">0 selected</span>
     <button class="btn btn-primary btn-sm" data-cf-click="toggleCompare()">⚖️ Compare</button>
     <button class="btn btn-outline btn-sm" data-cf-click="clearRunsSelection()">Clear</button>
-    <button class="btn btn-danger btn-sm" data-cf-click="bulkDeleteRuns()">🗑 Delete Selected</button>
+    <button class="read-only-hide btn btn-danger btn-sm" data-cf-click="bulkDeleteRuns()">🗑 Delete Selected</button>
   </div>
 
   <!-- Compare Panel (hidden by default) -->
@@ -1029,9 +1032,9 @@
     <h2>Portfolio</h2>
     <div class="broker-control-strip">
       <select class="broker-select" data-broker-select="portfolio" aria-label="Select portfolio broker"></select>
-      <button class="btn btn-outline btn-sm" data-broker-switch="portfolio" data-cf-click="switchBroker('portfolio')">Switch Broker</button>
+      <button class="read-only-hide btn btn-outline btn-sm" data-broker-switch="portfolio" data-cf-click="switchBroker('portfolio')">Switch Broker</button>
       <button class="btn btn-outline btn-sm" data-cf-click="loadPortfolioData()">🔄 Refresh</button>
-      <button class="btn btn-outline btn-sm broker-toggle-btn" data-cf-click="toggleBrokerConnection()" data-broker-toggle="portfolio">🔗 Connect Broker</button>
+      <button class="read-only-hide btn btn-outline btn-sm broker-toggle-btn" data-cf-click="toggleBrokerConnection()" data-broker-toggle="portfolio">🔗 Connect Broker</button>
     </div>
   </div>
 
@@ -1329,9 +1332,9 @@
           <small id="cf-r37-symbol-note">Each instrument keeps its own paper clock and journal.</small>
         </label>
         <div class="cf-r37-control-actions">
-          <button type="button" class="btn btn-primary btn-sm" id="cf-r37-start-btn" data-cf-click="cfR37Start()">Start Paper</button>
-          <button type="button" class="btn btn-danger btn-sm" id="cf-r37-stop-btn" data-cf-click="cfR37Stop()" hidden>Stop Paper</button>
-          <button type="button" class="btn btn-outline btn-sm" id="cf-r37-reset-btn" data-cf-click="cfR37Reset()">Reset Paper</button>
+          <button type="button" class="read-only-hide btn btn-primary btn-sm" id="cf-r37-start-btn" data-cf-click="cfR37Start()">Start Paper</button>
+          <button type="button" class="read-only-hide btn btn-danger btn-sm" id="cf-r37-stop-btn" data-cf-click="cfR37Stop()" hidden>Stop Paper</button>
+          <button type="button" class="read-only-hide btn btn-outline btn-sm" id="cf-r37-reset-btn" data-cf-click="cfR37Reset()">Reset Paper</button>
         </div>
       </div>
     </div>
@@ -1616,7 +1619,7 @@
             aria-label="What is a group fund?">i</button></label>
           <div class="cf-cascade-group-control">
             <input type="number" id="cf-cascade-group-budget" min="0" step="1" inputmode="decimal" placeholder="Optional — e.g. 1000">
-            <button type="button" class="btn btn-outline btn-sm" data-cf-click="cfCascadeSaveCapitalGroup()">Set</button>
+            <button type="button" class="read-only-hide btn btn-outline btn-sm" data-cf-click="cfCascadeSaveCapitalGroup()">Set</button>
           </div>
         </div>
         <div class="input-group">
@@ -1680,9 +1683,9 @@
         <div id="cf-cascade-groups" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;"></div>
       </div>
       <div class="allocator-actions">
-        <button class="btn btn-primary" id="cf-cascade-start-btn" data-cf-click="cfCascadeStartCampaign()">Start Campaign</button>
+        <button class="read-only-hide btn btn-primary" id="cf-cascade-start-btn" data-cf-click="cfCascadeStartCampaign()">Start Campaign</button>
         <button class="btn btn-outline" data-cf-click="cfLoadCascadeStatus(true)"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> Refresh</button>
-        <button class="btn btn-outline" data-cf-click="cfCascadeReconcile()"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Broker Sync</button>
+        <button class="read-only-hide btn btn-outline" data-cf-click="cfCascadeReconcile()"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Broker Sync</button>
       </div>
       <div class="allocator-error" id="cf-cascade-error" role="alert" aria-live="polite"></div>
       <div class="table-meta" style="margin-top:8px;">New campaigns start in paper mode by default. Flip to LIVE per campaign once you trust the behaviour — live entries rest on Binance as limit buys and the TP rests as a limit sell, so exits survive app downtime.</div>
@@ -1834,7 +1837,7 @@
       </div>
       <div class="admin-inline-actions">
         <button class="btn btn-outline btn-sm" data-cf-click="cfFeedBuyersLoad()"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> Refresh</button>
-        <button class="btn btn-primary btn-sm" data-cf-click="cfFeedBuyerFormToggle()" id="cf-feed-buyer-add-btn">Register a buyer</button>
+        <button class="read-only-hide btn btn-primary btn-sm" data-cf-click="cfFeedBuyerFormToggle()" id="cf-feed-buyer-add-btn">Register a buyer</button>
       </div>
     </div>
 
@@ -1868,8 +1871,8 @@
       </label>
       <div class="cf-feed-form-actions">
         <span class="cf-feed-form-msg" id="cf-feed-buyer-msg"></span>
-        <button class="btn btn-outline btn-sm" data-cf-click="cfFeedBuyerFormToggle()">Cancel</button>
-        <button class="btn btn-primary btn-sm" data-cf-click="cfFeedBuyerSubmit()" id="cf-feed-buyer-save">Register</button>
+        <button class="read-only-hide btn btn-outline btn-sm" data-cf-click="cfFeedBuyerFormToggle()">Cancel</button>
+        <button class="read-only-hide btn btn-primary btn-sm" data-cf-click="cfFeedBuyerSubmit()" id="cf-feed-buyer-save">Register</button>
       </div>
     </div>
 
@@ -1921,8 +1924,8 @@
           <span class="cf-scalp-session-label">Session P&amp;L:</span>
           <span class="cf-scalp-session-pnl" id="cf-scalp-session-pnl">$0.00</span>
         </div>
-        <button class="btn btn-outline btn-sm" data-cf-click="cfReconcileScalpBroker({ force: true, showToast: true })"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Broker Sync</button>
-        <button class="btn btn-danger btn-sm" data-cf-click="emergencyStop()">⛔ Master Kill</button>
+        <button class="read-only-hide btn btn-outline btn-sm" data-cf-click="cfReconcileScalpBroker({ force: true, showToast: true })"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Broker Sync</button>
+        <button class="read-only-hide btn btn-danger btn-sm" data-cf-click="emergencyStop()">⛔ Master Kill</button>
         <button class="btn btn-outline btn-sm" data-cf-click="cfRefreshScalpWorkspace({ forceSync: true, showToast: true })"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> Refresh</button>
       </div>
     </div>
@@ -1975,7 +1978,7 @@
         <span class="table-meta" id="cf-scalp-active-count">0 open</span>
       </div>
       <div class="table-actions">
-        <button class="btn btn-outline btn-sm" id="cf-scalp-exits-btn"
+        <button class="read-only-hide btn btn-outline btn-sm" id="cf-scalp-exits-btn"
           data-cf-click="cfToggleScalpExitEditors()">Edit exits</button>
       </div>
     </div>
@@ -2121,8 +2124,8 @@
         </div>
 
         <div class="cf-scalp-field cf-scalp-field-full cf-scalp-actions-grid">
-          <button class="btn cf-scalp-trade-btn cf-scalp-trade-btn-buy" id="cf-scalp-buy-btn" data-cf-click="cfSubmitScalp('BUY')">▲ BUY</button>
-          <button class="btn cf-scalp-trade-btn cf-scalp-trade-btn-sell" id="cf-scalp-sell-btn" data-cf-click="cfSubmitScalp('SELL')">▼ SELL</button>
+          <button class="read-only-hide btn cf-scalp-trade-btn cf-scalp-trade-btn-buy" id="cf-scalp-buy-btn" data-cf-click="cfSubmitScalp('BUY')">▲ BUY</button>
+          <button class="read-only-hide btn cf-scalp-trade-btn cf-scalp-trade-btn-sell" id="cf-scalp-sell-btn" data-cf-click="cfSubmitScalp('SELL')">▼ SELL</button>
         </div>
       </div>
       <div id="cf-scalp-entry-status" class="cf-scalp-entry-status"></div>

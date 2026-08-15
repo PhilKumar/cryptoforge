@@ -518,6 +518,47 @@
     white-space: nowrap;
     letter-spacing: 0.3px;
   }
+
+  /* Read-only sessions. The server refuses every write regardless (app.py
+     _viewer_may_call); these rules only stop the page offering controls that
+     cannot work, and say why. Everything that reads — pages, charts, tables,
+     the balances Phil chose to show — is untouched. Same vocabulary as
+     PhilForge: html.read-only-account, .read-only-hide, .read-only-lock. */
+  .topbar-viewer-chip { display: none; }
+  html.read-only-account .topbar-viewer-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 7px;
+    border: 1px solid rgba(56,189,248,0.32);
+    background: rgba(56,189,248,0.12);
+    color: #7dd3fc;
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .topbar-viewer-chip-short { display: none; }
+  /* On a phone the icon row is already full: the long label was squeezing
+     the clock to 55px of its 87. Say "View" there and keep the clock whole. */
+  @media (max-width: 767px) {
+    html.read-only-account .topbar-viewer-chip { padding: 5px 7px; letter-spacing: 0.8px; font-size: 10px; }
+    .topbar-viewer-chip-long { display: none; }
+    .topbar-viewer-chip-short { display: inline; }
+  }
+  html.read-only-account .read-only-hide { display: none !important; }
+  html.read-only-account .read-only-lock {
+    opacity: 0.45;
+    pointer-events: none;
+    cursor: not-allowed;
+  }
+  html.read-only-account[data-theme="light"] .topbar-viewer-chip {
+    border-color: rgba(3,105,161,0.28);
+    background: rgba(3,105,161,0.08);
+    color: #0369a1;
+  }
   .topbar-icon-btn {
     appearance: none;
     background: rgba(255,255,255,0.04);

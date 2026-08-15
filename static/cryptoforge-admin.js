@@ -364,6 +364,12 @@
   }
 
   function cfOpenAdminConsole() {
+    // The button is hidden for viewers; a keyboard shortcut or a stale
+    // reference must not open an empty console over a 403.
+    if (document.documentElement.classList.contains('read-only-account')) {
+      if (typeof window.cfReadOnlyRefused === 'function') window.cfReadOnlyRefused();
+      return;
+    }
     var modal = adminEl('admin-console-modal');
     if (!modal) return;
     modal.hidden = false;
