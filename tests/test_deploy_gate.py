@@ -113,5 +113,68 @@ class DeployGateTests(unittest.TestCase):
                 self.assertIn("steps.deploy.outputs.skipped != 'true'", flow)
 
 
+class BootStartFollowsTheFlipTests(unittest.TestCase):
+    """After a blue-green flip, systemd must boot the port nginx points at.
+
+    Nothing in this script ever enabled the templated units, so which worker
+    comes back after a reboot was whatever a human enabled once. That is only
+    right while the flip happens to land on the same port. Enable 9000, deploy,
+    and the box now boots a worker on 9000 while nginx points at 9001: the site
+    serves 502 forever, with a process running but holding the wrong port and
+    nothing to restart. PhilForge hit precisely this on 2026-08-10 and stayed
+    down until it was started by hand.
+
+    On CryptoForge the same reboot takes the live mainnet trading engine with
+    it, which is why this is pinned rather than left to the next reader.
+    """
+
+    def setUp(self):
+        self.src = open(_SCRIPT, encoding="utf-8").read()
+
+    def test_the_new_port_is_enabled_for_boot(self):
+        self.assertRegex(
+            self.src,
+            r'systemctl enable "\$\{APP\}@\$\{STANDBY_PORT\}"',
+            "the deploy never enables the port it just made live, so a reboot is a coin toss",
+        )
+
+    def test_the_retired_port_is_disabled(self):
+        """Leaving both enabled races two single-writer workers onto the broker
+        at boot, which is worse than the bug being fixed."""
+        self.assertRegex(self.src, r'systemctl disable "\$\{APP\}@\$\{ACTIVE_PORT\}"')
+
+    def test_enable_is_attempted_before_disable(self):
+        """If enabling fails, the old unit must still be enabled — a box that
+        boots the wrong port beats a box that boots nothing at all."""
+        enable_at = self.src.index('systemctl enable "${APP}@${STANDBY_PORT}"')
+        disable_at = self.src.index('systemctl disable "${APP}@${ACTIVE_PORT}"')
+        self.assertLess(enable_at, disable_at)
+
+    def test_it_runs_only_after_the_flip_is_committed(self):
+        """Enabling a port that later fails its health check and gets rolled
+        back would point boot at a worker the deploy abandoned."""
+        enable_at = self.src.index('systemctl enable "${APP}@${STANDBY_PORT}"')
+        self.assertLess(self.src.index('echo "$STANDBY_PORT" > "$PORT_FILE"'), enable_at)
+        self.assertLess(self.src.index("nginx -s reload"), enable_at)
+
+    def test_a_failure_to_enable_is_loud_but_not_fatal(self):
+        """Traffic is already served and the engine is running by this point;
+        aborting here would be worse than the warning.
+
+        The block is matched to a line that is exactly `fi`, not to the first
+        occurrence of the characters: splitting on bare "fi" ends the block
+        inside the word "tra-ffi-c" in the comment below it.
+        """
+        match = re.search(
+            r'systemctl enable "\$\{APP\}@\$\{STANDBY_PORT\}".*?^fi$',
+            self.src,
+            re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(match, "could not find the boot-enable if/else block")
+        block = match.group(0)
+        self.assertNotIn("die ", block)
+        self.assertIn("REBOOT WILL NOT", block)
+
+
 if __name__ == "__main__":
     unittest.main()

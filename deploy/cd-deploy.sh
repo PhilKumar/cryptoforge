@@ -194,7 +194,29 @@ if sudo fuser "${ACTIVE_PORT}/tcp" >/dev/null 2>&1; then
     die "Old worker still owns port $ACTIVE_PORT. The new worker remains active, but manual cleanup is required."
 fi
 
-# ── 8. Clean temporary deployment state ─────────────────────
+# ── 8. Point systemd's boot-start at the port that is now live ──
+# Nothing here ever enabled these units, so which port comes back after a
+# reboot was whatever someone enabled by hand once. That is right only while
+# the flip happens to land on the same port: enable 9000, deploy, and the box
+# now boots a worker on 9000 while nginx points at 9001 — the site answers
+# with a 502 and no process to restart, because the one systemd started is
+# holding the wrong port. PhilForge hit exactly this on 2026-08-10 and stayed
+# down until it was started by hand.
+#
+# Enabling here, in step with the flip, is what keeps systemd and nginx from
+# disagreeing. Enable first: if that fails, the old unit stays enabled and the
+# box still boots something, which beats disabling both and booting nothing.
+if sudo systemctl enable "${APP}@${STANDBY_PORT}" >/dev/null 2>&1; then
+    sudo systemctl disable "${APP}@${ACTIVE_PORT}" >/dev/null 2>&1 || true
+    log "Boot-start now points at port $STANDBY_PORT"
+else
+    # Not fatal — traffic is already served and the engine is running. It only
+    # means an unattended reboot comes back without CryptoForge, so it has to
+    # be loud rather than silent.
+    log "⚠ Could not enable ${APP}@${STANDBY_PORT} for boot — a REBOOT WILL NOT restart CryptoForge until this is fixed"
+fi
+
+# ── 9. Clean temporary deployment state ─────────────────────
 rm -f "$UPSTREAM_BACKUP"
 
 log "═══════════════════════════════════════════════"
