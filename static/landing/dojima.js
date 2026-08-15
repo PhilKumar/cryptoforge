@@ -1,14 +1,21 @@
 /* ── old bookmarks ──────────────────────────────────────────────
    Both terminals used to live at "/", so saved links, PWA shortcuts
-   and history entries still point at /#portfolio-page and friends.
-   Hand those straight through instead of dropping someone on the
-   marketing page. Every tab id ends in "-page" and results-page
-   carries an optional "/<runId>"; this page's own anchors (#top,
-   #method, #proof, #who, #markets, #access) cannot match. Carried
-   over from forge.js, which this page replaces. */
+   and history entries still point at /#market and /#portfolio-page.
+   Hand those through instead of dropping someone on the marketing
+   page — and this file is the front door of BOTH sites, so it has to
+   know BOTH vocabularies. CryptoForge names its tabs bare
+   (#market, #live); PhilForge suffixes them (#portfolio-page, and
+   results-page carries an optional "/<runId>"). Carried over from
+   landing.js and forge.js, the two files this page replaces; dropping
+   either half strands those bookmarks here. Neither vocabulary can
+   collide with this page's own anchors — #top, #method, #proof, #who,
+   #markets, #access — note #markets is NOT CryptoForge's #market. */
 (function(){
+  var TABS=['journal','portfolio','cascade','dashboard','scalp',
+            'live','builder','market','results'];
   var hash=(location.hash||'').replace('#','');
-  if(/^[a-z-]+-page(\/\d+)?$/.test(hash)) location.replace('/app#'+hash);
+  if(TABS.indexOf(hash)!==-1||/^[a-z-]+-page(\/\d+)?$/.test(hash))
+    location.replace('/app#'+hash);
 })();
 
 /* ── proof tape ─────────────────────────────────────────────── */

@@ -56,7 +56,8 @@ const check = (name, pass, detail) => {
   check('display type styled', d.h1Serif && d.h1Size > 40, `${d.h1Size}px serif=${d.h1Serif}`);
   // The script is the other half: the tape is built in JS from an array.
   check('external script ran', d.tape === 24, `tape items=${d.tape}`);
-  check('four films present', d.videos === 4, `videos=${d.videos}`);
+  // All five shots: hero port, merchant, chalk, candle, bridge.
+  check('five films present', d.videos === 5, `videos=${d.videos}`);
 
   // ── the hero film, checked while the hero is still on screen ───────────
   const film = await page.evaluate(async () => {
@@ -159,6 +160,25 @@ const check = (name, pass, detail) => {
   check('headline scaled down', mob.h1 < 48, `${mob.h1}px`);
   // The performance contract: below 880px no video bytes are requested at all.
   check('no film fetched on mobile', !mob.heroSrc && mob.poster, `src=${mob.heroSrc} poster=${mob.poster}`);
+
+  // Old bookmarks. This page replaced TWO landing scripts with two different
+  // tab vocabularies, and shipping only one of them stranded /#market on the
+  // marketing page — caught by CryptoForge's own app-shell spec, not here.
+  // /app does not exist in this static tree; the redirect is what is asserted,
+  // so a 404 landing at the right URL is a pass.
+  const rescue = [];
+  for (const [hash, why] of [['market', 'CryptoForge bare tab'], ['portfolio-page', 'PhilForge suffixed tab'],
+                             ['results-page/42', 'run id survives'], ['markets', 'own anchor must NOT redirect']]) {
+    const r = await browser.newPage();
+    await r.goto(`${BASE}/index.html#${hash}`, { waitUntil: 'load' }).catch(() => {});
+    await r.waitForTimeout(400);
+    rescue.push({ hash, why, url: r.url().replace(BASE, '') });
+    await r.close();
+  }
+  const wrong = rescue.filter((x) => (x.hash === 'markets' ? /\/app#/.test(x.url) : x.url !== `/app#${x.hash}`));
+  check('old terminal bookmarks are handed to /app', wrong.length === 0,
+    wrong.length ? wrong.map((w) => `#${w.hash} (${w.why}) → ${w.url}`).join(', ')
+                 : rescue.map((r) => `#${r.hash}→${r.url}`).join(', '));
 
   await browser.close();
 
