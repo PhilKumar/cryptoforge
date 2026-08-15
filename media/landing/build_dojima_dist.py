@@ -226,7 +226,17 @@ def main() -> None:
     src_clips = HERE / "film" / "clips"
     dst_clips = DIST / "film" / "clips"
     dst_clips.mkdir(parents=True, exist_ok=True)
-    for f in sorted(src_clips.glob("*_web.mp4")) + sorted(src_clips.glob("*_poster.jpg")):
+    wanted = sorted(src_clips.glob("*_web.mp4")) + sorted(src_clips.glob("*_poster.jpg"))
+    # Prune first. A retake arrives under a NEW filename — the only way past a
+    # cache-first service worker that does not know about ?v= on data-film= —
+    # and copy-without-delete would leave the superseded clip in dist forever,
+    # to be installed and served alongside its replacement.
+    keep = {f.name for f in wanted}
+    for stale in dst_clips.iterdir():
+        if stale.name not in keep:
+            stale.unlink()
+            print(f"pruned       {stale.name}")
+    for f in wanted:
         shutil.copy2(f, dst_clips / f.name)
 
     # ── 6. absolute asset paths, because the page is served at "/" ──────
