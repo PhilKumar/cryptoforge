@@ -152,14 +152,22 @@ const check = (name, pass, detail) => {
     navHidden: getComputedStyle(document.querySelector('.navlinks a:not(.navcta)')).display === 'none',
     h1: parseFloat(getComputedStyle(document.querySelector('h1')).fontSize),
     heroSrc: !!document.getElementById('heroFilm').getAttribute('src'),
+    heroPlaying: (() => { const v = document.getElementById('heroFilm'); return !v.paused && v.currentTime > 0; })(),
     poster: !!document.getElementById('heroFilm').poster,
+    // The act figures must stay still images on a phone — four decoding
+    // clips is what a phone cannot take, not one.
+    actSrcs: [...document.querySelectorAll('.act-fig video[data-film]')].filter((v) => v.getAttribute('src')).length,
   }));
   check('mobile viewport honoured', mob.inner <= 400, `innerWidth=${mob.inner}`);
   check('no horizontal overflow', mob.scrollW <= mob.inner + 1, `scrollW=${mob.scrollW} vs ${mob.inner}`);
   check('mobile breakpoint active', mob.navHidden, `navlinks hidden=${mob.navHidden}`);
   check('headline scaled down', mob.h1 < 48, `${mob.h1}px`);
-  // The performance contract: below 880px no video bytes are requested at all.
-  check('no film fetched on mobile', !mob.heroSrc && mob.poster, `src=${mob.heroSrc} poster=${mob.poster}`);
+  // The performance contract on a phone: the hero runs, and ONLY the hero.
+  // It used to fetch nothing at all, which left mobile looking at stills.
+  check('the hero film runs on mobile', mob.heroSrc && mob.heroPlaying && mob.poster,
+    `src=${mob.heroSrc} playing=${mob.heroPlaying} poster=${mob.poster}`);
+  check('the act films stay still on mobile', mob.actSrcs === 0,
+    `${mob.actSrcs} act clips fetched`);
 
   // Old bookmarks. This page replaced TWO landing scripts with two different
   // tab vocabularies, and shipping only one of them stranded /#market on the

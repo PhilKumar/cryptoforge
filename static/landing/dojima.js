@@ -47,8 +47,15 @@ document.querySelectorAll('.rv,.drawline,.act-fig').forEach(n=>io.observe(n));
   const films=[...document.querySelectorAll('video[data-film]')];
   if(!films.length||!('IntersectionObserver'in window))return;
   const conn=navigator.connection||{};
+  /* Width no longer disqualifies motion outright. It used to: after the
+     living layer hung Phil's machine, every film was cut below 880px, which
+     left a phone looking at still plates and none of the film it was told
+     about. A phone can play ONE muted inline H.264 clip without trouble —
+     what it cannot take is four of them decoding while it scrolls. So the
+     narrow case runs the hero and nothing else, and every other guard —
+     reduced motion, Save-Data, 2g — still refuses outright. */
+  const narrow=innerWidth<880;
   const wanted=!matchMedia('(prefers-reduced-motion: reduce)').matches
-            && innerWidth>=880
             && !conn.saveData
             && !/(^|-)2g$/.test(conn.effectiveType||'');
   if(!wanted)return;
@@ -68,7 +75,7 @@ document.querySelectorAll('.rv,.drawline,.act-fig').forEach(n=>io.observe(n));
       hush(v); drift(v,false); if(live===v)live=null;
     }
   }),{threshold:.25});
-  films.forEach(v=>fio.observe(v));
+  (narrow?films.filter(v=>v.id==='heroFilm'):films).forEach(v=>fio.observe(v));
   addEventListener('visibilitychange',()=>{
     if(document.hidden)hush(live);
     else if(live){const p=live.play();if(p)p.catch(()=>{});}
