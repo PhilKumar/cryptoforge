@@ -84,6 +84,11 @@ nav.stuck{background:rgba(6,7,10,.86);backdrop-filter:blur(14px) saturate(1.2);
 .desks a::after{bottom:-1px}
 /* An approved viewer should not have to scroll the whole story to find the
    door. Quieter than the desks — it is a way back in, not an invitation. */
+/* NOTE: this colour is dormant on the desktop bar and deliberately left so.
+   `.navlinks a` below outranks a lone class, so the link renders in --ink, and
+   at 13px --ink-lo would sit at 4.08:1 on the obsidian ground — under the 4.5
+   floor. The sheet's rule is written as `.navlinks a.navviewer` where it does
+   need to win. */
 .navviewer{color:var(--ink-lo)}
 .navviewer:hover{color:var(--brass-hi)}
 .navlinks a{font-size:13px;color:var(--ink);letter-spacing:.005em;position:relative;padding:4px 0}
@@ -98,7 +103,48 @@ nav.stuck{background:rgba(6,7,10,.86);backdrop-filter:blur(14px) saturate(1.2);
 .navcta:hover{border-color:var(--brass);background:var(--brass-dim)}
 /* Hiding the links alone would leave the desk pair as an empty hairline box.
    The Markets cards carry the same fork further down the page. */
-@media(max-width:820px){.navlinks a:not(.navcta){display:none}.desks{display:none}}
+/* The right-hand group. On a wide screen it reads exactly as one row of links
+   did before: same 30px rhythm, the CTA last. On a phone the links leave the
+   row and the CTA and the menu control stay in it. */
+.navright{display:flex;align-items:center;gap:30px}
+.navtoggle{display:none}
+@media(max-width:820px){
+  /* Was: every link but the CTA set to display:none — which is how the viewer
+     sign-in, both desks and all four section links went missing on a phone.
+     They drop into a sheet under the bar instead. */
+  .navright{gap:14px}
+  .navtoggle{display:inline-flex;align-items:center;background:none;
+    border:1px solid var(--hairline-hi);border-radius:2px;padding:9px 14px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ink);cursor:pointer;
+    transition:border-color .3s ease,background .3s ease}
+  .navtoggle[aria-expanded="true"]{border-color:var(--brass);background:var(--brass-dim);
+    color:var(--brass-hi)}
+  .navlinks{position:fixed;top:68px;left:0;right:0;
+    flex-direction:column;align-items:stretch;gap:0;
+    background:rgba(6,7,10,.97);backdrop-filter:blur(14px) saturate(1.2);
+    -webkit-backdrop-filter:blur(14px) saturate(1.2);
+    border-bottom:1px solid var(--hairline);
+    max-height:0;overflow:hidden;visibility:hidden;
+    transition:max-height .38s cubic-bezier(.22,.61,.36,1),visibility 0s linear .38s}
+  .navlinks.open{max-height:calc(100svh - 68px);overflow-y:auto;visibility:visible;
+    transition:max-height .38s cubic-bezier(.22,.61,.36,1),visibility 0s}
+  /* Full-width rows at a size a thumb can hit — 15px, not the 13px of the
+     desktop row, and 16px of vertical padding each side of the text. */
+  .navlinks a{font-size:15px;padding:16px var(--gut);border-top:1px solid var(--hairline)}
+  .navlinks a::after{display:none}
+  .navlinks > a:first-child{border-top:0}
+  /* The desk pair keeps its own shape: one row, both doors, side by side. */
+  .desks{display:flex;justify-content:flex-start;gap:14px;
+    margin:0;padding:16px var(--gut);background:none;border-radius:0;
+    border:0;border-top:1px solid var(--hairline)}
+  /* The row rule above gives every link its own separator; the two desk links
+     sit INSIDE one row and must not each draw one over their own text. */
+  .desks a{font-size:15px;padding:0;border-top:0}
+  /* In the sheet it takes the brass. Every other row is a place on this page;
+     this one is a door, and the sheet is where someone goes to look for it. */
+  .navlinks a.navviewer{color:var(--brass-hi)}
+}
 
 /* ══ HERO ═════════════════════════════════════════════════════════ */
 /* The hero is bottom-aligned, so a full-screen minimum would park the headline

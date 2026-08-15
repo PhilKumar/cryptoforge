@@ -22,14 +22,21 @@
          width="264" height="312" alt="" aria-hidden="true" decoding="async">
     <span class="bw"><span class="bw-1">PhilForge&#8217;s</span><span class="bw-2">Dōjima</span></span>
   </a>
-  <div class="navlinks">
-    <a href="#method">Method</a>
-    <a href="#proof">Proof</a>
-    <a href="#who">Who it's for</a>
-    <a href="#markets">Markets</a>
-    <span class="desks"><a href="https://philforge.in/app">Equities</a><i>·</i><a href="https://crypto.philforge.in/app">Crypto</a></span>
-    <a href="https://philforge.in/app" class="navviewer">Viewer sign-in</a>
+  <div class="navright">
+    <div class="navlinks" id="navlinks">
+      <a href="#method">Method</a>
+      <a href="#proof">Proof</a>
+      <a href="#who">Who it's for</a>
+      <a href="#markets">Markets</a>
+      <span class="desks"><a href="https://philforge.in/app">Equities</a><i>·</i><a href="https://crypto.philforge.in/app">Crypto</a></span>
+      <a href="https://philforge.in/app" class="navviewer">Viewer sign-in</a>
+    </div>
     <a href="#access" class="navcta">Request access</a>
+    <!-- Below 820px the links become a sheet under the bar rather than
+         disappearing. Seven links cannot sit in a 390px row without shrinking
+         the type, and the type is not the thing to give up. -->
+    <button type="button" class="navtoggle" id="navtoggle"
+            aria-expanded="false" aria-controls="navlinks" aria-label="Open menu">Menu</button>
   </div>
 </nav>
 

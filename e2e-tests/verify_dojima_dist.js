@@ -161,7 +161,10 @@ const check = (name, pass, detail) => {
   const mob = await m.evaluate(() => ({
     scrollW: document.documentElement.scrollWidth,
     inner: window.innerWidth,
-    navHidden: getComputedStyle(document.querySelector('.navlinks a:not(.navcta)')).display === 'none',
+    // The links are not in the bar on a phone — they are one tap away in the
+    // sheet, which is a different thing from the display:none they used to be.
+    menuButton: getComputedStyle(document.getElementById('navtoggle')).display !== 'none',
+    sheetShut: !document.getElementById('navlinks').classList.contains('open'),
     h1: parseFloat(getComputedStyle(document.querySelector('h1')).fontSize),
     heroSrc: !!document.getElementById('heroFilm').getAttribute('src'),
     heroPlaying: (() => { const v = document.getElementById('heroFilm'); return !v.paused && v.currentTime > 0; })(),
@@ -171,7 +174,42 @@ const check = (name, pass, detail) => {
   }));
   check('mobile viewport honoured', mob.inner <= 400, `innerWidth=${mob.inner}`);
   check('no horizontal overflow', mob.scrollW <= mob.inner + 1, `scrollW=${mob.scrollW} vs ${mob.inner}`);
-  check('mobile breakpoint active', mob.navHidden, `navlinks hidden=${mob.navHidden}`);
+  check('mobile breakpoint active', mob.menuButton && mob.sheetShut,
+    `menu button=${mob.menuButton} sheet shut=${mob.sheetShut}`);
+
+  // Every nav link must be REACHABLE on a phone, not just present in the DOM.
+  // They were display:none below 820px, which took the viewer sign-in and both
+  // desks off the page entirely — the thing Phil reported.
+  const menu = await m.evaluate(async () => {
+    document.getElementById('navtoggle').click();
+    await new Promise((r) => setTimeout(r, 500));
+    const shown = [...document.querySelectorAll('#navlinks a')].filter((a) => {
+      const r = a.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && getComputedStyle(a).display !== 'none';
+    });
+    const viewer = document.querySelector('.navviewer');
+    const vr = viewer.getBoundingClientRect();
+    const out = {
+      expanded: document.getElementById('navtoggle').getAttribute('aria-expanded'),
+      labels: shown.map((a) => a.textContent.trim()),
+      viewerVisible: vr.width > 0 && vr.height > 0,
+      viewerHref: viewer.href,
+      // A thumb target, not a 13px desktop row.
+      viewerTall: Math.round(vr.height),
+      insideViewport: vr.left >= 0 && vr.right <= innerWidth,
+    };
+    // A link closes the sheet behind it.
+    document.querySelector('#navlinks a[href="#method"]').click();
+    await new Promise((r) => setTimeout(r, 500));
+    out.closesAfterTap = !document.getElementById('navlinks').classList.contains('open');
+    return out;
+  });
+  check('the phone menu opens every link', menu.labels.length === 7 && menu.expanded === 'true',
+    `${menu.labels.length} links: ${menu.labels.join(', ')}`);
+  check('viewer sign-in is reachable on a phone', menu.viewerVisible && menu.insideViewport
+    && /^https:\/\/philforge\.in\/app$/.test(menu.viewerHref) && menu.viewerTall >= 40,
+    `visible=${menu.viewerVisible} height=${menu.viewerTall}px in-viewport=${menu.insideViewport}`);
+  check('the sheet closes behind a link', menu.closesAfterTap, `still open=${!menu.closesAfterTap}`);
   check('headline scaled down', mob.h1 < 48, `${mob.h1}px`);
   // The performance contract on a phone: the hero runs, and ONLY the hero.
   // It used to fetch nothing at all, which left mobile looking at stills.

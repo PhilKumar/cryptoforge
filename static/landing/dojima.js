@@ -31,6 +31,32 @@ run.innerHTML=[...TAPE,...TAPE].map(([v,l,c])=>
 const nav=document.getElementById('nav');
 addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>40),{passive:true});
 
+/* The phone menu. Below 820px the links live in a sheet under the bar — they
+   used to be display:none, which took the viewer sign-in and both desks off
+   the page entirely on a phone. CSS owns the open/closed look; this only ever
+   sets one class and one aria-expanded, so the button reads correctly to a
+   screen reader and to the CSS at the same time. */
+(function(){
+  const btn=document.getElementById('navtoggle'), links=document.getElementById('navlinks');
+  if(!btn||!links)return;
+  const shut=()=>{links.classList.remove('open');btn.setAttribute('aria-expanded','false');
+    btn.setAttribute('aria-label','Open menu')};
+  btn.addEventListener('click',()=>{
+    const open=!links.classList.contains('open');
+    links.classList.toggle('open',open);
+    btn.setAttribute('aria-expanded',String(open));
+    btn.setAttribute('aria-label',open?'Close menu':'Open menu');
+  });
+  /* Anything that takes you somewhere closes it behind you — including the
+     in-page anchors, which otherwise scroll under a sheet still covering the
+     thing they scrolled to. */
+  links.addEventListener('click',e=>{if(e.target.closest('a'))shut()});
+  addEventListener('keydown',e=>{if(e.key==='Escape')shut()});
+  /* Rotating a phone past the breakpoint must not leave a sheet stranded with
+     max-height animating over a desktop row. */
+  addEventListener('resize',()=>{if(innerWidth>820)shut()});
+})();
+
 /* ── reveal ─────────────────────────────────────────────────── */
 const io=new IntersectionObserver(es=>es.forEach(e=>{
   if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}
