@@ -113,6 +113,18 @@ const check = (name, pass, detail) => {
   const claims = await page.evaluate(() => document.body.innerText.includes('Received — we will write back'));
   check('no false "Received" claim', !claims);
 
+  // The way in for someone already approved. Accounts are opened by hand in the
+  // admin console, so this must NOT read as a sign-up: assert the door AND the
+  // sentence that says there is no self-serve form behind it.
+  const signin = await page.evaluate(() => {
+    const a = document.querySelector('.signin a');
+    const note = document.querySelector('.signin-note');
+    return a ? { href: a.href, text: a.textContent.trim(), note: (note && note.textContent) || '' } : null;
+  });
+  check('approved viewers have a way in', !!signin && /^https:\/\/philforge\.in\/app$/.test(signin.href)
+    && /no sign-up form/i.test(signin.note),
+    signin ? `${signin.href} — "${signin.text}"` : 'no sign-in link');
+
   // ── retina: the canvas-doubling failure is invisible at dpr 1 ──────────
   // A HiDPI helper that reads back the same height attribute it writes grows
   // the backing store every frame until allocation fails and Chrome paints a

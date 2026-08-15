@@ -331,6 +331,18 @@ a.sp:hover .enter .ar{transform:translateX(4px)}
 .fld:focus-within label{color:var(--brass)}
 .fld select option{background:var(--obsidian)}
 .formnote{margin-top:16px;font-size:12.5px;color:var(--ink-lo);max-width:60ch}
+/* The way IN for someone Phil has already approved. It belongs here, at the end
+   of the access story — request, conversation, then a door — and not in the nav,
+   which is for the two desks. Absolute URL: the viewer role lives on PhilForge,
+   so this reads the same from either host. */
+.signin{margin-top:18px;font-size:13px;color:var(--ink-lo);max-width:60ch}
+.signin a{color:var(--brass-hi);border-bottom:1px solid var(--hairline-hi);
+  padding-bottom:1px;transition:border-color .3s ease}
+.signin a:hover{border-bottom-color:var(--brass)}
+.signin a .ar{transition:transform .3s ease;display:inline-block}
+.signin a:hover .ar{transform:translateX(3px)}
+.signin-note{display:block;margin-top:6px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.06em;color:var(--ink-lo);opacity:.72}
 
 /* ══ FOOTER ═══════════════════════════════════════════════════════ */
 footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(--void)}
