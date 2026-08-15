@@ -4261,8 +4261,14 @@
     .btn { min-height: 44px; }
     .btn-sm { min-height: 38px; padding: 8px 14px !important; }
 
-    /* -- Kill switch: bottom-center on mobile -- */
+    /* -- Kill switch: bottom-center on mobile --
+       top:auto is load-bearing. The desktop rule pins top:20px, and a fixed
+       box given BOTH top and bottom with no height stretches to fill the gap:
+       the button became a full-height red slab down the middle of the phone,
+       with align-items:center parking "KILL ALL" halfway down it. Moving the
+       button from one edge to the other means releasing the edge it left. */
     .kill-switch {
+      top: auto !important;
       right: 50% !important;
       transform: translateX(50%);
       bottom: 16px !important;
