@@ -1,3 +1,16 @@
+/* ── old bookmarks ──────────────────────────────────────────────
+   Both terminals used to live at "/", so saved links, PWA shortcuts
+   and history entries still point at /#portfolio-page and friends.
+   Hand those straight through instead of dropping someone on the
+   marketing page. Every tab id ends in "-page" and results-page
+   carries an optional "/<runId>"; this page's own anchors (#top,
+   #method, #proof, #who, #markets, #access) cannot match. Carried
+   over from forge.js, which this page replaces. */
+(function(){
+  var hash=(location.hash||'').replace('#','');
+  if(/^[a-z-]+-page(\/\d+)?$/.test(hash)) location.replace('/app#'+hash);
+})();
+
 /* ── proof tape ─────────────────────────────────────────────── */
 const TAPE=[["₹11,60,571","Net, 5 years","up"],["935","Trades",""],["51.0%","Win rate",""],
 ["1.39","Profit factor",""],["−₹1,28,429","Max drawdown","dn"],["9.04×","Return / drawdown",""],

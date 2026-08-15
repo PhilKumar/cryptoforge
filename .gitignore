@@ -42,3 +42,7 @@ out/
 
 # Installer output — the app bundle, dmg and generated icons
 build/
+
+# The Dōjima build output — the deployed copy lives in static/landing/,
+# and tracking both puts 4 MB of film in the repo twice.
+media/landing/dist/

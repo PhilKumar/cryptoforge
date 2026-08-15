@@ -289,6 +289,17 @@ canvas{display:block;width:100%;touch-action:pan-y}
 .sp .row{display:flex;justify-content:space-between;gap:14px;padding:11px 0;
   border-bottom:1px solid var(--hairline);font-size:12.5px}
 .sp .row b{font-family:var(--mono);color:var(--ink-hi);font-weight:400}
+/* The two desks are the way in. This page is the front door of BOTH sites, so
+   each card links to its own terminal by absolute URL and reads the same on
+   either host. */
+a.sp{display:block;text-decoration:none;color:inherit;
+  transition:background .35s ease,box-shadow .35s ease}
+a.sp:hover{background:#0E1626;box-shadow:inset 0 0 0 1px var(--hairline-hi)}
+a.sp .enter{display:block;margin-top:18px;font-family:var(--mono);font-size:11px;
+  letter-spacing:.18em;text-transform:uppercase;color:var(--brass)}
+a.sp:hover .enter{color:var(--brass-hi)}
+a.sp .enter .ar{transition:transform .3s ease;display:inline-block}
+a.sp:hover .enter .ar{transform:translateX(4px)}
 
 /* ══ CTA ══════════════════════════════════════════════════════════ */
 .cta{position:relative;overflow:hidden;isolation:isolate;
@@ -416,6 +427,7 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
     <a href="#proof">Proof</a>
     <a href="#who">Who it's for</a>
     <a href="#markets">Markets</a>
+    <a href="/app">Enter</a>
     <a href="#access" class="navcta">Request access</a>
   </div>
 </nav>
@@ -703,7 +715,7 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
         option is the engine that ladders a Binance pair — the same anchors, the
         same geometry, different clocks and different fees.</p>
       <div class="split rv" data-d="4" style="margin-top:26px">
-        <div class="sp" style="padding:26px 24px">
+        <a class="sp" style="padding:26px 24px" href="https://philforge.in/app">
           <div class="mark">PhilForge</div>
           <div class="dom">PHILFORGE.IN · NSE OPTIONS</div>
           <div class="rows" style="margin-top:18px">
@@ -711,8 +723,9 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
             <div class="row"><span>Instruments</span><b>NIFTY · BANKNIFTY</b></div>
             <div class="row"><span>Evidence</span><b>5 yrs · 935 trades</b></div>
           </div>
-        </div>
-        <div class="sp" style="padding:26px 24px">
+          <span class="enter">Enter the equities desk <span class="ar">→</span></span>
+        </a>
+        <a class="sp" style="padding:26px 24px" href="https://crypto.philforge.in/app">
           <div class="mark">CryptoForge</div>
           <div class="dom">CRYPTOFORGE · 24/7 SPOT</div>
           <div class="rows" style="margin-top:18px">
@@ -720,7 +733,8 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
             <div class="row"><span>Instruments</span><b>Major spot pairs</b></div>
             <div class="row"><span>Evidence</span><b>Live, funded, small</b></div>
           </div>
-        </div>
+          <span class="enter">Enter the crypto desk <span class="ar">→</span></span>
+        </a>
       </div>
       <p class="rv" data-d="5" style="color:var(--ink-lo);font-size:13px;margin-top:16px">
         The crypto book is deliberately small and its record is short. We will not dress a
@@ -784,6 +798,19 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
 </footer>
 
 <script>
+/* ── old bookmarks ──────────────────────────────────────────────
+   Both terminals used to live at "/", so saved links, PWA shortcuts
+   and history entries still point at /#portfolio-page and friends.
+   Hand those straight through instead of dropping someone on the
+   marketing page. Every tab id ends in "-page" and results-page
+   carries an optional "/<runId>"; this page's own anchors (#top,
+   #method, #proof, #who, #markets, #access) cannot match. Carried
+   over from forge.js, which this page replaces. */
+(function(){
+  var hash=(location.hash||'').replace('#','');
+  if(/^[a-z-]+-page(\/\d+)?$/.test(hash)) location.replace('/app#'+hash);
+})();
+
 /* ── proof tape ─────────────────────────────────────────────── */
 const TAPE=[["₹11,60,571","Net, 5 years","up"],["935","Trades",""],["51.0%","Win rate",""],
 ["1.39","Profit factor",""],["−₹1,28,429","Max drawdown","dn"],["9.04×","Return / drawdown",""],

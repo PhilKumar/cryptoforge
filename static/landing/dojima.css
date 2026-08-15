@@ -272,6 +272,17 @@ canvas{display:block;width:100%;touch-action:pan-y}
 .sp .row{display:flex;justify-content:space-between;gap:14px;padding:11px 0;
   border-bottom:1px solid var(--hairline);font-size:12.5px}
 .sp .row b{font-family:var(--mono);color:var(--ink-hi);font-weight:400}
+/* The two desks are the way in. This page is the front door of BOTH sites, so
+   each card links to its own terminal by absolute URL and reads the same on
+   either host. */
+a.sp{display:block;text-decoration:none;color:inherit;
+  transition:background .35s ease,box-shadow .35s ease}
+a.sp:hover{background:#0E1626;box-shadow:inset 0 0 0 1px var(--hairline-hi)}
+a.sp .enter{display:block;margin-top:18px;font-family:var(--mono);font-size:11px;
+  letter-spacing:.18em;text-transform:uppercase;color:var(--brass)}
+a.sp:hover .enter{color:var(--brass-hi)}
+a.sp .enter .ar{transition:transform .3s ease;display:inline-block}
+a.sp:hover .enter .ar{transform:translateX(4px)}
 
 /* ══ CTA ══════════════════════════════════════════════════════════ */
 .cta{position:relative;overflow:hidden;isolation:isolate;

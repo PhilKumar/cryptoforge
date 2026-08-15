@@ -1,227 +1,399 @@
-<!DOCTYPE html>
-<html lang="en" class="no-js">
-<head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CryptoForge — From Ink to Algorithm</title>
-<meta name="description" content="The oldest way of reading markets — candle by candle — executed by software that never sleeps, never hopes, and never forgets.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PhilForge&#8217;s Dōjima</title>
+<meta name="description" content="One geometric method, run across Indian options and crypto — with every losing day published, because the losing days are the only part you cannot fake.">
 <meta name="theme-color" content="#06070A">
-<link rel="icon" href="/static/pwa-icons/favicon-32.png" sizes="32x32">
-<link rel="icon" href="/static/pwa-icons/favicon-16.png" sizes="16x16">
-<link rel="apple-touch-icon" href="/static/pwa-icons/apple-touch-icon.png">
-<link rel="canonical" href="https://crypto.philforge.in/">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="CryptoForge">
-<meta property="og:title" content="CryptoForge — From Ink to Algorithm">
-<meta property="og:description" content="Sakata, 1750: a rice trader drew a rectangle. 275 years later, software reads the same shape on every timeframe, around the clock.">
-<meta property="og:url" content="https://crypto.philforge.in/">
-<meta property="og:image" content="https://crypto.philforge.in/static/landing/og-card.jpg">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="654">
-<meta property="og:image:alt" content="An ink candlestick chart on parchment dissolving into a modern trading screen">
+<meta property="og:site_name" content="PhilForge&#8217;s Dōjima">
+<meta property="og:title" content="They ran it on four numbers, written by candlelight.">
+<meta property="og:description" content="One geometric method, run across Indian options and crypto — with every losing day published.">
+<meta property="og:image" content="https://philforge.in/static/landing/film/clips/01_port_poster.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="CryptoForge — From Ink to Algorithm">
-<meta name="twitter:description" content="Sakata, 1750: a rice trader drew a rectangle. 275 years later, software reads the same shape on every timeframe, around the clock.">
-<meta name="twitter:image" content="https://crypto.philforge.in/static/landing/og-card.jpg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@300;400;500&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="stylesheet" href="/static/landing/landing.css">
-<!-- pwa.js builds its install-guidance dialog from cf-pwa-* classes and does
-     NOT ship any styles of its own, so the sheet renders as raw unstyled HTML
-     unless this is linked. It cannot be injected as a <style> either: this
-     origin sends two CSP headers whose intersection is
-     style-src-elem 'self', which blocks inline stylesheets outright. -->
-<link rel="stylesheet" href="/static/cryptoforge-pwa.css">
-<script src="/static/pwa.js" defer></script>
-</head>
-<body>
+<meta name="twitter:title" content="They ran it on four numbers, written by candlelight.">
+<meta name="twitter:description" content="One geometric method, run across Indian options and crypto — with every losing day published.">
+<meta name="twitter:image" content="https://philforge.in/static/landing/film/clips/01_port_poster.jpg">
+<link rel="icon" type="image/png" sizes="64x64" href="/static/landing/img/mark_favicon.png">
+<link rel="apple-touch-icon" href="/static/landing/img/mark_favicon.png">
+<link rel="stylesheet" href="/static/landing/dojima.css">
 
-<!-- ═══ HERO — the bridge: ink chart dissolving into the terminal ═══ -->
-<section class="hero" data-scene="hero">
-  <div class="hero-scene"><img src="/static/landing/web_05_bridge_modern.jpg" alt="An ink candlestick chart on parchment dissolving into a modern trading screen"></div>
-  <div class="hero-veil"></div>
-  <div class="embers"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<nav id="nav">
+  <a class="brand" href="#top">
+    <img class="mark" src="/static/landing/img/mark_philforge.png"
+         width="120" height="120" alt="" aria-hidden="true" decoding="async">
+    PhilForge&#8217;s Dōjima
+  </a>
+  <div class="navlinks">
+    <a href="#method">Method</a>
+    <a href="#proof">Proof</a>
+    <a href="#who">Who it's for</a>
+    <a href="#markets">Markets</a>
+    <a href="/app">Enter</a>
+    <a href="#access" class="navcta">Request access</a>
+  </div>
+</nav>
 
-  <nav class="nav">
-    <div class="logo"><div class="logo-mark" aria-hidden="true"><span class="logo-col a"></span><span class="logo-col b"></span><span class="logo-col c"></span><span class="logo-spark"></span></div><div class="logo-text">CRYPTO<br>FORGE</div></div>
-    <div class="nav-links"><a href="#story">The Story</a><a href="#chart">The Chart</a><a href="/app">Enter</a></div>
-    <button class="nav-install" data-install-app hidden>Install</button>
-  </nav>
+<!-- ══ EPIGRAPH — Ecclesiastes 10:19 ═════════════════════════════ -->
+<section class="epi epi-open" id="top" aria-labelledby="epiverse">
+  <div class="wrap">
+    <p class="heb rv" lang="he" dir="rtl" translate="no">וְהַכֶּ֖סֶף</p>
+    <p class="epi-tr rv" data-d="1">v&#8217;hakesef &middot; and the money</p>
+    <div class="epi-rule rv" data-d="2"></div>
+    <p class="epi-v rv" data-d="3" id="epiverse">A feast is made for laughter, and wine makes life merry,<br class="epi-br">
+      but <b>money is the answer for everything</b>.</p>
+    <p class="epi-cite rv" data-d="4">Ecclesiastes 10:19</p>
+  </div>
+</section>
 
-  <div class="hero-copy">
-    <div class="hero-kicker">Sakata 1750 · CryptoForge 2026</div>
-    <h1 class="display">
-      <span style="animation-delay:.35s">From&nbsp;Ink</span><br>
-      <span style="animation-delay:.65s">to&nbsp;Algorithm.</span>
+<header class="hero" id="hero">
+  <div class="hero-plate" id="heroPlate" style="background-image:url(/static/landing/img/plate_hero.jpg)"></div>
+  <video class="hero-film" id="heroFilm" data-film="/static/landing/film/clips/01_port_web.mp4"
+         poster="/static/landing/film/clips/01_port_poster.jpg" muted loop playsinline preload="none"
+         aria-hidden="true" tabindex="-1"></video>
+  <div class="hero-grade"></div><div class="hero-vig"></div>
+  <div class="wrap">
+    <span class="kicker rise"><span style="animation-delay:.15s">Ōsaka, 1697 — the first futures market</span></span>
+    <h1>
+      <span class="rise"><span style="animation-delay:.30s">They ran it on</span></span>
+      <span class="rise"><span style="animation-delay:.38s">four numbers,</span></span>
+      <span class="rise"><span style="animation-delay:.46s">written by</span></span>
+      <span class="rise"><span style="animation-delay:.54s">candlelight.</span></span>
+      <span class="rise"><span style="animation-delay:.68s;color:var(--brass-hi)">We never needed a fifth.</span></span>
     </h1>
-    <p class="hero-sub">The oldest way of reading markets — candle by candle — executed by software that never sleeps, never hopes, and never forgets.</p>
-    <div class="cta-row">
-      <a class="pill" href="/app">Enter the Terminal</a>
-      <a class="ghost" href="#story">The lineage ↓</a>
+    <p class="hero-sub rise" style="overflow:visible">
+      <span style="animation-delay:.92s;display:block">Open, high, low, close. Everything since is decoration.
+      <b>Dōjima runs one geometric method across Indian options and crypto</b> — and publishes
+      every day it lost, because the losing days are the only part you cannot fake.</span>
+    </p>
+    <div class="hero-actions rise" style="overflow:visible">
+      <span style="animation-delay:1.14s;display:flex;gap:12px;flex-wrap:wrap">
+        <a class="btn btn-p" href="#proof">Read the five-year ledger <span class="ar">→</span></a>
+        <a class="btn btn-g" href="#method">How the method works</a>
+      </span>
     </div>
   </div>
-  <div class="scroll-hint"></div>
-</section>
+  <div class="scrollcue"><i></i> Scroll</div>
+</header>
 
-<!-- ═══ I · THE PORT ═══ -->
-<section class="band" id="story" data-scene="port">
-  <div class="band-media"><img src="/static/landing/web_01_establishing.jpg" loading="lazy" alt="The rice port of Sakata at dawn, boats and bales along the canals"></div>
-  <div class="band-copy rv">
-    <div class="chapter-tag">Chapter I · The Port</div>
-    <h2 class="display">Sakata, 1750.</h2>
-    <p>Boats came down the river loaded with rice, and the whole of Japan learned what it was worth from the men standing on this quay. The world's first futures market ran here — on paper, weather, and rumour.</p>
-  </div>
-</section>
+<div class="tape" aria-label="Verified performance figures">
+  <div class="tape-run" id="tapeRun"></div>
+</div>
 
-<!-- ═══ II · THE MERCHANT ═══ -->
-<section class="split" data-scene="merchant">
-  <div class="split-grid">
-    <div class="split-visual rv">
-      <img src="/static/landing/web_02_merchant.jpg" loading="lazy" alt="A rice merchant with a brush reading prices on a wooden board by lantern light">
+<!-- ══ THE PROBLEM ═══════════════════════════════════════════════ -->
+<section class="band" id="method">
+  <div class="wrap">
+    <div class="sechead rv"><span class="kicker">The position</span><span class="rule"></span></div>
+    <h2 class="rv" data-d="1" style="max-width:19ch">Every platform in this
+      category will show you a backtest.</h2>
+    <p class="lede rv" data-d="2" style="margin-top:22px;color:#C8D1DA">
+      Not one of them will show you the losing years. So the rising curve has stopped
+      carrying information — and the only credible move left is to publish what everyone
+      else deletes.
+    </p>
+    <div class="drawline rv" data-d="3" style="margin:38px 0 34px;max-width:180px"></div>
+    <div class="stats rv" data-d="3">
+      <div class="stat"><div class="n dn" data-count="-43397" data-pre="₹" data-grp="in">₹0</div>
+        <div class="k">Monday, net</div><div class="s">Across 143 trades, the one weekday that loses money. We publish it and we still trade it.</div></div>
+      <div class="stat"><div class="n dn" data-count="-128429" data-pre="₹" data-grp="in">₹0</div>
+        <div class="k">Deepest drawdown</div><div class="s">Peak-to-trough on the combined book. If you cannot hold this, do not fund it.</div></div>
+      <div class="stat"><div class="n" data-count="10" data-suf=" trades">0</div>
+        <div class="k">Longest losing run</div><div class="s">Ten consecutive losses over nine calendar days. It happened. It will happen again.</div></div>
+      <div class="stat"><div class="n" data-count="18" data-suf=" of 68">0</div>
+        <div class="k">Months that lost</div><div class="s">Fifty were green. The other eighteen are in the ledger with the same font size.</div></div>
     </div>
-    <div class="split-text rv" style="transition-delay:.12s">
-      <div class="chapter-tag">Chapter II · The Merchant</div>
-      <h2 class="display">One man kept better notes than everyone else.</h2>
-      <p><em>Munehisa Homma</em> traded rice in Sakata and did something nobody bothered with: he wrote down what the price did every single session, for years, and read the record back.</p>
-      <p>He wasn't looking for the news. He was looking for the <em>shape of the crowd</em> — where it panicked, where it got greedy, where it exhausted itself.</p>
+  </div>
+</section>
+
+<!-- ══ ACT I ═════════════════════════════════════════════════════ -->
+<section class="band band-line">
+  <div class="wrap act">
+    <figure class="act-fig rv" style="margin:0">
+      <div class="ph"><img src="/static/landing/img/plate_merchant.jpg" alt="A rice merchant reading the day's board at the Dōjima exchange"><video class="film" data-film="/static/landing/film/clips/02_merchant_web.mp4" poster="/static/landing/film/clips/02_merchant_poster.jpg" muted loop playsinline preload="none" aria-hidden="true" tabindex="-1"></video><div class="wipe"></div></div>
+      <figcaption class="act-cap"><span>Plate II — The merchant</span><span>Ōsaka · c. 1730</span></figcaption>
+    </figure>
+    <div class="act-body">
+      <span class="actno rv" data-d="1">Act I — Structure</span>
+      <h2 class="rv" data-d="2">A price is not a number. It is a shape with a memory.</h2>
+      <p class="rv" data-d="3">The rice merchants were not forecasting. They were reading structure — where
+        the last serious fall began, where buyers had defended before, how far a move
+        had retraced against itself.</p>
+      <p class="rv" data-d="4">Dōjima encodes exactly that and nothing more. A prior swing becomes an anchor.
+        The anchor projects a ladder. Price either respects the ladder or it does not,
+        and the engine cares about no other question. There is no sentiment model,
+        no news feed, no prediction of tomorrow.</p>
+      <p class="rv" data-d="5" style="color:var(--ink-lo);font-size:14px">
+        Four inputs, one geometry, two markets. The same code path prices a NIFTY option
+        and a Binance ladder.</p>
     </div>
   </div>
 </section>
 
-<!-- ═══ III · THE LEDGER ═══ -->
-<section class="band right" data-scene="ledger">
-  <div class="band-media"><img src="/static/landing/web_03_ledger_closeup.jpg" loading="lazy" alt="Hands writing prices in chalk on a board beside a burning candle"></div>
-  <div class="band-copy rv">
-    <div class="chapter-tag">Chapter III · The Ledger</div>
-    <h2 class="display">Four numbers, written by candlelight.</h2>
-    <p>Where it opened. Where it closed. The highest it reached, and the lowest it fell. Nothing else was recorded, because nothing else was needed.</p>
+<!-- ══ ACT II — the ledger, with chalk ═══════════════════════════ -->
+<section class="band band-line">
+  <div class="wrap act flip">
+    <figure class="act-fig rv" style="margin:0">
+      <div class="ph">
+        <img src="/static/landing/img/plate_ledger.jpg" alt="Hands chalking the day's prices onto a ledger board beside a lit candle"><video class="film" data-film="/static/landing/film/clips/03_chalk_web.mp4" poster="/static/landing/film/clips/03_chalk_poster.jpg" muted loop playsinline preload="none" aria-hidden="true" tabindex="-1"></video>
+        <div class="flame"></div>
+        <div class="chalk">
+          <span class="c">寄 <b>open</b></span>
+          <span class="c">高 <b>high</b></span>
+          <span class="c">安 <b>low</b></span>
+          <span class="c" id="tick">¥480</span>
+        </div>
+        <div class="wipe"></div>
+      </div>
+      <figcaption class="act-cap"><span>Plate III — The ledger</span><span>Chalk, board, candle</span></figcaption>
+    </figure>
+    <div class="act-body">
+      <span class="actno rv" data-d="1">Act II — Discipline</span>
+      <h2 class="rv" data-d="2">The rules were written before the trade, or they were not rules.</h2>
+      <p class="rv" data-d="3">Every parameter is committed to a file before the session opens: entry trigger,
+        stop distance, target, the exact minute an unresolved position is closed. The engine
+        cannot be argued with at 14:50 because there is nobody there to argue.</p>
+      <p class="rv" data-d="4">Entries are taken on the first second after a signal candle closes — not on
+        the candle that is still forming. That one distinction is the difference between a
+        backtest and a fantasy, and it is enforced in the same function for paper and live.</p>
+      <p class="rv" data-d="5" style="color:var(--ink-lo);font-size:14px">
+        Watch the last figure on the board. That is a live NIFTY print, chalked onto the
+        same four columns Ōsaka used.</p>
+    </div>
   </div>
 </section>
 
-<!-- ═══ IV · THE SHAPE ═══ -->
-<section class="shape" data-scene="shape">
-  <div class="rv">
-    <div class="chapter-tag">Chapter IV · The Shape</div>
-    <h2 class="display">Then he drew it as one mark.</h2>
-    <p>A body between the open and the close, a wick to each extreme. A full day of fear and conviction, compressed into a single brushstroke — and still, 275 years later, nobody has improved on it.</p>
-  </div>
-  <div class="shape-frame rv" style="transition-delay:.15s">
-    <img src="/static/landing/web_04_transition_candle.jpg" loading="lazy" alt="A single candlestick painted in ink on a paper scroll, glowing in candlelight">
-  </div>
-  <div class="ohlc rv" style="transition-delay:.25s">
-    <span>Open</span><span>High</span><span>Low</span><span>Close</span>
-  </div>
-</section>
-
-<!-- ═══ THE CHART: ink → light ═══ -->
-<section class="strip rv" id="chart" data-scene="terminal">
-  <div class="strip-head"><div class="chapter-tag">Two and a half centuries, one chart</div></div>
-  <div style="position:relative">
-    <div class="strip-fade"></div>
-    <svg viewBox="0 0 1400 520" fill="none" aria-label="A candlestick chart drawn in ink on the left, becoming a modern neon chart on the right">
-      <defs>
-        <linearGradient id="paperfade" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stop-color="#eadfbd" stop-opacity=".96"/>
-          <stop offset=".62" stop-color="#e6d7ae" stop-opacity=".85"/>
-          <stop offset="1" stop-color="#e6d7ae" stop-opacity="0"/>
-        </linearGradient>
-        <linearGradient id="dusk" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stop-color="#141a2c" stop-opacity="0"/>
-          <stop offset=".55" stop-color="#151b30" stop-opacity=".55"/>
-          <stop offset="1" stop-color="#181e38" stop-opacity=".8"/>
-        </linearGradient>
-        <filter id="papersoft" x="-8%" y="-8%" width="116%" height="116%"><feGaussianBlur stdDeviation="7"/></filter>
-      </defs>
-      <rect x="620" y="30" width="770" height="464" rx="18" fill="url(#dusk)"/>
-      <path d="M 14 46 Q 8 260 20 480 Q 330 496 640 474 L 660 258 L 636 40 Q 320 22 14 46 Z"
-            fill="url(#paperfade)" filter="url(#papersoft)"/>
-<g class="cnd" style="animation-delay:0.50s"><path d="M 30 247 C 28 255, 32 277, 30 285" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="22" y="260" width="17" height="12" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(-0.4 30 266)"/></g>
-<g class="cnd" style="animation-delay:0.55s"><path d="M 61 264 C 60 272, 63 267, 61 275" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="53" y="267" width="17" height="5" rx="4.5" fill="#e8d9b0" stroke="#33261731" stroke-width="2.6" style="stroke:#332617" transform="rotate(-0.7 61 269)"/></g>
-<g class="cnd" style="animation-delay:0.60s"><path d="M 92 257 C 91 265, 94 262, 92 270" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="84" y="258" width="17" height="9" rx="4.5" fill="#e8d9b0" stroke="#33261731" stroke-width="2.6" style="stroke:#332617" transform="rotate(1.3 92 263)"/></g>
-<g class="cnd" style="animation-delay:0.65s"><path d="M 123 178 C 122 186, 125 260, 123 268" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="115" y="209" width="17" height="49" rx="4.5" fill="#e8d9b0" stroke="#33261731" stroke-width="2.6" style="stroke:#332617" transform="rotate(1.4 123 234)"/></g>
-<g class="cnd" style="animation-delay:0.70s"><path d="M 155 205 C 153 213, 156 228, 155 236" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="146" y="209" width="17" height="12" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(1.3 155 216)"/></g>
-<g class="cnd" style="animation-delay:0.75s"><path d="M 186 208 C 184 216, 187 219, 186 227" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="177" y="222" width="17" height="3" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(-1.6 186 223)"/></g>
-<g class="cnd" style="animation-delay:0.80s"><path d="M 217 216 C 215 224, 218 278, 217 286" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="208" y="224" width="17" height="59" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(0.5 217 254)"/></g>
-<g class="cnd" style="animation-delay:0.85s"><path d="M 248 264 C 247 272, 250 279, 248 287" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="240" y="277" width="17" height="7" rx="4.5" fill="#e8d9b0" stroke="#33261731" stroke-width="2.6" style="stroke:#332617" transform="rotate(-0.3 248 280)"/></g>
-<g class="cnd" style="animation-delay:0.90s"><path d="M 279 265 C 278 273, 281 316, 279 324" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="271" y="277" width="17" height="47" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(-1.8 279 300)"/></g>
-<g class="cnd" style="animation-delay:0.95s"><path d="M 310 298 C 309 306, 312 331, 310 339" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="302" y="324" width="17" height="3" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(0.3 310 325)"/></g>
-<g class="cnd" style="animation-delay:1.00s"><path d="M 342 306 C 340 314, 343 349, 342 357" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="333" y="326" width="17" height="26" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(-1.8 342 339)"/></g>
-<g class="cnd" style="animation-delay:1.05s"><path d="M 373 350 C 371 358, 374 405, 373 413" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="364" y="352" width="17" height="43" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(-0.4 373 373)"/></g>
-<g class="cnd" style="animation-delay:1.10s"><path d="M 404 394 C 402 402, 405 431, 404 439" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="395" y="395" width="17" height="35" rx="4.5" fill="#2b2013" stroke="#1d1509" stroke-width="1.4" transform="rotate(1.2 404 412)"/></g>
-<g class="cnd" style="animation-delay:1.15s"><path d="M 435 425 C 434 433, 437 448, 435 456" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="427" y="428" width="17" height="3" rx="4.5" fill="#e8d9b0" stroke="#33261731" stroke-width="2.6" style="stroke:#332617" transform="rotate(-1.0 435 429)"/></g>
-<g class="cnd" style="animation-delay:1.20s"><path d="M 466 387 C 465 395, 468 462, 466 470" stroke="#3a2c1c" stroke-width="2.4" opacity=".85"/><rect x="458" y="404" width="17" height="25" rx="4.5" fill="#e8d9b0" stroke="#33261731" stroke-width="2.6" style="stroke:#332617" transform="rotate(-0.8 466 416)"/></g>
-<g class="cnd" style="animation-delay:1.25s"><path d="M 497 359 V 418" stroke="#a8b48a" stroke-width="2" opacity=".8"/><rect x="490" y="398" width="15" height="6" rx="3" fill="#a8b48a" opacity=".9"/></g>
-<g class="cnd" style="animation-delay:1.30s"><path d="M 529 371 V 400" stroke="#a8b48a" stroke-width="2" opacity=".8"/><rect x="521" y="376" width="15" height="22" rx="3" fill="#a8b48a" opacity=".9"/></g>
-<g class="cnd" style="animation-delay:1.35s"><path d="M 560 320 V 392" stroke="#a8b48a" stroke-width="2" opacity=".8"/><rect x="552" y="323" width="15" height="53" rx="3" fill="#a8b48a" opacity=".9"/></g>
-<g class="cnd" style="animation-delay:1.40s"><path d="M 591 287 V 334" stroke="#a8b48a" stroke-width="2" opacity=".8"/><rect x="583" y="290" width="15" height="33" rx="3" fill="#a8b48a" opacity=".9"/></g>
-<g class="cnd" style="animation-delay:1.45s"><path d="M 622 266 V 294" stroke="#a5876a" stroke-width="2" opacity=".8"/><rect x="615" y="290" width="15" height="3" rx="3" fill="#a5876a" opacity=".9"/></g>
-<g class="cnd" style="animation-delay:1.50s"><path d="M 653 288 V 347" stroke="#a5876a" stroke-width="2" opacity=".8"/><rect x="646" y="293" width="15" height="16" rx="3" fill="#a5876a" opacity=".9"/></g>
-<g class="cnd" style="animation-delay:1.55s"><path d="M 684 265 V 324" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="677" y="290" width="15" height="18" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:1.60s"><path d="M 716 271 V 304" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="708" y="290" width="15" height="7" rx="1.5" fill="#C2452D" style="filter: drop-shadow(0 0 8px rgba(194,69,45,.5))"/></g>
-<g class="cnd" style="animation-delay:1.65s"><path d="M 747 289 V 315" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="739" y="297" width="15" height="6" rx="1.5" fill="#C2452D" style="filter: drop-shadow(0 0 8px rgba(194,69,45,.5))"/></g>
-<g class="cnd" style="animation-delay:1.70s"><path d="M 778 295 V 310" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="770" y="303" width="15" height="5" rx="1.5" fill="#C2452D" style="filter: drop-shadow(0 0 8px rgba(194,69,45,.5))"/></g>
-<g class="cnd" style="animation-delay:1.75s"><path d="M 809 306 V 365" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="802" y="308" width="15" height="40" rx="1.5" fill="#C2452D" style="filter: drop-shadow(0 0 8px rgba(194,69,45,.5))"/></g>
-<g class="cnd" style="animation-delay:1.80s"><path d="M 840 339 V 383" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="833" y="348" width="15" height="31" rx="1.5" fill="#C2452D" style="filter: drop-shadow(0 0 8px rgba(194,69,45,.5))"/></g>
-<g class="cnd" style="animation-delay:1.85s"><path d="M 871 371 V 382" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="864" y="374" width="15" height="5" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:1.90s"><path d="M 903 341 V 386" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="895" y="355" width="15" height="19" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:1.95s"><path d="M 934 322 V 374" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="926" y="329" width="15" height="25" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.00s"><path d="M 965 276 V 334" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="957" y="292" width="15" height="38" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.05s"><path d="M 996 219 V 317" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="989" y="232" width="15" height="60" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.10s"><path d="M 1027 216 V 267" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1020" y="232" width="15" height="13" rx="1.5" fill="#C2452D" style="filter: drop-shadow(0 0 8px rgba(194,69,45,.5))"/></g>
-<g class="cnd" style="animation-delay:2.15s"><path d="M 1058 218 V 251" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1051" y="234" width="15" height="11" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.20s"><path d="M 1090 210 V 261" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1082" y="223" width="15" height="11" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.25s"><path d="M 1121 171 V 228" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1113" y="196" width="15" height="27" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.30s"><path d="M 1152 162 V 196" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1144" y="179" width="15" height="17" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.35s"><path d="M 1183 154 V 184" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1176" y="174" width="15" height="5" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.40s"><path d="M 1214 87 V 188" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1207" y="102" width="15" height="71" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.45s"><path d="M 1245 82 V 105" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1238" y="99" width="15" height="3" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.50s"><path d="M 1277 90 V 100" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1269" y="94" width="15" height="5" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.55s"><path d="M 1308 66 V 103" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1300" y="80" width="15" height="14" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.60s"><path d="M 1339 57 V 84" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1331" y="67" width="15" height="13" rx="1.5" fill="#2E9E6B" style="filter: drop-shadow(0 0 8px rgba(46,158,107,.55))"/></g>
-<g class="cnd" style="animation-delay:2.65s"><path d="M 1370 40 V 151" stroke="#5C6B7A" stroke-width="1.5" opacity=".75"/><rect x="1362" y="67" width="15" height="17" rx="1.5" fill="#C2452D" style="filter: drop-shadow(0 0 8px rgba(194,69,45,.5))"/></g>
-<!-- last close y=84 first y=260 -->
-
-    </svg>
+<!-- ══ ACT III — the candle draws itself ════════════════════════ -->
+<section class="band band-line">
+  <div class="wrap act">
+    <figure class="act-fig rv" style="margin:0">
+      <div class="ph"><img src="/static/landing/img/plate_candle.jpg" alt="A single candlestick emerging from the historical plate"><video class="film" data-film="/static/landing/film/clips/04_candle_web.mp4" poster="/static/landing/film/clips/04_candle_poster.jpg" muted loop playsinline preload="none" aria-hidden="true" tabindex="-1"></video><div class="wipe"></div></div>
+      <figcaption class="act-cap"><span>Plate IV — The candle</span><span>Unchanged in 328 years</span></figcaption>
+    </figure>
+    <div class="act-body">
+      <span class="actno rv" data-d="1">Act III — Continuity</span>
+      <h2 class="rv" data-d="2">The instrument you use today was invented to trade rice.</h2>
+      <p class="rv" data-d="3">Munehisa Homma's candle survived three centuries, four industrial revolutions
+        and the entire history of computing without a single change to its shape. Nothing
+        else on your screen can say that.</p>
+      <p class="rv" data-d="4">We did not modernise it. We automated the reading of it, then spent five years
+        proving the reading holds on real fills, at real lot sizes, net of every charge the
+        exchange and the government actually levy.</p>
+      <div class="chartcard rv" data-d="5" style="margin-top:26px">
+        <div class="chart-b" style="padding:14px 14px 8px">
+          <canvas id="cndl" height="150" aria-label="An animated candlestick sequence"></canvas>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- ═══ STATS — percentages only ═══ -->
-<section class="stats">
-  <div class="stats-row">
-    <div class="stat rv"><div class="k">Win Rate</div><div class="v">100%</div><p>Every closed round in the campaign history finished green.</p></div>
-    <div class="stat rv" style="transition-delay:.1s"><div class="k">Avg Round</div><div class="v up">+0.77%</div><p>Small, repeatable, fee-aware. Compounding does the shouting.</p></div>
-    <div class="stat rv" style="transition-delay:.2s"><div class="k">Best Round</div><div class="v up">+2.18%</div><p>Patience pays the orders that were already resting.</p></div>
-    <div class="stat rv" style="transition-delay:.3s"><div class="k">On Watch</div><div class="v gold">24/7</div><p>Paper first, live when trusted. The engine never leaves the desk.</p></div>
+<!-- ══ PROOF ════════════════════════════════════════════════════ -->
+<section class="band band-line" id="proof">
+  <div class="wrap">
+    <div class="sechead rv"><span class="kicker">The ledger</span><span class="rule"></span></div>
+    <h2 class="rv" data-d="1" style="max-width:20ch">Five years. 891 trading days. Nothing removed.</h2>
+    <p class="lede rv" data-d="2" style="margin-top:20px">
+      Every trade below was re-priced against real Upstox option premiums, at the lot
+      size actually in force on that expiry, net of brokerage, STT, exchange fees, GST,
+      SEBI turnover and stamp duty.
+    </p>
+
+    <div class="chartcard rv" data-d="3" style="margin-top:38px">
+      <div class="chart-h">
+        <div>
+          <span class="kicker">Cumulative net P&amp;L · Jan 2021 → Aug 2026</span>
+          <div style="font-family:var(--mono);font-size:clamp(24px,3vw,32px);color:var(--jade);
+                      margin-top:9px;font-variant-numeric:tabular-nums" id="bigno">₹0</div>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--brass)"></i> Cumulative net</span>
+          <span><i style="background:var(--jade)"></i> Winning day</span>
+          <span><i style="background:var(--vermilion)"></i> Losing day</span>
+        </div>
+      </div>
+      <div class="chart-b"><canvas id="eq" height="330" aria-label="Cumulative net profit and loss with daily bars"></canvas><div id="tip"></div></div>
+      <div class="chart-f">
+        Nothing here is smoothed. The first 46 months earned ₹3,81,178 across 634 trades —
+        ₹601 a trade. The last 21 months earned ₹7,79,393 across 301 — ₹2,589 a trade.
+        Two thirds of the result came from the final third of the book. Anyone who shows
+        you only the stretch after the marked line is selling you a regime, not a method.
+      </div>
+    </div>
+
+    <div class="stats rv" data-d="4" style="margin-top:14px">
+      <div class="stat"><div class="n up" data-count="1160571" data-pre="₹" data-grp="in">₹0</div>
+        <div class="k">Net, after every charge</div><div class="s">₹13,29,567 gross less ₹1,68,996 in charges. Itemised in the tearsheet.</div></div>
+      <div class="stat"><div class="n" data-count="935" data-suf="">0</div>
+        <div class="k">Trades</div><div class="s">51.0% won. The edge is size, not frequency of being right.</div></div>
+      <div class="stat"><div class="n" data-count="139" data-dec="2" data-div="100">0</div>
+        <div class="k">Profit factor</div><div class="s">₹1.39 returned for every ₹1.00 risked and lost.</div></div>
+      <div class="stat"><div class="n" data-count="904" data-dec="2" data-div="100" data-suf="×">0</div>
+        <div class="k">Return over drawdown</div><div class="s">Net profit measured against the worst hole it ever dug.</div></div>
+    </div>
+
+    <div class="split rv" data-d="5" style="margin-top:14px">
+      <div class="sp">
+        <div class="mark">What it costs to run</div>
+        <div class="dom">CHARGES, IN FULL</div>
+        <p>Flat ₹80 brokerage is 44% of all charges and does not scale with size — which is
+          precisely why small accounts are the ones that get quietly eaten.</p>
+        <div class="rows">
+          <div class="row"><span>Turnover traded</span><b>₹10.33 cr</b></div>
+          <div class="row"><span>Total charges</span><b>₹1,68,996</b></div>
+          <div class="row"><span>Charges / turnover</span><b>0.164%</b></div>
+          <div class="row"><span>Per trade</span><b>₹181</b></div>
+        </div>
+      </div>
+      <div class="sp">
+        <div class="mark">What it costs to fund</div>
+        <div class="dom">CAPITAL, AT EACH SIZE</div>
+        <p>Fund peak premium outstanding, plus the deepest drawdown, plus 30% headroom.
+          One lot is the floor — below it, the flat fee wins.</p>
+        <div class="rows">
+          <div class="row"><span>1 lot — the minimum</span><b>₹1,02,968 · 39%/yr</b></div>
+          <div class="row"><span>4 lots — as deployed</span><b>₹3,76,895 · 55%/yr</b></div>
+          <div class="row"><span>Charges eaten, 1 lot</span><b>33% of gross</b></div>
+          <div class="row"><span>Charges eaten, 4 lots</span><b>13% of gross</b></div>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- ═══ LEDGER — ROI only ═══ -->
-<section class="terminal rv" data-scene="terminal">
-  <h3>Closed Rounds</h3>
-  <div class="ledger">
-    <div class="ledger-head"><span>SYMBOL</span><span>ENTRY</span><span>EXIT</span><span>ROI</span></div>
-    <div class="ledger-row"><span>SOLUSDT</span><span>$75.09</span><span>$76.08</span><span class="roi">+1.31%</span></div>
-    <div class="ledger-row"><span>PAXGUSDT</span><span>$3,982.02</span><span>$4,010.91</span><span class="roi">+0.75%</span></div>
-    <div class="ledger-row"><span>BTCUSDT</span><span>$63,641.59</span><span>$64,110.94</span><span class="roi">+0.75%</span></div>
-    <div class="ledger-row"><span>BTCUSDT</span><span>$64,576.51</span><span>$64,832.38</span><span class="roi">+0.36%</span></div>
+<!-- ══ AUDIENCE ═════════════════════════════════════════════════ -->
+<section class="band band-line" id="who">
+  <div class="wrap">
+    <div class="sechead rv"><span class="kicker">Three ways in</span><span class="rule"></span></div>
+    <h2 class="rv" data-d="1" style="max-width:22ch">The same evidence answers three different questions.</h2>
+    <div class="aud rv" data-d="2" style="margin-top:36px">
+      <div class="acard">
+        <span class="who">Traders</span>
+        <h3>Run the signal on your own keys.</h3>
+        <p style="font-size:13.5px;color:var(--ink)">The geometry ships to you. Your API keys never leave your machine —
+          the executor runs locally and we could not place your orders if we wanted to.</p>
+        <ul>
+          <li>Signals delivered live, with the anchor and ladder that produced them</li>
+          <li>Local executor, one install, your broker, your custody</li>
+          <li>Every published signal timestamped before its outcome is known</li>
+        </ul>
+      </div>
+      <div class="acard">
+        <span class="who">Buyers</span>
+        <h3>License the method, not a black box.</h3>
+        <p style="font-size:13.5px;color:var(--ink)">You receive the rule set in full — anchors, ladder spacing, stop
+          logic, exit clock — because a method you cannot inspect is a method you cannot size.</p>
+        <ul>
+          <li>Complete parameter file, versioned, with the date each rule was frozen</li>
+          <li>Five-year tearsheet: monthly, yearly, daily, weekday, charge-by-charge</li>
+          <li>Slippage break-even published against the modelled assumption</li>
+        </ul>
+      </div>
+      <div class="acard">
+        <span class="who">Investors</span>
+        <h3>Diligence that starts with the drawdown.</h3>
+        <p style="font-size:13.5px;color:var(--ink)">Most decks open with the return. This one opens with the hole,
+          the flat years and the single trade that carries the tail.</p>
+        <ul>
+          <li>Regime split disclosed: 67% of profit from 32% of trades</li>
+          <li>Tail concentration named: best and worst ten days are 27% of the result</li>
+          <li>Raw trade log available for independent re-pricing</li>
+        </ul>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- ═══ CLOSER ═══ -->
-<section class="closer rv" id="enter">
-  <div class="chapter-tag">The hand that never blinks</div>
-  <h2 class="display">Homma read one market.<br>This one reads them all.</h2>
-  <p>Same shapes. Same crowd. Every timeframe, around the clock, acted on in milliseconds — with the discipline he had to hold in his own head.</p>
-  <a class="pill" href="/app">Enter the Terminal</a>
+<!-- ══ TWO MARKETS ══════════════════════════════════════════════ -->
+<section class="band band-line" id="markets">
+  <div class="wrap act">
+    <figure class="act-fig rv" style="margin:0">
+      <div class="ph"><img src="/static/landing/img/plate_bridge.jpg" alt="A paper price chart dissolving into a modern trading monitor"><div class="wipe"></div></div>
+      <figcaption class="act-cap"><span>Plate V — The bridge</span><span>Paper to screen</span></figcaption>
+    </figure>
+    <div class="act-body">
+      <span class="actno rv" data-d="1">One method, two markets</span>
+      <h2 class="rv" data-d="2">Rice, then index options, then crypto. The reading never changed.</h2>
+      <p class="rv" data-d="3">Structure does not know what it is drawn on. The engine that ladders a NIFTY
+        option is the engine that ladders a Binance pair — the same anchors, the
+        same geometry, different clocks and different fees.</p>
+      <div class="split rv" data-d="4" style="margin-top:26px">
+        <a class="sp" style="padding:26px 24px" href="https://philforge.in/app">
+          <div class="mark">PhilForge</div>
+          <div class="dom">PHILFORGE.IN · NSE OPTIONS</div>
+          <div class="rows" style="margin-top:18px">
+            <div class="row"><span>Session</span><b>09:15–15:30 IST</b></div>
+            <div class="row"><span>Instruments</span><b>NIFTY · BANKNIFTY</b></div>
+            <div class="row"><span>Evidence</span><b>5 yrs · 935 trades</b></div>
+          </div>
+          <span class="enter">Enter the equities desk <span class="ar">→</span></span>
+        </a>
+        <a class="sp" style="padding:26px 24px" href="https://crypto.philforge.in/app">
+          <div class="mark">CryptoForge</div>
+          <div class="dom">CRYPTOFORGE · 24/7 SPOT</div>
+          <div class="rows" style="margin-top:18px">
+            <div class="row"><span>Session</span><b>Continuous</b></div>
+            <div class="row"><span>Instruments</span><b>Major spot pairs</b></div>
+            <div class="row"><span>Evidence</span><b>Live, funded, small</b></div>
+          </div>
+          <span class="enter">Enter the crypto desk <span class="ar">→</span></span>
+        </a>
+      </div>
+      <p class="rv" data-d="5" style="color:var(--ink-lo);font-size:13px;margin-top:16px">
+        The crypto book is deliberately small and its record is short. We will not dress a
+        young book in the older one's numbers.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ CTA ══════════════════════════════════════════════════════ -->
+<section class="cta" id="access">
+  <div class="cta-plate" id="ctaPlate" style="background-image:url(/static/landing/img/plate_hero.jpg)"></div>
+  <div class="cta-grade"></div>
+  <div class="wrap">
+    <span class="kicker rv">Access</span>
+    <h2 class="rv" data-d="1" style="margin-top:18px;max-width:18ch">We would rather you left than sized this wrong.</h2>
+    <p class="lede rv" data-d="2" style="margin-top:20px">
+      Access is granted after a conversation, not after a card is charged. The last
+      question below is the one that decides it.
+    </p>
+    <form class="form rv" data-d="3" id="accessForm">
+      <div class="fld"><label for="f1">Name</label><input id="f1" placeholder="Your name" autocomplete="name"></div>
+      <div class="fld"><label for="f2">Email</label><input id="f2" type="email" placeholder="you@firm.com" autocomplete="email"></div>
+      <div class="fld"><label for="f3">Capital you would deploy</label>
+        <select id="f3"><option>Under ₹1,00,000</option><option>₹1–4 lakh</option>
+        <option>₹4–25 lakh</option><option>Above ₹25 lakh</option></select></div>
+      <div class="fld"><label for="f4">Maximum drawdown you can hold</label>
+        <select id="f4"><option>Under ₹50,000</option><option>₹50,000 – ₹1,30,000</option>
+        <option>₹1,30,000 – ₹5,00,000</option><option>Above ₹5,00,000</option></select></div>
+    </form>
+    <div class="hero-actions rv" data-d="4">
+      <a class="btn btn-p" id="accessSend" href="mailto:phil.shiny@gmail.com">Request access <span class="ar">→</span></a>
+      <a class="btn btn-g" href="#proof">Read the ledger first</a>
+    </div>
+    <p class="formnote rv" data-d="5">
+      If your drawdown answer is smaller than −₹1,28,429, we will tell you to trade one lot
+      or not at all. That conversation is free and it is the whole point of asking.
+    </p>
+  </div>
 </section>
 
 <footer>
-  <div class="logo"><div class="logo-mark" aria-hidden="true"><span class="logo-col a"></span><span class="logo-col b"></span><span class="logo-col c"></span><span class="logo-spark"></span></div><div class="logo-text">CRYPTO<br>FORGE</div></div>
-  <div class="tag">Perpetuals · Execution · Intelligence</div>
+  <div class="wrap frow">
+    <div>
+      <div class="brand" style="font-size:21px">
+        <img class="mark" src="/static/landing/img/mark_philforge.png"
+             width="120" height="120" alt="" aria-hidden="true" decoding="async">PhilForge&#8217;s Dōjima
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:10px">philforge.in · cryptoforge</div>
+    </div>
+    <div class="mono muted" style="font-size:11px;letter-spacing:.14em;text-align:right">
+      LEDGER LAST RE-PRICED<br><span style="color:var(--ink-hi)">14 AUG 2026 · IST</span>
+    </div>
+  </div>
+  <div class="wrap"><p class="fdis">
+    Past performance does not indicate future results. Figures shown are from a five-year
+    backtest re-priced on historical option premiums, net of modelled charges; they are not
+    an audited live track record. Derivatives carry the risk of total loss of capital.
+    Nothing here is investment advice or a solicitation.
+  </p></div>
 </footer>
 
-<script src="/static/landing/landing.js"></script>
-<script src="/static/landing/scene.js"></script>
-</body>
-</html>
+<script src="/static/landing/dojima.js" defer></script>

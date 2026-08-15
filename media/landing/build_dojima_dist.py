@@ -19,11 +19,14 @@ a link to it is not a form submission, so the link is the CSP-safe route).
 
     python3 build_dojima_dist.py
 
-Nothing that is served changes until someone copies dist/ over static/landing/.
+dist/ is untracked scratch. Nothing that is served changes until its contents
+are copied into BOTH front doors — CryptoForge's static/landing/index.html and
+PhilForge's static/landing/forge.html, which are the same page on two hosts.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import hashlib
 import re
@@ -33,6 +36,40 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "DOJIMA_LANDING.html"
 DIST = HERE / "dist"
+
+# Both apps serve this page at "/" while its files live under /static/landing/,
+# so a relative href="img/plate_hero.jpg" resolves to /img/plate_hero.jpg and
+# 404s — an unstyled page with no pictures and no console clue beyond the 404s
+# themselves. Every asset reference is therefore rewritten to an absolute path.
+# Pass --base "" to keep them relative for local preview out of dist/.
+DEFAULT_BASE = "/static/landing/"
+
+# One page, two hosts — but a social card cannot be relative: og:image is
+# fetched by a crawler with no page context, so a path-only value is dropped
+# and the link previews with no picture at all. It has to name a host, and
+# philforge.in is the one that owns the story.
+CANON_HOST = "https://philforge.in"
+
+
+# Any attribute, not a fixed list of them: the films are wired through
+# `poster=` and a lazy `data-film=`, and rewriting only href/src left those two
+# pointing at /film/clips/… — a hero that stays black and three 404s.
+ASSET_ATTR = re.compile(r'([a-zA-Z-]+=")(img/|film/|dojima\.)')
+ASSET_URL = re.compile(r"(url\()(img/|film/)")
+
+
+def rebase(html: str, base: str) -> str:
+    """Point every asset reference at `base` instead of the current directory."""
+    if not base:
+        return html
+    html = ASSET_ATTR.sub(lambda m: m.group(1) + base + m.group(2), html)
+    html = ASSET_URL.sub(lambda m: m.group(1) + base + m.group(2), html)
+    return re.sub(
+        r'((?:property="og:image"|name="twitter:image") content=")(' + re.escape(base) + ")",
+        lambda m: m.group(1) + CANON_HOST + m.group(2),
+        html,
+    )
+
 
 # Where access requests go. One line to change if Phil moves to a role address
 # on philforge.in; it is also injected into the page copy so the two can never
@@ -85,6 +122,12 @@ MAILTO_JS = """
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--base", default=DEFAULT_BASE, help='URL prefix for assets (default "%(default)s"; "" for relative)'
+    )
+    args = ap.parse_args()
+
     html = SRC.read_text(encoding="utf-8")
     DIST.mkdir(exist_ok=True)
     (DIST / "img").mkdir(exist_ok=True)
@@ -164,15 +207,19 @@ def main() -> None:
     for f in sorted(src_clips.glob("*_web.mp4")) + sorted(src_clips.glob("*_poster.jpg")):
         shutil.copy2(f, dst_clips / f.name)
 
+    # ── 6. absolute asset paths, because the page is served at "/" ──────
+    html = rebase(html, args.base)
     (DIST / "index.html").write_text(html, encoding="utf-8")
 
-    # ── 6. refuse to ship anything the CSP would silently kill ──────────
+    # ── 7. refuse to ship anything the CSP would silently kill ──────────
     bad = {
         "inline <style>": "<style>" in html,
         "inline <script>": re.search(r"<script>(?!\s*</script>)", html) is not None,
         "onclick=": "onclick=" in html,
         "onsubmit=": "onsubmit=" in html,
         "base64 image": ";base64," in html.replace("svg+xml,%3Csvg", ""),
+        # A single missed reference is enough to blank the page at "/".
+        "relative asset": bool(args.base) and (ASSET_ATTR.search(html) or ASSET_URL.search(html)) is not None,
     }
     failed = [k for k, v in bad.items() if v]
     if failed:
