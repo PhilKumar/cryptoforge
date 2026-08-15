@@ -12,18 +12,18 @@
   "prefer_related_applications": false,
   "screenshots": [
     {
-      "src": "/static/pwa-shots/cryptoforge-wide.jpg?v=20260803-1",
+      "src": "/static/pwa-shots/cryptoforge-wide.jpg?v=20260815-dojima",
       "sizes": "1280x800",
       "type": "image/jpeg",
       "form_factor": "wide",
-      "label": "CryptoForge — from ink to algorithm"
+      "label": "PhilForge’s Dōjima — the front door"
     },
     {
-      "src": "/static/pwa-shots/cryptoforge-narrow.jpg?v=20260803-1",
+      "src": "/static/pwa-shots/cryptoforge-narrow.jpg?v=20260815-dojima",
       "sizes": "750x1334",
       "type": "image/jpeg",
       "form_factor": "narrow",
-      "label": "CryptoForge — from ink to algorithm"
+      "label": "PhilForge’s Dōjima — the front door"
     }
   ],
   "icons": [

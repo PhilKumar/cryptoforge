@@ -1,4 +1,9 @@
-const CACHE_NAME = 'cryptoforge-shell-v85';
+// v86: the install screenshots and their labels changed, and the manifest is
+// cached here under a STABLE url with a cache-first rule — so an installed app
+// went on being offered the old "From Ink to Algorithm" pictures no matter how
+// many times the server was updated. Bumping this name is the only thing that
+// evicts it. Anything cached under a URL with no ?v= token needs this bump.
+const CACHE_NAME = 'cryptoforge-shell-v86';
 
 // Scripts and stylesheets are requested with a content-hash ?v= token that the
 // server computes at render time, so their URLs cannot be known here — listing
