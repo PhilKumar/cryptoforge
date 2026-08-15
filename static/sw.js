@@ -3,7 +3,9 @@
 // went on being offered the old "From Ink to Algorithm" pictures no matter how
 // many times the server was updated. Bumping this name is the only thing that
 // evicts it. Anything cached under a URL with no ?v= token needs this bump.
-const CACHE_NAME = 'cryptoforge-shell-v86';
+// v87: the app icons themselves changed. They are precached above under
+// stable URLs, so v86 may already be holding the old ones on a phone.
+const CACHE_NAME = 'cryptoforge-shell-v87';
 
 // Scripts and stylesheets are requested with a content-hash ?v= token that the
 // server computes at render time, so their URLs cannot be known here — listing

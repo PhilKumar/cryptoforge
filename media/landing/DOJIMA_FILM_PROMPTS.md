@@ -302,21 +302,52 @@ and single-source firelight locked. No text appearing, no hand morphing, no
 extra fingers, no style shift.
 ```
 
-### Shot 4 — The candle becomes real
+### Shot 4 — The candle becomes real  ·  TAKE 2 (use this one)
 Start image: `film/stage1/04_transition_candle_photoreal.png`
 
+**Why take 1 was retired.** Two faults, both visible on the live page:
+1. *"glows brighter and dimmer, as if lit from within"* was read as literal
+   combustion — the inked mark **ignited and burnt a hole through the
+   parchment**, embers and all. Phil: "it seems it is catching fire". A video
+   model will happily escalate any word that implies heat, so take 2 never
+   asks the ink to glow at all; the light comes from the real flame only, and
+   fire on the paper is named in the negatives instead of left to chance.
+2. *"very slow push-in"* threw the wax candle out of frame. It stands in the
+   right-hand strip of the plate, and the page crops ~5% off each side, so a
+   push-in loses the one object the whole shot is about. Phil: "the candle is
+   hidden". **Take 2 pulls back instead of pushing in** — the move can only
+   ever add to what is in frame.
+
+The idea is better too. Take 1 had the drawn candle passively pulsing. Here
+it **draws itself, in ink, in real time** — the instrument being invented in
+front of you — and then the flame answers it. That is the act's whole claim:
+*the instrument you use today was invented to trade rice*.
+
 ```
-Animate this exact image. Very slow push-in toward the parchment. The real
-candle's flame flickers and gutters, and its warm light sweeps across the
-paper. In time with the flame, the inked candlestick mark on the parchment
-glows brighter and dimmer, as if lit from within — the drawn candle and the
-burning candle breathing together. The parchment edge lifts very slightly in
-the draught. Steam curls from the teacup. A single slow bead of wax runs down
-the candle. Nothing else moves. The inked mark keeps exactly its shape and
-position throughout; no extra candlesticks, no axis, no numbers appear. Keep
-the photorealistic style and warm single-source firelight locked. No fast
-flicker, no strobing, no style shift.
+Animate this exact image. Hold on the parchment, then a very slow pull-back,
+so the brass candleholder and its burning candle stay fully in frame at all
+times and more of the desk is revealed. Over the first seconds the candlestick
+mark inks itself onto the parchment as if drawn by an unseen brush: first the
+thin vertical wick line descends in one stroke, then the rectangular body
+fills downward with black ink, the ink settling and darkening into the paper
+fibre. Once drawn, the mark holds perfectly still for the rest of the shot.
+The real candle's flame flickers and gutters, and its warm light sweeps slowly
+across the paper so the drawn mark's own cast shadow shifts with it. A single
+slow bead of wax runs down the candle. Steam curls from the teacup. The
+parchment edge lifts very slightly in the draught. Nothing else moves. Keep
+the photorealistic style, the warm single-source firelight and the sharp
+focus locked throughout.
 ```
+**Negative:** `the parchment catching fire, embers, scorch marks, burn holes,
+smoke or smoulder rising from the paper, the ink mark glowing or emitting
+light, the mark changing shape after it is drawn, extra candlesticks, axis
+lines, numbers or labels appearing, the candle leaving frame, push-in, fast
+flicker, strobing, style shift`
+
+**If the ink still refuses to draw itself,** fall back to a locked-off frame
+with only the flame, wax, steam and shadow moving, and keep the mark exactly
+as it starts — a still mark under moving firelight is a better shot than a
+burning one.
 
 ### Shot 5 — Paper to screen
 Needs its photoreal still first — plate 5 was never restyled (OpenArt ran out

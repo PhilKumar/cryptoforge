@@ -415,6 +415,11 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
   object-fit:cover;filter:saturate(.82) contrast(1.05);
   opacity:0;transition:opacity 1.1s ease}
 .act-fig .ph .film.lit{opacity:1}
+/* The figure is 16:10 and the films are 16:9, so cover eats ~5% off each side.
+   Usually that is invisible — but Plate IV's wax candle stands in the right
+   hand strip, and centring the crop cut its flame clean off. Bias this one
+   frame right; the only thing lost on the left is the edge of the book. */
+.act-fig .ph .film.film-right{object-position:90% 50%}
 
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;
