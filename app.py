@@ -8349,7 +8349,7 @@ def _landing_recent_rounds(trades: List[dict], limit: int = 6) -> list:
     return rows
 
 
-def _write_landing_ledger(summary: dict, capital_base: float, trades: Optional[List[dict]] = None) -> None:
+def _write_landing_ledger(summary: dict, capital_base: float, closed_rounds: Optional[List[dict]] = None) -> None:
     """Snapshot the closed-trade record for the public landing page.
 
     What is deliberately NOT in here: the account balance, the account's start
@@ -8364,6 +8364,10 @@ def _write_landing_ledger(summary: dict, capital_base: float, trades: Optional[L
     that only live fills go in the journal.
     """
     days = summary.get("equity_curve") or []
+    # NB: this local is an int and shadows anything named `trades` in scope -
+    # the round list is `closed_rounds` for exactly that reason. Naming it
+    # `trades` put a count where the rounds should have been and took the
+    # whole journal page down; see tests/test_landing_ledger.py.
     trades = int(summary.get("trade_count") or 0)
     if trades <= 0 or not days:
         return  # Nothing real to publish; the panel stays off rather than showing zeros.
@@ -8387,7 +8391,7 @@ def _write_landing_ledger(summary: dict, capital_base: float, trades: Optional[L
         "net_of_fees": True,
         "annualised": False,
         "source": "live fills only — no backtest, no paper rounds",
-        "recent": _landing_recent_rounds(trades or []),
+        "recent": _landing_recent_rounds(closed_rounds or []),
         "series": [
             {
                 "d": d.get("date"),
