@@ -60,3 +60,25 @@ class WarmupBudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoppedBookKeepsItsRecordTests(unittest.TestCase):
+    """Phil, 2026-08-17, after a restart: "Now the paper P&L is gone". The
+    journal on disk had six wins; a fresh, not-yet-started service showed
+    $0.00 · 0 wins because only start() and select_symbol() read it."""
+
+    def test_a_fresh_service_reads_its_journal_before_it_is_started(self):
+        import json
+        import os
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "paper_journal.jsonl"), "w") as journal:
+                journal.write(json.dumps({"kind": "BUY", "usd": 5.5}) + "\n")
+                journal.write(json.dumps({"kind": "TARGET", "net": 0.0125}) + "\n")
+                journal.write(json.dumps({"kind": "TARGET", "net": 0.0089}) + "\n")
+            with patch.object(rule3070_paper, "OUT", tmp):
+                snap = rule3070_paper.Rule3070PaperService("BTCUSDT").status()
+        self.assertFalse(snap["running"])
+        self.assertEqual(snap["closed"], {"count": 2, "net": 0.0214})

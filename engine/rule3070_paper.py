@@ -303,6 +303,11 @@ class Rule3070PaperService:
         self._primed_at = 0.0
         self._selection_generation = 0
         self._activity: List[dict] = []  # newest last; the console reads it reversed
+        # The book's record is on disk whether or not the writer is running. A
+        # fresh process showed "$0.00 · 0 wins" for a stopped book that had six
+        # wins in its journal (Phil, 2026-08-17: "Now the paper P&L is gone");
+        # selecting another symbol already reloaded them -- so must starting up.
+        self._load_closed_totals()
 
     @property
     def state_path(self) -> str:
