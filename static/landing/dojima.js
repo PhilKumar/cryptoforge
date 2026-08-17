@@ -57,6 +57,30 @@ addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>40),{passive:
   addEventListener('resize',()=>{if(innerWidth>820)shut()});
 })();
 
+/* ── the desk picker ──────────────────────────────────────────────
+   Both viewer sign-in links open it; the choice IS the destination. CSS also
+   shows it on :target, so this only adds the niceties — no hash jump, focus
+   on the first desk, Escape and the backdrop close it, and focus goes back
+   to whichever link opened it. */
+(function(){
+  const pick=document.getElementById('viewerpick');
+  if(!pick)return;
+  let opener=null;
+  const open=(from)=>{opener=from||null;pick.classList.add('open');
+    const first=document.getElementById('viewerpick-equities');if(first)first.focus()};
+  const close=()=>{pick.classList.remove('open');
+    if(location.hash==='#viewerpick')history.replaceState(null,'',location.pathname+location.search);
+    if(opener&&opener.focus)opener.focus();opener=null};
+  document.querySelectorAll('[data-viewerpick]').forEach(a=>a.addEventListener('click',e=>{
+    e.preventDefault();open(a)}));
+  document.getElementById('viewerpick-close').addEventListener('click',close);
+  pick.addEventListener('click',e=>{if(e.target===pick)close()});
+  addEventListener('keydown',e=>{if(e.key==='Escape'&&(pick.classList.contains('open')||location.hash==='#viewerpick'))close()});
+  /* Arrived on /#viewerpick (a shared link, or JS loaded late): :target already
+     shows it; take the class too so the close button works the same way. */
+  if(location.hash==='#viewerpick')open(null);
+})();
+
 /* ── reveal ─────────────────────────────────────────────────── */
 const io=new IntersectionObserver(es=>es.forEach(e=>{
   if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}

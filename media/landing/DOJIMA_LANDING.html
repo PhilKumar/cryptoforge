@@ -421,6 +421,40 @@ a.sp:hover .enter .ar{transform:translateX(4px)}
 .signin-note{display:block;margin-top:6px;font-family:var(--mono);font-size:10.5px;
   letter-spacing:.06em;color:var(--ink-lo);opacity:.72}
 
+/* ── The desk picker ─────────────────────────────────────────────
+   Phil, 2026-08-17: "when I click viewer's login, I should be asked equities
+   or crypto — from there it has to go to crypto or equities." Both viewer
+   sign-in links open this instead of pointing at one desk; each choice is an
+   absolute URL, so the same file answers correctly from either host.
+   Opened by JS on click, and by :target without it — the links' href is
+   #viewerpick, so a no-script visitor still gets the choice, not a dead link.
+   No inline handlers, no inline styles that CSP would drop. */
+.viewerpick{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;
+  padding:24px;background:rgba(6,7,10,.78);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.viewerpick.open,.viewerpick:target{display:flex}
+.viewerpick-card{position:relative;width:min(660px,100%);background:var(--obsidian);
+  border:1px solid var(--hairline-hi);padding:34px 30px 28px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.viewerpick-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--brass);margin:0}
+.viewerpick-card h3{margin-top:10px}
+.viewerpick-desks{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--hairline);
+  border:1px solid var(--hairline);margin-top:22px}
+.viewerpick-desks a.sp{padding:22px 20px}
+.viewerpick-desks a.sp .enter{margin-top:14px}
+.viewerpick-desks a.sp .dom{white-space:nowrap;letter-spacing:.14em}
+.viewerpick-note{display:block;margin-top:16px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.06em;color:var(--ink-lo);opacity:.72}
+.viewerpick-close{position:absolute;top:10px;right:10px;width:36px;height:36px;display:flex;
+  align-items:center;justify-content:center;background:transparent;border:1px solid transparent;
+  border-radius:2px;color:var(--ink-lo);font:400 20px/1 var(--sans);cursor:pointer;
+  transition:color .2s ease,border-color .2s ease}
+.viewerpick-close:hover{color:var(--ink-hi);border-color:var(--hairline-hi)}
+@media (max-width:560px){
+  .viewerpick{padding:14px}
+  .viewerpick-card{padding:28px 20px 22px}
+  .viewerpick-desks{grid-template-columns:1fr}
+}
+
 /* ══ FOOTER ═══════════════════════════════════════════════════════ */
 footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(--void)}
 .frow{display:flex;justify-content:space-between;gap:26px;flex-wrap:wrap;align-items:flex-start}
@@ -543,7 +577,7 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
       <a href="#who">Who it's for</a>
       <a href="#markets">Markets</a>
       <span class="desks"><a href="https://philforge.in/app">Equities</a><i>·</i><a href="https://crypto.philforge.in/app">Crypto</a></span>
-      <a href="https://philforge.in/app" class="navviewer">Viewer sign-in</a>
+      <a href="#viewerpick" class="navviewer" data-viewerpick>Viewer sign-in</a>
     </div>
     <a href="#access" class="navcta">Request access</a>
     <!-- Below 820px the links become a sheet under the bar rather than
@@ -896,7 +930,7 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
       or not at all. That conversation is free and it is the whole point of asking.
     </p>
     <p class="signin rv" data-d="6">
-      Already approved? <a href="https://philforge.in/app">Sign in to the viewer desk <span class="ar">&rarr;</span></a>
+      Already approved? <a href="#viewerpick" data-viewerpick>Sign in to the viewer desk <span class="ar">&rarr;</span></a>
       <span class="signin-note">Accounts are opened by hand, one conversation at a time &mdash; there is no sign-up form here.</span>
     </p>
   </div>
@@ -922,6 +956,32 @@ footer{border-top:1px solid var(--hairline);padding:46px 0 40px;background:var(-
     Nothing here is investment advice or a solicitation.
   </p></div>
 </footer>
+
+<!-- ══ THE DESK PICKER — which viewer desk? ═════════════════════════
+     Reached from both "Viewer sign-in" links. Two desks, two hosts; the
+     choice is the whole point. Closed with the ×, Escape, or the backdrop. -->
+<div class="viewerpick" id="viewerpick" role="dialog" aria-modal="true" aria-labelledby="viewerpick-title" aria-describedby="viewerpick-desc">
+  <div class="viewerpick-card">
+    <button type="button" class="viewerpick-close" id="viewerpick-close" aria-label="Close">&times;</button>
+    <p class="viewerpick-eyebrow">Viewer sign-in</p>
+    <h3 id="viewerpick-title">Which desk are you here to see?</h3>
+    <p id="viewerpick-desc" style="font-size:14px;margin-top:10px">Each desk has its own door and its own viewer PIN.
+      You can look at everything on the desk you were approved for, and change nothing.</p>
+    <div class="viewerpick-desks">
+      <a class="sp" href="https://philforge.in/app" id="viewerpick-equities">
+        <div class="mark">Equities</div>
+        <div class="dom">PHILFORGE.IN · NSE OPTIONS</div>
+        <span class="enter">Sign in as a viewer <span class="ar">&rarr;</span></span>
+      </a>
+      <a class="sp" href="https://crypto.philforge.in/app" id="viewerpick-crypto">
+        <div class="mark">Crypto</div>
+        <div class="dom">CRYPTO.PHILFORGE.IN · 24/7 SPOT</div>
+        <span class="enter">Sign in as a viewer <span class="ar">&rarr;</span></span>
+      </a>
+    </div>
+    <span class="viewerpick-note">Accounts are opened by hand, one conversation at a time &mdash; there is no sign-up form here.</span>
+  </div>
+</div>
 
 <script>
 /* ── old bookmarks ──────────────────────────────────────────────
@@ -981,6 +1041,30 @@ addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>40),{passive:
   /* Rotating a phone past the breakpoint must not leave a sheet stranded with
      max-height animating over a desktop row. */
   addEventListener('resize',()=>{if(innerWidth>820)shut()});
+})();
+
+/* ── the desk picker ──────────────────────────────────────────────
+   Both viewer sign-in links open it; the choice IS the destination. CSS also
+   shows it on :target, so this only adds the niceties — no hash jump, focus
+   on the first desk, Escape and the backdrop close it, and focus goes back
+   to whichever link opened it. */
+(function(){
+  const pick=document.getElementById('viewerpick');
+  if(!pick)return;
+  let opener=null;
+  const open=(from)=>{opener=from||null;pick.classList.add('open');
+    const first=document.getElementById('viewerpick-equities');if(first)first.focus()};
+  const close=()=>{pick.classList.remove('open');
+    if(location.hash==='#viewerpick')history.replaceState(null,'',location.pathname+location.search);
+    if(opener&&opener.focus)opener.focus();opener=null};
+  document.querySelectorAll('[data-viewerpick]').forEach(a=>a.addEventListener('click',e=>{
+    e.preventDefault();open(a)}));
+  document.getElementById('viewerpick-close').addEventListener('click',close);
+  pick.addEventListener('click',e=>{if(e.target===pick)close()});
+  addEventListener('keydown',e=>{if(e.key==='Escape'&&(pick.classList.contains('open')||location.hash==='#viewerpick'))close()});
+  /* Arrived on /#viewerpick (a shared link, or JS loaded late): :target already
+     shows it; take the class too so the close button works the same way. */
+  if(location.hash==='#viewerpick')open(null);
 })();
 
 /* ── reveal ─────────────────────────────────────────────────── */

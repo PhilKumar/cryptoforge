@@ -29,7 +29,7 @@
       <a href="#who">Who it's for</a>
       <a href="#markets">Markets</a>
       <span class="desks"><a href="https://philforge.in/app">Equities</a><i>·</i><a href="https://crypto.philforge.in/app">Crypto</a></span>
-      <a href="https://philforge.in/app" class="navviewer">Viewer sign-in</a>
+      <a href="#viewerpick" class="navviewer" data-viewerpick>Viewer sign-in</a>
     </div>
     <a href="#access" class="navcta">Request access</a>
     <!-- Below 820px the links become a sheet under the bar rather than
@@ -381,7 +381,7 @@
       or not at all. That conversation is free and it is the whole point of asking.
     </p>
     <p class="signin rv" data-d="6">
-      Already approved? <a href="https://philforge.in/app">Sign in to the viewer desk <span class="ar">&rarr;</span></a>
+      Already approved? <a href="#viewerpick" data-viewerpick>Sign in to the viewer desk <span class="ar">&rarr;</span></a>
       <span class="signin-note">Accounts are opened by hand, one conversation at a time &mdash; there is no sign-up form here.</span>
     </p>
   </div>
@@ -407,5 +407,31 @@
     Nothing here is investment advice or a solicitation.
   </p></div>
 </footer>
+
+<!-- ══ THE DESK PICKER — which viewer desk? ═════════════════════════
+     Reached from both "Viewer sign-in" links. Two desks, two hosts; the
+     choice is the whole point. Closed with the ×, Escape, or the backdrop. -->
+<div class="viewerpick" id="viewerpick" role="dialog" aria-modal="true" aria-labelledby="viewerpick-title" aria-describedby="viewerpick-desc">
+  <div class="viewerpick-card">
+    <button type="button" class="viewerpick-close" id="viewerpick-close" aria-label="Close">&times;</button>
+    <p class="viewerpick-eyebrow">Viewer sign-in</p>
+    <h3 id="viewerpick-title">Which desk are you here to see?</h3>
+    <p id="viewerpick-desc" style="font-size:14px;margin-top:10px">Each desk has its own door and its own viewer PIN.
+      You can look at everything on the desk you were approved for, and change nothing.</p>
+    <div class="viewerpick-desks">
+      <a class="sp" href="https://philforge.in/app" id="viewerpick-equities">
+        <div class="mark">Equities</div>
+        <div class="dom">PHILFORGE.IN · NSE OPTIONS</div>
+        <span class="enter">Sign in as a viewer <span class="ar">&rarr;</span></span>
+      </a>
+      <a class="sp" href="https://crypto.philforge.in/app" id="viewerpick-crypto">
+        <div class="mark">Crypto</div>
+        <div class="dom">CRYPTO.PHILFORGE.IN · 24/7 SPOT</div>
+        <span class="enter">Sign in as a viewer <span class="ar">&rarr;</span></span>
+      </a>
+    </div>
+    <span class="viewerpick-note">Accounts are opened by hand, one conversation at a time &mdash; there is no sign-up form here.</span>
+  </div>
+</div>
 
 <script src="/static/landing/dojima.js?v=__ASSET_VERSION__" defer></script>

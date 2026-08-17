@@ -116,14 +116,34 @@ const check = (name, pass, detail) => {
   // The way in for someone already approved. Accounts are opened by hand in the
   // admin console, so this must NOT read as a sign-up: assert the door AND the
   // sentence that says there is no self-serve form behind it.
-  const signin = await page.evaluate(() => {
+  // Phil, 2026-08-17: the sign-in asks WHICH desk — equities or crypto — and
+  // each answer is that desk's own door. Both sign-in links open the picker;
+  // the picker holds exactly the two hosts.
+  const signin = await page.evaluate(async () => {
     const a = document.querySelector('.signin a');
     const note = document.querySelector('.signin-note');
-    return a ? { href: a.href, text: a.textContent.trim(), note: (note && note.textContent) || '' } : null;
+    const pick = document.getElementById('viewerpick');
+    const before = pick ? getComputedStyle(pick).display : 'missing';
+    a.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const after = pick ? getComputedStyle(pick).display : 'missing';
+    const eq = document.getElementById('viewerpick-equities');
+    const cr = document.getElementById('viewerpick-crypto');
+    const focused = document.activeElement === eq;
+    document.getElementById('viewerpick-close').click();
+    await new Promise((r) => setTimeout(r, 150));
+    const closed = pick ? getComputedStyle(pick).display : 'missing';
+    return a ? { href: a.getAttribute('href'), text: a.textContent.trim(), note: (note && note.textContent) || '',
+      before, after, closed, focused, eq: eq && eq.href, cr: cr && cr.href, hash: location.hash } : null;
   });
-  check('approved viewers have a way in', !!signin && /^https:\/\/philforge\.in\/app$/.test(signin.href)
-    && /no sign-up form/i.test(signin.note),
+  check('approved viewers have a way in', !!signin && signin.href === '#viewerpick' && /no sign-up form/i.test(signin.note),
     signin ? `${signin.href} — "${signin.text}"` : 'no sign-in link');
+  check('the sign-in asks which desk', !!signin && signin.before === 'none' && signin.after === 'flex'
+    && signin.closed === 'none' && signin.focused && signin.hash === '',
+    signin ? `before=${signin.before} after=${signin.after} closed=${signin.closed} focus-on-equities=${signin.focused} hash="${signin.hash}"` : 'no picker');
+  check('the picker offers the two desks by host', !!signin
+    && signin.eq === 'https://philforge.in/app' && signin.cr === 'https://crypto.philforge.in/app',
+    signin ? `${signin.eq} | ${signin.cr}` : 'no picker');
 
   // ── retina: the canvas-doubling failure is invisible at dpr 1 ──────────
   // A HiDPI helper that reads back the same height attribute it writes grows
@@ -207,9 +227,35 @@ const check = (name, pass, detail) => {
   check('the phone menu opens every link', menu.labels.length === 7 && menu.expanded === 'true',
     `${menu.labels.length} links: ${menu.labels.join(', ')}`);
   check('viewer sign-in is reachable on a phone', menu.viewerVisible && menu.insideViewport
-    && /^https:\/\/philforge\.in\/app$/.test(menu.viewerHref) && menu.viewerTall >= 40,
+    && /#viewerpick$/.test(menu.viewerHref) && menu.viewerTall >= 40,
     `visible=${menu.viewerVisible} height=${menu.viewerTall}px in-viewport=${menu.insideViewport}`);
   check('the sheet closes behind a link', menu.closesAfterTap, `still open=${!menu.closesAfterTap}`);
+  // The nav sign-in on a phone opens the picker, closes the sheet behind it,
+  // and the two desk cards both fit inside a 390px viewport.
+  const phonePick = await m.evaluate(async () => {
+    document.getElementById('navtoggle').click();
+    await new Promise((r) => setTimeout(r, 400));
+    document.querySelector('.navviewer').click();
+    await new Promise((r) => setTimeout(r, 300));
+    const pick = document.getElementById('viewerpick');
+    const card = document.querySelector('.viewerpick-card').getBoundingClientRect();
+    const eq = document.getElementById('viewerpick-equities').getBoundingClientRect();
+    const cr = document.getElementById('viewerpick-crypto').getBoundingClientRect();
+    const out = {
+      shown: getComputedStyle(pick).display,
+      sheetShut: !document.getElementById('navlinks').classList.contains('open'),
+      cardFits: card.left >= 0 && card.right <= innerWidth && card.top >= 0 && card.bottom <= innerHeight,
+      eqTall: Math.round(eq.height), crTall: Math.round(cr.height),
+      stacked: cr.top >= eq.bottom - 1,
+    };
+    dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await new Promise((r) => setTimeout(r, 200));
+    out.escClosed = getComputedStyle(pick).display === 'none';
+    return out;
+  });
+  check('the phone sign-in opens the picker and it fits', phonePick.shown === 'flex' && phonePick.sheetShut
+    && phonePick.cardFits && phonePick.stacked && phonePick.eqTall >= 44 && phonePick.crTall >= 44 && phonePick.escClosed,
+    `shown=${phonePick.shown} sheet-shut=${phonePick.sheetShut} fits=${phonePick.cardFits} stacked=${phonePick.stacked} h=${phonePick.eqTall}/${phonePick.crTall} esc=${phonePick.escClosed}`);
   check('headline scaled down', mob.h1 < 48, `${mob.h1}px`);
   // The performance contract on a phone: the hero runs, and ONLY the hero.
   // It used to fetch nothing at all, which left mobile looking at stills.
