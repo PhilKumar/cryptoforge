@@ -357,7 +357,11 @@
   /* ── Topbar ── */
   .app-topbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    /* The right-hand group grew two chips (who is signed in, VIEW ONLY) and
+       overflowed its 1fr column leftward, over the ticker. Its column may
+       never be narrower than its content; the brand yields (its subtitle
+       ellipsizes) and the ticker stays centred whenever there is room. */
+    grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
     align-items: center;
     gap: 16px;
     padding: 10px 18px;
@@ -593,6 +597,18 @@
     font-size: 11px; font-weight: 800; text-transform: uppercase;
   }
   [data-theme="light"] .topbar-user-chip { background: rgba(248,250,252,0.86); border-color: rgba(15,23,42,0.08); color: #0f172a; }
+  /* [hidden] must beat the button's display rule, or a viewer sees the gear. */
+  #topbar-admin-btn[hidden] { display: none !important; }
+  /* Between a laptop and a phone the ticker, clock and nine controls share
+     one row: the two chips go compact — a round initial, and "VIEW". */
+  @media (max-width: 1440px) {
+    .topbar-user-chip { width: 32px; min-width: 32px; padding: 0; justify-content: center; }
+    .topbar-user-name, .topbar-user-role { display: none; }
+    .topbar-user-initial { display: inline-flex; }
+    html.read-only-account .topbar-viewer-chip { padding: 5px 8px; letter-spacing: 0.8px; font-size: 10px; }
+    .topbar-viewer-chip-long { display: none; }
+    .topbar-viewer-chip-short { display: inline; }
+  }
   /* On a phone the icon row is full, so the chip becomes a round initial:
      the name and role would squeeze the clock to nothing. */
   @media (max-width: 767px) {
