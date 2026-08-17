@@ -228,8 +228,37 @@ const bandWalk = async (pg) => {
     const leaked = ['account_value_usd', 'account_start_usd', 'account_roi_pct', 'invested_usd',
       'open_invested_usd', 'by_coin', 'trades_detail'].filter((k) => rec.keys.includes(k));
     check('snapshot leaks no account figures', leaked.length === 0, leaked.join(', ') || rec.keys.length + ' public keys, none of them balances');
-    // Losing days are the argument. If the series has them, the lane must draw them.
-    check('losing days are in the series', rec.down > 0, `${rec.down} down days published`);
+    // This used to assert `rec.down > 0` — that losing days EXIST. That is a
+    // property of Phil's trading, not of the page, and it went red the moment
+    // the real snapshot replaced the fixture (48 closed rounds, none of them a
+    // loss, because the engine has no path that closes one). What the page owes
+    // is that each day is drawn on the side its sign says, which is a promise
+    // the code can actually keep — and which was being broken.
+    const lane = await page.evaluate(() => {
+      const cv = document.getElementById('ledger');
+      const ctx = cv.getContext('2d');
+      const DPR = Math.min(2, devicePixelRatio || 1);
+      const mid = Math.round(cv.height - (62 * DPR) / 2);
+      const strip = (y0) => ctx.getImageData(0, y0, cv.width, 29).data;
+      const tally = (d) => { let g = 0, r = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 40) continue;
+          if (d[i + 1] > 120 && d[i + 1] > d[i] + 40 && d[i + 1] > d[i + 2] + 25) g++;
+          else if (d[i] > 150 && d[i] > d[i + 1] + 40) r++;
+        }
+        return { g, r }; };
+      return { above: tally(strip(mid - 30)), below: tally(strip(mid + 2)) };
+    });
+    // A winning day below the centreline reads as a loss, and vice versa. The
+    // min-height clamp was applied to the bar's height but not its origin, so
+    // every day too small to draw — most of them, against a $1.09 peak — grew
+    // DOWNWARD from the line. 90 green pixels sat on the losing side.
+    check('each day is drawn on the side its sign says',
+      lane.below.g === 0 && lane.above.r === 0,
+      `${lane.below.g} winning px below the line, ${lane.above.r} losing px above it`);
+    // And the lane must actually be carrying the days it was given.
+    check('the daily lane is drawn', lane.above.g + lane.below.r > 0,
+      `${lane.above.g} up px, ${lane.below.r} down px (${rec.down} down days in the series)`);
   }
 
   // canvases actually painted something

@@ -552,9 +552,14 @@
           const bw = Math.max(2 * DPR, Math.min(11 * DPR, (w - padL - padR) / s.length * 0.62));
           for (let i = 0; i < shown; i++) {
             const v = s[i].p;
-            const hgt = (Math.abs(v) / peak) * (barLane / 2 - 5 * DPR);
+            // The minimum height has to be applied BEFORE the origin, not after.
+            // Clamping only the height left a winning day too small to draw
+            // starting at laneMid - hgt (≈ the line) and extending 1.5px DOWN —
+            // painting a win in the position that means a loss. It fired on the
+            // real series, where the peak day is $1.09 and most days are cents.
+            const hgt = Math.max(1.5 * DPR, (Math.abs(v) / peak) * (barLane / 2 - 5 * DPR));
             ctx.fillStyle = v >= 0 ? 'rgba(74,222,155,.85)' : 'rgba(255,122,147,.9)';
-            ctx.fillRect(X(i) - bw / 2, v >= 0 ? laneMid - hgt : laneMid, bw, Math.max(1.5 * DPR, hgt));
+            ctx.fillRect(X(i) - bw / 2, v >= 0 ? laneMid - hgt : laneMid, bw, hgt);
           }
           ctx.fillStyle = 'rgba(142,152,170,1)';
           ctx.font = `${9.5 * DPR}px "JetBrains Mono", ui-monospace, monospace`;
