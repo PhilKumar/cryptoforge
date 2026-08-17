@@ -5,7 +5,12 @@
 // evicts it. Anything cached under a URL with no ?v= token needs this bump.
 // v87: the app icons themselves changed. They are precached above under
 // stable URLs, so v86 may already be holding the old ones on a phone.
-const CACHE_NAME = 'cryptoforge-shell-v87';
+// v88: crypto.philforge.in stopped serving the shared Dojima landing and got
+// its own. The install screenshots were pictures of Dojima, and the manifest
+// that points at them is cached here CACHE-FIRST under a stable URL, so a new
+// ?v= token on the images alone would never have been seen by an installed
+// app. This bump is what evicts the old manifest.
+const CACHE_NAME = 'cryptoforge-shell-v88';
 
 // Scripts and stylesheets are requested with a content-hash ?v= token that the
 // server computes at render time, so their URLs cannot be known here — listing

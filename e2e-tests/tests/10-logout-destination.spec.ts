@@ -29,12 +29,12 @@ test('signing out lands on the landing page, not the unlock screen', async ({ pa
 
   const landed = await page.evaluate(() => ({
     path: location.pathname,
-    epigraph: !!document.querySelector('.epi'),
+    landing: document.body.dataset.landing || '',
     keypad: !!document.querySelector('#unlock-btn'),
     navTabs: document.querySelectorAll('.nav-tab').length,
   }));
   expect(landed.path).toBe('/');
-  expect(landed.epigraph).toBe(true);
+  expect(landed.landing).toBe('crypto');
   expect(landed.keypad).toBe(false);
   expect(landed.navTabs).toBe(0);
 

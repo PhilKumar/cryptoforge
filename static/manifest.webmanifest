@@ -12,14 +12,14 @@
   "prefer_related_applications": false,
   "screenshots": [
     {
-      "src": "/static/pwa-shots/cryptoforge-wide.jpg?v=20260815-dojima",
+      "src": "/static/pwa-shots/cryptoforge-wide.jpg?v=20260817-crypto",
       "sizes": "1280x800",
       "type": "image/jpeg",
       "form_factor": "wide",
       "label": "PhilForge’s Dōjima — the front door"
     },
     {
-      "src": "/static/pwa-shots/cryptoforge-narrow.jpg?v=20260815-dojima",
+      "src": "/static/pwa-shots/cryptoforge-narrow.jpg?v=20260817-crypto",
       "sizes": "750x1334",
       "type": "image/jpeg",
       "form_factor": "narrow",

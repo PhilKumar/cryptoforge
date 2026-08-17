@@ -1,6 +1,6 @@
 {
   "source": "CRYPTO_Trade_Sheet_fixed (Google Sheets)",
-  "capital_base_usd": 2000.0,
+  "capital_base_usd": 200.0,
   "imported_at": "2026-07-20",
   "trades": [
     {
@@ -383,5 +383,6 @@
         }
       ]
     }
-  ]
+  ],
+  "capital_base_note": "The account was funded once with $200 and never topped up. This is the denominator of every percentage the journal and the public landing ledger report; it read 2000.0 until 2026-08-17, which made every percentage 10x too small."
 }

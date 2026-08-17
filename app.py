@@ -8282,6 +8282,69 @@ def _journal_summary(trades: List[dict], capital_base: float, account_value: Opt
     }
 
 
+# The public landing ledger. `/` is served to anyone, and /api/journal/trades
+# makes three Binance calls per request and returns the account's balance — so
+# the landing must never call it. This writes a deliberately small, public-safe
+# snapshot to a static file that the landing fetches instead.
+_LANDING_LEDGER_FILE = os.path.join(_HERE, "static", "landing", "ledger.json")
+
+
+def _write_landing_ledger(summary: dict, capital_base: float) -> None:
+    """Snapshot the closed-trade record for the public landing page.
+
+    What is deliberately NOT in here: the account balance, the account's start
+    value, open positions, per-coin breakdowns, invested amounts, and anything
+    that would let a reader infer the size of the account beyond the capital
+    base Phil has chosen to state. Percentages and counts only, plus the daily
+    series — which is the point: the landing publishes the SEQUENCE, losing days
+    included, not a single figure ([[proj_cryptoforge_own_landing]] honesty band).
+
+    Backtested results are never mixed in. A blended live/simulated figure
+    cannot be checked by anyone, including us, and the landing says in print
+    that only live fills go in the journal.
+    """
+    days = summary.get("equity_curve") or []
+    trades = int(summary.get("trade_count") or 0)
+    if trades <= 0 or not days:
+        return  # Nothing real to publish; the panel stays off rather than showing zeros.
+    net = _coerce_float_safe(summary.get("realized_pnl_usd"))
+    payload = {
+        "as_of": datetime.now(_IST_TZ).strftime("%Y-%m-%d %H:%M IST"),
+        "since": days[0].get("date") or "",
+        "through": days[-1].get("date") or "",
+        "trades": trades,
+        "wins": int(summary.get("win_count") or 0),
+        "losses": int(summary.get("loss_count") or 0),
+        "trading_days": len(days),
+        "net_usd": round(net, 2),
+        "fees_usd": round(_coerce_float_safe(summary.get("fees_usd")), 2),
+        # Net of commission, over the money the account was funded with. Not
+        # annualised: a few dozen trades over a few weeks does not carry a
+        # yearly figure, and inventing one is the fastest way to lose a reader
+        # who divides it back out.
+        "capital_base_usd": round(capital_base, 2),
+        "net_pct_of_capital": round(net / capital_base * 100, 2) if capital_base else None,
+        "net_of_fees": True,
+        "annualised": False,
+        "source": "live fills only — no backtest, no paper rounds",
+        "series": [
+            {
+                "d": d.get("date"),
+                "p": round(_coerce_float_safe(d.get("pnl")), 4),
+                "c": round(_coerce_float_safe(d.get("cumulative_pnl")), 4),
+            }
+            for d in days
+        ],
+    }
+    try:
+        tmp = _LANDING_LEDGER_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+        os.replace(tmp, _LANDING_LEDGER_FILE)  # atomic: the landing never reads a half-written file
+    except Exception as exc:
+        _logger.warning("[LEDGER] could not write the public landing ledger: %s", exc)
+
+
 def _coerce_float_safe(value, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -8442,13 +8505,21 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
     # exchange order id) so the row can show a "how we took the trade" chart.
     _link_trades_to_campaigns(trades)
 
+    summary = _journal_summary(trades, capital_base, account_value)
+    # Refresh the public landing snapshot from the same figures the journal
+    # shows, so the two can never disagree. Only when the exchange was actually
+    # read: a sheet-only summary would quietly publish a shorter, all-winners
+    # record as if it were the whole thing.
+    if broker_trades:
+        _write_landing_ledger(summary, capital_base)
+
     return {
         "status": "ok",
         "source": doc.get("source") or "",
         "imported_at": doc.get("imported_at") or "",
         "capital_base_usd": capital_base,
         "trades": trades,
-        "summary": _journal_summary(trades, capital_base, account_value),
+        "summary": summary,
         "converts": converts,
         "convert_error": convert_error,
         "convert_supported": bool(getattr(delta, "get_convert_history", None)) and _broker_is_configured(),

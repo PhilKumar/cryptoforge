@@ -1,437 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>PhilForge&#8217;s Dōjima</title>
-<meta name="description" content="One geometric method, run across Indian options and crypto — with every losing day published, because the losing days are the only part you cannot fake.">
-<meta name="theme-color" content="#06070A">
+<title>CryptoForge</title>
+<meta name="description" content="A rule-based crypto desk on Binance that runs around the clock and writes every trade into a journal you can read — fees included, losing days first.">
+<meta name="theme-color" content="#05060B">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="PhilForge&#8217;s Dōjima">
-<meta property="og:title" content="They ran it on four numbers, written by candlelight.">
-<meta property="og:description" content="One geometric method, run across Indian options and crypto — with every losing day published.">
-<meta property="og:image" content="https://philforge.in/static/landing/film/clips/01_port_poster.jpg">
+<meta property="og:site_name" content="CryptoForge">
+<meta property="og:title" content="A desk that never gets tired, greedy or scared.">
+<meta property="og:description" content="Rule-based crypto trading on Binance, around the clock — every trade journaled with its fee, losing days first.">
+<meta property="og:image" content="https://crypto.philforge.in/static/landing/og-crypto.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="They ran it on four numbers, written by candlelight.">
-<meta name="twitter:description" content="One geometric method, run across Indian options and crypto — with every losing day published.">
-<meta name="twitter:image" content="https://philforge.in/static/landing/film/clips/01_port_poster.jpg">
+<meta name="twitter:title" content="A desk that never gets tired, greedy or scared.">
+<meta name="twitter:description" content="Rule-based crypto trading on Binance, around the clock — every trade journaled with its fee, losing days first.">
+<meta name="twitter:image" content="https://crypto.philforge.in/static/landing/og-crypto.jpg">
 <link rel="icon" type="image/png" sizes="64x64" href="/static/landing/img/mark_favicon.png?v=__ASSET_VERSION__">
 <link rel="apple-touch-icon" href="/static/landing/img/mark_favicon.png?v=__ASSET_VERSION__">
-<link rel="stylesheet" href="/static/landing/dojima.css?v=__ASSET_VERSION__">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/landing/crypto.css?v=__ASSET_VERSION__">
+</head>
+<body data-landing="crypto">
+<div class="bg-grid" aria-hidden="true"></div>
 
 <nav id="nav">
-  <a class="brand" href="#top">
-    <img class="mark" src="/static/landing/img/mark_philforge.png?v=__ASSET_VERSION__"
-         width="264" height="312" alt="" aria-hidden="true" decoding="async">
-    <span class="bw"><span class="bw-1">PhilForge&#8217;s</span><span class="bw-2">Dōjima</span></span>
-  </a>
-  <div class="navright">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img class="mark" src="/static/landing/img/mark_philforge.png?v=__ASSET_VERSION__" width="120" height="120" alt="" aria-hidden="true" decoding="async">
+      <span>CryptoForge<small>a PhilForge desk</small></span>
+    </a>
     <div class="navlinks" id="navlinks">
+      <a href="#record">The record</a>
       <a href="#method">Method</a>
-      <a href="#proof">Proof</a>
-      <a href="#who">Who it's for</a>
-      <a href="#markets">Markets</a>
-      <span class="desks"><a href="https://philforge.in/app">Equities</a><i>·</i><a href="https://crypto.philforge.in/app">Crypto</a></span>
-      <a href="#viewerpick" class="navviewer" data-viewerpick>Viewer sign-in</a>
+      <a href="#desk">The desk</a>
+      <a href="#honesty">Honesty</a>
+      <a href="#access">Access</a>
+      <a href="/app" class="navviewer">Viewer sign-in</a>
+      <a href="/app" class="navcta">Sign in</a>
     </div>
-    <a href="#access" class="navcta">Request access</a>
-    <!-- Below 820px the links become a sheet under the bar rather than
-         disappearing. Seven links cannot sit in a 390px row without shrinking
-         the type, and the type is not the thing to give up. -->
-    <button type="button" class="navtoggle" id="navtoggle"
-            aria-expanded="false" aria-controls="navlinks" aria-label="Open menu">Menu</button>
+    <button class="navtoggle" id="navToggle" type="button"
+            aria-label="Menu" aria-expanded="false" aria-controls="navlinks">
+      <span class="bars" aria-hidden="true"><i></i><i></i></span>
+    </button>
   </div>
 </nav>
 
-<!-- ══ EPIGRAPH — Ecclesiastes 10:19 ═════════════════════════════ -->
-<section class="epi epi-open" id="top" aria-labelledby="epiverse">
+<!-- ══ HERO ═══════════════════════════════════════════════════════ -->
+<header class="hero" id="top">
+  <video class="hero-film" id="heroFilm" data-film="/static/landing/film/clips/00_plate_web.mp4"
+         poster="/static/landing/film/clips/00_plate_poster.jpg?v=__ASSET_VERSION__" muted loop playsinline
+         preload="none" aria-hidden="true" tabindex="-1"></video>
+  <canvas class="aurora" id="aurora" aria-hidden="true"></canvas>
+  <canvas class="hero-stars" id="stars" aria-hidden="true"></canvas>
+  <div class="hero-vig" aria-hidden="true"></div>
   <div class="wrap">
-    <p class="heb rv" lang="he" dir="rtl" translate="no">וְהַכֶּ֖סֶף</p>
-    <p class="epi-tr rv" data-d="1">v&#8217;hakesef &middot; and the money</p>
-    <div class="epi-rule rv" data-d="2"></div>
-    <p class="epi-v rv" data-d="3" id="epiverse">A feast is made for laughter, and wine makes life merry,<br class="epi-br">
-      but <b>money is the answer for everything</b>.</p>
-    <p class="epi-cite rv" data-d="4">Ecclesiastes 10:19</p>
-  </div>
-</section>
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Binance &middot; live on mainnet &middot; around the clock</p>
+      <h1>
+        <span class="rise"><span>A desk that never</span></span>
+        <span class="rise"><span>gets tired,</span></span>
+        <span class="rise"><span><span class="grad">greedy</span> or <span class="grad-warm">scared.</span></span></span>
+      </h1>
+      <p class="hero-sub">CryptoForge runs <b>one rule-based method</b> on Binance, twenty-four hours a day &mdash; and writes
+        every trade into a journal you can read, <b>fees included, losing days first</b>. No opinions, no news feed,
+        no finger on the button at 3&nbsp;a.m.</p>
+      <div class="hero-actions">
+        <a class="btn btn-p" href="#access">Request access <span class="ar">&rarr;</span></a>
+        <a class="btn btn-g" href="#method">How it thinks <span class="ar">&darr;</span></a>
+      </div>
+      <p class="hero-note"><span>Times in IST</span><i>&middot;</i><span>Nothing on this page is a promise</span><i>&middot;</i><span>Access by conversation</span></p>
+    </div>
 
-<header class="hero" id="hero">
-  <div class="hero-plate" id="heroPlate" style="background-image:url(/static/landing/img/plate_hero.jpg)"></div>
-  <video class="hero-film" id="heroFilm" data-film="/static/landing/film/clips/01_port_web.mp4"
-         poster="/static/landing/film/clips/01_port_poster.jpg" muted loop playsinline preload="none"
-         aria-hidden="true" tabindex="-1"></video>
-  <div class="hero-grade"></div><div class="hero-vig"></div>
-  <div class="wrap">
-    <span class="kicker rise"><span style="animation-delay:.15s">Ōsaka, 1697 — the first futures market</span></span>
-    <h1>
-      <span class="rise"><span style="animation-delay:.30s">They ran it on</span></span>
-      <span class="rise"><span style="animation-delay:.38s">four numbers,</span></span>
-      <span class="rise"><span style="animation-delay:.46s">written by</span></span>
-      <span class="rise"><span style="animation-delay:.54s">candlelight.</span></span>
-      <span class="rise"><span style="animation-delay:.68s;color:var(--brass-hi)">We never needed a fifth.</span></span>
-    </h1>
-    <p class="hero-sub rise" style="overflow:visible">
-      <span style="animation-delay:.92s;display:block">Open, high, low, close. Everything since is decoration.
-      <b>Dōjima runs one geometric method across Indian options and crypto</b> — and publishes
-      every day it lost, because the losing days are the only part you cannot fake.</span>
-    </p>
-    <div class="hero-actions rise" style="overflow:visible">
-      <span style="animation-delay:1.14s;display:flex;gap:12px;flex-wrap:wrap">
-        <a class="btn btn-p" href="#proof">Read the five-year ledger <span class="ar">→</span></a>
-        <a class="btn btn-g" href="#method">How the method works</a>
-      </span>
+    <div class="desk" id="deskTilt">
+      <div class="desk-glow" aria-hidden="true"></div>
+      <div class="desk-win" id="deskWin" aria-label="Illustration of the desk, drawn from synthetic data">
+        <div class="desk-bar">
+          <div class="l"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><b>BTC / USDT</b><span>15m</span></div>
+          <span class="desk-tag">Illustration &middot; synthetic data</span>
+        </div>
+        <div class="desk-body">
+          <div class="desk-chart">
+            <canvas id="chart"></canvas>
+            <div class="px" id="px"><span>last</span><b id="pxv">—</b></div>
+          </div>
+          <div class="desk-side">
+            <div class="desk-tile"><div class="k">Armed</div><div class="v c" id="tArmed">3</div></div>
+            <div class="desk-tile"><div class="k">Live</div><div class="v a" id="tLive">1</div></div>
+            <div class="desk-tile"><div class="k">Journaled</div><div class="v j" id="tDone">0</div></div>
+          </div>
+        </div>
+        <div class="desk-rows" id="rows" aria-hidden="true"></div>
+      </div>
     </div>
   </div>
-  <div class="scrollcue"><i></i> Scroll</div>
 </header>
 
-<div class="tape" aria-label="Verified performance figures">
-  <div class="tape-run" id="tapeRun"></div>
-</div>
+<!-- ══ TAPE ═══════════════════════════════════════════════════════ -->
+<div class="tape" aria-hidden="true"><div class="tape-run" id="tapeRun"></div></div>
 
-<!-- ══ THE PROBLEM ═══════════════════════════════════════════════ -->
-<section class="band" id="method">
+<!-- ══ THE RECORD ═════════════════════════════════════════════════
+     Fed by static/landing/ledger.json, which app.py writes from the same
+     figures the private journal shows. Live fills only — never a backtest,
+     never a paper round. The whole section removes itself if the file is
+     missing, so the page can never show a placeholder number. -->
+<section class="sec record" id="record" hidden>
   <div class="wrap">
-    <div class="sechead rv"><span class="kicker">The position</span><span class="rule"></span></div>
-    <h2 class="rv" data-d="1" style="max-width:19ch">Every platform in this
-      category will show you a backtest.</h2>
-    <p class="lede rv" data-d="2" style="margin-top:22px;color:#C8D1DA">
-      Not one of them will show you the losing years. So the rising curve has stopped
-      carrying information — and the only credible move left is to publish what everyone
-      else deletes.
-    </p>
-    <div class="drawline rv" data-d="3" style="margin:38px 0 34px;max-width:180px"></div>
-    <div class="stats rv" data-d="3">
-      <div class="stat"><div class="n dn" data-count="-43397" data-pre="₹" data-grp="in">₹0</div>
-        <div class="k">Monday, net</div><div class="s">Across 143 trades, the one weekday that loses money. We publish it and we still trade it.</div></div>
-      <div class="stat"><div class="n dn" data-count="-128429" data-pre="₹" data-grp="in">₹0</div>
-        <div class="k">Deepest drawdown</div><div class="s">Peak-to-trough on the combined book. If you cannot hold this, do not fund it.</div></div>
-      <div class="stat"><div class="n" data-count="10" data-suf=" trades">0</div>
-        <div class="k">Longest losing run</div><div class="s">Ten consecutive losses over nine calendar days. It happened. It will happen again.</div></div>
-      <div class="stat"><div class="n" data-count="18" data-suf=" of 68">0</div>
-        <div class="k">Months that lost</div><div class="s">Fifty were green. The other eighteen are in the ledger with the same font size.</div></div>
+    <div class="sec-head">
+      <p class="eyebrow rv">The record</p>
+      <h2 class="rv" data-d="1">Every closed trade, <span class="dim">including the ones that lost.</span></h2>
+      <p class="lede rv" data-d="2">Live fills on Binance, net of commission, over the money the account was funded
+        with. <b>Not annualised</b> &mdash; a few dozen trades across a few weeks does not carry a yearly figure, and
+        inventing one would be the first dishonest thing on this page.</p>
     </div>
-  </div>
-</section>
 
-<!-- ══ ACT I ═════════════════════════════════════════════════════ -->
-<section class="band band-line">
-  <div class="wrap act">
-    <figure class="act-fig rv" style="margin:0">
-      <div class="ph"><img src="/static/landing/img/plate_merchant.jpg?v=__ASSET_VERSION__" alt="A rice merchant reading the day's board at the Dōjima exchange"><video class="film" data-film="/static/landing/film/clips/02_merchant_web.mp4" poster="/static/landing/film/clips/02_merchant_poster.jpg" muted loop playsinline preload="none" aria-hidden="true" tabindex="-1"></video><div class="wipe"></div></div>
-      <figcaption class="act-cap"><span>Plate II — The merchant</span><span>Ōsaka · c. 1730</span></figcaption>
-    </figure>
-    <div class="act-body">
-      <span class="actno rv" data-d="1">Act I — Structure</span>
-      <h2 class="rv" data-d="2">A price is not a number. It is a shape with a memory.</h2>
-      <p class="rv" data-d="3">The rice merchants were not forecasting. They were reading structure — where
-        the last serious fall began, where buyers had defended before, how far a move
-        had retraced against itself.</p>
-      <p class="rv" data-d="4">Dōjima encodes exactly that and nothing more. A prior swing becomes an anchor.
-        The anchor projects a ladder. Price either respects the ladder or it does not,
-        and the engine cares about no other question. There is no sentiment model,
-        no news feed, no prediction of tomorrow.</p>
-      <p class="rv" data-d="5" style="color:var(--ink-lo);font-size:14px">
-        Four inputs, one geometry, two markets. The same code path prices a NIFTY option
-        and a Binance ladder.</p>
-    </div>
-  </div>
-</section>
-
-<!-- ══ ACT II — the ledger, with chalk ═══════════════════════════ -->
-<section class="band band-line">
-  <div class="wrap act flip">
-    <figure class="act-fig rv" style="margin:0">
-      <div class="ph">
-        <img src="/static/landing/img/plate_ledger.jpg?v=__ASSET_VERSION__" alt="Hands chalking the day's prices onto a ledger board beside a lit candle"><video class="film" data-film="/static/landing/film/clips/03_chalk_web.mp4" poster="/static/landing/film/clips/03_chalk_poster.jpg" muted loop playsinline preload="none" aria-hidden="true" tabindex="-1"></video>
-        <div class="flame"></div>
-        <div class="chalk">
-          <span class="c">寄 <b>open</b></span>
-          <span class="c">高 <b>high</b></span>
-          <span class="c">安 <b>low</b></span>
-          <span class="c" id="tick">¥480</span>
+    <div class="led">
+      <div class="led-tiles">
+        <div class="led-tile">
+          <div class="k">Net, of the account</div>
+          <div class="v" id="ledPct">&mdash;</div>
+          <div class="n" id="ledNet">&mdash;</div>
         </div>
-        <div class="wipe"></div>
-      </div>
-      <figcaption class="act-cap"><span>Plate III — The ledger</span><span>Chalk, board, candle</span></figcaption>
-    </figure>
-    <div class="act-body">
-      <span class="actno rv" data-d="1">Act II — Discipline</span>
-      <h2 class="rv" data-d="2">The rules were written before the trade, or they were not rules.</h2>
-      <p class="rv" data-d="3">Every parameter is committed to a file before the session opens: entry trigger,
-        stop distance, target, the exact minute an unresolved position is closed. The engine
-        cannot be argued with at 14:50 because there is nobody there to argue.</p>
-      <p class="rv" data-d="4">Entries are taken on the first second after a signal candle closes — not on
-        the candle that is still forming. That one distinction is the difference between a
-        backtest and a fantasy, and it is enforced in the same function for paper and live.</p>
-      <p class="rv" data-d="5" style="color:var(--ink-lo);font-size:14px">
-        Watch the last figure on the board. That is a live NIFTY print, chalked onto the
-        same four columns Ōsaka used.</p>
-    </div>
-  </div>
-</section>
-
-<!-- ══ ACT III — the candle draws itself ════════════════════════ -->
-<section class="band band-line">
-  <div class="wrap act">
-    <figure class="act-fig rv" style="margin:0">
-      <div class="ph"><img src="/static/landing/img/plate_candle.jpg?v=__ASSET_VERSION__" alt="A single candlestick emerging from the historical plate"><video class="film film-right" data-film="/static/landing/film/clips/04_candle_v2_web.mp4" poster="/static/landing/film/clips/04_candle_v2_poster.jpg" muted loop playsinline preload="none" aria-hidden="true" tabindex="-1"></video><div class="wipe"></div></div>
-      <figcaption class="act-cap"><span>Plate IV — The candle</span><span>Unchanged in 328 years</span></figcaption>
-    </figure>
-    <div class="act-body">
-      <span class="actno rv" data-d="1">Act III — Continuity</span>
-      <h2 class="rv" data-d="2">The instrument you use today was invented to trade rice.</h2>
-      <p class="rv" data-d="3">Munehisa Homma's candle survived three centuries, four industrial revolutions
-        and the entire history of computing without a single change to its shape. Nothing
-        else on your screen can say that.</p>
-      <p class="rv" data-d="4">We did not modernise it. We automated the reading of it, then spent five years
-        proving the reading holds on real fills, at real lot sizes, net of every charge the
-        exchange and the government actually levy.</p>
-      <div class="chartcard rv" data-d="5" style="margin-top:26px">
-        <div class="chart-b" style="padding:14px 14px 8px">
-          <canvas id="cndl" height="150" aria-label="An animated candlestick sequence"></canvas>
+        <div class="led-tile">
+          <div class="k">Closed trades</div>
+          <div class="v" id="ledTrades">&mdash;</div>
+          <div class="n" id="ledWL">&mdash;</div>
+        </div>
+        <div class="led-tile">
+          <div class="k">Since</div>
+          <div class="v" id="ledSince">&mdash;</div>
+          <div class="n" id="ledDays">&mdash;</div>
+        </div>
+        <div class="led-tile">
+          <div class="k">Commission paid</div>
+          <div class="v" id="ledFees">&mdash;</div>
+          <div class="n">already taken out of the figure on the left</div>
         </div>
       </div>
+
+      <figure class="led-chart">
+        <figcaption>
+          <span>Cumulative net, and each day on its own line below</span>
+          <span class="led-as" id="ledAs">&mdash;</span>
+        </figcaption>
+        <canvas id="ledger" height="300"></canvas>
+      </figure>
+
+      <p class="led-foot">
+        <b>What this is not.</b> No backtest is mixed in and no paper round is counted &mdash; a blended
+        live-and-simulated figure cannot be checked by anyone, including us. The account was funded once with
+        <span id="ledBase">&mdash;</span> and never topped up. The whole ledger, trade by trade with its fees, is
+        behind the door.
+      </p>
     </div>
   </div>
 </section>
 
-<!-- ══ PROOF ════════════════════════════════════════════════════ -->
-<section class="band band-line" id="proof">
+<!-- ══ FILM BAND ═════════════════════════════════════════════════ -->
+<section class="filmband" aria-label="The night desk before automation">
   <div class="wrap">
-    <div class="sechead rv"><span class="kicker">The ledger</span><span class="rule"></span></div>
-    <h2 class="rv" data-d="1" style="max-width:20ch">Five years. 891 trading days. Nothing removed.</h2>
-    <p class="lede rv" data-d="2" style="margin-top:20px">
-      Every trade below was re-priced against real Upstox option premiums, at the lot
-      size actually in force on that expiry, net of brokerage, STT, exchange fees, GST,
-      SEBI turnover and stamp duty.
-    </p>
-
-    <div class="chartcard rv" data-d="3" style="margin-top:38px">
-      <div class="chart-h">
-        <div>
-          <span class="kicker">Cumulative net P&amp;L · Jan 2021 → Aug 2026</span>
-          <div style="font-family:var(--mono);font-size:clamp(24px,3vw,32px);color:var(--jade);
-                      margin-top:9px;font-variant-numeric:tabular-nums" id="bigno">₹0</div>
-        </div>
-        <div class="legend">
-          <span><i style="background:var(--brass)"></i> Cumulative net</span>
-          <span><i style="background:var(--jade)"></i> Winning day</span>
-          <span><i style="background:var(--vermilion)"></i> Losing day</span>
-        </div>
+    <figure>
+      <div class="frame">
+        <video data-film="/static/landing/film/clips/01_night_web.mp4" poster="/static/landing/film/clips/01_night_poster.jpg?v=__ASSET_VERSION__"
+               muted loop playsinline preload="none" tabindex="-1" aria-hidden="true"></video>
       </div>
-      <div class="chart-b"><canvas id="eq" height="330" aria-label="Cumulative net profit and loss with daily bars"></canvas><div id="tip"></div></div>
-      <div class="chart-f">
-        Nothing here is smoothed. The first 46 months earned ₹3,81,178 across 634 trades —
-        ₹601 a trade. The last 21 months earned ₹7,79,393 across 301 — ₹2,589 a trade.
-        Two thirds of the result came from the final third of the book. Anyone who shows
-        you only the stretch after the marked line is selling you a regime, not a method.
-      </div>
-    </div>
-
-    <div class="stats rv" data-d="4" style="margin-top:14px">
-      <div class="stat"><div class="n up" data-count="1160571" data-pre="₹" data-grp="in">₹0</div>
-        <div class="k">Net, after every charge</div><div class="s">₹13,29,567 gross less ₹1,68,996 in charges. Itemised in the tearsheet.</div></div>
-      <div class="stat"><div class="n" data-count="935" data-suf="">0</div>
-        <div class="k">Trades</div><div class="s">51.0% won. The edge is size, not frequency of being right.</div></div>
-      <div class="stat"><div class="n" data-count="139" data-dec="2" data-div="100">0</div>
-        <div class="k">Profit factor</div><div class="s">₹1.39 returned for every ₹1.00 risked and lost.</div></div>
-      <div class="stat"><div class="n" data-count="904" data-dec="2" data-div="100" data-suf="×">0</div>
-        <div class="k">Return over drawdown</div><div class="s">Net profit measured against the worst hole it ever dug.</div></div>
-    </div>
-
-    <div class="split rv" data-d="5" style="margin-top:14px">
-      <div class="sp">
-        <div class="mark">What it costs to run</div>
-        <div class="dom">CHARGES, IN FULL</div>
-        <p>Flat ₹80 brokerage is 44% of all charges and does not scale with size — which is
-          precisely why small accounts are the ones that get quietly eaten.</p>
-        <div class="rows">
-          <div class="row"><span>Turnover traded</span><b>₹10.33 cr</b></div>
-          <div class="row"><span>Total charges</span><b>₹1,68,996</b></div>
-          <div class="row"><span>Charges / turnover</span><b>0.164%</b></div>
-          <div class="row"><span>Per trade</span><b>₹181</b></div>
-        </div>
-      </div>
-      <div class="sp">
-        <div class="mark">What it costs to fund</div>
-        <div class="dom">CAPITAL, AT EACH SIZE</div>
-        <p>Fund peak premium outstanding, plus the deepest drawdown, plus 30% headroom.
-          One lot is the floor — below it, the flat fee wins.</p>
-        <div class="rows">
-          <div class="row"><span>1 lot — the minimum</span><b>₹1,02,968 · 39%/yr</b></div>
-          <div class="row"><span>4 lots — as deployed</span><b>₹3,76,895 · 55%/yr</b></div>
-          <div class="row"><span>Charges eaten, 1 lot</span><b>33% of gross</b></div>
-          <div class="row"><span>Charges eaten, 4 lots</span><b>13% of gross</b></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ══ AUDIENCE ═════════════════════════════════════════════════ -->
-<section class="band band-line" id="who">
-  <div class="wrap">
-    <div class="sechead rv"><span class="kicker">Three ways in</span><span class="rule"></span></div>
-    <h2 class="rv" data-d="1" style="max-width:22ch">The same evidence answers three different questions.</h2>
-    <div class="aud rv" data-d="2" style="margin-top:36px">
-      <div class="acard">
-        <span class="who">Traders</span>
-        <h3>Run the signal on your own keys.</h3>
-        <p style="font-size:13.5px;color:var(--ink)">The geometry ships to you. Your API keys never leave your machine —
-          the executor runs locally and we could not place your orders if we wanted to.</p>
-        <ul>
-          <li>Signals delivered live, with the anchor and ladder that produced them</li>
-          <li>Local executor, one install, your broker, your custody</li>
-          <li>Every published signal timestamped before its outcome is known</li>
-        </ul>
-      </div>
-      <div class="acard">
-        <span class="who">Buyers</span>
-        <h3>License the method, not a black box.</h3>
-        <p style="font-size:13.5px;color:var(--ink)">You receive the rule set in full — anchors, ladder spacing, stop
-          logic, exit clock — because a method you cannot inspect is a method you cannot size.</p>
-        <ul>
-          <li>Complete parameter file, versioned, with the date each rule was frozen</li>
-          <li>Five-year tearsheet: monthly, yearly, daily, weekday, charge-by-charge</li>
-          <li>Slippage break-even published against the modelled assumption</li>
-        </ul>
-      </div>
-      <div class="acard">
-        <span class="who">Investors</span>
-        <h3>Diligence that starts with the drawdown.</h3>
-        <p style="font-size:13.5px;color:var(--ink)">Most decks open with the return. This one opens with the hole,
-          the flat years and the single trade that carries the tail.</p>
-        <ul>
-          <li>Regime split disclosed: 67% of profit from 32% of trades</li>
-          <li>Tail concentration named: best and worst ten days are 27% of the result</li>
-          <li>Raw trade log available for independent re-pricing</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ══ TWO MARKETS ══════════════════════════════════════════════ -->
-<section class="band band-line" id="markets">
-  <div class="wrap act">
-    <figure class="act-fig rv" style="margin:0">
-      <div class="ph"><img src="/static/landing/img/plate_bridge.jpg?v=__ASSET_VERSION__" alt="A paper price chart dissolving into a modern trading monitor"><video class="film" data-film="/static/landing/film/clips/05_bridge_web.mp4" poster="/static/landing/film/clips/05_bridge_poster.jpg" muted loop playsinline preload="none" aria-hidden="true" tabindex="-1"></video><div class="wipe"></div></div>
-      <figcaption class="act-cap"><span>Plate V — The bridge</span><span>Paper to screen</span></figcaption>
+      <figcaption><span class="lab">02:47</span><span><b>Before the desk ran itself.</b> Watching charts is not a strategy; it is just being awake.</span></figcaption>
     </figure>
-    <div class="act-body">
-      <span class="actno rv" data-d="1">One method, two markets</span>
-      <h2 class="rv" data-d="2">Rice, then index options, then crypto. The reading never changed.</h2>
-      <p class="rv" data-d="3">Structure does not know what it is drawn on. The engine that ladders a NIFTY
-        option is the engine that ladders a Binance pair — the same anchors, the
-        same geometry, different clocks and different fees.</p>
-      <div class="split rv" data-d="4" style="margin-top:26px">
-        <a class="sp" style="padding:26px 24px" href="https://philforge.in/app">
-          <div class="mark">PhilForge</div>
-          <div class="dom">PHILFORGE.IN · NSE OPTIONS</div>
-          <div class="rows" style="margin-top:18px">
-            <div class="row"><span>Session</span><b>09:15–15:30 IST</b></div>
-            <div class="row"><span>Instruments</span><b>NIFTY · BANKNIFTY</b></div>
-            <div class="row"><span>Evidence</span><b>5 yrs · 935 trades</b></div>
+  </div>
+</section>
+
+<!-- ══ METHOD ═════════════════════════════════════════════════════ -->
+<section class="sec" id="method">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow rv">How it thinks</p>
+      <h2 class="rv" data-d="1">Three verbs. <span class="dim">Nothing else gets a vote.</span></h2>
+      <p class="lede rv" data-d="2">The whole desk is a loop that watches, waits and writes. It has no view on where
+        the market is going, and it is <b>never allowed to develop one</b>.</p>
+    </div>
+    <div class="steps">
+      <article class="step rv" data-d="1">
+        <div class="n">01</div>
+        <div class="glyph" aria-hidden="true">
+          <svg viewBox="0 0 300 96" fill="none">
+            <path d="M0 62 C40 62 40 30 80 30 S120 70 160 70 S200 22 240 22 S280 58 300 58" stroke="rgba(79,231,245,.35)" stroke-width="1.4"/>
+            <path class="g-scan" d="M0 62 C40 62 40 30 80 30 S120 70 160 70 S200 22 240 22 S280 58 300 58" stroke="#4FE7F5" stroke-width="1.6"/>
+            <g class="g-pulse"><circle cx="160" cy="70" r="5" fill="#4FE7F5"/><circle cx="160" cy="70" r="14" stroke="#4FE7F5" stroke-opacity=".35"/></g>
+            <line x1="160" y1="8" x2="160" y2="88" stroke="rgba(255,255,255,.14)" stroke-dasharray="2 4"/>
+          </svg>
+        </div>
+        <h3>Watch</h3>
+        <p>Every candle on every watched pair, all night, in the same four numbers. <b>No headlines, no
+          influencers, no gut.</b> The desk reads price and nothing but price.</p>
+      </article>
+      <article class="step rv" data-d="2">
+        <div class="n">02</div>
+        <div class="glyph" aria-hidden="true">
+          <svg viewBox="0 0 300 96" fill="none">
+            <line x1="20" y1="20" x2="280" y2="20" stroke="rgba(255,255,255,.12)"/>
+            <line x1="20" y1="48" x2="280" y2="48" stroke="rgba(245,166,35,.6)" stroke-dasharray="6 5"/>
+            <line x1="20" y1="76" x2="280" y2="76" stroke="rgba(255,255,255,.12)"/>
+            <text x="286" y="52" fill="#FFC65A" font-family="JetBrains Mono,monospace" font-size="9" letter-spacing="1">ARMED</text>
+            <g class="g-armed"><rect x="132" y="38" width="36" height="20" rx="5" fill="rgba(245,166,35,.16)" stroke="#F5A623"/><circle cx="150" cy="48" r="3" fill="#F5A623"/></g>
+            <path d="M20 90 L60 84 L100 88 L140 80 L180 86 L220 78 L260 82 L280 79" stroke="rgba(79,231,245,.55)" stroke-width="1.4"/>
+          </svg>
+        </div>
+        <h3>Wait</h3>
+        <p>An order sits armed until price proves the rule &mdash; not a minute sooner. <b>Most days it does
+          nothing at all.</b> That is not the desk being idle; that is the method working.</p>
+      </article>
+      <article class="step rv" data-d="3">
+        <div class="n">03</div>
+        <div class="glyph" aria-hidden="true">
+          <svg viewBox="0 0 300 96" fill="none">
+            <rect x="24" y="12" width="252" height="72" rx="10" stroke="rgba(255,255,255,.14)"/>
+            <line x1="24" y1="36" x2="276" y2="36" stroke="rgba(255,255,255,.09)"/>
+            <line x1="24" y1="60" x2="276" y2="60" stroke="rgba(255,255,255,.09)"/>
+            <path class="g-write" d="M40 26 H120 M140 26 H180 M200 26 H250 M40 50 H100 M120 50 H200 M220 50 H255 M40 74 H140 M160 74 H190 M210 74 H260" stroke="#4ADE9B" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Write</h3>
+        <p>Every fill lands in the journal with its fee attached, <b>before anyone has read it</b>. The losing days
+          go in the same ink as the winning ones. Nothing is edited later.</p>
+      </article>
+    </div>
+    <div class="stripe rv" data-d="2">
+      <div><div class="big"><em>0</em></div><div class="lab">opinions in the loop &mdash; the desk is not allowed to have one</div></div>
+      <div><div class="big">1</div><div class="lab">method, run the same way on every pair, every hour</div></div>
+      <div><div class="big">24<em>/</em>7</div><div class="lab">the market never closes, so neither does the loop</div></div>
+      <div><div class="big"><span data-count="100" data-suffix="%">0%</span></div><div class="lab">of trades in the journal, fees and all &mdash; not a highlight reel</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ THE DESK ═══════════════════════════════════════════════════ -->
+<section class="sec" id="desk">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow rv">The desk</p>
+      <h2 class="rv" data-d="1">Built for the person who has to <span class="dim">live with it.</span></h2>
+      <p class="lede rv" data-d="2">A trading loop is easy. A desk you can trust with the lights off is not. Everything
+        here exists because someone had to sleep while it ran.</p>
+    </div>
+    <div class="bento">
+      <article class="card c-4 rv" data-d="1">
+        <div class="art">
+          <div class="jrn" aria-hidden="true">
+            <div class="h"><span>Pair</span><span>Closed</span><span>Hold</span><span>Fee</span><span>Result</span></div>
+            <div class="r"><b>ETH/USDT</b><em>02:14 IST</em><span>3h 40m</span><span class="fee">0.10%</span><span class="up">+0.84%</span></div>
+            <div class="r"><b>SOL/USDT</b><em>23:51 IST</em><span>1h 05m</span><span class="fee">0.10%</span><span class="dn">&minus;0.42%</span></div>
+            <div class="r"><b>BNB/USDT</b><em>19:07 IST</em><span>6h 12m</span><span class="fee">0.075%</span><span class="up">+1.12%</span></div>
+            <div class="r"><b>BTC/USDT</b><em>14:30 IST</em><span>0h 48m</span><span class="fee">0.10%</span><span class="dn">&minus;0.31%</span></div>
           </div>
-          <span class="enter">Enter the equities desk <span class="ar">→</span></span>
-        </a>
-        <a class="sp" style="padding:26px 24px" href="https://crypto.philforge.in/app">
-          <div class="mark">CryptoForge</div>
-          <div class="dom">CRYPTOFORGE · 24/7 SPOT</div>
-          <div class="rows" style="margin-top:18px">
-            <div class="row"><span>Session</span><b>Continuous</b></div>
-            <div class="row"><span>Instruments</span><b>Major spot pairs</b></div>
-            <div class="row"><span>Evidence</span><b>Live, funded, small</b></div>
+        </div>
+        <div class="kicker">Journal</div>
+        <h3>Every trade, with its fee, in the order it happened</h3>
+        <p>The journal is the product. Fees are shown as what they were, not rounded to zero; a paper round is listed
+          but never counted; and a losing day sits exactly where it fell.</p>
+      </article>
+      <article class="card c-2 rv warm" data-d="2">
+        <div class="art">
+          <div class="kill" aria-hidden="true">
+            <div class="sw"><svg viewBox="0 0 24 24" fill="none" stroke="#FF7A93" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></div>
+            <div class="txt">Kill all<small>one tap &middot; every order cancelled &middot; every position flat</small></div>
           </div>
-          <span class="enter">Enter the crypto desk <span class="ar">→</span></span>
-        </a>
-      </div>
-      <p class="rv" data-d="5" style="color:var(--ink-lo);font-size:13px;margin-top:16px">
-        The crypto book is deliberately small and its record is short. We will not dress a
-        young book in the older one's numbers.</p>
+        </div>
+        <div class="kicker">The switch</div>
+        <h3>One button ends everything</h3>
+        <p>It sits in the far corner of the desk, in the same place on every screen. It asks once. It does not negotiate.</p>
+      </article>
+      <article class="card c-2 rv" data-d="1">
+        <div class="art">
+          <div class="alerts" aria-hidden="true">
+            <div class="alert"><i></i>ETH filled at rule<em>now</em></div>
+            <div class="alert"><i></i>SOL closed &minus;0.42%<em>2h</em></div>
+            <div class="alert"><i></i>BNB stop raised<em>5h</em></div>
+          </div>
+        </div>
+        <div class="kicker">Alerts</div>
+        <h3>News that waits until you have seen it</h3>
+        <p>A trade alert stays in the inbox until it is read &mdash; on the phone, on the desk, after a restart. Nothing
+          important scrolls away.</p>
+      </article>
+      <article class="card c-2 rv" data-d="2">
+        <div class="art">
+          <div class="keys" aria-hidden="true">
+            <span class="key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>password</span>
+            <span class="key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>authenticator</span>
+            <span class="key pk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z"/><path d="M9.5 12l2 2 3.5-4"/></svg>passkey</span>
+          </div>
+        </div>
+        <div class="kicker">Accounts</div>
+        <h3>Doors, not a shared PIN</h3>
+        <p>Every person on the desk has their own account, second factor and role. Nobody shares a PIN, and a viewer
+          cannot be promoted by accident.</p>
+      </article>
+      <article class="card c-2 rv" data-d="3">
+        <div class="art">
+          <div class="mask" aria-hidden="true">
+            <div class="col"><div class="k">Trades</div><div class="v">visible</div></div>
+            <div class="col"><div class="k">Actions</div><div class="v blur">disabled</div></div>
+          </div>
+        </div>
+        <div class="kicker">Viewer role</div>
+        <h3>See everything, change nothing</h3>
+        <p>An approved viewer reads the desk exactly as its owner does &mdash; and every button that could act is
+          simply not there.</p>
+      </article>
+      <article class="card c-3 rv" data-d="2">
+        <div class="art">
+          <div class="ex" aria-hidden="true">
+            <span class="node live">Binance</span><span class="link"></span><span class="node">The desk</span><span class="link"></span><span class="node next">next venue</span>
+          </div>
+        </div>
+        <div class="kicker">Venues</div>
+        <h3>Binance today, built for more than one</h3>
+        <p>The method is written once and speaks to the exchange through an adapter, so a second venue is a new
+          adapter &mdash; not a second desk.</p>
+      </article>
+      <article class="card c-3 rv" data-d="3">
+        <div class="art">
+          <div class="phone" aria-hidden="true">
+            <div class="app"><img src="/static/landing/img/mark_philforge.png?v=__ASSET_VERSION__" alt="" decoding="async"></div>
+            <div class="lbl">CryptoForge</div>
+            <div class="bars"><i></i><i></i><i></i></div>
+          </div>
+        </div>
+        <div class="kicker">Installs</div>
+        <h3>On the phone, as an app</h3>
+        <p>The desk installs from the browser and opens full-screen &mdash; journal first, in the desktop's order,
+          alerts included.</p>
+      </article>
     </div>
   </div>
 </section>
 
-<!-- ══ CTA ══════════════════════════════════════════════════════ -->
-<section class="cta" id="access">
-  <div class="cta-plate" id="ctaPlate" style="background-image:url(/static/landing/img/plate_hero.jpg)"></div>
-  <div class="cta-grade"></div>
+<!-- ══ FILM BAND ═════════════════════════════════════════════════ -->
+<section class="filmband" aria-label="The desk running overnight while its owner sleeps">
   <div class="wrap">
-    <span class="kicker rv">Access</span>
-    <h2 class="rv" data-d="1" style="margin-top:18px;max-width:18ch">We would rather you left than sized this wrong.</h2>
-    <p class="lede rv" data-d="2" style="margin-top:20px">
-      Access is granted after a conversation, not after a card is charged. The last
-      question below is the one that decides it.
-    </p>
+    <figure>
+      <div class="frame">
+        <video data-film="/static/landing/film/clips/03_nightshift_web.mp4" poster="/static/landing/film/clips/03_nightshift_poster.jpg?v=__ASSET_VERSION__"
+               muted loop playsinline preload="none" tabindex="-1" aria-hidden="true"></video>
+      </div>
+      <figcaption><span class="lab">The night shift</span><span><b>He is asleep. It is not.</b> The desk works the hours nobody should be sitting up for.</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ══ HONESTY ════════════════════════════════════════════════════ -->
+<section class="sec honest" id="honesty">
+  <div class="glow" aria-hidden="true"></div>
+  <div class="wrap">
+    <div class="box rv">
+      <div>
+        <p class="eyebrow amber">What this page will not tell you</p>
+        <h2>There is no return figure here. <span class="dim">On purpose.</span></h2>
+        <p class="lede">A percentage on a landing page, without its losing days beside it, is an advertisement.
+          <b>The journal carries both</b> &mdash; every fill, every fee, every day it went the wrong way &mdash; and it
+          is behind the door, where it can be read whole or not at all.</p>
+        <p class="lede">This is a working desk trading its owner&rsquo;s own money, not a fund and not a course.
+          Access is opened by hand, one conversation at a time.</p>
+      </div>
+      <ul>
+        <li class="rv" data-d="1"><span class="x">&times;</span><span><b>No annual number</b>A single figure hides the sequence that made it. Read the sequence instead.</span></li>
+        <li class="rv" data-d="2"><span class="x">&times;</span><span><b>No backtest curve</b>Curves drawn after the fact are cheap. Only live fills go in the journal.</span></li>
+        <li class="rv" data-d="3"><span class="x">&times;</span><span><b>No advice</b>Nothing here is a recommendation to buy or sell anything, to anyone.</span></li>
+        <li class="rv" data-d="4"><span class="x ok">&check;</span><span><b>Every losing day, published</b>Because the losing days are the only part you cannot fake.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══ SECURITY ═══════════════════════════════════════════════════ -->
+<section class="sec" id="security">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow rv">Security</p>
+      <h2 class="rv" data-d="1">Real money, <span class="dim">treated like it.</span></h2>
+    </div>
+    <div class="trip">
+      <div class="t rv" data-d="1">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#4FE7F5" stroke-width="1.8" stroke-linecap="round"><path d="M14 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/><path d="M12 11v9M9 20h6M12 14h4"/></svg></div>
+        <h3>Keys stay on the desk</h3>
+        <p>Exchange keys are stored encrypted, never shown again once entered, and never leave the box that trades
+          with them. <b>A viewer never sees them at all.</b></p>
+      </div>
+      <div class="t rv" data-d="2">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#4FE7F5" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg></div>
+        <h3>Two factors, then a third</h3>
+        <p>Password, authenticator code, and a passkey where the device offers one. <b>The owner&rsquo;s door is no
+          softer than anyone else&rsquo;s.</b></p>
+      </div>
+      <div class="t rv" data-d="3">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#4FE7F5" stroke-width="1.8" stroke-linecap="round"><path d="M12 3l8 4v5c0 5-3.6 8.5-8 10-4.4-1.5-8-5-8-10V7z"/><path d="M12 8v5M12 16h.01"/></svg></div>
+        <h3>A guard on the door</h3>
+        <p>A deploy is refused while a trade is live, and a restart never wakes the engine on its own.
+          <b>Boring on purpose</b> &mdash; the exciting failures have all been had once.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ ACCESS ═════════════════════════════════════════════════════ -->
+<section class="sec access" id="access">
+  <canvas class="aurora2" id="aurora2" aria-hidden="true"></canvas>
+  <div class="fade" aria-hidden="true"></div>
+  <div class="wrap">
+    <div>
+      <p class="eyebrow rv">Access</p>
+      <h2 class="rv" data-d="1">Ask, <span class="dim">and say how much you can lose.</span></h2>
+      <p class="lede rv" data-d="2">There is no sign-up. Tell us who you are and what you would put behind a method that
+        publishes its bad days, and the reply comes from a person. <b>The second question is the one that matters.</b></p>
+      <p class="alt rv" data-d="3"><span>Already approved? <a href="/app">Sign in to the desk <span class="ar">&rarr;</span></a></span><span
+        class="alt-sep" aria-hidden="true">&nbsp;&middot;&nbsp;</span><span>Approved to watch only? <a href="/app">Viewer sign-in <span class="ar">&rarr;</span></a></span></p>
+      <p class="alt rv" data-d="4">Here for the equities side instead?
+        <a href="https://philforge.in/equities" rel="noopener">PhilForge Equity <span class="ar">&rarr;</span></a></p>
+    </div>
     <form class="form rv" data-d="3" id="accessForm">
-      <div class="fld"><label for="f1">Name</label><input id="f1" placeholder="Your name" autocomplete="name"></div>
-      <div class="fld"><label for="f2">Email</label><input id="f2" type="email" placeholder="you@firm.com" autocomplete="email"></div>
-      <div class="fld"><label for="f3">Capital you would deploy</label>
-        <select id="f3"><option>Under ₹1,00,000</option><option>₹1–4 lakh</option>
-        <option>₹4–25 lakh</option><option>Above ₹25 lakh</option></select></div>
-      <div class="fld"><label for="f4">Maximum drawdown you can hold</label>
-        <select id="f4"><option>Under ₹50,000</option><option>₹50,000 – ₹1,30,000</option>
-        <option>₹1,30,000 – ₹5,00,000</option><option>Above ₹5,00,000</option></select></div>
+      <label for="f1">Your name</label>
+      <input id="f1" name="name" type="text" placeholder="How should we address you?" autocomplete="name">
+      <label for="f2">Email</label>
+      <input id="f2" name="email" type="email" placeholder="you@somewhere.com" autocomplete="email">
+      <div class="row">
+        <div>
+          <label for="f3">Capital you would deploy</label>
+          <select id="f3" name="capital">
+            <option value="">Choose&hellip;</option>
+            <option>Under $1,000</option>
+            <option>$1,000 &ndash; $10,000</option>
+            <option>$10,000 &ndash; $50,000</option>
+            <option>Over $50,000</option>
+          </select>
+        </div>
+        <div>
+          <label for="f4">Maximum drawdown you can hold</label>
+          <select id="f4" name="drawdown">
+            <option value="">Choose&hellip;</option>
+            <option>Up to 10%</option>
+            <option>Up to 25%</option>
+            <option>Up to 40%</option>
+            <option>I have not decided</option>
+          </select>
+        </div>
+      </div>
+      <div class="send">
+        <a class="btn btn-p" id="accessSend" href="mailto:phil.shiny@gmail.com">Request access <span class="ar">&rarr;</span></a>
+        <span class="fine">Opens your mail app with the answers filled in.<br>Nothing is stored on this page.</span>
+      </div>
     </form>
-    <div class="hero-actions rv" data-d="4">
-      <a class="btn btn-p" id="accessSend" href="mailto:phil.shiny@gmail.com">Request access <span class="ar">→</span></a>
-      <a class="btn btn-g" href="#proof">Read the ledger first</a>
-    </div>
-    <p class="formnote rv" data-d="5">
-      If your drawdown answer is smaller than −₹1,28,429, we will tell you to trade one lot
-      or not at all. That conversation is free and it is the whole point of asking.
-    </p>
-    <p class="signin rv" data-d="6">
-      Already approved? <a href="#viewerpick" data-viewerpick>Sign in to the viewer desk <span class="ar">&rarr;</span></a>
-      <span class="signin-note">Accounts are opened by hand, one conversation at a time &mdash; there is no sign-up form here.</span>
-    </p>
   </div>
 </section>
 
 <footer>
-  <div class="wrap frow">
-    <div>
-      <div class="brand" style="font-size:21px">
-        <img class="mark" src="/static/landing/img/mark_philforge.png?v=__ASSET_VERSION__"
-             width="264" height="312" alt="" aria-hidden="true" decoding="async"><span class="bw"><span class="bw-1">PhilForge&#8217;s</span><span class="bw-2">Dōjima</span></span>
-      </div>
-      <div class="muted" style="font-size:12px;margin-top:10px">philforge.in · cryptoforge</div>
+  <div class="wrap">
+    <div class="brandcol">
+      <a class="brand" href="#top">
+        <img class="mark" src="/static/landing/img/mark_philforge.png?v=__ASSET_VERSION__" width="120" height="120" alt="" aria-hidden="true" decoding="async">
+        <span>CryptoForge<small>a PhilForge desk</small></span>
+      </a>
+      <p class="tag">Rule-based crypto trading on Binance, around the clock, with every trade written down.</p>
     </div>
-    <div class="mono muted" style="font-size:11px;letter-spacing:.14em;text-align:right">
-      LEDGER LAST RE-PRICED<br><span style="color:var(--ink-hi)">14 AUG 2026 · IST</span>
+    <div class="col">
+      <h4>This desk</h4>
+      <a href="#record">The record</a>
+      <a href="#method">How it thinks</a>
+      <a href="#desk">The desk</a>
+      <a href="#honesty">What is not claimed</a>
+      <a href="#security">Security</a>
+    </div>
+    <div class="col">
+      <h4>Doors</h4>
+      <a href="/app">Sign in <span class="ar">&rarr;</span></a>
+      <a href="/app">Viewer sign-in <span class="ar">&rarr;</span></a>
+      <a href="#access">Request access <span class="ar">&rarr;</span></a>
+      <span class="muted">Accounts are opened by hand. There is no sign-up form.</span>
+    </div>
+    <div class="col">
+      <h4>PhilForge</h4>
+      <a href="https://philforge.in/" rel="noopener">PhilForge&rsquo;s Dōjima <span class="ar">&rarr;</span></a>
+      <a href="https://philforge.in/equities" rel="noopener">PhilForge Equity <span class="ar">&rarr;</span></a>
+      <a href="https://philforge.in/app" rel="noopener">Equities desk <span class="ar">&rarr;</span></a>
+      <span class="muted">Indian options &amp; equities, on the same discipline.</span>
+    </div>
+    <div class="legal">
+      <span><b>CryptoForge</b> &middot; a PhilForge desk &middot; crypto.philforge.in</span>
+      <span>Not investment advice &middot; Times in IST</span>
     </div>
   </div>
-  <div class="wrap"><p class="fdis">
-    Past performance does not indicate future results. Figures shown are from a five-year
-    backtest re-priced on historical option premiums, net of modelled charges; they are not
-    an audited live track record. Derivatives carry the risk of total loss of capital.
-    Nothing here is investment advice or a solicitation.
-  </p></div>
 </footer>
 
-<!-- ══ THE DESK PICKER — which viewer desk? ═════════════════════════
-     Reached from both "Viewer sign-in" links. Two desks, two hosts; the
-     choice is the whole point. Closed with the ×, Escape, or the backdrop. -->
-<div class="viewerpick" id="viewerpick" role="dialog" aria-modal="true" aria-labelledby="viewerpick-title" aria-describedby="viewerpick-desc">
-  <div class="viewerpick-card">
-    <button type="button" class="viewerpick-close" id="viewerpick-close" aria-label="Close">&times;</button>
-    <p class="viewerpick-eyebrow">Viewer sign-in</p>
-    <h3 id="viewerpick-title">Which desk are you here to see?</h3>
-    <p id="viewerpick-desc" style="font-size:14px;margin-top:10px">Each desk has its own door and its own viewer PIN.
-      You can look at everything on the desk you were approved for, and change nothing.</p>
-    <div class="viewerpick-desks">
-      <a class="sp" href="https://philforge.in/app" id="viewerpick-equities">
-        <div class="mark">Equities</div>
-        <div class="dom">PHILFORGE.IN · NSE OPTIONS</div>
-        <span class="enter">Sign in as a viewer <span class="ar">&rarr;</span></span>
-      </a>
-      <a class="sp" href="https://crypto.philforge.in/app" id="viewerpick-crypto">
-        <div class="mark">Crypto</div>
-        <div class="dom">CRYPTO.PHILFORGE.IN · 24/7 SPOT</div>
-        <span class="enter">Sign in as a viewer <span class="ar">&rarr;</span></span>
-      </a>
-    </div>
-    <span class="viewerpick-note">Accounts are opened by hand, one conversation at a time &mdash; there is no sign-up form here.</span>
-  </div>
-</div>
-
-<script src="/static/landing/dojima.js?v=__ASSET_VERSION__" defer></script>
+<script src="/static/landing/crypto.js?v=__ASSET_VERSION__" defer></script>
+</body>
+</html>
