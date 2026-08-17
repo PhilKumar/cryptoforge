@@ -48,8 +48,20 @@ const bandWalk = async (pg) => {
       const all = [...document.querySelectorAll('video[data-film]')];
       const v = document.querySelectorAll('.filmband video')[i];
       const r = v.closest('.frame').getBoundingClientRect();
+      const inView = (x) => { const b = x.getBoundingClientRect();
+        return b.bottom > 0 && b.top < innerHeight && (b.width || b.height); };
+      const live = all.filter((x) => !x.paused);
       return { playing: !v.paused, lit: v.classList.contains('lit'), poster: !!v.poster,
-               op: +getComputedStyle(v).opacity, decoding: all.filter((x) => !x.paused).length,
+               op: +getComputedStyle(v).opacity, decoding: live.length,
+               // Two bands can share one phone screen — on prod the record
+               // section is hidden, so the plate and the first act are separated
+               // only by the tape. The observer then correctly starts the second
+               // and hushes the first, so "the band I scrolled to is playing" is
+               // NOT the promise. The promise is: one clip decoding, and the one
+               // decoding is on screen. Reaching a band still has to WANT it,
+               // which is what fetched proves.
+               fetched: !!v.getAttribute('src'),
+               liveInView: live.length > 0 && live.every(inView),
                ratio: +(r.width / r.height).toFixed(3),
                w: Math.round(r.width), h: Math.round(r.height) };
     }, idx));
@@ -313,8 +325,9 @@ const bandWalk = async (pg) => {
   const bands = await bandWalk(page);
   check('film bands present', bands.length === 2, `${bands.length} shown at this width`);
   bands.forEach((st, i) => check(`band ${i + 1} plays, alone, at 16:9`,
-    st.playing && st.lit && st.poster && st.decoding === 1 && Math.abs(st.ratio - 16 / 9) < 0.02,
-    `playing=${st.playing} decoding=${st.decoding} ${st.w}px @ ${st.ratio}`));
+    st.fetched && st.poster && st.decoding === 1 && st.liveInView
+      && Math.abs(st.ratio - 16 / 9) < 0.02,
+    `fetched=${st.fetched} decoding=${st.decoding} on-screen=${st.liveInView} ${st.w}px @ ${st.ratio}`));
 
   await page.screenshot({ path: `${SHOTS}/crypto_hero_1440.png` });
 
@@ -424,9 +437,9 @@ const bandWalk = async (pg) => {
   const mBands = await bandWalk(m);
   check('phone shows all three frames', mBands.length === 3, `${mBands.length} frames`);
   mBands.forEach((st, i) => check(`frame ${i + 1} plays on a phone, alone and visible`,
-    st.playing && st.op > 0.9 && st.decoding === 1 && st.w <= mob.inner && st.h > 100
-      && Math.abs(st.ratio - 16 / 9) < 0.02,
-    `playing=${st.playing} opacity=${st.op} decoding=${st.decoding} ${st.w}×${st.h} @ ${st.ratio}`));
+    st.fetched && st.op > 0.9 && st.decoding === 1 && st.liveInView
+      && st.w <= mob.inner && st.h > 100 && Math.abs(st.ratio - 16 / 9) < 0.02,
+    `fetched=${st.fetched} opacity=${st.op} decoding=${st.decoding} on-screen=${st.liveInView} ${st.w}×${st.h}`));
   // The poster must stand in when the clip is refused, or the frame is a hole.
   // Reduced motion is the refusal the page can actually be tested against.
   const rm = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, reducedMotion: 'reduce' });
