@@ -63,6 +63,15 @@ TARGET_AT_FILL_ONLY = False
 ENFORCE_BUDGET = False
 _COMMITTED = 0.0  # run_ladder refreshes this every bar
 _MAJOR_COMMITTED = 0.0  # what the big trades hold; minors size off the rest
+# BUDGET_FROM_TS — the paper clock. A replay that starts 30 days before the
+# clock (engine/rule3070_paper) fills WARM-UP ladders on history nobody
+# traded; they are shown, they never count as trades -- and until 2026-08-17
+# they COUNTED AGAINST THE PURSE. Seven of them held $96.81 of BTC's $100 cap
+# and refused every real buy for five days while price walked through nine
+# armed orders (Phil: "Nothing works in this strategy"). A fill before this
+# stamp is phantom money: it was never spent, so it cannot be tied up.
+# None = every fill spends (the backtest and the CLI, which have no clock).
+BUDGET_FROM_TS: Optional[pd.Timestamp] = None
 # MAX_BANDS — a campaign stops adding buys past this band and simply holds
 # for its target: the crash brake. Phil adjudicated 2026-08-11: "lets have
 # 4 buys deeper" — 2 bands = 4 buys, then hold (0 = unlimited).
@@ -241,6 +250,11 @@ class Campaign:
         else:
             lines.append(f"status {self.status}")
         return "\n".join(lines)
+
+
+def _spent(f: Fill) -> bool:
+    """Whether this fill's money is really out of the purse (see BUDGET_FROM_TS)."""
+    return BUDGET_FROM_TS is None or f.ts >= BUDGET_FROM_TS
 
 
 def _step(c: Campaign, ts, o, h, lo, cl) -> bool:
@@ -444,9 +458,10 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
     for pos in range(1, n):
         ts = df.index[pos]
 
-        # 1) step every running campaign
-        _COMMITTED = sum(f.usd for c in active for f in c.fills)
-        _MAJOR_COMMITTED = sum(f.usd for c in active if not c.is_minor for f in c.fills)
+        # 1) step every running campaign. Only money actually spent is tied
+        # up: a warm-up fill from before the paper clock never left the purse.
+        _COMMITTED = sum(f.usd for c in active for f in c.fills if _spent(f))
+        _MAJOR_COMMITTED = sum(f.usd for c in active if not c.is_minor for f in c.fills if _spent(f))
         still = []
         ended_current_mother = False
         for c in active:

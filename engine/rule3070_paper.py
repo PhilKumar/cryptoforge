@@ -133,7 +133,14 @@ def campaign_id(c) -> str:
 def harvest(df: pd.DataFrame, start_ts: int, seen: set) -> tuple:
     """Replay the window; return (new events, open-position summaries, campaigns)."""
     configure()
-    campaigns = sim.run_ladder(df, minors=True)
+    # The paper clock. Fills the replay makes BEFORE it are warm-up ladders:
+    # shown, never counted -- and never spending the purse either, or the
+    # book starts full and no paper buy can ever happen (2026-08-17).
+    sim.BUDGET_FROM_TS = pd.Timestamp(int(start_ts), unit="s", tz="UTC")
+    try:
+        campaigns = sim.run_ladder(df, minors=True)
+    finally:
+        sim.BUDGET_FROM_TS = None
     last_close = float(df["close"].iloc[-1]) if len(df) else 0.0
     events: List[dict] = []
     opens: List[dict] = []
