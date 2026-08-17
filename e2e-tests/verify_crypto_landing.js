@@ -322,7 +322,13 @@ const bandWalk = async (pg) => {
     `${twins.boxed}/${twins.total} boxed, ${twins.hiddenFetched} hidden-but-fetched`);
 
   const bands = await bandWalk(page);
-  check('film bands present', bands.length === 2, `${bands.length} shown at this width`);
+  // Not a hardcoded count — the arc grows as Phil generates shots, and a fixed
+  // number here just goes stale and starts failing on good work. The promise is
+  // that every band in the markup actually has a box and runs.
+  const bandsInMarkup = await page.evaluate(() =>
+    document.querySelectorAll('.filmband:not(.bandphone) video').length);
+  check('every film band in the markup is shown', bands.length === bandsInMarkup && bands.length >= 2,
+    `${bands.length} shown of ${bandsInMarkup} in the markup`);
   bands.forEach((st, i) => check(`band ${i + 1} plays, alone, at 16:9`,
     st.fetched && st.poster && st.decoding === 1 && st.liveInView
       && Math.abs(st.ratio - 16 / 9) < 0.02,
@@ -441,7 +447,12 @@ const bandWalk = async (pg) => {
     `${mob.films.fetched}/${mob.films.total} fetched at scroll 0`);
   // The two act bands stay framed pictures — those ARE photographs of a moment.
   const mBands = await bandWalk(m);
-  check('phone shows the two act bands', mBands.length === 2, `${mBands.length} frames`);
+  // Structural parity is the real assertion: a phone must get the same film as a
+  // wide screen, not a subset. Comparing against the desktop walk catches a band
+  // that silently drops out below a breakpoint — which is exactly the bug class
+  // that started all of this.
+  check('phone shows every band the desktop shows', mBands.length === bands.length,
+    `${mBands.length} on the phone vs ${bands.length} on the desktop`);
   mBands.forEach((st, i) => check(`act band ${i + 1} plays on a phone, alone and visible`,
     st.fetched && st.op > 0.9 && st.decoding === 1 && st.liveInView
       && st.w <= mob.inner && st.h > 100 && Math.abs(st.ratio - 16 / 9) < 0.02,
