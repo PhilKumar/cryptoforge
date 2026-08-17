@@ -97,6 +97,27 @@
   </div>
 </header>
 
+<!-- ══ THE PLATE, ON A PHONE ══════════════════════════════════════
+     The hero clip cannot be a full-bleed backdrop on a portrait screen:
+     object-fit:cover on a 375x1322 box keeps a 16% vertical slice of a 16:9
+     frame, which is unrecognisable AND bright, which is why the scrim over it
+     had to be heavy enough to black it out. So on a phone the same footage gets
+     a real 16:9 frame here instead, where it can actually be seen, and the
+     hero keeps its aurora. Two elements, exactly one of them displayed at any
+     width — the controller observes boxes, and a display:none video never
+     intersects, so the hidden one is never fetched. -->
+<section class="filmband bandphone" aria-label="The desk this replaces">
+  <div class="wrap">
+    <figure>
+      <div class="frame">
+        <video data-film="/static/landing/film/clips/00_plate_web.mp4" poster="/static/landing/film/clips/00_plate_poster.jpg?v=__ASSET_VERSION__"
+               muted loop playsinline preload="none" tabindex="-1" aria-hidden="true"></video>
+      </div>
+      <figcaption><span class="lab">The desk</span><span><b>One method, running on Binance.</b> No opinions, no news feed, no finger on the button.</span></figcaption>
+    </figure>
+  </div>
+</section>
+
 <!-- ══ TAPE ═══════════════════════════════════════════════════════ -->
 <div class="tape" aria-hidden="true"><div class="tape-run" id="tapeRun"></div></div>
 

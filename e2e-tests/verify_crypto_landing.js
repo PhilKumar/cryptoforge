@@ -22,6 +22,41 @@ const check = (name, pass, detail) => {
   console.log(`${pass ? '  ok  ' : ' FAIL '} ${name}${detail ? ' — ' + detail : ''}`);
 };
 
+// Walks every film band that actually has a box at the current width and reports
+// what each one did when it was reached. Which bands those are is width-dependent
+// — the plate's framed copy only exists on a phone — so the walk asks the layout
+// rather than assuming a count. Reads `decoding` across ALL clips at each stop,
+// because "one at a time" is the whole performance contract.
+const bandWalk = async (pg) => {
+  // Ask whether the element has a BOX, not what its own display says. A video
+  // inside a display:none section still computes display:block for itself —
+  // getComputedStyle does not inherit the ancestor's none — so reading the
+  // video's display reports every band as shown at every width.
+  const shown = await pg.evaluate(() => [...document.querySelectorAll('.filmband video')]
+    .map((v, i) => (v.offsetWidth || v.offsetHeight || v.getClientRects().length ? i : -1))
+    .filter((i) => i >= 0));
+  const out = [];
+  for (const idx of shown) {
+    await pg.evaluate((i) => {
+      document.documentElement.style.scrollBehavior = 'auto';
+      const v = document.querySelectorAll('.filmband video')[i];
+      const r = v.getBoundingClientRect();
+      scrollTo(0, r.top + scrollY - (innerHeight - r.height) / 2);
+    }, idx);
+    await pg.waitForTimeout(2600);
+    out.push(await pg.evaluate((i) => {
+      const all = [...document.querySelectorAll('video[data-film]')];
+      const v = document.querySelectorAll('.filmband video')[i];
+      const r = v.closest('.frame').getBoundingClientRect();
+      return { playing: !v.paused, lit: v.classList.contains('lit'), poster: !!v.poster,
+               op: +getComputedStyle(v).opacity, decoding: all.filter((x) => !x.paused).length,
+               ratio: +(r.width / r.height).toFixed(3),
+               w: Math.round(r.width), h: Math.round(r.height) };
+    }, idx));
+  }
+  return out;
+};
+
 (async () => {
   // ── static: nothing the CSP would silently drop ─────────────────────
   // The page is reachable two ways — as a file under /static/landing/ and as
@@ -213,8 +248,12 @@ const check = (name, pass, detail) => {
     return {
       viewer: label('viewer sign-in'),
       dojima: hrefs.filter((h) => h === 'https://philforge.in/').length,
-      equity: hrefs.filter((h) => h === 'https://philforge.in/equities').length,
       eqDesk: hrefs.filter((h) => h === 'https://philforge.in/app').length,
+      // The equities side must be NAMED, wherever it points. This used to
+      // demand the literal /equities URL, which the page had already dropped on
+      // purpose — an orphaned story page — so the check was red while claiming
+      // to describe the page. Assert the promise, not one spelling of it.
+      eqNamed: all.filter((a) => /equit/i.test(a.textContent)).length,
       relOnExternal: all.filter((a) => /^https?:/.test(a.getAttribute('href')))
         .every((a) => (a.getAttribute('rel') || '').includes('noopener')),
       footerCols: document.querySelectorAll('footer .col').length,
@@ -222,8 +261,8 @@ const check = (name, pass, detail) => {
     };
   });
   check('viewer sign-in is offered', links.viewer >= 2, `${links.viewer} viewer links`);
-  check('the equities side is linked', links.dojima >= 1 && links.equity >= 1 && links.eqDesk >= 1,
-    `Dōjima ${links.dojima} · Equity ${links.equity} · desk ${links.eqDesk}`);
+  check('the equities side is linked', links.dojima >= 1 && links.eqNamed >= 2 && links.eqDesk >= 1,
+    `Dōjima ${links.dojima} · named "equit…" ${links.eqNamed} · desk ${links.eqDesk}`);
   check('every external link is rel=noopener', links.relOnExternal);
   check('footer carries the three link columns', links.footerCols === 3, `${links.footerCols} columns`);
   check('no placeholder hrefs', links.dead.length === 0, links.dead.join(', ') || 'every href names a real target');
@@ -258,23 +297,24 @@ const check = (name, pass, detail) => {
       `filmed=${filmHero.filmed} aurora opacity=${filmHero.aurora}`);
   }
 
-  const bands = await page.$$('.filmband video');
-  check('film bands present', bands.length === 2, `${bands.length} bands`);
-  for (let i = 0; i < bands.length; i++) {
-    await bands[i].scrollIntoViewIfNeeded();
-    await page.waitForTimeout(2600);
-    const st = await page.evaluate((idx) => {
-      const all = [...document.querySelectorAll('video[data-film]')];
-      const v = document.querySelectorAll('.filmband video')[idx];
-      const r = v.closest('.frame').getBoundingClientRect();
-      return { playing: !v.paused, lit: v.classList.contains('lit'), poster: !!v.poster,
-               decoding: all.filter((x) => !x.paused).length,
-               ratio: +(r.width / r.height).toFixed(3), w: Math.round(r.width) };
-    }, i);
-    check(`band ${i + 1} plays, alone, at 16:9`,
-      st.playing && st.lit && st.poster && st.decoding === 1 && Math.abs(st.ratio - 16 / 9) < 0.02,
-      `playing=${st.playing} decoding=${st.decoding} ${st.w}px @ ${st.ratio}`);
-  }
+  // The plate exists twice — a full-bleed hero backdrop for a wide screen and a
+  // framed band for a portrait one — and exactly one of them may have a box at
+  // any width. The hidden twin must also never be fetched, which is what makes
+  // two elements cheaper than one badly-cropped one.
+  const twins = await page.evaluate(() => {
+    const p = [...document.querySelectorAll('video[data-film*="00_plate"]')];
+    const boxed = (v) => !!(v.offsetWidth || v.offsetHeight || v.getClientRects().length);
+    return { total: p.length, boxed: p.filter(boxed).length,
+             hiddenFetched: p.filter((v) => !boxed(v) && v.getAttribute('src')).length };
+  });
+  check('exactly one plate has a box', twins.total === 2 && twins.boxed === 1 && twins.hiddenFetched === 0,
+    `${twins.boxed}/${twins.total} boxed, ${twins.hiddenFetched} hidden-but-fetched`);
+
+  const bands = await bandWalk(page);
+  check('film bands present', bands.length === 2, `${bands.length} shown at this width`);
+  bands.forEach((st, i) => check(`band ${i + 1} plays, alone, at 16:9`,
+    st.playing && st.lit && st.poster && st.decoding === 1 && Math.abs(st.ratio - 16 / 9) < 0.02,
+    `playing=${st.playing} decoding=${st.decoding} ${st.w}px @ ${st.ratio}`));
 
   await page.screenshot({ path: `${SHOTS}/crypto_hero_1440.png` });
 
@@ -348,8 +388,11 @@ const check = (name, pass, detail) => {
     toggleShown: getComputedStyle(document.getElementById('navToggle')).display !== 'none',
     tilt: document.getElementById('deskWin').style.transform || '',
     films: (() => { const v = [...document.querySelectorAll('video[data-film]')];
+      const hero = document.getElementById('heroFilm');
+      const hd = getComputedStyle(hero).display;
       return { total: v.length, fetched: v.filter((x) => x.getAttribute('src')).length,
-               posters: v.filter((x) => x.poster).length }; })(),
+               posters: v.filter((x) => x.poster).length,
+               heroDisplay: hd, heroBoxed: hd !== 'none' }; })(),
     h1: parseFloat(getComputedStyle(document.querySelector('h1')).fontSize),
     deskW: Math.round(document.getElementById('deskWin').getBoundingClientRect().width),
     stacked: getComputedStyle(document.querySelector('.desk-body')).gridTemplateColumns.split(' ').length === 1,
@@ -361,10 +404,44 @@ const check = (name, pass, detail) => {
   check('headline scaled down', mob.h1 < 52, `${mob.h1}px`);
   check('desk window fits and stacks', mob.deskW <= mob.inner && mob.stacked, `${mob.deskW}px wide, stacked=${mob.stacked}`);
   check('no tilt on touch', mob.tilt === '');
-  // The whole point of the contract: a phone downloads no video at all and
-  // still sees a picture, because every clip carries a poster.
-  check('no video bytes on a phone', mob.films.fetched === 0 && mob.films.posters === mob.films.total,
-    `${mob.films.fetched}/${mob.films.total} fetched, ${mob.films.posters} posters`);
+  // A phone gets the film. This check used to assert the opposite — 0 bytes at
+  // 390px — and that WAS the bug Phil reported: the hero plate never played and
+  // the two bands were empty rectangles. What keeps a phone safe is one clip
+  // decoding at a time and nothing fetched before it is reached, so that is
+  // what gets asserted, at the width he actually holds.
+  check('every clip carries a poster', mob.films.posters === mob.films.total,
+    `${mob.films.posters}/${mob.films.total} posters`);
+  // Nothing is in view at load but the hero, and on a phone the hero carries no
+  // clip — the plate has moved into a frame further down. So a phone that has
+  // not scrolled yet must have spent nothing at all.
+  check('phone fetches nothing before it scrolls', mob.films.fetched === 0,
+    `${mob.films.fetched}/${mob.films.total} fetched at scroll 0`);
+  check('no hero backdrop on a phone', mob.films.heroBoxed === false,
+    `hero video display=${mob.films.heroDisplay}`);
+  // Three frames on a phone: the plate, then the two acts. Each must be really
+  // visible — not opacity 0, which is how they used to "be there" — and still
+  // alone in the decoder.
+  const mBands = await bandWalk(m);
+  check('phone shows all three frames', mBands.length === 3, `${mBands.length} frames`);
+  mBands.forEach((st, i) => check(`frame ${i + 1} plays on a phone, alone and visible`,
+    st.playing && st.op > 0.9 && st.decoding === 1 && st.w <= mob.inner && st.h > 100
+      && Math.abs(st.ratio - 16 / 9) < 0.02,
+    `playing=${st.playing} opacity=${st.op} decoding=${st.decoding} ${st.w}×${st.h} @ ${st.ratio}`));
+  // The poster must stand in when the clip is refused, or the frame is a hole.
+  // Reduced motion is the refusal the page can actually be tested against.
+  const rm = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, reducedMotion: 'reduce' });
+  await rm.goto(URL, { waitUntil: 'load' });
+  await rm.waitForTimeout(1800);
+  const still = await rm.evaluate(async () => {
+    const v = document.querySelector('.filmband video');
+    v.scrollIntoView({ block: 'center' });
+    await new Promise((r) => setTimeout(r, 1200));
+    return { fetched: [...document.querySelectorAll('video[data-film]')].filter((x) => x.getAttribute('src')).length,
+             op: +getComputedStyle(v).opacity, poster: !!v.poster };
+  });
+  await rm.close();
+  check('reduced motion keeps the still, fetches nothing', still.fetched === 0 && still.poster && still.op > 0.9,
+    `fetched=${still.fetched} poster=${still.poster} opacity=${still.op}`);
 
   // ── the mobile menu ─────────────────────────────────────────────────
   // This page used to simply hide its nav links under 720px, which left a phone

@@ -361,16 +361,22 @@
   /* ── film ───────────────────────────────────────────────────────── */
   /* The performance contract, unchanged from Dōjima because it was paid for
      once already: exactly ONE clip decoding at a time, paused the moment it
-     leaves the viewport or the tab is hidden, nothing fetched until it is
-     actually wanted, and no bytes at all on a phone, a metered connection or
-     under reduced-motion. A landing page that hangs the machine is worse than
-     one with no film on it. */
+     leaves the viewport or the tab is hidden, and nothing fetched until it is
+     actually wanted. A landing page that hangs the machine is worse than one
+     with no film on it.
+     Screen width is NOT part of that contract, and gating on it was a defect
+     Dōjima already paid for (c9959c4): a phone got posters at best and, with
+     the band video hidden too, empty rectangles at worst. One clip at a time is
+     what makes this safe, and that holds at every width. The refusals below are
+     the ones the device actually asks for — the user's own motion preference,
+     save-data, and a 2g line. Note that iOS Low Power Mode and Reduce Motion
+     suppress autoplay themselves; the page cannot override either, and the
+     poster is what shows then. */
   (function film() {
     const films = [...document.querySelectorAll('video[data-film]')];
     if (!films.length || !('IntersectionObserver' in window)) return;
     const conn = navigator.connection || {};
     const wanted = !reduce
-      && innerWidth >= 880
       && !conn.saveData
       && !/(^|-)2g$/.test(conn.effectiveType || '');
     if (!wanted) return;
