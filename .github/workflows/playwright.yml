@@ -49,7 +49,6 @@ jobs:
       - name: Start CryptoForge dev server
         env:
           CRYPTOFORGE_PIN: "123456"
-          CRYPTOFORGE_VIEWER_PIN: "777777"
           DELTA_API_KEY: "e2e-dummy"
           DELTA_API_SECRET: "e2e-dummy-secret"
           BINANCE_API_KEY: ""
@@ -75,7 +74,7 @@ jobs:
       - name: Run Playwright tests
         env:
           E2E_PIN: "123456"
-          E2E_VIEWER_PIN: "777777"
+          E2E_USER: "admin"
         working-directory: e2e-tests
         run: npx playwright test --project=cryptoforge
 

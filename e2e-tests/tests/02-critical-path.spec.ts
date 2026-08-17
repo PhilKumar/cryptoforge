@@ -12,6 +12,7 @@
 import { test, expect, Page } from '@playwright/test';
 
 const PIN = process.env.E2E_PIN || '123456';
+const USER = process.env.E2E_USER || 'admin';
 
 async function apiWrite(page: Page, url: string, options: Record<string, unknown> = {}) {
   const cookies = await page.context().cookies();
@@ -26,15 +27,16 @@ async function apiWrite(page: Page, url: string, options: Record<string, unknown
 
 // ── Auth helper ─────────────────────────────────────────────
 // Login page is a PIN-pad served at GET /app (/ is the public landing page). There is no text input —
-// each digit is a <button class="key" data-val="N">.
+// the login page takes a username and a password.
 // After the 6th digit the page POSTs /api/auth/login and replaces
 // itself with strategy.html (same URL, different content).
 async function login(page: Page) {
   await page.goto('/app');
-  // Click each digit of the PIN in order
-  for (const digit of PIN.split('')) {
-    await page.click(`button.key[data-val="${digit}"]`);
-  }
+  // Accounts, since 2026-08-17: username + password (the seeded admin's
+  // password is CRYPTOFORGE_PIN, which is what E2E_PIN carries).
+  await page.fill('#username-input', USER);
+  await page.fill('#password-input', PIN);
+  await page.click('#unlock-btn');
   // Wait for the authenticated shell (nav bar rendered by strategy.html)
   await page.waitForSelector('.nav-tab', { timeout: 10_000 });
 }

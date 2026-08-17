@@ -60,187 +60,229 @@ function initLoginAppearance() {
   });
 }
 
-const PIN_LENGTH = 6;
-let pin = '';
+// ══════════════════════════════════════════════════════════════
+//  ACCOUNT SIGN-IN — username + password, then the account's
+//  authenticator code when it has one (the server answers 428 and the
+//  code field appears), or a passkey. Same flow as PhilForge's door.
+// ══════════════════════════════════════════════════════════════
 let locked = false;
+let mfaPending = false;
 
-// Second factor, when the server has one configured. Both values are 6 digits,
-// so the same keypad collects them in two passes rather than growing a second
-// input the keypad cannot reach.
-let totpRequired = false;
-let stage = 'pin';          // 'pin' -> 'totp'
-let savedPin = '';
-
-// The viewer door. Off unless the server says a viewer PIN is configured; when
-// on, the switch under the keypad flips this and the keypad collects the
-// viewer PIN alone — no authenticator stage, because the code is on the
-// owner's phone and a viewer has no phone to read it from. The server decides
-// the role from the PIN it receives; this flag only shapes the keypad flow.
-let viewerLoginEnabled = false;
-let viewerMode = false;
-
-const dots = document.querySelectorAll('.pin-dot');
 const status = document.getElementById('unlock-status');
 const card = document.getElementById('unlock-card');
-const subtitle = document.querySelector('.unlock-sub');
-const modeBtn = document.getElementById('unlock-mode');
+const usernameInput = document.getElementById('username-input');
+const passwordInput = document.getElementById('password-input');
+const passwordToggle = document.getElementById('password-toggle');
+const totpField = document.getElementById('totp-field');
+const totpInput = document.getElementById('totp-input');
+const unlockBtn = document.getElementById('unlock-btn');
+const subtitle = document.getElementById('unlock-sub');
 
-const PROMPTS = {
-  pin: 'Enter your 6-digit PIN',
-  viewer: 'Enter the 6-digit viewer PIN',
-  totp: 'Enter the 6-digit code from your authenticator'
-};
+function baseStatusMessage() {
+  return mfaPending ? 'Enter the code from your authenticator app' : 'Enter username & password';
+}
 
-function setStage(next) {
-  stage = next;
-  pin = '';
-  updateDots();
-  status.textContent = PROMPTS[stage === 'pin' && viewerMode ? 'viewer' : stage];
+function setIdleStatus() {
+  status.textContent = baseStatusMessage();
   status.className = 'unlock-status';
-  if (subtitle) {
-    subtitle.textContent = stage === 'totp' ? 'Two-factor code' : (viewerMode ? 'View-only access' : 'Enter PIN to unlock');
-  }
+  unlockBtn.disabled = false;
 }
 
-function setViewerMode(next) {
-  viewerMode = Boolean(next) && viewerLoginEnabled;
-  card.classList.toggle('viewer-mode', viewerMode);
-  if (modeBtn) {
-    modeBtn.setAttribute('aria-pressed', viewerMode ? 'true' : 'false');
-    modeBtn.textContent = viewerMode ? 'Full access' : 'Viewer access';
-  }
-  savedPin = '';
-  setStage('pin');
+function resetToPassword(focus) {
+  mfaPending = false;
+  totpField.classList.add('hidden');
+  totpInput.value = '';
+  passwordInput.value = '';
+  unlockBtn.textContent = 'Unlock';
+  if (subtitle) subtitle.textContent = 'Sign in to continue';
+  locked = false;
+  setIdleStatus();
+  if (!focus) return;
+  if (!usernameInput.value.trim()) usernameInput.focus();
+  else passwordInput.focus();
 }
 
-async function detectSecondFactor() {
-  try {
-    const res = await fetch('/api/auth/status', { credentials: 'same-origin', cache: 'no-store' });
-    if (!res.ok) return;
-    const data = await res.json();
-    totpRequired = Boolean(data && data.totp_required);
-    viewerLoginEnabled = Boolean(data && data.viewer_login_enabled);
-    if (modeBtn) modeBtn.hidden = !viewerLoginEnabled;
-  } catch (e) { /* offline: fall back to PIN only, the server still enforces both */ }
-}
-
-function updateDots() {
-  dots.forEach((dot, i) => {
-    dot.classList.remove('filled', 'error', 'success');
-    if (i < pin.length) dot.classList.add('filled');
-  });
+function showValidationError(msg, focusEl) {
+  status.textContent = msg;
+  status.className = 'unlock-status error';
+  card.classList.add('shake');
+  unlockBtn.disabled = false;
+  setTimeout(() => {
+    card.classList.remove('shake');
+    if (focusEl) focusEl.focus();
+  }, 400);
 }
 
 function setError(msg, holdMs) {
   status.textContent = msg;
   status.className = 'unlock-status error';
-  dots.forEach(d => { d.classList.remove('filled'); d.classList.add('error'); });
   card.classList.add('shake');
   setTimeout(() => {
     card.classList.remove('shake');
-    // A wrong code sends you back to the PIN, not just to the code — a half
-    // completed login should not leave a verified PIN sitting in the page.
-    savedPin = '';
-    setStage('pin');
-    locked = false;
+    if (mfaPending) {
+      // A wrong code keeps the verified password out of the page: back to the start.
+      resetToPassword(true);
+    } else {
+      passwordInput.value = '';
+      locked = false;
+      setIdleStatus();
+      passwordInput.focus();
+    }
   }, holdMs || 800);
 }
 
-function setSuccess() {
-  status.textContent = 'Unlocked! Redirecting...';
+function setSuccess(role) {
+  status.textContent = role === 'viewer' ? 'Unlocked — view only. Redirecting...' : 'Unlocked! Redirecting...';
   status.className = 'unlock-status success';
-  dots.forEach(d => { d.classList.remove('filled'); d.classList.add('success'); });
   card.classList.add('unlock-pulse');
 }
 
 async function tryUnlock() {
   if (locked) return;
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
+  const totp = totpInput.value.trim();
+  if (!username) { showValidationError('Enter your username', usernameInput); return; }
+  if (!password) { showValidationError('Enter your password', passwordInput); return; }
+  if (mfaPending && !/^\d{6}$/.test(totp)) { showValidationError('Enter the 6-digit authenticator code', totpInput); return; }
   locked = true;
   status.textContent = 'Verifying...';
   status.className = 'unlock-status';
+  unlockBtn.disabled = true;
   try {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: savedPin || pin, totp: savedPin ? pin : '' }),
-      credentials: 'same-origin'
+      credentials: 'same-origin',
+      body: JSON.stringify({ username, password, ...(mfaPending ? { totp } : {}) }),
     });
     if (res.ok) {
-      setSuccess();
-      // Wrong door with the right PIN — a viewer PIN typed under "Full access"
-      // still opens the viewer session; say so before the page changes.
       let role = '';
       try { role = String(((await res.json()) || {}).role || ''); } catch (e) { /* the redirect is the same */ }
-      if (role === 'viewer') status.textContent = 'Unlocked — view only. Redirecting...';
+      setSuccess(role);
       setTimeout(() => { window.location.href = '/app'; }, 400);
       return;
     }
-    // The lockout now escalates, so "try again in 6 hours" is real information.
-    // Showing the stock wrong-PIN line instead would have you retyping into a
-    // door that is not going to open for a while.
-    if (res.status === 429) {
-      let detail = 'Too many attempts. Try again later.';
-      try {
-        const data = await res.json();
-        if (data && data.detail) detail = data.detail;
-      } catch (e) { /* keep the default */ }
-      setError(detail, 4000);
+    const data = await res.json().catch(() => ({}));
+    // error_handlers.py reshapes 4xx bodies into {success, error:{detail}}.
+    const detail = (data && data.detail) || (data && data.error && data.error.detail) || '';
+    const code = (data && data.code) || (data && data.error && data.error.code) || '';
+    if (res.status === 428 && (code === 'mfa_required' || /authenticator/i.test(detail))) {
+      locked = false;
+      mfaPending = true;
+      totpField.classList.remove('hidden');
+      unlockBtn.disabled = false;
+      unlockBtn.textContent = 'Verify & Unlock';
+      if (subtitle) subtitle.textContent = 'Two-factor code';
+      status.textContent = detail || baseStatusMessage();
+      status.className = 'unlock-status';
+      totpInput.focus();
       return;
     }
-    setError((totpRequired && !viewerMode) ? 'Wrong PIN or code. Try again.' : 'Wrong PIN. Try again.');
+    // The lockout escalates, so "try again in 6 hours" is real information.
+    if (res.status === 429) { setError(detail || 'Too many attempts. Try again later.', 4000); return; }
+    setError(detail || 'Wrong credentials. Try again.');
   } catch (e) {
     setError('Connection error.');
   }
 }
 
-function addDigit(d) {
-  if (locked || pin.length >= PIN_LENGTH) return;
-  pin += d;
-  updateDots();
-  if (pin.length !== PIN_LENGTH) return;
-  if (stage === 'pin' && totpRequired && !viewerMode) {
-    // Hold the PIN and collect the code before contacting the server, so a
-    // wrong code costs one attempt rather than two.
-    savedPin = pin;
-    setTimeout(() => setStage('totp'), 150);
-    return;
-  }
-  setTimeout(tryUnlock, 150);
-}
-
-function removeDigit() {
-  if (locked || pin.length === 0) return;
-  pin = pin.slice(0, -1);
-  updateDots();
-}
-
-function clearAll() {
-  if (locked) return;
-  savedPin = '';
-  setStage('pin');
-}
-
-document.getElementById('keypad').addEventListener('click', (e) => {
-  const btn = e.target.closest('.key');
-  if (!btn) return;
-  const val = btn.dataset.val;
-  if (val === 'clear') clearAll();
-  else if (val === 'back') removeDigit();
-  else addDigit(val);
+usernameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); passwordInput.focus(); }
 });
-
+passwordInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); tryUnlock(); }
+});
+totpInput.addEventListener('input', () => {
+  totpInput.value = totpInput.value.replace(/\D/g, '').slice(0, 6);
+});
+totpInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); tryUnlock(); }
+});
+passwordToggle.addEventListener('click', () => {
+  const nextType = passwordInput.type === 'password' ? 'text' : 'password';
+  passwordInput.type = nextType;
+  passwordToggle.textContent = nextType === 'password' ? 'Show' : 'Hide';
+  passwordToggle.setAttribute('aria-label', nextType === 'password' ? 'Show password' : 'Hide password');
+});
+unlockBtn.addEventListener('click', tryUnlock);
 document.addEventListener('keydown', (e) => {
-  if (e.key >= '0' && e.key <= '9') addDigit(e.key);
-  else if (e.key === 'Backspace') removeDigit();
-  else if (e.key === 'Escape') clearAll();
+  if (e.key === 'Escape' && !locked) resetToPassword(true);
 });
-
-if (modeBtn) {
-  modeBtn.addEventListener('click', () => {
-    if (locked) return;
-    setViewerMode(!viewerMode);
-  });
-}
 
 initLoginAppearance();
-detectSecondFactor();
+resetToPassword(false);
+
+// ══════════════════════════════════════════════════════════════
+//  PASSKEY SIGN-IN (Face ID / fingerprint)
+//
+//  The biometric never reaches this code or the server. The phone unlocks a
+//  private key held in its own secure hardware and hands back a signature;
+//  CryptoForge only ever stores and checks a public key.
+// ══════════════════════════════════════════════════════════════
+(() => {
+  const btn = document.getElementById('passkey-btn');
+  if (!btn) return;
+  const b64urlToBytes = (value) => {
+    const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (value.length % 4)) % 4);
+    return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+  };
+  const bytesToB64url = (buffer) =>
+    btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  // Only offer this where it can actually work: a secure context with a
+  // built-in authenticator. Otherwise the button stays hidden.
+  const supported = window.PublicKeyCredential
+    && window.isSecureContext
+    && typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function';
+  if (!supported) return;
+  PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+    .then((available) => { if (available) btn.hidden = false; })
+    .catch(() => {});
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    status.textContent = 'Waiting for your fingerprint or face...';
+    status.className = 'unlock-status';
+    try {
+      const optionsRes = await fetch('/api/auth/passkeys/login/options', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      const optionsData = await optionsRes.json();
+      if (!optionsRes.ok) throw new Error(optionsData.detail || 'Could not start passkey sign-in');
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          ...optionsData.options,
+          challenge: b64urlToBytes(optionsData.options.challenge),
+          allowCredentials: [],
+        },
+      });
+      if (!assertion) throw new Error('No passkey was chosen');
+      const verifyRes = await fetch('/api/auth/passkeys/login/verify', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challenge_id: optionsData.challenge_id,
+          credential: {
+            id: assertion.id,
+            type: assertion.type,
+            response: {
+              clientDataJSON: bytesToB64url(assertion.response.clientDataJSON),
+              authenticatorData: bytesToB64url(assertion.response.authenticatorData),
+              signature: bytesToB64url(assertion.response.signature),
+            },
+          },
+        }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok) throw new Error(verifyData.detail || (verifyData.error && verifyData.error.detail) || 'That passkey was not accepted');
+      setSuccess(String(verifyData.role || ''));
+      setTimeout(() => { window.location.href = '/app'; }, 300);
+    } catch (error) {
+      // A user who changes their mind is not an error worth shouting about.
+      const cancelled = error && (error.name === 'NotAllowedError' || error.name === 'AbortError');
+      status.textContent = cancelled ? baseStatusMessage() : (error.message || 'Passkey sign-in failed');
+      status.className = cancelled ? 'unlock-status' : 'unlock-status error';
+      btn.disabled = false;
+    }
+  });
+})();

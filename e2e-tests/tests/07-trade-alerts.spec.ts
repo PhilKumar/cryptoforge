@@ -14,6 +14,7 @@ import { test, expect, Page } from '@playwright/test';
  */
 
 const PIN = process.env.E2E_PIN || '123456';
+const USER = process.env.E2E_USER || 'admin';
 
 function alert(id: number, over: Record<string, unknown> = {}) {
   return {
@@ -58,9 +59,11 @@ async function stubInbox(page: Page, items: Record<string, unknown>[]) {
 
 async function login(page: Page) {
   await page.goto('/app');
-  for (const digit of PIN.split('')) {
-    await page.click(`button.key[data-val="${digit}"]`);
-  }
+  // Accounts, since 2026-08-17: username + password (the seeded admin's
+  // password is CRYPTOFORGE_PIN, which is what E2E_PIN carries).
+  await page.fill('#username-input', USER);
+  await page.fill('#password-input', PIN);
+  await page.click('#unlock-btn');
   await page.waitForSelector('.nav-tab', { timeout: 10_000 });
 }
 
@@ -155,7 +158,13 @@ test.describe('Trade alerts', () => {
 
   test('a live push adds a card without a reload, and cannot inject markup', async ({ page }) => {
     await stubInbox(page, []);
+    // The first inbox poll fires 1.2s after boot and repaints the stack from
+    // the (stubbed, empty) server. Push only after it has been and gone, or
+    // the poll wipes the card this test is about — sign-in used to be six
+    // keypad clicks slow enough to hide that; a username/password sign-in is not.
+    const firstPoll = page.waitForResponse((r) => r.url().includes('/api/notifications') && r.request().method() === 'GET');
     await login(page);
+    await firstPoll;
 
     await expect(page.locator('#cf-alert-stack')).toBeHidden();
 

@@ -60,7 +60,7 @@
   </div>
 </div>
 
-<div class="unlock-card" id="unlock-card">
+<main class="unlock-card" id="unlock-card" aria-labelledby="unlock-title">
   <!-- The terminal's own mark — three depth columns and a spark — not a "CF"
        monogram the rest of the product never uses. Same geometry as
        .topbar-brand-icon in the app and the executor's console. -->
@@ -70,43 +70,42 @@
     <span class="brand-column col-c"></span>
     <span class="brand-spark"></span>
   </div>
-  <div class="unlock-title">CryptoForge</div>
-  <div class="unlock-sub">Enter PIN to unlock</div>
+  <h1 class="unlock-title" id="unlock-title">CryptoForge</h1>
+  <div class="unlock-sub" id="unlock-sub">Sign in to continue</div>
 
-  <div class="pin-dots" id="pin-dots">
-    <div class="pin-dot" data-i="0"></div>
-    <div class="pin-dot" data-i="1"></div>
-    <div class="pin-dot" data-i="2"></div>
-    <div class="pin-dot" data-i="3"></div>
-    <div class="pin-dot" data-i="4"></div>
-    <div class="pin-dot" data-i="5"></div>
+  <!-- Accounts, since 2026-08-17: username + password, then the account's
+       authenticator code if it has one (the server answers 428 and the code
+       field appears), or a passkey. The same door as PhilForge's, in this
+       desk's colours. -->
+  <div class="auth-field">
+    <label class="sr-only" for="username-input">Username</label>
+    <input type="text" id="username-input" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="unlock-status" autofocus>
   </div>
 
-  <div class="unlock-status" id="unlock-status">Enter your 6-digit PIN</div>
-
-  <div class="keypad" id="keypad">
-    <button class="key" data-val="1">1</button>
-    <button class="key" data-val="2">2</button>
-    <button class="key" data-val="3">3</button>
-    <button class="key" data-val="4">4</button>
-    <button class="key" data-val="5">5</button>
-    <button class="key" data-val="6">6</button>
-    <button class="key" data-val="7">7</button>
-    <button class="key" data-val="8">8</button>
-    <button class="key" data-val="9">9</button>
-    <button class="key fn" data-val="clear">&#x2715;</button>
-    <button class="key" data-val="0">0</button>
-    <button class="key fn" data-val="back">&#x232b;</button>
+  <div class="auth-field" id="password-field">
+    <div class="secret-wrap">
+      <label class="sr-only" for="password-input">Password</label>
+      <input type="password" id="password-input" placeholder="Password" autocomplete="current-password" aria-describedby="unlock-status">
+      <button type="button" class="password-toggle" id="password-toggle" aria-label="Show password">Show</button>
+    </div>
   </div>
 
-  <!-- The viewer door. Hidden until /api/auth/status says a viewer PIN is
-       configured, so an install without one never advertises a second way in.
-       In viewer mode the keypad takes the viewer PIN and asks for no
-       authenticator code — the code is on Phil's phone, not the viewer's. -->
-  <button type="button" class="unlock-mode" id="unlock-mode" hidden aria-pressed="false">Viewer access</button>
+  <div class="auth-field hidden" id="totp-field">
+    <label class="sr-only" for="totp-input">Authenticator code</label>
+    <input type="text" id="totp-input" placeholder="6-digit authenticator code" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
+  </div>
 
-  <div class="unlock-footer">Session-secured &middot; Auto-locks after 24h</div>
-</div>
+  <div class="unlock-status" id="unlock-status" role="status" aria-live="polite" aria-atomic="true">Enter username &amp; password</div>
+
+  <div class="unlock-actions">
+    <button type="button" class="unlock-btn" id="unlock-btn">Unlock</button>
+    <!-- Hidden until the browser confirms it has a platform authenticator, so
+         nobody is offered a fingerprint button on a machine that has none. -->
+    <button type="button" class="unlock-btn unlock-btn--passkey" id="passkey-btn" hidden>Use Face ID or fingerprint</button>
+  </div>
+
+  <div class="unlock-footer">Password + authenticator when enabled &middot; Auto-locks after 24h</div>
+</main>
 
 <script src="/static/cryptoforge-login.js?v=20260616-1" defer></script>
 <script src="/static/pwa.js?v=20260616-1" defer></script>

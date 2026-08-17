@@ -361,21 +361,23 @@ Ordered. Items 2 and 3 mostly happen by leaving it alone.
 
    Re-issue with `venv/bin/python tools/totp_setup.py`.
 
-   **The viewer door (2026-08-17).** `CRYPTOFORGE_VIEWER_PIN` — a second
-   6-digit PIN that opens the terminal read-only: every page and every number
-   (balances included, Phil's call), and the server refuses every write by
-   HTTP method plus the admin reads (`/api/admin`, `/api/ops/`, `/api/audit/`,
-   feed subscribers) by path — see `_viewer_may_call` in `app.py`. It asks for
-   no authenticator code, and it must differ from the unlock PIN; the admin
-   console (Security → Viewer PIN) enforces that, and if `.env` is hand-edited
-   to make them equal the door simply stays shut. Unset = no viewer door and
-   the login page never offers the switch. Changing or clearing it signs every
-   viewer out. Set it from the console, or:
-
-   ```bash
-   sudo sed -i 's/^CRYPTOFORGE_VIEWER_PIN=.*/CRYPTOFORGE_VIEWER_PIN=NNNNNN/' /home/ec2-user/cryptoforge/.env
-   sudo systemctl restart cryptoforge@$(cat ~/.cryptoforge-active-port)
-   ```
+   **ACCOUNTS (2026-08-17).** The desk opens on accounts now — username +
+   password, an authenticator per account, a passkey (Face ID / fingerprint)
+   per device — the same model as PhilForge. `CRYPTOFORGE_PIN` is read for one
+   job: it is the password of the **first admin account**, created the first
+   time anyone signs in to an empty install (username `CRYPTOFORGE_ADMIN_USER`,
+   default `admin`; `CRYPTOFORGE_ADMIN_PASSWORD` overrides the PIN if set).
+   `CRYPTOFORGE_TOTP_SECRET` seeds that account's authenticator, so the code
+   already on the phone keeps working. **After the first deploy: sign in as
+   `admin` / the PIN / the authenticator code, then change the password in
+   Account Settings (top-bar chip).** Everyone else is created in Admin Console
+   → Users, with a role: viewer (sees everything, changes nothing), user
+   (trades), admin (everything). Users, passkeys and challenges live in the
+   state DB (`users`, `passkeys`, `webauthn_challenges` buckets); `accounts.py`
+   is the store, `webauthn_auth.py` (identical in both repos) checks passkeys.
+   Locked out of every admin account: `CRYPTOFORGE_PIN` will NOT help once
+   users exist — restore the state DB from backup, or delete the `users`
+   bucket to re-seed.
 6. ~~**Confirm Telegram alerts arrive.**~~ — **verified 2026-07-22.** The
    `-2010 Duplicate order sent` failure fired "Cascade order FAILED" and it was
    received. Telegram returned HTTP 200 in the same second.

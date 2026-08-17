@@ -89,7 +89,7 @@
     meta.className = 'admin-field-meta';
     if (field.secret) {
       if (field.key === 'CRYPTOFORGE_PIN') {
-        meta.textContent = field.configured ? 'Leave blank to keep the current unlock PIN.' : 'Set an unlock PIN before production use.';
+        meta.textContent = field.help || (field.configured ? 'Leave blank to keep the current value.' : 'Set before production use.');
       } else {
         var clearId = adminFieldId(field.key) + '-clear';
         var clearLabel = document.createElement('label');
@@ -376,6 +376,7 @@
     modal.classList.add('open');
     document.body.classList.add('admin-console-open');
     cfAdminLoad(true);
+    if (typeof window.cfAdminLoadUsers === 'function') window.cfAdminLoadUsers(true);
   }
 
   function cfCloseAdminConsole() {

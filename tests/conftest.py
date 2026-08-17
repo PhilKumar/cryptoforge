@@ -26,10 +26,12 @@ def _totp_disabled_by_default(request):
     if request.cls is not None and getattr(request.cls, "wants_totp", False):
         yield
         return
+    # Since accounts (2026-08-17) TOTP_SECRET only seeds the FIRST admin's
+    # authenticator; every test class also gets a fresh state DB, so a blank
+    # secret here means "no authenticator on the seeded admin".
     original = app_module.TOTP_SECRET
     app_module.TOTP_SECRET = ""
     try:
         yield
     finally:
         app_module.TOTP_SECRET = original
-        app_module._totp_used_counters.clear()

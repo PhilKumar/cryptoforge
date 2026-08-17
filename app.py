@@ -7,7 +7,6 @@ Production-ready: multi-engine, market feed, portfolio history, full CRUD.
 import asyncio
 import base64
 import hashlib
-import hmac
 import inspect
 import json
 import logging
@@ -15,7 +14,6 @@ import os
 import re
 import secrets
 import shutil
-import struct
 import sys
 import tempfile
 import threading
@@ -58,8 +56,10 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import accounts as _accounts_mod
 import alerter
 import config  # must be first — calls load_dotenv()
+import webauthn_auth as _webauthn_mod
 from broker import get_broker_client, get_broker_name, get_supported_brokers
 from broker.delta import get_candles_binance
 from engine.backtest import run_backtest
@@ -549,31 +549,50 @@ _inflight_tasks: set = set()
 
 
 # ── Authentication ────────────────────────────────────────────────
+# ACCOUNTS, since 2026-08-17. Phil: "I need the same kinda authentication for
+# cryptoforge as well with username and password and authentication... Also I
+# want to add user from admin console... Also with biometrics."
+#
+# The desk used to open on one shared 6-digit PIN (+ one env-wide TOTP secret).
+# It now opens on accounts — username + password, an authenticator per account,
+# a passkey per device — the same model as PhilForge, so a person who has one
+# desk knows the other. accounts.py holds the store; this file holds sessions,
+# the login route and the middleware, as it always did.
+#
+# CRYPTOFORGE_PIN is still read, for ONE job: it is the password of the first
+# admin account, created the first time anyone signs in to an empty install
+# (see _bootstrap_admin_if_empty). CRYPTOFORGE_TOTP_SECRET seeds that account's
+# authenticator, so the code already on Phil's phone keeps working. After that
+# first sign-in, passwords and authenticators live on the accounts.
 AUTH_PIN = os.getenv("CRYPTOFORGE_PIN") or os.getenv("CRYPTOFORGE_PASSWORD")
 if not AUTH_PIN:
     raise RuntimeError(
         "[FATAL] CRYPTOFORGE_PIN environment variable is not set. "
-        "The server refuses to start without an explicit PIN. "
-        "Set it in your .env file: CRYPTOFORGE_PIN=<your-6-digit-pin>"
+        "The server refuses to start without it: it is the first admin account's "
+        "password on an empty install. Set it in your .env file: CRYPTOFORGE_PIN=<password>"
     )
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+ADMIN_USERNAME = (os.getenv("CRYPTOFORGE_ADMIN_USER") or "admin").strip() or "admin"
+ADMIN_BOOTSTRAP_PASSWORD = os.getenv("CRYPTOFORGE_ADMIN_PASSWORD") or ""
 
-# ── Viewer door (read-only) ───────────────────────────────────────
-# A second PIN that opens the terminal for looking, never for doing. Phil,
-# 2026-08-17: "Portfolio numbers can be visible here... Only nothing can be
-# started or stopped or no admin activities." So a viewer sees the balances,
-# the positions and every page, and the server refuses every write.
+SESSION_ROLE_ADMIN = _accounts_mod.ROLE_ADMIN
+SESSION_ROLE_USER = _accounts_mod.ROLE_USER
+SESSION_ROLE_VIEWER = _accounts_mod.ROLE_VIEWER
+_SESSION_COOKIE_NAME = "cryptoforge_session"
+
+
+def _account_store() -> "_accounts_mod.AccountStore":
+    return _accounts_mod.AccountStore(_get_state_store)
+
+
+# ── Who may do what ───────────────────────────────────────────────
+# viewer: sees every page and every number, changes nothing (Phil, 2026-08-17:
+#         "Portfolio numbers can be visible here... Only nothing can be
+#         started or stopped or no admin activities").
+# user:   trades — everything a viewer sees plus every start/stop/order — but
+#         not the admin console: no accounts, no environment file.
+# admin:  everything.
 #
-# Unset means there is no viewer door at all — the login page does not offer
-# it and no PIN opens it. Set it from the admin console (Security) or in .env.
-# It must differ from the unlock PIN; the admin console refuses to save it
-# equal, and if .env is hand-edited to match, the door simply stays shut
-# (see _viewer_login_enabled) rather than handing the unlock PIN a way round
-# the authenticator.
-SESSION_ROLE_ADMIN = "admin"
-SESSION_ROLE_VIEWER = "viewer"
-VIEWER_PIN = (os.getenv("CRYPTOFORGE_VIEWER_PIN") or "").strip()
-
 # Reads a viewer may not make. Everything under these prefixes is admin
 # activity — the environment file with the broker keys, the state backup
 # (which carries every session token), the readiness audit, and the feed's
@@ -584,17 +603,28 @@ VIEWER_REFUSED_READ_PREFIXES = (
     "/api/audit/",
     "/api/cascade/feed/subscribers",
 )
+# What only an admin may touch, in either direction.
+ADMIN_ONLY_PREFIXES = ("/api/admin",)
 
-# The only non-GET calls a viewer may make. Logout is theirs. /api/broker/check
-# is a read that happens to wear a POST verb — it asks the broker whether the
-# keys still work and returns the wallet, changing nothing — and the top bar's
-# "connected" light is drawn from it on every boot.
-VIEWER_WRITE_ALLOWLIST = frozenset({"/api/auth/logout", "/api/broker/check"})
+# The only non-GET calls a viewer may make. Their own session and their own
+# account security are theirs. /api/broker/check is a read that happens to
+# wear a POST verb — it asks the broker whether the keys still work and returns
+# the wallet, changing nothing — and the top bar's "connected" light is drawn
+# from it on every boot.
+VIEWER_WRITE_ALLOWLIST = frozenset(
+    {
+        "/api/auth/logout",
+        "/api/broker/check",
+        "/api/user/password",
+        "/api/auth/mfa/enroll/start",
+        "/api/auth/mfa/enroll/verify",
+        "/api/auth/mfa",
+        "/api/auth/passkeys/register/options",
+        "/api/auth/passkeys/register/verify",
+    }
+)
+_VIEWER_WRITE_PREFIXES = ("/api/auth/passkeys/",)  # DELETE one of their own passkeys
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-
-def _viewer_login_enabled() -> bool:
-    return bool(VIEWER_PIN) and not secrets.compare_digest(str(VIEWER_PIN), str(AUTH_PIN))
 
 
 def _viewer_may_call(method: str, path: str) -> bool:
@@ -605,101 +635,74 @@ def _viewer_may_call(method: str, path: str) -> bool:
     """
     if str(method or "").upper() in _SAFE_METHODS:
         return not path.startswith(VIEWER_REFUSED_READ_PREFIXES)
-    return path in VIEWER_WRITE_ALLOWLIST
+    return path in VIEWER_WRITE_ALLOWLIST or path.startswith(_VIEWER_WRITE_PREFIXES)
 
 
-def _viewer_refusal(request: Request) -> Optional[JSONResponse]:
-    """The 403 a viewer gets for a call they may not make, or None."""
-    if _request_session_role(request) != SESSION_ROLE_VIEWER:
-        return None
-    if _viewer_may_call(request.method, request.url.path):
-        return None
-    _logger.info(
-        "[Auth] Viewer blocked from %s %s request_id=%s",
-        request.method.upper(),
-        request.url.path,
-        getattr(getattr(request, "state", None), "request_id", ""),
-    )
-    return JSONResponse(
-        status_code=403,
-        content={
-            "detail": "View-only access. You can see everything here and change nothing.",
-            "code": "viewer_read_only",
-        },
-    )
-
-
-# ── Optional second factor (RFC 6238 TOTP) ────────────────────────
-# Deliberately stdlib-only. requirements.txt is pinned and installed on the
-# server at deploy time, so reaching for pyotp here would mean a login path that
-# works locally and 500s in production until someone remembers to pip install.
-#
-# Unset CRYPTOFORGE_TOTP_SECRET means the login flow behaves exactly as before.
-# Generate a secret with `venv/bin/python tools/totp_setup.py` — it prints the
-# value and the QR payload locally and never sends it anywhere.
-TOTP_SECRET = (os.getenv("CRYPTOFORGE_TOTP_SECRET") or "").strip().replace(" ", "").upper()
-_TOTP_STEP_SEC = 30
-_TOTP_DIGITS = 6
-_TOTP_DRIFT_STEPS = 1  # accept one step either side of now, for clock skew
-_totp_used_counters: dict = {}  # counter -> expiry, so a code cannot be replayed
-
-
-def _totp_enabled() -> bool:
-    return bool(TOTP_SECRET)
-
-
-def _totp_code_at(counter: int) -> str:
-    padding = "=" * (-len(TOTP_SECRET) % 8)
-    key = base64.b32decode(TOTP_SECRET + padding, casefold=True)
-    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
-    offset = digest[-1] & 0x0F
-    truncated = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
-    return str(truncated % (10**_TOTP_DIGITS)).zfill(_TOTP_DIGITS)
-
-
-def _verify_totp(code: str) -> Optional[int]:
-    """The step counter `code` matches, or None.
-
-    Checking and spending are separate on purpose. When they were one call, any
-    failed login spent the code — so mistyping the PIN burned the six digits
-    still on your phone screen, the obvious retry with that same code was
-    rejected as a replay, and the message said "wrong PIN or code" both times
-    with no hint that you now had to wait up to 30 seconds. Repeat that a few
-    times and the escalating lockout has you out of your own trading app for
-    hours, from one fat-fingered digit.
-
-    Only a login that actually succeeds spends a code. See _consume_totp.
-    """
-    digits = "".join(ch for ch in str(code or "") if ch.isdigit())
-    if len(digits) != _TOTP_DIGITS:
-        return None
-    now = time.time()
-    current = int(now // _TOTP_STEP_SEC)
-    for key, expiry in list(_totp_used_counters.items()):
-        if expiry < now:
-            _totp_used_counters.pop(key, None)
-    for delta in range(-_TOTP_DRIFT_STEPS, _TOTP_DRIFT_STEPS + 1):
-        counter = current + delta
-        try:
-            expected = _totp_code_at(counter)
-        except Exception as exc:
-            _logger.error("TOTP secret is not valid base32: %s", exc)
-            return None
-        if secrets.compare_digest(digits, expected):
-            if counter in _totp_used_counters:
-                _logger.warning("Rejected a replayed TOTP code")
-                return None
-            return counter
+def _role_refusal(request: Request) -> Optional[JSONResponse]:
+    """The 403 this session gets for a call its role may not make, or None."""
+    role = _request_session_role(request)
+    path = request.url.path
+    if role == SESSION_ROLE_VIEWER and not _viewer_may_call(request.method, path):
+        _logger.info(
+            "[Auth] Viewer blocked from %s %s request_id=%s",
+            request.method.upper(),
+            path,
+            getattr(getattr(request, "state", None), "request_id", ""),
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "View-only access. You can see everything here and change nothing.",
+                "code": "viewer_read_only",
+            },
+        )
+    if role != SESSION_ROLE_ADMIN and path.startswith(ADMIN_ONLY_PREFIXES):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Admin access only.", "code": "admin_only"},
+        )
     return None
 
 
-def _consume_totp(counter: int) -> None:
-    """Spend a code so it cannot be used again inside its own window.
+# Kept for callers and tests that still ask the old question.
+def _viewer_refusal(request: Request) -> Optional[JSONResponse]:
+    return _role_refusal(request)
 
-    One code, one login: without this a code stays good for its full 30
-    seconds, so anyone who reads it over your shoulder can sign in behind you.
+
+# ── The authenticator seed for the first admin ────────────────────
+# Before accounts, CRYPTOFORGE_TOTP_SECRET was the desk's one authenticator.
+# It is now read for one purpose: when the first admin account is created it
+# is enrolled with this secret, so the code already on Phil's phone keeps
+# working across the change. Every account after that enrols its own in
+# Account Settings. Generate a fresh one with `tools/totp_setup.py` if needed.
+TOTP_SECRET = (os.getenv("CRYPTOFORGE_TOTP_SECRET") or "").strip().replace(" ", "").upper()
+
+
+def _bootstrap_admin_if_empty() -> Optional[dict]:
+    """Create the first admin on an empty install; return it, or None if users exist.
+
+    Lazy — on the first login attempt, not at import — so a test that swaps the
+    state DB path and the PIN gets an admin that matches, and so importing the
+    module never writes to a database.
     """
-    _totp_used_counters[int(counter)] = time.time() + _TOTP_STEP_SEC * (_TOTP_DRIFT_STEPS + 2)
+    store = _account_store()
+    if store.count_users():
+        return None
+    password = ADMIN_BOOTSTRAP_PASSWORD or str(AUTH_PIN or "")
+    if not password:
+        return None
+    user = store.create_user(
+        ADMIN_USERNAME,
+        _accounts_mod.hash_password(password),
+        role=SESSION_ROLE_ADMIN,
+        mfa_totp_secret=TOTP_SECRET,
+    )
+    _logger.info(
+        "[Auth] Created the first admin account '%s'%s",
+        ADMIN_USERNAME,
+        " with the authenticator from CRYPTOFORGE_TOTP_SECRET" if TOTP_SECRET else "",
+    )
+    return user
 
 
 def _state_dir_candidates() -> List[str]:
@@ -1173,6 +1176,7 @@ def _normalize_session_record(value, now: Optional[datetime] = None) -> Optional
             "expires_at": expires_at.isoformat(),
             "ua_hash": "",
             "role": SESSION_ROLE_ADMIN,
+            "user_id": None,
         }
     if not isinstance(value, dict):
         return None
@@ -1186,14 +1190,23 @@ def _normalize_session_record(value, now: Optional[datetime] = None) -> Optional
         "last_seen_at": last_seen_at.isoformat(),
         "expires_at": expires_at.isoformat(),
         "ua_hash": str(value.get("ua_hash") or ""),
-        # Sessions minted before the viewer door existed carry no role. They
-        # were all opened with the unlock PIN, so they are admin sessions.
+        # Sessions minted before accounts existed carry no user. They were all
+        # opened with the unlock PIN, so they belong to the first admin.
         "role": _normalize_session_role(value.get("role")),
+        "user_id": _int_or_none(value.get("user_id")),
     }
 
 
+def _int_or_none(value):
+    try:
+        return int(value) if value is not None and str(value) != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_session_role(value) -> str:
-    return SESSION_ROLE_VIEWER if str(value or "").strip().lower() == SESSION_ROLE_VIEWER else SESSION_ROLE_ADMIN
+    role = str(value or "").strip().lower()
+    return role if role in _accounts_mod.USER_ROLES else SESSION_ROLE_ADMIN
 
 
 def _session_expired(record: dict, now: Optional[datetime] = None) -> bool:
@@ -1238,7 +1251,7 @@ def _save_sessions(sessions: dict):
         _logger.warning("Failed to save session store %s: %s", _current_state_db_file(), exc)
 
 
-def _create_session(request=None, role: str = SESSION_ROLE_ADMIN) -> str:
+def _create_session(request=None, role: str = SESSION_ROLE_ADMIN, user_id=None) -> str:
     sessions = _load_sessions()
     token = secrets.token_hex(32)
     now = _session_now()
@@ -1248,17 +1261,36 @@ def _create_session(request=None, role: str = SESSION_ROLE_ADMIN) -> str:
         "expires_at": (now + timedelta(seconds=_SESSION_ABSOLUTE_SEC)).isoformat(),
         "ua_hash": _session_user_agent_hash(request),
         "role": _normalize_session_role(role),
+        "user_id": _int_or_none(user_id),
     }
     _save_sessions(sessions)
     return token
 
 
+def _session_user_for_record(record: dict) -> Optional[dict]:
+    """The account behind a session record.
+
+    A record with no user_id predates accounts; it was opened with the unlock
+    PIN, so it belongs to the first admin — created on the spot if the install
+    is empty, so an in-flight session survives the upgrade instead of bouncing
+    everyone to the keypad-that-is-no-longer-a-keypad.
+    """
+    store = _account_store()
+    uid = _int_or_none(record.get("user_id"))
+    if uid is not None:
+        return store.get_user(uid)
+    return store.first_admin() or _bootstrap_admin_if_empty()
+
+
 def _session_role(token: str) -> str:
-    """The role on a session record. Admin for anything unknown — callers must
-    have validated the token first; this only reads what is on it."""
+    """The role of the account behind a session. Admin for anything unknown —
+    callers must have validated the token first; this only reads what is on it."""
     if not token:
         return SESSION_ROLE_ADMIN
     record = _load_sessions().get(token) or {}
+    user = _session_user_for_record(record) if record else None
+    if user:
+        return _normalize_session_role(user.get("role"))
     return _normalize_session_role(record.get("role"))
 
 
@@ -1271,13 +1303,38 @@ def _request_session_role(request) -> str:
     return _session_role(_get_session_token(request))
 
 
+def _request_user(request) -> Optional[dict]:
+    """The account _validate_session stashed on this request, or a fresh read."""
+    state = getattr(request, "state", None)
+    cached = getattr(state, "cf_user", None) if state is not None else None
+    if cached:
+        return cached
+    token = _get_session_token(request)
+    record = _load_sessions().get(token) if token else None
+    return _session_user_for_record(record) if record else None
+
+
 def _revoke_sessions_with_role(role: str) -> int:
-    """Drop every live session of one role. Changing or clearing the viewer PIN
-    must end the sessions it opened, or the old PIN's holders stay signed in
-    for up to a day after it was taken away."""
+    """Drop every live session of one role."""
     role = _normalize_session_role(role)
     sessions = _load_sessions()
     keep = {tok: rec for tok, rec in sessions.items() if _normalize_session_role(rec.get("role")) != role}
+    dropped = len(sessions) - len(keep)
+    if dropped:
+        _save_sessions(keep)
+    return dropped
+
+
+def _revoke_sessions_for_user(user_id, *, keep_token: str = "") -> int:
+    """Drop every session of one account — a disabled account, a changed
+    password, a newly enrolled authenticator. `keep_token` spares the browser
+    that made the change."""
+    sessions = _load_sessions()
+    keep = {
+        tok: rec
+        for tok, rec in sessions.items()
+        if _int_or_none(rec.get("user_id")) != _int_or_none(user_id) or tok == keep_token
+    }
     dropped = len(sessions) - len(keep)
     if dropped:
         _save_sessions(keep)
@@ -1322,13 +1379,21 @@ def _validate_session(token: str, request=None, touch: bool = True) -> bool:
             record["last_seen_at"] = now.isoformat()
             sessions[token] = record
             _save_sessions(sessions)
-    # Stash the role so the middleware and the routes do not each reload the
-    # session store to learn it. Tests pass bare namespaces here, hence the
-    # guard.
+    # The session is only as alive as its account: a disabled or deleted
+    # account ends every session it had, the moment the next request arrives.
+    user = _session_user_for_record(record)
+    if not user or not bool(user.get("is_active", True)):
+        sessions.pop(token, None)
+        _save_sessions(sessions)
+        return False
+    # Stash the account and its role so the middleware and the routes do not
+    # each reload two stores to learn them. Tests pass bare namespaces here,
+    # hence the guard.
     state = getattr(request, "state", None)
     if state is not None:
         try:
-            state.cf_session_role = _normalize_session_role(record.get("role"))
+            state.cf_user = user
+            state.cf_session_role = _normalize_session_role(user.get("role"))
         except Exception:
             pass
     return True
@@ -1459,6 +1524,8 @@ async def require_auth(request: Request):
     if path in (
         "/api/auth/login",
         "/api/auth/status",
+        "/api/auth/passkeys/login/options",
+        "/api/auth/passkeys/login/verify",
         "/api/health",
         # Public keys, and an executor must be able to fetch them before it has
         # proved anything about itself.
@@ -1484,8 +1551,9 @@ async def require_auth(request: Request):
     token = _get_session_token(request)
     if not _validate_session(token, request=request):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    if _request_session_role(request) == SESSION_ROLE_VIEWER and not _viewer_may_call(request.method, path):
-        raise HTTPException(status_code=403, detail="View-only access. You can see everything here and change nothing.")
+    refusal = _role_refusal(request)
+    if refusal is not None:
+        raise HTTPException(status_code=refusal.status_code, detail="Not allowed for this account's role.")
 
 
 @app.middleware("http")
@@ -1507,6 +1575,9 @@ async def auth_middleware(request: Request, call_next):
         "/",
         "/api/auth/login",
         "/api/auth/status",
+        # Passkey sign-in: nobody has a session yet, that is the point.
+        "/api/auth/passkeys/login/options",
+        "/api/auth/passkeys/login/verify",
         "/health",
         "/api/health",
         "/api/cascade/feed/keys",
@@ -1525,9 +1596,10 @@ async def auth_middleware(request: Request, call_next):
         token = _get_session_token(request)
         if not _validate_session(token, request=request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        # Read-only sessions, gated once, here, by HTTP method — see
-        # _viewer_may_call. Every route is covered without being annotated.
-        refusal = _viewer_refusal(request)
+        # Roles, gated once, here — viewers by HTTP method (_viewer_may_call),
+        # everyone but admin off /api/admin. Every route is covered without
+        # being annotated.
+        refusal = _role_refusal(request)
         if refusal is not None:
             return refusal
     return await _call_next_or_client_closed(request, call_next)
@@ -1536,7 +1608,11 @@ async def auth_middleware(request: Request, call_next):
 @app.middleware("http")
 async def csrf_middleware(request: Request, call_next):
     if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path.startswith("/api/"):
-        if request.url.path != "/api/auth/login":
+        if request.url.path not in (
+            "/api/auth/login",
+            "/api/auth/passkeys/login/options",
+            "/api/auth/passkeys/login/verify",
+        ):
             token = _get_session_token(request)
             if _validate_session(token, request=request):
                 cookie_token = _get_csrf_token(request)
@@ -2229,75 +2305,117 @@ def _mark_html_read_only(html: str) -> str:
 
 
 # ── Auth Endpoints ────────────────────────────────────────────────
+def _set_session_cookie(resp: Response, token: str, request: Request) -> None:
+    resp.headers["Cache-Control"] = "no-store"
+    resp.set_cookie(
+        _SESSION_COOKIE_NAME,
+        token,
+        max_age=_SESSION_ABSOLUTE_SEC,
+        httponly=True,
+        samesite="lax",
+        secure=_is_https_request(request),
+        path="/",
+    )
+    _set_csrf_cookie(resp, _create_csrf_token(), request)
+
+
+def _clear_session_cookie(resp: Response) -> None:
+    resp.headers["Cache-Control"] = "no-store"
+    resp.delete_cookie(_SESSION_COOKIE_NAME, path="/")
+    resp.delete_cookie(CSRF_COOKIE_NAME, path="/")
+
+
+def _login_keys(username: str, ip: str) -> List[str]:
+    """One bucket per address, one per account-at-address, so a guess at one
+    name from many places and many names from one place both run into the
+    escalating lockout."""
+    keys = [ip]
+    name = _accounts_mod.normalize_username(username).lower()
+    if name:
+        keys.append(f"user:{name}@{ip}")
+    return keys
+
+
+def _session_response(user: dict, request: Request, message: str = "Login successful") -> JSONResponse:
+    store = _account_store()
+    token = _create_session(request=request, role=user.get("role"), user_id=user.get("id"))
+    store.touch_login(user["id"])
+    resp = JSONResponse(
+        {"status": "ok", "message": message, "username": user.get("username"), "role": user.get("role")}
+    )
+    _set_session_cookie(resp, token, request)
+    return resp
+
+
 @app.post("/api/auth/login")
 async def auth_login(request: Request):
+    """Username + password, then the account's authenticator if it has one.
+
+    No username means the legacy caller — a test, or the last PIN-era client —
+    and is read as the first admin account, which on an empty install is
+    created on the spot from CRYPTOFORGE_PIN.
+    """
     ip = _client_ip(request)
-    _check_login_rate(ip)
     body = await request.json()
-    password = str(body.get("password", ""))
-    pin_ok = secrets.compare_digest(password, str(AUTH_PIN))
-    # Check both factors before branching, and always check both even when the
-    # PIN is already wrong — replying faster for a bad PIN than for a bad code
-    # tells an attacker which half they got right.
-    totp_counter = _verify_totp(body.get("totp") or body.get("code") or "") if _totp_enabled() else None
-    totp_ok = True if not _totp_enabled() else totp_counter is not None
-    # The viewer PIN opens a read-only session and asks for no authenticator
-    # code — the code belongs to Phil's phone, and a viewer has no phone to
-    # read it from. Checked unconditionally, like the others, so a bad guess
-    # takes the same time whichever door it was aimed at. The unlock PIN
-    # without its code still gets nothing: the viewer door is a different PIN,
-    # not a way past the second factor.
-    viewer_ok = _viewer_login_enabled() and secrets.compare_digest(password, str(VIEWER_PIN))
-    role = None
-    if pin_ok and totp_ok:
-        role = SESSION_ROLE_ADMIN
-    elif viewer_ok:
-        role = SESSION_ROLE_VIEWER
-    if role:
-        # Spend the code only now. A failed attempt must leave it usable, or a
-        # PIN typo costs you the code still showing on your phone.
-        if role == SESSION_ROLE_ADMIN and totp_counter is not None:
-            _consume_totp(totp_counter)
-        _clear_login_attempts(ip)
-        token = _create_session(request=request, role=role)
-        resp = JSONResponse({"status": "ok", "message": "Login successful", "role": role})
-        is_https = _is_https_request(request)
-        resp.headers["Cache-Control"] = "no-store"
-        resp.set_cookie(
-            "cryptoforge_session",
-            token,
-            max_age=_SESSION_ABSOLUTE_SEC,
-            httponly=True,
-            samesite="lax",
-            secure=is_https,
-            path="/",
-        )
-        _set_csrf_cookie(resp, _create_csrf_token(), request)
-        return resp
-    _record_failed_login(ip)
-    # One message for both factors, on purpose: naming which one was wrong hands
-    # an attacker a free oracle for cracking them one at a time.
-    raise HTTPException(status_code=401, detail="Invalid PIN or code" if _totp_enabled() else "Invalid PIN")
+    username = _accounts_mod.normalize_username(body.get("username", ""))
+    password = str(body.get("password", body.get("pin", "")) or "")
+    keys = _login_keys(username, ip)
+    for key in keys:
+        _check_login_rate(key)
+
+    store = _account_store()
+    _bootstrap_admin_if_empty()
+    user = store.get_user_by_username(username) if username else store.first_admin()
+
+    # Check the password even when there is no such account, so "no such user"
+    # and "wrong password" take the same time and get the same sentence.
+    password_ok = _accounts_mod.verify_password(
+        password, (user or {}).get("password_hash") or _accounts_mod.hash_password(secrets.token_hex(8))
+    )
+    if not user or not password_ok:
+        for key in keys:
+            _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if not bool(user.get("is_active", True)):
+        raise HTTPException(status_code=403, detail="This account is disabled")
+
+    if bool(user.get("mfa_enabled")):
+        code = str(body.get("totp", body.get("code", "")) or "").strip()
+        if not code:
+            # Not a failure — the page asks for the code and tries again.
+            return JSONResponse(
+                status_code=428,
+                content={"detail": "Enter the 6-digit code from your authenticator app.", "code": "mfa_required"},
+            )
+        if not store.verify_user_totp(user, code):
+            for key in keys:
+                _record_failed_login(key)
+            # One message for both factors, on purpose: naming which one was
+            # wrong hands an attacker a free oracle for cracking them one at a time.
+            raise HTTPException(status_code=401, detail="Invalid credentials or authenticator code")
+
+    for key in keys:
+        _clear_login_attempts(key)
+    return _session_response(user, request)
 
 
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     token = _get_session_token(request)
     authenticated = _validate_session(token, request=request)
-    # The login page asks for this before drawing its form, so it knows whether
-    # to show the authenticator field. Advertising only that a second factor is
-    # configured gives away nothing the login attempt would not. Likewise
-    # "there is a viewer door" — the login page needs it to offer the switch,
-    # and knowing a second PIN exists is not knowing it.
-    payload = {
-        "authenticated": authenticated,
-        "totp_required": _totp_enabled(),
-        "viewer_login_enabled": _viewer_login_enabled(),
-    }
+    payload = {"authenticated": authenticated}
     if authenticated:
-        role = _request_session_role(request)
-        payload["role"] = role
-        payload["read_only"] = role == SESSION_ROLE_VIEWER
+        user = _request_user(request) or {}
+        role = _normalize_session_role(user.get("role"))
+        payload.update(
+            {
+                "username": user.get("username"),
+                "user_id": user.get("id"),
+                "role": role,
+                "read_only": role == SESSION_ROLE_VIEWER,
+                "mfa_enabled": bool(user.get("mfa_enabled")),
+            }
+        )
     resp = JSONResponse(payload)
     resp.headers["Cache-Control"] = "no-store"
     if authenticated:
@@ -2310,10 +2428,403 @@ async def auth_logout(request: Request):
     token = _get_session_token(request)
     _destroy_session(token)
     resp = JSONResponse({"status": "ok"})
-    resp.headers["Cache-Control"] = "no-store"
-    resp.delete_cookie("cryptoforge_session", path="/")
-    resp.delete_cookie(CSRF_COOKIE_NAME, path="/")
+    _clear_session_cookie(resp)
     return resp
+
+
+def _current_user_or_401(request: Request) -> dict:
+    user = _request_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user
+
+
+def _require_admin(request: Request) -> dict:
+    user = _current_user_or_401(request)
+    if _normalize_session_role(user.get("role")) != SESSION_ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access only.")
+    return user
+
+
+def _require_valid_account_password(password: str, label: str = "Password") -> None:
+    problem = _accounts_mod.password_policy_error(password, label)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+
+
+# ── Account: profile, password, authenticator ────────────────────
+@app.get("/api/user/profile")
+async def user_profile(request: Request):
+    user = _current_user_or_401(request)
+    store = _account_store()
+    return {"status": "ok", "user": store.public(user), "passkeys": store.list_passkeys(user["id"])}
+
+
+@app.put("/api/user/password")
+async def user_change_password(request: Request):
+    """Change your own password. Every other browser is signed out; this one stays."""
+    user = _current_user_or_401(request)
+    body = await request.json()
+    ip = _client_ip(request)
+    key = f"password:{user['username']}@{ip}"
+    _check_login_rate(key)
+    if not _accounts_mod.verify_password(str(body.get("current_password", "") or ""), user["password_hash"]):
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    new_pw = str(body.get("new_password", "") or "")
+    _require_valid_account_password(new_pw, "New password")
+    _account_store().update_user(user["id"], password_hash=_accounts_mod.hash_password(new_pw))
+    _revoke_sessions_for_user(user["id"], keep_token=_get_session_token(request))
+    _clear_login_attempts(key)
+    _logger.info("[Auth] Password changed for '%s'", user["username"])
+    return {"status": "ok", "message": "Password changed. Other devices have been signed out."}
+
+
+@app.post("/api/auth/mfa/enroll/start")
+async def auth_mfa_enroll_start(request: Request):
+    """Start authenticator enrolment without replacing a working factor."""
+    user = _current_user_or_401(request)
+    body = await request.json()
+    ip = _client_ip(request)
+    key = f"mfa-manage:{user['username']}@{ip}"
+    _check_login_rate(key)
+    store = _account_store()
+    if not _accounts_mod.verify_password(str(body.get("password", "") or ""), user["password_hash"]):
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if bool(user.get("mfa_enabled")) and not store.verify_user_totp(user, str(body.get("totp", "") or "")):
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Current authenticator code is incorrect or already used")
+    enrollment = _accounts_mod.totp_enrollment(str(user["username"]))
+    store.update_user(user["id"], mfa_pending_secret=enrollment["secret"])
+    _clear_login_attempts(key)
+    _logger.info("[Auth] MFA enrolment started for '%s'", user["username"])
+    return {
+        "status": "pending",
+        "secret": enrollment["secret"],
+        "otpauth_uri": enrollment["otpauth_uri"],
+        "qr_data_uri": enrollment["qr_data_uri"],
+        "issuer": _accounts_mod.TOTP_ISSUER,
+        "account": user["username"],
+    }
+
+
+@app.post("/api/auth/mfa/enroll/verify")
+async def auth_mfa_enroll_verify(request: Request):
+    """Activate a pending authenticator secret after proving one fresh code."""
+    user = _current_user_or_401(request)
+    body = await request.json()
+    ip = _client_ip(request)
+    key = f"mfa-manage:{user['username']}@{ip}"
+    _check_login_rate(key)
+    store = _account_store()
+    if not _accounts_mod.verify_password(str(body.get("password", "") or ""), user["password_hash"]):
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    pending = str(user.get("mfa_pending_secret") or "")
+    if not pending:
+        raise HTTPException(status_code=409, detail="Start authenticator setup first")
+    if not store.verify_totp_enrollment(user["id"], pending, str(body.get("totp", "") or "")):
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Authenticator code is invalid or already used")
+    store.update_user(  # nosec B106 - deliberately clearing the pending secret
+        user["id"],
+        mfa_totp_secret=pending,
+        mfa_pending_secret="",
+        mfa_enabled=True,
+        mfa_enrolled_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _clear_login_attempts(key)
+    _logger.info("[Auth] MFA enabled for '%s'", user["username"])
+    # Rotate this browser's session and revoke every other one, so a session
+    # stolen before enrolment does not outlive the second factor.
+    _revoke_sessions_for_user(user["id"])
+    token = _create_session(request=request, role=user.get("role"), user_id=user["id"])
+    resp = JSONResponse({"status": "ok", "mfa_enabled": True})
+    _set_session_cookie(resp, token, request)
+    return resp
+
+
+@app.delete("/api/auth/mfa")
+async def auth_mfa_disable(request: Request):
+    """Disable the authenticator only after fresh password and current-code proof."""
+    user = _current_user_or_401(request)
+    body = await request.json()
+    ip = _client_ip(request)
+    key = f"mfa-manage:{user['username']}@{ip}"
+    _check_login_rate(key)
+    store = _account_store()
+    if not bool(user.get("mfa_enabled")):
+        return {"status": "ok", "mfa_enabled": False}
+    if not _accounts_mod.verify_password(str(body.get("password", "") or ""), user["password_hash"]):
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if not store.verify_user_totp(user, str(body.get("totp", "") or "")):
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="Authenticator code is invalid or already used")
+    store.update_user(  # nosec B106 - deliberately clearing the enrolled and pending secrets
+        user["id"],
+        mfa_totp_secret="",
+        mfa_pending_secret="",
+        mfa_enabled=False,
+        mfa_enrolled_at=None,
+        mfa_last_counter=-1,
+    )
+    _clear_login_attempts(key)
+    _logger.info("[Auth] MFA disabled for '%s'", user["username"])
+    _revoke_sessions_for_user(user["id"])
+    resp = JSONResponse({"status": "ok", "mfa_enabled": False, "reauthenticate": True})
+    _clear_session_cookie(resp)
+    return resp
+
+
+# ── Passkeys: Face ID / fingerprint sign-in ──────────────────────
+# The RP ID and origin are derived from the request host, so the same code
+# serves localhost during tests and crypto.philforge.in in production without
+# a second setting that could drift out of step with the deployment. Only
+# public keys are ever stored (webauthn_auth.py); the biometric stays on the
+# phone.
+def _passkey_rp_id(request: Request) -> str:
+    host = str(request.headers.get("x-forwarded-host") or request.headers.get("host") or "").strip().lower()
+    return host.split(":")[0] or "localhost"
+
+
+def _passkey_origin(request: Request) -> str:
+    host = str(request.headers.get("x-forwarded-host") or request.headers.get("host") or "").strip().lower()
+    return f"{'https' if _is_https_request(request) else 'http'}://{host}"
+
+
+@app.post("/api/auth/passkeys/register/options")
+async def passkey_register_options(request: Request):
+    """Step 1 of adding a fingerprint/Face ID unlock to THIS device."""
+    user = _current_user_or_401(request)
+    store = _account_store()
+    existing = store.list_passkeys(user["id"])
+    challenge = _webauthn_mod.b64url_encode(_webauthn_mod.new_challenge())
+    challenge_id = store.store_challenge(user["id"], "register", challenge)
+    options = _webauthn_mod.registration_options(
+        rp_id=_passkey_rp_id(request),
+        rp_name="CryptoForge",
+        user_id=int(user["id"]),
+        username=str(user["username"]),
+        existing_ids=[row["credential_id"] for row in existing],
+    )
+    options["challenge"] = challenge
+    return {"status": "ok", "challenge_id": challenge_id, "options": options}
+
+
+@app.post("/api/auth/passkeys/register/verify")
+async def passkey_register_verify(request: Request):
+    """Step 2 — store the public key the device just generated."""
+    user = _current_user_or_401(request)
+    body = await request.json()
+    store = _account_store()
+    stored = store.consume_challenge(str(body.get("challenge_id") or ""), "register")
+    if not stored or _int_or_none(stored.get("user_id")) != int(user["id"]):
+        raise HTTPException(status_code=400, detail="That registration expired. Please try again.")
+    try:
+        result = _webauthn_mod.verify_registration(
+            credential=body.get("credential") or {},
+            expected_challenge=_webauthn_mod.b64url_decode(stored["challenge"]),
+            rp_id=_passkey_rp_id(request),
+            origin=_passkey_origin(request),
+        )
+    except _webauthn_mod.WebAuthnError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    label = str(body.get("label") or "").strip()[:60] or "This device"
+    store.add_passkey(result["credential_id"], user["id"], result["public_key"], result["sign_count"], label)
+    _logger.info("[Auth] Passkey registered for '%s' (%s)", user["username"], label)
+    return {"status": "ok", "label": label}
+
+
+@app.get("/api/auth/passkeys")
+async def passkey_list(request: Request):
+    user = _current_user_or_401(request)
+    return {"status": "ok", "passkeys": _account_store().list_passkeys(user["id"])}
+
+
+@app.delete("/api/auth/passkeys/{credential_id}")
+async def passkey_delete(credential_id: str, request: Request):
+    user = _current_user_or_401(request)
+    if not _account_store().delete_passkey(credential_id, user["id"]):
+        raise HTTPException(status_code=404, detail="No such passkey on this account")
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/passkeys/login/options")
+async def passkey_login_options(request: Request):
+    """Step 1 of signing in with a fingerprint. Deliberately unauthenticated.
+
+    No username is required and none is revealed: the device already knows
+    which passkeys it holds for this site, so an empty allowCredentials list
+    tells an attacker nothing about who has an account here.
+    """
+    challenge = _webauthn_mod.b64url_encode(_webauthn_mod.new_challenge())
+    challenge_id = _account_store().store_challenge(None, "login", challenge)
+    return {
+        "status": "ok",
+        "challenge_id": challenge_id,
+        "options": {
+            "challenge": challenge,
+            "rpId": _passkey_rp_id(request),
+            "timeout": 120000,
+            "userVerification": "required",
+            "allowCredentials": [],
+        },
+    }
+
+
+@app.post("/api/auth/passkeys/login/verify")
+async def passkey_login_verify(request: Request):
+    """Step 2 — check the signature and, if it holds, start a session."""
+    ip = _client_ip(request)
+    key = f"passkey:{ip}"
+    _check_login_rate(key)
+    body = await request.json()
+    credential = body.get("credential") or {}
+    store = _account_store()
+    stored = store.consume_challenge(str(body.get("challenge_id") or ""), "login")
+    if not stored:
+        raise HTTPException(status_code=401, detail="That sign-in expired. Please try again.")
+    passkey = store.get_passkey(str(credential.get("id") or ""))
+    if not passkey:
+        _record_failed_login(key)
+        raise HTTPException(status_code=401, detail="This device is not registered on any account")
+    user = store.get_user(passkey["user_id"])
+    if not user or not bool(user.get("is_active", True)):
+        raise HTTPException(status_code=403, detail="This account is disabled")
+    try:
+        sign_count = _webauthn_mod.verify_authentication(
+            credential=credential,
+            expected_challenge=_webauthn_mod.b64url_decode(stored["challenge"]),
+            rp_id=_passkey_rp_id(request),
+            origin=_passkey_origin(request),
+            public_key_b64=str(passkey["public_key"]),
+            stored_sign_count=int(passkey.get("sign_count") or 0),
+        )
+    except _webauthn_mod.WebAuthnError as exc:
+        _record_failed_login(key)
+        _logger.warning("[Auth] Passkey sign-in refused for '%s': %s", user["username"], exc)
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    # A passkey already proves possession of the device AND a biometric, so it
+    # stands on its own — the same reasoning that lets a phone unlock a banking
+    # app without a second code.
+    store.touch_passkey(str(passkey["credential_id"]), sign_count)
+    _clear_login_attempts(key)
+    return _session_response(user, request)
+
+
+# ── Admin: accounts ───────────────────────────────────────────────
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request):
+    _require_admin(request)
+    return {"status": "ok", "users": _account_store().list_users()}
+
+
+@app.post("/api/admin/users")
+async def admin_create_user(request: Request):
+    admin = _require_admin(request)
+    body = await request.json()
+    username = _accounts_mod.normalize_username(body.get("username", ""))
+    password = str(body.get("password", "") or "")
+    role = str(body.get("role", SESSION_ROLE_VIEWER) or "").strip().lower()
+    problem = _accounts_mod.username_error(username)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    if role not in _accounts_mod.USER_ROLES:
+        raise HTTPException(status_code=400, detail="Role must be 'admin', 'user' or 'viewer'")
+    _require_valid_account_password(password)
+    store = _account_store()
+    if store.get_user_by_username(username):
+        raise HTTPException(status_code=409, detail=f"Username '{username}' is already taken")
+    user = store.create_user(username, _accounts_mod.hash_password(password), role=role)
+    _logger.info("[Admin] Account '%s' (%s) created by '%s'", username, role, admin["username"])
+    return {"status": "ok", "user": store.public(user)}
+
+
+@app.put("/api/admin/users/{user_id}/toggle")
+async def admin_toggle_user(user_id: int, request: Request):
+    admin = _require_admin(request)
+    if int(user_id) == int(admin["id"]):
+        raise HTTPException(status_code=400, detail="You cannot disable your own account")
+    store = _account_store()
+    user = store.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    new_state = not bool(user.get("is_active", True))
+    if not new_state and user.get("role") == SESSION_ROLE_ADMIN and store.active_admin_count(excluding=user_id) == 0:
+        raise HTTPException(status_code=400, detail="That is the last active admin")
+    store.update_user(user_id, is_active=new_state)
+    if not new_state:
+        _revoke_sessions_for_user(user_id)
+    _logger.info(
+        "[Admin] Account '%s' %s by '%s'", user["username"], "enabled" if new_state else "disabled", admin["username"]
+    )
+    return {"status": "ok", "user_id": int(user_id), "is_active": new_state}
+
+
+@app.put("/api/admin/users/{user_id}/password")
+async def admin_reset_password(user_id: int, request: Request):
+    admin = _require_admin(request)
+    body = await request.json()
+    new_password = str(body.get("password", "") or "")
+    _require_valid_account_password(new_password)
+    store = _account_store()
+    user = store.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    store.update_user(user_id, password_hash=_accounts_mod.hash_password(new_password))
+    _revoke_sessions_for_user(
+        user_id, keep_token=_get_session_token(request) if int(user_id) == int(admin["id"]) else ""
+    )
+    _logger.info("[Admin] Password reset for '%s' by '%s'", user["username"], admin["username"])
+    return {"status": "ok", "message": f"Password reset for '{user['username']}'"}
+
+
+@app.put("/api/admin/users/{user_id}/role")
+async def admin_set_role(user_id: int, request: Request):
+    admin = _require_admin(request)
+    body = await request.json()
+    role = str(body.get("role", "") or "").strip().lower()
+    if role not in _accounts_mod.USER_ROLES:
+        raise HTTPException(status_code=400, detail="Role must be 'admin', 'user' or 'viewer'")
+    store = _account_store()
+    user = store.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if int(user_id) == int(admin["id"]) and role != SESSION_ROLE_ADMIN:
+        raise HTTPException(status_code=400, detail="You cannot demote your own account")
+    if (
+        user.get("role") == SESSION_ROLE_ADMIN
+        and role != SESSION_ROLE_ADMIN
+        and store.active_admin_count(excluding=user_id) == 0
+    ):
+        raise HTTPException(status_code=400, detail="That is the last active admin")
+    store.update_user(user_id, role=role)
+    # Their open sessions carry the old role in the cache; end them.
+    _revoke_sessions_for_user(user_id)
+    _logger.info("[Admin] Account '%s' is now %s (by '%s')", user["username"], role, admin["username"])
+    return {"status": "ok", "user_id": int(user_id), "role": role}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: int, request: Request):
+    """Delete an account and its passkeys and sessions. Disable is the
+    reversible path and stays; this one refuses wherever the answer is not
+    obviously yes."""
+    admin = _require_admin(request)
+    if int(user_id) == int(admin["id"]):
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    store = _account_store()
+    user = store.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.get("role") == SESSION_ROLE_ADMIN and store.active_admin_count(excluding=user_id) == 0:
+        raise HTTPException(status_code=400, detail="That is the last active admin")
+    _revoke_sessions_for_user(user_id)
+    store.delete_user(user_id)
+    _logger.info("[Admin] Account '%s' deleted by '%s'", user["username"], admin["username"])
+    return {"status": "ok", "user_id": int(user_id)}
 
 
 # ── CSV formula-injection guard ───────────────────────────────────
@@ -2517,18 +3028,16 @@ _ADMIN_CONFIG_FIELDS = [
         "options": get_supported_brokers(),
         "secret": False,
     },
-    {"key": "CRYPTOFORGE_PIN", "label": "Unlock PIN", "section": "security", "kind": "password", "secret": True},
     {
-        "key": "CRYPTOFORGE_VIEWER_PIN",
-        "label": "Viewer PIN",
+        "key": "CRYPTOFORGE_PIN",
+        "label": "First-admin password",
         "section": "security",
         "kind": "password",
         "secret": True,
-        "optional": True,
         "help": (
-            "A second 6-digit PIN that opens the terminal read-only: every page and every "
-            "number, nothing can be started, stopped or changed. Must differ from the unlock PIN. "
-            "Clearing it closes the door and signs every viewer out."
+            "Used once: it is the password of the first admin account, created the first time anyone "
+            "signs in to an empty install. After that, passwords live on the accounts — change yours in "
+            "Account Settings, and manage everyone else's under Users above."
         ),
     },
     {"key": "DELTA_API_KEY", "label": "API Key", "section": "delta", "kind": "password", "secret": True},
@@ -2704,11 +3213,6 @@ def _normalize_admin_env_update(key: str, value: Optional[str]) -> str:
             raise HTTPException(status_code=400, detail="CRYPTOFORGE_PIN cannot be empty")
         if len(raw) < 4:
             raise HTTPException(status_code=400, detail="CRYPTOFORGE_PIN must be at least 4 characters")
-    if key == "CRYPTOFORGE_VIEWER_PIN" and raw:
-        # The keypad collects exactly six digits and nothing else, so anything
-        # else saved here is a door no one can open.
-        if not (len(raw) == 6 and raw.isdigit()):
-            raise HTTPException(status_code=400, detail="CRYPTOFORGE_VIEWER_PIN must be exactly 6 digits")
     if kind == "boolean":
         lowered = raw.lower()
         if lowered not in {"true", "false"}:
@@ -2802,7 +3306,7 @@ def _write_env_updates(updates: dict) -> str:
 
 
 def _reload_runtime_config_from_env() -> None:
-    global AUTH_PIN, SESSION_SECRET, VIEWER_PIN
+    global AUTH_PIN, SESSION_SECRET
 
     load_dotenv(_ENV_PATH, override=True)
 
@@ -2839,9 +3343,6 @@ def _reload_runtime_config_from_env() -> None:
         config.DELTA_BASE_URL = "https://api.india.delta.exchange/v2"
         config.DELTA_WS_URL = "wss://socket.india.delta.exchange"
     AUTH_PIN = os.getenv("CRYPTOFORGE_PIN") or os.getenv("CRYPTOFORGE_PASSWORD") or AUTH_PIN
-    # No fallback to the old value here, unlike AUTH_PIN: an empty
-    # CRYPTOFORGE_VIEWER_PIN= line means the door was closed on purpose.
-    VIEWER_PIN = (os.getenv("CRYPTOFORGE_VIEWER_PIN") or "").strip()
     SESSION_SECRET = os.getenv("SESSION_SECRET", SESSION_SECRET)
     alerter.reload_from_env()
 
@@ -2908,18 +3409,9 @@ async def _apply_admin_config_update(payload: AdminConfigUpdateRequest) -> dict:
     if not updates and not requested_active:
         return {"status": "ok", "message": "No configuration changes submitted", **_admin_config_payload()}
 
-    # The two PINs may never be the same value: the login route tries the
-    # unlock PIN first, so an equal viewer PIN would silently be a second
-    # unlock PIN that skips the authenticator. Compare against whichever
-    # value each will have AFTER this save.
-    next_unlock = updates.get("CRYPTOFORGE_PIN", str(AUTH_PIN or ""))
-    next_viewer = updates.get("CRYPTOFORGE_VIEWER_PIN", str(VIEWER_PIN or ""))
-    if next_viewer and next_unlock and secrets.compare_digest(next_viewer, next_unlock):
-        raise HTTPException(status_code=400, detail="The viewer PIN must differ from the unlock PIN")
-
-    # The PINs are not broker state; changing either must work while an engine
-    # is running. Everything else in .env belongs to the broker and waits.
-    broker_sensitive_keys = set(updates) - {"CRYPTOFORGE_PIN", "CRYPTOFORGE_VIEWER_PIN"}
+    # The bootstrap password is not broker state; changing it must work while
+    # an engine is running. Everything else in .env belongs to the broker and waits.
+    broker_sensitive_keys = set(updates) - {"CRYPTOFORGE_PIN"}
     target_switch = requested_active and requested_active != _active_broker_name()
     if (broker_sensitive_keys or target_switch) and not runtime_locks["switchable"]:
         return JSONResponse(
@@ -2933,16 +3425,8 @@ async def _apply_admin_config_update(payload: AdminConfigUpdateRequest) -> dict:
             },
         )
 
-    viewer_pin_before = str(VIEWER_PIN or "")
     backup_path = _write_env_updates(updates)
     _reload_runtime_config_from_env()
-    if "CRYPTOFORGE_VIEWER_PIN" in updates and str(VIEWER_PIN or "") != viewer_pin_before:
-        # A changed or cleared viewer PIN ends the sessions the old one opened.
-        # Admin sessions are untouched — this is Phil, saving from one of them.
-        dropped = _revoke_sessions_with_role(SESSION_ROLE_VIEWER)
-        _logger.info(
-            "Viewer PIN %s; %d viewer session(s) signed out", "cleared" if not VIEWER_PIN else "changed", dropped
-        )
     active_target = requested_active or _active_broker_name()
     _set_active_broker(active_target, persist=True)
     if broker_sensitive_keys:
@@ -3008,7 +3492,7 @@ def _ops_state_summary() -> dict:
     broker_info = _broker_summary()
     ready_checks = {
         "auth_pin_configured": bool(AUTH_PIN),
-        "viewer_login_enabled": _viewer_login_enabled(),
+        "accounts": _account_store().count_users(),
         "state_store_writable": bool(store_health.get("writable")),
         "state_store_exists": bool(store_health.get("exists")),
         "broker_configured": broker_info["configured"],
@@ -3152,7 +3636,13 @@ def _production_readiness_payload() -> dict:
         "trade_alerts": 'id="cf-alert-stack"',
     }
     missing_controls = [name for name, marker in required_shell_controls.items() if marker not in strategy_html]
-    login_controls = {"login_pin": 'data-val="', "login_appearance": 'id="login-appearance-toggle"'}
+    login_controls = {
+        "login_username": 'id="username-input"',
+        "login_password": 'id="password-input"',
+        "login_unlock": 'id="unlock-btn"',
+        "login_passkey": 'id="passkey-btn"',
+        "login_appearance": 'id="login-appearance-toggle"',
+    }
     missing_login_controls = [name for name, marker in login_controls.items() if marker not in login_html]
 
     required_get_routes = [
@@ -3285,7 +3775,8 @@ def _production_readiness_payload() -> dict:
             and _route_available("/api/auth/logout", "POST"),
             {
                 "session_auth": True,
-                "totp_enabled": _totp_enabled(),
+                "accounts": _account_store().count_users(),
+                "admin_mfa_enabled": bool((_account_store().first_admin() or {}).get("mfa_enabled")),
                 "persistent_session_secret": bool(os.getenv("SESSION_SECRET")),
                 "csrf_for_writes": True,
                 "rate_limited_write_routes": ["admin_config_update", "broker_switch", "scalp_enter", "scalp_exit"],
@@ -3302,8 +3793,8 @@ def _production_readiness_payload() -> dict:
             warnings=[
                 *(
                     []
-                    if _totp_enabled()
-                    else ["TOTP is not configured; the trading console is protected by one factor."]
+                    if bool((_account_store().first_admin() or {}).get("mfa_enabled"))
+                    else ["The admin account has no authenticator; the trading console is protected by one factor."]
                 ),
                 *(
                     []
@@ -8213,7 +8704,6 @@ _FEED_SUBSCRIBER_STATUSES = ("active", "lapsed", "revoked")
 def _validate_buyer_public_key(raw: str) -> str:
     """A registered key that cannot verify anything is a locked-out buyer who
     finds out at connect time, with a support chat instead of an error here."""
-    import base64
 
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 

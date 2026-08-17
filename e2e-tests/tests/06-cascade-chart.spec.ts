@@ -24,6 +24,7 @@ import { test, expect, Page } from '@playwright/test';
  */
 
 const PIN = process.env.E2E_PIN || '123456';
+const USER = process.env.E2E_USER || 'admin';
 
 // Fixed epoch: the chart formats times to IST, and a moving clock would make
 // the rendered labels differ run to run for no useful reason.
@@ -32,9 +33,11 @@ const STEP = 300;
 
 async function login(page: Page) {
   await page.goto('/app');
-  for (const digit of PIN.split('')) {
-    await page.click(`button.key[data-val="${digit}"]`);
-  }
+  // Accounts, since 2026-08-17: username + password (the seeded admin's
+  // password is CRYPTOFORGE_PIN, which is what E2E_PIN carries).
+  await page.fill('#username-input', USER);
+  await page.fill('#password-input', PIN);
+  await page.click('#unlock-btn');
   await page.waitForSelector('.nav-tab', { timeout: 10_000 });
   await page.waitForFunction(() => typeof (window as any).cfCascadeShowChart === 'function');
 }
