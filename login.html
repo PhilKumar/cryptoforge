@@ -20,9 +20,13 @@
 <body>
 
 <!-- The unlock screen sits on the landing hero, blurred — the same front door,
-     out of focus, rather than a second unrelated dark page. -->
+     out of focus, rather than a second unrelated dark page. It follows whatever
+     the landing's hero actually is: that used to be a Dojima plate and is now
+     the poster frame of the hero film. If the landing hero changes again, this
+     src moves with it, and tests/test_live_hardening.py fails if the file it
+     names has gone. -->
 <div class="unlock-backdrop" aria-hidden="true">
-  <img src="/static/landing/img/plate_hero.jpg" alt="">
+  <img src="/static/landing/film/clips/00_plate_poster.jpg" alt="">
 </div>
 
 <button type="button" class="login-appearance-toggle" id="login-appearance-toggle" aria-label="Appearance">

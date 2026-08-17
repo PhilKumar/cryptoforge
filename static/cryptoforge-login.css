@@ -49,13 +49,14 @@
     content: ''; position: absolute; inset: 0;
     /* Darkest directly behind the card, so the PIN stays legible while the
        painting still reads as the front door around it. */
-    /* Obsidian and brass, the landing's own grade: the plate is warmed by a
-       brass wash and then darkened hardest directly behind the card, so the
-       PIN stays legible while the port still reads as the front door. */
+    /* Signal and glass, the landing's own grade. The brass wash that used to sit
+       here was tuned for Dojima's warm port plate; over the crypto hero's cyan
+       and violet bokeh it read as dirt, so the wash is cool now and the void
+       matches the landing's #05060B rather than Dojima's #06070A. */
     background:
-      radial-gradient(58% 62% at 50% 40%, rgba(201,162,39,0.10) 0%, transparent 72%),
-      radial-gradient(46% 44% at 50% 50%, rgba(6,7,10,0.62) 0%, rgba(6,7,10,0.32) 60%, transparent 100%),
-      linear-gradient(180deg, rgba(6,7,10,0.46), rgba(6,7,10,0.18) 45%, rgba(6,7,10,0.58));
+      radial-gradient(58% 62% at 50% 40%, rgba(79,231,245,0.09) 0%, transparent 72%),
+      radial-gradient(46% 44% at 50% 50%, rgba(5,6,11,0.66) 0%, rgba(5,6,11,0.34) 60%, transparent 100%),
+      linear-gradient(180deg, rgba(5,6,11,0.48), rgba(5,6,11,0.20) 45%, rgba(5,6,11,0.60));
   }
   [data-theme="light"] .unlock-backdrop img { filter: blur(26px) saturate(1.02) brightness(0.92); }
   [data-theme="light"] .unlock-backdrop::after {
