@@ -228,11 +228,21 @@ nav.stuck{background:rgba(6,7,10,.86);backdrop-filter:blur(14px) saturate(1.2);
 /* ══ PROOF TAPE ═══════════════════════════════════════════════════ */
 .tape{border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);
   background:var(--obsidian);overflow:hidden;position:relative;z-index:2}
-.tape::before,.tape::after{content:"";position:absolute;top:0;bottom:0;width:110px;z-index:3;pointer-events:none}
+/* The fades are sized off the tape itself, never a fixed 110px: on a 375px
+   phone two 110px masks ate 59% of the window and left 155px of clear tape
+   for a 224px figure, so no item was ever legible whole and the run read as
+   static mush. */
+.tape::before,.tape::after{content:"";position:absolute;top:0;bottom:0;
+  width:clamp(28px,9vw,110px);z-index:3;pointer-events:none}
 .tape::before{left:0;background:linear-gradient(90deg,var(--obsidian),transparent)}
 .tape::after{right:0;background:linear-gradient(270deg,var(--obsidian),transparent)}
-.tape-run{display:flex;width:max-content;animation:run 46s linear infinite}
-.tape:hover .tape-run{animation-play-state:paused}
+.tape-run{display:flex;width:max-content;animation:run 46s linear infinite;
+  will-change:transform}
+/* Pause on hover only where a pointer can actually leave. On a touch screen
+   :hover STICKS after a tap, which stopped the tape dead and never resumed. */
+@media (hover:hover) and (pointer:fine){
+  .tape:hover .tape-run{animation-play-state:paused}
+}
 @keyframes run{to{transform:translateX(-50%)}}
 .tape-i{display:flex;align-items:baseline;gap:11px;padding:9px 30px;white-space:nowrap;
   border-right:1px solid var(--hairline)}

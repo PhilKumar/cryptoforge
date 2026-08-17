@@ -264,6 +264,48 @@ const check = (name, pass, detail) => {
   check('mobile fetches nothing it has not reached', mob.actSrcs === 0,
     `${mob.actSrcs} act clips fetched before scrolling`);
 
+  // THE PROOF TAPE ON A PHONE. Two fixed 110px fades used to eat 59% of a
+  // 375px tape, leaving 155px of clear window for a 239px figure -- nothing
+  // ever read whole, so the run looked dead. And `.tape:hover` was unguarded,
+  // which on a touch screen STICKS after a tap and stops the tape for good.
+  const tape = await m.evaluate(() => {
+    const t = document.querySelector('.tape');
+    const r = document.getElementById('tapeRun');
+    const mask = parseFloat(getComputedStyle(t, '::before').width);
+    const widest = Math.max(...[...document.querySelectorAll('.tape-i')].map((e) => e.getBoundingClientRect().width));
+    const a = r.getAnimations()[0];
+    // the pane may not paint, so drive the timeline instead of watching it
+    const readX = (ms) => { a.currentTime = ms; return new DOMMatrix(getComputedStyle(r).transform).m41; };
+    const early = readX(11500);
+    const late = readX(23000);
+    a.currentTime = 0;
+    return {
+      mask,
+      clear: t.getBoundingClientRect().width - 2 * mask,
+      widest,
+      items: r.children.length,
+      moves: late < early && early < 0,
+      paused: getComputedStyle(r).animationPlayState !== 'running',
+      // Sticky touch-:hover cannot be simulated, so assert the RULE instead:
+      // every .tape:hover pause must sit inside a hover-capability query.
+      hoverPauseUnguarded: [...document.styleSheets].some((s) => {
+        const walk = (rules, guarded) => [...rules].some((rule) => {
+          if (rule.type === 4) {
+            return walk(rule.cssRules, guarded || /hover/.test(rule.conditionText || ''));
+          }
+          return !guarded && (rule.selectorText || '').includes('.tape:hover');
+        });
+        try { return walk(s.cssRules, false); } catch (e) { return false; }
+      }),
+    };
+  });
+  check('the proof tape actually runs on a phone', tape.moves && !tape.paused && tape.items === 24,
+    `items=${tape.items} advances=${tape.moves} paused=${tape.paused}`);
+  check('a tape figure is legible whole on a phone', tape.clear >= tape.widest,
+    `clear window ${Math.round(tape.clear)}px vs widest figure ${Math.round(tape.widest)}px (fades ${tape.mask}px)`);
+  check('a sticky touch :hover cannot stop the tape', !tape.hoverPauseUnguarded,
+    `hover-pause rule outside a hover query=${tape.hoverPauseUnguarded}`);
+
   // A phone used to get the hero and nothing else, so a re-shot act clip could
   // never show up there. It plays now — and the contract that makes that safe
   // is the one asserted here: scrolling to a figure starts THAT clip, and
