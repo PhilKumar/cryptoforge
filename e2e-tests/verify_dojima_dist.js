@@ -268,24 +268,30 @@ const check = (name, pass, detail) => {
   // 375px tape, leaving 155px of clear window for a 239px figure -- nothing
   // ever read whole, so the run looked dead. And `.tape:hover` was unguarded,
   // which on a touch screen STICKS after a tap and stops the tape for good.
-  const tape = await m.evaluate(() => {
+  const tape = await m.evaluate(async () => {
     const t = document.querySelector('.tape');
     const r = document.getElementById('tapeRun');
     const mask = parseFloat(getComputedStyle(t, '::before').width);
     const widest = Math.max(...[...document.querySelectorAll('.tape-i')].map((e) => e.getBoundingClientRect().width));
-    const a = r.getAnimations()[0];
-    // the pane may not paint, so drive the timeline instead of watching it
-    const readX = (ms) => { a.currentTime = ms; return new DOMMatrix(getComputedStyle(r).transform).m41; };
-    const early = readX(11500);
-    const late = readX(23000);
-    a.currentTime = 0;
+    // Sample over REAL time. Driving an animation's timeline by hand proved
+    // nothing about whether the tape actually moves -- it "passed" while a
+    // phone showed a dead strip.
+    const s0 = t.scrollLeft;
+    await new Promise((s) => setTimeout(s, 2000));
+    const s1 = t.scrollLeft;
     return {
       mask,
       clear: t.getBoundingClientRect().width - 2 * mask,
       widest,
       items: r.children.length,
-      moves: late < early && early < 0,
-      paused: getComputedStyle(r).animationPlayState !== 'running',
+      moved: +(s1 - s0).toFixed(1),
+      moves: s1 > s0,
+      // The blank-strip cause: a transformed track becomes ONE composited
+      // layer, and 4818 CSS px at dpr 3 is 14,454 device px -- past the
+      // ~8192px max texture, so a phone drops its tiles and repaints nothing.
+      layerDevicePx: Math.round(r.getBoundingClientRect().width * devicePixelRatio),
+      promoted: getComputedStyle(r).willChange !== 'auto'
+        || r.getAnimations().some((a) => a.playState === 'running'),
       // Sticky touch-:hover cannot be simulated, so assert the RULE instead:
       // every .tape:hover pause must sit inside a hover-capability query.
       hoverPauseUnguarded: [...document.styleSheets].some((s) => {
@@ -299,12 +305,38 @@ const check = (name, pass, detail) => {
       }),
     };
   });
-  check('the proof tape actually runs on a phone', tape.moves && !tape.paused && tape.items === 24,
-    `items=${tape.items} advances=${tape.moves} paused=${tape.paused}`);
+  check('the proof tape actually runs on a phone', tape.moves && tape.items === 24,
+    `items=${tape.items} moved ${tape.moved}px in 2s`);
+  check('the tape is not one oversized layer a phone can drop', !tape.promoted,
+    `promoted=${tape.promoted} track=${tape.layerDevicePx} device px (max texture ~8192)`);
   check('a tape figure is legible whole on a phone', tape.clear >= tape.widest,
     `clear window ${Math.round(tape.clear)}px vs widest figure ${Math.round(tape.widest)}px (fades ${tape.mask}px)`);
   check('a sticky touch :hover cannot stop the tape', !tape.hoverPauseUnguarded,
     `hover-pause rule outside a hover query=${tape.hoverPauseUnguarded}`);
+
+  // Phil's exact trip, 2026-08-17: "Initially I am seeing it, later when I
+  // scroll down and up it becomes blank strip." The tape must still be
+  // painted AND still moving after leaving it and coming back.
+  await m.evaluate(() => scrollTo(0, document.body.scrollHeight));
+  await m.waitForTimeout(2500);
+  await m.evaluate(() => scrollTo(0, 0));
+  await m.waitForTimeout(1200);
+  const back = await m.evaluate(async () => {
+    const t = document.querySelector('.tape');
+    const r = document.getElementById('tapeRun');
+    t.scrollIntoView({ block: 'center' });
+    await new Promise((s) => setTimeout(s, 1500));
+    const s0 = t.scrollLeft;
+    await new Promise((s) => setTimeout(s, 1500));
+    // "blank" means the figures stopped painting: no laid-out text on screen
+    const painted = [...r.children].filter((el) => {
+      const b = el.getBoundingClientRect();
+      return b.width > 0 && b.right > 0 && b.left < innerWidth && el.innerText.trim().length;
+    }).length;
+    return { painted, moved: +(t.scrollLeft - s0).toFixed(1), still: t.scrollLeft === s0 };
+  });
+  check('the tape survives scrolling away and back', back.painted > 0 && !back.still,
+    `${back.painted} figures painted in view, moved ${back.moved}px after the round trip`);
 
   // A phone used to get the hero and nothing else, so a re-shot act clip could
   // never show up there. It plays now — and the contract that makes that safe

@@ -236,14 +236,15 @@ nav.stuck{background:rgba(6,7,10,.86);backdrop-filter:blur(14px) saturate(1.2);
   width:clamp(28px,9vw,110px);z-index:3;pointer-events:none}
 .tape::before{left:0;background:linear-gradient(90deg,var(--obsidian),transparent)}
 .tape::after{right:0;background:linear-gradient(270deg,var(--obsidian),transparent)}
-.tape-run{display:flex;width:max-content;animation:run 46s linear infinite;
-  will-change:transform}
-/* Pause on hover only where a pointer can actually leave. On a touch screen
-   :hover STICKS after a tap, which stopped the tape dead and never resumed. */
-@media (hover:hover) and (pointer:fine){
-  .tape:hover .tape-run{animation-play-state:paused}
-}
-@keyframes run{to{transform:translateX(-50%)}}
+/* The tape SCROLLS its container; it does not transform a long track.
+   Transforming made the 4818px run one composited layer -- 14,454 device px
+   at dpr 3, past the ~8192px max texture -- so a phone dropped its tiles on
+   the way past and painted a BLANK strip on the way back. A scroll container
+   paints tiled and on demand, so there is no giant texture to lose. The
+   motion is driven in dojima.js; without JS the tape is simply still. */
+.tape{scrollbar-width:none;-ms-overflow-style:none}
+.tape::-webkit-scrollbar{display:none}
+.tape-run{display:flex;width:max-content}
 .tape-i{display:flex;align-items:baseline;gap:11px;padding:9px 30px;white-space:nowrap;
   border-right:1px solid var(--hairline)}
 .tape-i .v{font-family:var(--mono);font-size:14px;color:var(--ink-hi);font-variant-numeric:tabular-nums}
@@ -1022,6 +1023,45 @@ const TAPE=[["₹11,60,571","Net, 5 years","up"],["935","Trades",""],["51.0%","W
 const run=document.getElementById('tapeRun');
 run.innerHTML=[...TAPE,...TAPE].map(([v,l,c])=>
   '<div class="tape-i"><span class="v '+c+'">'+v+'</span><span class="l">'+l+'</span></div>').join('');
+
+/* The run is two identical copies, so scrolling past the first copy and
+   subtracting its width is seamless. 52.4 px/s is the old 46s CSS loop.
+   Driven here rather than in CSS because a transformed 4818px track became
+   one oversized layer and went blank on a phone after scrolling away. */
+(function tapeTicker(){
+  const tape=document.querySelector('.tape');
+  if(!tape||!run.children.length) return;
+  const SPEED=52.4;
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  let pos=0,last=0,vis=true,hover=false,raf=0;
+  const lap=()=>run.scrollWidth/2;               /* one copy */
+  const step=(t)=>{
+    if(last){
+      if(!hover){
+        pos+=SPEED*(t-last)/1000;
+        const l=lap();
+        if(l>0&&pos>=l) pos-=l;                  /* seamless wrap */
+        tape.scrollLeft=pos;
+      }
+    }
+    last=t; raf=vis?requestAnimationFrame(step):0;
+  };
+  const start=()=>{ if(!raf){ last=0; raf=requestAnimationFrame(step); } };
+  const stop=()=>{ if(raf){ cancelAnimationFrame(raf); raf=0; } };
+  /* Nothing burns a phone battery scrolling a strip nobody is looking at. */
+  if('IntersectionObserver' in window){
+    new IntersectionObserver((es)=>{ vis=es[0].isIntersecting; vis?start():stop(); },
+      {threshold:0}).observe(tape);
+  } else { start(); }
+  document.addEventListener('visibilitychange',()=>{ document.hidden?stop():(vis&&start()); });
+  /* Pause under a real pointer only. On a touch screen :hover STICKS after a
+     tap, which used to stop the tape for good. */
+  if(matchMedia('(hover:hover) and (pointer:fine)').matches){
+    tape.addEventListener('mouseenter',()=>{hover=true});
+    tape.addEventListener('mouseleave',()=>{hover=false});
+  }
+  start();
+})();
 
 /* ── nav ────────────────────────────────────────────────────── */
 const nav=document.getElementById('nav');
