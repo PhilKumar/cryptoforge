@@ -6629,25 +6629,25 @@ function cfInitBrandMotion() {
 
   columns.forEach(function(col, i) {
     col.animate([
-      { transform: 'scaleY(0.04)', opacity: 0 },
-      { transform: 'scaleY(1.16)', opacity: 1, offset: 0.62 },
-      { transform: 'scaleY(1)', opacity: 1 }
+      { transform: 'scaleX(0.04)', opacity: 0 },
+      { transform: 'scaleX(1.08)', opacity: 1, offset: 0.62 },
+      { transform: 'scaleX(1)', opacity: 1 }
     ], { duration: 880, delay: 120 + i * 95, easing: RISE, fill: 'backwards' });
   });
 
   if (spark) {
     var strike = spark.animate([
-      { transform: 'scale(0)', opacity: 0 },
-      { transform: 'scale(1.55)', opacity: 1, offset: 0.62 },
-      { transform: 'scale(1)', opacity: 1 }
+      { transform: 'rotate(45deg) scale(0)', opacity: 0 },
+      { transform: 'rotate(45deg) scale(1.4)', opacity: 1, offset: 0.62 },
+      { transform: 'rotate(45deg) scale(1)', opacity: 1 }
     ], { duration: 620, delay: 430, easing: POP, fill: 'backwards' });
     // Hand over to the resting pulse only once the strike has landed, so the
     // two never fight over transform.
     strike.finished.then(function() {
       spark.animate([
-        { opacity: 0.55, transform: 'scale(0.88)' },
-        { opacity: 1, transform: 'scale(1.14)' },
-        { opacity: 0.55, transform: 'scale(0.88)' }
+        { opacity: 0.6, transform: 'rotate(45deg) scale(0.94)' },
+        { opacity: 1, transform: 'rotate(45deg) scale(1.08)' },
+        { opacity: 0.6, transform: 'rotate(45deg) scale(0.94)' }
       ], { duration: 3400, iterations: Infinity, easing: 'ease-in-out' });
     }).catch(function() { /* cancelled by a theme swap or teardown */ });
   }
@@ -6660,9 +6660,9 @@ function cfInitBrandMotion() {
     columns.forEach(function(col, i) {
       var peak = 0.62 + Math.random() * 0.7;
       col.animate([
-        { transform: 'scaleY(1)' },
-        { transform: 'scaleY(' + peak.toFixed(3) + ')', offset: 0.44 },
-        { transform: 'scaleY(1)' }
+        { transform: 'scaleX(1)' },
+        { transform: 'scaleX(' + peak.toFixed(3) + ')', offset: 0.44 },
+        { transform: 'scaleX(1)' }
       ], { duration: 780, delay: i * 65, easing: RISE });
     });
   });

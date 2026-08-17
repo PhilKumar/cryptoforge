@@ -2123,7 +2123,22 @@ def _estimate_warmup_days(candle_interval: str, indicators: List[str]) -> int:
 # ── Favicon ───────────────────────────────────────────────────────
 @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
 async def favicon():
-    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#8b5cf6"/><text y=".9em" x="50" text-anchor="middle" font-size="70" font-family="sans-serif">⬡</text></svg>'
+    # The desk's mark, flattened to two colours: four brass rungs standing up
+    # under a cyan chevron. Drawn rather than served as a file because this
+    # route answers /favicon.ico for every page, and an SVG stays sharp at the
+    # 16px a browser tab actually paints. It replaces a purple hexagon that
+    # belonged to no part of this product.
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+        '<rect width="64" height="64" rx="14" fill="#0A0A0C"/>'
+        '<g fill="none" stroke-linecap="round" stroke-width="4.9">'
+        '<g stroke="#F5A623">'
+        '<path d="M20.9 51.3H43.1"/><path d="M20.9 43.6H43.1"/>'
+        '<path d="M20.9 36H43.1"/><path d="M20.9 28.3H43.1"/>'
+        "</g>"
+        '<path d="M18.4 20.7L32 7l13.6 13.7" stroke="#4FE7F5" stroke-linejoin="round"/>'
+        "</g></svg>"
+    )
     return Response(content=svg, media_type="image/svg+xml")
 
 

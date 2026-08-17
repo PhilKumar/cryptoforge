@@ -111,17 +111,24 @@
     border: 1px solid rgba(96,165,250,0.14);
     background: linear-gradient(145deg, rgba(24,35,62,0.30), transparent 62%);
   }
+  /* Same mark as the app's top bar, 36px geometry doubled: brass rungs
+     standing up under a cyan chevron. Fixed colours — the logo does not
+     follow the appearance preset. */
   .brand-column {
-    position: absolute; bottom: 14px; width: 11px; border-radius: 999px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.20);
+    position: absolute; left: 50%; margin-left: -16px;
+    width: 32px; height: 6px; border-radius: 999px;
+    background: linear-gradient(180deg, #F2D69E, #C89A56);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28);
   }
-  .brand-column.col-a { left: 18px; height: 33px; background: linear-gradient(180deg, #93c5fd, #2563eb); }
-  .brand-column.col-b { left: 31px; height: 44px; background: linear-gradient(180deg, var(--accent), var(--accent2)); }
-  .brand-column.col-c { left: 44px; height: 26px; background: linear-gradient(180deg, #fb7185, #db2777); }
+  .brand-column.col-a { top: 56px; }
+  .brand-column.col-b { top: 46px; }
+  .brand-column.col-c { top: 36px; }
   .brand-spark {
-    position: absolute; top: 15px; right: 13px; width: 14px; height: 14px; border-radius: 999px;
-    background: radial-gradient(circle, #f8fafc 0%, rgba(125,211,252,0.86) 48%, rgba(14,165,233,0) 100%);
-    filter: blur(0.2px);
+    position: absolute; top: 18px; left: 50%; margin-left: -12px;
+    width: 24px; height: 24px; border-radius: 4px;
+    border-top: 6px solid #6FE9F7; border-left: 6px solid #6FE9F7;
+    background: none; transform: rotate(45deg);
+    filter: drop-shadow(0 0 9px rgba(79,231,245,0.55));
   }
   .unlock-title {
     font-family: var(--font-display);

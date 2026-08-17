@@ -414,41 +414,50 @@
     border: 1px solid rgba(96,165,250,0.14);
     background: linear-gradient(145deg, rgba(24,35,62,0.30), transparent 62%);
   }
+  /* The desk's mark: brass rungs standing up under a cyan chevron, the same
+     shape the landing and the app icon carry. Three rungs here, not the four
+     the full mark has — at 36px a fourth closes the gaps and the ladder reads
+     as a solid block.
+
+     These colours are deliberately NOT theme-tinted. The mark used to take
+     --tint-primary/secondary/tertiary and change colour with the appearance
+     preset, which meant the logo in the top bar rarely matched the logo on the
+     landing, the tab or the home screen. The plate below still follows the
+     theme; the mark on it does not. */
   .brand-column {
     position: absolute;
-    bottom: 7px;
-    width: 6px;
+    left: 50%;
+    margin-left: -8px;
+    width: 16px;
+    height: 3px;
     border-radius: 999px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.20);
-    /* cfInitBrandMotion() scales these on scaleY; growing from the baseline is
-       what makes them read as depth columns rather than stretching bars. */
-    transform-origin: 50% 100%;
+    background: linear-gradient(180deg, #F2D69E, #C89A56);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28);
+    /* cfInitBrandMotion() draws these in on scaleX, so a rung lays itself down
+       from the left the way the ladder is built. Growing from the centre made
+       them flick outwards from a dot, which read as a glitch. */
+    transform-origin: 0 50%;
     will-change: transform;
   }
-  .brand-column.col-a {
-    left: 9px;
-    height: 18px;
-    background: linear-gradient(180deg, #93c5fd, #2563eb);
-  }
-  .brand-column.col-b {
-    left: 16px;
-    height: 24px;
-    background: linear-gradient(180deg, var(--accent), var(--accent2));
-  }
-  .brand-column.col-c {
-    left: 23px;
-    height: 14px;
-    background: linear-gradient(180deg, #fb7185, #db2777);
-  }
+  .brand-column.col-a { top: 28px; }
+  .brand-column.col-b { top: 23px; }
+  .brand-column.col-c { top: 18px; }
+  /* The chevron is one square turned 45deg with two of its borders painted.
+     The rotation has to be repeated in every JS keyframe that touches
+     transform, or the animation drops it and the caret lands as a square. */
   .brand-spark {
     position: absolute;
-    top: 8px;
-    right: 7px;
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: radial-gradient(circle, #f8fafc 0%, rgba(125,211,252,0.86) 48%, rgba(14,165,233,0) 100%);
-    filter: blur(0.2px);
+    top: 9px;
+    left: 50%;
+    margin-left: -6px;
+    width: 12px;
+    height: 12px;
+    border-top: 3px solid #6FE9F7;
+    border-left: 3px solid #6FE9F7;
+    border-radius: 2px;
+    background: none;
+    transform: rotate(45deg);
+    filter: drop-shadow(0 0 5px rgba(79,231,245,0.55));
   }
   .topbar-brand-text {
     font-family: var(--font-display);
@@ -6208,12 +6217,8 @@ h1, h2, h3, h4, h5, h6,
     inset 0 1px 0 rgba(255,255,255,0.18),
     inset 0 -14px 22px rgba(0,0,0,0.22);
 }
-.brand-column.col-a { background: linear-gradient(180deg, #7dd3fc, #0891b2); }
-.brand-column.col-b { background: linear-gradient(180deg, #5eead4, #0f766e); }
-.brand-column.col-c { background: linear-gradient(180deg, #fcd34d, #d97706); }
-.brand-spark {
-  background: radial-gradient(circle, #fff7ed 0%, rgba(251,191,36,0.88) 46%, rgba(245,158,11,0) 100%);
-}
+/* The mark keeps its own colours under every appearance preset — see the note
+   on .brand-column. Only the plate it sits on follows the theme. */
 .topbar-brand-text {
   font-size: 18px;
   letter-spacing: 1.9px;
@@ -6668,9 +6673,7 @@ body {
 .appearance-option.active {
   border-color: rgba(var(--tint-primary-rgb),0.44);
 }
-.brand-column.col-a { background: linear-gradient(180deg, color-mix(in srgb, var(--tint-primary) 72%, white), var(--tint-primary)); }
-.brand-column.col-b { background: linear-gradient(180deg, color-mix(in srgb, var(--tint-tertiary) 72%, white), var(--tint-tertiary)); }
-.brand-column.col-c { background: linear-gradient(180deg, color-mix(in srgb, var(--tint-secondary) 72%, white), var(--tint-secondary)); }
+/* Rungs are not tinted by the preset; the logo is constant. */
 .topbar-brand-text,
 .unlock-title {
   background: linear-gradient(130deg, color-mix(in srgb, var(--tint-primary) 35%, white) 0%, var(--tint-primary) 42%, var(--tint-secondary) 100%);
