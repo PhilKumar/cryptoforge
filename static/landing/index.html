@@ -282,18 +282,23 @@
     <div class="bento">
       <article class="card c-4 rv" data-d="1">
         <div class="art">
-          <div class="jrn" aria-hidden="true">
+          <!-- Filled from ledger.json's `recent` by crypto.js, and REMOVED if
+               that array is missing or empty. It used to hold four hand-written
+               rows with real pair names and plausible times, which on a page
+               whose argument is "the journal is the product" was the one piece
+               of invented evidence on it. Empty here is correct: nothing ships
+               until the desk has closed rounds to show. The instrument is
+               masked to "Pair A/B/…" — the record is public, the coin
+               selection is not. -->
+          <div class="jrn" id="jrn" hidden>
             <div class="h"><span>Pair</span><span>Closed</span><span>Hold</span><span>Fee</span><span>Result</span></div>
-            <div class="r"><b>ETH/USDT</b><em>02:14 IST</em><span>3h 40m</span><span class="fee">0.10%</span><span class="up">+0.84%</span></div>
-            <div class="r"><b>SOL/USDT</b><em>23:51 IST</em><span>1h 05m</span><span class="fee">0.10%</span><span class="dn">&minus;0.42%</span></div>
-            <div class="r"><b>BNB/USDT</b><em>19:07 IST</em><span>6h 12m</span><span class="fee">0.075%</span><span class="up">+1.12%</span></div>
-            <div class="r"><b>BTC/USDT</b><em>14:30 IST</em><span>0h 48m</span><span class="fee">0.10%</span><span class="dn">&minus;0.31%</span></div>
           </div>
         </div>
         <div class="kicker">Journal</div>
         <h3>Every trade, with its fee, in the order it happened</h3>
         <p>The journal is the product. Fees are shown as what they were, not rounded to zero; a paper round is listed
-          but never counted; and a losing day sits exactly where it fell.</p>
+          but never counted; and a losing day sits exactly where it fell. These are real closed rounds &mdash; the
+          <b>instrument is masked</b>, because the record is public and the coin selection is not.</p>
       </article>
       <article class="card c-2 rv warm" data-d="2">
         <div class="art">

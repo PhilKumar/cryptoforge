@@ -8289,7 +8289,52 @@ def _journal_summary(trades: List[dict], capital_base: float, account_value: Opt
 _LANDING_LEDGER_FILE = os.path.join(_HERE, "static", "landing", "ledger.json")
 
 
-def _write_landing_ledger(summary: dict, capital_base: float) -> None:
+def _landing_recent_rounds(trades: List[dict], limit: int = 6) -> list:
+    """The last few closed rounds, with the instrument masked.
+
+    The landing shows these instead of a hand-written mock-up, so the table a
+    reader sees is the real cadence: when a round closed, how long it was held,
+    what the commission came to and what it made. What it must NOT reveal is
+    WHICH coins the desk trades — that is the per-coin breakdown this file
+    withholds on purpose — so each distinct symbol gets a stable letter by
+    first appearance. Same coin, same letter, and two rows sharing a letter are
+    genuinely the same instrument; the letters mean nothing outside this list.
+
+    The fee is a percentage of the money put in, and it is None rather than
+    0.00% whenever the commission was taken in BNB: the account pays it in coin,
+    the USD figure comes back as zero, and printing "0.00%" on a page that
+    promises fees are shown as what they were would be the one lie on it.
+    """
+    closed = [
+        t
+        for t in trades
+        if str(t.get("status") or "") == "Closed" and str(t.get("kind") or "") != "fee_float" and t.get("closed_ts")
+    ]
+    closed.sort(key=lambda t: int(t.get("closed_ts") or 0), reverse=True)
+    rows: list = []
+    labels: Dict[str, str] = {}
+    for t in closed[:limit]:
+        coin = str(t.get("coin") or t.get("symbol") or "").upper()
+        if coin not in labels:
+            labels[coin] = f"Pair {chr(ord('A') + len(labels))}"
+        opened_ms, closed_ms = int(t.get("opened_ts") or 0), int(t.get("closed_ts") or 0)
+        held_min = max(0, (closed_ms - opened_ms) // 60000) if opened_ms else 0
+        invested = _coerce_float_safe(t.get("invested_usd"))
+        fees = _coerce_float_safe(t.get("fees_usd"))
+        paid_in_coin = fees <= 0 and bool(t.get("fee_assets"))
+        rows.append(
+            {
+                "pair": labels[coin],
+                "closed": datetime.fromtimestamp(closed_ms / 1000, _IST_TZ).strftime("%H:%M IST"),
+                "hold": f"{held_min // 60}h {held_min % 60:02d}m",
+                "fee_pct": None if (paid_in_coin or invested <= 0) else round(fees / invested * 100, 3),
+                "result_pct": round(_coerce_float_safe(t.get("roi_pct")), 2),
+            }
+        )
+    return rows
+
+
+def _write_landing_ledger(summary: dict, capital_base: float, trades: Optional[List[dict]] = None) -> None:
     """Snapshot the closed-trade record for the public landing page.
 
     What is deliberately NOT in here: the account balance, the account's start
@@ -8327,6 +8372,7 @@ def _write_landing_ledger(summary: dict, capital_base: float) -> None:
         "net_of_fees": True,
         "annualised": False,
         "source": "live fills only — no backtest, no paper rounds",
+        "recent": _landing_recent_rounds(trades or []),
         "series": [
             {
                 "d": d.get("date"),
@@ -8511,7 +8557,7 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
     # read: a sheet-only summary would quietly publish a shorter, all-winners
     # record as if it were the whole thing.
     if broker_trades:
-        _write_landing_ledger(summary, capital_base)
+        _write_landing_ledger(summary, capital_base, trades)
 
     return {
         "status": "ok",

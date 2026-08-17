@@ -431,6 +431,41 @@
     fetch('/static/landing/ledger.json', { credentials: 'omit' })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
+        /* The journal card's table. Real closed rounds with the instrument
+           masked, and it stays hidden unless the ledger actually carries some.
+           It used to be four hand-written rows with real pair names — invented
+           evidence sitting directly above the sentence "the journal is the
+           product", which is the one place on this page that could not afford
+           it. Empty beats plausible. Runs before the series gate below, because
+           the rounds and the daily curve fail independently. */
+        const jrn = document.getElementById('jrn');
+        if (jrn && d && Array.isArray(d.recent) && d.recent.length) {
+          const feeTxt = (v) => (Math.round(v * 1000) % 10 === 0 ? v.toFixed(2) : v.toFixed(3)) + '%';
+          const frag = document.createDocumentFragment();
+          d.recent.forEach((t) => {
+            const row = document.createElement('div');
+            row.className = 'r';
+            const cell = (tag, text, cls) => {
+              const el = document.createElement(tag);
+              el.textContent = text;
+              if (cls) el.className = cls;
+              row.appendChild(el);
+            };
+            const res = +t.result_pct || 0;
+            cell('b', t.pair || '—');
+            cell('em', t.closed || '—');
+            cell('span', t.hold || '—');
+            /* null means the commission was taken in BNB: the USD figure comes
+               back as zero, and "0.00%" under a promise that fees are shown as
+               what they were would be the only false line on the page. */
+            cell('span', t.fee_pct === null || t.fee_pct === undefined ? '—' : feeTxt(+t.fee_pct), 'fee');
+            cell('span', pct(res), res > 0 ? 'up' : res < 0 ? 'dn' : '');
+            frag.appendChild(row);
+          });
+          jrn.appendChild(frag);
+          jrn.hidden = false;
+        }
+
         if (!d || !d.trades || !Array.isArray(d.series) || !d.series.length) return;
         sec.hidden = false;
 
