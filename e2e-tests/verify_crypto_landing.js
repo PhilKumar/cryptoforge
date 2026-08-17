@@ -309,10 +309,9 @@ const bandWalk = async (pg) => {
       `filmed=${filmHero.filmed} aurora opacity=${filmHero.aurora}`);
   }
 
-  // The plate exists twice — a full-bleed hero backdrop for a wide screen and a
-  // framed band for a portrait one — and exactly one of them may have a box at
-  // any width. The hidden twin must also never be fetched, which is what makes
-  // two elements cheaper than one badly-cropped one.
+  // The plate is in the markup twice: the hero backdrop, and a framed copy that
+  // is now retired at every width. Exactly one may have a box, and the one
+  // without a box must never be fetched.
   const twins = await page.evaluate(() => {
     const p = [...document.querySelectorAll('video[data-film*="00_plate"]')];
     const boxed = (v) => !!(v.offsetWidth || v.offsetHeight || v.getClientRects().length);
@@ -402,10 +401,16 @@ const bandWalk = async (pg) => {
     tilt: document.getElementById('deskWin').style.transform || '',
     films: (() => { const v = [...document.querySelectorAll('video[data-film]')];
       const hero = document.getElementById('heroFilm');
-      const hd = getComputedStyle(hero).display;
+      const boxed = (x) => !!(x.offsetWidth || x.offsetHeight || x.getClientRects().length);
       return { total: v.length, fetched: v.filter((x) => x.getAttribute('src')).length,
                posters: v.filter((x) => x.poster).length,
-               heroDisplay: hd, heroBoxed: hd !== 'none' }; })(),
+               heroBoxed: boxed(hero), heroLit: hero.classList.contains('lit'),
+               heroPlaying: !hero.paused, heroOp: +getComputedStyle(hero).opacity,
+               filmed: document.querySelector('.hero').classList.contains('filmed'),
+               // The framed phone copy is retired: it must have no box anywhere,
+               // and therefore must never cost a byte.
+               strayBoxed: v.filter((x) => x.closest('.bandphone') && boxed(x)).length,
+               strayFetched: v.filter((x) => x.closest('.bandphone') && x.getAttribute('src')).length }; })(),
     h1: parseFloat(getComputedStyle(document.querySelector('h1')).fontSize),
     deskW: Math.round(document.getElementById('deskWin').getBoundingClientRect().width),
     stacked: getComputedStyle(document.querySelector('.desk-body')).gridTemplateColumns.split(' ').length === 1,
@@ -417,26 +422,27 @@ const bandWalk = async (pg) => {
   check('headline scaled down', mob.h1 < 52, `${mob.h1}px`);
   check('desk window fits and stacks', mob.deskW <= mob.inner && mob.stacked, `${mob.deskW}px wide, stacked=${mob.stacked}`);
   check('no tilt on touch', mob.tilt === '');
-  // A phone gets the film. This check used to assert the opposite — 0 bytes at
-  // 390px — and that WAS the bug Phil reported: the hero plate never played and
-  // the two bands were empty rectangles. What keeps a phone safe is one clip
-  // decoding at a time and nothing fetched before it is reached, so that is
-  // what gets asserted, at the width he actually holds.
+  // A phone gets the SAME hero as a wide screen: the plate behind the copy. Two
+  // earlier versions of this block asserted the opposite and each matched a bug
+  // Phil then reported — first "no video bytes on a phone" (his film was
+  // invisible), then "no hero backdrop on a phone" (his plate was an isolated
+  // picture card). The page's promise is structural: one hero, one treatment.
   check('every clip carries a poster', mob.films.posters === mob.films.total,
     `${mob.films.posters}/${mob.films.total} posters`);
-  // Nothing is in view at load but the hero, and on a phone the hero carries no
-  // clip — the plate has moved into a frame further down. So a phone that has
-  // not scrolled yet must have spent nothing at all.
-  check('phone fetches nothing before it scrolls', mob.films.fetched === 0,
+  check('hero plate is the backdrop on a phone too',
+    mob.films.heroBoxed && mob.films.heroPlaying && mob.films.heroLit
+      && mob.films.heroOp > 0.9 && mob.films.filmed,
+    `boxed=${mob.films.heroBoxed} playing=${mob.films.heroPlaying} opacity=${mob.films.heroOp} filmed=${mob.films.filmed}`);
+  check('no isolated picture card anywhere',
+    mob.films.strayBoxed === 0 && mob.films.strayFetched === 0,
+    `${mob.films.strayBoxed} boxed, ${mob.films.strayFetched} fetched`);
+  // Only the hero is in view at load, so only its clip may have been wanted.
+  check('phone fetches only the hero before it scrolls', mob.films.fetched === 1,
     `${mob.films.fetched}/${mob.films.total} fetched at scroll 0`);
-  check('no hero backdrop on a phone', mob.films.heroBoxed === false,
-    `hero video display=${mob.films.heroDisplay}`);
-  // Three frames on a phone: the plate, then the two acts. Each must be really
-  // visible — not opacity 0, which is how they used to "be there" — and still
-  // alone in the decoder.
+  // The two act bands stay framed pictures — those ARE photographs of a moment.
   const mBands = await bandWalk(m);
-  check('phone shows all three frames', mBands.length === 3, `${mBands.length} frames`);
-  mBands.forEach((st, i) => check(`frame ${i + 1} plays on a phone, alone and visible`,
+  check('phone shows the two act bands', mBands.length === 2, `${mBands.length} frames`);
+  mBands.forEach((st, i) => check(`act band ${i + 1} plays on a phone, alone and visible`,
     st.fetched && st.op > 0.9 && st.decoding === 1 && st.liveInView
       && st.w <= mob.inner && st.h > 100 && Math.abs(st.ratio - 16 / 9) < 0.02,
     `fetched=${st.fetched} opacity=${st.op} decoding=${st.decoding} on-screen=${st.liveInView} ${st.w}×${st.h}`));

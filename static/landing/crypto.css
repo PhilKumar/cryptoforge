@@ -303,35 +303,43 @@ h1 .rise:nth-child(3)>span{animation-delay:.39s}
   text-transform:uppercase;color:var(--amber-hi)}
 .filmband figcaption b{color:var(--ink);font-weight:500}
 
-/* The phone's copy of the plate. It is the only film band above 880px that is
-   NOT shown, and the only one below it that is — see the note in index.html for
-   why the hero backdrop cannot survive a portrait crop. */
+/* A phone gets the SAME hero as the desktop: the plate behind the copy, not a
+   picture of its own anywhere on the page. Two earlier attempts are recorded
+   here because both were wrong in instructive ways —
+   (1) the plate as a backdrop with the desktop scrim: that scrim runs left→right
+       and is heaviest where the copy is, which on a phone is the whole width, so
+       the picture was buried under 74–94% black and read as solid black;
+   (2) the plate in its own 16:9 band below the hero: legible, but it read as a
+       separate photograph dropped into the page, which is not what the hero is.
+   What actually works is the backdrop with the scrim turned through 90°: heavy
+   across the copy from the top down to where the desk window starts, then opening
+   up underneath it, so the footage glows through the lower half and around the
+   glass exactly as it does on a wide screen. The stops below are the measured
+   positions of the real elements at 390px — copy ends at 56% of the hero, the
+   desk window runs 59%–94% — not guesses. */
 .bandphone{display:none}
 @media(max-width:880px){
-  /* No backdrop on a phone: the aurora carries the hero, which is exactly what
-     it did before there was any footage. Because the element has no box, the
-     controller never reaches it and never spends a byte on it. */
-  .hero-film{display:none}
-  /* The plate is the hero continuing, not a picture of something. Framed like
-     the act bands it read as a separate captioned photograph dropped into the
-     page, so it loses the frame entirely: edge to edge, no border, no radius, no
-     shadow, and both ends dissolved into the void with a mask so there is no
-     boundary anywhere for the eye to catch. It keeps its own 16:9 box — that is
-     what stops the portrait crop — but nothing about it announces an image. */
-  .bandphone{display:block;padding:0;margin-top:calc(-1 * clamp(10px,3vh,34px))}
-  .bandphone .wrap{padding:0}
-  .bandphone .frame{width:100vw;margin-left:calc(50% - 50vw);
-    border:0;border-radius:0;box-shadow:none;background:transparent}
-  /* Knocked back so it sits behind the page's own light rather than in front of
-     it, the way the hero backdrop was always meant to. */
-  .bandphone video{filter:saturate(.92) contrast(1.02) brightness(.6)}
-  .bandphone .frame::after{background:
-    linear-gradient(180deg,var(--void) 0%,rgba(5,6,11,.35) 26%,rgba(5,6,11,.35) 62%,var(--void) 100%)}
-  .bandphone .frame{-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 22%,#000 76%,transparent 100%);
-          mask-image:linear-gradient(180deg,transparent 0%,#000 22%,#000 76%,transparent 100%)}
-  /* No caption either: a caption is the thing that makes a picture a picture,
-     and the hero has already said this in full a screen above. */
-  .bandphone figcaption{display:none}
+  /* The framed copy is retired at every width. The element stays in the markup
+     with no box, which costs nothing: a display:none video never intersects, so
+     the controller never fetches it. */
+  .bandphone{display:none}
+  .hero-film{object-position:50% 45%;
+    filter:saturate(1) contrast(1.03) brightness(1.02)}
+  .hero-film.lit{opacity:1}
+  /* Stops chosen against measured ground luminance, not by eye. The binding
+     constraint is NOT the headline — white on this ground has ratios to spare —
+     it is .hero-note, 10px mono in --ink-lo, which sits at 50–56% of the hero.
+     That band stays dark; everything below 60% opens up, which is where the
+     footage actually reads. */
+  .hero.filmed .hero-vig{background:
+    linear-gradient(180deg,
+      rgba(5,6,11,.90) 0%,
+      rgba(5,6,11,.88) 50%,
+      rgba(5,6,11,.84) 58%,
+      rgba(5,6,11,.50) 72%,
+      rgba(5,6,11,.44) 88%,
+      rgba(5,6,11,.82) 100%),
+    radial-gradient(140% 30% at 50% 100%,var(--void) 10%,transparent 86%)}
 }
 /* Reduced motion is a request to stop moving, not a request to show nothing:
    the hero plate steps aside for the aurora, and each band keeps its poster. */
