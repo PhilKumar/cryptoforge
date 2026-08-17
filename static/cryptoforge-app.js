@@ -114,6 +114,7 @@ const _CF_VIEWER_BLOCKED = new Set([
   'cfFeedBuyerFormToggle', 'cfFeedBuyerSubmit', 'cfFeedBuyerDelete', 'cfFeedBuyerSetStatus',
   'cfFeedCatalogToggle', 'cfR37Start', 'cfR37Stop', 'cfR37Reset', 'cfR37SelectSymbol',
   'cfOpenAdminConsole', 'cfAdminSave', 'cfAdminSwitchBroker', 'cfAdminTestActive',
+  'cfAdminCreateUser', 'cfAdminToggleUser', 'cfAdminResetPassword', 'cfAdminSetRole', 'cfAdminDeleteUser',
 ]);
 
 function _cfInvokeNamedFunction(name, args) {
@@ -693,7 +694,7 @@ async function cfSuccess(msg, title, allowHtml) {
 }
 
 // ── Prompt Modal (replaces native prompt()) ────────────────
-function cfPrompt(title, label, defaultVal) {
+function cfPrompt(title, label, defaultVal, inputType) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'cf-modal-overlay';
@@ -714,7 +715,7 @@ function cfPrompt(title, label, defaultVal) {
     labelEl.textContent = label;
 
     const input = document.createElement('input');
-    input.type = 'text';
+    input.type = inputType || 'text';
     input.className = 'cf-prompt-input';
     input.id = 'cf-prompt-val';
     input.value = defaultVal || '';
@@ -1000,13 +1001,29 @@ function isReadOnlyAccount() {
   return document.documentElement.classList.contains('read-only-account');
 }
 
+var _cfAuthUser = null;
+
 async function cfLoadAuthContext() {
   try {
     var r = await fetch('/api/auth/status', { credentials: 'same-origin', cache: 'no-store' });
     if (!r.ok) return null;
     var d = await r.json();
     if (d && d.authenticated) {
+      _cfAuthUser = d;
+      window._cfAuthUser = d;
       document.documentElement.classList.toggle('read-only-account', d.role === 'viewer');
+      var nameEl = document.getElementById('topbar-username');
+      var roleEl = document.getElementById('topbar-user-role');
+      if (nameEl) nameEl.textContent = d.username || 'Account';
+      if (roleEl) roleEl.textContent = String(d.role || 'user').toUpperCase();
+      var initialEl = document.getElementById('topbar-user-initial');
+      if (initialEl) initialEl.textContent = String(d.username || 'A').charAt(0);
+      var chipBtn = document.getElementById('topbar-account-btn');
+      if (chipBtn) chipBtn.title = 'Account Settings — ' + (d.username || '') + ' (' + String(d.role || 'user') + ')';
+      // The admin console is for admins. The server refuses it for anyone
+      // else regardless; this only stops the gear looking clickable.
+      var adminBtn = document.getElementById('topbar-admin-btn');
+      if (adminBtn) adminBtn.hidden = d.role !== 'admin';
     }
     return d;
   } catch (e) {
@@ -6248,9 +6265,16 @@ function _cfJournalEquitySvg(points) {
     + '</svg>';
 }
 
-function _cfJournalRoiSvg(trades) {
+function _cfJournalRoiSvg(allTrades) {
+  // CLOSED trades only, as the card's title says. An OPEN ladder that has sold
+  // one slice was drawn here too, and its slice was measured against the
+  // average of everything still held in that coin -- so a Cascade round that
+  // sold at its TP for a profit showed as a red bar (Phil, 2026-08-17: "Why
+  // this showing red in between as all trades were in profit?"). It goes back
+  // to being a bar when it closes and its own result is known.
+  var trades = (allTrades || []).filter(function(t) { return String(t.status || '') === 'Closed'; });
   if (!trades.length) return '<div class="cf-table-empty-cell">No closed trades yet.</div>';
-  var W = 640, H = 220, padL = 44, padR = 16, padT = 16, padB = 56;
+  var W = 640, H = 220, padL = 44, padR = 52, padT = 16, padB = 56;
   var rois = trades.map(function(t) { return Number(t.roi_pct) || 0; });
   var maxV = Math.max.apply(null, rois.concat([0])) * 1.15 || 1;
   var minV = Math.min.apply(null, rois.concat([0]));
@@ -6262,6 +6286,17 @@ function _cfJournalRoiSvg(trades) {
   var y = function(v) { return padT + (maxV - v) * (H - padT - padB) / span; };
   var zeroY = y(0);
 
+  // The running total, the way Binance draws it over the per-trade bars: a
+  // line on its own dollar axis on the right, so the shape of the account is
+  // read at the same glance as the size of each trade.
+  var cum = 0;
+  var cums = trades.map(function(t) { cum += Number(t.pnl_usd) || 0; return cum; });
+  var cMax = Math.max.apply(null, cums.concat([0]));
+  var cMin = Math.min.apply(null, cums.concat([0]));
+  var cSpan = (cMax - cMin) || 1;
+  cMax += cSpan * 0.12; cMin -= cSpan * 0.12; cSpan = cMax - cMin;
+  var yc = function(v) { return padT + (cMax - v) * (H - padT - padB) / cSpan; };
+
   var grid = '';
   for (var i = 0; i <= 3; i++) {
     var gv = maxV - (span * i / 3);
@@ -6270,6 +6305,9 @@ function _cfJournalRoiSvg(trades) {
       + '" stroke="currentColor" stroke-opacity="0.10"/>'
       + '<text x="' + (padL - 8) + '" y="' + (gy + 3.5) + '" text-anchor="end" font-size="9.5"'
       + ' fill="currentColor" fill-opacity="0.55">' + gv.toFixed(1) + '%</text>';
+    var cv = cMax - (cSpan * i / 3);
+    grid += '<text x="' + (W - padR + 8) + '" y="' + (yc(cv) + 3.5) + '" text-anchor="start" font-size="9.5"'
+      + ' fill="var(--accent,#f0b429)" fill-opacity="0.8">$' + cv.toFixed(2) + '</text>';
   }
 
   var bars = trades.map(function(t, idx) {
@@ -6281,17 +6319,30 @@ function _cfJournalRoiSvg(trades) {
     return '<rect x="' + (cx - barW / 2).toFixed(2) + '" y="' + top.toFixed(2) + '" width="' + barW.toFixed(2)
       + '" height="' + h.toFixed(2) + '" rx="2" fill="' + colour + '" fill-opacity="0.85">'
       + '<title>' + _escapeHtml(t.trade_id) + ' — ' + _escapeHtml(_cfJournalPct(v, 2)) + ' ('
-      + _escapeHtml(_cfJournalUsd(t.pnl_usd)) + ')</title></rect>'
+      + _escapeHtml(_cfJournalUsd(t.pnl_usd)) + ') · cumulative ' + _escapeHtml(_cfJournalUsd(cums[idx]))
+      + '</title></rect>'
       + '<text x="' + cx.toFixed(2) + '" y="' + (H - padB + 14) + '" text-anchor="end" font-size="8.5"'
       + ' fill="currentColor" fill-opacity="0.6" transform="rotate(-45 ' + cx.toFixed(2) + ' '
       + (H - padB + 14) + ')">' + _escapeHtml(t.coin.replace('USDT', '')) + '</text>';
   }).join('');
 
-  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="ROI percent by trade">'
+  var line = cums.map(function(v, idx) {
+    var cx = padL + slot * idx + slot / 2;
+    return (idx ? 'L' : 'M') + cx.toFixed(2) + ' ' + yc(v).toFixed(2);
+  }).join(' ');
+  var last = cums.length - 1;
+  var lastX = padL + slot * last + slot / 2;
+  var cumLine = '<path d="' + line + '" fill="none" stroke="var(--accent,#f0b429)" stroke-width="1.8"'
+    + ' stroke-linejoin="round" stroke-linecap="round"/>'
+    + '<circle cx="' + lastX.toFixed(2) + '" cy="' + yc(cums[last]).toFixed(2) + '" r="3.2"'
+    + ' fill="var(--accent,#f0b429)"><title>cumulative net P&amp;L ' + _escapeHtml(_cfJournalUsd(cums[last]))
+    + ' after ' + trades.length + ' closed trade' + (trades.length === 1 ? '' : 's') + '</title></circle>';
+
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="ROI percent by trade with cumulative net P&L">'
     + grid
     + '<line x1="' + padL + '" y1="' + zeroY + '" x2="' + (W - padR) + '" y2="' + zeroY
     + '" stroke="currentColor" stroke-opacity="0.32"/>'
-    + bars + '</svg>';
+    + bars + cumLine + '</svg>';
 }
 
 function _cfJournalCoinsSvg(byCoin) {

@@ -99,7 +99,16 @@
     <button type="button" class="topbar-icon-btn topbar-appearance-btn" id="topbar-appearance-btn" data-cf-click="cfOpenAppearancePanel()" title="Appearance" aria-label="Appearance">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18"></path><path d="M3 12h18"></path><path d="M6.5 6.5 17.5 17.5"></path></svg>
     </button>
-    <button type="button" class="read-only-hide topbar-icon-btn topbar-console-btn" id="topbar-admin-btn" data-cf-click="cfOpenAdminConsole()" title="Broker & API Console" aria-label="Broker and API Console">
+    <!-- Who is signed in. Opens Account Settings — password, authenticator,
+         Face ID / fingerprint. Filled from /api/auth/status. -->
+    <button type="button" class="topbar-user-chip" id="topbar-account-btn" data-cf-click="cfOpenAccountModal()" title="Account Settings" aria-label="Account Settings">
+      <span class="topbar-user-initial" id="topbar-user-initial" aria-hidden="true">·</span>
+      <span class="topbar-user-name" id="topbar-username">Account</span>
+      <span class="topbar-user-role" id="topbar-user-role">—</span>
+    </button>
+    <!-- Admin only; hidden by cfLoadAuthContext for anyone else and refused
+         by the server regardless. -->
+    <button type="button" class="topbar-icon-btn topbar-console-btn" id="topbar-admin-btn" data-cf-click="cfOpenAdminConsole()" title="Admin Console — accounts, broker & API" aria-label="Admin Console" hidden>
       <span class="topbar-console-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.2 2.2 0 0 1-3.11 3.11l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21.5a2.2 2.2 0 0 1-4.4 0v-.06a1.8 1.8 0 0 0-1.09-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.2 2.2 0 0 1-3.11-3.11l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.09H2.9a2.2 2.2 0 0 1 0-4.4h.06A1.8 1.8 0 0 0 4.6 8a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.2 2.2 0 0 1 3.11-3.11l.04.04A1.8 1.8 0 0 0 9.33 3.3 1.8 1.8 0 0 0 10.42 1.65V1.6a2.2 2.2 0 0 1 4.4 0v.06A1.8 1.8 0 0 0 15.91 3.3a1.8 1.8 0 0 0 1.98-.36l.04-.04a2.2 2.2 0 0 1 3.11 3.11l-.04.04A1.8 1.8 0 0 0 19.4 8c.12.36.3.68.56.94.3.3.73.47 1.17.47h.06a2.2 2.2 0 0 1 0 4.4h-.06A1.8 1.8 0 0 0 19.4 15Z"></path></svg></span>
     </button>
     <button type="button" class="topbar-icon-btn" data-cf-click="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"></path></svg></button>
@@ -935,7 +944,7 @@
     <section class="card cf-journal-chart-card">
       <div class="table-title-group">
         <h3 class="table-title">ROI by Trade</h3>
-        <div class="table-meta">Every closed trade, oldest first.</div>
+        <div class="table-meta">Every closed trade, oldest first — with the running total, net of fees.</div>
       </div>
       <div class="cf-journal-chart" id="cf-journal-roi"></div>
     </section>
@@ -2214,12 +2223,121 @@
 </div>
 
 <!-- ═══ BROKER / API CONSOLE MODAL ═══ -->
+<!-- Account Settings — the signed-in person's own door: password, authenticator,
+     Face ID / fingerprint. Every role gets this, including viewers; it is the
+     one place a viewer may write. Same sections and words as PhilForge's. -->
+<div class="cf-admin-modal-overlay" id="account-modal" hidden data-cf-click="if(event.target===this)cfCloseAccountModal()">
+  <div class="cf-admin-modal-panel cf-account-panel" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+    <div class="admin-console-head">
+      <div>
+        <h2 id="account-modal-title">Account Settings</h2>
+        <div class="admin-console-sub" id="account-modal-sub">Signed in</div>
+      </div>
+      <div class="admin-console-actions">
+        <button class="topbar-icon-btn admin-modal-close" data-cf-click="cfCloseAccountModal()" title="Close" aria-label="Close">×</button>
+      </div>
+    </div>
+
+    <div class="admin-console-grid">
+      <section class="card admin-panel admin-panel-wide">
+        <div class="admin-panel-head">
+          <div>
+            <div class="admin-kicker">Profile</div>
+            <h3 id="account-profile-username">—</h3>
+          </div>
+          <span class="admin-pill" id="account-profile-role">—</span>
+        </div>
+        <div class="stats-grid admin-status-grid cf-account-meta">
+          <div class="stat-box"><div class="stat-label">Created</div><div class="stat-value stat-value-sm" id="account-profile-created">--</div></div>
+          <div class="stat-box"><div class="stat-label">Last sign-in</div><div class="stat-value stat-value-sm" id="account-profile-login">--</div></div>
+          <div class="stat-box"><div class="stat-label">Authenticator</div><div class="stat-value stat-value-sm" id="account-mfa-status-chip">--</div></div>
+          <div class="stat-box"><div class="stat-label">Face ID / fingerprint</div><div class="stat-value stat-value-sm" id="account-passkey-status-chip">--</div></div>
+        </div>
+      </section>
+
+      <section class="card admin-panel">
+        <div class="admin-panel-head">
+          <div>
+            <div class="admin-kicker">Second factor</div>
+            <h3>Authenticator</h3>
+          </div>
+        </div>
+        <div class="admin-field-meta" id="account-mfa-status-line">Loading authenticator status...</div>
+        <div class="admin-field-grid admin-field-grid-compact" style="margin-top:12px">
+          <div class="admin-field">
+            <label for="account-mfa-password">Current password</label>
+            <input type="password" id="account-mfa-password" autocomplete="current-password">
+          </div>
+          <div class="admin-field">
+            <label for="account-mfa-code">Authenticator code</label>
+            <input type="text" id="account-mfa-code" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456">
+          </div>
+        </div>
+        <div class="cf-mfa-enrollment" id="account-mfa-enrollment" hidden>
+          <img id="account-mfa-qr" class="cf-mfa-qr" alt="QR code for CryptoForge authenticator setup">
+          <div class="admin-kicker" style="margin-top:8px">Manual setup key</div>
+          <code id="account-mfa-secret" class="cf-mfa-secret"></code>
+          <a id="account-mfa-uri" href="#" class="cf-mfa-link">Open in authenticator app</a>
+          <div class="admin-field-meta">Add this key to Google Authenticator, Microsoft Authenticator, 1Password or another TOTP app, then enter its first code above and press Verify.</div>
+        </div>
+        <div class="admin-inline-actions" style="margin-top:12px">
+          <button class="btn btn-primary btn-sm" id="account-mfa-start-btn" data-cf-click="cfStartMfaEnrollment()">Set Up Authenticator</button>
+          <button class="btn btn-success btn-sm" id="account-mfa-verify-btn" data-cf-click="cfVerifyMfaEnrollment()" hidden>Verify &amp; Enable</button>
+          <button class="btn btn-danger btn-sm" id="account-mfa-disable-btn" data-cf-click="cfDisableMfa()" hidden>Disable Authenticator</button>
+        </div>
+      </section>
+
+      <section class="card admin-panel">
+        <div class="admin-panel-head">
+          <div>
+            <div class="admin-kicker">Biometrics</div>
+            <h3>Face ID &amp; Fingerprint</h3>
+          </div>
+        </div>
+        <div class="admin-field-meta" id="account-passkey-status-line">Looking for registered devices...</div>
+        <div class="admin-field-meta">Register this phone or laptop once and sign in afterwards with your fingerprint, face or device PIN. The fingerprint never leaves the device: it unlocks a key held in the device's own secure hardware, and CryptoForge only ever stores the matching public key. Register each device separately.</div>
+        <div id="account-passkey-list" class="cf-passkey-list"></div>
+        <div class="admin-inline-actions" style="margin-top:12px">
+          <button class="btn btn-primary btn-sm" id="account-passkey-add-btn" data-cf-click="cfRegisterPasskey()">Register This Device</button>
+        </div>
+      </section>
+
+      <section class="card admin-panel admin-panel-wide">
+        <div class="admin-panel-head">
+          <div>
+            <div class="admin-kicker">Password</div>
+            <h3>Change Password</h3>
+          </div>
+        </div>
+        <div class="admin-field-grid admin-field-grid-compact">
+          <div class="admin-field">
+            <label for="account-current-password">Current password</label>
+            <input type="password" id="account-current-password" autocomplete="current-password">
+          </div>
+          <div class="admin-field">
+            <label for="account-new-password">New password</label>
+            <input type="password" id="account-new-password" autocomplete="new-password" placeholder="At least 8 characters, a letter and a number">
+          </div>
+          <div class="admin-field">
+            <label for="account-confirm-password">Confirm new password</label>
+            <input type="password" id="account-confirm-password" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="admin-field-meta">Changing your password signs out every other device. This one stays signed in.</div>
+        <div class="admin-inline-actions" style="margin-top:12px">
+          <button class="btn btn-primary btn-sm" id="account-password-save-btn" data-cf-click="cfChangeOwnPassword()">Update Password</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <div class="cf-admin-modal-overlay" id="admin-console-modal" hidden data-cf-click="if(event.target===this)cfCloseAdminConsole()">
   <div class="cf-admin-modal-panel" role="dialog" aria-modal="true" aria-labelledby="admin-console-title">
     <div class="admin-console-head">
       <div>
-        <h2 id="admin-console-title">Broker & API Console</h2>
-        <div class="admin-console-sub" id="admin-console-updated">Runtime configuration</div>
+        <h2 id="admin-console-title">Admin Console</h2>
+        <div class="admin-console-sub" id="admin-console-updated">Accounts, broker & runtime configuration</div>
       </div>
       <div class="admin-console-actions">
         <button class="btn btn-outline btn-sm" data-cf-click="cfAdminLoad(false)">Refresh</button>
@@ -2252,6 +2370,45 @@
   </div>
 
   <div class="admin-console-grid">
+    <!-- Accounts. Phil, 2026-08-17: "I want to add user from admin console."
+         Same roles as PhilForge: viewer sees everything and changes nothing,
+         user trades, admin runs the desk. -->
+    <section class="card admin-panel admin-panel-wide" id="admin-users-panel">
+      <div class="admin-panel-head">
+        <div>
+          <div class="admin-kicker">Accounts</div>
+          <h3>Users</h3>
+        </div>
+        <span class="admin-pill" id="admin-users-pill">--</span>
+      </div>
+      <div class="admin-create-grid">
+        <div class="admin-field">
+          <label for="admin-create-username">Username</label>
+          <input type="text" id="admin-create-username" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. kavi">
+        </div>
+        <div class="admin-field">
+          <label for="admin-create-password">Password</label>
+          <input type="password" id="admin-create-password" autocomplete="new-password" placeholder="At least 8 characters">
+        </div>
+        <div class="admin-field">
+          <label for="admin-create-role">Role</label>
+          <select id="admin-create-role">
+            <option value="viewer" selected>Viewer — sees everything, changes nothing</option>
+            <option value="user">User — can trade</option>
+            <option value="admin">Admin — everything</option>
+          </select>
+        </div>
+        <div class="admin-field admin-create-action">
+          <label>&nbsp;</label>
+          <button class="btn btn-primary btn-sm" id="admin-create-user-btn" data-cf-click="cfAdminCreateUser()">Create User</button>
+        </div>
+      </div>
+      <div class="admin-field-meta">A new account signs in with its username and password, then sets up its own authenticator and Face ID / fingerprint in Account Settings.</div>
+      <div class="admin-users-table-wrap">
+        <div id="admin-users-list" class="admin-empty-state">Loading users...</div>
+      </div>
+    </section>
+
     <section class="card admin-panel admin-panel-wide">
       <div class="admin-panel-head">
         <div>
@@ -2487,5 +2644,6 @@
 </div><!-- end #run-detail-modal -->
 <script src="/static/cryptoforge-app.js?v=20260812-2" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
+<script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 </body>
 </html>
