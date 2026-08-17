@@ -330,6 +330,32 @@ class JournalSummaryTests(unittest.TestCase):
             "source": "binance",
         }
 
+    def test_return_on_account_is_binance_cumulative_pnl(self):
+        """Phil, 2026-08-17: the ROI tile said 0.60% on capital deployed while
+        Binance's Cumulative PNL(%) said +1.79% on the same trades. Binance
+        divides by the ACCOUNT — what it started with — not by every dollar
+        redeployed. With $3.50 net on an account now worth $198.50, the account
+        started at $195.00 and the return is 1.795%."""
+        trades = [
+            self._closed("BTCUSDT", 300.0, 2.0, 2.2, 0.2, 0.667),
+            self._closed("ETHUSDT", 283.33, 1.5, 1.7, 0.2, 0.529),
+        ]
+        s = self.summary(trades, 2000.0, account_value=198.5)
+        self.assertAlmostEqual(s["realized_pnl_usd"], 3.5, places=2)
+        self.assertAlmostEqual(s["roi_pct"], 0.6, places=2, msg="capital-deployed ROI stays as the smaller figure")
+        self.assertEqual(s["account_value_usd"], 198.5)
+        self.assertEqual(s["account_start_usd"], 195.0)
+        self.assertAlmostEqual(s["account_roi_pct"], 1.795, places=3)
+
+    def test_return_on_account_is_none_when_the_balance_is_unknown(self):
+        trades = [self._closed("BTCUSDT", 300.0, 2.0, 2.2, 0.2, 0.667)]
+        s = self.summary(trades, 2000.0)
+        self.assertIsNone(s["account_roi_pct"])
+        self.assertIsNone(s["account_value_usd"])
+        # and never divides by a start balance that is not positive
+        s = self.summary(trades, 2000.0, account_value=1.0)
+        self.assertIsNone(s["account_roi_pct"])
+
     def test_fees_and_gross_are_totalled(self):
         trades = [
             self._closed("SOLUSDT", 22.25, 0.1965, 0.2412, 0.0447, 0.883),

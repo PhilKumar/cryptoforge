@@ -8128,7 +8128,38 @@ def _load_trade_journal() -> dict:
         return {"trades": [], "capital_base_usd": 0.0, "source": "", "imported_at": ""}
 
 
-def _journal_summary(trades: List[dict], capital_base: float) -> dict:
+async def _journal_account_value_usd() -> Optional[float]:
+    """The account's estimated balance in USDT — the quote balance plus every
+    other holding at its mark — or None when the broker cannot answer.
+
+    This is the denominator Binance uses for its Cumulative PNL(%): the money
+    in the account, not the money put to work. Phil, 2026-08-17: the ROI tile
+    read 0.60% on capital deployed while Binance said +1.79% on the same trades.
+    """
+    if not _broker_is_configured():
+        return None
+    try:
+        wallet, positions = await asyncio.gather(
+            asyncio.to_thread(delta.get_wallet),
+            asyncio.to_thread(delta.get_positions),
+        )
+    except Exception as exc:
+        _logger.warning("[JOURNAL] account value unavailable: %s", exc)
+        return None
+    if isinstance(wallet, dict) and "error" in wallet:
+        return None
+    asset_row = _wallet_asset_row(wallet)
+    quote = _wallet_amount(asset_row, "balance", "wallet_balance", "total_balance", "equity")
+    if _wallet_amount_or_none(asset_row, "balance", "wallet_balance", "total_balance", "equity") is None:
+        quote = _wallet_amount(
+            asset_row, "available_balance", "available_margin", "free_balance", "free"
+        ) + _wallet_amount(asset_row, "blocked_margin", "locked_margin", "hold_balance", "locked_balance")
+    holdings = sum(_safe_float(pos.get("size"), 0.0) for pos in (positions or []) if isinstance(pos, dict))
+    total = float(quote) + float(holdings)
+    return round(total, 4) if total > 0 else None
+
+
+def _journal_summary(trades: List[dict], capital_base: float, account_value: Optional[float] = None) -> dict:
     # Realised stats are computed on CLOSED trades only. An open position has
     # made no money yet — counting its $0 result diluted the win rate, and
     # counting its still-deployed capital inflated "capital deployed" with money
@@ -8224,6 +8255,17 @@ def _journal_summary(trades: List[dict], capital_base: float) -> dict:
         "fee_float_usd": round(sum(_coerce_float_safe(t.get("invested_usd")) for t in fee_float), 2),
         "roi_pct": round(pnl / invested * 100, 3) if invested else 0.0,
         "capital_roi_pct": round(pnl / capital_base * 100, 3) if capital_base else 0.0,
+        # Binance's Cumulative PNL(%): net realised P&L over what the account
+        # started with. The start is today's estimated balance less the P&L
+        # made since — the account was funded once and never topped up, so
+        # that is the balance the trades were made against. None when the
+        # broker could not be asked; the tile then falls back to the sheet's
+        # capital base and says so.
+        "account_value_usd": round(account_value, 2) if account_value else None,
+        "account_start_usd": round(account_value - pnl, 2) if account_value else None,
+        "account_roi_pct": (
+            round(pnl / (account_value - pnl) * 100, 3) if account_value and (account_value - pnl) > 0 else None
+        ),
         "win_count": len(wins),
         "loss_count": len(losses),
         "win_rate_pct": round(len(wins) / len(closed) * 100, 2) if closed else 0.0,
@@ -8394,6 +8436,7 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
             _logger.warning("[JOURNAL] convert history unavailable: %s", exc)
 
     broker_trades, broker_error = ([], "") if not include_broker else await _broker_journal_trades(converts)
+    account_value = await _journal_account_value_usd() if include_broker else None
     trades = merge_with_sheet(sheet_trades, broker_trades) if include_broker else sheet_trades
     # Link each paired round to the Cascade campaign that placed it (by shared
     # exchange order id) so the row can show a "how we took the trade" chart.
@@ -8405,7 +8448,7 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
         "imported_at": doc.get("imported_at") or "",
         "capital_base_usd": capital_base,
         "trades": trades,
-        "summary": _journal_summary(trades, capital_base),
+        "summary": _journal_summary(trades, capital_base, account_value),
         "converts": converts,
         "convert_error": convert_error,
         "convert_supported": bool(getattr(delta, "get_convert_history", None)) and _broker_is_configured(),

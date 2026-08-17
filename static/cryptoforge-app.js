@@ -6176,12 +6176,19 @@ function _cfJournalKpiHtml(summary) {
         + (feeFloat ? ' · ' + _cfJournalUsd(feeFloat, 2) + ' held as fee reserve' : '') },
     { label: 'Win Rate', value: _cfJournalPct(summary.win_rate_pct, 1),
       note: summary.win_count + 'W / ' + summary.loss_count + 'L' },
-    // Total P&L over total capital deployed, NOT the mean of the per-trade
-    // percentages. The mean weighs a $5 trade and a $50 trade the same, so it
-    // drifts away from the money actually made — 0.52% against 0.66% on the
-    // same trades. This one is arithmetic on the dollars.
-    { label: 'ROI', value: _cfJournalPct(summary.roi_pct, 2), tone: summary.roi_pct,
-      note: 'on capital deployed · avg ' + _cfJournalPct(summary.avg_roi_pct, 2) + ' per trade' },
+    // Binance's Cumulative PNL(%): net realised P&L over what the ACCOUNT
+    // started with — the same figure Binance shows on the wallet's PNL
+    // Analysis (Phil, 2026-08-17: the tile said 0.60% while Binance said
+    // +1.79% on the same trades; 0.60% was P&L over every dollar redeployed,
+    // which counts the same dollar twice and never sees idle cash). Capital-
+    // deployed ROI stays underneath as the smaller figure. When the broker
+    // cannot be asked for the balance the tile falls back to it and says so.
+    (summary.account_roi_pct != null
+      ? { label: 'ROI', value: _cfJournalPct(summary.account_roi_pct, 2), tone: summary.account_roi_pct,
+          note: 'on the account (' + _cfJournalUsd(summary.account_start_usd, 2) + ' → ' + _cfJournalUsd(summary.account_value_usd, 2)
+            + ') · ' + _cfJournalPct(summary.roi_pct, 2) + ' on capital deployed' }
+      : { label: 'ROI', value: _cfJournalPct(summary.roi_pct, 2), tone: summary.roi_pct,
+          note: 'on capital deployed · account balance unavailable · avg ' + _cfJournalPct(summary.avg_roi_pct, 2) + ' per trade' }),
     { label: 'Avg Win', value: _cfJournalUsd(summary.avg_win_usd, 2), tone: 1,
       note: summary.loss_count ? 'avg loss ' + _cfJournalUsd(summary.avg_loss_usd, 2) : 'no losing trades yet' }
   ];
@@ -6190,7 +6197,7 @@ function _cfJournalKpiHtml(summary) {
     'Fees Paid': "Total commission charged by the exchange on these trades. The drag figure is what share of the gross profit it took.",
     'Capital Deployed': "The sum invested across closed trades \u2014 money put to work, not your account balance. The same dollar redeployed twice counts twice.",
     'Win Rate': "Closed trades that finished green, as a share of all closed trades. Open positions do not count either way.",
-    'ROI': "Total profit divided by all the capital you put to work — the dollars, weighted by size. The average per trade sits underneath it: that one counts a small trade as heavily as a large one, so the two rarely agree. Neither is the return on your whole account, since money that sat idle is not counted.",
+    'ROI': "The return on your account — net realised profit over what the account started with — the same figure Binance shows as Cumulative PNL(%) in the wallet's PNL Analysis. Underneath is the return on capital deployed: profit over every dollar put to work, where the same dollar redeployed twice counts twice and idle cash is not counted, so it always reads lower.",
     'Avg Win': "Average profit of the trades that won. Read it next to the average loss to see whether the wins are big enough to pay for the losses."
   };
   return cards.map(function(c) {
