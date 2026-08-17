@@ -35,6 +35,12 @@
   --rose:#FF7A93;
   --sans:"Sora",-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Inter,system-ui,sans-serif;
   --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  /* Scripture only. Both are system stacks on purpose: the page already
+     spends two webfonts on Sora and JetBrains Mono, and the vowel points
+     on the Hebrew need a face that actually carries niqqud — which is a
+     local font question, not something a CDN copy of a Latin face fixes. */
+  --serif:"Hoefler Text","Iowan Old Style",Georgia,"Times New Roman",serif;
+  --heb:"Taamey Frank CLM","SBL Hebrew","Ezra SIL","New Peninim MT","Arial Hebrew","Times New Roman",serif;
   --ease:cubic-bezier(.2,.7,.2,1);
   --r-lg:22px;--r-md:16px;--r-sm:10px;
   --nav-h:72px;
@@ -169,8 +175,48 @@ nav.stuck{background:rgba(5,6,11,.72);backdrop-filter:blur(16px) saturate(1.3);
 .rv[data-d="5"]{transition-delay:.50s}.rv[data-d="6"]{transition-delay:.60s}
 
 /* ── hero ────────────────────────────────────────────────────────── */
+/* ══ EPIGRAPH ═════════════════════════════════════════════════════
+   Proverbs 14:23. Same band the Dōjima landing opens with, in this
+   page's own palette: amber where that one uses brass. The Hebrew is
+   לְהַרְוִיחַ, l'harviach, "to profit" — set right-to-left in its own
+   lane so the niqqud are not reflowed by the Latin text around it.
+
+   NOT overflow:hidden. Every line in here is a .rv, and an unrevealed
+   .rv is translated DOWN 22px; clipping the band means the last line's
+   painted box falls outside it, the observer never sees an intersection,
+   .in is never added and the citation stays invisible for good. The clip
+   would buy nothing anyway — the ::after glow is inset:0. */
+.epi{position:relative;text-align:center;
+  border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,var(--void),var(--deep) 52%,var(--void));
+  padding:calc(var(--nav-h) + 34px) 0 clamp(34px,5vh,58px)}
+.epi::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(58% 68% at 50% 44%,rgba(245,166,35,.10),transparent 70%)}
+.epi .wrap{position:relative;z-index:1}
+.heb{direction:rtl;unicode-bidi:isolate;font-family:var(--heb);
+  font-size:clamp(44px,8vw,92px);line-height:1.05;color:var(--amber-hi);
+  font-weight:400;letter-spacing:.01em;margin:0 auto;padding-bottom:.08em;
+  text-shadow:0 0 34px rgba(245,166,35,.30)}
+.epi-tr{margin:4px auto 0;font-family:var(--mono);font-size:10.5px;letter-spacing:.26em;
+  text-transform:uppercase;color:var(--ink-lo)}
+.epi-rule{width:64px;height:1px;background:var(--line-hi);margin:14px auto}
+/* Broken where the proverb itself turns — the work on one line, the talk on
+   the other. Below 800px the forced break goes and it wraps on its own. */
+.epi-v{font-family:var(--serif);font-size:clamp(19px,2.4vw,30px);line-height:1.34;
+  color:var(--ink-hi);max-width:56ch;margin:0 auto;font-style:italic;text-wrap:pretty}
+.epi-v b{font-style:normal;font-weight:400;color:var(--amber-hi)}
+.epi-cite{margin:16px auto 0;font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;
+  text-transform:uppercase;color:var(--amber)}
+@media (max-width:800px){
+  .epi-br{display:none}
+  .epi-v{max-width:28ch}
+}
+
 .hero{position:relative;min-height:100svh;display:flex;align-items:center;
   padding:calc(var(--nav-h) + 56px) 0 72px;overflow:hidden;isolation:isolate}
+/* The epigraph now owns the top of the page, so the hero no longer has to
+   clear the fixed nav as well — it follows the band instead of the viewport. */
+.epi + .hero{min-height:auto;padding-top:clamp(56px,8vh,96px)}
 .aurora{position:absolute;inset:-10%;z-index:-3;width:120%;height:120%;max-width:none;
   filter:blur(38px) saturate(1.15);opacity:.9;transform:translateZ(0)}
 .hero-vig{position:absolute;inset:0;z-index:-2;pointer-events:none;
