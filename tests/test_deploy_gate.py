@@ -94,6 +94,19 @@ class DeployGateTests(unittest.TestCase):
         self.assertIn("skip ", branch)
         self.assertNotIn("die ", branch)
 
+    def test_force_deploy_is_an_explicit_override_and_only_that(self):
+        """Cascade is live around the clock, so 'wait until flat' skipped every
+        push from 12 to 17 Aug 2026 and the process ran a 5-day-old build.
+        FORCE_DEPLOY=1, by hand on the box, goes through; anything else skips."""
+        src = open(_SCRIPT, encoding="utf-8").read()
+        branch = src.split('if [[ "$runtime_status" -eq 0 ]]; then', 1)[1]
+        self.assertIn('"${FORCE_DEPLOY:-0}" == "1"', branch)
+        forced, unforced = branch.split("else", 1)
+        self.assertIn("log ", forced, "the override is announced")
+        self.assertNotIn("skip ", forced)
+        self.assertNotIn("die ", forced)
+        self.assertIn("skip ", unforced.split("fi", 1)[0], "without it, the guard still skips")
+
     def test_a_genuine_deploy_fault_still_fails(self):
         """Only the trading-in-flight case is a skip. A worker that cannot be
         read at all is still blocked closed, and still red."""

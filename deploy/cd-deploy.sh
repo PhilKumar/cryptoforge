@@ -101,7 +101,18 @@ log "Active: port $ACTIVE_PORT → Deploying to: port $STANDBY_PORT"
 runtime_status=0
 runtime_is_active "$ACTIVE_PORT" || runtime_status=$?
 if [[ "$runtime_status" -eq 0 ]]; then
-    skip "Open positions or resting orders on port $ACTIVE_PORT. The code is on the box and will go out on the next deploy once they are flat; the running service is untouched."
+    # FORCE_DEPLOY=1 is the deliberate override, run by hand on the box.
+    # Cascade is live around the clock, so "wait until flat" can mean weeks:
+    # from 12 to 17 Aug 2026 every push was skipped and the process ran a
+    # 5-day-old build while its checkout said otherwise. The flip itself is
+    # safe with campaigns open -- the incoming worker restores them and
+    # reconciles against the exchange, and the monitor loop's writer lock keeps
+    # the two workers from acting at once -- so the guard is a brake, not a wall.
+    if [[ "${FORCE_DEPLOY:-0}" == "1" ]]; then
+        log "⚠ FORCE_DEPLOY=1 — deploying with open positions or resting orders on port $ACTIVE_PORT (Phil's call)"
+    else
+        skip "Open positions or resting orders on port $ACTIVE_PORT. The code is on the box and will go out on the next deploy once they are flat; the running service is untouched. FORCE_DEPLOY=1 overrides, by hand, on the box."
+    fi
 fi
 if [[ "$runtime_status" -eq 2 ]] && sudo fuser "${ACTIVE_PORT}/tcp" >/dev/null 2>&1; then
     die "The active worker on port $ACTIVE_PORT did not return runtime state. Deployment is blocked closed."
