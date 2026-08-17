@@ -48,7 +48,11 @@ const check = (name, pass, detail) => {
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('requestfailed', (r) => { if (!/fonts\.(googleapis|gstatic)\.com/.test(r.url())) errors.push('requestfailed: ' + r.url()); });
 
-  ledgerMissing = !fs.existsSync(path.resolve(__dirname, '..', 'static', 'landing', 'ledger.json'));
+  // Ask the TARGET whether it has a snapshot, not the local disk. Checking
+  // local files here meant a run against production tolerated nothing (the
+  // fixture existed here) and reported prod's expected 404 as a page error.
+  ledgerMissing = await page.request.get(new (require('url').URL)('/static/landing/ledger.json', URL).href)
+    .then((r) => !r.ok()).catch(() => true);
   await page.goto(URL, { waitUntil: 'load' });
   await page.waitForTimeout(2600);
 
