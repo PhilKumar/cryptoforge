@@ -235,9 +235,12 @@ test.describe('Comprehensive Site Audit', () => {
     await page.click('#nav-strategies');
     await expectActivePage(page, 'cascade-page', 'nav-strategies');
 
+    // The Cascade/V-Rule selector is a desk CARD now (PhilForge's shape: icon
+    // tile, name, one line) — it keeps a deliberate 1px border, so it is
+    // checked for the card look rather than the flat segmented one.
     const toggles = [
-      { selector: '.cf-mode-option', label: 'Paper/Live mode' },
-      { selector: '.cf-strat-subnav .cf-tf-option', label: 'Cascade/V-Rule sub-nav' },
+      { selector: '.cf-mode-option', label: 'Paper/Live mode', border: 0 },
+      { selector: '.cf-strat-subnav .cf-strat-tab', label: 'Cascade/V-Rule selector', border: 1 },
     ];
 
     for (const toggle of toggles) {
@@ -255,7 +258,17 @@ test.describe('Comprehensive Site Audit', () => {
       expect(painted.appearance, `${toggle.label} kept the native button look`).toBe('none');
       expect(painted.borderRadius, `${toggle.label} lost its rounded corners`).toBeGreaterThan(0);
       expect(painted.paddingLeft, `${toggle.label} lost its padding`).toBeGreaterThan(4);
-      expect(painted.borderTopWidth, `${toggle.label} kept the native border`).toBe(0);
+      expect(painted.borderTopWidth, `${toggle.label} has the wrong border`).toBe(toggle.border);
+    }
+
+    // The desk card carries a name AND a one-line description on both pages.
+    for (const pageId of ['cascade-page', 'rule3070-page']) {
+      const cards = page.locator(`#${pageId} .cf-strat-tab`);
+      await expect(cards, `${pageId} selector`).toHaveCount(2);
+      await expect(cards.locator('strong')).toHaveText(['Cascade', 'V-Rule']);
+      for (let i = 0; i < 2; i++) {
+        await expect(cards.nth(i).locator('small')).not.toBeEmpty();
+      }
     }
   });
 });
