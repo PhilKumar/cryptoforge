@@ -1446,6 +1446,9 @@ function cfUpdateKillSwitch(patch) {
   if (!btn) return;
   var anyRunning = _cfRuntimeLive.paper || _cfRuntimeLive.live || _cfRuntimeLive.scalp;
   btn.classList.toggle('hidden', !anyRunning);
+  // The top bar reserves the extreme corner for the switch while it shows.
+  var readOnly = typeof isReadOnlyAccount === 'function' && isReadOnlyAccount();
+  if (document.body && document.body.classList) document.body.classList.toggle('kill-switch-on', !!anyRunning && !readOnly);
 }
 
 async function emergencyStop() {
