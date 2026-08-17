@@ -8348,9 +8348,7 @@ html[data-theme="light"] .journal-entry-notes section {
   }
 
   /* The Trading / Analysis / Setup headings only existed to force row breaks
-     in the grid. With one row there are no rows to break. The `order` values
-     below survive them, so the tabs still read grouped: Cascade, Scalp, Live,
-     then Journal, Results, Market, then Builder, Portfolio, Dashboard. */
+     in the grid. With one row there are no rows to break. */
   .nav-group-label { display: none !important; }
 
   /* Labels return: an icon with a word beside it is the whole point. */
@@ -8377,22 +8375,13 @@ html[data-theme="light"] .journal-entry-notes section {
   .nav-tabs .nav-tab .tab-icon { font-size: 15px !important; }
   .nav-tabs .nav-tab .tab-icon svg { width: 15px; height: 15px; }
 
-  /* Grouping. Order values interleave headings with their members:
-     Trading 1-4, Analysis 5-8, Setup 9-12. */
-  .nav-group-label[data-nav-group="trading"]  { order: 1; }
-  #nav-cascade   { order: 2; }
-  #nav-scalp     { order: 3; }
-  #nav-live      { order: 4; }
-
-  .nav-group-label[data-nav-group="analysis"] { order: 5; }
-  #nav-journal   { order: 6; }
-  #nav-results   { order: 7; }
-  #nav-market    { order: 8; }
-
-  .nav-group-label[data-nav-group="setup"]    { order: 9; }
-  #nav-builder   { order: 10; }
-  #nav-portfolio { order: 11; }
-  #nav-dashboard { order: 12; }
+  /* No reordering on a phone. The strip used to carry a grouped order
+     (Trading, Analysis, Setup) left over from the grid, and it named
+     #nav-cascade — a tab that no longer exists — so Strategies fell to the
+     front, Journal to fourth. Phil, 2026-08-17: "Mobile has the tabs not
+     arranged properly starting from journal." The phone now reads exactly as
+     the desktop does — Journal first, in DOM order — and the default page is
+     the first tab you see. */
 
   /* The Cascade live dot sits inline rather than absolutely, so it cannot
      land on top of a neighbouring tab now that they are packed tighter. */
