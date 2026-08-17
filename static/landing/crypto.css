@@ -82,7 +82,10 @@ nav.stuck{background:rgba(5,6,11,.72);backdrop-filter:blur(16px) saturate(1.3);
   font-size:17px;letter-spacing:-.01em;line-height:1}
 /* The mark is Phil's own logo and keeps its own colours; only the plate it
    sits on is ours. */
-.brand .mark{width:32px;height:32px;flex:none;border-radius:8px;object-fit:cover;
+/* 38px, not 32: the mark is a rendered plate rather than a flat glyph, and
+   below about 36px the four rungs merge into one another. This is the
+   smallest size at which the ladder and its arrow still separate. */
+.brand .mark{width:38px;height:38px;flex:none;border-radius:9px;object-fit:cover;
   background:#0B1220;box-shadow:0 0 0 1px var(--line-hi),0 4px 14px rgba(0,0,0,.5)}
 .brand small{display:block;font-family:var(--mono);font-weight:400;font-size:10px;
   letter-spacing:.2em;text-transform:uppercase;color:var(--ink-lo);margin-top:5px}
