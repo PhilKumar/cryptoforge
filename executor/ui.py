@@ -1079,7 +1079,7 @@ PAGE = "".join(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cascade — by CryptoForge</title>
 <meta name="theme-color" content="#040814">
-<link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http%3A//www.w3.org/2000/svg'%3E%3Crect width='32' height='32' rx='7' fill='%23040814'/%3E%3Crect x='7' y='10' width='4' height='12' rx='1' fill='%23f59e0b'/%3E%3Crect x='14' y='6' width='4' height='16' rx='1' fill='%2322d3ee'/%3E%3Crect x='21' y='13' width='4' height='9' rx='1' fill='%232dd4bf'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,<svg%20viewBox='0%200%2064%2064'%20xmlns='http%3A//www.w3.org/2000/svg'><rect%20width='64'%20height='64'%20rx='14'%20fill='%230A0A0C'/><g%20fill='none'%20stroke-linecap='round'%20stroke-width='4.9'><g%20stroke='%23F5A623'><path%20d='M20.9%2051.3H43.1'/><path%20d='M20.9%2043.6H43.1'/><path%20d='M20.9%2036H43.1'/><path%20d='M20.9%2028.3H43.1'/></g><path%20d='M18.4%2020.7L32%207l13.6%2013.7'%20stroke='%234FE7F5'%20stroke-linejoin='round'/></g></svg>">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/fonts/core.css">
@@ -1193,16 +1193,22 @@ PAGE = "".join(
     border:1px solid rgba(96,165,250,0.14);
     background:linear-gradient(145deg, rgba(24,35,62,0.30), transparent 62%); }
   html[data-theme="light"] .brand-mark::before { border-color:rgba(59,130,246,0.12); }
-  .brand-column { position:absolute; bottom:7px; width:6px; border-radius:999px;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,0.20); transform-origin:50% 100%; }
-  .brand-column.col-a { left:9px;  height:18px; background:linear-gradient(180deg,#93c5fd,#2563eb); }
-  .brand-column.col-b { left:16px; height:24px; background:linear-gradient(180deg,var(--accent),var(--accent2)); }
-  .brand-column.col-c { left:23px; height:14px; background:linear-gradient(180deg,#fb7185,#db2777); }
-  .brand-spark { position:absolute; top:8px; right:7px; width:8px; height:8px; border-radius:999px;
-    background:radial-gradient(circle,#f8fafc 0%, rgba(125,211,252,0.86) 48%, rgba(14,165,233,0) 100%);
-    filter:blur(0.2px); }
+  /* The desk's mark: brass rungs standing up under a cyan chevron, the same
+     shape the site and the app icon carry. Three rungs at this size, not the
+     full four - at 36px a fourth closes the gaps into a solid block. */
+  .brand-column { position:absolute; left:50%; margin-left:-8px; width:16px; height:3px;
+    border-radius:999px; background:linear-gradient(180deg,#F2D69E,#C89A56);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,0.28); }
+  .brand-column.col-a { top:28px; }
+  .brand-column.col-b { top:23px; }
+  .brand-column.col-c { top:18px; }
+  /* One square turned 45deg with two borders painted. */
+  .brand-spark { position:absolute; top:9px; left:50%; margin-left:-6px; width:12px; height:12px;
+    border-top:3px solid #6FE9F7; border-left:3px solid #6FE9F7; border-radius:2px;
+    background:none; transform:rotate(45deg);
+    filter:drop-shadow(0 0 5px rgba(79,231,245,0.55)); }
   .brand-text { font-family:var(--font-display); font-size:16px; font-weight:800; letter-spacing:1.5px;
-    background:linear-gradient(130deg,#c4b5fd 0%,#f9a8d4 100%);
+    background:linear-gradient(130deg,#dffaff 0%,#7dd3fc 36%,#facc15 100%);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
     white-space:nowrap; }
   html[data-theme="light"] .brand-text { background:linear-gradient(130deg,var(--accent2) 0%,#db2777 100%);
