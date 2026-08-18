@@ -2938,6 +2938,90 @@ class CascadeOrderChurnTests(unittest.IsolatedAsyncioTestCase):
         # None — that is the loop the brake above bounds, not a leak.
         self.assertNotEqual(campaign.pending_order_id, "9999")
 
+    async def test_an_ioc_that_fills_part_of_the_pot_and_expires_books_the_part(self):
+        """An IOC stop never rests: it can buy PART of the pot at the ask and
+        expire the remainder in the same instant, arriving as EXPIRED with a
+        non-zero executedQty. Dropping the id without booking that part left
+        coin in the wallet with no TP against it — and re-bought the full pot
+        on top of it at the next placement."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)  # $14.61 collected, trigger 77.14
+        campaign.pending_order_id = "9999"
+        broker.open_orders = []
+        broker.order_lookup = {
+            "9999": {"status": "EXPIRED", "executedQty": "0.1", "cummulativeQuoteQty": "7.716"},
+        }
+        engine._price_cache["SOLUSDT"] = (77.10, time.monotonic())
+
+        await engine._sync_live_orders(campaign)
+
+        self.assertEqual(len(campaign.all_fills), 1, "the part that traded was not booked")
+        fill = campaign.all_fills[0]
+        self.assertAlmostEqual(fill.quantity, 0.1)
+        self.assertAlmostEqual(fill.price, 77.16)
+        self.assertEqual(fill.order_id, "9999")
+        self.assertAlmostEqual(
+            campaign.pending_usd, 14.61 - 7.716, places=2, msg="the pot must shrink by what was bought"
+        )
+        self.assertGreater(campaign.tp_price or 0.0, 77.16, "the bought part needs a target above it")
+        # The remainder goes out again — for the REMAINDER, on a fresh order —
+        # and the bought part gets its TP sell in the same sync.
+        buys = [o for o in broker.placed_orders if o["side"] == "buy"]
+        sells = [o for o in broker.placed_orders if o["side"] == "sell"]
+        self.assertEqual(len(buys), 1)
+        self.assertAlmostEqual(buys[0]["size"], 14.61 - 7.716, places=2)
+        self.assertEqual(len(sells), 1, "the coin that was bought needs a TP resting against it")
+        self.assertNotEqual(campaign.pending_order_id, "9999")
+
+    async def test_executed_so_far_does_not_carry_onto_the_next_order(self):
+        """pending_filled_qty is the executed count of the CURRENT order. Left
+        over from a cancelled one, the next order's first fills up to that
+        count would be read as already-booked and silently skipped."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        campaign.pending_order_id = "9999"
+        campaign.pending_filled_qty = 0.05  # booked earlier, while it rested
+        broker.open_orders = []
+        broker.order_lookup = {"9999": {"status": "CANCELED", "executedQty": "0.05", "cummulativeQuoteQty": "3.858"}}
+        engine._price_cache["SOLUSDT"] = (77.10, time.monotonic())
+
+        await engine._sync_live_orders(campaign)
+
+        self.assertEqual(len(campaign.all_fills), 0, "0.05 was already booked — nothing new to book")
+        self.assertEqual(campaign.pending_filled_qty, 0.0, "the counter belongs to the order that is gone")
+
+    async def test_a_hold_after_an_expiry_says_the_fill_was_missed_not_that_the_fall_is_stale(self):
+        """PAXG, 2026-08-18: seven holds logged as 'the collected fall already
+        bottomed and bounced' when the truth was that the stop had triggered
+        seconds earlier and expired unfilled. Same decision, different story —
+        and the log has to tell it, or the desk looks like it is refusing to
+        buy for no reason."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker)
+        # This trigger has been placed once already; the exchange expired it.
+        engine._place_attempts[campaign.campaign_id] = ((77.14, 77.19), 1)
+        engine._price_cache["SOLUSDT"] = (77.60, time.monotonic())  # far above the trigger
+
+        self.assertFalse(await engine._place_pending_stop(campaign))
+        held = [e["message"] for e in campaign.event_log if "HELD" in e.get("message", "")]
+        self.assertEqual(len(held), 1)
+        self.assertIn("triggered but came back unfilled", held[0])
+        self.assertNotIn("already bottomed and bounced", held[0])
+        self.assertIn("back under 77.14", held[0])
+
+        # A trigger never placed IS the stale-pot story.
+        other = self._armed(engine, broker)
+        other.campaign_id = "churn2"
+        other.pending_stop_price, other.pending_limit_price = 77.00, 77.02
+        engine.campaigns[other.campaign_id] = other
+        self.assertFalse(await engine._place_pending_stop(other))
+        held = [e["message"] for e in other.event_log if "HELD" in e.get("message", "")]
+        self.assertEqual(len(held), 1)
+        self.assertIn("already bottomed and bounced", held[0])
+
 
 class CascadeAnchorToleranceTests(unittest.TestCase):
     """The trendline anchor rejected a close sitting ONE CENT above the line.

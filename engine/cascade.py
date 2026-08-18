@@ -6134,24 +6134,51 @@ class CascadeEngine:
                     await self._attribute_buy_commission(campaign, filled_order_id)
                     changed = True
                 elif status in {"CANCELED", "EXPIRED", "REJECTED"}:
-                    # Say WHICH. The three mean very different things — EXPIRED
-                    # is a stop that triggered and could not fill inside its
-                    # limit, CANCELED is something pulling it, REJECTED is the
-                    # order never being accepted — and the old message collapsed
-                    # all three into "cancelled", which made a re-place loop
-                    # impossible to diagnose from the log alone.
-                    self._log_event(
-                        campaign,
-                        "warn",
-                        f"The buy stop came back {status} from the exchange "
-                        f"(trigger {campaign.pending_stop_price}, limit {campaign.pending_limit_price}); re-placing",
-                    )
+                    # Book what DID trade before letting the order go. An IOC
+                    # stop can fill part of the pot at the ask and expire the
+                    # rest in the same instant — it never rests, so the
+                    # partial-fill branch above never sees it. Dropping the id
+                    # without this left bought coin in the wallet with no TP
+                    # against it, and the next placement re-bought the full
+                    # amount on top of it.
+                    executed = _coerce_float(status_row.get("executedQty"))
+                    quote = _coerce_float(status_row.get("cummulativeQuoteQty"))
+                    if executed > campaign.pending_filled_qty + 1e-12:
+                        delta_qty = executed - campaign.pending_filled_qty
+                        price = (
+                            quote / executed
+                            if executed > 0 and quote > 0
+                            else (campaign.pending_limit_price or campaign.pending_stop_price or 0.0)
+                        )
+                        part_order_id = campaign.pending_order_id
+                        campaign.pending_filled_qty = executed
+                        self._fill_pending_part(campaign, price, delta_qty, exchange_fill_ts(status_row))
+                        await self._attribute_buy_commission(campaign, part_order_id)
+                        changed = True
+                    if campaign.pending_usd > 0.01:
+                        # (When the partial completed the pot, _settle_pending
+                        # has already cleared it and there is nothing to
+                        # re-place — so no message and no alert.)
+                        #
+                        # Say WHICH. The three mean very different things —
+                        # EXPIRED is a stop that triggered and could not fill
+                        # inside its limit, CANCELED is something pulling it,
+                        # REJECTED is the order never being accepted — and the
+                        # old message collapsed all three into "cancelled",
+                        # which made a re-place loop impossible to diagnose from
+                        # the log alone.
+                        self._log_event(
+                            campaign,
+                            "warn",
+                            f"The buy stop came back {status} from the exchange "
+                            f"(trigger {campaign.pending_stop_price}, limit {campaign.pending_limit_price}); re-placing",
+                        )
                     # Only for real money, and deduped: a stop walking down a
                     # fall legitimately expires and re-places, and alerting on
                     # every one of those would train the eye to ignore the case
                     # that matters — something outside CryptoForge pulling our
                     # orders.
-                    if campaign.mode == "live":
+                    if campaign.mode == "live" and campaign.pending_usd > 0.01:
                         meaning = {
                             "EXPIRED": "the stop triggered but could not fill inside its limit price",
                             "CANCELED": "something cancelled it — the exchange, another client, or by hand",
@@ -6168,6 +6195,9 @@ class CascadeEngine:
                             dedupe_key=f"entry-cancelled:{campaign.campaign_id}",
                         )
                     campaign.pending_order_id = None
+                    # Executed-so-far is per ORDER. Carrying the old order's
+                    # count onto the next one would hide that much of its fills.
+                    campaign.pending_filled_qty = 0.0
                     changed = True
 
         # 2) One accumulated buy stop, repriced as the fall walks it down.
@@ -6299,25 +6329,58 @@ class CascadeEngine:
             if raise_usd > allowed:
                 if campaign.campaign_id not in self._stale_pot_held:
                     self._stale_pot_held.add(campaign.campaign_id)
-                    self._log_event(
-                        campaign,
-                        "order",
-                        f"Buy HELD, not armed: price {market:,.2f} is {raise_pct * 100:.2f}% above the "
-                        f"trigger {stop:,.2f} — {raise_usd:,.4f} against an allowance of {allowed:,.4f} "
+                    # Two different stories end here, and the log has to tell
+                    # them apart. If THIS trigger has already been placed, the
+                    # exchange triggered it and it came back unfilled — the
+                    # cross was live and the market simply ran ahead of the
+                    # fill window (PAXG, 2026-08-18: seven of these, each read
+                    # as "already bottomed and bounced", which it had not).
+                    # Only a trigger never yet placed is the stale-pot case.
+                    prior = self._place_attempts.get(campaign.campaign_id)
+                    just_expired = bool(prior and prior[0][0] == stop)
+                    scale = (
+                        f"{raise_usd:,.4f} against an allowance of {allowed:,.4f} "
                         f"({MAX_STOP_RAISE_BAR_RATIO:g} of a median {campaign.median_bar_pct * 100:.3f}% bar, "
-                        f"floored at {MAX_STOP_RAISE_FLOOR_TICKS} ticks). The collected fall already bottomed "
-                        f"and bounced, so arming here would buy over value with no new low. "
-                        f"${campaign.pending_usd:,.2f} stays collected — it will arm only when price makes a "
-                        f"fresh low below {stop:,.2f}.",
+                        f"floored at {MAX_STOP_RAISE_FLOOR_TICKS} ticks)"
                     )
+                    # Either way the pot is not dead: the walk-down places it
+                    # again the moment price is back under the trigger — it does
+                    # not need a NEW low, only to be below the trigger again.
+                    if just_expired:
+                        why = (
+                            f"the stop at {stop:,.2f} triggered but came back unfilled, and price has since "
+                            f"run to {market:,.2f} ({raise_pct * 100:.2f}% above it) — {scale}. The desk does not "
+                            f"chase a fill; ${campaign.pending_usd:,.2f} stays collected and the stop goes out "
+                            f"again as soon as price is back under {stop:,.2f}."
+                        )
+                        title = "Cascade entry held — fill missed, not chasing"
+                        body = (
+                            f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()})\n"
+                            f"The buy stop at {stop:,.2f} triggered and came back unfilled; price is now "
+                            f"{market:,.2f}, more than {MAX_STOP_RAISE_BAR_RATIO:g} of a median bar above it.\n\n"
+                            f"Holding ${campaign.pending_usd:,.2f} rather than buying higher — the stop goes "
+                            f"out again as soon as price is back under the trigger."
+                        )
+                    else:
+                        why = (
+                            f"price {market:,.2f} is {raise_pct * 100:.2f}% above the trigger {stop:,.2f} — "
+                            f"{scale}. The collected fall already bottomed and bounced, so arming here would "
+                            f"buy over value with no new low. ${campaign.pending_usd:,.2f} stays collected — "
+                            f"it arms only when price is back under {stop:,.2f}."
+                        )
+                        title = "Cascade entry held — no new low"
+                        body = (
+                            f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()})\n"
+                            f"Price {market:,.2f} is {raise_pct * 100:.2f}% above the collected fall's trigger "
+                            f"{stop:,.2f} — more than {MAX_STOP_RAISE_BAR_RATIO:g} of a median bar on this "
+                            f"instrument.\n\nHolding ${campaign.pending_usd:,.2f} until price is back under the "
+                            f"trigger — it will not buy over value. This is normal when a campaign is started "
+                            f"late or from an older mother candle."
+                        )
+                    self._log_event(campaign, "order", f"Buy HELD, not armed: {why}")
                     self._alert(
-                        "Cascade entry held — no new low",
-                        f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()})\n"
-                        f"Price {market:,.2f} is {raise_pct * 100:.2f}% above the collected fall's trigger "
-                        f"{stop:,.2f} — more than {MAX_STOP_RAISE_BAR_RATIO:g} of a median bar on this "
-                        f"instrument.\n\nHolding ${campaign.pending_usd:,.2f} until price makes a new low — "
-                        f"it will not buy over value. This is normal when a campaign is started late or from "
-                        f"an older mother candle.",
+                        title,
+                        body,
                         level="warn",
                         dedupe_sec=1800,
                         dedupe_key=f"entry-held:{campaign.campaign_id}",
