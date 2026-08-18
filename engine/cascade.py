@@ -103,7 +103,24 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # that it never pays much over the trigger. Phil set these by feel per market:
 # SOL moves in bigger relative steps than BTC or PAXG, so it wants 2 cents flat
 # rather than five ticks.
-STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
+#
+# PAXG is the thin book. Its prints jump 40-130 ticks at a time on a fast day,
+# so an IOC stop whose limit sits five ticks over the trigger triggers and then
+# cannot fill: 2026-08-18, seven EXPIRED entries between 14:45 and 15:27 UTC on
+# a 46-dollar fall, ZERO fills, the market $0.37-1.28 above the trigger each
+# time the sync looked. Two dollars is 0.046% of the price — the IOC still fills
+# at the best ask, so this is a ceiling on a bad print, not what a fill costs.
+STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
+
+
+def stop_limit_gap_usd(symbol: str, tick: float) -> float:
+    """How far the limit cap sits above the trigger for this symbol, in USD."""
+    gap = STOP_LIMIT_GAP_USD.get(str(symbol or "").upper())
+    if gap is not None and gap > 0:
+        return float(gap)
+    return STOP_LIMIT_OFFSET_TICKS * (float(tick) if tick else DEFAULT_TICK_SIZE)
+
+
 # Time-in-force for the entry stop, and why it is IOC.
 #
 # A GTC stop-limit that TRIGGERS but cannot fill inside its limit does not go
@@ -5160,8 +5177,7 @@ class CascadeEngine:
     def _set_pending_stop(self, campaign: Campaign, trigger: float, probe: Candle) -> None:
         tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
         stop = round(trigger, 8)
-        gap = STOP_LIMIT_GAP_USD.get(campaign.symbol.upper())
-        limit = round(trigger + (gap if gap is not None else STOP_LIMIT_OFFSET_TICKS * tick), 8)
+        limit = round(trigger + stop_limit_gap_usd(campaign.symbol, tick), 8)
         first = campaign.pending_stop_price is None
         if campaign.pending_order_id:
             # The resting order is at the wrong trigger now; drop the id so the
@@ -6233,6 +6249,16 @@ class CascadeEngine:
         limit = campaign.pending_limit_price
         if not stop or not limit:
             return False  # not armed: two reds have not printed below the line yet
+        tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
+        # The limit cap is this symbol's CURRENT gap, not the one stored when the
+        # trigger was set. A pot armed before the gap table changed (PAXG,
+        # 2026-08-18: $18.55 at 4,357.63 with a five-tick cap that had already
+        # expired three times) would otherwise keep going out with the old cap
+        # until a new low re-armed it — the wrong day to wait for a new low.
+        rule_limit = round(stop + stop_limit_gap_usd(campaign.symbol, tick), 8)
+        if rule_limit > limit:
+            limit = rule_limit
+            campaign.pending_limit_price = limit
         # A buy stop has to sit ABOVE the market, or Binance rejects it -2010
         # "would trigger immediately". Read a FRESH price (not the 4s cache): on
         # a thin book like PAXG the price crosses the trigger inside those 4
@@ -6251,7 +6277,6 @@ class CascadeEngine:
         # is necessarily a touch higher than the original trigger, which is the
         # cost of price having already passed it; the invariant that matters is
         # preserved: the entry never fills on a downward move.
-        tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
         eff_stop, eff_limit = stop, limit
         raised = bool(market and market >= stop)
         if raised:

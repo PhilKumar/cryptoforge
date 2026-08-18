@@ -44,7 +44,10 @@ MAX_STOP_RAISE_FLOOR_TICKS = 3
 # its own gap. Wide enough to still fill on a quick turn, tight enough never to
 # pay much over the trigger.
 STOP_LIMIT_OFFSET_TICKS = 5
-STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02}
+# Mirrors engine.cascade.STOP_LIMIT_GAP_USD (a test holds them equal). PAXG's
+# thin book jumps 40-130 ticks a print on a fast day, so five ticks over the
+# trigger never fills — 2026-08-18, seven EXPIRED entries, zero fills.
+STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
 DEFAULT_TICK_SIZE = 0.01
 
 

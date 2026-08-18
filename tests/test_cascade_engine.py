@@ -2759,6 +2759,25 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await engine._place_pending_stop(campaign))
         self.assertEqual(broker.placed_orders[0]["time_in_force"], "GTC")
 
+    async def test_a_pot_armed_under_an_old_gap_goes_out_with_the_current_one(self):
+        """PAXG, 2026-08-18: seven IOC entries triggered and EXPIRED because the
+        limit sat five ticks over the trigger on a book whose prints jump
+        40-130 ticks. The gap table now gives PAXG $2.00 — and a pot armed
+        BEFORE that change must pick it up at placement, not wait for a new
+        low to walk the trigger down and re-stamp the limit."""
+        broker = FakeCascadeBroker()
+        engine = _mk_engine(broker)
+        campaign = self._armed(engine, broker, stop=4357.63)
+        campaign.symbol = "PAXGUSDT"
+        campaign.pending_limit_price = 4357.68  # the old five-tick cap
+        engine._price_cache["PAXGUSDT"] = (4356.90, time.monotonic())
+
+        self.assertTrue(await engine._place_pending_stop(campaign))
+        order = broker.placed_orders[0]
+        self.assertAlmostEqual(order["stop_price"], 4357.63)
+        self.assertAlmostEqual(order["limit_price"], 4359.63, msg="the current $2 PAXG gap, not the stored 5 ticks")
+        self.assertAlmostEqual(campaign.pending_limit_price, 4359.63)
+
     async def test_a_cached_price_below_the_trigger_places_the_order(self):
         broker = FakeCascadeBroker()
         engine = _mk_engine(broker)
