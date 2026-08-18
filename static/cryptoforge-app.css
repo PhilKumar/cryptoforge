@@ -8098,6 +8098,43 @@ html[data-theme="light"] .journal-entry-notes section {
     /* Horizontal only: a height cap here would cut rows off mid-table. */
     overflow-y: hidden;
   }
+
+  /* ── The ladder scrolls inside its card ──
+     A campaign with four fibs draws ~30 level rows, so the card grew to
+     several screens and the page scrolled past every other campaign to get
+     to the next one. The ladder gets its own viewport instead: the card
+     stays a card, and the levels move under a header that stays put.
+
+     The cap is on a class of its own rather than on `.table-scroll`, which
+     would collide with .cf-cascade-chart-details' own 34vh rule at equal
+     specificity and silently win by source order. */
+  .cf-cascade-ladder-scroll {
+    max-height: min(52vh, 460px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;   /* stop the page scrolling on when it ends */
+  }
+  /* The column labels have to survive the scroll or the prices lose their
+     names. .trade-table th already paints an opaque gradient, so the rows
+     pass underneath it rather than through it. */
+  /* The table itself computes to overflow:hidden, which makes IT the sticky
+     header's scroll container — the header then stuck to a box that never
+     scrolls and rode away with the rows. Handing overflow back to the scroll
+     div is what actually makes the header hold. */
+  .cf-cascade-ladder-scroll .cf-cascade-ladder { overflow: visible; }
+  .cf-cascade-ladder-scroll .cf-cascade-ladder thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* The shared header gradient starts at 62% alpha, so rows read through it
+       while scrolling. An opaque layer goes underneath it, not instead of it. */
+    background-color: var(--bg, #040814);
+  }
+  /* A scrollable region must be reachable without a mouse. */
+  .cf-cascade-ladder-scroll:focus-visible {
+    outline: 2px solid var(--accent, #22d3ee);
+    outline-offset: -2px;
+  }
   [data-theme="light"] .cf-cascade-position {
     background: rgba(15,23,42,0.035);
     border-color: rgba(15,23,42,0.10);

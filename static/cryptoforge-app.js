@@ -8866,7 +8866,7 @@ function _cfCascadeLadderRows(campaign) {
         + '</div></td></tr>'
       : '');
 
-  return '<div class="table-surface"><div class="table-scroll"><table class="trade-table cf-cascade-ladder">'
+  return '<div class="table-surface"><div class="table-scroll cf-cascade-ladder-scroll" tabindex="0" role="region" aria-label="Ladder levels, scrollable"><table class="trade-table cf-cascade-ladder">'
     + '<thead><tr><th>Level</th><th class="num">Price</th><th>TF</th>'
     + '<th class="num">Amount</th><th>Status</th></tr></thead>'
     + '<tbody>' + head + rows + '</tbody></table></div></div>';
