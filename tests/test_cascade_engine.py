@@ -774,7 +774,9 @@ class CascadeAccumulatorEntryTests(unittest.TestCase):
         self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
         self._feed(600, 64795.0, 64796.0, 64700.0, 64710.0)
         self.assertAlmostEqual(self.campaign.pending_stop_price, 64795.0)
-        self.assertAlmostEqual(self.campaign.pending_limit_price, 64795.05)  # five ticks
+        # No bar measured on this fixture: the 0.03%-of-price floor, not five
+        # ticks — five ticks fills one BTC cross in four (2026-08-19).
+        self.assertAlmostEqual(self.campaign.pending_limit_price, 64795.0 + 64795.0 * 0.0003, places=4)
 
     def test_the_fall_walks_the_stop_down_and_never_buys_into_it(self):
         self._feed(300, 64900.0, 64910.0, 64790.0, 64795.0)
@@ -2775,16 +2777,16 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await engine._place_pending_stop(campaign))
         order = broker.placed_orders[0]
         self.assertAlmostEqual(order["stop_price"], 4357.63)
-        self.assertAlmostEqual(order["limit_price"], 4359.63, msg="the current $2 PAXG gap, not the stored 5 ticks")
-        self.assertAlmostEqual(campaign.pending_limit_price, 4359.63)
+        self.assertAlmostEqual(order["limit_price"], 4361.63, msg="the current $4 PAXG gap, not the stored 5 ticks")
+        self.assertAlmostEqual(campaign.pending_limit_price, 4361.63)
 
-    async def test_the_fill_window_is_one_median_bar_on_a_measured_instrument(self):
+    async def test_the_fill_window_is_two_median_bars_on_a_measured_instrument(self):
         """BTCUSDT 2026-08-19 06:15:28.545 UTC: one sweep printed 64,180.00,
         64,180.01 and 64,180.10 in the same millisecond and ran to 64,197. The
         stop triggered on the first print and its five-tick limit found no ask
         left — EXPIRED on the deepest book on the exchange. The window is a
-        race against the order that triggers it, so it is sized in bars: one
-        median 5m bar (0.024% here → $15.40), never below the tick floor."""
+        race against the order that triggers it, so it is sized in bars: two
+        median 5m bars (0.024% here → $30.81), never below the tick floor."""
         broker = FakeCascadeBroker()
         engine = _mk_engine(broker)
         campaign = self._armed(engine, broker, stop=64180.0)
@@ -2796,11 +2798,11 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await engine._place_pending_stop(campaign))
         order = broker.placed_orders[0]
         self.assertAlmostEqual(order["stop_price"], 64180.0)
-        self.assertAlmostEqual(order["limit_price"], 64180.0 + 15.4032, places=4, msg="one 0.024% bar, not five ticks")
+        self.assertAlmostEqual(order["limit_price"], 64180.0 + 30.8064, places=4, msg="two 0.024% bars, not five ticks")
         self.assertAlmostEqual(campaign.pending_limit_price, order["limit_price"], places=4)
 
-        # An UNMEASURED bar keeps the tick floor — a failed measurement never
-        # widens the window.
+        # An UNMEASURED bar falls to the 0.03%-of-price floor, not to five
+        # ticks: for a fill window, tight is the failure.
         quiet = self._armed(engine, broker, stop=64180.0)
         quiet.campaign_id = "btc-quiet"
         quiet.symbol = "BTCUSDT"
@@ -2808,7 +2810,34 @@ class CascadeLivePlacementTests(unittest.IsolatedAsyncioTestCase):
         quiet.pending_limit_price = 64180.05
         engine.campaigns[quiet.campaign_id] = quiet
         self.assertTrue(await engine._place_pending_stop(quiet))
-        self.assertAlmostEqual(broker.placed_orders[1]["limit_price"], 64180.05)
+        self.assertAlmostEqual(broker.placed_orders[1]["limit_price"], 64180.0 + 64180.0 * 0.0003, places=4)
+
+    async def test_the_two_tapes_that_expired_fill_inside_the_live_window(self):
+        """Regression against the real prints. PAXG 2026-08-18 15:25 UTC: trigger
+        4,357.63, first print after the cross 4,357.71 — a 5-tick cap (4,357.68)
+        expired it, seven times. BTC 2026-08-19 06:15:28.545 UTC: trigger
+        64,180.00, the triggering sweep printed 64,180.00/.01/.10 in one
+        millisecond and the next print was 64,197.50 — 64,180.05 expired it.
+        Both live campaigns' own bars (0.006% and 0.024%) must now put the
+        limit above those prints, with the window each campaign actually has."""
+        cases = (
+            ("PAXGUSDT", 4357.63, 0.00006, 4357.71),
+            ("BTCUSDT", 64180.00, 0.00024, 64180.10),
+        )
+        for sym, trigger, bar, first_print in cases:
+            broker = FakeCascadeBroker()
+            engine = _mk_engine(broker)
+            campaign = self._armed(engine, broker, stop=trigger)
+            campaign.symbol = sym
+            campaign.median_bar_pct = bar
+            campaign.pending_limit_price = round(trigger + 0.05, 2)  # the window that expired
+            engine._price_cache[sym] = (round(trigger - 0.50, 2), time.monotonic())
+            self.assertTrue(await engine._place_pending_stop(campaign))
+            limit = broker.placed_orders[0]["limit_price"]
+            self.assertGreaterEqual(limit, first_print, f"{sym}: limit {limit} is under the print that expired it")
+            # The IOC fills at the ask, so the window is a ceiling, never a cost:
+            # it stays inside a tenth of a percent of the trigger.
+            self.assertLess(limit - trigger, trigger * 0.001, f"{sym}: window {limit - trigger} is wider than 0.1%")
 
     async def test_a_cached_price_below_the_trigger_places_the_order(self):
         broker = FakeCascadeBroker()

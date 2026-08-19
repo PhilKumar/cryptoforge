@@ -108,9 +108,12 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # so an IOC stop whose limit sits five ticks over the trigger triggers and then
 # cannot fill: 2026-08-18, seven EXPIRED entries between 14:45 and 15:27 UTC on
 # a 46-dollar fall, ZERO fills, the market $0.37-1.28 above the trigger each
-# time the sync looked. Two dollars is 0.046% of the price — the IOC still fills
-# at the best ask, so this is a ceiling on a bad print, not what a fill costs.
-STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
+# time the sync looked. Its bar is unusable for sizing (a campaign born on a
+# weekend measures gold ~10x too quiet), so the floor is read off the tape: over
+# 48h of prints $2 still missed 1 cross in 239 and $4 missed none of 237,066.
+# Four dollars is 0.09% of the price — the IOC still fills at the best ask, so
+# this is a ceiling on a bad print, not what a fill costs.
+STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 4.00}
 # ...and the tick counts above are only a FLOOR. The window that actually
 # matters is a fraction of the instrument's own median 5m bar, the same yardstick
 # max_stop_raise_usd uses, because the trigger print IS someone else's sweep:
@@ -121,32 +124,39 @@ STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
 # fill window is a race against the order that triggered it, so it has to be
 # sized to how far one bar moves, not to how fine the price grid is.
 #
-# ONE median bar. Measured on 2026-08-19 over two hours of BTCUSDT tape (26,280
-# trades, 90,831 upward crosses of a one-tick grid): the first print after a
-# cross lands inside five ticks only 25% of the time, inside half a median bar
-# 98.6%, inside one bar 99.8%. SOL prints tick by tick — 100% at any width —
-# and PAXG is 100% inside its $2 floor. A full bar on BTC is a ceiling of
-# ~0.02-0.06% of price, a fraction of one commission, paid only on the sweep
-# that would otherwise have been a missed turn; the fill itself is at the ask.
-STOP_LIMIT_GAP_BAR_RATIO = 1.0
+# TWO median bars. Measured on 2026-08-19 by replaying real prints against a
+# one-tick grid of triggers — 12h of BTCUSDT (489,034 upward crosses), 24h of
+# SOLUSDT (19,985), 48h of PAXGUSDT (237,066) — and asking whether the first
+# print after the cross, and the one after it, landed inside the window:
+#   five ticks     BTC 27%    PAXG 19%    SOL 99.9%   (the last five days)
+#   one bar        BTC 99.96% PAXG —      SOL 99.95%  (1 miss in ~2,300)
+#   two bars       BTC 100%   PAXG —      SOL 99.99%  (1 miss in ~20,000)
+# The window is a ceiling, not a price: the IOC fills at the ask, so two bars
+# costs nothing except on the single violent print that would otherwise have
+# been a missed turn — and there it is 0.05% of price on BTC, 0.13% on SOL.
+STOP_LIMIT_GAP_BAR_RATIO = 2.0
+# And an absolute floor under all of it, as a fraction of price, for the case
+# the bar cannot help: a campaign whose bar was never measured (0 of 80 births
+# since 2026-07-01, but the path exists) or was measured in a dead regime. For
+# a filter an unmeasured input must tighten; for a FILL WINDOW tight is the
+# failure — five ticks on BTC fills one cross in four. 0.03% of price is the
+# width that caught every one of 489,034 BTC crosses; ~$19 at 64,000.
+STOP_LIMIT_GAP_MIN_PCT = 0.0003
 
 
 def stop_limit_gap_usd(symbol: str, tick: float, price: float = 0.0, median_bar_pct: float = 0.0) -> float:
     """How far the limit cap sits above the trigger for this symbol, in USD:
-    one median 5m bar at `price`, never less than the symbol's own floor (or
-    five ticks). An unmeasured bar (0.0) leaves just the floor —
-    a failed measurement must never quietly widen a real filter."""
+    two median 5m bars at `price`, never less than the symbol's own floor (or
+    five ticks), and never less than STOP_LIMIT_GAP_MIN_PCT of the price."""
     gap = STOP_LIMIT_GAP_USD.get(str(symbol or "").upper())
     floor = (
         float(gap)
         if gap is not None and gap > 0
         else STOP_LIMIT_OFFSET_TICKS * (float(tick) if tick else DEFAULT_TICK_SIZE)
     )
-    bar = (
-        float(price) * float(median_bar_pct) * STOP_LIMIT_GAP_BAR_RATIO
-        if price and median_bar_pct and price > 0 and median_bar_pct > 0
-        else 0.0
-    )
+    px = float(price) if price and price > 0 else 0.0
+    floor = max(floor, px * STOP_LIMIT_GAP_MIN_PCT)
+    bar = px * float(median_bar_pct) * STOP_LIMIT_GAP_BAR_RATIO if px and median_bar_pct and median_bar_pct > 0 else 0.0
     return max(floor, bar)
 
 

@@ -47,12 +47,15 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # Mirrors engine.cascade.STOP_LIMIT_GAP_USD (a test holds them equal). PAXG's
 # thin book jumps 40-130 ticks a print on a fast day, so five ticks over the
 # trigger never fills — 2026-08-18, seven EXPIRED entries, zero fills.
-STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
-# The tick counts and per-symbol floors are only FLOORS: the window is one
-# median 5m bar of the instrument (BTC 2026-08-19: a sweep printed 64,180.00 →
-# 64,180.10 in one millisecond; five ticks fill 25% of first prints, one bar
-# 99.8%, measured over two hours of tape).
-STOP_LIMIT_GAP_BAR_RATIO = 1.0
+STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 4.00}
+# The tick counts and per-symbol floors are only FLOORS: the window is two
+# median 5m bars of the instrument (BTC 2026-08-19: a sweep printed 64,180.00 →
+# 64,180.10 in one millisecond; five ticks fill 27% of first prints, two bars
+# 100%, measured over 12h of tape).
+STOP_LIMIT_GAP_BAR_RATIO = 2.0
+# Absolute floor as a fraction of price, for a campaign whose bar was never
+# measured: for a fill window, tight IS the failure.
+STOP_LIMIT_GAP_MIN_PCT = 0.0003
 DEFAULT_TICK_SIZE = 0.01
 
 
@@ -64,11 +67,9 @@ def stop_limit_gap_usd(symbol: str, tick: float, price: float = 0.0, median_bar_
         if gap is not None and gap > 0
         else STOP_LIMIT_OFFSET_TICKS * (float(tick) if tick else DEFAULT_TICK_SIZE)
     )
-    bar = (
-        float(price) * float(median_bar_pct) * STOP_LIMIT_GAP_BAR_RATIO
-        if price and median_bar_pct and price > 0 and median_bar_pct > 0
-        else 0.0
-    )
+    px = float(price) if price and price > 0 else 0.0
+    floor = max(floor, px * STOP_LIMIT_GAP_MIN_PCT)
+    bar = px * float(median_bar_pct) * STOP_LIMIT_GAP_BAR_RATIO if px and median_bar_pct and median_bar_pct > 0 else 0.0
     return max(floor, bar)
 
 
