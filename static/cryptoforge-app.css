@@ -1161,6 +1161,60 @@
   .allocator-result-panel h3 {
     margin-bottom: 14px;
   }
+
+  /* ── The two columns are panes, not a long document ──
+     `align-items: start` let each column take its natural height, so the
+     campaign list grew to several screens: the form ended a third of the way
+     down beside a column of dead space, and reaching the third campaign meant
+     scrolling every level of the first two. Each column now gets the height
+     the viewport actually has and scrolls inside itself.
+
+     --cf-shell-h is written by cfSyncShellHeight() from the real .sticky-shell
+     box. It is measured rather than assumed because that stack changes height:
+     the ticker rail wraps, and the VIEW ONLY chip appears for a viewer.
+
+     Only above the single-column breakpoint. On a phone the columns stack, and
+     a pane that scrolls inside a page that also scrolls is worse than either. */
+  @media (min-width: 1181px) {
+    .allocator-grid {
+      align-items: stretch;
+    }
+    .allocator-grid > .allocator-input-panel,
+    .allocator-grid > .allocator-result-panel {
+      position: sticky;
+      top: calc(var(--cf-shell-h, 168px) + 12px);
+      /* 44px = the page section's 14px padding top and bottom, plus body's
+         own 16px padding-bottom. Measured against the real stylesheet:
+         at 28px the document still scrolled 16px and kept a scrollbar. */
+      max-height: calc(100dvh - var(--cf-shell-h, 168px) - 44px);
+      min-height: 0;
+      /* .card's own bottom margin sits outside that max-height and put the
+         page 14px over the viewport, which is enough to give the document a
+         scrollbar and undo the point of the panes. */
+      margin-bottom: 0;
+    }
+    /* The form is all one thing, so the panel itself is the scroller. */
+    .allocator-grid > .allocator-input-panel {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    /* The results panel keeps its heading and scrolls only the list under it —
+       scrolling the panel would carry "Active Campaigns" away with the cards. */
+    .allocator-grid > .allocator-result-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .allocator-grid > .allocator-result-panel > #cf-cascade-campaigns {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      /* the cards' own shadows need room inside the scroller */
+      padding-right: 4px;
+      margin-right: -4px;
+    }
+  }
   .allocator-form-grid {
     display: grid;
     grid-template-columns: 1fr;

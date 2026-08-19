@@ -6668,7 +6668,24 @@ function cfInitBrandMotion() {
   });
 }
 
+/* The height of the sticky header stack, published as --cf-shell-h so the
+   Strategies panes can be exactly the viewport minus the chrome above them.
+   Measured, not assumed: the ticker rail wraps at some widths and a viewer
+   session adds a VIEW ONLY chip, both of which change that height. */
+function cfSyncShellHeight() {
+  var shell = document.querySelector('.sticky-shell');
+  if (!shell) return;
+  var apply = function () {
+    var h = Math.round(shell.getBoundingClientRect().height);
+    if (h > 0) document.documentElement.style.setProperty('--cf-shell-h', h + 'px');
+  };
+  apply();
+  if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(shell);
+  window.addEventListener('resize', apply);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  cfSyncShellHeight();
   cfInitBrandMotion();
   cfLoadAuthContext();
   _cfPageHistoryDepth = Math.max(0, Number(window.history && window.history.state && window.history.state.cfDepth) || 0);
