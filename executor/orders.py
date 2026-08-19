@@ -48,7 +48,27 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # thin book jumps 40-130 ticks a print on a fast day, so five ticks over the
 # trigger never fills — 2026-08-18, seven EXPIRED entries, zero fills.
 STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
+# The tick counts and per-symbol floors are only FLOORS: the window is half the
+# instrument's median 5m bar (BTC 2026-08-19: a sweep printed 64,180.00 →
+# 64,180.10 in one millisecond; five ticks can never win that race).
+STOP_LIMIT_GAP_BAR_RATIO = 0.5
 DEFAULT_TICK_SIZE = 0.01
+
+
+def stop_limit_gap_usd(symbol: str, tick: float, price: float = 0.0, median_bar_pct: float = 0.0) -> float:
+    """Mirror of engine.cascade.stop_limit_gap_usd — pinned by a test."""
+    gap = STOP_LIMIT_GAP_USD.get(str(symbol or "").upper())
+    floor = (
+        float(gap)
+        if gap is not None and gap > 0
+        else STOP_LIMIT_OFFSET_TICKS * (float(tick) if tick else DEFAULT_TICK_SIZE)
+    )
+    bar = (
+        float(price) * float(median_bar_pct) * STOP_LIMIT_GAP_BAR_RATIO
+        if price and median_bar_pct and price > 0 and median_bar_pct > 0
+        else 0.0
+    )
+    return max(floor, bar)
 
 
 def _opt_float(value) -> Optional[float]:
@@ -247,9 +267,10 @@ class CampaignOrders:
         # The trigger is the PREVIOUS red close, one body back, so it sits
         # ABOVE where the market just closed. That is what makes it a stop.
         trigger = self.last_red
-        gap = STOP_LIMIT_GAP_USD.get(self.symbol.upper())
         self.stop_price = round(trigger, 8)
-        self.limit_price = round(trigger + (gap if gap is not None else STOP_LIMIT_OFFSET_TICKS * self.tick_size), 8)
+        self.limit_price = round(
+            trigger + stop_limit_gap_usd(self.symbol, self.tick_size, trigger, self.median_bar_pct), 8
+        )
         self.stop_ts = candle.timestamp
         self.entry_rev += 1
         self.entry_resting = False  # the resting order is at the wrong trigger now

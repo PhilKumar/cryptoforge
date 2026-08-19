@@ -111,14 +111,36 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # time the sync looked. Two dollars is 0.046% of the price — the IOC still fills
 # at the best ask, so this is a ceiling on a bad print, not what a fill costs.
 STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
+# ...and the tick counts above are only a FLOOR. The window that actually
+# matters is a fraction of the instrument's own median 5m bar, the same yardstick
+# max_stop_raise_usd uses, because the trigger print IS someone else's sweep:
+# BTCUSDT 2026-08-19 06:15:28.545 UTC printed 64,180.00 / 64,180.01 / 64,180.10
+# in the SAME millisecond and was at 64,197 seconds later. Our stop triggers on
+# the first of those, and by the time its limit reaches the book the sweeper has
+# eaten every ask inside five ticks — EXPIRED, on the deepest book there is. A
+# fill window is a race against the order that triggered it, so it has to be
+# sized to how far one bar moves, not to how fine the price grid is. Half a
+# median bar: BTC ~$8-20, PAXG ~$1.30 (its $2 floor stands), SOL ~4c.
+STOP_LIMIT_GAP_BAR_RATIO = 0.5
 
 
-def stop_limit_gap_usd(symbol: str, tick: float) -> float:
-    """How far the limit cap sits above the trigger for this symbol, in USD."""
+def stop_limit_gap_usd(symbol: str, tick: float, price: float = 0.0, median_bar_pct: float = 0.0) -> float:
+    """How far the limit cap sits above the trigger for this symbol, in USD:
+    half of its median 5m bar at `price`, never less than the symbol's own
+    floor (or five ticks). An unmeasured bar (0.0) leaves just the floor —
+    a failed measurement must never quietly widen a real filter."""
     gap = STOP_LIMIT_GAP_USD.get(str(symbol or "").upper())
-    if gap is not None and gap > 0:
-        return float(gap)
-    return STOP_LIMIT_OFFSET_TICKS * (float(tick) if tick else DEFAULT_TICK_SIZE)
+    floor = (
+        float(gap)
+        if gap is not None and gap > 0
+        else STOP_LIMIT_OFFSET_TICKS * (float(tick) if tick else DEFAULT_TICK_SIZE)
+    )
+    bar = (
+        float(price) * float(median_bar_pct) * STOP_LIMIT_GAP_BAR_RATIO
+        if price and median_bar_pct and price > 0 and median_bar_pct > 0
+        else 0.0
+    )
+    return max(floor, bar)
 
 
 # Time-in-force for the entry stop, and why it is IOC.
@@ -5177,7 +5199,7 @@ class CascadeEngine:
     def _set_pending_stop(self, campaign: Campaign, trigger: float, probe: Candle) -> None:
         tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
         stop = round(trigger, 8)
-        limit = round(trigger + stop_limit_gap_usd(campaign.symbol, tick), 8)
+        limit = round(trigger + stop_limit_gap_usd(campaign.symbol, tick, trigger, campaign.median_bar_pct), 8)
         first = campaign.pending_stop_price is None
         if campaign.pending_order_id:
             # The resting order is at the wrong trigger now; drop the id so the
@@ -6285,7 +6307,7 @@ class CascadeEngine:
         # 2026-08-18: $18.55 at 4,357.63 with a five-tick cap that had already
         # expired three times) would otherwise keep going out with the old cap
         # until a new low re-armed it — the wrong day to wait for a new low.
-        rule_limit = round(stop + stop_limit_gap_usd(campaign.symbol, tick), 8)
+        rule_limit = round(stop + stop_limit_gap_usd(campaign.symbol, tick, stop, campaign.median_bar_pct), 8)
         if rule_limit > limit:
             limit = rule_limit
             campaign.pending_limit_price = limit

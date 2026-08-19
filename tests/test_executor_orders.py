@@ -18,6 +18,7 @@ from executor import model
 from executor.orders import (
     MAX_STOP_RAISE_BAR_RATIO,
     MAX_STOP_RAISE_FLOOR_TICKS,
+    STOP_LIMIT_GAP_BAR_RATIO,
     STOP_LIMIT_GAP_USD,
     STOP_LIMIT_OFFSET_TICKS,
     CampaignOrders,
@@ -25,6 +26,7 @@ from executor.orders import (
     Fill,
     OrderBook,
     max_stop_raise_usd,
+    stop_limit_gap_usd,
 )
 
 
@@ -67,6 +69,26 @@ class EntryContractTests(unittest.TestCase):
     def test_the_stop_limit_gap_matches_the_engine(self):
         self.assertEqual(STOP_LIMIT_OFFSET_TICKS, engine.STOP_LIMIT_OFFSET_TICKS)
         self.assertEqual(STOP_LIMIT_GAP_USD, engine.STOP_LIMIT_GAP_USD)
+        self.assertEqual(STOP_LIMIT_GAP_BAR_RATIO, engine.STOP_LIMIT_GAP_BAR_RATIO)
+
+    def test_the_fill_window_matches_the_engines_function(self):
+        """Half a median bar, floored at the symbol's own gap or five ticks —
+        the SAME number on both sides, or a buyer's stop expires where the
+        desk's fills (BTC 2026-08-19: five ticks lost to a one-millisecond
+        sweep from 64,180.00 to 64,180.10)."""
+        for sym, tick, price, bar in (
+            ("BTCUSDT", 0.01, 64180.0, 0.00024),  # measured bar: half of it, $7.70
+            ("BTCUSDT", 0.01, 64180.0, 0.0),  # unmeasured: five ticks
+            ("PAXGUSDT", 0.01, 4357.63, 0.00006),  # $2 floor beats a quiet bar
+            ("SOLUSDT", 0.01, 76.9, 0.00106),  # 4c bar beats the 2c floor
+        ):
+            self.assertAlmostEqual(
+                stop_limit_gap_usd(sym, tick, price, bar), engine.stop_limit_gap_usd(sym, tick, price, bar), places=9
+            )
+        self.assertAlmostEqual(stop_limit_gap_usd("BTCUSDT", 0.01, 64180.0, 0.00024), 7.7016, places=4)
+        self.assertAlmostEqual(stop_limit_gap_usd("BTCUSDT", 0.01, 64180.0, 0.0), 0.05, places=9)
+        self.assertAlmostEqual(stop_limit_gap_usd("PAXGUSDT", 0.01, 4357.63, 0.00006), 2.00, places=9)
+        self.assertGreater(stop_limit_gap_usd("SOLUSDT", 0.01, 76.9, 0.00106), 0.02)
 
     def test_the_allowance_matches_the_engines_function(self):
         for trigger, bar, tick in ((72.90, 0.0019, 0.01), (66000.0, 0.0011, 0.01), (4000.0, 0.0, 0.01)):
@@ -149,18 +171,26 @@ class StopWalkTests(unittest.TestCase):
         self.orders.advance_stop(_red(3, 161.50))
         self.assertGreater(self.orders.stop_price, 161.50)
 
-    def test_the_limit_caps_just_over_the_trigger(self):
+    def test_the_limit_caps_half_a_bar_over_the_trigger(self):
         self.orders.advance_stop(_red(2, 162.00))
         self.orders.advance_stop(_red(3, 161.50))
-        # SOLUSDT has its own 2c gap rather than five ticks.
-        self.assertAlmostEqual(self.orders.limit_price, 162.02)
+        # The fixture's bar is 0.2%: half of it at 162.00 is 16.2c, which beats
+        # SOLUSDT's own 2c floor. The window is a race against the sweep that
+        # triggers it, so it is sized in bars, not ticks.
+        self.assertAlmostEqual(self.orders.limit_price, 162.00 + 162.00 * 0.002 * 0.5)
 
-    def test_a_symbol_without_its_own_gap_uses_five_ticks(self):
+    def test_a_symbol_without_its_own_gap_uses_half_a_bar_floored_at_five_ticks(self):
         orders = _orders(symbol="BTCUSDT", tick_size=0.01)
         orders.collect(Candle(1, 70000, 70000, 66000.0, 66100), _rungs((4, 4, 66052.63, 6.0)))
         orders.advance_stop(_red(2, 66050.00))
         orders.advance_stop(_red(3, 66040.00))
-        self.assertAlmostEqual(orders.limit_price, 66050.00 + 5 * 0.01)
+        self.assertAlmostEqual(orders.limit_price, 66050.00 + 66050.00 * 0.002 * 0.5)
+        # Unmeasured bar: the five-tick floor is the whole window.
+        quiet = _orders(symbol="BTCUSDT", tick_size=0.01, median_bar_pct=0.0)
+        quiet.collect(Candle(1, 70000, 70000, 66000.0, 66100), _rungs((4, 4, 66052.63, 6.0)))
+        quiet.advance_stop(_red(2, 66050.00))
+        quiet.advance_stop(_red(3, 66040.00))
+        self.assertAlmostEqual(quiet.limit_price, 66050.00 + 5 * 0.01)
 
     def test_green_candles_are_ignored(self):
         self.orders.advance_stop(_red(2, 162.00))
