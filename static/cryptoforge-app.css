@@ -1178,6 +1178,10 @@
   @media (min-width: 1181px) {
     .allocator-grid {
       align-items: stretch;
+      /* The panels give up .card's 14px bottom margin below so the pane height
+         arithmetic stays exact, which left the next section (Campaign Event
+         Log) butted straight against them. The rhythm moves to the grid. */
+      margin-bottom: 14px;
     }
     .allocator-grid > .allocator-input-panel,
     .allocator-grid > .allocator-result-panel {
