@@ -48,10 +48,11 @@ STOP_LIMIT_OFFSET_TICKS = 5
 # thin book jumps 40-130 ticks a print on a fast day, so five ticks over the
 # trigger never fills — 2026-08-18, seven EXPIRED entries, zero fills.
 STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
-# The tick counts and per-symbol floors are only FLOORS: the window is half the
-# instrument's median 5m bar (BTC 2026-08-19: a sweep printed 64,180.00 →
-# 64,180.10 in one millisecond; five ticks can never win that race).
-STOP_LIMIT_GAP_BAR_RATIO = 0.5
+# The tick counts and per-symbol floors are only FLOORS: the window is one
+# median 5m bar of the instrument (BTC 2026-08-19: a sweep printed 64,180.00 →
+# 64,180.10 in one millisecond; five ticks fill 25% of first prints, one bar
+# 99.8%, measured over two hours of tape).
+STOP_LIMIT_GAP_BAR_RATIO = 1.0
 DEFAULT_TICK_SIZE = 0.01
 
 

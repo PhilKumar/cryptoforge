@@ -119,15 +119,22 @@ STOP_LIMIT_GAP_USD = {"SOLUSDT": 0.02, "PAXGUSDT": 2.00}
 # the first of those, and by the time its limit reaches the book the sweeper has
 # eaten every ask inside five ticks — EXPIRED, on the deepest book there is. A
 # fill window is a race against the order that triggered it, so it has to be
-# sized to how far one bar moves, not to how fine the price grid is. Half a
-# median bar: BTC ~$8-20, PAXG ~$1.30 (its $2 floor stands), SOL ~4c.
-STOP_LIMIT_GAP_BAR_RATIO = 0.5
+# sized to how far one bar moves, not to how fine the price grid is.
+#
+# ONE median bar. Measured on 2026-08-19 over two hours of BTCUSDT tape (26,280
+# trades, 90,831 upward crosses of a one-tick grid): the first print after a
+# cross lands inside five ticks only 25% of the time, inside half a median bar
+# 98.6%, inside one bar 99.8%. SOL prints tick by tick — 100% at any width —
+# and PAXG is 100% inside its $2 floor. A full bar on BTC is a ceiling of
+# ~0.02-0.06% of price, a fraction of one commission, paid only on the sweep
+# that would otherwise have been a missed turn; the fill itself is at the ask.
+STOP_LIMIT_GAP_BAR_RATIO = 1.0
 
 
 def stop_limit_gap_usd(symbol: str, tick: float, price: float = 0.0, median_bar_pct: float = 0.0) -> float:
     """How far the limit cap sits above the trigger for this symbol, in USD:
-    half of its median 5m bar at `price`, never less than the symbol's own
-    floor (or five ticks). An unmeasured bar (0.0) leaves just the floor —
+    one median 5m bar at `price`, never less than the symbol's own floor (or
+    five ticks). An unmeasured bar (0.0) leaves just the floor —
     a failed measurement must never quietly widen a real filter."""
     gap = STOP_LIMIT_GAP_USD.get(str(symbol or "").upper())
     floor = (
