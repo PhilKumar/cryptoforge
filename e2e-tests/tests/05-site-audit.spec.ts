@@ -270,5 +270,22 @@ test.describe('Comprehensive Site Audit', () => {
         await expect(cards.nth(i).locator('small')).not.toBeEmpty();
       }
     }
+
+    // Strategy cards stay compact and start at the left edge, leaving room in
+    // the same row for future strategies instead of stretching two cards to
+    // consume the whole page.
+    const layout = await page.locator('#cascade-page .cf-strat-tabs').evaluate((tabs) => {
+      const host = tabs.getBoundingClientRect();
+      const cards = Array.from(tabs.querySelectorAll('.cf-strat-tab'))
+        .map((card) => card.getBoundingClientRect());
+      return {
+        host: { left: host.left, right: host.right },
+        cards: cards.map((card) => ({ left: card.left, right: card.right, width: card.width })),
+      };
+    });
+    expect(layout.cards[0].left).toBeCloseTo(layout.host.left, 0);
+    expect(layout.cards[0].width).toBeLessThanOrEqual(320);
+    expect(layout.cards[1].left).toBeGreaterThan(layout.cards[0].right);
+    expect(layout.host.right - layout.cards[1].right).toBeGreaterThan(100);
   });
 });
