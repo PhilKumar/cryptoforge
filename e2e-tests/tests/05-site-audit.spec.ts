@@ -261,12 +261,15 @@ test.describe('Comprehensive Site Audit', () => {
       expect(painted.borderTopWidth, `${toggle.label} has the wrong border`).toBe(toggle.border);
     }
 
-    // The desk card carries a name AND a one-line description on both pages.
-    for (const pageId of ['cascade-page', 'rule3070-page']) {
+    // The desk card carries a name AND a one-line description on EVERY
+    // strategy page, and each page carries the whole set so the selector reads
+    // the same wherever you are standing.
+    const STRATEGIES = ['Cascade', 'V-Rule', 'Auto-Cascade_Fib'];
+    for (const pageId of ['cascade-page', 'rule3070-page', 'autofib-page']) {
       const cards = page.locator(`#${pageId} .cf-strat-tab`);
-      await expect(cards, `${pageId} selector`).toHaveCount(2);
-      await expect(cards.locator('strong')).toHaveText(['Cascade', 'V-Rule']);
-      for (let i = 0; i < 2; i++) {
+      await expect(cards, `${pageId} selector`).toHaveCount(STRATEGIES.length);
+      await expect(cards.locator('strong')).toHaveText(STRATEGIES);
+      for (let i = 0; i < STRATEGIES.length; i++) {
         await expect(cards.nth(i).locator('small')).not.toBeEmpty();
       }
     }
@@ -284,8 +287,19 @@ test.describe('Comprehensive Site Audit', () => {
       };
     });
     expect(layout.cards[0].left).toBeCloseTo(layout.host.left, 0);
-    expect(layout.cards[0].width).toBeLessThanOrEqual(320);
-    expect(layout.cards[1].left).toBeGreaterThan(layout.cards[0].right);
-    expect(layout.host.right - layout.cards[1].right).toBeGreaterThan(100);
+    // Every card compact, and each one starting after the last — a row that
+    // reads left to right, not a set stretched to fill the page.
+    for (let i = 0; i < layout.cards.length; i++) {
+      expect(layout.cards[i].width, `card ${i} is too wide`).toBeLessThanOrEqual(320);
+      if (i > 0) {
+        expect(layout.cards[i].left, `card ${i} overlaps the one before it`)
+          .toBeGreaterThan(layout.cards[i - 1].right);
+      }
+    }
+    // Room still left after the LAST card, so the next strategy has somewhere
+    // to go. Checking the second card would stop meaning anything the moment
+    // a third one exists.
+    const lastCard = layout.cards[layout.cards.length - 1];
+    expect(layout.host.right - lastCard.right).toBeGreaterThan(100);
   });
 });
