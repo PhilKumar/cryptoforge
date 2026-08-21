@@ -12110,41 +12110,10 @@ document.addEventListener('keydown', function(event) {
   }
 });
 
-// Where the chart panel lives when it is NOT pinned into a page: back inside
-// its overlay. Remembered once so pinning can always be undone.
-var _cfChartPinnedHostId = '';
-
-// Move the chart PANEL — the real one, with its toolbar, engines and canvas —
-// either into a page container or back into its overlay. The renderer is not
-// touched: only where its markup hangs changes, so a pinned chart and a
-// full-screen one can never drift apart.
-function cfCascadeChartPinTo(hostId) {
-  var panel = document.getElementById('cf-cascade-chart-panel');
-  var overlay = document.getElementById('cf-cascade-chart-overlay');
-  if (!panel || !overlay) return;
-  var host = hostId ? document.getElementById(hostId) : null;
-  if (host) {
-    if (panel.parentNode !== host) host.appendChild(panel);
-    _cfChartPinnedHostId = hostId;
-    overlay.style.display = 'none';
-    document.body.classList.remove('cf-chart-fs-open');
-    panel.classList.add('cf-chart-pinned');
-    return;
-  }
-  if (panel.parentNode !== overlay) overlay.appendChild(panel);
-  panel.classList.remove('cf-chart-pinned');
-  _cfChartPinnedHostId = '';
-}
-
-async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs, hostId) {
+async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   var body = document.getElementById('cf-cascade-chart-body');
   if (!overlay || !body) return;
-  // A pinned chart sits in the page instead of over it. Everything below —
-  // the fetch, the engines, the timeframe toggle — is identical either way.
-  var pinned = !!hostId;
-  if (pinned) cfCascadeChartPinTo(hostId);
-  else if (_cfChartPinnedHostId) cfCascadeChartPinTo('');
   // Openers pass the mode ('journal' from a journal row, nothing = 'full' from
   // the cascade tab); internal re-renders pass the current mode to preserve it.
   _cfCascadeChartMode = mode || 'full';
@@ -12158,12 +12127,10 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs, h
   // display:none on every other tab — so opening it from a Journal row set its
   // own display to flex but a hidden ancestor kept it invisible. Reparent it to
   // <body> so it is a true top-level modal that shows over whatever tab is up.
-  if (!pinned && overlay.parentNode !== document.body) document.body.appendChild(overlay);
+  if (overlay.parentNode !== document.body) document.body.appendChild(overlay);
   _cfCascadeChartId = campaignId;
-  if (!pinned) {
-    overlay.style.display = '';
-    document.body.classList.add('cf-chart-fs-open');
-  }
+  overlay.style.display = '';
+  document.body.classList.add('cf-chart-fs-open');
   // A Canvas refresh keeps its real host mounted through the fetch. Every other
   // open/re-render retains the established teardown-before-replace behaviour.
   var keepCanvas = !!(canvasRefreshState && _CF_CHART_ENGINE === 'canvas'
@@ -12265,10 +12232,6 @@ function _cfCascadeRefreshOpenCanvasChartFromPoll() {
 
 function cfCascadeHideChart() {
   cfCascadeToggleFullscreen(false);
-  // Put the panel back in its overlay first. Leaving it pinned inside a page
-  // section would hand the Cascade page an empty overlay the next time it
-  // opened a chart, and the fault would look like the renderer's.
-  if (_cfChartPinnedHostId) cfCascadeChartPinTo('');
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   if (overlay) overlay.style.display = 'none';
   document.body.classList.remove('cf-chart-fs-open');
@@ -13486,7 +13449,6 @@ function cfAfUpdateWalletHint() {
 }
 
 function cfAfRenderStats(books) {
-  _cfAfLastBooks = books || [];
   var purse = 0, cap = 0, inCoin = 0, pocket = 0, foldAt = 0, lines = 0, working = 0;
   books.forEach(function (b) {
     if (!b.enabled) return;
@@ -13513,76 +13475,6 @@ function cfAfRenderStats(books) {
 // The strategy's campaigns ARE Cascade campaigns, so they are drawn by the
 // Cascade page's renderer into this page's own mount — never by a second copy
 // of it, which would drift the moment either page changed.
-var _cfAfChartId = '';
-var _cfAfLastBooks = [];
-
-// What the enabled books are waiting for, in their own words, so an empty
-// chart panel is never mistaken for a dead one.
-function _cfAfWaitingNote() {
-  var on = _cfAfLastBooks.filter(function (b) { return b.enabled && b.note; });
-  if (!on.length) return '';
-  return on.map(function (b) { return b.symbol + ': ' + b.note; }).join(' · ');
-}
-
-// The chart follows the WORKING line by default — the fast one actually
-// moving — and stays wherever it is put by hand until that line is gone.
-async function cfAfSyncChart(lines) {
-  var pick = document.getElementById('cf-af-chart-pick');
-  var note = document.getElementById('cf-af-chart-note');
-  var host = document.getElementById('cf-af-chart-host');
-  if (!pick || !host) return;
-  var ids = lines.map(function (c) { return c.campaign_id; });
-
-  var label = function (c) {
-    var kind = String(c.mc_kind || 'major').toLowerCase() === 'minor' ? 'working' : 'major';
-    return '#' + c.seq + ' · ' + c.timeframe + ' · ' + kind;
-  };
-  var wanted = pick.value;
-  if (!wanted || ids.indexOf(wanted) === -1) {
-    var working = lines.filter(function (c) {
-      return String(c.mc_kind || 'major').toLowerCase() === 'minor';
-    })[0];
-    wanted = (working || lines[0] || {}).campaign_id || '';
-  }
-  var signature = ids.join(',');
-  if (pick._cfAfSig !== signature) {
-    pick._cfAfSig = signature;
-    pick.innerHTML = lines.map(function (c) {
-      return '<option value="' + c.campaign_id + '">' + _escapeHtml(label(c)) + '</option>';
-    }).join('');
-    if (!pick._cfAfBound) {
-      pick._cfAfBound = true;
-      pick.addEventListener('change', function () {
-        _cfAfChartId = '';
-        cfAfRenderLines();
-      });
-    }
-  }
-  if (wanted) pick.value = wanted;
-
-  if (!lines.length) {
-    _cfAfChartId = '';
-    if (_cfChartPinnedHostId === 'cf-af-chart-host') cfCascadeHideChart();
-    host.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
-      + 'Turn a book on and its first line will chart here.</div>';
-    if (note) note.textContent = _cfAfWaitingNote() || 'Turn a book on to see its working line here.';
-    return;
-  }
-  if (note) {
-    var chosen = lines.filter(function (c) { return c.campaign_id === wanted; })[0] || {};
-    note.textContent = chosen.symbol
-      ? (chosen.symbol + ' · ' + chosen.timeframe + ' · mother ' + Number(chosen.mother_high || 0).toLocaleString())
-      : 'Trendlines, fib anchors and ladder levels as the engine marked them.';
-  }
-  // Only re-open when the chosen line actually changed. The poll runs every
-  // 20s and re-opening on each tick would throw away the zoom every time.
-  if (wanted && wanted !== _cfAfChartId) {
-    _cfAfChartId = wanted;
-    host.innerHTML = '';
-    await cfCascadeShowChart(wanted, 'full', null, undefined, 'cf-af-chart-host');
-  }
-}
-
 async function cfAfRenderLines() {
   try {
     var response = await cfApiFetch('/api/cascade/status', { cache: 'no-store' });
@@ -13595,7 +13487,6 @@ async function cfAfRenderLines() {
       mountId: 'cf-af-campaigns',
       emptyText: 'Nothing running yet — turn a book on above.'
     });
-    await cfAfSyncChart(mine);
   } catch (err) {
     /* the books table already carries the error line; a dead poll must not
        blank the panel that is showing real positions */
@@ -13684,15 +13575,9 @@ function cfInitAutoFibPage() {
 
 var _cfAfOrigShowPage = showPage;
 showPage = function (pageId, btn, options) {
-  if (pageId !== 'autofib-page') {
-    if (_cfAfPollTimer) {
-      clearInterval(_cfAfPollTimer);
-      _cfAfPollTimer = null;
-    }
-    // Give the chart panel back before the page hides, or the Cascade page
-    // opens an overlay with nothing in it.
-    if (_cfChartPinnedHostId === 'cf-af-chart-host') cfCascadeHideChart();
-    _cfAfChartId = '';
+  if (pageId !== 'autofib-page' && _cfAfPollTimer) {
+    clearInterval(_cfAfPollTimer);
+    _cfAfPollTimer = null;
   }
   _cfAfOrigShowPage(pageId, btn, options);
   if (pageId === 'autofib-page') cfInitAutoFibPage();

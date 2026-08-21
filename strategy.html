@@ -1358,7 +1358,8 @@
     </div>
   </div>
 
-  <section class="card allocator-panel" aria-labelledby="cf-af-controls-title">
+  <div class="allocator-grid">
+  <section class="card allocator-input-panel" aria-labelledby="cf-af-controls-title">
     <h3 id="cf-af-controls-title">Add or change a book <button type="button" class="cf-info" tabindex="0" data-cf-info="One book per coin, each with its own purse. Paper books mark real candles and book simulated fills; live books place real orders. Purse is what the rung sizes are measured from — the wallet limit is half of it, and it grows as profit folds in. Changing the purse before any profit has folded resets it; afterwards it only moves the starting figure, so a compounded purse is never quietly shrunk." aria-label="What these controls do">i</button></h3>
     <div class="cf-cascade-form">
       <div class="input-group">
@@ -1416,19 +1417,7 @@
       No books yet. Add one above to start.
     </div>
   </section>
-
-  <section class="card allocator-result-panel" aria-labelledby="cf-af-chart-title">
-    <div class="table-toolbar">
-      <div class="table-title-group">
-        <h3 id="cf-af-chart-title">Chart <button type="button" class="cf-info" tabindex="0" data-cf-info="The working 5-minute line's chart, kept on the page rather than behind a click. It is the SAME chart the Cascade page opens — trendlines, fib anchors and ladder levels exactly as the engine marked them — mounted here instead of over the screen. Pick any other line from the list to watch it instead; the fast line is chosen for you because it is the one actually moving." aria-label="What this chart shows">i</button></h3>
-        <div class="table-meta" id="cf-af-chart-note">Turn a book on to see its working line here.</div>
-      </div>
-      <div class="admin-inline-actions">
-        <select id="cf-af-chart-pick" aria-label="Which line to chart"></select>
-      </div>
-    </div>
-    <div id="cf-af-chart-host" class="cf-af-chart-host"></div>
-  </section>
+  </div>
 
   <section class="card allocator-result-panel" aria-labelledby="cf-af-lines-title">
     <h3 id="cf-af-lines-title">Lines <button type="button" class="cf-info" tabindex="0" data-cf-info="The campaigns this strategy is running, drawn by the Cascade page's own renderer — these ARE Cascade campaigns, they simply carry this strategy's rules. Expect several at once: one fast 5-minute line fighting the near move, and a growing set of slower ones that graduated to 1H and 4H and are waiting on their targets. Most of the money sits in the slow ones. Each card opens the same campaign chart the Cascade page uses." aria-label="What the lines are">i</button></h3>
