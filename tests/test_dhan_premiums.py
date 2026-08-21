@@ -321,3 +321,22 @@ def test_a_refusal_is_not_retried():
     finally:
         dp.requests.post = real_post
     assert len(calls) == 1, "a 401 must fail on the first call"
+
+
+def test_listed_source_does_not_substitute_a_neighbouring_minute_by_default():
+    """A price borrowed from a nearby minute measured a median 2.55% from the
+    Upstox archive against 0.076% for the minute actually asked for, and the
+    caller already does its own forward/back search. Silence is the honest
+    answer here."""
+    from datetime import date
+
+    from options.dhan_listed import DhanListedSource
+
+    class Contract:
+        expiry, strike, option_type = date(2021, 1, 7), 14000, "CE"
+
+    src = DhanListedSource([date(2021, 1, 7)], {})
+    assert src.nearest_within == 0
+    # no stores at all -> the contract is out of reach, and nothing is invented
+    assert src.lookup(datetime(2021, 1, 4, 9, 20), Contract()) is None
+    assert src.served == 0
