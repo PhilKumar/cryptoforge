@@ -24,6 +24,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Iterable, Optional
 
 import requests
@@ -65,6 +66,7 @@ class Coverage:
     bars: int = 0
     requests: int = 0
     empty_requests: int = 0
+    retries: int = 0
     gaps: list[Gap] = field(default_factory=list)
     minutes: set = field(default_factory=set)
     strikes: set = field(default_factory=set)
@@ -88,7 +90,7 @@ class Coverage:
         return (
             f"{self.bars:,} bars over {span}; "
             f"{len(self.strikes)} distinct strikes; "
-            f"{self.requests} requests ({self.empty_requests} empty); "
+            f"{self.requests} requests ({self.empty_requests} empty, {self.retries} retried); "
             f"lookups {self.hits:,} hit / {self.misses:,} miss "
             f"({self.hit_rate:.1%} served)"
         )
@@ -163,17 +165,36 @@ class DhanRollingPremiums:
 
     # ---------------------------------------------------------------- network
 
+    # A five-year backfill is thousands of calls over hours. The vendor will
+    # drop one somewhere -- a 504 from its gateway, a reset connection -- and a
+    # pull that dies on the first of those has to be restarted by hand. Retry
+    # the transient failures; never retry a refusal, because a bad token or a
+    # malformed request will refuse just as firmly the tenth time.
+    RETRY_ON = (408, 429, 500, 502, 503, 504)
+    MAX_ATTEMPTS = 6
+
     def _post(self, body: dict) -> dict:
-        try:
-            resp = requests.post(BASE_URL, json=body, headers=self._headers, timeout=60)
-        except requests.RequestException as exc:
-            raise DhanDataError(f"Dhan request failed: {exc!r}") from exc
-        if resp.status_code != 200:
-            raise DhanDataError(f"Dhan HTTP {resp.status_code}: {resp.text[:300]}")
-        try:
-            return resp.json()
-        except ValueError as exc:
-            raise DhanDataError(f"Dhan sent non-JSON: {resp.text[:200]}") from exc
+        last = ""
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                resp = requests.post(BASE_URL, json=body, headers=self._headers, timeout=90)
+            except requests.RequestException as exc:
+                last = f"request failed: {exc!r}"
+            else:
+                if resp.status_code == 200:
+                    try:
+                        return resp.json()
+                    except ValueError as exc:
+                        raise DhanDataError(f"Dhan sent non-JSON: {resp.text[:200]}") from exc
+                if resp.status_code not in self.RETRY_ON:
+                    raise DhanDataError(f"Dhan HTTP {resp.status_code}: {resp.text[:300]}")
+                last = f"HTTP {resp.status_code}: {resp.text[:150]}"
+            if attempt < self.MAX_ATTEMPTS:
+                backoff = min(60.0, 2.0**attempt)
+                self.coverage.retries += 1
+                print(f"    [retry {attempt}/{self.MAX_ATTEMPTS - 1} in {backoff:.0f}s] {last[:110]}", flush=True)
+                time.sleep(backoff)
+        raise DhanDataError(f"Dhan failed {self.MAX_ATTEMPTS} times, last: {last}")
 
     def _fetch(self, frm: str, to: str, alias: str, option_type: str) -> int:
         side = "CALL" if option_type.upper() in ("CALL", "CE") else "PUT"
@@ -300,3 +321,163 @@ class DhanRollingPremiums:
 
     def spot(self, when: datetime) -> Optional[float]:
         return self._spot.get(when.replace(second=0, microsecond=0))
+
+
+# ---------------------------------------------------------------------------
+# Streaming: a pull too big to hold
+# ---------------------------------------------------------------------------
+#
+# Three years of ATM+/-10 at minute resolution is roughly 12 million bars per
+# index. Kept in a dict that is about 2.5 GB of live objects, which is fine on a
+# laptop and fatal on the 1 GB box PhilForge runs on. So the backfill writes
+# each chunk straight out and keeps nothing, and the lookup reads back one month
+# at a time.
+
+
+class StreamingPull(DhanRollingPremiums):
+    """Same fetch, but every chunk lands on disk instead of on the heap."""
+
+    def __init__(self, *args, out_dir: str | Path, underlying: str = "NIFTY", **kw):
+        super().__init__(*args, **kw)
+        self.out_dir = Path(out_dir)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.underlying = underlying.upper()
+        self._pending: list[dict] = []
+
+    def _fetch(self, frm: str, to: str, alias: str, option_type: str) -> int:
+        side = "CALL" if option_type.upper() in ("CALL", "CE") else "PUT"
+        tag = "CE" if side == "CALL" else "PE"
+        body = {
+            "securityId": self.security_id,
+            "exchangeSegment": self.exchange_segment,
+            "instrument": self.instrument,
+            "expiryFlag": self.expiry_flag,
+            "expiryCode": self.expiry_code,
+            "strike": alias,
+            "drvOptionType": side,
+            "requiredData": ["open", "high", "low", "close", "volume", "strike", "spot", "iv", "oi"],
+            "fromDate": frm,
+            "toDate": to,
+            "interval": self.interval,
+        }
+        payload = self._post(body)
+        self.coverage.requests += 1
+
+        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        leg = data.get("ce" if side == "CALL" else "pe") or {}
+        stamps = leg.get("timestamp") or []
+        if not stamps:
+            self.coverage.empty_requests += 1
+            self.coverage.gaps.append(Gap(frm, to, alias, side))
+            return 0
+
+        strikes = leg.get("strike") or []
+        closes = leg.get("close") or []
+        opens = leg.get("open") or []
+        highs = leg.get("high") or []
+        lows = leg.get("low") or []
+        spots = leg.get("spot") or []
+        ois = leg.get("oi") or []
+        ivs = leg.get("iv") or []
+        unit = 1000.0 if stamps[0] > 1e12 else 1.0
+
+        def at(seq, i):
+            return seq[i] if i < len(seq) and seq[i] is not None else None
+
+        added = 0
+        for i, raw in enumerate(stamps):
+            if at(strikes, i) is None or at(closes, i) is None:
+                continue
+            minute = datetime.utcfromtimestamp(raw / unit) + timedelta(hours=5, minutes=30)
+            self._pending.append(
+                {
+                    "ts": minute,
+                    "strike": int(round(float(strikes[i]))),
+                    "side": tag,
+                    "open": at(opens, i),
+                    "high": at(highs, i),
+                    "low": at(lows, i),
+                    "close": float(closes[i]),
+                    "oi": at(ois, i),
+                    "iv": at(ivs, i),
+                    "spot": at(spots, i),
+                }
+            )
+            added += 1
+
+        self.coverage.bars += added
+        if self.coverage.first_minute is None and self._pending:
+            self.coverage.first_minute = self._pending[0]["ts"]
+        if self._pending:
+            self.coverage.last_minute = self._pending[-1]["ts"]
+        if len(self._pending) > 250_000:
+            self.flush()
+        return added
+
+    def flush(self) -> int:
+        """Write what is buffered, one file per calendar month, then forget it."""
+        if not self._pending:
+            return 0
+        import pandas as pd
+
+        df = pd.DataFrame(self._pending)
+        self._pending = []
+        written = 0
+        for month, part in df.groupby(df["ts"].dt.strftime("%Y-%m")):
+            path = self.out_dir / f"{self.underlying}_{month}.parquet"
+            if path.exists():
+                part = pd.concat([pd.read_parquet(path), part], ignore_index=True)
+            part = part.drop_duplicates(subset=["ts", "strike", "side"], keep="last")
+            part.to_parquet(path, index=False)
+            written += len(part)
+        return written
+
+    def load(self, *args, **kw) -> Coverage:
+        try:
+            return super().load(*args, **kw)
+        finally:
+            self.flush()
+
+
+class ParquetPremiums:
+    """A PremiumLookup over a streamed pull, holding one month at a time."""
+
+    def __init__(self, out_dir: str | Path, underlying: str = "NIFTY", keep_months: int = 2):
+        self.out_dir = Path(out_dir)
+        self.underlying = underlying.upper()
+        self.keep_months = int(keep_months)
+        self._cache: dict[str, dict] = {}
+        self._order: list[str] = []
+        self.coverage = Coverage()
+
+    def _month(self, key: str) -> dict:
+        if key in self._cache:
+            return self._cache[key]
+        import pandas as pd
+
+        path = self.out_dir / f"{self.underlying}_{key}.parquet"
+        table: dict = {}
+        if path.exists():
+            df = pd.read_parquet(path, columns=["ts", "strike", "side", "close"])
+            table = {
+                (t.to_pydatetime(), int(s), sd): float(c)
+                for t, s, sd, c in zip(df["ts"], df["strike"], df["side"], df["close"])
+            }
+        self._cache[key] = table
+        self._order.append(key)
+        while len(self._order) > self.keep_months:
+            self._cache.pop(self._order.pop(0), None)
+        return table
+
+    def premium(self, when: datetime, strike: int, option_type: str) -> Optional[float]:
+        minute = when.replace(second=0, microsecond=0)
+        table = self._month(f"{minute:%Y-%m}")
+        hit = table.get((minute, int(strike), option_type.upper()))
+        if hit is None:
+            self.coverage.misses += 1
+        else:
+            self.coverage.hits += 1
+        return hit
+
+    def as_premium_lookup(self):
+        return lambda when, strike, option_type: self.premium(when, strike, option_type)

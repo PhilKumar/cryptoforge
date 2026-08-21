@@ -31,6 +31,10 @@ class Comparison:
     matched: int = 0
     dhan_missing: int = 0
     upstox_missing: int = 0
+    # Of dhan_missing, the ones whose strike simply sat outside the ATM band
+    # the vendor sells. Those are a known edge of the product, not a hole in
+    # it, and counting them as gaps condemns data that is in fact complete.
+    out_of_band: int = 0
     abs_diffs: list = field(default_factory=list)
     rel_diffs: list = field(default_factory=list)
     worst: Optional[tuple] = None
@@ -59,6 +63,8 @@ class Comparison:
             f"minutes Upstox priced      : {asked:,}",
             f"  Dhan also priced         : {self.matched:,} ({self.matched / asked:.1%})",
             f"  Dhan had nothing         : {self.dhan_missing:,} ({self.dhan_missing / asked:.1%})",
+            f"  of which outside ATM band: {self.out_of_band:,}",
+            f"  coverage inside the band : {self.in_band_served:.1%}",
             f"minutes only Dhan priced   : {self.upstox_missing:,}",
             "",
             f"median absolute difference : Rs {med:.2f}",
@@ -74,14 +80,19 @@ class Comparison:
         return "\n".join(lines)
 
     @property
+    def in_band_served(self) -> float:
+        """Coverage judged only where the vendor claims to sell data."""
+        asked = self.matched + self.dhan_missing - self.out_of_band
+        return (self.matched / asked) if asked > 0 else 0.0
+
+    @property
     def verdict(self) -> str:
         if not self.matched:
             return "UNUSABLE"
-        asked = self.matched + self.dhan_missing
-        served = self.matched / asked
+        served = self.in_band_served
         relmed = statistics.median(self.rel_diffs) if self.rel_diffs else 1.0
         if served >= 0.95 and relmed <= 0.01:
-            return "GOOD -- Dhan reproduces the archive; a backfill is trustworthy"
+            return "GOOD -- Dhan reproduces the archive inside its band"
         if served >= 0.80 and relmed <= 0.05:
             return "USABLE WITH CAVEAT -- agrees, but with holes; report coverage beside every number"
         return "NOT TRUSTWORTHY -- do not publish anything built on this"
