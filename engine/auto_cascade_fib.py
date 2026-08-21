@@ -77,6 +77,9 @@ class Book:
     rounds_seen: Dict[str, int] = field(default_factory=dict)
     graduated: List[str] = field(default_factory=list)
     last_error: str = ""
+    # What the book is doing when it is not starting anything. A book that
+    # is correctly WAITING looks identical to a broken one without this.
+    note: str = ""
 
     @property
     def key(self) -> str:
@@ -104,6 +107,7 @@ class Book:
             "rounds_seen": dict(self.rounds_seen),
             "graduated": list(self.graduated),
             "last_error": self.last_error,
+            "note": self.note,
         }
 
     @classmethod
@@ -119,6 +123,7 @@ class Book:
         book.rounds_seen = {str(k): int(v) for k, v in (data.get("rounds_seen") or {}).items()}
         book.graduated = [str(x) for x in (data.get("graduated") or [])]
         book.last_error = str(data.get("last_error") or "")
+        book.note = str(data.get("note") or "")
         return book
 
 
@@ -333,14 +338,21 @@ class AutoCascadeFib:
     async def _seed_working_line(self, book: Book) -> bool:
         """Anchor a fresh 5m line on the latest confirmed swing high."""
         if self._working_line_id(book):
+            book.note = "working a 5m line"
             return False
         if self._in_coin(book) >= book.wallet_cap_usd:
-            return False  # no room to fund it — do not litter the book
+            book.note = "wallet full — no room to start another line"
+            return False
         candles = await self.engine._fetch_closed_candles(book.symbol, int(time.time()) - SWING_LOOKBACK_BARS * 300)
         if not candles:
+            book.note = "no candles yet"
             return False
         anchor = latest_swing_high(candles, candles[-1].close)
         if anchor is None:
+            # The ordinary case in a rising market, and the one that looks like
+            # a fault: every high above the price is too recent to be confirmed
+            # failed, so there is nothing honest to hang a mother on yet.
+            book.note = "waiting for a high to fail above the price"
             return False
         result = await self.engine.start_campaign(
             symbol=book.symbol,
@@ -360,6 +372,7 @@ class AutoCascadeFib:
             book.last_error = str(result["error"])
             return False
         book.last_error = ""
+        book.note = "started a 5m line"
         _log.info("[AUTO-FIB] %s new 5m line on the swing high at %.8f", book.symbol, anchor.high)
         return True
 

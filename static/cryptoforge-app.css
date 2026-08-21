@@ -8949,6 +8949,25 @@ html[data-theme="light"] .journal-entry-notes section {
     font-variant-numeric: tabular-nums;
     background: rgba(118,138,176,0.06);
   }
+  /* The chart panel, pinned into the page rather than thrown over it. It is
+     the SAME element the overlay uses, so these rules only undo the modal
+     chrome — the card border, the fixed height, the shadow — and let it sit
+     in the flow like any other panel. */
+  .cf-af-chart-host { min-height: 320px; }
+  .cf-af-chart-host #cf-cascade-chart-panel.cf-chart-pinned {
+    margin: 0;
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+    padding: 0;
+    max-height: none;
+    height: auto;
+  }
+  /* Its own toolbar is redundant here — the panel already sits under this
+     page's heading, with the line picker beside it. */
+  .cf-af-chart-host #cf-cascade-chart-panel.cf-chart-pinned > .table-toolbar > .table-title-group {
+    display: none;
+  }
   .cf-af-row-error {
     color: var(--danger, #ff6b6b);
     margin-top: 2px;
