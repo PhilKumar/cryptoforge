@@ -8933,3 +8933,24 @@ html[data-theme="light"] .journal-entry-notes section {
 [data-theme="light"] .cf-feed-form { background: rgba(15, 23, 42, 0.02); }
 [data-theme="light"] .cf-feed-field input,
 [data-theme="light"] .cf-feed-field textarea { background: #ffffff; }
+
+  /* ── Auto-Cascade_Fib ────────────────────────────────────────── */
+  /* A value the strategy works out rather than one you type — sized to sit on
+     the same baseline as the inputs it stands next to. */
+  .cf-af-derived {
+    display: flex;
+    align-items: center;
+    min-height: 38px;
+    padding: 0 12px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    background: rgba(118,138,176,0.06);
+  }
+  .cf-af-row-error {
+    color: var(--danger, #ff6b6b);
+    margin-top: 2px;
+    font-size: 11px;
+  }

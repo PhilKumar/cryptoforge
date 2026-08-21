@@ -1335,49 +1335,92 @@
     </div>
   </div>
 
-  <section class="card table-panel" aria-labelledby="cf-af-controls-title">
-    <h3 class="table-title" id="cf-af-controls-title">Add or change a book <button type="button" class="cf-info" tabindex="0" data-cf-info="One book per coin, each with its own purse. Paper books mark real candles and book simulated fills; live books place real orders. Size is the purse the rung sizes are measured from — the wallet limit is half of it, and it grows as profit folds in. Changing the size before any profit has folded resets the purse with it; afterwards it only moves the starting figure so a compounded purse is never quietly shrunk." aria-label="What these controls do">i</button></h3>
-    <p class="table-meta">Switching a book on lets it start its own campaigns from the next cycle.</p>
-    <div class="cf-af-controls">
-      <label class="cf-af-field" for="cf-af-symbol">
-        <span>Coin</span>
-        <select id="cf-af-symbol"></select>
-      </label>
-      <label class="cf-af-field" for="cf-af-mode">
-        <span>Mode</span>
-        <select id="cf-af-mode">
-          <option value="paper" selected>Paper</option>
-          <option value="live">Live — real money</option>
-        </select>
-      </label>
-      <label class="cf-af-field" for="cf-af-capital">
-        <span>Purse (USD)</span>
-        <input id="cf-af-capital" type="number" min="10" step="10" value="2000" inputmode="decimal">
-      </label>
-      <div class="cf-af-actions">
-        <button type="button" class="btn btn-primary" data-cf-click="cfAfSaveBook(true)">Turn on</button>
-        <button type="button" class="btn" data-cf-click="cfAfSaveBook(false)">Turn off</button>
-        <button type="button" class="btn" data-cf-click="cfAfRefresh(true)">Refresh</button>
-      </div>
+  <div class="stats-grid" id="cf-af-stats">
+    <div class="stat-box">
+      <div class="stat-label">Purse</div>
+      <div class="stat-value" id="cf-af-stat-purse">$0.00</div>
+      <div class="stat-sub" id="cf-af-stat-purse-sub">across every book</div>
     </div>
-    <div id="cf-af-error" class="cf-af-error" style="display:none;"></div>
+    <div class="stat-box">
+      <div class="stat-label">In coin</div>
+      <div class="stat-value" id="cf-af-stat-incoin">$0.00</div>
+      <div class="stat-sub" id="cf-af-stat-incoin-sub">of a $0.00 limit</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Pocket</div>
+      <div class="stat-value" id="cf-af-stat-pocket">$0.00</div>
+      <div class="stat-sub" id="cf-af-stat-pocket-sub">folds at $0.00</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Lines running</div>
+      <div class="stat-value" id="cf-af-stat-lines">0</div>
+      <div class="stat-sub" id="cf-af-stat-lines-sub">none working</div>
+    </div>
+  </div>
+
+  <section class="card allocator-panel" aria-labelledby="cf-af-controls-title">
+    <h3 id="cf-af-controls-title">Add or change a book <button type="button" class="cf-info" tabindex="0" data-cf-info="One book per coin, each with its own purse. Paper books mark real candles and book simulated fills; live books place real orders. Purse is what the rung sizes are measured from — the wallet limit is half of it, and it grows as profit folds in. Changing the purse before any profit has folded resets it; afterwards it only moves the starting figure, so a compounded purse is never quietly shrunk." aria-label="What these controls do">i</button></h3>
+    <div class="cf-cascade-form">
+      <div class="input-group">
+        <label for="cf-af-symbol">Coin</label>
+        <select id="cf-af-symbol"></select>
+      </div>
+      <div class="input-group">
+        <label for="cf-af-capital">Purse (USD)</label>
+        <input id="cf-af-capital" type="number" min="10" step="10" value="2000" inputmode="decimal">
+      </div>
+      <div class="input-group">
+        <label id="cf-af-mode-label">Mode</label>
+        <div class="cf-mode-toggle" role="radiogroup" aria-labelledby="cf-af-mode-label">
+          <input type="hidden" id="cf-af-mode" value="paper">
+          <button type="button" class="cf-mode-option cf-af-mode-option is-active" data-mode="paper" role="radio"
+                  aria-checked="true" data-cf-click="cfAfSetMode('paper')">Paper</button>
+          <button type="button" class="cf-mode-option cf-af-mode-option" data-mode="live" role="radio"
+                  aria-checked="false" data-cf-click="cfAfSetMode('live')">Live</button>
+        </div>
+      </div>
+      <div class="input-group">
+        <label id="cf-af-wallet-label">Wallet limit</label>
+        <div class="cf-af-derived" id="cf-af-wallet-hint" aria-labelledby="cf-af-wallet-label">$1,000.00</div>
+      </div>
+      <div class="cf-cascade-form-note">Half the purse is the most this book may ever hold in coin at once. Profit folds into the purse each time it is worth a quarter of it, and the limit grows with it.</div>
+    </div>
+    <div class="allocator-actions">
+      <button class="read-only-hide btn btn-primary" data-cf-click="cfAfSaveBook(true)">Turn on</button>
+      <button class="read-only-hide btn btn-outline" data-cf-click="cfAfSaveBook(false)">Turn off</button>
+      <button class="btn btn-outline" data-cf-click="cfAfRefresh(true)">Refresh</button>
+    </div>
+    <div class="allocator-error" id="cf-af-error" role="alert" aria-live="polite"></div>
+    <div class="table-meta" style="margin-top:8px;">Books start in paper. A book only begins marking its own mother candles once it is switched on.</div>
   </section>
 
-  <section class="card table-panel" aria-labelledby="cf-af-books-title">
-    <h3 class="table-title" id="cf-af-books-title">Books <button type="button" class="cf-info" tabindex="0" data-cf-info="Purse is the money the book sizes from. In coin is what it is holding right now, and it can never pass the wallet limit — half the purse. Pocket is closed profit waiting to fold; when it reaches the fold-at figure it goes into the purse whole and the wallet limit rises with it. Working line is the 5-minute campaign fighting the near move; it is empty for a moment after one graduates to 1H and before the next is anchored." aria-label="What the book columns mean">i</button></h3>
+  <section class="card allocator-result-panel" aria-labelledby="cf-af-books-title">
+    <h3 id="cf-af-books-title">Books <button type="button" class="cf-info" tabindex="0" data-cf-info="Purse is the money the book sizes from. In coin is what it holds right now, and it can never pass the wallet limit. Pocket is closed profit waiting to fold; at the fold-at figure it goes into the purse whole and the limit rises with it. Lines is how many campaigns this book has running — expect several, most of them slow ones waiting on 4H. Working line is the 5-minute campaign fighting the near move; it is briefly empty after one graduates to 1H and before the next is anchored." aria-label="What the book columns mean">i</button></h3>
     <div class="table-scroll">
-      <table class="data-table">
+      <table class="trade-table" id="cf-af-books-table">
         <thead><tr>
           <th>Coin</th><th>Mode</th><th>State</th>
-          <th class="num">Purse</th><th class="num">Wallet limit</th><th class="num">In coin</th>
-          <th class="num">Pocket</th><th class="num">Folds at</th><th class="num">Folds</th>
-          <th class="num">Lines</th><th>Working line</th>
+          <th style="text-align:right;">Purse</th>
+          <th style="text-align:right;">Wallet limit</th>
+          <th style="text-align:right;">In coin</th>
+          <th style="text-align:right;">Pocket</th>
+          <th style="text-align:right;">Folds at</th>
+          <th style="text-align:right;">Folds</th>
+          <th style="text-align:right;">Lines</th>
+          <th>Working line</th>
         </tr></thead>
         <tbody id="cf-af-books"></tbody>
       </table>
     </div>
     <div id="cf-af-books-empty" class="table-meta" style="text-align:center; padding:20px;">
       No books yet. Add one above to start.
+    </div>
+  </section>
+
+  <section class="card allocator-result-panel" aria-labelledby="cf-af-lines-title">
+    <h3 id="cf-af-lines-title">Lines <button type="button" class="cf-info" tabindex="0" data-cf-info="The campaigns this strategy is running, drawn by the Cascade page's own renderer — these ARE Cascade campaigns, they simply carry this strategy's rules. Expect several at once: one fast 5-minute line fighting the near move, and a growing set of slower ones that graduated to 1H and 4H and are waiting on their targets. Most of the money sits in the slow ones. Each card opens the same campaign chart the Cascade page uses." aria-label="What the lines are">i</button></h3>
+    <div id="cf-af-campaigns">
+      <div class="cf-table-empty-cell" style="padding:16px;">Nothing running yet — turn a book on above.</div>
     </div>
   </section>
 </div>

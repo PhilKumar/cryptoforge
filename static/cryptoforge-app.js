@@ -9791,11 +9791,16 @@ function _cfWithScrollPreserved(root, render) {
   });
 }
 
-function cfRenderCascadeCampaigns(campaigns, instruments) {
-  var mount = document.getElementById('cf-cascade-campaigns');
+function cfRenderCascadeCampaigns(campaigns, instruments, options) {
+  // ONE renderer, two pages. Auto-Cascade_Fib's campaigns are ordinary Cascade
+  // campaigns, so they are drawn by this same function into their own mount
+  // rather than by a second copy of it that would drift from this one.
+  var opts = options || {};
+  var mount = document.getElementById(opts.mountId || 'cf-cascade-campaigns');
   if (!mount) return;
   if (!campaigns.length) {
-    mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">No campaigns yet — start one on the left.</div>';
+    mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
+      + (opts.emptyText || 'No campaigns yet — start one on the left.') + '</div>';
     return;
   }
   // The status poll runs every 3s and rewrites this whole block, which throws
@@ -13420,6 +13425,70 @@ function cfAfRenderStatus(data) {
   }).join('');
 }
 
+function cfAfSetMode(mode) {
+  var picked = mode === 'live' ? 'live' : 'paper';
+  var field = document.getElementById('cf-af-mode');
+  if (field) field.value = picked;
+  var options = document.querySelectorAll('.cf-af-mode-option');
+  for (var i = 0; i < options.length; i++) {
+    var on = options[i].getAttribute('data-mode') === picked;
+    options[i].classList.toggle('is-active', on);
+    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+}
+
+function cfAfUpdateWalletHint() {
+  var hint = document.getElementById('cf-af-wallet-hint');
+  if (!hint) return;
+  var purse = Number((document.getElementById('cf-af-capital') || {}).value || 0);
+  hint.textContent = purse > 0 ? _cfAfUsd(purse / 2) : '$—';
+}
+
+function cfAfRenderStats(books) {
+  var purse = 0, cap = 0, inCoin = 0, pocket = 0, foldAt = 0, lines = 0, working = 0;
+  books.forEach(function (b) {
+    if (!b.enabled) return;
+    purse += Number(b.purse_usd || 0);
+    cap += Number(b.wallet_cap_usd || 0);
+    inCoin += Number(b.in_coin_usd || 0);
+    pocket += Number(b.pocket_usd || 0);
+    foldAt += Number(b.fold_threshold_usd || 0);
+    lines += Number(b.campaigns || 0);
+    if (b.working_line) working += 1;
+  });
+  var on = books.filter(function (b) { return b.enabled; }).length;
+  var set = function (id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
+  set('cf-af-stat-purse', _cfAfUsd(purse));
+  set('cf-af-stat-purse-sub', on === 1 ? 'one book on' : on + ' books on');
+  set('cf-af-stat-incoin', _cfAfUsd(inCoin));
+  set('cf-af-stat-incoin-sub', 'of a ' + _cfAfUsd(cap) + ' limit');
+  set('cf-af-stat-pocket', _cfAfUsd(pocket));
+  set('cf-af-stat-pocket-sub', 'folds at ' + _cfAfUsd(foldAt));
+  set('cf-af-stat-lines', String(lines));
+  set('cf-af-stat-lines-sub', working ? (working + ' working the near move') : 'none working');
+}
+
+// The strategy's campaigns ARE Cascade campaigns, so they are drawn by the
+// Cascade page's renderer into this page's own mount — never by a second copy
+// of it, which would drift the moment either page changed.
+async function cfAfRenderLines() {
+  try {
+    var response = await cfApiFetch('/api/cascade/status', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) return;
+    var mine = (Array.isArray(data.campaigns) ? data.campaigns : []).filter(function (c) {
+      return String(c.strategy || '') === 'auto-cascade-fib';
+    });
+    cfRenderCascadeCampaigns(mine, data.instruments || {}, {
+      mountId: 'cf-af-campaigns',
+      emptyText: 'Nothing running yet — turn a book on above.'
+    });
+  } catch (err) {
+    /* the books table already carries the error line; a dead poll must not
+       blank the panel that is showing real positions */
+  }
+}
+
 async function cfAfRefresh(showToast) {
   try {
     var response = await cfApiFetch('/api/auto-fib/status', { cache: 'no-store' });
@@ -13427,6 +13496,8 @@ async function cfAfRefresh(showToast) {
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Auto-Cascade_Fib status unavailable'));
     _cfAfSetError('');
     cfAfRenderStatus(data);
+    cfAfRenderStats((data && data.books) || []);
+    await cfAfRenderLines();
     if (showToast) cfToast('Auto-Cascade_Fib refreshed', 'success');
   } catch (err) {
     _cfAfSetError(String(err.message || err));
@@ -13462,6 +13533,8 @@ async function cfAfSaveBook(enabled) {
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the book'));
     _cfAfSetError('');
     cfAfRenderStatus(data);
+    cfAfRenderStats((data && data.books) || []);
+    await cfAfRenderLines();
     cfToast(symbol + (enabled ? ' is on' : ' is off'), 'success');
   } catch (err) {
     _cfAfSetError(String(err.message || err));
@@ -13482,6 +13555,13 @@ function cfInitAutoFibPage() {
         select.appendChild(option);
       });
   }
+  cfAfSetMode((document.getElementById('cf-af-mode') || {}).value || 'paper');
+  var purseField = document.getElementById('cf-af-capital');
+  if (purseField && !purseField._cfAfBound) {
+    purseField._cfAfBound = true;
+    purseField.addEventListener('input', cfAfUpdateWalletHint);
+  }
+  cfAfUpdateWalletHint();
   cfAfRefresh(false);
   if (_cfAfPollTimer) clearInterval(_cfAfPollTimer);
   // The purse only moves when a round closes, which is rare — a slow poll is
