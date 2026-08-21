@@ -40,8 +40,21 @@ python3 tools/dhan_backfill.py --underlying NIFTY --security-id 13 \
     --from 2021-08-01 --to 2026-08-01
 ```
 
-The audit is source-agnostic. Load the existing Upstox archive into an
-`OptionStore` and it will answer the same questions about that.
+### Auditing an archive this package did not write
+
+Point it at the existing Upstox data — reads only, writes nothing:
+
+```bash
+python3 tools/audit_options_archive.py /path/to/upstox --underlying NIFTY
+python3 tools/audit_options_archive.py archive.db --table candles
+python3 tools/audit_options_archive.py data.csv --map ts=bar_time strike=strike_pr
+```
+
+Column names are auto-detected from a table of aliases; `--map` covers the rest.
+Because a contract-keyed archive only knows where the money was if it carries
+spot, the ATM basis is always reported: `EXACT` (spot on the row), `JOINED`
+(via `--spot-file`), or `INFERRED` (most-traded strike per session). INFERRED is
+enough to detect a hollow ATM and not enough to price anything, and says so.
 
 ## Unverified assumptions
 

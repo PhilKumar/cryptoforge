@@ -12,7 +12,10 @@ Everything else supports it.
 
 import unittest
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from tempfile import TemporaryDirectory
+
+import pandas as pd
 
 from options.audit import SESSION_COMPLETE_THRESHOLD, audit, format_report
 from options.charges import RATE_TABLE, rates_for, round_trip_charges
@@ -278,3 +281,73 @@ class TestCharges(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExternalArchiveAdapter(unittest.TestCase):
+    """The audit has to judge the archive that already exists, not only the one
+    this package writes — otherwise the Upstox question stays unanswered."""
+
+    def _upstox_shaped_csv(self, tmp, *, with_spot, atm_bars, wing_bars):
+        """An archive in someone else's shape: real strikes, their column names."""
+        rows = []
+        base = datetime(2025, 1, 2, 9, 15)
+        for strike, n in ((23500, atm_bars), (23550, atm_bars), (24000, wing_bars)):
+            for i in range(n):
+                row = {
+                    "candle_time": (base + timedelta(minutes=i)).isoformat(),
+                    "strike_price": strike,
+                    "instrument_type": "CE",
+                    "open_price": 100.0, "high_price": 101.0,
+                    "low_price": 99.0, "close_price": 100.5,
+                    "traded_qty": 5000 if strike in (23500, 23550) else 10,
+                    "open_interest": 1000,
+                }
+                if with_spot:
+                    row["underlying_price"] = 23520.0
+                rows.append(row)
+        path = Path(tmp) / "upstox.csv"
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return path
+
+    def test_foreign_column_names_are_recognised(self):
+        from options.adapters import AtmBasis, load_external
+
+        with TemporaryDirectory() as tmp:
+            path = self._upstox_shaped_csv(tmp, with_spot=True, atm_bars=375, wing_bars=20)
+            res = load_external(path, underlying_name="NIFTY")
+            self.assertEqual(res.atm_basis, AtmBasis.EXACT)
+            self.assertGreater(res.rows_out, 0)
+            self.assertEqual(res.frame["underlying"].iloc[0], "NIFTY")
+            self.assertEqual(res.frame["option_type"].iloc[0], "CALL")
+
+    def test_hollow_atm_in_a_foreign_archive_is_caught(self):
+        """The whole point of the adapter: run the ATM cut on their data and
+        have it fail when the middle of the chain is empty."""
+        from options.adapters import load_external
+
+        with TemporaryDirectory() as tmp:
+            path = self._upstox_shaped_csv(tmp, with_spot=True, atm_bars=8, wing_bars=375)
+            res = load_external(path, underlying_name="NIFTY")
+            verdict = audit(res.frame, pd.DataFrame())
+            self.assertFalse(verdict.ok())
+            self.assertTrue(any("near-ATM" in n for n in verdict.notes))
+
+    def test_missing_spot_falls_back_to_a_labelled_estimate(self):
+        from options.adapters import AtmBasis, load_external
+
+        with TemporaryDirectory() as tmp:
+            path = self._upstox_shaped_csv(tmp, with_spot=False, atm_bars=375, wing_bars=20)
+            res = load_external(path, underlying_name="NIFTY")
+            self.assertEqual(res.atm_basis, AtmBasis.INFERRED)
+            self.assertIn("INFERRED", res.caveat())
+
+    def test_missing_strike_column_refuses_rather_than_guesses(self):
+        from options.adapters import load_external
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nostrike.csv"
+            pd.DataFrame([{"candle_time": "2025-01-02T09:15:00", "close_price": 1.0}]).to_csv(
+                path, index=False
+            )
+            with self.assertRaises(ValueError):
+                load_external(path)
