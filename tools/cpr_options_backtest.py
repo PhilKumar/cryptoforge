@@ -56,18 +56,59 @@ SESSION_CLOSE = time(15, 30)
 
 
 # ---------------------------------------------------------------- levels ----
+# Every rung a trade can act on, ordered high to low. A PE entered on a
+# rejection at one rung takes the rungs beneath it as its targets and the rung
+# directly above it as its stop, so the whole rule is one walk down this list.
+RUNG_ORDER = [
+    "R5",
+    "R4.5",
+    "R4",
+    "R3.5",
+    "R3",
+    "R2.5",
+    "R2",
+    "R1.5",
+    "R1",
+    "R0.5",
+    "TC",
+    "BC",
+    "S0.5",
+    "S1",
+    "S1.5",
+    "S2",
+    "S2.5",
+    "S3",
+    "S3.5",
+    "S4",
+    "S4.5",
+    "S5",
+]
+
+
 @dataclass(frozen=True)
 class Levels:
-    """One week's floor pivots, plus the half steps the target ladder walks."""
+    """One week's floor pivots, as an ordered ladder of rungs."""
 
     pivot: float
-    bc: float
-    tc: float
-    supports: dict  # label -> price, ordered shallow to deep
+    rungs: dict  # label -> price, ordered high to low
 
     @property
-    def ladder(self) -> list:
-        return list(self.supports.items())
+    def bc(self) -> float:
+        return self.rungs["BC"]
+
+    @property
+    def tc(self) -> float:
+        return self.rungs["TC"]
+
+    def below(self, label: str) -> list:
+        items = list(self.rungs.items())
+        i = [k for k, _ in items].index(label)
+        return items[i + 1 :]
+
+    def above(self, label: str) -> Optional[tuple]:
+        items = list(self.rungs.items())
+        i = [k for k, _ in items].index(label)
+        return items[i - 1] if i > 0 else None
 
 
 def weekly_levels(daily: pd.DataFrame) -> dict:
@@ -75,7 +116,7 @@ def weekly_levels(daily: pd.DataFrame) -> dict:
 
     TradingView's Traditional pivots, which is what the Indian CPR scripts draw.
     The half levels are midpoints of neighbouring pivots -- S0.5 sits between
-    the pivot and S1, S1.5 between S1 and S2, and so on.
+    the pivot and S1, R0.5 between the pivot and R1, and so on outward.
     """
     wk = (
         daily.resample("W-MON", label="left", closed="left")
@@ -90,19 +131,27 @@ def weekly_levels(daily: pd.DataFrame) -> dict:
         tc = 2 * p - bc
         if tc < bc:
             tc, bc = bc, tc
-        s = [
+        sup = [
             2 * p - hi,  # S1
             p - (hi - lo),  # S2
             2 * p - (2 * hi - lo),  # S3
             3 * p - (3 * hi - lo),  # S4
             4 * p - (4 * hi - lo),  # S5
         ]
-        rungs = {"S0.5": (p + s[0]) / 2.0}
+        res = [
+            2 * p - lo,  # R1
+            p + (hi - lo),  # R2
+            2 * p + (hi - 2 * lo),  # R3
+            3 * p + (hi - 3 * lo),  # R4
+            4 * p + (hi - 4 * lo),  # R5
+        ]
+        priced = {"TC": tc, "BC": bc, "R0.5": (p + res[0]) / 2.0, "S0.5": (p + sup[0]) / 2.0}
         for n in range(5):
-            rungs[f"S{n + 1}"] = s[n]
+            priced[f"S{n + 1}"], priced[f"R{n + 1}"] = sup[n], res[n]
             if n + 1 < 5:
-                rungs[f"S{n + 1}.5"] = (s[n] + s[n + 1]) / 2.0
-        out[wk.index[i].date()] = Levels(pivot=p, bc=bc, tc=tc, supports=rungs)
+                priced[f"S{n + 1}.5"] = (sup[n] + sup[n + 1]) / 2.0
+                priced[f"R{n + 1}.5"] = (res[n] + res[n + 1]) / 2.0
+        out[wk.index[i].date()] = Levels(pivot=p, rungs={k: priced[k] for k in RUNG_ORDER})
     return out
 
 
@@ -116,6 +165,7 @@ def levels_on(week_starts: list, table: dict, day: date) -> Optional[Levels]:
 class Trade:
     entry_ts: datetime
     entry_spot: float
+    entry_rung: str
     strike: int
     expiry: date
     lots: int
@@ -163,6 +213,13 @@ class Backtest:
         self.args = args
         minute = load_minutes()
         self.minute = minute
+        wanted = [r.strip() for r in str(args.entry_rungs).split(",") if r.strip()]
+        unknown = [r for r in wanted if r not in RUNG_ORDER]
+        if unknown:
+            raise SystemExit(f"unknown rung(s) {unknown}; pick from {RUNG_ORDER}")
+        # Highest first, so a bar that reached through two of them is credited to
+        # the one it was actually turned back from.
+        self.entry_rungs = [r for r in RUNG_ORDER if r in wanted]
         self.bar_minutes = int(args.bar_minutes)
         self.bars = to_bars(minute, f"{self.bar_minutes}min")
         # An entry needs a minute after the signal bar to fill in, so the last
@@ -235,6 +292,7 @@ class Backtest:
         trades: list = []
         open_trade: Optional[Trade] = None
         live_levels: Optional[Levels] = None
+        stop_rung: Optional[str] = None
         deepest_i = -1
         active_level: Optional[tuple] = None
 
@@ -253,8 +311,8 @@ class Backtest:
 
                 if day == open_trade.expiry and ts.time() >= SQUARE_OFF:
                     exit_now, reason = self.last_minute_before(ts.replace(hour=15, minute=15)), "EXPIRY"
-                elif bar["close"] > use.tc:
-                    exit_now, reason = self.next_minute(ts + self.bar_span), "STOP_ABOVE_CPR"
+                elif stop_rung is not None and bar["close"] > use.rungs[stop_rung]:
+                    exit_now, reason = self.next_minute(ts + self.bar_span), f"STOP_ABOVE_{stop_rung}"
                 elif active_level is not None and bar["close"] > active_level[1]:
                     exit_now, reason = self.next_minute(ts + self.bar_span), f"TRAIL_{active_level[0]}"
 
@@ -262,10 +320,11 @@ class Backtest:
                     self.close_trade(open_trade, exit_now, reason)
                     trades.append(open_trade)
                     open_trade, live_levels, active_level, deepest_i = None, None, None, -1
+                    stop_rung = None
                 elif reason:
                     open_trade.notes.append(f"{reason} at {ts} but no minute to fill in")
                 else:
-                    ladder = use.ladder
+                    ladder = use.below(open_trade.entry_rung)
                     for i in range(deepest_i + 1, len(ladder)):
                         if bar["low"] <= ladder[i][1]:
                             deepest_i = i
@@ -283,14 +342,19 @@ class Backtest:
                 continue  # nothing left of the session to fill an entry in
 
             prev_close = bars["close"].iloc[k - 1]
-            if not (prev_close < lv.bc):  # the market must already be below the CPR
-                continue
-            if not (bar["high"] >= lv.bc):  # and it must come back up and tag the band
-                continue
-            if not (bar["close"] < lv.bc):  # and be rejected by it
-                continue
             if self.args.ema > 0 and not (bar["close"] < bar["ema"]):
                 continue  # EMA20 vetoes a PE in an up regime
+
+            # The highest rung the bar was rejected from: it must have been under
+            # the rung already, reached up and touched it, and closed back below.
+            rung = None
+            for label in self.entry_rungs:
+                price = lv.rungs[label]
+                if prev_close < price and bar["high"] >= price and bar["close"] < price:
+                    rung = label
+                    break
+            if rung is None:
+                continue
 
             fill_ts = self.next_minute(ts + self.bar_span)
             if fill_ts is None or fill_ts.date() != day:
@@ -309,6 +373,7 @@ class Backtest:
             open_trade = Trade(
                 entry_ts=fill_ts,
                 entry_spot=spot,
+                entry_rung=rung,
                 strike=strike,
                 expiry=expiry,
                 lots=self.args.lots,
@@ -318,6 +383,8 @@ class Backtest:
                 tc=lv.tc,
             )
             live_levels, active_level, deepest_i = lv, None, -1
+            above = lv.above(rung)
+            stop_rung = above[0] if above else None
 
         if open_trade is not None:
             last = self.minute_index[-1]
@@ -387,7 +454,7 @@ def report(trades: list, bt: Backtest, args) -> str:
     out.append("")
     reasons: dict = {}
     for t in trades:
-        r = t.exit_reason.split("_")[0] if t.exit_reason.startswith("TRAIL") else t.exit_reason
+        r = t.exit_reason.split("_")[0] if t.exit_reason.startswith(("TRAIL", "STOP")) else t.exit_reason
         reasons.setdefault(r, []).append(t.net)
     out.append("by exit:")
     for r, xs in sorted(reasons.items(), key=lambda kv: -sum(kv[1])):
@@ -406,7 +473,7 @@ def report(trades: list, bt: Backtest, args) -> str:
     rungs: dict = {}
     for t in trades:
         rungs.setdefault(t.deepest or "-none-", []).append(t.net)
-    order = ["-none-", "S0.5", "S1", "S1.5", "S2", "S2.5", "S3", "S3.5", "S4", "S4.5", "S5"]
+    order = ["-none-"] + RUNG_ORDER
     for r in order:
         if r in rungs:
             xs = rungs[r]
@@ -418,6 +485,9 @@ def report(trades: list, bt: Backtest, args) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--entry-rungs", default="BC", help="rungs a rejection may be bought at, comma separated, e.g. R2,R1 or BC"
+    )
     ap.add_argument("--bar-minutes", type=int, default=15, help="signal timeframe in minutes; 15 or 5")
     ap.add_argument("--ema", type=int, default=20, help="0 turns the EMA regime filter off entirely")
     ap.add_argument("--lots", type=int, default=1)

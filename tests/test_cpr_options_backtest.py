@@ -5,7 +5,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from tools.cpr_options_backtest import weekly_levels
+from tools.cpr_options_backtest import RUNG_ORDER, weekly_levels
 from tools.nifty_expiry_calendar import era_for, lot_size, weekly_expiries
 
 
@@ -31,7 +31,8 @@ def test_weekly_levels_use_the_previous_week_only():
     assert week.pivot == pytest.approx((120 + 90 + 118) / 3)
     assert week.bc == pytest.approx((120 + 90) / 2)
     # nothing from 8 Jan (high 200) may leak in
-    assert week.supports["S1"] == pytest.approx(2 * week.pivot - 120)
+    assert week.rungs["S1"] == pytest.approx(2 * week.pivot - 120)
+    assert week.rungs["R1"] == pytest.approx(2 * week.pivot - 90)
 
 
 def test_cpr_band_is_ordered_top_above_bottom():
@@ -42,10 +43,28 @@ def test_cpr_band_is_ordered_top_above_bottom():
 
 def test_half_rungs_sit_between_their_neighbours():
     rows = [("2024-01-01", 100, 130, 70, 110), ("2024-01-08", 100, 110, 90, 95)]
-    s = lv_supports = weekly_levels(_daily(rows))[date(2024, 1, 8)].supports
-    assert s["S1"] > s["S1.5"] > s["S2"] > s["S2.5"] > s["S3"]
-    assert s["S1.5"] == pytest.approx((s["S1"] + s["S2"]) / 2)
-    assert list(lv_supports) == ["S0.5", "S1", "S1.5", "S2", "S2.5", "S3", "S3.5", "S4", "S4.5", "S5"]
+    lv = weekly_levels(_daily(rows))[date(2024, 1, 8)]
+    r = lv.rungs
+    assert r["S1.5"] == pytest.approx((r["S1"] + r["S2"]) / 2)
+    assert r["R1.5"] == pytest.approx((r["R1"] + r["R2"]) / 2)
+    assert list(r) == RUNG_ORDER
+
+
+def test_the_ladder_only_ever_descends():
+    """Every rule below reads this list as ordered; an inversion would make a
+    stop sit under its own targets."""
+    rows = [("2024-01-01", 100, 130, 70, 110), ("2024-01-08", 100, 110, 90, 95)]
+    prices = list(weekly_levels(_daily(rows))[date(2024, 1, 8)].rungs.values())
+    assert all(a > b for a, b in zip(prices, prices[1:]))
+
+
+def test_a_rung_knows_its_stop_and_its_targets():
+    rows = [("2024-01-01", 100, 130, 70, 110), ("2024-01-08", 100, 110, 90, 95)]
+    lv = weekly_levels(_daily(rows))[date(2024, 1, 8)]
+    assert lv.above("R1")[0] == "R1.5"
+    assert lv.above("BC")[0] == "TC"  # the original rule, unchanged
+    assert [k for k, _ in lv.below("R1")][:3] == ["R0.5", "TC", "BC"]
+    assert lv.above("R5") is None
 
 
 def test_expiry_walks_back_off_a_holiday_never_forward():
