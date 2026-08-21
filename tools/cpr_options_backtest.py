@@ -49,7 +49,10 @@ STORES = {
     "m1": os.path.join(REPO, "data", "dhan_options_m1"),
     "m2": os.path.join(REPO, "data", "dhan_options_m2"),
 }
+# A contract still open on its own expiry day is squared off here, not carried
+# into the settlement print.
 SQUARE_OFF = time(15, 15)
+SESSION_CLOSE = time(15, 30)
 
 
 # ---------------------------------------------------------------- levels ----
@@ -160,7 +163,13 @@ class Backtest:
         self.args = args
         minute = load_minutes()
         self.minute = minute
-        self.bars = to_bars(minute)
+        self.bar_minutes = int(args.bar_minutes)
+        self.bars = to_bars(minute, f"{self.bar_minutes}min")
+        # An entry needs a minute after the signal bar to fill in, so the last
+        # bar of a session cannot open a trade.
+        self.entry_cutoff = (
+            datetime.combine(date(2000, 1, 1), SESSION_CLOSE) - timedelta(minutes=self.bar_minutes)
+        ).time()
         self.daily = to_daily(minute)
         self.session_days = sessions(minute)
         self.weeklies = weekly_expiries(self.session_days)
@@ -197,6 +206,12 @@ class Backtest:
         if (cand.date() - after.date()).days > limit_sessions + 4:
             return None
         return cand
+
+    @property
+    def bar_span(self) -> timedelta:
+        """One minute short of the bar, so `next_minute` lands on the first
+        minute after it closes rather than skipping a bar."""
+        return timedelta(minutes=self.bar_minutes - 1)
 
     def last_minute_before(self, when: datetime) -> Optional[datetime]:
         i = self.minute_index.searchsorted(when, side="right") - 1
@@ -239,9 +254,9 @@ class Backtest:
                 if day == open_trade.expiry and ts.time() >= SQUARE_OFF:
                     exit_now, reason = self.last_minute_before(ts.replace(hour=15, minute=15)), "EXPIRY"
                 elif bar["close"] > use.tc:
-                    exit_now, reason = self.next_minute(ts + timedelta(minutes=14)), "STOP_ABOVE_CPR"
+                    exit_now, reason = self.next_minute(ts + self.bar_span), "STOP_ABOVE_CPR"
                 elif active_level is not None and bar["close"] > active_level[1]:
-                    exit_now, reason = self.next_minute(ts + timedelta(minutes=14)), f"TRAIL_{active_level[0]}"
+                    exit_now, reason = self.next_minute(ts + self.bar_span), f"TRAIL_{active_level[0]}"
 
                 if exit_now is not None:
                     self.close_trade(open_trade, exit_now, reason)
@@ -264,7 +279,7 @@ class Backtest:
 
             if open_trade is not None:
                 continue
-            if ts.time() >= SQUARE_OFF:
+            if ts.time() >= self.entry_cutoff:
                 continue  # nothing left of the session to fill an entry in
 
             prev_close = bars["close"].iloc[k - 1]
@@ -277,7 +292,7 @@ class Backtest:
             if self.args.ema > 0 and not (bar["close"] < bar["ema"]):
                 continue  # EMA20 vetoes a PE in an up regime
 
-            fill_ts = self.next_minute(ts + timedelta(minutes=14))
+            fill_ts = self.next_minute(ts + self.bar_span)
             if fill_ts is None or fill_ts.date() != day:
                 continue
             expiry = self.second_weekly(day)
@@ -403,6 +418,7 @@ def report(trades: list, bt: Backtest, args) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--bar-minutes", type=int, default=15, help="signal timeframe in minutes; 15 or 5")
     ap.add_argument("--ema", type=int, default=20, help="0 turns the EMA regime filter off entirely")
     ap.add_argument("--lots", type=int, default=1)
     ap.add_argument("--strike-offset", type=int, default=0, help="strikes from ATM; -2 is 100 points out of the money")
