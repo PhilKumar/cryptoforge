@@ -13485,7 +13485,7 @@ async function cfAfRenderLines() {
     });
     cfRenderCascadeCampaigns(mine, data.instruments || {}, {
       mountId: 'cf-af-campaigns',
-      emptyText: 'Nothing running yet — turn a book on above.'
+      emptyText: 'Nothing running yet — turn a book on beside this.'
     });
   } catch (err) {
     /* the books table already carries the error line; a dead poll must not
