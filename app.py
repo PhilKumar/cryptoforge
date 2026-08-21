@@ -62,7 +62,7 @@ import config  # must be first — calls load_dotenv()
 import webauthn_auth as _webauthn_mod
 from broker import get_broker_client, get_broker_name, get_supported_brokers
 from broker.delta import get_candles_binance
-from engine.auto_cascade_fib import AutoCascadeFib
+from engine.auto_cascade_fib import AutoCascadeFib, PaperOnlyBroker
 from engine.backtest import run_backtest
 from engine.billing import (
     BillingRefused,
@@ -143,6 +143,13 @@ async def _shutdown_runtime_engines() -> None:
             await cascade_engine.shutdown()
         except Exception as exc:
             _logger.warning("Failed to shutdown cascade engine during app shutdown: %s", exc)
+    sandbox = globals().get("_auto_fib_engine")
+    if sandbox is not None:
+        try:
+            _save_auto_fib_runtime()
+            await sandbox.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown the Auto-Cascade_Fib sandbox during app shutdown: %s", exc)
     rule3070_services = globals().get("_rule3070_services") or {}
     legacy_rule3070 = globals().get("_rule3070_service")
     if legacy_rule3070 is not None:
@@ -175,6 +182,13 @@ async def _wake_cascade_on_boot() -> None:
         _get_cascade_engine()
     except Exception as exc:
         _logger.error("[CASCADE] boot restore failed; engine stays asleep: %s", exc)
+    # The sandbox wakes on the same boot path for the same reason: an enabled
+    # Auto-Cascade_Fib book restored from state must resume without waiting
+    # for a browser to open its page. Its failures are equally contained.
+    try:
+        _get_auto_fib_engine()
+    except Exception as exc:
+        _logger.error("[AUTO-FIB] boot restore failed; the sandbox stays asleep: %s", exc)
 
 
 @asynccontextmanager
@@ -748,6 +762,7 @@ _BUCKET_CASCADE_EVENTS = "cascade_events"
 _BUCKET_CASCADE_CLOSED = "cascade_closed"
 # Auto-Cascade_Fib's books: the purse, the pocket and which symbols are on.
 _BUCKET_AUTO_FIB = "auto_cascade_fib"
+_BUCKET_AUTO_FIB_RUNTIME = "auto_fib_runtime"
 # One frozen chart payload per campaign, keyed by campaign_id — the permanent,
 # static "how the trade was taken" record shown from the journal.
 _BUCKET_CASCADE_CHART_SNAP = "cascade_chart_snap"
@@ -7800,6 +7815,7 @@ _cascade_engine: Optional[CascadeEngine] = None
 
 
 _auto_fib = None
+_auto_fib_engine = None
 
 
 def _load_cascade_runtime() -> dict:
@@ -7837,6 +7853,7 @@ def _persist_cascade_runtime_snapshot(engine: "CascadeEngine") -> None:
     # left behind.
     if _auto_fib is not None:
         _save_auto_fib()
+        _save_auto_fib_runtime()
 
 
 def _load_cascade_events() -> list:
@@ -8137,12 +8154,60 @@ def _get_cascade_engine() -> "CascadeEngine":
             brokers=_cascade_broker_registry(),
         )
         _restore_cascade_runtime(_cascade_engine)
-        _attach_auto_fib(_cascade_engine)
     return _cascade_engine
 
 
+def _get_auto_fib_engine() -> "CascadeEngine":
+    """Auto-Cascade_Fib's OWN engine — paper-only, walled off from the live one.
+
+    Phil's rule, made structural after 2026-08-21: nothing this strategy does
+    may affect the live Cascade page. Sharing his engine broke that rule by
+    construction — shared capital groups, shared cross-campaign adjudication,
+    shared alert inbox. So the strategy gets a second CascadeEngine instance:
+
+      · its broker is a PaperOnlyBroker — market data forwarded, every order
+        and account method refuses loudly, so even a bug cannot trade;
+      · no alert/event callbacks — its noise never reaches the trade-alert
+        inbox or the live event log;
+      · its own writer-lock file — the live engine's lock is per-process-file,
+        and contending for it would have silently parked one of the two loops;
+      · its own persistence bucket, so a restart restores each engine from its
+        own history and neither ever sees the other's campaigns.
+    """
+    global _auto_fib_engine
+    if _auto_fib_engine is None:
+        eng = CascadeEngine(PaperOnlyBroker(delta))
+        eng._lock_path = os.path.join(_HERE, ".cascade-sandbox-writer.lock")
+        state = _get_state_store().get(_BUCKET_AUTO_FIB_RUNTIME, "current", default={}) or {}
+        if isinstance(state, dict):
+            eng.load_capital_groups(state.get("capital_groups") or {})
+            eng.load_closed_campaigns(state.get("closed_campaigns") or [])
+            snapshots = state.get("campaigns") or []
+            if snapshots:
+                eng.restore_campaigns(snapshots)
+        _auto_fib_engine = eng
+        _attach_auto_fib(eng)
+        # No reconcile() here, deliberately: reconcile is about live orders on
+        # the exchange, and this engine cannot have any. Paper positions come
+        # back from the snapshot alone.
+        if eng.active_campaigns or any(b.enabled for b in (_auto_fib.books.values() if _auto_fib else [])):
+            eng.start()
+    return _auto_fib_engine
+
+
+def _save_auto_fib_runtime() -> None:
+    if _auto_fib_engine is None:
+        return
+    try:
+        _get_state_store().put(
+            _BUCKET_AUTO_FIB_RUNTIME, "current", _snapshot_cascade_runtime(_auto_fib_engine.get_status())
+        )
+    except Exception as exc:
+        _logger.error("[AUTO-FIB] Failed to persist the sandbox runtime: %s", exc)
+
+
 def _attach_auto_fib(engine: "CascadeEngine") -> None:
-    """Give the engine its Auto-Cascade_Fib driver, books and all.
+    """Give the SANDBOX engine its Auto-Cascade_Fib driver, books and all.
 
     Attached even when every book is off: the driver does nothing until one is
     enabled, and having it present means the Strategies page can read and set
@@ -8158,7 +8223,7 @@ def _attach_auto_fib(engine: "CascadeEngine") -> None:
 
 
 def _get_auto_fib() -> "AutoCascadeFib":
-    _get_cascade_engine()  # builds and attaches on first use
+    _get_auto_fib_engine()  # builds and attaches on first use
     if _auto_fib is None:
         raise HTTPException(status_code=503, detail="Auto-Cascade_Fib is not available")
     return _auto_fib
@@ -9187,53 +9252,52 @@ async def cascade_feed_keys():
 
 @app.get("/api/auto-fib/status")
 async def auto_fib_status():
-    """The strategy's books: purse, wallet cap, and what it is working on."""
-    return {"status": "ok", **_get_auto_fib().status()}
+    """The books, and the sandbox engine's campaigns in the Cascade shape.
+
+    The campaigns ride in the same payload the Cascade page's status carries,
+    so the page draws them with the SAME renderer — but they come from the
+    sandbox engine, which is the only place they exist.
+    """
+    driver = _get_auto_fib()
+    engine_status = _get_auto_fib_engine().get_status()
+    return {
+        "status": "ok",
+        **driver.status(),
+        "campaigns": engine_status.get("campaigns") or [],
+        "instruments": engine_status.get("instruments") or {},
+    }
 
 
 @app.post("/api/auto-fib/books")
 async def auto_fib_set_book(request: Request):
-    """Turn a symbol on or off, choose paper/live, or set its size.
+    """Turn a symbol on or off, or set its size. Paper only.
 
-    Live is refused unless the venue's keys are actually configured — the same
-    check the Cascade page makes — because a book switched to live without keys
-    would look armed and place nothing.
+    Live mode is refused by the driver itself — the strategy runs in a sandbox
+    engine whose broker cannot place an order, and offering live from here
+    would arm a book that can never fire.
     """
     check_rate_limit("auto_fib_book", max_calls=6, window_sec=10)
     body = await _read_json_body(request)
     symbol = str(body.get("symbol") or "").strip().upper()
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol is required")
-    mode = body.get("mode")
-    exchange = str(body.get("exchange") or "").strip().lower()
-    if mode is not None and str(mode).lower() == "live":
-        eng = _get_cascade_engine()
-        client = eng.brokers.get(exchange) if exchange else eng.broker
-        if client is None:
-            raise HTTPException(status_code=400, detail=f"Unknown exchange '{exchange}'")
-        if not _broker_is_configured(client):
-            label = str(getattr(client, "display_name", "Broker"))
-            raise HTTPException(
-                status_code=409,
-                detail=f"{label} API keys are not configured — cannot run {symbol} live",
-            )
     driver = _get_auto_fib()
     try:
         book = driver.set_book(
             symbol,
             enabled=body.get("enabled"),
-            mode=mode,
+            mode=body.get("mode"),
             capital_usd=body.get("capital_usd", body.get("capital")),
-            exchange=exchange,
+            exchange=str(body.get("exchange") or "").strip().lower(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    # The driver only runs inside the monitor loop, and that loop is started by
-    # a campaign being started or restored. On a book turned on while nothing
-    # else is running — the ordinary case for a fresh strategy — the loop is
+    # The driver only runs inside its engine's monitor loop. On a book turned
+    # on while nothing else is running — the ordinary case — the loop is
     # asleep, so the book would sit there looking armed and do nothing at all.
+    # This starts the SANDBOX engine; the live engine is not involved.
     if book.enabled:
-        _get_cascade_engine().start()
+        _get_auto_fib_engine().start()
     _save_auto_fib()
     return {"status": "ok", **driver.status()}
 
@@ -9400,6 +9464,16 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto", end_
     eng = _get_cascade_engine()
     if not eng.campaigns:
         _restore_cascade_runtime(eng)
+    # A sandbox campaign is charted by the SANDBOX engine — one renderer, one
+    # endpoint, two engines feeding it. Read-only either way, and checked first
+    # so a sandbox id can never be answered from live history by accident.
+    if campaign_id not in eng.campaigns and not any(c.get("campaign_id") == campaign_id for c in eng.closed_campaigns):
+        sandbox = _auto_fib_engine
+        if sandbox is not None and (
+            campaign_id in sandbox.campaigns
+            or any(c.get("campaign_id") == campaign_id for c in sandbox.closed_campaigns)
+        ):
+            return await sandbox.get_chart_data(campaign_id, timeframe=timeframe, end_ts=max(0, int(end_ts)))
     if not eng.closed_campaigns:
         # The chart works for ended campaigns too, and after a restart their
         # history has to be loaded before it can be found.

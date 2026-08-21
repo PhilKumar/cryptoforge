@@ -68,11 +68,14 @@ class FakeCandle:
 
 
 class FakeEngine:
-    def __init__(self, candles=None):
+    def __init__(self, candles=None, candles_1m=None):
         self.campaigns: Dict[str, FakeCampaign] = {}
         self.capital_groups: Dict[str, float] = {}
         self.started: List[dict] = []
         self._candles = candles or []
+        # The 1m lane feeds the freshness guard. Empty means "no 1m data",
+        # which skips the guard — most tests are not about it.
+        self._candles_1m = candles_1m or []
         self.start_error: Optional[str] = None
 
     def add(self, campaign: FakeCampaign) -> FakeCampaign:
@@ -83,6 +86,8 @@ class FakeEngine:
         self.capital_groups[f"{symbol}:{exchange}".lower()] = budget
 
     async def _fetch_closed_candles(self, symbol, since_ts, timeframe="5m"):
+        if timeframe == "1m":
+            return self._candles_1m
         return self._candles
 
     async def start_campaign(self, **kwargs):
@@ -284,7 +289,7 @@ def test_a_disabled_book_does_nothing_at_all():
 
 def test_state_survives_a_save_and_load():
     engine = FakeEngine()
-    driver = _driver(engine, mode="live")
+    driver = _driver(engine)  # paper — the only mode the sandbox has
     book = _book(driver)
     book.purse_usd = 3300.0
     book.pocket_usd = 12.5
@@ -295,7 +300,7 @@ def test_state_survives_a_save_and_load():
     assert back.purse_usd == 3300.0
     assert back.pocket_usd == 12.5
     assert back.folds == 3
-    assert back.mode == "live"
+    assert back.mode == "paper"
     assert back.enabled is True
 
 
@@ -384,7 +389,7 @@ def test_turning_a_book_on_while_disarmed_is_refused(monkeypatch):
     engine = FakeEngine()
     driver = AutoCascadeFib(engine)
     monkeypatch.setattr(auto_fib, "DRIVER_ARMED", False)
-    with pytest.raises(ValueError, match="disarmed"):
+    with pytest.raises(ValueError, match="switched off"):
         driver.set_book("BTCUSDT", enabled=True, capital_usd=2000.0)
     assert driver.books == {}
 
@@ -396,3 +401,109 @@ def test_a_book_can_still_be_turned_OFF_while_disarmed(monkeypatch):
     monkeypatch.setattr(auto_fib, "DRIVER_ARMED", False)
     driver.set_book("BTCUSDT", enabled=False)
     assert _book(driver).enabled is False
+
+
+# ── the 2026-08-21 runaway, closed for good ───────────────────────
+
+
+def test_live_mode_is_refused_outright():
+    """The sandbox cannot trade, so a live book must not even exist."""
+    engine = FakeEngine()
+    driver = AutoCascadeFib(engine)
+    with pytest.raises(ValueError, match="paper-only"):
+        driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=2000.0)
+    assert driver.books == {}
+
+
+def test_a_used_anchor_is_never_seeded_twice():
+    """The runaway's engine: the same dead high, re-anchored every cycle."""
+    engine = FakeEngine(_rising_then_falling())
+    driver = _driver(engine)
+    book = _book(driver)
+    assert asyncio.run(driver._seed_working_line(book)) is True
+    first_anchor = engine.started[0]["mother_timestamp"]
+    assert first_anchor in book.tried_anchors
+    # The campaign dies instantly (as it did live) and the cooldown lapses.
+    engine.campaigns.clear()
+    book.next_seed_ts = 0.0
+    started_again = asyncio.run(driver._seed_working_line(book))
+    # Either an OLDER anchor was found, or nothing was — but never the same one.
+    if started_again:
+        assert engine.started[1]["mother_timestamp"] != first_anchor
+    assert book.tried_anchors.count(first_anchor) == 1
+
+
+def test_every_start_opens_a_full_bar_cooldown():
+    """One start per closed 5m bar, however fast campaigns die."""
+    engine = FakeEngine(_rising_then_falling())
+    driver = _driver(engine)
+    book = _book(driver)
+    assert asyncio.run(driver._seed_working_line(book)) is True
+    assert book.next_seed_ts > __import__("time").time()
+    engine.campaigns.clear()  # instant death — the runaway's tempo
+    assert asyncio.run(driver._seed_working_line(book)) is False
+    assert book.note == "cooling down after the last start"
+    assert len(engine.started) == 1
+
+
+def test_an_anchor_the_1m_tape_has_reached_does_not_start():
+    """The stale-anchor bug: 91.33 anchored while the 1m tape printed 91.38."""
+    candles = _rising_then_falling()
+    anchor = latest_swing_high(candles, candles[-1].close)
+    hot_1m = [
+        FakeCandle(timestamp=999_000, open=anchor.high, high=anchor.high + 0.05, low=anchor.high - 1, close=anchor.high)
+    ]
+    engine = FakeEngine(candles, candles_1m=hot_1m)
+    driver = _driver(engine)
+    book = _book(driver)
+    assert asyncio.run(driver._seed_working_line(book)) is False
+    assert engine.started == []
+    assert "retested" in book.note
+    assert book.tried_anchors == []  # not blacklisted — it may become honest again
+
+
+def test_a_failed_start_cools_down_but_keeps_the_anchor():
+    engine = FakeEngine(_rising_then_falling())
+    engine.start_error = "venue hiccup"
+    driver = _driver(engine)
+    book = _book(driver)
+    assert asyncio.run(driver._seed_working_line(book)) is False
+    assert book.next_seed_ts > 0  # no retry storm at monitor pace
+    assert book.tried_anchors == []  # transient errors do not burn the anchor
+
+
+def test_the_paper_only_broker_refuses_orders_and_forwards_data():
+    class RealBroker:
+        broker_name = "binance"
+        display_name = "Binance Spot"
+        min_timeframe = "5m"
+
+        def get_ticker(self, symbol):
+            return {"symbol": symbol, "last": 100.0}
+
+        def place_order(self, *a, **k):  # pragma: no cover — must never run
+            raise AssertionError("the sandbox reached the exchange")
+
+    from engine.auto_cascade_fib import PaperOnlyBroker
+
+    sandbox = PaperOnlyBroker(RealBroker())
+    assert sandbox.get_ticker("BTCUSDT")["last"] == 100.0
+    assert sandbox._is_configured() is False
+    with pytest.raises(RuntimeError, match="refused place_order"):
+        sandbox.place_order("BTCUSDT", 1.0, "buy")
+    with pytest.raises(RuntimeError, match="refused get_wallet"):
+        sandbox.get_wallet()
+    assert getattr(sandbox, "no_such_feature", None) is None  # unknowns stay missing
+
+
+def test_tried_anchors_and_cooldown_survive_a_save_and_load():
+    engine = FakeEngine(_rising_then_falling())
+    driver = _driver(engine)
+    book = _book(driver)
+    asyncio.run(driver._seed_working_line(book))
+    assert book.tried_anchors
+    reloaded = AutoCascadeFib(FakeEngine())
+    reloaded.load(driver.dump())
+    twin = reloaded.books["btcusdt:"]
+    assert twin.tried_anchors == book.tried_anchors
+    assert twin.next_seed_ts == book.next_seed_ts

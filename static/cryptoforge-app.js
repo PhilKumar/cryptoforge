@@ -13453,6 +13453,13 @@ function cfAfRenderStatus(data) {
 }
 
 function cfAfSetMode(mode) {
+  // Paper only since 2026-08-21: the strategy runs in a sandbox engine whose
+  // broker cannot place an order. The Live half of the toggle explains itself
+  // instead of arming a book that can never fire.
+  if (mode === 'live') {
+    _cfAfSetError('Paper only for now — the strategy runs in a sandbox that cannot reach real orders.');
+    return;
+  }
   var picked = mode === 'live' ? 'live' : 'paper';
   var field = document.getElementById('cf-af-mode');
   if (field) field.value = picked;
@@ -13557,26 +13564,21 @@ function cfAfRenderStats(books) {
   set('cf-af-stat-lines-sub', working ? (working + ' working the near move') : 'none working');
 }
 
-// The strategy's campaigns ARE Cascade campaigns, so they are drawn by the
-// Cascade page's renderer into this page's own mount — never by a second copy
-// of it, which would drift the moment either page changed.
-async function cfAfRenderLines() {
-  try {
-    var response = await cfApiFetch('/api/cascade/status', { cache: 'no-store' });
-    var data = await cfReadApiPayload(response);
-    if (!response.ok) return;
-    var mine = (Array.isArray(data.campaigns) ? data.campaigns : []).filter(function (c) {
-      return String(c.strategy || '') === 'auto-cascade-fib';
-    });
-    cfRenderCascadeCampaigns(mine, data.instruments || {}, {
+// The strategy's campaigns live in its own SANDBOX engine — after 2026-08-21
+// they are never in the live Cascade's status. They arrive inside the
+// auto-fib status payload, in the Cascade shape, and are drawn by the Cascade
+// page's renderer into this page's own mount — never by a second copy of it,
+// which would drift the moment either page changed.
+function cfAfRenderLines(data) {
+  cfRenderCascadeCampaigns(
+    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    (data && data.instruments) || {},
+    {
       mountId: 'cf-af-campaigns',
       emptyText: 'Nothing running yet — turn a book on beside this.',
-      emptyLiveText: 'Nothing running right now. Closed lines are on the Cascade page.'
-    });
-  } catch (err) {
-    /* the books table already carries the error line; a dead poll must not
-       blank the panel that is showing real positions */
-  }
+      emptyLiveText: 'Nothing running right now — the finished lines stay in this page\'s books.'
+    }
+  );
 }
 
 async function cfAfRefresh(showToast) {
@@ -13587,7 +13589,7 @@ async function cfAfRefresh(showToast) {
     _cfAfSetError('');
     cfAfRenderStatus(data);
     cfAfRenderStats((data && data.books) || []);
-    await cfAfRenderLines();
+    cfAfRenderLines(data);
     if (showToast) cfToast('Auto-Cascade_Fib refreshed', 'success');
   } catch (err) {
     _cfAfSetError(String(err.message || err));
@@ -13607,7 +13609,7 @@ async function _cfAfPostBook(payload, actingId) {
     _cfAfSetError('');
     cfAfRenderStatus(data);
     cfAfRenderStats((data && data.books) || []);
-    await cfAfRenderLines();
+    cfAfRenderLines(data);
     return true;
   } catch (err) {
     _cfAfSetError(String(err.message || err));

@@ -49,3 +49,6 @@ media/landing/dist/
 
 # Live ledger snapshot: written by the app from the journal, never committed.
 static/landing/ledger.json
+
+# Sandbox engine advisory lock (Auto-Cascade_Fib)
+.cascade-sandbox-writer.lock

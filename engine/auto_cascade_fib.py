@@ -53,26 +53,84 @@ _log = logging.getLogger("cryptoforge.auto_cascade_fib")
 
 STRATEGY = "auto-cascade-fib"
 
-# ── DISARMED, 2026-08-21 ─────────────────────────────────────────────────
+# ── the 2026-08-21 runaway, and what it changed ──────────────────────────
 # On its first hour live this driver started a new SOLUSDT campaign every 15
-# seconds — 20 in 45 minutes — because:
+# seconds — 20 in 45 minutes. Three causes, all now closed:
 #
-#   · it anchored on a swing high taken from CLOSED 5m candles while the engine
-#     judges the mother break on the LIVE 1m price, so the anchor was already
-#     below the market before the campaign existed;
-#   · the campaign therefore broke within seconds, its successor was suppressed
-#     by the minor/major simultaneous-break rule, and the driver — seeing no
-#     working line — anchored the SAME stale high again; and
-#   · its campaigns live in the same engine as Phil's hand-started ones, so
-#     they shared his capital groups and were adjudicated against his LIVE
-#     campaigns by rules that scan every campaign on a symbol.
+#   · The anchor was STALE: picked from closed 5m candles while the engine
+#     judges breaks on the live 1m price. Now the anchor must stand above the
+#     last closed 1m candle's high, or nothing starts.
+#   · The same dead anchor was re-seeded forever. Now every anchor is used at
+#     most once per book (tried_anchors), and every start opens a cooldown of
+#     one full 5m bar before the next may even be considered.
+#   · Its campaigns lived in Phil's LIVE engine — shared capital groups,
+#     shared cross-campaign rules, shared alert inbox. Now the driver runs in
+#     its own paper-only sandbox engine (see PaperOnlyBroker and the app
+#     wiring): the live Cascade cannot see its campaigns and its campaigns
+#     cannot see the live Cascade's money. Live mode is refused outright.
 #
-# The third one is a design fault, not a bug: this strategy must not be able to
-# reach the live Cascade at all. Until that isolation is built, the driver does
-# NOTHING regardless of what the books say. Arming it takes a deliberate act on
-# the server, not a click in the UI.
-DRIVER_ARMED = os.getenv("CRYPTOFORGE_AUTO_FIB", "").strip().lower() in {"1", "true", "yes", "on"}
-DISARMED_NOTE = "disarmed — it shares one engine with the live Cascade, which it must not; off until that is separated"
+# The env switch remains as the off-switch: CRYPTOFORGE_AUTO_FIB=0 disables
+# the driver entirely, books notwithstanding.
+DRIVER_ARMED = os.getenv("CRYPTOFORGE_AUTO_FIB", "").strip().lower() not in {"0", "false", "no", "off"}
+DISARMED_NOTE = "disarmed by CRYPTOFORGE_AUTO_FIB=0 on the server"
+
+SEED_COOLDOWN_SEC = 300  # one full 5m bar between starts — the churn brake
+TRIED_ANCHOR_LIMIT = 50  # how many used anchors a book remembers
+
+
+class PaperOnlyBroker:
+    """A real broker's market data, and NOTHING else.
+
+    The sandbox engine gets its candles, tickers and product metadata from the
+    same client the app already has — but if any code path in the shared
+    engine ever reaches for an order or account method on the sandbox, it must
+    fail LOUDLY rather than touch the exchange. Paper campaigns never place
+    orders, so nothing legitimate is lost; this exists for the illegitimate
+    paths.
+    """
+
+    _FORWARD = {
+        "async_get_candles",
+        "get_candles",
+        "get_product_by_symbol",
+        "get_ticker",
+    }
+    _REFUSE = {
+        "place_order",
+        "cancel_order",
+        "cancel_all_orders",
+        "get_orders",
+        "get_order",
+        "get_wallet",
+        "get_balances",
+    }
+
+    def __init__(self, real):
+        self._real = real
+        self.broker_name = str(getattr(real, "broker_name", "") or "")
+        self.display_name = f"{getattr(real, 'display_name', 'Broker')} (sandbox, market data only)"
+        self.supports_cascade = True
+        self.min_timeframe = str(getattr(real, "min_timeframe", "") or "")
+
+    def _is_configured(self) -> bool:
+        return False  # never tradable, so nothing ever offers it live
+
+    def __getattr__(self, name):
+        if name in self._FORWARD:
+            return getattr(self._real, name)
+        if name in self._REFUSE:
+
+            def _refused(*_args, **_kwargs):
+                raise RuntimeError(
+                    f"PaperOnlyBroker refused {name}() — the Auto-Cascade_Fib sandbox "
+                    "must never reach orders or the account"
+                )
+
+            return _refused
+        # Anything unknown is treated as missing, so getattr(..., default)
+        # falls back the way it would on a client without the feature.
+        raise AttributeError(name)
+
 
 # ── the rules, as constants so a reader can check them against the notes ──
 TP_FIB_LEVEL = 0.5  # sell half way back to the mother
@@ -98,6 +156,13 @@ class Book:
     folds: int = 0
     rounds_seen: Dict[str, int] = field(default_factory=dict)
     graduated: List[str] = field(default_factory=list)
+    # Anchor timestamps this book has already started a line on. An anchor is
+    # used ONCE: re-seeding the same dead high every cycle is what the
+    # 2026-08-21 runaway was made of.
+    tried_anchors: List[int] = field(default_factory=list)
+    # No new line before this wall-clock time — one full 5m bar after every
+    # start, so even a brand-new anchor cannot churn faster than the chart.
+    next_seed_ts: float = 0.0
     last_error: str = ""
     # What the book is doing when it is not starting anything. A book that
     # is correctly WAITING looks identical to a broken one without this.
@@ -128,6 +193,8 @@ class Book:
             "folds": self.folds,
             "rounds_seen": dict(self.rounds_seen),
             "graduated": list(self.graduated),
+            "tried_anchors": list(self.tried_anchors),
+            "next_seed_ts": self.next_seed_ts,
             "last_error": self.last_error,
             "note": self.note,
         }
@@ -136,7 +203,9 @@ class Book:
     def from_dict(cls, data: dict) -> "Book":
         book = cls(symbol=str(data.get("symbol") or "").upper())
         book.exchange = str(data.get("exchange") or "")
-        book.mode = "live" if str(data.get("mode") or "").lower() == "live" else "paper"
+        # Saved state predating 2026-08-21 could carry "live". The sandbox is
+        # paper-only, so a restore coerces rather than resurrects it.
+        book.mode = "paper"
         book.enabled = bool(data.get("enabled"))
         book.start_capital_usd = _positive(data.get("start_capital_usd"), 2000.0)
         book.purse_usd = _positive(data.get("purse_usd"), book.start_capital_usd)
@@ -144,6 +213,8 @@ class Book:
         book.folds = int(data.get("folds") or 0)
         book.rounds_seen = {str(k): int(v) for k, v in (data.get("rounds_seen") or {}).items()}
         book.graduated = [str(x) for x in (data.get("graduated") or [])]
+        book.tried_anchors = [int(x) for x in (data.get("tried_anchors") or [])]
+        book.next_seed_ts = float(data.get("next_seed_ts") or 0.0)
         book.last_error = str(data.get("last_error") or "")
         book.note = str(data.get("note") or "")
         return book
@@ -157,16 +228,19 @@ def _positive(value, fallback: float) -> float:
     return number if number > 0 else fallback
 
 
-def latest_swing_high(candles, close: float, swing_bars: int = SWING_BARS) -> Optional[object]:
+def latest_swing_high(candles, close: float, swing_bars: int = SWING_BARS, exclude_ts=()) -> Optional[object]:
     """The most recent confirmed 5m swing high still standing above price.
 
     Confirmed means `swing_bars` bars either side are lower, so the high is
     only ever anchored once the bars after it have printed — the campaign
     starts strictly in the past, the way Phil marks one after a high has
-    clearly failed. Returns the candle, or None to try again next bar.
+    clearly failed. `exclude_ts` are anchors already used up; the scan walks
+    past them to the next older candidate rather than serving the same high
+    twice. Returns the candle, or None to try again next bar.
     """
     if not candles:
         return None
+    skip = {int(x) for x in exclude_ts}
     rows = list(candles)
     last = len(rows) - 1
     oldest = max(last - SWING_LOOKBACK_BARS, swing_bars)
@@ -176,6 +250,8 @@ def latest_swing_high(candles, close: float, swing_bars: int = SWING_BARS) -> Op
         high = rows[pivot].high
         if high <= close:
             continue  # price is already above it — not a high to fall from
+        if int(rows[pivot].timestamp) in skip:
+            continue  # already tried — a dead anchor is never re-seeded
         window = rows[pivot - swing_bars : min(pivot + swing_bars, last) + 1]
         if any(row.high > high for row in window if row is not rows[pivot]):
             continue
@@ -207,19 +283,23 @@ class AutoCascadeFib:
             raise ValueError("symbol is required")
         if enabled and not DRIVER_ARMED:
             # Refuse rather than accept-and-ignore: a book that reads "On" over
-            # a driver that will never tick is the exact trap this strategy
-            # already fell into once.
+            # a driver that will never tick is a trap this strategy has already
+            # fallen into once.
+            raise ValueError("Auto-Cascade_Fib is switched off on the server (CRYPTOFORGE_AUTO_FIB=0).")
+        if mode is not None and str(mode).lower() == "live":
+            # The sandbox holds market data and paper fills, nothing else. A
+            # live book here would look armed and place nothing — worse than a
+            # refusal.
             raise ValueError(
-                "Auto-Cascade_Fib is disarmed. It shares one engine with the live Cascade — "
-                "same capital groups, same cross-campaign rules — and stays off until that is "
-                "separated. Nothing will start."
+                "Auto-Cascade_Fib is paper-only. It runs in a sandbox that cannot reach "
+                "orders or the account; going live is a separate build, deliberately."
             )
         key = f"{symbol}:{exchange}".lower()
         book = self.books.get(key) or Book(symbol=symbol, exchange=exchange)
         if enabled is not None:
             book.enabled = bool(enabled)
         if mode is not None:
-            book.mode = "live" if str(mode).lower() == "live" else "paper"
+            book.mode = "paper"  # the only mode the sandbox has
         if capital_usd is not None:
             fresh = _positive(capital_usd, book.start_capital_usd)
             # Changing the size before any profit has been folded resets the
@@ -370,6 +450,20 @@ class AutoCascadeFib:
             )
         return changed
 
+    async def _latest_1m_high(self, book: Book) -> Optional[float]:
+        """The last closed 1m candle's high — the freshest price we can hold.
+
+        The engine judges mother breaks on the live 1m tape, so an anchor is
+        only honest if it still stands above THIS, not merely above a 5m close
+        that can be five minutes stale. That gap is how the runaway's anchor
+        was already broken before its campaign existed.
+        """
+        try:
+            rows = await self.engine._fetch_closed_candles(book.symbol, int(time.time()) - 600, timeframe="1m")
+        except Exception:
+            return None
+        return float(rows[-1].high) if rows else None
+
     async def _seed_working_line(self, book: Book) -> bool:
         """Anchor a fresh 5m line on the latest confirmed swing high."""
         if self._working_line_id(book):
@@ -378,16 +472,29 @@ class AutoCascadeFib:
         if self._in_coin(book) >= book.wallet_cap_usd:
             book.note = "wallet full — no room to start another line"
             return False
-        candles = await self.engine._fetch_closed_candles(book.symbol, int(time.time()) - SWING_LOOKBACK_BARS * 300)
+        now = time.time()
+        if now < book.next_seed_ts:
+            # The churn brake. Whatever else looks startable, at most one start
+            # per closed 5m bar — the 2026-08-21 runaway managed one every 15s.
+            book.note = "cooling down after the last start"
+            return False
+        candles = await self.engine._fetch_closed_candles(book.symbol, int(now) - SWING_LOOKBACK_BARS * 300)
         if not candles:
             book.note = "no candles yet"
             return False
-        anchor = latest_swing_high(candles, candles[-1].close)
+        anchor = latest_swing_high(candles, candles[-1].close, exclude_ts=book.tried_anchors)
         if anchor is None:
             # The ordinary case in a rising market, and the one that looks like
             # a fault: every high above the price is too recent to be confirmed
             # failed, so there is nothing honest to hang a mother on yet.
             book.note = "waiting for a high to fail above the price"
+            return False
+        fresh_high = await self._latest_1m_high(book)
+        if fresh_high is not None and anchor.high <= fresh_high:
+            # The 1m tape has already reached the anchor. Starting now would be
+            # born broken — the runaway's opening move. Do not blacklist it:
+            # if price falls back below, this high becomes honest again.
+            book.note = "the nearest failed high is already being retested — waiting"
             return False
         result = await self.engine.start_campaign(
             symbol=book.symbol,
@@ -405,9 +512,16 @@ class AutoCascadeFib:
         )
         if result.get("error"):
             book.last_error = str(result["error"])
+            # A failed start still opens the cooldown — retrying an error at
+            # the monitor's pace is a different runaway, not a fix. The anchor
+            # is NOT blacklisted: the error may be transient.
+            book.next_seed_ts = now + SEED_COOLDOWN_SEC
             return False
         book.last_error = ""
         book.note = "started a 5m line"
+        book.tried_anchors.append(int(anchor.timestamp))
+        del book.tried_anchors[:-TRIED_ANCHOR_LIMIT]
+        book.next_seed_ts = now + SEED_COOLDOWN_SEC
         _log.info("[AUTO-FIB] %s new 5m line on the swing high at %.8f", book.symbol, anchor.high)
         return True
 
