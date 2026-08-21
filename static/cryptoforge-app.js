@@ -8702,14 +8702,20 @@ function cfRenderCascadeGroups(groups) {
     mount.innerHTML = '';
     return;
   }
+  // One tight line per symbol (Phil, 2026-08-21: "Too much texts").
+  // "$1,000 free" is the number a start actually needs; funded only earns its
+  // place once some of the pot is in use.
   var rows = symbols.map(function(sym) {
     var g = groups[sym] || {};
     var available = Number(g.available_usd) || 0;
-    return '<div class="table-meta" style="display:flex;justify-content:space-between;gap:8px;">'
-      + '<span><strong>' + _escapeHtml(sym) + '</strong> group fund</span>'
-      + '<span>$' + _cfCascadeUsd(g.committed_usd) + ' funded · '
-      + '<strong style="color:' + (available > 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)') + ';">$'
-      + _cfCascadeUsd(available) + '</strong> free of $' + _cfCascadeUsd(g.budget_usd) + '</span>'
+    var committed = Number(g.committed_usd) || 0;
+    var detail = '<strong style="color:' + (available > 0 ? 'var(--green,#34d399)' : 'var(--red,#f87171)') + ';">$'
+      + _cfCascadeUsd(available) + '</strong> free'
+      + (committed > 0 ? ' · $' + _cfCascadeUsd(committed) + ' in use' : '')
+      + ' <span style="color:var(--muted);">/ $' + _cfCascadeUsd(g.budget_usd) + '</span>';
+    return '<div class="table-meta" style="display:flex;justify-content:space-between;gap:8px;white-space:nowrap;">'
+      + '<span><strong>' + _escapeHtml(sym) + '</strong></span>'
+      + '<span>' + detail + '</span>'
       + '</div>';
   }).join('');
   mount.innerHTML = rows;
@@ -13443,7 +13449,7 @@ function cfAfRenderStatus(data) {
       + '<td class="num">' + _cfAfUsd(b.fold_threshold_usd) + '</td>'
       + '<td class="num">' + (b.folds || 0) + '</td>'
       + '<td class="num">' + (b.campaigns || 0) + '</td>'
-      + '<td>' + (b.working_line ? _escapeHtml(b.working_line) : '<span class="muted">—</span>') + '</td>'
+      + '<td>' + (b.working_line ? _escapeHtml(b.working_line) : '<span style="color:var(--muted);">—</span>') + '</td>'
       + '<td class="read-only-hide"><button type="button" id="cf-af-row-' + _escapeHtml(b.symbol || '')
       + '" class="btn btn-sm ' + (b.enabled ? 'btn-danger' : 'btn-primary')
       + '" data-cf-click="cfAfToggleBook(\'' + _escapeHtml(b.symbol || '') + '\', '
