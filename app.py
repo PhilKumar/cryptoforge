@@ -8204,7 +8204,13 @@ def _get_auto_fib_engine() -> "CascadeEngine":
     """
     global _auto_fib_engine
     if _auto_fib_engine is None:
-        eng = CascadeEngine(PaperOnlyBroker(delta))
+        # on_update is what actually makes the sandbox survive a restart. The
+        # live engine persists on every geometry change through this same hook;
+        # without it the sandbox was written only at graceful shutdown and by
+        # whatever the LIVE engine happened to trigger — so a hard restart, or
+        # an idle live engine, lost every campaign it was tracking and the
+        # driver came back believing it had never started one.
+        eng = CascadeEngine(PaperOnlyBroker(delta), on_update=_persist_auto_fib_update)
         eng._lock_path = os.path.join(_HERE, ".cascade-sandbox-writer.lock")
         state = _get_state_store().get(_BUCKET_AUTO_FIB_RUNTIME, "current", default={}) or {}
         if isinstance(state, dict):
@@ -8221,6 +8227,23 @@ def _get_auto_fib_engine() -> "CascadeEngine":
         if eng.active_campaigns or any(b.enabled for b in (_auto_fib.books.values() if _auto_fib else [])):
             eng.start()
     return _auto_fib_engine
+
+
+def _persist_auto_fib_update(status: dict) -> None:
+    """Write the sandbox's own runtime, from its own status payload.
+
+    Deliberately narrow: no feed publishing and no alerting, unlike the live
+    engine's callback. This engine's campaigns are paper and belong to nobody
+    but the strategy page.
+    """
+    try:
+        _get_state_store().put(_BUCKET_AUTO_FIB_RUNTIME, "current", _snapshot_cascade_runtime(status))
+    except Exception as exc:
+        _logger.error("[AUTO-FIB] Failed to persist the sandbox runtime: %s", exc)
+    # The purse and the fold counter move inside the driver, not the engine, so
+    # they ride the same hook rather than waiting for the next API call.
+    if _auto_fib is not None:
+        _save_auto_fib()
 
 
 def _save_auto_fib_runtime() -> None:
