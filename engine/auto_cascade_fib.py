@@ -44,6 +44,7 @@ Treat that as the expectation, not the headline numbers.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -51,6 +52,27 @@ from typing import Dict, List, Optional
 _log = logging.getLogger("cryptoforge.auto_cascade_fib")
 
 STRATEGY = "auto-cascade-fib"
+
+# ── DISARMED, 2026-08-21 ─────────────────────────────────────────────────
+# On its first hour live this driver started a new SOLUSDT campaign every 15
+# seconds — 20 in 45 minutes — because:
+#
+#   · it anchored on a swing high taken from CLOSED 5m candles while the engine
+#     judges the mother break on the LIVE 1m price, so the anchor was already
+#     below the market before the campaign existed;
+#   · the campaign therefore broke within seconds, its successor was suppressed
+#     by the minor/major simultaneous-break rule, and the driver — seeing no
+#     working line — anchored the SAME stale high again; and
+#   · its campaigns live in the same engine as Phil's hand-started ones, so
+#     they shared his capital groups and were adjudicated against his LIVE
+#     campaigns by rules that scan every campaign on a symbol.
+#
+# The third one is a design fault, not a bug: this strategy must not be able to
+# reach the live Cascade at all. Until that isolation is built, the driver does
+# NOTHING regardless of what the books say. Arming it takes a deliberate act on
+# the server, not a click in the UI.
+DRIVER_ARMED = os.getenv("CRYPTOFORGE_AUTO_FIB", "").strip().lower() in {"1", "true", "yes", "on"}
+DISARMED_NOTE = "disarmed — it shares one engine with the live Cascade, which it must not; off until that is separated"
 
 # ── the rules, as constants so a reader can check them against the notes ──
 TP_FIB_LEVEL = 0.5  # sell half way back to the mother
@@ -183,6 +205,15 @@ class AutoCascadeFib:
         symbol = str(symbol or "").upper().strip()
         if not symbol:
             raise ValueError("symbol is required")
+        if enabled and not DRIVER_ARMED:
+            # Refuse rather than accept-and-ignore: a book that reads "On" over
+            # a driver that will never tick is the exact trap this strategy
+            # already fell into once.
+            raise ValueError(
+                "Auto-Cascade_Fib is disarmed. It shares one engine with the live Cascade — "
+                "same capital groups, same cross-campaign rules — and stays off until that is "
+                "separated. Nothing will start."
+            )
         key = f"{symbol}:{exchange}".lower()
         book = self.books.get(key) or Book(symbol=symbol, exchange=exchange)
         if enabled is not None:
@@ -203,6 +234,8 @@ class AutoCascadeFib:
     def status(self) -> dict:
         return {
             "strategy": STRATEGY,
+            "armed": DRIVER_ARMED,
+            "disarmed_reason": "" if DRIVER_ARMED else DISARMED_NOTE,
             "rules": {
                 "tp_fib_level": TP_FIB_LEVEL,
                 "cap_timeframe": CAP_TIMEFRAME,
@@ -382,6 +415,13 @@ class AutoCascadeFib:
 
     async def tick(self) -> bool:
         """Called once per monitor cycle. Does nothing unless a book is on."""
+        # The kill switch comes FIRST, before any book is read. A book left
+        # enabled in saved state must not be able to wake this up.
+        if not DRIVER_ARMED:
+            for book in self.books.values():
+                if book.enabled and book.note != DISARMED_NOTE:
+                    book.note = DISARMED_NOTE
+            return False
         changed = False
         for book in list(self.books.values()):
             if not book.enabled:

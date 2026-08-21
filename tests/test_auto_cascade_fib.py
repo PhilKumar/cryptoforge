@@ -14,6 +14,9 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest  # noqa: E402
+
+import engine.auto_cascade_fib as auto_fib  # noqa: E402
 from engine.auto_cascade_fib import (  # noqa: E402
     CAP_TIMEFRAME,
     STRATEGY,
@@ -22,6 +25,17 @@ from engine.auto_cascade_fib import (  # noqa: E402
     Book,
     latest_swing_high,
 )
+
+
+@pytest.fixture(autouse=True)
+def armed(monkeypatch):
+    """The driver ships DISARMED after the 2026-08-21 runaway.
+
+    These tests are about what it decides WHEN it is allowed to run, so they
+    arm it. The tests that prove the kill switch itself turn it back off.
+    """
+    monkeypatch.setattr(auto_fib, "DRIVER_ARMED", True)
+
 
 # ── stand-ins ─────────────────────────────────────────────────────
 
@@ -336,3 +350,49 @@ def test_the_status_counts_only_lines_still_running():
     engine.add(FakeCampaign("done", state="COMPLETED"))
     row = driver.status()["books"][0]
     assert row["campaigns"] == 1
+
+
+# ── the kill switch ───────────────────────────────────────────────
+
+
+def test_a_disarmed_driver_starts_nothing_however_the_books_read(monkeypatch):
+    """The exact 2026-08-21 failure: a book left On in saved state.
+
+    It must not be able to wake the driver, because saved state is restored on
+    every boot and there is no click involved.
+    """
+    engine = FakeEngine(_rising_then_falling())
+    driver = _driver(engine)
+    assert _book(driver).enabled is True
+    monkeypatch.setattr(auto_fib, "DRIVER_ARMED", False)
+    assert asyncio.run(driver.tick()) is False
+    assert engine.started == []
+    assert engine.capital_groups == {}
+
+
+def test_a_disarmed_book_says_so_rather_than_looking_armed(monkeypatch):
+    engine = FakeEngine(_rising_then_falling())
+    driver = _driver(engine)
+    monkeypatch.setattr(auto_fib, "DRIVER_ARMED", False)
+    asyncio.run(driver.tick())
+    assert _book(driver).note == auto_fib.DISARMED_NOTE
+    assert driver.status()["armed"] is False
+
+
+def test_turning_a_book_on_while_disarmed_is_refused(monkeypatch):
+    """Refused, not accepted-and-ignored — the page must never read On."""
+    engine = FakeEngine()
+    driver = AutoCascadeFib(engine)
+    monkeypatch.setattr(auto_fib, "DRIVER_ARMED", False)
+    with pytest.raises(ValueError, match="disarmed"):
+        driver.set_book("BTCUSDT", enabled=True, capital_usd=2000.0)
+    assert driver.books == {}
+
+
+def test_a_book_can_still_be_turned_OFF_while_disarmed(monkeypatch):
+    """Whatever else is true, the off switch must always work."""
+    engine = FakeEngine()
+    driver = _driver(engine)
+    monkeypatch.setattr(auto_fib, "DRIVER_ARMED", False)
+    driver.set_book("BTCUSDT", enabled=False)
+    assert _book(driver).enabled is False
