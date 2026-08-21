@@ -7565,6 +7565,23 @@ html[data-theme="light"] .journal-entry-notes section {
     color: var(--muted);
     line-height: 1.5;
   }
+  /* The group-fund readout is a summary of the whole form, not a field beside
+     Mode. Without the span it landed in the grid's right-hand cell — which is
+     exactly what "alignment not good" was (Phil, 2026-08-21). */
+  #cf-cascade-groups {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 12px;
+    align-items: baseline;
+  }
+  #cf-cascade-groups > div {
+    display: contents;
+  }
+  #cf-cascade-groups .cf-group-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
   @media (max-width: 560px) {
     .cf-cascade-form { grid-template-columns: minmax(0, 1fr); }
     .cf-cascade-stats { grid-auto-columns: minmax(84px, 1fr); gap: 5px; }

@@ -8713,9 +8713,11 @@ function cfRenderCascadeGroups(groups) {
       + _cfCascadeUsd(available) + '</strong> free'
       + (committed > 0 ? ' · $' + _cfCascadeUsd(committed) + ' in use' : '')
       + ' <span style="color:var(--muted);">/ $' + _cfCascadeUsd(g.budget_usd) + '</span>';
-    return '<div class="table-meta" style="display:flex;justify-content:space-between;gap:8px;white-space:nowrap;">'
+    // display:contents on the wrapper puts both spans straight into the
+    // parent grid, so every symbol's figures line up in one column.
+    return '<div class="table-meta">'
       + '<span><strong>' + _escapeHtml(sym) + '</strong></span>'
-      + '<span>' + detail + '</span>'
+      + '<span class="cf-group-value">' + detail + '</span>'
       + '</div>';
   }).join('');
   mount.innerHTML = rows;
