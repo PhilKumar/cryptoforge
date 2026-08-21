@@ -153,7 +153,7 @@ MINOR_GAP_PCT = 0.05  # a new minor must sit 5% under every live mother
 #   hold  walk away holding it: the position is never sold, and lands in the
 #         stranded bag. The pessimistic floor.
 
-RETIRE_MODES = ("park", "sell", "hold")
+RETIRE_MODES = ("park", "sell", "hold", "stay")  # stay: never retire — trade at the cap forever
 ESCALATION_RUNGS = ("5m", "15m", "1h", "4h", "1d", "1w")
 
 
@@ -201,9 +201,50 @@ def _restore(cascade) -> None:
     cascade.CascadeEngine._paper_tp_check = _PRISTINE_TP_CHECK
     cascade.ESCALATION_LADDER = ESCALATION_RUNGS
     cascade.ESCALATION_BARS = _PRISTINE_BARS
+    global _PRISTINE_PLAN, _PRISTINE_REPLAN
+    if _PRISTINE_PLAN is None:
+        _PRISTINE_PLAN = cascade.plan_leg_orders
+        _PRISTINE_REPLAN = cascade.replan_ladder
+    cascade.plan_leg_orders = _PRISTINE_PLAN
+    cascade.replan_ladder = _PRISTINE_REPLAN
 
 
 _PRISTINE_TP_CHECK = None
+_PRISTINE_PLAN = None
+_PRISTINE_REPLAN = None
+
+
+def _install_minor_ladder(cascade, levels: Tuple[int, ...]) -> None:
+    """Minors scalp, majors ladder deep (Phil, 2026-08-11).
+
+    His journal says a minor is a scalp: entry a small structure below the
+    marked high, 14 of 16 filled on a single buy. So a minor campaign plans
+    its orders on this shallow ladder while majors keep the full one. The
+    campaign's kind is read at CALL time, so the moment a minor graduates to
+    major its next legs are planned deep automatically.
+    """
+    alloc = proportional(levels)
+    plan, replan = cascade.plan_leg_orders, cascade.replan_ladder
+
+    def swapped(fn):
+        def wrapper(campaign, *args, **kwargs):
+            if str(campaign.mc_kind or "major").lower() != "minor":
+                return fn(campaign, *args, **kwargs)
+            saved = (cascade.CASCADE_LEVELS, cascade.LEVEL_ALLOCATION, cascade.STOP_ENTRY_LEVELS)
+            cascade.CASCADE_LEVELS = levels
+            cascade.LEVEL_ALLOCATION = alloc
+            cascade.STOP_ENTRY_LEVELS = levels[:-1]
+            try:
+                return fn(campaign, *args, **kwargs)
+            finally:
+                cascade.CASCADE_LEVELS, cascade.LEVEL_ALLOCATION, cascade.STOP_ENTRY_LEVELS = saved
+
+        return wrapper
+
+    cascade.plan_leg_orders = swapped(plan)
+    cascade.replan_ladder = swapped(replan)
+
+
 _PRISTINE_BARS = None
 
 
@@ -337,6 +378,7 @@ class RunResult:
     unreached_rungs: int = 0
     unreached_rung_usd: float = 0.0
     escalated: int = 0
+    graduated: int = 0  # 5m lines that reached 1h and became majors (Phil's rule)
     # The minor-MC half of the book, so "did the minors carry the fall" is
     # answerable without unpicking the totals.
     minors: int = 0  # how many were allowed to run at once
@@ -392,6 +434,8 @@ class Replay:
         escalate_on: str = "bars",
         compound: bool = False,
         compound_live: bool = False,
+        spawn_on_escalation: bool = False,
+        new_low_gate: bool = False,
     ):
         self.cascade = cascade
         self.symbol = symbol
@@ -406,6 +450,21 @@ class Replay:
         self.minors = minors
         self.minor_gap = minor_gap
         self.minor_swing = minor_swing
+        # Phil's escalation rule (2026-08-11): the working line starts on 5m as
+        # a minor; the moment it climbs to 1h it GRADUATES into a major and a
+        # fresh 5m minor is seeded at the latest confirmed 5m swing high. There
+        # is always exactly one 5m line working; graduated majors accumulate
+        # and ride their own ladders up.
+        self.spawn_on_escalation = spawn_on_escalation
+        self._graduated: set = set()
+        self._rounds_seen: Dict[str, int] = {}
+        # Phil's new-low law between minor generations: the next minor may only
+        # start once price is BELOW the last generation's lowest buy — or once
+        # the market builds a HIGHER structure, which means the fall is over
+        # and the near fight is fresh territory again.
+        self.new_low_gate = new_low_gate
+        self._minor_gate_low: Optional[float] = None
+        self._minor_gate_mother: float = 0.0
         # The rung a campaign may not climb past, and what to do with the coin
         # it is holding when it outgrows even that.
         self.cap_tf = cap_tf
@@ -520,6 +579,38 @@ class Replay:
                 return None
         return pivot
 
+    @staticmethod
+    def _lowest_buy(campaign) -> Optional[float]:
+        prices = [f.price for f in campaign.all_fills if f.price > 0]
+        for rnd in campaign.rounds:
+            prices += [float(f.get("price") or 0) for f in rnd.fills if float(f.get("price") or 0) > 0]
+        return min(prices) if prices else None
+
+    def _set_minor_gate(self, campaign) -> None:
+        low = self._lowest_buy(campaign)
+        if low is not None:
+            self._minor_gate_low = low
+            self._minor_gate_mother = float(campaign.mother_high)
+
+    def _latest_swing_high(self, index: int) -> Optional[int]:
+        """The most recent confirmed 5m swing high standing above price.
+
+        Phil's escalation rule anchors the next minor at "the 5m minor high" —
+        the nearest high confirmed by minor_swing bars each side that price is
+        currently below. Scanned back two days; None means try again next bar.
+        """
+        sw = self.minor_swing
+        close = self.rows[index][4]
+        for pivot in range(index - sw, max(index - 576, sw), -1):
+            high = self.rows[pivot][2]
+            if high <= close:
+                continue
+            window = self.rows[pivot - sw : min(pivot + sw, index) + 1]
+            if any(row[2] > high for row in window if row is not self.rows[pivot]):
+                continue
+            return pivot
+        return None
+
     def _bank(self, ts: int) -> None:
         """Move any newly closed round's P&L into the pot the next campaign uses."""
         moved = 0.0
@@ -567,6 +658,8 @@ class Replay:
         current rung — so retirement happens exactly where the next escalation
         would have, not at some new threshold invented here.
         """
+        if self.retire == "stay":
+            return False  # the cap only stops the climb; the campaign keeps trading its rung
         if campaign.timeframe != self.cap_tf:
             return False
         if campaign.pending_stop_price is not None:
@@ -612,6 +705,13 @@ class Replay:
         """
         self.seen.add(campaign.campaign_id)
         self.result.campaigns += 1
+        # A successor born already at 1h or above (its parent was a graduated
+        # major) is a major continuing its climb, not a fresh 5m line — it must
+        # not trigger another minor spawn.
+        if self.spawn_on_escalation and campaign.timeframe_sec >= 3600:
+            self._graduated.add(campaign.campaign_id)
+            if str(campaign.mc_kind or "major").lower() == "minor":
+                campaign.mc_kind = "major"
         if not self.escalate:
             campaign.escalates = False
         median_bar = self._median_bar_pct(index)
@@ -725,7 +825,7 @@ class Replay:
         pending = cascade.MOTHER_BREAK_PENDING
         engine = self.engine
 
-        self._seed_campaign(0)
+        self._seed_campaign(0, kind="minor" if self.spawn_on_escalation else "major")
         for index in range(1, len(rows)):
             base = rows[index]
             ts, _o, high, _low, close = base
@@ -771,6 +871,40 @@ class Replay:
                 if campaign.state in active_states:
                     if self.escalate_on == "bars" or self._may_climb(campaign, candle):
                         engine._maybe_escalate(campaign, candle)
+                    if (
+                        self.spawn_on_escalation
+                        and campaign.timeframe_sec >= 3600
+                        and campaign.campaign_id not in self._graduated
+                    ):
+                        # Phil's rule: the 5m line reached 1h — it is a major
+                        # now, and a fresh 5m minor takes over the near fight.
+                        self._graduated.add(campaign.campaign_id)
+                        self.result.graduated += 1
+                        if str(campaign.mc_kind or "major").lower() == "minor":
+                            campaign.mc_kind = "major"
+                            self._set_minor_gate(campaign)
+                    if (
+                        self.spawn_on_escalation
+                        and not os.environ.get("SWEEP_NO_SWAP")
+                        and campaign.campaign_id in self._graduated
+                        and len(campaign.rounds) > self._rounds_seen.get(campaign.campaign_id, 0)
+                    ):
+                        # Phil (2026-08-11): a major that pays its target
+                        # leaves the board; the working minor is promoted to
+                        # major and a fresh 5m minor starts. Majors drain,
+                        # never stack forever.
+                        self._rounds_seen[campaign.campaign_id] = len(campaign.rounds)
+                        if (
+                            campaign.timeframe_sec >= 3600
+                            and campaign.filled_base_qty <= 0
+                            and campaign.state not in final_states
+                        ):
+                            campaign.state = "COMPLETED"
+                            for other in engine.campaigns.values():
+                                if other.state not in final_states and str(other.mc_kind or "major").lower() == "minor":
+                                    other.mc_kind = "major"
+                                    self._graduated.add(other.campaign_id)
+                                    self._set_minor_gate(other)
                     if self.cap_tf and self._outgrew_cap(campaign, candle):
                         self._retire(campaign, close)
 
@@ -810,7 +944,22 @@ class Replay:
             # The major chain is re-anchored on its own account: with minors
             # running, "some campaign is alive" would let the major line die
             # out and never come back.
-            if not majors:
+            if self.spawn_on_escalation:
+                # There is always exactly ONE 5m line working (mc_kind minor).
+                # It goes missing when it graduates to major or dies out; the
+                # replacement hangs from the latest confirmed 5m swing high.
+                if not minors_alive:
+                    anchor = self._latest_swing_high(index)
+                    if anchor is not None and self.new_low_gate and self._minor_gate_low is not None:
+                        # Below the last generation's lowest buy, or above its
+                        # mother (a higher structure): otherwise wait.
+                        if not (close < self._minor_gate_low or rows[anchor][2] > self._minor_gate_mother):
+                            anchor = None
+                    if anchor is not None:
+                        self._seed_campaign(index, mother=anchor, kind="minor")
+                    elif not majors:
+                        self._seed_campaign(index, kind="minor")
+            elif not majors:
                 self._seed_campaign(index)
             elif minors_alive < self.minors:
                 anchor = self._minor_anchor(index)
@@ -867,6 +1016,9 @@ def run_one(args: tuple) -> dict:
         compound_live,
         minor_gap,
         minor_swing,
+        spawn_on_escalation,
+        minor_levels,
+        new_low_gate,
     ) = args
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     import engine.cascade as cascade
@@ -875,6 +1027,8 @@ def run_one(args: tuple) -> dict:
     _restore(cascade)
     if trail > 0:
         _install_trail(cascade, trail)
+    if minor_levels:
+        _install_minor_ladder(cascade, minor_levels)
     if cap_tf:
         # Shortening the ladder is all it takes: `can_escalate` and
         # `next_timeframe_up` both read it, so nothing climbs past the cap.
@@ -904,6 +1058,8 @@ def run_one(args: tuple) -> dict:
         escalate_on=escalate_on,
         compound=compound,
         compound_live=compound_live,
+        spawn_on_escalation=spawn_on_escalation,
+        new_low_gate=new_low_gate,
     )
     replay.result.trail = trail
     replay.result.minors = minors
@@ -916,6 +1072,12 @@ def run_one(args: tuple) -> dict:
         suffix += f" · trail {trail:g}"
     if minors:
         suffix += f" · +{minors} minor MC @{minor_gap * 100:g}%/{minor_swing}bar"
+    if spawn_on_escalation:
+        suffix += " · minors graduate at 1h"
+    if minor_levels:
+        suffix += f" · minors scalp @L{'/'.join(str(x) for x in minor_levels)}"
+    if new_low_gate:
+        suffix += " · new-low gate"
     if cap_tf:
         suffix += f" · cap {cap_tf}/{retire}"
     if escalate_on != "bars":
@@ -997,6 +1159,24 @@ def main() -> int:
         action="store_true",
         help="feed each win back into the campaign that earned it, so its next fib is funded bigger",
     )
+    parser.add_argument(
+        "--minor-levels",
+        default="",
+        help="comma-separated fib levels for MINOR campaigns only (e.g. '1' = one scalp "
+        "rung a single leg below the touch high); majors keep the config's ladder",
+    )
+    parser.add_argument(
+        "--new-low-gate",
+        action="store_true",
+        help="Phil's new-low law between minor generations: the next minor starts only "
+        "below the last generation's lowest buy, or above its mother (higher structure)",
+    )
+    parser.add_argument(
+        "--spawn-on-escalation",
+        action="store_true",
+        help="Phil's rule: one 5m minor line always works; when it escalates to 1h it "
+        "becomes a major and a fresh 5m minor starts at the latest 5m swing high",
+    )
     parser.add_argument("--out", default="depth_sweep.json", help="filename under tools/.sweep_out")
     args = parser.parse_args()
 
@@ -1033,6 +1213,9 @@ def main() -> int:
             args.compound_live,
             args.minor_gap,
             args.minor_swing,
+            args.spawn_on_escalation,
+            tuple(int(x) for x in args.minor_levels.split(",") if x.strip()),
+            args.new_low_gate,
         )
         for symbol in symbols
         for config in configs
