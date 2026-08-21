@@ -1364,7 +1364,7 @@
     <div class="cf-cascade-form">
       <div class="input-group">
         <label for="cf-af-symbol">Coin</label>
-        <select id="cf-af-symbol"></select>
+        <select id="cf-af-symbol" data-cf-change="cfAfSelectSymbol(this.value)"></select>
       </div>
       <div class="input-group">
         <label for="cf-af-capital">Purse (USD)</label>
@@ -1386,10 +1386,15 @@
       </div>
       <div class="cf-cascade-form-note">Half the purse is the most this book may ever hold in coin at once. Profit folds into the purse each time it is worth a quarter of it, and the limit grows with it.</div>
     </div>
+    <div class="cf-af-state" id="cf-af-state-line">
+      <span class="tp-badge idle" id="cf-af-state-badge">No book</span>
+      <span id="cf-af-state-text">Pick a coin to see where its book stands.</span>
+    </div>
     <div class="allocator-actions">
-      <button class="read-only-hide btn btn-primary" data-cf-click="cfAfSaveBook(true)">Turn on</button>
-      <button class="read-only-hide btn btn-outline" data-cf-click="cfAfSaveBook(false)">Turn off</button>
-      <button class="btn btn-outline" data-cf-click="cfAfRefresh(true)">Refresh</button>
+      <button type="button" id="cf-af-on-btn" class="read-only-hide btn btn-primary" data-cf-click="cfAfSaveBook(true)">Turn on</button>
+      <button type="button" id="cf-af-save-btn" class="read-only-hide btn btn-primary" data-cf-click="cfAfSaveBook(true)" hidden>Save changes</button>
+      <button type="button" id="cf-af-off-btn" class="read-only-hide btn btn-danger" data-cf-click="cfAfSaveBook(false)" hidden>Turn off</button>
+      <button type="button" id="cf-af-refresh-btn" class="btn btn-outline" data-cf-click="cfAfRefresh(true)">Refresh</button>
     </div>
     <div class="allocator-error" id="cf-af-error" role="alert" aria-live="polite"></div>
     <div class="table-meta" style="margin-top:8px;">Books start in paper. A book only begins marking its own mother candles once it is switched on.</div>
@@ -1417,6 +1422,7 @@
           <th style="text-align:right;">Folds</th>
           <th style="text-align:right;">Lines</th>
           <th>Working line</th>
+          <th class="read-only-hide">Switch</th>
         </tr></thead>
         <tbody id="cf-af-books"></tbody>
       </table>

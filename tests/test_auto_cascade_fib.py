@@ -321,3 +321,18 @@ def test_the_anchor_is_never_the_newest_bars():
 
 def test_no_candles_no_anchor():
     assert latest_swing_high([], 100.0) is None
+
+
+def test_the_status_counts_only_lines_still_running():
+    """A closed campaign is history, not a running line.
+
+    The page reads this number straight out, so counting the dead ones made it
+    say "1 line running" over an empty panel.
+    """
+    engine = FakeEngine()
+    driver = _driver(engine)
+    engine.add(FakeCampaign("alive", state="TRENDLINE_ACTIVE"))
+    engine.add(FakeCampaign("dead", state="MOTHER_BROKEN"))
+    engine.add(FakeCampaign("done", state="COMPLETED"))
+    row = driver.status()["books"][0]
+    assert row["campaigns"] == 1

@@ -9825,8 +9825,10 @@ function cfRenderCascadeCampaigns(campaigns, instruments, options) {
     return c.state !== 'MOTHER_BROKEN' && c.state !== 'COMPLETED' && c.state !== 'STOPPED';
   });
   if (!live.length) {
+    // Each page says where its own history lives. Auto-Cascade_Fib has no
+    // Closed Campaigns section of its own, so it must not point at one.
     mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
-      + 'No live campaigns — ended ones are in Closed Campaigns below.</div>';
+      + (opts.emptyLiveText || 'No live campaigns — ended ones are in Closed Campaigns below.') + '</div>';
     _cfCascadeMarkClippedLabels(mount);
     _cfCascadeMarkClippedStrips(mount);
     return;
@@ -13367,6 +13369,18 @@ function _cfR37ChartHtml(d, P) {
 
 var _cfAfPollTimer = null;
 var _cfAfBusy = false;
+// The books as the server last reported them. The controls read this to say
+// what the picked coin is actually doing — without it the panel looks the
+// same whether a book is running or was never created.
+var _cfAfBooks = [];
+
+function _cfAfBookFor(symbol) {
+  var want = String(symbol || '').toUpperCase();
+  for (var i = 0; i < _cfAfBooks.length; i++) {
+    if (String(_cfAfBooks[i].symbol || '').toUpperCase() === want) return _cfAfBooks[i];
+  }
+  return null;
+}
 
 function _cfAfUsd(value) {
   if (value == null || value === '' || !isFinite(Number(value))) return '$—';
@@ -13383,6 +13397,8 @@ function _cfAfSetError(message) {
 
 function cfAfRenderStatus(data) {
   var books = (data && data.books) || [];
+  _cfAfBooks = books;
+  cfAfSyncControls();
   var body = document.getElementById('cf-af-books');
   var empty = document.getElementById('cf-af-books-empty');
   var state = document.getElementById('cf-af-engine-state');
@@ -13415,8 +13431,11 @@ function cfAfRenderStatus(data) {
       ? '<div class="table-meta">' + _escapeHtml(b.note) + '</div>' : '';
     return '<tr>'
       + '<td><strong>' + _escapeHtml(b.symbol || '') + '</strong>' + note + '</td>'
-      + '<td>' + (b.mode === 'live' ? '<span class="badge badge-live">LIVE</span>' : 'Paper') + '</td>'
-      + '<td>' + (b.enabled ? 'On' : 'Off') + doing + '</td>'
+      + '<td>' + (b.mode === 'live'
+        ? '<span class="tp-badge live">Live</span>'
+        : '<span class="tp-badge idle">Paper</span>') + '</td>'
+      + '<td><span class="tp-badge ' + (b.enabled ? 'running' : 'idle') + '">'
+      + (b.enabled ? 'On' : 'Off') + '</span>' + doing + '</td>'
       + '<td class="num">' + _cfAfUsd(b.purse_usd) + '</td>'
       + '<td class="num">' + _cfAfUsd(b.wallet_cap_usd) + '</td>'
       + '<td class="num">' + _cfAfUsd(b.in_coin_usd) + '</td>'
@@ -13425,6 +13444,10 @@ function cfAfRenderStatus(data) {
       + '<td class="num">' + (b.folds || 0) + '</td>'
       + '<td class="num">' + (b.campaigns || 0) + '</td>'
       + '<td>' + (b.working_line ? _escapeHtml(b.working_line) : '<span class="muted">—</span>') + '</td>'
+      + '<td class="read-only-hide"><button type="button" id="cf-af-row-' + _escapeHtml(b.symbol || '')
+      + '" class="btn btn-sm ' + (b.enabled ? 'btn-danger' : 'btn-primary')
+      + '" data-cf-click="cfAfToggleBook(\'' + _escapeHtml(b.symbol || '') + '\', '
+      + (b.enabled ? 'false' : 'true') + ')">' + (b.enabled ? 'Turn off' : 'Turn on') + '</button></td>'
       + '</tr>';
   }).join('');
 }
@@ -13439,6 +13462,68 @@ function cfAfSetMode(mode) {
     options[i].classList.toggle('is-active', on);
     options[i].setAttribute('aria-checked', on ? 'true' : 'false');
   }
+}
+
+// The buttons ARE the state. A book that is on offers "Save changes" and
+// "Turn off"; one that is off offers "Turn on". Pressing a button and seeing
+// nothing move is the failure this replaces.
+function cfAfSyncControls() {
+  var symbol = (document.getElementById('cf-af-symbol') || {}).value || '';
+  var book = _cfAfBookFor(symbol);
+  var on = !!(book && book.enabled);
+  var badge = document.getElementById('cf-af-state-badge');
+  var text = document.getElementById('cf-af-state-text');
+  if (badge) {
+    badge.className = 'tp-badge ' + (on ? (book.mode === 'live' ? 'live' : 'running') : 'idle');
+    badge.textContent = on ? (book.mode === 'live' ? 'On · live' : 'On · paper') : (book ? 'Off' : 'No book');
+  }
+  if (text) {
+    text.textContent = !book
+      ? 'No book for ' + (symbol || 'this coin') + ' yet — turning it on creates one.'
+      : (on
+        ? (book.last_error || book.note || 'Running. It marks its own mothers from the next cycle.')
+        : ('Switched off. Its purse of ' + _cfAfUsd(book.purse_usd) + ' and its history are kept.'));
+  }
+  var show = function (id, visible) { var n = document.getElementById(id); if (n) n.hidden = !visible; };
+  show('cf-af-on-btn', !on);
+  show('cf-af-save-btn', on);
+  show('cf-af-off-btn', on);
+}
+
+// Picking a coin loads ITS saved size and mode, so the fields never describe
+// one book while the buttons act on another.
+function cfAfSelectSymbol(symbol) {
+  var book = _cfAfBookFor(symbol);
+  if (book) {
+    var purse = document.getElementById('cf-af-capital');
+    if (purse && Number(book.start_capital_usd || book.purse_usd || 0) > 0) {
+      purse.value = Number(book.start_capital_usd || book.purse_usd);
+    }
+    cfAfSetMode(book.mode === 'live' ? 'live' : 'paper');
+  }
+  _cfAfSetError('');
+  cfAfUpdateWalletHint();
+  cfAfSyncControls();
+}
+
+var _CF_AF_BUTTONS = ['cf-af-on-btn', 'cf-af-save-btn', 'cf-af-off-btn', 'cf-af-refresh-btn'];
+
+// A request that takes a second must LOOK like it is taking a second.
+function _cfAfSetBusy(busy, actingId) {
+  _cfAfBusy = busy;
+  _CF_AF_BUTTONS.forEach(function (id) {
+    var node = document.getElementById(id);
+    if (!node) return;
+    node.disabled = busy;
+    if (id !== actingId) return;
+    if (busy) {
+      node.setAttribute('data-cf-label', node.textContent);
+      node.textContent = 'Working…';
+    } else if (node.hasAttribute('data-cf-label')) {
+      node.textContent = node.getAttribute('data-cf-label');
+      node.removeAttribute('data-cf-label');
+    }
+  });
 }
 
 function cfAfUpdateWalletHint() {
@@ -13485,7 +13570,8 @@ async function cfAfRenderLines() {
     });
     cfRenderCascadeCampaigns(mine, data.instruments || {}, {
       mountId: 'cf-af-campaigns',
-      emptyText: 'Nothing running yet — turn a book on beside this.'
+      emptyText: 'Nothing running yet — turn a book on beside this.',
+      emptyLiveText: 'Nothing running right now. Closed lines are on the Cascade page.'
     });
   } catch (err) {
     /* the books table already carries the error line; a dead poll must not
@@ -13508,6 +13594,29 @@ async function cfAfRefresh(showToast) {
   }
 }
 
+async function _cfAfPostBook(payload, actingId) {
+  _cfAfSetBusy(true, actingId);
+  try {
+    var response = await cfApiFetch('/api/auto-fib/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the book'));
+    _cfAfSetError('');
+    cfAfRenderStatus(data);
+    cfAfRenderStats((data && data.books) || []);
+    await cfAfRenderLines();
+    return true;
+  } catch (err) {
+    _cfAfSetError(String(err.message || err));
+    return false;
+  } finally {
+    _cfAfSetBusy(false, actingId);
+  }
+}
+
 async function cfAfSaveBook(enabled) {
   if (_cfAfBusy) return;
   var symbol = (document.getElementById('cf-af-symbol') || {}).value || '';
@@ -13515,6 +13624,7 @@ async function cfAfSaveBook(enabled) {
   var capital = Number((document.getElementById('cf-af-capital') || {}).value || 0);
   if (!symbol) { _cfAfSetError('Choose a coin first'); return; }
   if (enabled && !(capital > 0)) { _cfAfSetError('Set a purse bigger than zero'); return; }
+  var wasOn = !!(_cfAfBookFor(symbol) || {}).enabled;
   // Turning a book LIVE starts real orders with no further confirmation, so
   // it asks once — the same courtesy the Cascade page gives a live campaign.
   if (enabled && mode === 'live') {
@@ -13526,25 +13636,36 @@ async function cfAfSaveBook(enabled) {
     );
     if (!ok) return;
   }
-  _cfAfBusy = true;
-  try {
-    var response = await cfApiFetch('/api/auto-fib/books', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled })
-    });
-    var data = await cfReadApiPayload(response);
-    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the book'));
-    _cfAfSetError('');
-    cfAfRenderStatus(data);
-    cfAfRenderStats((data && data.books) || []);
-    await cfAfRenderLines();
-    cfToast(symbol + (enabled ? ' is on' : ' is off'), 'success');
-  } catch (err) {
-    _cfAfSetError(String(err.message || err));
-  } finally {
-    _cfAfBusy = false;
+  var acting = enabled ? (wasOn ? 'cf-af-save-btn' : 'cf-af-on-btn') : 'cf-af-off-btn';
+  var saved = await _cfAfPostBook(
+    { symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled },
+    acting
+  );
+  if (saved) {
+    cfToast(symbol + (enabled ? (wasOn ? ' saved' : ' is on') : ' is off'), 'success');
   }
+}
+
+// The row switch changes ONE thing — on or off. It carries no purse or mode,
+// so a book toggled from the table keeps the size it was given.
+async function cfAfToggleBook(symbol, enabled) {
+  if (_cfAfBusy) return;
+  symbol = String(symbol || '').toUpperCase();
+  if (!symbol) return;
+  var book = _cfAfBookFor(symbol);
+  if (enabled && book && book.mode === 'live') {
+    var ok = await cfConfirm(
+      symbol + ' will trade with REAL money, on its own, from the next cycle. '
+      + 'It may hold up to ' + _cfAfUsd(book.wallet_cap_usd) + ' in coin at once. Start it?',
+      'Start ' + symbol + ' live?',
+      '⚠️'
+    );
+    if (!ok) return;
+  }
+  var row = document.getElementById('cf-af-row-' + symbol);
+  if (row) { row.disabled = true; row.textContent = 'Working…'; }
+  var saved = await _cfAfPostBook({ symbol: symbol, enabled: !!enabled }, null);
+  if (saved) cfToast(symbol + (enabled ? ' is on' : ' is off'), 'success');
 }
 
 function cfInitAutoFibPage() {
@@ -13566,6 +13687,7 @@ function cfInitAutoFibPage() {
     purseField.addEventListener('input', cfAfUpdateWalletHint);
   }
   cfAfUpdateWalletHint();
+  cfAfSyncControls();
   cfAfRefresh(false);
   if (_cfAfPollTimer) clearInterval(_cfAfPollTimer);
   // The purse only moves when a round closes, which is rare — a slow poll is

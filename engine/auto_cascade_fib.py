@@ -216,7 +216,9 @@ class AutoCascadeFib:
                     "wallet_cap_usd": book.wallet_cap_usd,
                     "fold_threshold_usd": book.fold_threshold_usd,
                     "in_coin_usd": round(self._in_coin(book), 2),
-                    "campaigns": len(self._own_campaigns(book)),
+                    # Lines still RUNNING. Counting the dead ones made the page
+                    # say "1 line running" over an empty panel.
+                    "campaigns": len(self._live_campaigns(book)),
                     "working_line": self._working_line_id(book),
                 }
                 for book in sorted(self.books.values(), key=lambda b: b.symbol)

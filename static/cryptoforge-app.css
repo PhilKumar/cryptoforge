@@ -8949,6 +8949,23 @@ html[data-theme="light"] .journal-entry-notes section {
     font-variant-numeric: tabular-nums;
     background: rgba(118,138,176,0.06);
   }
+  /* Where the picked coin's book actually stands. Without it the panel reads
+     the same whether a book is running or was never created. */
+  .cf-af-state {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .cf-af-state .tp-badge { flex: none; }
+  /* The table's badges sit in a row of numbers, so they carry less weight than
+     the panel's. */
+  #cf-af-books-table .tp-badge { padding: 3px 10px; font-size: 10px; }
   .cf-af-row-error {
     color: var(--danger, #ff6b6b);
     margin-top: 2px;
