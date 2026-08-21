@@ -240,3 +240,84 @@ def test_compare_walks_an_upstox_series_against_a_dhan_source():
     ups = {datetime(2023, 5, 2, 9, 15): 121.0, datetime(2023, 5, 2, 9, 16): 119.0}
     cmp_ = compare(ups, src, 18000, "CE")
     assert cmp_.matched == 1 and cmp_.dhan_missing == 1
+
+
+def test_out_of_band_misses_do_not_condemn_complete_data():
+    """Dhan sells ATM+/-10. A strike 12 out is absent by design, and counting it
+    as a hole marks an archive untrustworthy when it is in fact complete."""
+    cmp_ = Comparison()
+    for _ in range(100):
+        cmp_.add(datetime(2025, 1, 2, 9, 15), 23000, "CE", 100.0, 100.0)
+    cmp_.dhan_missing = 60
+    cmp_.out_of_band = 60  # every miss was outside the band
+    assert cmp_.in_band_served == 1.0
+    assert cmp_.verdict.startswith("GOOD")
+
+
+def test_holes_inside_the_band_still_condemn():
+    cmp_ = Comparison()
+    for _ in range(100):
+        cmp_.add(datetime(2025, 1, 2, 9, 15), 23000, "CE", 100.0, 100.0)
+    cmp_.dhan_missing = 60
+    cmp_.out_of_band = 10  # 50 real holes at strikes Dhan should serve
+    assert cmp_.verdict.startswith("NOT TRUSTWORTHY")
+
+
+def test_a_gateway_timeout_is_retried_not_fatal():
+    """A five-year pull is thousands of calls; one 504 must not end it."""
+    import options.dhan_premiums as dp
+
+    src = DhanRollingPremiums("cid", "tok", sleep_between=0, band=0)
+    src.MAX_ATTEMPTS = 3
+    calls = []
+    good = {"data": {"ce": leg([epoch_ist(2023, 5, 2, 9, 15)], [18000], [120.5])}}
+
+    class Resp:
+        def __init__(self, code, body=None):
+            self.status_code, self._b, self.text = code, body, "gateway timeout"
+
+        def json(self):
+            return self._b
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(1)
+        return Resp(504) if len(calls) < 3 else Resp(200, good)
+
+    real_post, real_sleep = dp.requests.post, dp.time.sleep
+    dp.requests.post, dp.time.sleep = fake_post, lambda *_: None
+    try:
+        src.load("2023-05-02", "2023-05-02", option_type="CE", progress=False)
+    finally:
+        dp.requests.post, dp.time.sleep = real_post, real_sleep
+
+    assert len(calls) == 3, "should have retried twice then succeeded"
+    assert src.premium(datetime(2023, 5, 2, 9, 15), 18000, "CE") == 120.5
+    assert src.coverage.retries == 2
+
+
+def test_a_refusal_is_not_retried():
+    """A dead token refuses just as firmly the tenth time; retrying it only
+    delays the error and burns the rate budget."""
+    import options.dhan_premiums as dp
+
+    src = DhanRollingPremiums("cid", "tok", sleep_between=0, band=0)
+    calls = []
+
+    class Resp:
+        status_code, text = 401, '{"errorCode":"DH-901"}'
+
+        def json(self):
+            return {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(1)
+        return Resp()
+
+    real_post = dp.requests.post
+    dp.requests.post = fake_post
+    try:
+        with pytest.raises(DhanDataError):
+            src.load("2023-05-02", "2023-05-02", option_type="CE", progress=False)
+    finally:
+        dp.requests.post = real_post
+    assert len(calls) == 1, "a 401 must fail on the first call"
