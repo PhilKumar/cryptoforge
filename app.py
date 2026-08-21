@@ -189,6 +189,34 @@ async def _wake_cascade_on_boot() -> None:
         _get_auto_fib_engine()
     except Exception as exc:
         _logger.error("[AUTO-FIB] boot restore failed; the sandbox stays asleep: %s", exc)
+    _resume_rule3070_on_boot()
+
+
+def _resume_rule3070_on_boot() -> None:
+    """Restart the V-Rule books that were running when the process went away.
+
+    The paper trader is a thread, so it died with the old process and nothing
+    brought it back — every deploy silently stopped Phil's book and the console
+    returned reading "Stopped" over a journal that simply ended. `start()` now
+    records the intent on disk and `stop()` clears it, so what resumes here is
+    exactly what was deliberately left running.
+
+    One symbol failing must not stop the rest, and none of it may stop the app
+    from serving.
+    """
+    try:
+        from engine.rule3070_paper import symbols_marked_running
+
+        wanted = symbols_marked_running()
+    except Exception as exc:
+        _logger.error("[30-70] could not read which books were running: %s", exc)
+        return
+    for symbol in wanted:
+        try:
+            _get_rule3070_service(symbol).start()
+            _logger.info("[30-70] resumed %s after restart", symbol)
+        except Exception as exc:
+            _logger.error("[30-70] could not resume %s: %s", symbol, exc)
 
 
 @asynccontextmanager

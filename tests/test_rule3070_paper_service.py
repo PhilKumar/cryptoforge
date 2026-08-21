@@ -21,6 +21,32 @@ class Rule3070InstrumentTests(unittest.TestCase):
         self.out_patch.stop()
         self.tmp.cleanup()
 
+    def test_symbols_marked_running_reads_the_intent_off_disk(self):
+        """What boot resumes: books left RUNNING, never ones deliberately stopped."""
+        for name, payload in (
+            ("paper_state.json", {"start_ts": 1, "running": True}),  # BTC, running
+            ("paper_state_ETHUSDT.json", {"start_ts": 1, "running": False}),  # stopped on purpose
+            ("paper_state_SOLUSDT.json", {"start_ts": 1}),  # pre-dates the flag
+            ("paper_state_XRPUSDT.json", {"start_ts": 1, "running": True}),
+        ):
+            with open(os.path.join(self.tmp.name, name), "w") as fh:
+                json.dump(payload, fh)
+        # A corrupt file must be skipped, not crash the whole boot scan.
+        with open(os.path.join(self.tmp.name, "paper_state_DOGEUSDT.json"), "w") as fh:
+            fh.write("{ not json")
+        self.assertEqual(rule3070_paper.symbols_marked_running(), ["BTCUSDT", "XRPUSDT"])
+
+    def test_no_state_files_means_nothing_to_resume(self):
+        self.assertEqual(rule3070_paper.symbols_marked_running(), [])
+
+    def test_stop_records_the_decision_so_boot_does_not_undo_it(self):
+        service = rule3070_paper.Rule3070PaperService()
+        service._state = {"start_ts": 1, "running": True}
+        service._write_state()
+        self.assertEqual(rule3070_paper.symbols_marked_running(), ["BTCUSDT"])
+        service.stop()
+        self.assertEqual(rule3070_paper.symbols_marked_running(), [])
+
     def test_six_supported_instruments_are_exposed(self):
         self.assertEqual(
             rule3070_paper.SUPPORTED_SYMBOLS,

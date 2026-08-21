@@ -69,6 +69,26 @@ def normalize_symbol(symbol: str) -> str:
     return value
 
 
+def symbols_marked_running() -> list:
+    """Symbols whose book was RUNNING when the process last went away.
+
+    Read straight off disk without constructing a service, so boot can decide
+    what to resume before paying for any of them. A book that was stopped, or
+    never started, is absent.
+    """
+    out = []
+    for symbol in SUPPORTED_SYMBOLS:
+        name = "paper_state.json" if symbol == "BTCUSDT" else f"paper_state_{symbol}.json"
+        path = os.path.join(OUT, name)
+        try:
+            with open(path) as fh:
+                if json.load(fh).get("running"):
+                    out.append(symbol)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 def _read_json(path: str) -> dict:
     with open(path) as fh:
         return json.load(fh)
@@ -385,6 +405,13 @@ class Rule3070PaperService:
                 self._select_symbol_unlocked(symbol)
             self._prepare()
             self._stop.clear()
+            # A running book must survive a restart. Phil starts it once and
+            # expects it to keep counting; before this, every deploy silently
+            # stopped it and the console came back reading "Stopped" with a
+            # journal that simply ended (Phil, 2026-08-21). The intent lives on
+            # disk beside the book itself, so boot can honour it.
+            self._state["running"] = True
+            self._write_state()
             self._thread = threading.Thread(target=self._loop, name="rule3070-paper", daemon=True)
             self._thread.start()
             _logger.info("30-70 paper started on %s (start_ts %s)", self.symbol, self._state["start_ts"])
@@ -424,6 +451,15 @@ class Rule3070PaperService:
             self._thread = None
             self._release_writer_lock()
             self._status["running"] = False
+            # Stopping is a decision, and it has to outlive the process too —
+            # otherwise the next boot would restart a book that was deliberately
+            # switched off.
+            if self._state:
+                self._state["running"] = False
+                try:
+                    self._write_state()
+                except OSError as exc:
+                    _logger.warning("30-70 %s: could not record the stop: %s", self.symbol, exc)
             return self.status()
 
     def reset(self) -> dict:
