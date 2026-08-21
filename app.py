@@ -62,6 +62,7 @@ import config  # must be first — calls load_dotenv()
 import webauthn_auth as _webauthn_mod
 from broker import get_broker_client, get_broker_name, get_supported_brokers
 from broker.delta import get_candles_binance
+from engine.auto_cascade_fib import AutoCascadeFib
 from engine.backtest import run_backtest
 from engine.billing import (
     BillingRefused,
@@ -745,6 +746,8 @@ _BUCKET_SCALP_RUNTIME = "scalp_runtime"
 _BUCKET_CASCADE_RUNTIME = "cascade_runtime"
 _BUCKET_CASCADE_EVENTS = "cascade_events"
 _BUCKET_CASCADE_CLOSED = "cascade_closed"
+# Auto-Cascade_Fib's books: the purse, the pocket and which symbols are on.
+_BUCKET_AUTO_FIB = "auto_cascade_fib"
 # One frozen chart payload per campaign, keyed by campaign_id — the permanent,
 # static "how the trade was taken" record shown from the journal.
 _BUCKET_CASCADE_CHART_SNAP = "cascade_chart_snap"
@@ -7796,6 +7799,9 @@ async def scalp_reconcile():
 _cascade_engine: Optional[CascadeEngine] = None
 
 
+_auto_fib = None
+
+
 def _load_cascade_runtime() -> dict:
     data = _get_state_store().get(_BUCKET_CASCADE_RUNTIME, "current", default={})
     return data if isinstance(data, dict) else {}
@@ -7825,6 +7831,12 @@ def _persist_cascade_runtime_snapshot(engine: "CascadeEngine") -> None:
         _save_cascade_runtime(_snapshot_cascade_runtime(engine.get_status()))
     except Exception as exc:
         _logger.error("[CASCADE] Failed to persist runtime snapshot: %s", exc)
+    # The strategy's purse moves on its own, without any request being made —
+    # a fold happens inside the monitor loop. Riding along with the runtime
+    # snapshot means a restart cannot rewind it to whatever the last API call
+    # left behind.
+    if _auto_fib is not None:
+        _save_auto_fib()
 
 
 def _load_cascade_events() -> list:
@@ -8125,7 +8137,38 @@ def _get_cascade_engine() -> "CascadeEngine":
             brokers=_cascade_broker_registry(),
         )
         _restore_cascade_runtime(_cascade_engine)
+        _attach_auto_fib(_cascade_engine)
     return _cascade_engine
+
+
+def _attach_auto_fib(engine: "CascadeEngine") -> None:
+    """Give the engine its Auto-Cascade_Fib driver, books and all.
+
+    Attached even when every book is off: the driver does nothing until one is
+    enabled, and having it present means the Strategies page can read and set
+    the books without the engine needing a restart.
+    """
+    global _auto_fib
+    try:
+        _auto_fib = AutoCascadeFib(engine)
+        _auto_fib.load(_get_state_store().get(_BUCKET_AUTO_FIB, "books", default={}) or {})
+        engine.strategy_drivers.append(_auto_fib)
+    except Exception as exc:
+        _logger.error("[AUTO-FIB] could not attach the driver; the strategy stays off: %s", exc)
+
+
+def _get_auto_fib() -> "AutoCascadeFib":
+    _get_cascade_engine()  # builds and attaches on first use
+    if _auto_fib is None:
+        raise HTTPException(status_code=503, detail="Auto-Cascade_Fib is not available")
+    return _auto_fib
+
+
+def _save_auto_fib() -> None:
+    try:
+        _get_state_store().put(_BUCKET_AUTO_FIB, "books", _get_auto_fib().dump())
+    except Exception as exc:
+        _logger.error("[AUTO-FIB] Failed to persist the books: %s", exc)
 
 
 _TRADE_JOURNAL_FILE = os.path.join(_HERE, "data", "trade_journal.json")
@@ -9140,6 +9183,59 @@ async def cascade_feed_keys():
     response = JSONResponse(frame)
     response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
     return response
+
+
+@app.get("/api/auto-fib/status")
+async def auto_fib_status():
+    """The strategy's books: purse, wallet cap, and what it is working on."""
+    return {"status": "ok", **_get_auto_fib().status()}
+
+
+@app.post("/api/auto-fib/books")
+async def auto_fib_set_book(request: Request):
+    """Turn a symbol on or off, choose paper/live, or set its size.
+
+    Live is refused unless the venue's keys are actually configured — the same
+    check the Cascade page makes — because a book switched to live without keys
+    would look armed and place nothing.
+    """
+    check_rate_limit("auto_fib_book", max_calls=6, window_sec=10)
+    body = await _read_json_body(request)
+    symbol = str(body.get("symbol") or "").strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+    mode = body.get("mode")
+    exchange = str(body.get("exchange") or "").strip().lower()
+    if mode is not None and str(mode).lower() == "live":
+        eng = _get_cascade_engine()
+        client = eng.brokers.get(exchange) if exchange else eng.broker
+        if client is None:
+            raise HTTPException(status_code=400, detail=f"Unknown exchange '{exchange}'")
+        if not _broker_is_configured(client):
+            label = str(getattr(client, "display_name", "Broker"))
+            raise HTTPException(
+                status_code=409,
+                detail=f"{label} API keys are not configured — cannot run {symbol} live",
+            )
+    driver = _get_auto_fib()
+    try:
+        book = driver.set_book(
+            symbol,
+            enabled=body.get("enabled"),
+            mode=mode,
+            capital_usd=body.get("capital_usd", body.get("capital")),
+            exchange=exchange,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    # The driver only runs inside the monitor loop, and that loop is started by
+    # a campaign being started or restored. On a book turned on while nothing
+    # else is running — the ordinary case for a fresh strategy — the loop is
+    # asleep, so the book would sit there looking armed and do nothing at all.
+    if book.enabled:
+        _get_cascade_engine().start()
+    _save_auto_fib()
+    return {"status": "ok", **driver.status()}
 
 
 @app.get("/api/cascade/status")

@@ -1211,6 +1211,22 @@ class Campaign:
     # "minor" = a sub-mother marked inside a move that is already running, which
     # is always 5m no matter what chart it was spotted on.
     mc_kind: str = "major"
+    # ── the two settings a strategy can vary per campaign ──────────
+    # Both default to "whatever the module constant says", so every campaign
+    # ever saved, and every campaign the live Cascade starts, is unchanged.
+    #
+    # How far back toward the mother high this campaign sells. None = the
+    # module's TP_FIB_LEVEL (0.25). Auto-Cascade_Fib sets 0.5.
+    tp_fib_level: Optional[float] = None
+    # The highest rung this campaign may climb to. Empty = the full ladder,
+    # ending at 1W. Auto-Cascade_Fib sets "4h", so the campaign stops there and
+    # simply keeps trading that rung for as long as it takes.
+    cap_timeframe: str = ""
+    # Which strategy owns this campaign. Empty means the Cascade page, which is
+    # every campaign that existed before strategies were a concept and every
+    # one Phil starts by hand. A named strategy's driver claims only its own,
+    # so the two books can never manage each other's campaigns.
+    strategy: str = ""
     # Which exchange this campaign's money and orders live on. Empty means "the
     # one this engine was started with", which is what every campaign saved
     # before exchanges were a concept will read as — so nothing existing moves
@@ -1376,8 +1392,17 @@ class Campaign:
 
     @property
     def can_escalate(self) -> bool:
-        """A ladder-born campaign that has not already reached the top rung."""
-        return bool(self.escalates) and self.timeframe != ESCALATION_LADDER[-1]
+        """A ladder-born campaign that has not already reached its top rung.
+
+        `cap_timeframe` lowers that top rung for this campaign alone. Reaching
+        the cap does not end the campaign — it keeps trading the rung it is on,
+        which is the whole point of the cap: the ladder stops widening, the
+        trading does not stop.
+        """
+        if not self.escalates:
+            return False
+        top = self.cap_timeframe if self.cap_timeframe in ESCALATION_LADDER else ESCALATION_LADDER[-1]
+        return self.timeframe != top
 
     @property
     def has_escalated(self) -> bool:
@@ -1490,6 +1515,9 @@ class Campaign:
             "start_timeframe": self.start_timeframe,
             "escalates": self.escalates,
             "mc_kind": self.mc_kind,
+            "tp_fib_level": self.tp_fib_level,
+            "strategy": self.strategy,
+            "cap_timeframe": self.cap_timeframe,
             "exchange": self.exchange,
             "fee_pct_per_side": self.fee_pct_per_side,
             "funded_floor_price": self.funded_floor_price,
@@ -1578,6 +1606,9 @@ class Campaign:
             "start_timeframe",
             "escalates",
             "mc_kind",
+            "tp_fib_level",
+            "strategy",
+            "cap_timeframe",
             "exchange",
             "fee_pct_per_side",
             "funded_floor_price",
@@ -1763,7 +1794,8 @@ def compute_tp_price(campaign: Campaign) -> Optional[float]:
         # No entry yet — there is no target to speak of. The TP only exists
         # once the position does, measured from the actual average entry.
         return None
-    geometric = anchor + TP_FIB_LEVEL * (campaign.mother_high - anchor)
+    level = campaign.tp_fib_level if campaign.tp_fib_level is not None else TP_FIB_LEVEL
+    geometric = anchor + level * (campaign.mother_high - anchor)
     if not TP_MUST_CLEAR_FEES:
         return geometric
     floor = tp_breakeven_price(anchor, campaign_fee_pct(campaign)) * (1.0 + TP_MIN_NET_PCT / 100.0)
@@ -1994,6 +2026,11 @@ class CascadeEngine:
         # symbol means no group — campaigns take their typed capital unchanged,
         # which is exactly the pre-group behaviour.
         self.capital_groups: Dict[str, float] = {}
+        # Strategy drivers that decide WHEN to start a campaign. Empty on the
+        # Cascade page, which is hand-driven. Each is ticked once per monitor
+        # cycle, inside the write lock, so only the instance that owns order
+        # placement ever starts anything.
+        self.strategy_drivers: List = []
         # Campaign ids whose pot is collected but HELD unarmed because the fall
         # it collected already bounced far above the trigger (a late/left start).
         # In memory only, for one-shot logging — the hold itself is recomputed
@@ -2501,6 +2538,9 @@ class CascadeEngine:
         timeframe: str = BASE_TIMEFRAME,
         mc_kind: str = "",
         exchange: str = "",
+        strategy: str = "",
+        tp_fib_level: Optional[float] = None,
+        cap_timeframe: str = "",
     ) -> dict:
         symbol = str(symbol or "").strip().upper()
         mode = "live" if str(mode or "").strip().lower() == "live" else "paper"
@@ -2712,6 +2752,12 @@ class CascadeEngine:
             # escalate all the way to 1W. Only a campaign STARTED on 1W is fixed.
             escalates=timeframe in ESCALATING_START_TIMEFRAMES,
             mc_kind=mc_kind,
+            # Which strategy owns it, and the two settings that strategy varies.
+            # All three are empty/None for the Cascade page, so a hand-started
+            # campaign is built exactly as it always was.
+            strategy=str(strategy or ""),
+            tp_fib_level=tp_fib_level,
+            cap_timeframe=str(cap_timeframe or ""),
             # Stamped only when a venue was named. Left empty for the default
             # so existing campaigns and new ones are stored identically, and
             # an engine started on a different broker keeps behaving as before.
@@ -2740,7 +2786,14 @@ class CascadeEngine:
             f"{mc_kind} MC, capital ${capital_usd:g}, "
             f"mother high {mother_high:g} / low {mother_low:g}"
             + (" — minor MC, so 5m regardless of the chart it was marked on" if mc_kind == "minor" else "")
-            + (f" — climbs to {ESCALATION_LADDER[-1]}" if campaign.escalates else " — fixed timeframe, no escalation")
+            + (
+                # A capped campaign stops short of 1W, so saying "climbs to 1w"
+                # would describe a ladder it is never allowed to reach.
+                f" — climbs to {campaign.cap_timeframe or ESCALATION_LADDER[-1]}"
+                + (" and holds there" if campaign.cap_timeframe else "")
+                if campaign.escalates
+                else " — fixed timeframe, no escalation"
+            )
             + (
                 f" — smallest fib {min_fib_range * 100:.3f}% (median 5m bar {median_bar * 100:.3f}%)"
                 if median_bar > 0
@@ -4200,6 +4253,16 @@ class CascadeEngine:
                         changed |= await self._campaign_tick(campaign)
                     except Exception as exc:
                         _log.warning("[CASCADE] tick failed for %s: %s", campaign.campaign_id, exc)
+                # Strategies run AFTER the campaigns have stepped, so a line
+                # that graduated or a round that closed on this cycle is
+                # already visible to them. A driver that throws must never
+                # stop the monitor loop: the campaigns it started are ordinary
+                # campaigns and go on being managed without it.
+                for driver in list(self.strategy_drivers):
+                    try:
+                        changed |= bool(await driver.tick())
+                    except Exception as exc:
+                        _log.warning("[CASCADE] strategy driver failed: %s", exc)
                 if changed:
                     self._emit_update()
                 # Ended campaigns are not in active_campaigns, so nothing above

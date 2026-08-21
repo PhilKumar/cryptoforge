@@ -1122,7 +1122,7 @@ function cfPageTabName(pageId) {
 function cfNavButtonForPage(pageId) {
   // Cascade and the V-Rule live as two pages under ONE nav tab (Phil,
   // 2026-08-11: "Make strategy as a single tab").
-  if (pageId === 'cascade-page' || pageId === 'rule3070-page') {
+  if (pageId === 'cascade-page' || pageId === 'rule3070-page' || pageId === 'autofib-page') {
     return document.getElementById('nav-strategies');
   }
   return document.getElementById('nav-' + cfPageTabName(pageId));
@@ -1131,7 +1131,7 @@ function cfNavButtonForPage(pageId) {
 // The Strategies tab reopens whichever strategy page was used last.
 function cfOpenStrategies(btn) {
   var last = localStorage.getItem('cf-strat-sub');
-  if (last !== 'cascade-page' && last !== 'rule3070-page') last = 'cascade-page';
+  if (last !== 'cascade-page' && last !== 'rule3070-page' && last !== 'autofib-page') last = 'cascade-page';
   showPage(last, btn);
 }
 
@@ -1215,7 +1215,7 @@ function showPage(pageId, btn, options) {
   window.scrollTo(0, 0);
   // Persist active tab
   localStorage.setItem('cf_active_tab', tabName);
-  if (pageId === 'cascade-page' || pageId === 'rule3070-page') {
+  if (pageId === 'cascade-page' || pageId === 'rule3070-page' || pageId === 'autofib-page') {
     localStorage.setItem('cf-strat-sub', pageId);
   }
   cfSyncPageHistory(pageId, opts);
@@ -13351,3 +13351,150 @@ function _cfR37ChartHtml(d, P) {
     + '</div>';
   return html;
 }
+
+// ══════════════════════════════════════════════════════════════
+//  AUTO-CASCADE_FIB
+//  The cascade driving itself. This console only reads the books and
+//  turns them on or off — every campaign it starts is an ordinary
+//  Cascade campaign, managed by the same engine, and shows up on the
+//  Cascade page alongside the hand-started ones.
+// ══════════════════════════════════════════════════════════════
+
+var _cfAfPollTimer = null;
+var _cfAfBusy = false;
+
+function _cfAfUsd(value) {
+  if (value == null || value === '' || !isFinite(Number(value))) return '$—';
+  return '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _cfAfSetError(message) {
+  var node = document.getElementById('cf-af-error');
+  if (!node) return;
+  if (!message) { node.style.display = 'none'; node.textContent = ''; return; }
+  node.textContent = message;
+  node.style.display = '';
+}
+
+function cfAfRenderStatus(data) {
+  var books = (data && data.books) || [];
+  var body = document.getElementById('cf-af-books');
+  var empty = document.getElementById('cf-af-books-empty');
+  var state = document.getElementById('cf-af-engine-state');
+  var chip = document.getElementById('cf-af-engine-chip');
+  if (!body) return;
+
+  var on = books.filter(function (b) { return b.enabled; });
+  var live = on.filter(function (b) { return b.mode === 'live'; });
+  if (state) {
+    state.textContent = on.length
+      ? (on.length + ' on' + (live.length ? ' · ' + live.length + ' live' : ' · paper'))
+      : 'Off';
+  }
+  if (chip) chip.setAttribute('data-state', live.length ? 'running' : (on.length ? 'paper' : 'idle'));
+
+  if (!books.length) {
+    body.innerHTML = '';
+    if (empty) empty.style.display = '';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  body.innerHTML = books.map(function (b) {
+    // A book that failed to start something says so in its own row rather
+    // than in a toast that has already faded by the time it is looked at.
+    var note = b.last_error
+      ? '<div class="table-meta cf-af-row-error">' + _escapeHtml(b.last_error) + '</div>' : '';
+    return '<tr>'
+      + '<td><strong>' + _escapeHtml(b.symbol || '') + '</strong>' + note + '</td>'
+      + '<td>' + (b.mode === 'live' ? '<span class="badge badge-live">LIVE</span>' : 'Paper') + '</td>'
+      + '<td>' + (b.enabled ? 'On' : 'Off') + '</td>'
+      + '<td class="num">' + _cfAfUsd(b.purse_usd) + '</td>'
+      + '<td class="num">' + _cfAfUsd(b.wallet_cap_usd) + '</td>'
+      + '<td class="num">' + _cfAfUsd(b.in_coin_usd) + '</td>'
+      + '<td class="num">' + _cfAfUsd(b.pocket_usd) + '</td>'
+      + '<td class="num">' + _cfAfUsd(b.fold_threshold_usd) + '</td>'
+      + '<td class="num">' + (b.folds || 0) + '</td>'
+      + '<td class="num">' + (b.campaigns || 0) + '</td>'
+      + '<td>' + (b.working_line ? _escapeHtml(b.working_line) : '<span class="muted">—</span>') + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function cfAfRefresh(showToast) {
+  try {
+    var response = await cfApiFetch('/api/auto-fib/status', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Auto-Cascade_Fib status unavailable'));
+    _cfAfSetError('');
+    cfAfRenderStatus(data);
+    if (showToast) cfToast('Auto-Cascade_Fib refreshed', 'success');
+  } catch (err) {
+    _cfAfSetError(String(err.message || err));
+  }
+}
+
+async function cfAfSaveBook(enabled) {
+  if (_cfAfBusy) return;
+  var symbol = (document.getElementById('cf-af-symbol') || {}).value || '';
+  var mode = (document.getElementById('cf-af-mode') || {}).value || 'paper';
+  var capital = Number((document.getElementById('cf-af-capital') || {}).value || 0);
+  if (!symbol) { _cfAfSetError('Choose a coin first'); return; }
+  if (enabled && !(capital > 0)) { _cfAfSetError('Set a purse bigger than zero'); return; }
+  // Turning a book LIVE starts real orders with no further confirmation, so
+  // it asks once — the same courtesy the Cascade page gives a live campaign.
+  if (enabled && mode === 'live') {
+    var ok = await cfConfirm(
+      symbol + ' will trade with REAL money, on its own, from the next cycle. '
+      + 'It may hold up to ' + _cfAfUsd(capital / 2) + ' in coin at once. Start it?',
+      'Start ' + symbol + ' live?',
+      '⚠️'
+    );
+    if (!ok) return;
+  }
+  _cfAfBusy = true;
+  try {
+    var response = await cfApiFetch('/api/auto-fib/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled })
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the book'));
+    _cfAfSetError('');
+    cfAfRenderStatus(data);
+    cfToast(symbol + (enabled ? ' is on' : ' is off'), 'success');
+  } catch (err) {
+    _cfAfSetError(String(err.message || err));
+  } finally {
+    _cfAfBusy = false;
+  }
+}
+
+function cfInitAutoFibPage() {
+  var select = document.getElementById('cf-af-symbol');
+  if (select && !select.options.length) {
+    // The same coins the Cascade page offers (Phil, 2026-08-21).
+    ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'PAXGUSDT', 'XRPUSDT', 'DOGEUSDT', 'BNBUSDT']
+      .forEach(function (symbol) {
+        var option = document.createElement('option');
+        option.value = symbol;
+        option.textContent = symbol;
+        select.appendChild(option);
+      });
+  }
+  cfAfRefresh(false);
+  if (_cfAfPollTimer) clearInterval(_cfAfPollTimer);
+  // The purse only moves when a round closes, which is rare — a slow poll is
+  // enough and keeps this page off the engine's back.
+  _cfAfPollTimer = setInterval(function () { cfAfRefresh(false); }, 20000);
+}
+
+var _cfAfOrigShowPage = showPage;
+showPage = function (pageId, btn, options) {
+  if (pageId !== 'autofib-page' && _cfAfPollTimer) {
+    clearInterval(_cfAfPollTimer);
+    _cfAfPollTimer = null;
+  }
+  _cfAfOrigShowPage(pageId, btn, options);
+  if (pageId === 'autofib-page') cfInitAutoFibPage();
+};
