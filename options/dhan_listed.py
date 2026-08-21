@@ -64,7 +64,7 @@ class DhanListedSource:
     """``expiries()`` and ``lookup()``, the two calls PhilForge's runners make."""
 
     def __init__(
-        self, weeklies: list[date], stores: dict[str, str], underlying: str = "NIFTY", nearest_within: int = 15
+        self, weeklies: list[date], stores: dict[str, str], underlying: str = "NIFTY", nearest_within: int = 0
     ):
         self.weeklies = sorted(weeklies)
         self.monthlies = monthly_expiries(self.weeklies)
@@ -73,6 +73,13 @@ class DhanListedSource:
         # Why a lookup came back empty, counted so a run can be judged.
         self.misses = {"out_of_reach": 0, "no_bar": 0}
         self.served = 0
+        # Served from the minute asked for, versus from a neighbouring
+        # minute. The second is a substitution and has to be visible: a
+        # strike that drifts outside the ATM band comes back only at the
+        # edges of the window, at a price the asked-for minute never had.
+        self.served_exact = 0
+        self.served_nearby = 0
+        self.nearby_offsets: list = []
 
     # -- calendar ---------------------------------------------------------
     @staticmethod
@@ -112,16 +119,28 @@ class DhanListedSource:
 
         strike, side = int(contract.strike), str(contract.option_type).upper()
         price = store.at(stamp, strike, side)
-        if price is None:
-            # The nearest real print the same day, the way the app's own hybrid
-            # lookup does it -- forward first, an order resting at the level
-            # fills at the option's next trade.
+        exact = price is not None
+        offset = 0
+        if price is None and self.nearest_within:
+            # OFF by default, and it should stay off. PhilForge's own premium()
+            # already walks forward 15 minutes and back 30 when a lookup comes
+            # back empty, so searching here too substitutes twice and hides the
+            # miss from the caller that is entitled to know about it.
+            #
+            # It is also much less accurate. Measured against the Upstox archive
+            # over 8,209 minutes: a price from the minute asked for is a median
+            # 0.076% from the archive and within 1% nine times out of ten; one
+            # borrowed from a neighbouring minute is a median 2.55% out and
+            # wrong by more than 2% over half the time. A strike drifting past
+            # the edge of the ATM band reappears only at the edges of the
+            # window, at a price the asked-for minute never saw.
             for step in range(1, self.nearest_within + 1):
                 for cand in (stamp + timedelta(minutes=step), stamp - timedelta(minutes=step)):
                     if cand.date() != stamp.date():
                         continue
                     price = store.at(cand, strike, side)
                     if price is not None:
+                        offset = step
                         break
                 if price is not None:
                     break
@@ -129,6 +148,11 @@ class DhanListedSource:
             self.misses["no_bar"] += 1
             return None
         self.served += 1
+        if exact:
+            self.served_exact += 1
+        else:
+            self.served_nearby += 1
+            self.nearby_offsets.append(offset)
         return price
 
     def report(self) -> str:
@@ -137,6 +161,8 @@ class DhanListedSource:
             return "no lookups"
         return (
             f"{self.served:,}/{asked:,} lookups served ({self.served / asked:.1%}); "
+            f"{self.served_exact:,} at the exact minute, "
+            f"{self.served_nearby:,} substituted from a neighbouring one; "
             f"{self.misses['out_of_reach']:,} beyond the stores' expiries, "
             f"{self.misses['no_bar']:,} with no bar"
         )
