@@ -204,6 +204,8 @@ class Trade:
     entry_ts: datetime
     entry_spot: float
     entry_rung: str
+    entry_bar_high: float
+    entry_bar_close: float
     strike: int
     expiry: date
     lots: int
@@ -303,6 +305,20 @@ class Backtest:
             return None
         return cand
 
+    def stop_level(self, trade: "Trade", lv: "Levels", stop_rung: Optional[str]) -> Optional[float]:
+        """What a close has to clear to end the trade.
+
+        `rung` is the geometry: the pivot directly above the one bought at.
+        `entry-high` is the price action: the top of the candle that was rejected,
+        which is a much tighter line -- it sits a few points above the rung
+        entered on, where the rung above is a median 39 points away.
+        """
+        if self.args.stop == "entry-high":
+            return trade.entry_bar_high
+        if self.args.stop == "entry-close":
+            return trade.entry_bar_close
+        return lv.rungs[stop_rung] if stop_rung else None
+
     @property
     def bar_span(self) -> timedelta:
         """One minute short of the bar, so `next_minute` lands on the first
@@ -351,8 +367,11 @@ class Backtest:
                 if ts.time() >= SQUARE_OFF and (self.args.intraday or day == open_trade.expiry):
                     exit_now = self.last_minute_before(ts.replace(hour=15, minute=15))
                     reason = "SQUARE_OFF" if self.args.intraday else "EXPIRY"
-                elif stop_rung is not None and bar["close"] > use.rungs[stop_rung]:
-                    exit_now, reason = self.next_minute(ts + self.bar_span), f"STOP_ABOVE_{stop_rung}"
+                elif self.stop_level(open_trade, use, stop_rung) is not None and bar["close"] > self.stop_level(
+                    open_trade, use, stop_rung
+                ):
+                    exit_now = self.next_minute(ts + self.bar_span)
+                    reason = f"STOP_ABOVE_{stop_rung}" if self.args.stop == "rung" else "STOP_ABOVE_ENTRY_CANDLE"
                 elif active_level is not None and bar["close"] > active_level[1]:
                     exit_now, reason = self.next_minute(ts + self.bar_span), f"TRAIL_{active_level[0]}"
 
@@ -420,6 +439,8 @@ class Backtest:
                 entry_ts=fill_ts,
                 entry_spot=spot,
                 entry_rung=rung,
+                entry_bar_high=float(bar["high"]),
+                entry_bar_close=float(bar["close"]),
                 strike=strike,
                 expiry=expiry,
                 lots=self.args.lots,
