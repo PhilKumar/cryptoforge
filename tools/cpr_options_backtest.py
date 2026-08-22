@@ -332,7 +332,12 @@ class Backtest:
             raise SystemExit(f"unknown rung(s) {unknown}; pick from {RUNG_ORDER}")
         # Highest first, so a bar that reached through two of them is credited to
         # the one it was actually turned back from.
-        self.entry_rungs = [r for r in RUNG_ORDER if r in wanted]
+        order = (
+            RUNG_ORDER
+            if str(getattr(args, "side", "PE")).upper() == "PE" or not getattr(args, "mirror", False)
+            else list(reversed(RUNG_ORDER))
+        )
+        self.entry_rungs = [r for r in order if r in wanted]
         self.bar_minutes = int(args.bar_minutes)
         self.bars = to_bars(minute, f"{self.bar_minutes}min")
         # An entry needs a minute after the signal bar to fill in, so the last
@@ -515,9 +520,18 @@ class Backtest:
                     open_trade.notes.append(f"{reason} at {ts} but no minute to fill in")
                 else:
                     if open_trade.entry_rung == "ST":
-                        ladder = [(lb, pr) for lb, pr in use.rungs.items() if pr < open_trade.entry_spot]
-                    else:
+                        ladder = [
+                            (lb, pr) for lb, pr in use.rungs.items() if self.dirn * (pr - open_trade.entry_spot) > 0
+                        ]
+                    elif self.dirn < 0:
                         ladder = use.below(open_trade.entry_rung)
+                    else:
+                        ladder = use.rungs_above(open_trade.entry_rung)
+                    if self.dirn > 0:
+                        # RUNG_ORDER runs high to low, so a call's targets come
+                        # out farthest-first; the trail must walk the nearest one
+                        # first or it never engages at all.
+                        ladder = list(reversed(ladder))
                     for i in range(deepest_i + 1, len(ladder)):
                         reached = bar["high"] >= ladder[i][1] if self.dirn > 0 else bar["low"] <= ladder[i][1]
                         if reached:
@@ -550,7 +564,16 @@ class Backtest:
                 rung = None
                 for label in self.entry_rungs:
                     price = lv.rungs[label]
-                    if prev_close < price and bar["high"] >= price and bar["close"] < price:
+                    # It must already be on the trade's side of the rung, must
+                    # reach across and touch it, and must close back on the
+                    # trade's side. Written through `dirn` so a put reads it as
+                    # a rejection from below and a call as a bounce from above.
+                    reach = bar["high"] if self.dirn < 0 else bar["low"]
+                    if (
+                        self.dirn * (prev_close - price) > 0
+                        and self.dirn * (reach - price) <= 0
+                        and self.dirn * (bar["close"] - price) > 0
+                    ):
                         rung = label
                         break
                 if rung is None:
@@ -595,8 +618,14 @@ class Backtest:
             live_levels, active_level, deepest_i = lv, None, -1
             # A supertrend entry is not on a rung, so there is no rung above it;
             # stop_level() reads the nearest one off the entry price instead.
-            above = None if rung == "ST" else lv.above(rung)
-            stop_rung = above[0] if above else None
+            if rung == "ST":
+                stop_rung = None
+            elif self.dirn < 0:
+                nxt = lv.above(rung)
+                stop_rung = nxt[0] if nxt else None
+            else:
+                nxt = lv.below(rung)
+                stop_rung = nxt[0][0] if nxt else None
 
         if open_trade is not None:
             last = self.minute_index[-1]

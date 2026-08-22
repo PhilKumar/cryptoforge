@@ -86,3 +86,18 @@ def test_lot_size_steps_are_keyed_by_expiry():
 def test_expiry_weekday_moves_to_tuesday_in_september_2025():
     assert era_for(date(2025, 8, 20))["expiry_weekday"] == 3
     assert era_for(date(2025, 9, 3))["expiry_weekday"] == 1
+
+
+def test_a_calls_targets_run_upward_and_nearest_first():
+    """The bug this catches produced zero trailing exits on every call run: the
+    ladder came out farthest-rung-first, so the trail never engaged."""
+    rows = [("2024-01-01", 100, 130, 70, 110), ("2024-01-08", 100, 110, 90, 95)]
+    lv = weekly_levels(_daily(rows))[date(2024, 1, 8)]
+
+    put = lv.below("R1")
+    assert [k for k, _ in put][:3] == ["R0.5", "TC", "BC"]
+    assert put[0][1] > put[1][1], "a put's targets must descend"
+
+    call = list(reversed(lv.rungs_above("S1")))
+    assert [k for k, _ in call][:3] == ["S0.5", "BC", "TC"]
+    assert call[0][1] < call[1][1], "a call's targets must ascend, nearest first"
