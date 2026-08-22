@@ -361,6 +361,7 @@ class Trade:
     deepest: str = ""
     priced_exit: bool = True
     unpriceable: bool = False
+    best: Optional[float] = None
     mfe: float = 0.0
     charges: float = 0.0
     notes: list = field(default_factory=list)
@@ -681,6 +682,13 @@ class Backtest:
                 ):
                     exit_now = self.next_minute(ts + self.bar_span)
                     reason = f"STOP_ABOVE_{stop_rung}" if self.args.stop == "rung" else "STOP_ABOVE_ENTRY_CANDLE"
+                elif (
+                    self.args.trail_points
+                    and open_trade.best is not None
+                    and (self.dirn * (bar["close"] - (open_trade.best - self.dirn * self.args.trail_points)) < 0)
+                ):
+                    exit_now = self.next_minute(ts + self.bar_span)
+                    reason = "TRAIL_POINTS"
                 elif active_level is not None and self.dirn * (bar["close"] - active_level[1]) < 0:
                     exit_now, reason = self.next_minute(ts + self.bar_span), f"TRAIL_{active_level[0]}"
 
@@ -693,6 +701,10 @@ class Backtest:
                 elif reason:
                     open_trade.notes.append(f"{reason} at {ts} but no minute to fill in")
                 else:
+                    # A rung a few points from entry is not a target, it is a
+                    # scratch: it arms the trail at once and the first tick back
+                    # ends the trade. --min-trail-points skips those.
+                    near = self.args.min_trail_points
                     if open_trade.entry_rung not in use.rungs:
                         ladder = [
                             (lb, pr) for lb, pr in use.rungs.items() if self.dirn * (pr - open_trade.entry_spot) > 0
@@ -701,6 +713,8 @@ class Backtest:
                         ladder = use.below(open_trade.entry_rung)
                     else:
                         ladder = use.rungs_above(open_trade.entry_rung)
+                    if near:
+                        ladder = [x for x in ladder if abs(x[1] - open_trade.entry_spot) >= near]
                     if self.dirn > 0:
                         # RUNG_ORDER runs high to low, so a call's targets come
                         # out farthest-first; the trail must walk the nearest one
@@ -716,6 +730,8 @@ class Backtest:
                     behind = deepest_i - self.args.trail_lag
                     active_level = ladder[behind] if behind >= 0 else None
                     far = float(bar["high"]) if self.dirn > 0 else float(bar["low"])
+                    if open_trade.best is None or self.dirn * (far - open_trade.best) > 0:
+                        open_trade.best = far
                     open_trade.mfe = max(open_trade.mfe, self.dirn * (far - open_trade.entry_spot))
                     continue
 
@@ -997,6 +1013,18 @@ def main() -> None:
         help="0.25 halves every gap between R or S rungs, so the trail ratchets twice as often",
     )
     ap.add_argument("--stop", choices=["rung", "entry-high", "entry-close", "st-line"], default="rung")
+    ap.add_argument(
+        "--min-trail-points",
+        type=float,
+        default=0.0,
+        help="ignore trail rungs nearer than this to entry; they scratch the trade",
+    )
+    ap.add_argument(
+        "--trail-points",
+        type=float,
+        default=0.0,
+        help="trail by a fixed number of points from the best price instead of by rungs",
+    )
     ap.add_argument(
         "--max-stop-points", type=float, default=0.0, help="cap the stop distance from entry; 0 is uncapped"
     )
