@@ -983,6 +983,110 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self.assertEqual(grandchild.barren_chain, 0)
 
 
+class CascadeSuccessorInheritsTheRuleTests(unittest.TestCase):
+    """A break moves the campaign; it must not change whose campaign it is.
+
+    Until 2026-08-23 the successor carried neither the parent's strategy name
+    nor its two settings, so a broken mother handed an Auto-Cascade_Fib line
+    back to the Cascade defaults — no half-target, no 4h cap, and no owner. The
+    book then saw no working line and started a second one on the same purse.
+    """
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.parent = Campaign(
+            campaign_id="p1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            seq=1,
+            mode="paper",
+            min_notional_usd=5.0,
+            tick_size=0.01,
+            strategy="auto-cascade-fib",
+            tp_fib_level=0.5,
+            cap_timeframe="4h",
+        )
+        self.parent.close_reason = "mother_broken"  # _auto_restart only covers the break case
+        self.engine.campaigns["p1"] = self.parent
+
+    def test_the_successor_carries_the_strategy_and_its_two_settings(self):
+        child = self.engine._auto_restart(self.parent, Candle(3000, 1.0, 2.0, 0.5, 1.5))
+        self.assertIsNotNone(child)
+        self.assertEqual(child.strategy, "auto-cascade-fib")
+        self.assertEqual(child.tp_fib_level, 0.5)
+        self.assertEqual(child.cap_timeframe, "4h")
+
+    def test_a_hand_started_campaign_still_has_no_owner_to_pass_on(self):
+        self.parent.strategy = ""
+        self.parent.tp_fib_level = None
+        self.parent.cap_timeframe = ""
+        child = self.engine._auto_restart(self.parent, Candle(3000, 1.0, 2.0, 0.5, 1.5))
+        self.assertEqual(child.strategy, "")
+        self.assertIsNone(child.tp_fib_level)
+        self.assertEqual(child.cap_timeframe, "")
+
+
+class CascadeOrphanedSuccessorRepairTests(unittest.TestCase):
+    """The chains already on disk, walked back to whoever started them."""
+
+    def _chain(self, root_strategy="auto-cascade-fib"):
+        engine = _mk_engine()
+        root = Campaign(
+            campaign_id="root",
+            symbol="ETHUSDT",
+            capital_usd=2000.0,
+            mother_high=10.0,
+            mother_low=9.0,
+            mother_timestamp=0,
+            seq=1,
+            mode="paper",
+            strategy=root_strategy,
+            tp_fib_level=0.5 if root_strategy else None,
+            cap_timeframe="4h" if root_strategy else "",
+        )
+        kid = Campaign(
+            campaign_id="kid",
+            symbol="ETHUSDT",
+            capital_usd=2000.0,
+            mother_high=11.0,
+            mother_low=10.0,
+            mother_timestamp=300,
+            seq=2,
+            mode="paper",
+            parent_campaign_id="root",
+            generation=1,
+        )
+        engine.campaigns["root"] = root
+        engine.campaigns["kid"] = kid
+        return engine, kid
+
+    def test_an_orphan_is_handed_back_with_its_targets(self):
+        engine, kid = self._chain()
+        self.assertEqual(engine._repair_orphaned_strategy_successors(), 1)
+        self.assertEqual(kid.strategy, "auto-cascade-fib")
+        self.assertEqual(kid.tp_fib_level, 0.5)
+        self.assertEqual(kid.cap_timeframe, "4h")
+
+    def test_it_runs_once_and_is_idempotent(self):
+        engine, _ = self._chain()
+        engine._repair_orphaned_strategy_successors()
+        self.assertEqual(engine._repair_orphaned_strategy_successors(), 0)
+
+    def test_a_chain_phil_started_by_hand_is_left_alone(self):
+        engine, kid = self._chain(root_strategy="")
+        self.assertEqual(engine._repair_orphaned_strategy_successors(), 0)
+        self.assertEqual(kid.strategy, "")
+
+    def test_a_pruned_root_adopts_nobody(self):
+        engine, kid = self._chain()
+        del engine.campaigns["root"]  # the root is gone: who started it is unknowable
+        self.assertEqual(engine._repair_orphaned_strategy_successors(), 0)
+        self.assertEqual(kid.strategy, "")
+
+
 class CascadeRestartAlertNoiseTests(unittest.TestCase):
     """A barren chain is one event, not N.
 

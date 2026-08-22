@@ -8958,6 +8958,44 @@ function _cfCascadeMcKindPill(campaign) {
   var kind = String(campaign.mc_kind || 'major').toLowerCase();
   var minor = kind === 'minor';
   var gen = Number(campaign.generation) || 0;
+  var owner = String(campaign.strategy || '');
+  // A strategy's campaigns are not the Cascade page's, and the kind does not
+  // mean there what it means here — so the pill says what the STRATEGY means by
+  // it, and stops being a button. Auto-Cascade_Fib picks its working line by
+  // looking for the minor and stamps major only once a line has climbed to 1h;
+  // relabelling one by hand told it the line had graduated, and it would seed a
+  // second line behind the one still running (Phil, 2026-08-23: "which one is
+  // minor and which is major.... The lables are not mentioned properly").
+  if (owner === 'auto-cascade-fib') {
+    if (!minor) {
+      return '<span class="admin-pill" data-state="info" title="'
+        + _escapeHtml('GRADUATED · 1H — this line climbed from 5m to the 1h rung, so Auto-Cascade_Fib '
+          + 'left it to run on its own and started a fresh 5m working line behind it.')
+        + '">GRADUATED &middot; 1H</span>';
+    }
+    // The book names its working line outright, so say WORKING LINE only when
+    // it is confirmed to be that one. Everything else is honestly just a 5m
+    // line — an ended one, or (until the successor fix landed) a duplicate the
+    // book was not feeding. Never claim the strong label from a guess.
+    var afBook = (typeof _cfAfBookFor === 'function') ? _cfAfBookFor(campaign.symbol) : null;
+    var isWorking = !!(afBook && afBook.working_line
+      && String(afBook.working_line) === String(campaign.campaign_id));
+    return '<span class="admin-pill" data-state="' + (isWorking ? 'ok' : 'info') + '" title="'
+      + _escapeHtml(isWorking
+        ? 'WORKING LINE — the 5m line Auto-Cascade_Fib is feeding right now. There is one per '
+          + 'symbol: the strategy finds it by this mark, and starts a fresh one only once this '
+          + 'line has graduated to the 1h rung.'
+        : '5M LINE — a 5m line of this book that the strategy is not feeding right now. Either it '
+          + 'has ended, or the book is working a different line on this symbol.')
+      + '">' + (isWorking ? 'WORKING LINE' : '5M LINE') + '</span>';
+  }
+  if (owner) {
+    return '<span class="admin-pill" data-state="' + (minor ? 'warn' : 'ok') + '" title="'
+      + _escapeHtml((minor ? 'MINOR MC' : 'MAJOR MC') + ' — set by the ' + owner + ' strategy, which '
+        + 'owns this campaign. Relabelling it by hand would tell the strategy something untrue about '
+        + 'its own line, so it is shown here rather than offered as a control.')
+      + '">' + (minor ? 'MINOR MC' : 'MAJOR MC') + '</span>';
+  }
   var why = minor
     ? 'MINOR MC — a sub-mother marked inside a move that is already running. Always stepped on 5m, '
       + 'whatever chart it was spotted on. Only ever started by hand.'

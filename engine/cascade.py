@@ -4260,6 +4260,7 @@ class CascadeEngine:
             self.campaigns[campaign.campaign_id] = campaign
             restored += 1
         self._repair_inherited_mc_kind()
+        self._repair_orphaned_strategy_successors()
         self._backfill_closed_history()
         return restored
 
@@ -4317,6 +4318,80 @@ class CascadeEngine:
             repaired += 1
         if repaired:
             _log.info("[CASCADE] relabelled %s successor campaign(s) back to major", repaired)
+        return repaired
+
+    def _repair_orphaned_strategy_successors(self) -> int:
+        """Hand a strategy's successors back to the strategy that started them.
+
+        Until 2026-08-23 an auto-restart carried neither the parent's strategy
+        name nor its two settings, so a broken mother handed the campaign back
+        to the Cascade defaults: Auto-Cascade_Fib's successors lost the
+        half-target and the 4h cap, and since a driver claims only campaigns
+        carrying its name, they lost their owner too. The book, seeing no
+        working line, then seeded a second one — two lines on one purse, one of
+        them trading a rule nobody chose. The restart inherits all three now;
+        the chains already on disk are walked back to the campaign the strategy
+        actually started and given its name and its settings.
+
+        Only a chain whose root is still on hand is adopted, and only where the
+        root names a strategy. A pruned parent says nothing about who started
+        the chain, and a campaign Phil began by hand has no name to inherit.
+        """
+        owners: Dict[str, tuple] = {}
+        parents: Dict[str, str] = {}
+        for campaign in self.campaigns.values():
+            owners[campaign.campaign_id] = (
+                str(campaign.strategy or ""),
+                campaign.tp_fib_level,
+                str(campaign.cap_timeframe or ""),
+            )
+            parents[campaign.campaign_id] = str(campaign.parent_campaign_id or "")
+        for row in self.closed_campaigns:
+            cid = str(row.get("campaign_id") or "")
+            if cid and cid not in owners:
+                owners[cid] = (
+                    str(row.get("strategy") or ""),
+                    row.get("tp_fib_level"),
+                    str(row.get("cap_timeframe") or ""),
+                )
+                parents[cid] = str(row.get("parent_campaign_id") or "")
+
+        repaired = 0
+        for campaign in self.campaigns.values():
+            if campaign.strategy or not campaign.parent_campaign_id:
+                continue
+            seen = {campaign.campaign_id}
+            current = campaign.parent_campaign_id
+            root = ""
+            while current and current not in seen:
+                if current not in owners:
+                    root = ""
+                    break
+                seen.add(current)
+                root = current
+                current = parents.get(current) or ""
+            name, tp_level, cap = owners.get(root) or ("", None, "")
+            if not name:
+                continue
+            campaign.strategy = name
+            campaign.tp_fib_level = tp_level
+            campaign.cap_timeframe = cap
+            owners[campaign.campaign_id] = (name, tp_level, cap)
+            for row in self.closed_campaigns:
+                if row.get("campaign_id") == campaign.campaign_id:
+                    row["strategy"] = name
+                    row["tp_fib_level"] = tp_level
+                    row["cap_timeframe"] = cap
+            self._log_event(
+                campaign,
+                "info",
+                f"Adopted back into {name}. It restarted from a broken mother before successors "
+                f"inherited their parent's rule, so it had been running under the Cascade defaults "
+                f"instead of the strategy's own target and ladder cap.",
+            )
+            repaired += 1
+        if repaired:
+            _log.info("[CASCADE] handed %s orphaned successor(s) back to their strategy", repaired)
         return repaired
 
     def _backfill_closed_history(self) -> int:
@@ -6168,6 +6243,19 @@ class CascadeEngine:
             # A successor carries on the parent's move on the parent's venue.
             # Inheriting this is what stops a restart from crossing exchanges.
             exchange=parent.exchange,
+            # And it carries on under the parent's RULE. Without these three a
+            # break silently handed the campaign back to the Cascade defaults:
+            # Auto-Cascade_Fib's successors lost their half-target and their 4h
+            # ladder cap, and — because the driver claims only campaigns
+            # carrying its name — lost their owner too. The book then saw no
+            # working line and seeded a second one, so a broken mother left TWO
+            # lines running on one purse while the orphan traded a rule nobody
+            # chose (Phil, 2026-08-23: "which one is minor and which is major").
+            # Driven campaigns never reach here — they skip _candle_step — so
+            # this only ever carries a candle-stepped strategy forward.
+            strategy=parent.strategy,
+            tp_fib_level=parent.tp_fib_level,
+            cap_timeframe=parent.cap_timeframe,
             fee_pct_per_side=parent.fee_pct_per_side,
             # A successor is a newly-born MC like any other, so it takes the
             # band ledger as it stands now. The parent is already archived and

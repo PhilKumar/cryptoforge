@@ -452,6 +452,40 @@ def test_a_used_anchor_is_never_seeded_twice():
     assert book.tried_anchors.count(first_anchor) == 1
 
 
+def test_the_successor_of_a_broken_line_is_the_working_line():
+    """The 2026-08-23 ETHUSDT pair: two lines running on one purse.
+
+    When a mother breaks, the engine restarts it on the breaking candle. That
+    successor used to be born with no strategy name, so the driver could not
+    see it, seeded a fresh line 21 seconds later, and the book paid for both.
+    The engine inherits the name now — this pins that the driver stands down
+    when it does.
+    """
+    engine = FakeEngine(_rising_then_falling())
+    driver = _driver(engine)
+    book = _book(driver)
+    assert asyncio.run(driver._seed_working_line(book)) is True
+    parent = engine.campaigns["new1"]
+    parent.state = "MOTHER_BROKEN"  # a final state: the parent is done
+    engine.add(FakeCampaign(campaign_id="successor", symbol="BTCUSDT"))
+    book.next_seed_ts = 0.0  # the cooldown is not what is being tested
+    assert asyncio.run(driver._seed_working_line(book)) is False
+    assert book.note == "working a 5m line"
+    assert len(engine.started) == 1
+    assert driver._working_line_id(book) == "successor"
+
+
+def test_a_successor_that_lost_its_name_is_invisible_and_costs_a_second_line():
+    """The bug itself, pinned so it cannot come back quietly."""
+    engine = FakeEngine(_rising_then_falling())
+    driver = _driver(engine)
+    book = _book(driver)
+    assert asyncio.run(driver._seed_working_line(book)) is True
+    engine.campaigns["new1"].state = "MOTHER_BROKEN"
+    engine.add(FakeCampaign(campaign_id="orphan", symbol="BTCUSDT", strategy=""))
+    assert driver._working_line_id(book) == ""  # the driver cannot see it
+
+
 def test_every_start_opens_a_full_bar_cooldown():
     """One start per closed 5m bar, however fast campaigns die."""
     engine = FakeEngine(_rising_then_falling())
