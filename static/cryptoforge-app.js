@@ -12968,10 +12968,7 @@ async function cfR37Load(showToast, scan) {
   }
 }
 
-var _cfR37LastStatus = null;
-
 function cfR37RenderStatus(s) {
-  _cfR37LastStatus = s;
   var running = !!s.running;
   var selectedSymbol = String(s.symbol || _cfR37ActiveSymbol || 'BTCUSDT').toUpperCase();
   _cfR37ActiveSymbol = selectedSymbol;
@@ -12990,9 +12987,8 @@ function cfR37RenderStatus(s) {
   var resetBtn = document.getElementById('cf-r37-reset-btn');
   var symbolSelect = document.getElementById('cf-r37-symbol-select');
   var symbolNote = document.getElementById('cf-r37-symbol-note');
-  var liveMode = typeof cfR37Mode === 'function' && cfR37Mode() === 'live';
-  if (startBtn) startBtn.hidden = running || liveMode;
-  if (stopBtn) stopBtn.hidden = !running || liveMode;
+  if (startBtn) startBtn.hidden = running;
+  if (stopBtn) stopBtn.hidden = !running;
   if (startBtn) startBtn.disabled = _cfR37Switching;
   if (resetBtn) resetBtn.disabled = running || _cfR37Switching;
   if (symbolSelect) {
@@ -13312,9 +13308,8 @@ async function cfR37SelectSymbol(symbol) {
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not change the instrument'));
     _cfR37Switching = false;
     cfR37RenderStatus(data);
-    cfVrSyncControls();
     await cfR37Load(false, true);
-    cfToast(requested + ' selected', 'success');
+    cfToast(requested + ' paper book selected', 'success');
   } catch (err) {
     _cfR37Switching = false;
     _cfR37ActiveSymbol = previous;
@@ -13324,14 +13319,39 @@ async function cfR37SelectSymbol(symbol) {
   }
 }
 
-// ── V-Rule, live ─────────────────────────────────────────────────
-// The Paper/Live toggle in the V-Rule console, like the other two pages.
-// Paper is the replay book; Live is the same rule trading the account
-// through its own engine. The ladders are drawn by the Cascade renderer.
+// ── V-Rule, real money ────────────────────────────────────────────
+// The card on the V-Rule page that starts the rule against a live account.
+// Same shape as the Auto-Cascade_Fib controls: the server says whether live
+// is on offer, the buttons ARE the state, and the ladders are drawn by the
+// Cascade page's own renderer into this page's mount.
 
 var _cfVrPollTimer = null;
 var _cfVrBusy = false;
 var _cfVrBooks = [];
+
+function cfVrMode() {
+  return (document.getElementById('cf-vr-mode') || {}).value === 'live' ? 'live' : 'paper';
+}
+
+function cfVrSetMode(mode) {
+  var picked = mode === 'live' ? 'live' : 'paper';
+  var field = document.getElementById('cf-vr-mode');
+  if (field) field.value = picked;
+  var options = document.querySelectorAll('.cf-vr-mode-option');
+  for (var i = 0; i < options.length; i++) {
+    var on = options[i].getAttribute('data-mode') === picked;
+    options[i].classList.toggle('is-active', on);
+    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+}
+
+function _cfVrSetError(message) {
+  var node = document.getElementById('cf-vr-error');
+  if (!node) return;
+  if (!message) { node.style.display = 'none'; node.textContent = ''; return; }
+  node.textContent = message;
+  node.style.display = '';
+}
 
 function _cfVrBookFor(symbol) {
   var want = String(symbol || '').toUpperCase();
@@ -13341,62 +13361,42 @@ function _cfVrBookFor(symbol) {
   return null;
 }
 
-function cfR37Mode() {
-  return (document.getElementById('cf-r37-mode') || {}).value === 'live' ? 'live' : 'paper';
-}
-
-function cfR37SetMode(mode) {
-  var picked = mode === 'live' ? 'live' : 'paper';
-  var field = document.getElementById('cf-r37-mode');
-  if (field) field.value = picked;
-  var options = document.querySelectorAll('.cf-r37-mode-option');
-  for (var i = 0; i < options.length; i++) {
-    var on = options[i].getAttribute('data-mode') === picked;
-    options[i].classList.toggle('is-active', on);
-    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
-  }
-  cfVrSyncControls();
-}
-
 function cfVrUpdateWalletHint() {
   var hint = document.getElementById('cf-vr-wallet-hint');
   if (!hint) return;
   var purse = Number((document.getElementById('cf-vr-capital') || {}).value || 0);
-  hint.textContent = purse > 0 ? 'at most ' + _cfR37Usd(purse / 2) + ' in coin' : '';
+  hint.textContent = purse > 0 ? _cfR37Usd(purse / 2) : '$—';
 }
 
-// Which buttons show is the mode; what they say is the book.
 function cfVrSyncControls() {
-  var live = cfR37Mode() === 'live';
-  var symbol = _cfR37ActiveSymbol;
+  var symbol = (document.getElementById('cf-vr-symbol') || {}).value || '';
   var book = _cfVrBookFor(symbol);
   var on = !!(book && book.enabled);
+  var badge = document.getElementById('cf-vr-state-badge');
+  var text = document.getElementById('cf-vr-state-text');
+  if (badge) {
+    badge.className = 'tp-badge ' + (on ? (book.mode === 'live' ? 'live' : 'running') : 'idle');
+    badge.textContent = on ? (book.mode === 'live' ? 'On · REAL MONEY' : 'On · paper') : (book ? 'Off' : 'No book');
+  }
+  if (text) text.textContent = book ? (on ? (book.last_error || book.note || '') : '') : '';
   var show = function (id, visible) { var n = document.getElementById(id); if (n) n.hidden = !visible; };
-  show('cf-vr-purse-field', live);
-  show('cf-vr-ladders', live);
-  show('cf-r37-reset-btn', !live);
-  if (live) {
-    show('cf-r37-start-btn', false);
-    show('cf-r37-stop-btn', false);
-    show('cf-vr-on-btn', !on);
-    show('cf-vr-off-btn', on);
-  } else {
-    show('cf-vr-on-btn', false);
-    show('cf-vr-off-btn', false);
-    // paper buttons are owned by cfR37RenderStatus; re-run it from the last
-    // known state rather than guessing here
-    if (_cfR37LastStatus) cfR37RenderStatus(_cfR37LastStatus);
+  show('cf-vr-on-btn', !on);
+  show('cf-vr-save-btn', on);
+  show('cf-vr-off-btn', on);
+}
+
+function cfVrSelectSymbol(symbol) {
+  var book = _cfVrBookFor(symbol);
+  if (book) {
+    var purse = document.getElementById('cf-vr-capital');
+    if (purse && Number(book.start_capital_usd || book.purse_usd || 0) > 0) {
+      purse.value = Number(book.start_capital_usd || book.purse_usd);
+    }
+    cfVrSetMode(book.mode === 'live' ? 'live' : 'paper');
   }
-  var chip = document.getElementById('cf-vr-chip');
-  if (chip) chip.setAttribute('data-state', on ? 'running' : 'idle');
-  var state = document.getElementById('cf-vr-state');
-  if (state) state.textContent = on ? 'On · ' + symbol : 'Off';
-  var note = document.getElementById('cf-r37-mode-note');
-  if (note) {
-    note.textContent = live
-      ? (on ? (book.note || 'Trading.') : 'Real money, in its own engine. No stop-loss.')
-      : 'Paper replays the rule; Live trades it.';
-  }
+  _cfVrSetError('');
+  cfVrUpdateWalletHint();
+  cfVrSyncControls();
 }
 
 function cfVrRenderStatus(data) {
@@ -13407,76 +13407,108 @@ function cfVrRenderStatus(data) {
     (data && data.instruments) || {},
     {
       mountId: 'cf-vr-campaigns',
-      emptyText: 'Nothing live yet.',
-      emptyLiveText: 'No ladder working — watching for the next V.'
+      emptyText: 'Nothing live — start a book beside this, once the server is armed.',
+      emptyLiveText: 'No ladder working right now — the book is watching for its next V.'
     }
   );
 }
 
-async function cfVrRefresh() {
+async function cfVrRefresh(showToast) {
   try {
     var response = await cfApiFetch('/api/vrule/live/status', { cache: 'no-store' });
     if (response.status === 404) return;  // the server has not been restarted onto this build yet
     var data = await cfReadApiPayload(response);
-    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Live status unavailable'));
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'V-Rule live status unavailable'));
+    _cfVrSetError('');
     cfVrRenderStatus(data);
+    if (showToast) cfToast('V-Rule live refreshed', 'success');
   } catch (err) {
-    _cfR37SetError(String(err.message || err));
+    _cfVrSetError(String(err.message || err));
   }
+}
+
+var _CF_VR_BUTTONS = ['cf-vr-on-btn', 'cf-vr-save-btn', 'cf-vr-off-btn', 'cf-vr-refresh-btn'];
+
+function _cfVrSetBusy(busy, actingId) {
+  _cfVrBusy = busy;
+  _CF_VR_BUTTONS.forEach(function (id) {
+    var node = document.getElementById(id);
+    if (!node) return;
+    node.disabled = busy;
+    if (id !== actingId) return;
+    if (busy) {
+      node.setAttribute('data-cf-label', node.textContent);
+      node.textContent = 'Working…';
+    } else if (node.hasAttribute('data-cf-label')) {
+      node.textContent = node.getAttribute('data-cf-label');
+      node.removeAttribute('data-cf-label');
+    }
+  });
 }
 
 async function cfVrSaveBook(enabled) {
   if (_cfVrBusy) return;
-  var symbol = _cfR37ActiveSymbol;
+  var symbol = (document.getElementById('cf-vr-symbol') || {}).value || '';
   var capital = Number((document.getElementById('cf-vr-capital') || {}).value || 0);
-  if (enabled && !(capital > 0)) { _cfR37SetError('Set a purse bigger than zero'); return; }
+  if (!symbol) { _cfVrSetError('Choose a coin first'); return; }
+  if (enabled && !(capital > 0)) { _cfVrSetError('Set a purse bigger than zero'); return; }
   var wasOn = !!(_cfVrBookFor(symbol) || {}).enabled;
-  if (enabled && !wasOn) {
+  var mode = cfVrMode();
+  if (enabled && !wasOn && mode === 'live') {
     var ok = await cfConfirm(
       '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own, '
-      + 'from the next bar.</strong></p>'
-      + '<p>Up to <strong>' + _cfR37Usd(capital / 2) + '</strong> in coin at once, and '
-      + '<strong>no stop-loss</strong> — every exit is the target, so a ladder the market does not '
-      + 'turn for is held for as long as it takes.</p>',
-      'Start the V-Rule live on ' + symbol + '?',
+      + 'from the next bar.</strong> Nobody clicks anything per trade.</p>'
+      + '<p>It may hold up to <strong>' + _cfR37Usd(capital / 2) + '</strong> in coin at once, '
+      + 'and it has <strong>no stop-loss</strong> — every exit is the target, so a ladder the '
+      + 'market does not turn for is simply held, for as long as it takes.</p>'
+      + '<p>It trades in its own engine, so your Cascade campaigns are not touched — but it '
+      + 'spends from the <strong>same exchange balance</strong>.</p>',
+      'Start the V-Rule on ' + symbol + ' with real money?',
       '⚠️', true
     );
     if (!ok) return;
   }
-  var btn = document.getElementById(enabled ? 'cf-vr-on-btn' : 'cf-vr-off-btn');
-  _cfVrBusy = true;
-  if (btn) { btn.disabled = true; btn.setAttribute('data-cf-label', btn.textContent); btn.textContent = 'Working…'; }
+  var acting = enabled ? (wasOn ? 'cf-vr-save-btn' : 'cf-vr-on-btn') : 'cf-vr-off-btn';
+  _cfVrSetBusy(true, acting);
   try {
     var response = await cfApiFetch('/api/vrule/live/books', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol: symbol, mode: 'live', capital_usd: capital, enabled: !!enabled })
+      body: JSON.stringify({ symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled })
     });
     var data = await cfReadApiPayload(response);
-    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not start live'));
-    _cfR37SetError('');
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the live book'));
+    _cfVrSetError('');
     cfVrRenderStatus(data);
-    cfToast(symbol + (enabled ? ' is trading live' : ' live stopped'), 'success');
+    cfToast(symbol + (enabled ? (wasOn ? ' saved' : ' is on') : ' is off'), 'success');
   } catch (err) {
-    _cfR37SetError(String(err.message || err));
-    cfToast(String(err.message || err), 'error');
+    _cfVrSetError(String(err.message || err));
   } finally {
-    _cfVrBusy = false;
-    if (btn) { btn.disabled = false; btn.textContent = btn.getAttribute('data-cf-label') || btn.textContent; btn.removeAttribute('data-cf-label'); }
+    _cfVrSetBusy(false, acting);
   }
 }
 
 function cfVrInit() {
+  var select = document.getElementById('cf-vr-symbol');
+  if (select && !select.options.length) {
+    // The same instruments the paper book offers.
+    ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'PAXGUSDT'].forEach(function (symbol) {
+      var option = document.createElement('option');
+      option.value = symbol;
+      option.textContent = symbol;
+      select.appendChild(option);
+    });
+  }
   var purseField = document.getElementById('cf-vr-capital');
   if (purseField && !purseField._cfVrBound) {
     purseField._cfVrBound = true;
     purseField.addEventListener('input', cfVrUpdateWalletHint);
   }
   cfVrUpdateWalletHint();
-  cfR37SetMode(cfR37Mode());
-  cfVrRefresh();
+  cfVrSyncControls();
+  cfVrRefresh(false);
   if (_cfVrPollTimer) clearInterval(_cfVrPollTimer);
-  _cfVrPollTimer = setInterval(cfVrRefresh, 20000);
+  _cfVrPollTimer = setInterval(function () { cfVrRefresh(false); }, 20000);
 }
 
 function cfVrStopPolling() {
@@ -13579,10 +13611,8 @@ function cfAfRenderStatus(data) {
   _cfAfLiveCeiling = Number((data && data.live_ceiling_usd) || 0);
   var liveBtn = document.querySelector('.cf-af-mode-option[data-mode="live"]');
   if (liveBtn) {
-    liveBtn.setAttribute('aria-disabled', _cfAfLiveAvailable ? 'false' : 'true');
-    liveBtn.title = _cfAfLiveAvailable
-      ? 'Real money, in this strategy\'s own engine — the live Cascade is untouched'
-      : 'Paper only — live is not armed on the server';
+    liveBtn.setAttribute('aria-disabled', 'false');
+    liveBtn.title = 'Real money, in this strategy\'s own engine — the live Cascade is untouched';
   }
   cfAfSyncControls();
   var body = document.getElementById('cf-af-books');
@@ -13641,13 +13671,6 @@ function cfAfRenderStatus(data) {
 function cfAfSetMode(mode) {
   // Live is the server's decision, not the page's. When it is not armed the
   // toggle says why rather than arming a book that can never fire.
-  if (mode === 'live' && !_cfAfLiveAvailable) {
-    _cfAfSetError(
-      'Live is not armed on the server. It needs CRYPTOFORGE_AUTO_FIB_LIVE=1 and the '
-      + 'exchange keys configured — a click here cannot arm it.'
-    );
-    return;
-  }
   var picked = mode === 'live' ? 'live' : 'paper';
   var field = document.getElementById('cf-af-mode');
   if (field) field.value = picked;

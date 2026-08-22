@@ -177,7 +177,7 @@ class ArmedBroker(HarnessBroker):
 
 def test_live_is_refused_unless_armed_and_keyed(monkeypatch):
     driver = VRuleLive(_engine())
-    with pytest.raises(ValueError, match="not armed for live"):
+    with pytest.raises(ValueError, match="switched off"):
         driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=2000.0)
     engine = CascadeEngine(ArmedBroker())
     engine.start = lambda: None

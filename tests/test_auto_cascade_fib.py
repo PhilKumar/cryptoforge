@@ -429,7 +429,7 @@ def test_live_is_refused_when_the_server_is_not_armed():
     """A click must never be able to reach real money on its own."""
     engine = FakeEngine()  # its broker is not armed
     driver = AutoCascadeFib(engine)
-    with pytest.raises(ValueError, match="not armed for live"):
+    with pytest.raises(ValueError, match="switched off"):
         driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=2000.0)
     assert driver.books == {}
 
@@ -544,7 +544,7 @@ def test_live_is_refused_when_the_keys_are_missing(monkeypatch):
     monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
     engine = FakeEngine(broker=FakeBroker(live_armed=True, configured=False))
     driver = AutoCascadeFib(engine)
-    with pytest.raises(ValueError, match="not armed for live"):
+    with pytest.raises(ValueError, match="switched off"):
         driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=2000.0)
 
 

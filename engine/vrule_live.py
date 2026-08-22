@@ -309,10 +309,7 @@ class VRuleLive:
             raise ValueError("The V-Rule live driver is switched off on the server (CRYPTOFORGE_VRULE=0).")
         wants_live = mode is not None and str(mode).lower() == "live"
         if wants_live and not self.live_available():
-            raise ValueError(
-                "The V-Rule is not armed for live trading. It needs CRYPTOFORGE_VRULE_LIVE=1 on the "
-                "server and the venue's API keys configured — a click cannot arm it on its own."
-            )
+            raise ValueError("Live is switched off on the server.")
         if wants_live and _positive(capital_usd, 0.0) > LIVE_CEILING_USD:
             raise ValueError(
                 f"A live V-Rule book may size from at most ${LIVE_CEILING_USD:,.0f}. "

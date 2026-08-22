@@ -371,11 +371,7 @@ class AutoCascadeFib:
             # Refuse rather than accept-and-ignore: a book reading "live" over
             # a broker that cannot place an order is the trap this strategy
             # has already fallen into once.
-            raise ValueError(
-                "Auto-Cascade_Fib is not armed for live trading. It needs "
-                "CRYPTOFORGE_AUTO_FIB_LIVE=1 on the server and the venue's API keys "
-                "configured — a click cannot arm it on its own."
-            )
+            raise ValueError("Live is switched off on the server.")
         if wants_live and _positive(capital_usd, 0.0) > LIVE_CEILING_USD:
             raise ValueError(
                 f"A live book may hold at most ${LIVE_CEILING_USD:,.0f}. "
