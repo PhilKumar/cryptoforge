@@ -117,6 +117,20 @@ def slope_angle(bars: pd.DataFrame, ema: pd.Series, lookback: int, basis: str, u
     return pd.Series([math.degrees(math.atan(x)) if x == x else float("nan") for x in (gain / div)], index=bars.index)
 
 
+def rsi(bars: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Wilder's RSI, smoothed the way Wilder smoothed it (alpha = 1/period), which
+    is what every charting package draws. A simple rolling mean here would read a
+    few points different at exactly the thresholds a rule keys on."""
+    delta = bars["close"].diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
+    out = 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+    # No losing bars in the window is RSI 100, not a division by zero.
+    return out.where(avg_loss > 0, 100.0).where(avg_gain > 0, other=out.where(avg_gain > 0, 0.0))
+
+
 # ----------------------------------------------------------------- trade ----
 @dataclass
 class Trade:
@@ -190,6 +204,7 @@ class Backtest:
 
         ema = self.bars["close"].ewm(span=max(2, int(args.ema)), adjust=False).mean()
         self.bars["ema"] = ema
+        self.bars["rsi"] = rsi(self.bars, max(2, int(args.rsi_period)))
         self.bars["angle"] = slope_angle(
             self.bars, ema, max(1, int(args.slope_bars)), args.slope_basis, args.slope_unit, int(args.atr_period)
         )
@@ -232,6 +247,7 @@ class Backtest:
         self.dropped_unpriceable = 0
         self.signals = {"CE": 0, "PE": 0}
         self.vetoed_by_angle = {"CE": 0, "PE": 0}
+        self.vetoed_by_rsi = {"CE": 0, "PE": 0}
 
     # -- plumbing ---------------------------------------------------------
     @property
@@ -294,11 +310,34 @@ class Backtest:
                 open_trade.bars_held += 1
                 want = 1 if open_trade.side == "CE" else -1
                 exit_now, reason = None, ""
+                # How far the index went for and against the trade INSIDE this bar.
+                favour = float(bar["high"]) if want > 0 else float(bar["low"])
+                against = float(bar["low"]) if want > 0 else float(bar["high"])
                 if ts.time() >= self.square_off and (self.args.intraday or day == open_trade.expiry):
                     exit_now = self.last_minute_before(
                         ts.replace(hour=self.square_off.hour, minute=self.square_off.minute)
                     )
                     reason = "SQUARE_OFF" if self.args.intraday else "EXPIRY"
+                elif self.args.stop_points and want * (against - open_trade.entry_spot) <= -self.args.stop_points:
+                    # Checked BEFORE the target: if one bar contains both, assume
+                    # the bad one came first. A backtest that assumes otherwise is
+                    # paying itself for a coin flip.
+                    exit_now, reason = self.next_minute(ts + self.bar_span), "STOP_POINTS"
+                elif (
+                    self.args.trail_points
+                    and open_trade.mfe > self.args.trail_points
+                    and want * (against - open_trade.entry_spot) <= open_trade.mfe - self.args.trail_points
+                ):
+                    # Give back this many points from the best level the INDEX
+                    # reached, and the trade is over. `mfe` only counts bars that
+                    # have closed, so the trail ratchets a bar behind the high --
+                    # it cannot see an extreme and sell it in the same candle.
+                    exit_now, reason = self.next_minute(ts + self.bar_span), "TRAIL_POINTS"
+                elif self.args.target_points and want * (favour - open_trade.entry_spot) >= self.args.target_points:
+                    # The bar REACHED the target; the fill is the next minute after
+                    # it closes, not the touch itself. That is conservative -- the
+                    # index can and does come back before the option is sold.
+                    exit_now, reason = self.next_minute(ts + self.bar_span), "TARGET_POINTS"
                 elif want * (close - ema) < 0:
                     exit_now = self.next_minute(ts + self.bar_span)
                     reason = "CLOSE_THROUGH_EMA"
@@ -345,6 +384,19 @@ class Backtest:
                     continue
                 if angle != angle:
                     continue
+                if self.args.rsi_min:
+                    # Read as a mirror: a call wants RSI at or above the level, a
+                    # put wants it at or below the reflection of that level, so
+                    # --rsi-min 60 is "60+ for CE, 40- for PE".
+                    r = float(bar["rsi"])
+                    if r != r:
+                        continue
+                    if want > 0 and r < self.args.rsi_min:
+                        self.vetoed_by_rsi[cand] += 1
+                        continue
+                    if want < 0 and r > 100.0 - self.args.rsi_min:
+                        self.vetoed_by_rsi[cand] += 1
+                        continue
                 if want * angle < self.args.min_angle:
                     if crossed:
                         self.vetoed_by_angle[cand] += 1
@@ -620,6 +672,13 @@ def main() -> None:
     )
     ap.add_argument("--slope-bars", type=int, default=3, help="bars the EMA's rise is measured over")
     ap.add_argument("--atr-period", type=int, default=14)
+    ap.add_argument("--rsi-period", type=int, default=14)
+    ap.add_argument(
+        "--rsi-min",
+        type=float,
+        default=0.0,
+        help="CE needs RSI at or above this, PE at or below its mirror (60 means 60+ for CE, 40- for PE); 0 is off",
+    )
     ap.add_argument("--side", choices=["both", "CE", "PE"], default="both")
     ap.add_argument(
         "--entry",
@@ -650,6 +709,24 @@ def main() -> None:
     )
     ap.add_argument("--square-off", default="15:15", help="intraday / expiry-day exit time, HH:MM")
     ap.add_argument("--max-hold-days", type=int, default=0, help="0 is no cap")
+    ap.add_argument(
+        "--target-points",
+        type=float,
+        default=0.0,
+        help="exit once the INDEX has moved this many points in the trade's favour; 0 is off",
+    )
+    ap.add_argument(
+        "--stop-points",
+        type=float,
+        default=0.0,
+        help="exit once the INDEX has moved this many points against the trade; 0 is off",
+    )
+    ap.add_argument(
+        "--trail-points",
+        type=float,
+        default=0.0,
+        help="exit once the INDEX gives back this many points from its best level in the trade; 0 is off",
+    )
     ap.add_argument("--max-premium", type=float, default=0.0, help="skip an entry costing more; 0 means no cap")
 
     # --- data ---------------------------------------------------------------
