@@ -155,6 +155,44 @@ def weekly_levels(daily: pd.DataFrame) -> dict:
     return out
 
 
+def _levels_from(hi: float, lo: float, cl: float) -> "Levels":
+    p = (hi + lo + cl) / 3.0
+    bc = (hi + lo) / 2.0
+    tc = 2 * p - bc
+    if tc < bc:
+        tc, bc = bc, tc
+    sup = [2 * p - hi, p - (hi - lo), 2 * p - (2 * hi - lo), 3 * p - (3 * hi - lo), 4 * p - (4 * hi - lo)]
+    res = [2 * p - lo, p + (hi - lo), 2 * p + (hi - 2 * lo), 3 * p + (hi - 3 * lo), 4 * p + (hi - 4 * lo)]
+    priced = {"TC": tc, "BC": bc, "R0.5": (p + res[0]) / 2.0, "S0.5": (p + sup[0]) / 2.0}
+    for n in range(5):
+        priced[f"S{n + 1}"], priced[f"R{n + 1}"] = sup[n], res[n]
+        if n + 1 < 5:
+            priced[f"S{n + 1}.5"] = (sup[n] + sup[n + 1]) / 2.0
+            priced[f"R{n + 1}.5"] = (res[n] + res[n + 1]) / 2.0
+    return Levels(pivot=p, rungs={k: priced[k] for k in RUNG_ORDER})
+
+
+def daily_levels(daily: pd.DataFrame) -> dict:
+    """Each session's pivots, from the session before it. Keyed by session date."""
+    out: dict = {}
+    for i in range(1, len(daily)):
+        prev = daily.iloc[i - 1]
+        out[daily.index[i].date()] = _levels_from(prev["high"], prev["low"], prev["close"])
+    return out
+
+
+def levels_by_day(daily: pd.DataFrame, basis: str) -> dict:
+    """One Levels per session date, whichever basis draws them."""
+    if basis == "daily":
+        return daily_levels(daily)
+    weekly = weekly_levels(daily)
+    return {
+        d.date(): weekly[d.date() - timedelta(days=d.weekday())]
+        for d in daily.index
+        if (d.date() - timedelta(days=d.weekday())) in weekly
+    }
+
+
 def levels_on(week_starts: list, table: dict, day: date) -> Optional[Levels]:
     monday = day - timedelta(days=day.weekday())
     return table.get(monday)
@@ -230,11 +268,11 @@ class Backtest:
         self.daily = to_daily(minute)
         self.session_days = sessions(minute)
         self.weeklies = weekly_expiries(self.session_days)
-        self.levels = weekly_levels(self.daily)
+        self.levels = levels_by_day(self.daily, args.pivots)
         self.minute_index = minute.index
         self.spot_at = minute["open"]
 
-        levels_by_day = {d.strftime("%Y-%m-%d"): float(c) for d, c in self.daily["close"].items()}
+        index_close = {d.strftime("%Y-%m-%d"): float(c) for d, c in self.daily["close"].items()}
         self.source = DhanListedSource(self.weeklies, STORES, "NIFTY", nearest_within=0)
         for store in self.source.stores.values():
             if not hasattr(store, "dropped"):
@@ -247,11 +285,12 @@ class Backtest:
                 )
             # PhilForge's index cache starts 2024-10; ours reaches back to 2021, so
             # the rows before that date get judged too instead of waved through.
-            store.levels = levels_by_day
+            store.levels = index_close
 
         span = max(2, args.ema)
         self.bars["ema"] = self.bars["close"].ewm(span=span, adjust=False).mean()
         self.skipped_no_entry_price = 0
+        self.skipped_too_dear = 0
         self.unpriced_exits = 0
 
     # -- plumbing ---------------------------------------------------------
@@ -301,7 +340,7 @@ class Backtest:
             ts = stamps[k]
             bar = bars.iloc[k]
             day = ts.date()
-            lv = levels_on(None, self.levels, day)
+            lv = self.levels.get(day)
             if lv is None:
                 continue
 
@@ -309,8 +348,9 @@ class Backtest:
                 use = live_levels if self.args.levels == "frozen" else lv
                 exit_now, reason = None, ""
 
-                if day == open_trade.expiry and ts.time() >= SQUARE_OFF:
-                    exit_now, reason = self.last_minute_before(ts.replace(hour=15, minute=15)), "EXPIRY"
+                if ts.time() >= SQUARE_OFF and (self.args.intraday or day == open_trade.expiry):
+                    exit_now = self.last_minute_before(ts.replace(hour=15, minute=15))
+                    reason = "SQUARE_OFF" if self.args.intraday else "EXPIRY"
                 elif stop_rung is not None and bar["close"] > use.rungs[stop_rung]:
                     exit_now, reason = self.next_minute(ts + self.bar_span), f"STOP_ABOVE_{stop_rung}"
                 elif active_level is not None and bar["close"] > active_level[1]:
@@ -366,6 +406,12 @@ class Backtest:
             strike = int(round(spot / STRIKE_STEP) * STRIKE_STEP) + self.args.strike_offset * int(STRIKE_STEP)
             contract = Contract(expiry=expiry, strike=strike, option_type="PE")
             prem = self.premium(fill_ts, contract)
+            if prem is not None and self.args.max_premium:
+                # A trade you could not fund is a trade you did not take. Skipping
+                # it is what sets the account size, so it belongs in the rule.
+                if prem * self.args.lots * lot_size(expiry) > self.args.max_premium:
+                    self.skipped_too_dear += 1
+                    continue
             if prem is None:
                 self.skipped_no_entry_price += 1
                 continue
