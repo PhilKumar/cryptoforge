@@ -696,28 +696,72 @@ def report(trades: list, bt: Backtest, args) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    """The defaults ARE the rule that survived; every flag below is a road not taken."""
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    # --- the surviving rule -------------------------------------------------
     ap.add_argument(
-        "--entry-rungs", default="BC", help="rungs a rejection may be bought at, comma separated, e.g. R2,R1 or BC"
+        "--pivots", choices=["weekly", "daily"], default="daily", help="draw the CPR from last week or from yesterday"
     )
-    ap.add_argument("--bar-minutes", type=int, default=15, help="signal timeframe in minutes; 15 or 5")
-    ap.add_argument("--ema", type=int, default=20, help="0 turns the EMA regime filter off entirely")
+    ap.add_argument(
+        "--intraday",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="square off at 15:15; nothing is carried overnight",
+    )
+    ap.add_argument("--bar-minutes", type=int, default=5, help="signal timeframe in minutes")
+    ap.add_argument("--entry-rungs", default="R2,R1", help="rungs a rejection may be bought at, comma separated")
+    ap.add_argument("--ema", type=int, default=20, help="0 turns the EMA regime filter off")
+    ap.add_argument(
+        "--strike-offset", type=int, default=2, help="strikes from ATM; +2 is 100 points in the money for a put"
+    )
+    ap.add_argument(
+        "--stop-fraction",
+        type=float,
+        default=0.5,
+        help="how far from the entry rung to the rung above the stop sits; 0.5 is the quarter rung",
+    )
+    ap.add_argument(
+        "--max-premium", type=float, default=25000.0, help="skip an entry costing more than this; 0 means no cap"
+    )
     ap.add_argument("--lots", type=int, default=1)
-    ap.add_argument("--strike-offset", type=int, default=0, help="strikes from ATM; -2 is 100 points out of the money")
-    ap.add_argument("--slippage-pct", type=float, default=0.0, help="adverse percent of premium, each leg")
+
+    # --- roads not taken, each one measured and worse -----------------------
+    ap.add_argument(
+        "--side", choices=["PE", "CE"], default="PE", help="which contract the signal buys; exits are untouched"
+    )
+    ap.add_argument(
+        "--mirror", action="store_true", help="additionally flip every target, stop and trail to the other side"
+    )
+    ap.add_argument(
+        "--entry-mode",
+        choices=["rung", "supertrend"],
+        default="rung",
+        help="buy the rejection at a pivot rung, or the nth touch of a flat supertrend",
+    )
+    ap.add_argument("--st-period", type=int, default=10)
+    ap.add_argument("--st-multiplier", type=float, default=1.7)
+    ap.add_argument("--st-touch", type=int, default=2, help="which touch of the flat line to buy")
+    ap.add_argument(
+        "--ladder-step",
+        type=float,
+        default=0.5,
+        help="0.25 halves every gap between R or S rungs, so the trail ratchets twice as often",
+    )
+    ap.add_argument("--stop", choices=["rung", "entry-high", "entry-close", "st-line"], default="rung")
+    ap.add_argument(
+        "--min-stop-points", type=float, default=0.0, help="a floor under the stop distance, in index points"
+    )
+    ap.add_argument("--trail-lag", type=int, default=0, help="rungs the exit sits behind the deepest reached")
     ap.add_argument(
         "--levels",
         choices=["frozen", "rolling"],
         default="frozen",
-        help="frozen keeps the entry week's ladder for the life of the trade",
+        help="frozen keeps the entry period's ladder for the life of the trade",
     )
-    ap.add_argument(
-        "--trail-lag",
-        type=int,
-        default=0,
-        help="rungs the exit sits behind the deepest reached; 0 exits on a close back above "
-        "the rung just touched, 1 keeps one rung of room",
-    )
+
+    # --- measurement --------------------------------------------------------
+    ap.add_argument("--slippage-pct", type=float, default=0.0, help="adverse percent of premium, each leg")
     ap.add_argument("--from", dest="start", default=None)
     ap.add_argument("--to", dest="end", default=None)
     ap.add_argument("--csv", default=None)
