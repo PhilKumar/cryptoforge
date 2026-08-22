@@ -124,6 +124,11 @@ class Levels:
         i = [k for k, _ in items].index(label)
         return items[i + 1 :]
 
+    def rungs_above(self, label: str) -> list:
+        items = list(self.rungs.items())
+        i = [k for k, _ in items].index(label)
+        return items[:i]
+
     def above(self, label: str) -> Optional[tuple]:
         items = list(self.rungs.items())
         i = [k for k, _ in items].index(label)
@@ -271,6 +276,7 @@ class Trade:
     entry_spot: float
     entry_rung: str
     entry_bar_high: float
+    entry_bar_low: float
     entry_st: float
     entry_bar_close: float
     strike: int
@@ -361,6 +367,12 @@ class Backtest:
             self.bars["st"], self.bars["st_down"] = st["line"], st["down"]
         span = max(2, args.ema)
         self.bars["ema"] = self.bars["close"].ewm(span=span, adjust=False).mean()
+        self.side = getattr(args, "side", "PE").upper()
+        # `side` is only which contract gets bought. `dirn` is which way the
+        # levels are read, and it changes ONLY when --mirror is asked for.
+        # Swapping the instrument and rewriting the exits are two different
+        # experiments and must not be run as one.
+        self.dirn = 1 if (self.side == "CE" and getattr(args, "mirror", False)) else -1
         self._flat_level, self._touches = None, 0
         self.skipped_no_entry_price = 0
         self.skipped_too_dear = 0
@@ -402,7 +414,8 @@ class Backtest:
         # supertrend entry can land two points under a pivot and be stopped by a
         # tick -- which is what made the first supertrend run look like a losing
         # rule when it was really a losing stop.
-        return max(level, trade.entry_spot + self.args.min_stop_points)
+        floor_ = trade.entry_spot - self.dirn * self.args.min_stop_points
+        return min(level, floor_) if self.dirn > 0 else max(level, floor_)
 
     def _raw_stop(self, trade: "Trade", lv: "Levels", stop_rung: Optional[str]) -> Optional[float]:
         """What a close has to clear to end the trade.
@@ -421,11 +434,12 @@ class Backtest:
                 # The double top's own high: the trade is wrong when price closes
                 # back through the level it was turned away from twice.
                 return trade.entry_bar_high
-            above = [pr for pr in lv.rungs.values() if pr > trade.entry_spot]
-            if not above:
-                return trade.entry_bar_high
+            beyond = [pr for pr in lv.rungs.values() if self.dirn * (pr - trade.entry_spot) < 0]
+            if not beyond:
+                return trade.entry_bar_high if self.dirn < 0 else trade.entry_bar_low
             here = trade.entry_spot
-            return here + self.args.stop_fraction * (min(above) - here)
+            nearest = min(beyond) if self.dirn < 0 else max(beyond)
+            return here + self.args.stop_fraction * (nearest - here)
         if self.args.stop == "entry-close":
             return trade.entry_bar_close
         if not stop_rung:
@@ -483,12 +497,13 @@ class Backtest:
                 if ts.time() >= SQUARE_OFF and (self.args.intraday or day == open_trade.expiry):
                     exit_now = self.last_minute_before(ts.replace(hour=15, minute=15))
                     reason = "SQUARE_OFF" if self.args.intraday else "EXPIRY"
-                elif self.stop_level(open_trade, use, stop_rung) is not None and bar["close"] > self.stop_level(
-                    open_trade, use, stop_rung
+                elif (
+                    self.stop_level(open_trade, use, stop_rung) is not None
+                    and self.dirn * (bar["close"] - self.stop_level(open_trade, use, stop_rung)) < 0
                 ):
                     exit_now = self.next_minute(ts + self.bar_span)
                     reason = f"STOP_ABOVE_{stop_rung}" if self.args.stop == "rung" else "STOP_ABOVE_ENTRY_CANDLE"
-                elif active_level is not None and bar["close"] > active_level[1]:
+                elif active_level is not None and self.dirn * (bar["close"] - active_level[1]) < 0:
                     exit_now, reason = self.next_minute(ts + self.bar_span), f"TRAIL_{active_level[0]}"
 
                 if exit_now is not None:
@@ -504,14 +519,16 @@ class Backtest:
                     else:
                         ladder = use.below(open_trade.entry_rung)
                     for i in range(deepest_i + 1, len(ladder)):
-                        if bar["low"] <= ladder[i][1]:
+                        reached = bar["high"] >= ladder[i][1] if self.dirn > 0 else bar["low"] <= ladder[i][1]
+                        if reached:
                             deepest_i = i
                             open_trade.deepest = ladder[i][0]
                         else:
                             break
                     behind = deepest_i - self.args.trail_lag
                     active_level = ladder[behind] if behind >= 0 else None
-                    open_trade.mfe = max(open_trade.mfe, open_trade.entry_spot - float(bar["low"]))
+                    far = float(bar["high"]) if self.dirn > 0 else float(bar["low"])
+                    open_trade.mfe = max(open_trade.mfe, self.dirn * (far - open_trade.entry_spot))
                     continue
 
             if open_trade is not None:
@@ -520,8 +537,8 @@ class Backtest:
                 continue  # nothing left of the session to fill an entry in
 
             prev_close = bars["close"].iloc[k - 1]
-            if self.args.ema > 0 and not (bar["close"] < bar["ema"]):
-                continue  # EMA20 vetoes a PE in an up regime
+            if self.args.ema > 0 and self.dirn * (bar["close"] - bar["ema"]) <= 0:
+                continue  # EMA20 vetoes a trade taken against the regime
 
             if self.args.entry_mode == "supertrend":
                 rung = self.supertrend_touch(k, bar)
@@ -547,7 +564,7 @@ class Backtest:
                 continue
             spot = float(self.spot_at.loc[fill_ts])
             strike = int(round(spot / STRIKE_STEP) * STRIKE_STEP) + self.args.strike_offset * int(STRIKE_STEP)
-            contract = Contract(expiry=expiry, strike=strike, option_type="PE")
+            contract = Contract(expiry=expiry, strike=strike, option_type=self.side)
             prem = self.premium(fill_ts, contract)
             if prem is not None and self.args.max_premium:
                 # A trade you could not fund is a trade you did not take. Skipping
@@ -564,6 +581,7 @@ class Backtest:
                 entry_spot=spot,
                 entry_rung=rung,
                 entry_bar_high=float(bar["high"]),
+                entry_bar_low=float(bar["low"]),
                 entry_st=float(bar["st"]) if "st" in bar.index and not pd.isna(bar["st"]) else 0.0,
                 entry_bar_close=float(bar["close"]),
                 strike=strike,
@@ -587,14 +605,14 @@ class Backtest:
         return trades
 
     def close_trade(self, t: Trade, when: datetime, reason: str) -> None:
-        contract = Contract(expiry=t.expiry, strike=t.strike, option_type="PE")
+        contract = Contract(expiry=t.expiry, strike=t.strike, option_type=self.side)
         price = self.premium(when, contract)
         spot = float(self.spot_at.loc[when]) if when in self.spot_at.index else t.entry_spot
         if price is None:
             # Deep in the money, off the edge of Dhan's band. An in-the-money put
             # is worth its intrinsic value at minimum, so that is the floor -- and
             # it is flagged, because a floor is not a price.
-            price = max(0.0, t.strike - spot)
+            price = max(0.0, (spot - t.strike) if self.dirn > 0 else (t.strike - spot))
             t.priced_exit = False
             self.unpriced_exits += 1
         t.exit_ts, t.exit_spot, t.exit_premium, t.exit_reason = when, spot, price, reason
