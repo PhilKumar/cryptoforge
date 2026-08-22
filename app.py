@@ -9551,11 +9551,13 @@ async def auto_fib_set_book(request: Request):
 async def vrule_live_status():
     """The V-Rule's live books and their ladders, in the Cascade shape."""
     driver = _get_vrule()
-    engine_status = _get_vrule_engine().get_status()
+    engine = _get_vrule_engine()
+    engine_status = engine.get_status()
     return {
         "status": "ok",
         **driver.status(),
         "campaigns": engine_status.get("campaigns") or [],
+        "closed_campaigns": list(engine_status.get("closed_campaigns") or engine.closed_campaigns or [])[-50:],
         "instruments": engine_status.get("instruments") or {},
     }
 
