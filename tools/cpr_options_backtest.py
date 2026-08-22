@@ -1044,6 +1044,7 @@ def main() -> None:
             breakout_levels="TC,PDH",
             strike_offset=0,
             min_stop_points=60.0,
+            max_stop_points=60.0,
             max_trades_per_day=1,
             trail_lag=0,
         ),
