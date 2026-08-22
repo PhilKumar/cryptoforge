@@ -38,13 +38,26 @@ def _seed(monkeypatch):
                 {"campaign_id": "hand2", "strategy": ""},
                 {"campaign_id": "bot3", "strategy": STRATEGY},
             ],
-            "capital_groups": {"btcusdt:": 1000.0},
+            "capital_groups": {
+                # written by the strategy: exactly half BTC's purse
+                "binance:BTCUSDT": {"budget_usd": 1000.0, "exchange": "binance"},
+                # Phil's own: not half of SOL's $500 purse
+                "binance:SOLUSDT": {"budget_usd": 900.0, "exchange": "binance"},
+                # a symbol with no book at all
+                "binance:XRPUSDT": {"budget_usd": 250.0, "exchange": "binance"},
+            },
         },
         ("cascade_closed", "campaigns"): [
             {"campaign_id": "hand2", "strategy": ""},
             {"campaign_id": "bot3", "strategy": STRATEGY},
             {"campaign_id": "bot1", "strategy": STRATEGY},
         ],
+        ("auto_cascade_fib", "books"): {
+            "books": [
+                {"symbol": "BTCUSDT", "purse_usd": 2000.0},  # wallet cap 1000
+                {"symbol": "SOLUSDT", "purse_usd": 500.0},  # wallet cap 250
+            ]
+        },
         ("cascade_events", "log"): [
             {"campaign_id": "hand1", "message": "real"},
             {"campaign_id": "bot1", "message": "debris"},
@@ -64,8 +77,8 @@ def test_the_sweep_removes_only_the_strategys_own_campaigns(monkeypatch):
     runtime = store.get("cascade_runtime", "current")
     assert [c["campaign_id"] for c in runtime["campaigns"]] == ["hand1"]
     assert [c["campaign_id"] for c in runtime["closed_campaigns"]] == ["hand2"]
-    # Untouched: budgets are Phil's, whatever ran on them.
-    assert runtime["capital_groups"] == {"btcusdt:": 1000.0}
+    # Only the budget the strategy itself wrote goes.
+    assert set(runtime["capital_groups"]) == {"binance:SOLUSDT", "binance:XRPUSDT"}
     assert [c["campaign_id"] for c in store.get("cascade_closed", "campaigns")] == ["hand2"]
     assert [e["campaign_id"] for e in store.get("cascade_events", "log")] == ["hand1", "hand2"]
 
@@ -99,3 +112,28 @@ def test_a_broken_store_never_stops_the_engine_coming_up(monkeypatch):
 
     monkeypatch.setattr(app_module, "_get_state_store", lambda: Exploding())
     app_module._purge_stray_auto_fib_from_live()  # must not raise
+
+
+def test_only_the_budget_the_strategy_wrote_is_removed(monkeypatch):
+    """It caps a book by setting the symbol's group to HALF the purse.
+
+    While it shared the live engine it wrote those onto Phil's own campaigns —
+    a $2,000 live BTC campaign silently limited to $1,000 of funding. Matched
+    narrowly so a budget Phil sets by hand is never touched: the symbol must
+    have a book AND the budget must equal that book's wallet cap exactly.
+    """
+    store = _seed(monkeypatch)
+    app_module._purge_stray_auto_fib_from_live()
+    groups = store.get("cascade_runtime", "current")["capital_groups"]
+    assert "binance:BTCUSDT" not in groups  # the strategy's own cap
+    assert groups["binance:SOLUSDT"]["budget_usd"] == 900.0  # not half of $500 — Phil's
+    assert groups["binance:XRPUSDT"]["budget_usd"] == 250.0  # no book on this symbol
+
+
+def test_a_budget_survives_when_the_books_cannot_be_read(monkeypatch):
+    """A budget is money. If the books are unreadable, remove nothing."""
+    store = _seed(monkeypatch)
+    store.data[("auto_cascade_fib", "books")] = {"books": "not a list"}
+    app_module._purge_stray_auto_fib_from_live()
+    groups = store.get("cascade_runtime", "current")["capital_groups"]
+    assert set(groups) == {"binance:BTCUSDT", "binance:SOLUSDT", "binance:XRPUSDT"}

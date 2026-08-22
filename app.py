@@ -8129,6 +8129,45 @@ def _purge_stray_auto_fib_from_live() -> None:
         runtime = store.get(_BUCKET_CASCADE_RUNTIME, "current", default={})
         if isinstance(runtime, dict):
             changed = False
+            # The BUDGETS it wrote, too. Auto-Cascade_Fib caps its book by
+            # setting the symbol's capital group to half its purse, and while
+            # it shared the live engine it wrote those onto Phil's own
+            # campaigns: a $2,000 live BTC campaign quietly limited to $1,000
+            # of funding, and still limited days later because the first sweep
+            # deliberately left budgets alone as "Phil's, whatever ran on them"
+            # (2026-08-22 — they were not his; he has never set one by hand).
+            # Matched narrowly: only a symbol that has a book, and only when
+            # the budget is exactly that book's wallet cap. A budget Phil sets
+            # himself will not equal it, and is left alone.
+            caps = {}
+            try:
+                books = (_get_state_store().get(_BUCKET_AUTO_FIB, "books", default={}) or {}).get("books") or []
+                for row in books:
+                    if isinstance(row, dict) and row.get("symbol"):
+                        purse = float(row.get("purse_usd") or row.get("start_capital_usd") or 0.0)
+                        if purse > 0:
+                            caps[str(row["symbol"]).upper()] = round(purse * 0.5, 2)
+            except Exception as exc:
+                _logger.warning("[AUTO-FIB] could not read the books while sweeping budgets: %s", exc)
+            groups = runtime.get("capital_groups")
+            if isinstance(groups, dict) and caps:
+                for gkey in list(groups.keys()):
+                    value = groups[gkey]
+                    budget = (
+                        float((value or {}).get("budget_usd") or 0.0)
+                        if isinstance(value, dict)
+                        else float(value or 0.0)
+                    )
+                    symbol = str(gkey).partition(":")[2].upper() if ":" in str(gkey) else str(gkey).upper()
+                    if symbol in caps and abs(budget - caps[symbol]) < 0.01:
+                        del groups[gkey]
+                        changed = True
+                        _logger.info(
+                            "[AUTO-FIB] removed the $%.2f budget it had set on the live %s — that cap is the "
+                            "strategy's, not the Cascade's",
+                            budget,
+                            symbol,
+                        )
             for key in ("campaigns", "closed_campaigns"):
                 rows = runtime.get(key) or []
                 keep = [r for r in rows if str((r or {}).get("strategy") or "") != STRATEGY]
