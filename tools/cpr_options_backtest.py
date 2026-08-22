@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -223,6 +224,46 @@ def levels_on(week_starts: list, table: dict, day: date) -> Optional[Levels]:
     return table.get(monday)
 
 
+# ------------------------------------------------------------ supertrend ----
+def supertrend(bars: pd.DataFrame, period: int = 10, multiplier: float = 1.7) -> pd.DataFrame:
+    """Supertrend, with Wilder's ATR -- the line and which side of it we are on.
+
+    In a downtrend the line is the upper band, and it only ever ratchets down.
+    So the line goes flat exactly when price stops making new lows, which is what
+    makes "the second touch of the flat line" a double top against it.
+    """
+    h, low_, c = bars["high"], bars["low"], bars["close"]
+    prev = c.shift(1)
+    tr = pd.concat([h - low_, (h - prev).abs(), (low_ - prev).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    hl2 = (h + low_) / 2.0
+    upper_basic, lower_basic = hl2 + multiplier * atr, hl2 - multiplier * atr
+
+    ub = upper_basic.to_numpy(copy=True)
+    lb = lower_basic.to_numpy(copy=True)
+    close = c.to_numpy()
+    line = np.full(len(bars), np.nan)
+    down = np.zeros(len(bars), dtype=bool)  # True while the line sits above price
+
+    started = False
+    for i in range(len(bars)):
+        if np.isnan(ub[i]) or np.isnan(lb[i]):
+            continue
+        if not started:
+            line[i], down[i], started = ub[i], True, True
+            continue
+        if close[i - 1] <= ub[i - 1]:
+            ub[i] = min(ub[i], ub[i - 1])
+        if close[i - 1] >= lb[i - 1]:
+            lb[i] = max(lb[i], lb[i - 1])
+        if down[i - 1]:
+            down[i] = close[i] <= ub[i]
+        else:
+            down[i] = close[i] < lb[i]
+        line[i] = ub[i] if down[i] else lb[i]
+    return pd.DataFrame({"line": line, "down": down}, index=bars.index)
+
+
 # ----------------------------------------------------------------- trade ----
 @dataclass
 class Trade:
@@ -230,6 +271,7 @@ class Trade:
     entry_spot: float
     entry_rung: str
     entry_bar_high: float
+    entry_st: float
     entry_bar_close: float
     strike: int
     expiry: date
@@ -314,8 +356,12 @@ class Backtest:
             # the rows before that date get judged too instead of waved through.
             store.levels = index_close
 
+        if args.entry_mode == "supertrend":
+            st = supertrend(self.bars, args.st_period, args.st_multiplier)
+            self.bars["st"], self.bars["st_down"] = st["line"], st["down"]
         span = max(2, args.ema)
         self.bars["ema"] = self.bars["close"].ewm(span=span, adjust=False).mean()
+        self._flat_level, self._touches = None, 0
         self.skipped_no_entry_price = 0
         self.skipped_too_dear = 0
         self.unpriced_exits = 0
@@ -330,7 +376,35 @@ class Backtest:
             return None
         return cand
 
+    def supertrend_touch(self, k: int, bar) -> Optional[str]:
+        """The nth touch of a flat supertrend, while the line is above price.
+
+        The counter resets whenever the line moves, so the touches counted are
+        always touches of the *same* flat level -- which is what the chart shows.
+        """
+        if not bool(bar.get("st_down")) or pd.isna(bar.get("st")):
+            self._flat_level, self._touches = None, 0
+            return None
+        level = float(bar["st"])
+        if self._flat_level is None or abs(level - self._flat_level) > 0.01:
+            self._flat_level, self._touches = level, 0
+            return None  # the bar that moved the line is not a touch of the new one
+        if bar["high"] < level:
+            return None
+        self._touches += 1
+        return "ST" if self._touches == self.args.st_touch else None
+
     def stop_level(self, trade: "Trade", lv: "Levels", stop_rung: Optional[str]) -> Optional[float]:
+        level = self._raw_stop(trade, lv, stop_rung)
+        if level is None:
+            return None
+        # A stop closer than this is not a stop, it is noise. Without a floor a
+        # supertrend entry can land two points under a pivot and be stopped by a
+        # tick -- which is what made the first supertrend run look like a losing
+        # rule when it was really a losing stop.
+        return max(level, trade.entry_spot + self.args.min_stop_points)
+
+    def _raw_stop(self, trade: "Trade", lv: "Levels", stop_rung: Optional[str]) -> Optional[float]:
         """What a close has to clear to end the trade.
 
         `rung` is the geometry: the pivot directly above the one bought at.
@@ -338,12 +412,24 @@ class Backtest:
         which is a much tighter line -- it sits a few points above the rung
         entered on, where the rung above is a median 39 points away.
         """
+        if self.args.stop == "st-line":
+            return trade.entry_st or trade.entry_bar_high
         if self.args.stop == "entry-high":
             return trade.entry_bar_high
+        if trade.entry_rung == "ST":
+            if self.args.stop != "rung":
+                # The double top's own high: the trade is wrong when price closes
+                # back through the level it was turned away from twice.
+                return trade.entry_bar_high
+            above = [pr for pr in lv.rungs.values() if pr > trade.entry_spot]
+            if not above:
+                return trade.entry_bar_high
+            here = trade.entry_spot
+            return here + self.args.stop_fraction * (min(above) - here)
         if self.args.stop == "entry-close":
             return trade.entry_bar_close
         if not stop_rung:
-            return None
+            return None if trade.entry_rung != "ST" else trade.entry_bar_high
         here, above = lv.rungs[trade.entry_rung], lv.rungs[stop_rung]
         # 1.0 puts the stop on the rung above; 0.5 puts it halfway there, which
         # on a half-step ladder is the quarter rung.
@@ -413,7 +499,10 @@ class Backtest:
                 elif reason:
                     open_trade.notes.append(f"{reason} at {ts} but no minute to fill in")
                 else:
-                    ladder = use.below(open_trade.entry_rung)
+                    if open_trade.entry_rung == "ST":
+                        ladder = [(lb, pr) for lb, pr in use.rungs.items() if pr < open_trade.entry_spot]
+                    else:
+                        ladder = use.below(open_trade.entry_rung)
                     for i in range(deepest_i + 1, len(ladder)):
                         if bar["low"] <= ladder[i][1]:
                             deepest_i = i
@@ -434,16 +523,21 @@ class Backtest:
             if self.args.ema > 0 and not (bar["close"] < bar["ema"]):
                 continue  # EMA20 vetoes a PE in an up regime
 
-            # The highest rung the bar was rejected from: it must have been under
-            # the rung already, reached up and touched it, and closed back below.
-            rung = None
-            for label in self.entry_rungs:
-                price = lv.rungs[label]
-                if prev_close < price and bar["high"] >= price and bar["close"] < price:
-                    rung = label
-                    break
-            if rung is None:
-                continue
+            if self.args.entry_mode == "supertrend":
+                rung = self.supertrend_touch(k, bar)
+                if rung is None:
+                    continue
+            else:
+                # The highest rung the bar was rejected from: it must have been under
+                # the rung already, reached up and touched it, and closed back below.
+                rung = None
+                for label in self.entry_rungs:
+                    price = lv.rungs[label]
+                    if prev_close < price and bar["high"] >= price and bar["close"] < price:
+                        rung = label
+                        break
+                if rung is None:
+                    continue
 
             fill_ts = self.next_minute(ts + self.bar_span)
             if fill_ts is None or fill_ts.date() != day:
@@ -470,6 +564,7 @@ class Backtest:
                 entry_spot=spot,
                 entry_rung=rung,
                 entry_bar_high=float(bar["high"]),
+                entry_st=float(bar["st"]) if "st" in bar.index and not pd.isna(bar["st"]) else 0.0,
                 entry_bar_close=float(bar["close"]),
                 strike=strike,
                 expiry=expiry,
@@ -480,7 +575,9 @@ class Backtest:
                 tc=lv.tc,
             )
             live_levels, active_level, deepest_i = lv, None, -1
-            above = lv.above(rung)
+            # A supertrend entry is not on a rung, so there is no rung above it;
+            # stop_level() reads the nearest one off the entry price instead.
+            above = None if rung == "ST" else lv.above(rung)
             stop_rung = above[0] if above else None
 
         if open_trade is not None:
