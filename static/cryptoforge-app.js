@@ -9229,23 +9229,44 @@ function _cfCascadeSortCampaigns(campaigns) {
 // status poll. A class set on the button would survive about three seconds.
 var _cfCascadeMenuOpenFor = '';
 
+// The last arguments cfRenderCascadeCampaigns was called with, per mount id.
+// Three pages draw these cards now — Cascade, Auto-Cascade_Fib, and the
+// V-Rule's live panel — and the menu has to repaint whichever one it was
+// opened in.
+var _cfCascadeRenders = {};
+
+function _cfCascadeRepaintCards() {
+  var painted = false;
+  Object.keys(_cfCascadeRenders).forEach(function (mountId) {
+    var last = _cfCascadeRenders[mountId];
+    var mount = document.getElementById(mountId);
+    // Skip a mount that has gone from the page, or is on a page not showing.
+    if (!last || !mount || !mount.offsetParent) return;
+    cfRenderCascadeCampaigns(last.campaigns, last.instruments, last.options);
+    painted = true;
+  });
+  // Nothing drawn from memory (a first click before any render finished):
+  // fall back to the Cascade page's own full repaint, as before.
+  if (!painted && _cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+}
+
 function cfCascadeCloseMenu() {
   if (!_cfCascadeMenuOpenFor) return;
   _cfCascadeMenuOpenFor = '';
-  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+  _cfCascadeRepaintCards();
 }
 
 function cfCascadeToggleMenu(cid) {
   var key = String(cid || '');
   _cfCascadeMenuOpenFor = _cfCascadeMenuOpenFor === key ? '' : key;
-  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+  _cfCascadeRepaintCards();
 }
 
 // One entry point for everything behind the menu: close first, then act. Left
 // open, the menu would sit over the confirm dialog these actions raise.
 function cfCascadeMenuPick(cid, what) {
   _cfCascadeMenuOpenFor = '';
-  if (_cfCascadeLastStatus) cfRenderCascadeStatus(_cfCascadeLastStatus);
+  _cfCascadeRepaintCards();
   if (what === 'restructure') return cfCascadeRestructure(cid);
   if (what === 'recalc') return cfCascadeRecalculate(cid);
   if (what === 'live') return cfCascadeSetLive(cid);
@@ -9804,8 +9825,14 @@ function cfRenderCascadeCampaigns(campaigns, instruments, options) {
   // campaigns, so they are drawn by this same function into their own mount
   // rather than by a second copy of it that would drift from this one.
   var opts = options || {};
-  var mount = document.getElementById(opts.mountId || 'cf-cascade-campaigns');
+  var mountId = opts.mountId || 'cf-cascade-campaigns';
+  var mount = document.getElementById(mountId);
   if (!mount) return;
+  // Remembered so the "⋯" menu can repaint the mount it was clicked in.
+  // Before this, opening the menu always repainted the CASCADE page's mount,
+  // whichever page the click came from — so on Auto-Cascade_Fib and on the
+  // V-Rule's live panel the button did nothing at all (Phil, three times).
+  _cfCascadeRenders[mountId] = { campaigns: campaigns, instruments: instruments, options: opts };
   if (!campaigns.length) {
     mount.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
       + (opts.emptyText || 'No campaigns yet — start one on the left.') + '</div>';
@@ -12968,21 +12995,16 @@ async function cfR37Load(showToast, scan) {
   }
 }
 
-var _cfR37LastStatus = null;
-
 function cfR37RenderStatus(s) {
-  _cfR37LastStatus = s;
-  // In Live the chip and the buttons belong to the live book (cfVrSyncControls).
-  var liveMode = typeof cfR37Mode === 'function' && cfR37Mode() === 'live';
   var running = !!s.running;
   var selectedSymbol = String(s.symbol || _cfR37ActiveSymbol || 'BTCUSDT').toUpperCase();
   _cfR37ActiveSymbol = selectedSymbol;
   var runningSymbols = Array.isArray(s.running_symbols) ? s.running_symbols : (running ? [selectedSymbol] : []);
   var anyRunning = runningSymbols.length > 0;
   var chip = document.getElementById('cf-r37-engine-chip');
-  if (chip && !liveMode) chip.setAttribute('data-state', anyRunning ? 'running' : (s.start_ts ? 'stopped' : 'idle'));
+  if (chip) chip.setAttribute('data-state', anyRunning ? 'running' : (s.start_ts ? 'stopped' : 'idle'));
   var stateNode = document.getElementById('cf-r37-engine-state');
-  if (stateNode && !liveMode) stateNode.textContent = running
+  if (stateNode) stateNode.textContent = running
     ? 'Running'
     : (anyRunning ? runningSymbols.length + ' Running' : (s.start_ts ? 'Stopped' : 'Idle'));
   var dot = document.getElementById('rule3070-tab-dot');
@@ -12992,8 +13014,8 @@ function cfR37RenderStatus(s) {
   var resetBtn = document.getElementById('cf-r37-reset-btn');
   var symbolSelect = document.getElementById('cf-r37-symbol-select');
   var symbolNote = document.getElementById('cf-r37-symbol-note');
-  if (startBtn) startBtn.hidden = running || liveMode;
-  if (stopBtn) stopBtn.hidden = !running || liveMode;
+  if (startBtn) startBtn.hidden = running;
+  if (stopBtn) stopBtn.hidden = !running;
   if (startBtn) startBtn.disabled = _cfR37Switching;
   if (resetBtn) resetBtn.disabled = running || _cfR37Switching;
   if (symbolSelect) {
@@ -13313,9 +13335,8 @@ async function cfR37SelectSymbol(symbol) {
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not change the instrument'));
     _cfR37Switching = false;
     cfR37RenderStatus(data);
-    if (_cfVrLast) cfVrRenderStatus(_cfVrLast); else cfVrSyncControls();
     await cfR37Load(false, true);
-    cfToast(requested + ' selected', 'success');
+    cfToast(requested + ' paper book selected', 'success');
   } catch (err) {
     _cfR37Switching = false;
     _cfR37ActiveSymbol = previous;
@@ -13325,19 +13346,38 @@ async function cfR37SelectSymbol(symbol) {
   }
 }
 
-// ── V-Rule: the Paper/Live switch and the live book ──────────────
-// One console, two books. Paper is the replay service; Live is the same
-// rule trading the account through its own engine. The switch decides which
-// book's sections the page shows; the ladders are drawn by the Cascade
-// renderer; nothing here ever touches the Cascade page.
+// ── V-Rule, real money ────────────────────────────────────────────
+// The card on the V-Rule page that starts the rule against a live account.
+// Same shape as the Auto-Cascade_Fib controls: the server says whether live
+// is on offer, the buttons ARE the state, and the ladders are drawn by the
+// Cascade page's own renderer into this page's mount.
 
 var _cfVrPollTimer = null;
 var _cfVrBusy = false;
 var _cfVrBooks = [];
-var _cfVrLast = null;
 
-function cfR37Mode() {
-  return (document.getElementById('cf-r37-mode') || {}).value === 'live' ? 'live' : 'paper';
+function cfVrMode() {
+  return (document.getElementById('cf-vr-mode') || {}).value === 'live' ? 'live' : 'paper';
+}
+
+function cfVrSetMode(mode) {
+  var picked = mode === 'live' ? 'live' : 'paper';
+  var field = document.getElementById('cf-vr-mode');
+  if (field) field.value = picked;
+  var options = document.querySelectorAll('.cf-vr-mode-option');
+  for (var i = 0; i < options.length; i++) {
+    var on = options[i].getAttribute('data-mode') === picked;
+    options[i].classList.toggle('is-active', on);
+    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+}
+
+function _cfVrSetError(message) {
+  var node = document.getElementById('cf-vr-error');
+  if (!node) return;
+  if (!message) { node.style.display = 'none'; node.textContent = ''; return; }
+  node.textContent = message;
+  node.style.display = '';
 }
 
 function _cfVrBookFor(symbol) {
@@ -13348,246 +13388,154 @@ function _cfVrBookFor(symbol) {
   return null;
 }
 
-function cfR37SetMode(mode) {
-  var picked = mode === 'live' ? 'live' : 'paper';
-  var field = document.getElementById('cf-r37-mode');
-  if (field) field.value = picked;
-  var options = document.querySelectorAll('.cf-r37-mode-option');
-  for (var i = 0; i < options.length; i++) {
-    var on = options[i].getAttribute('data-mode') === picked;
-    options[i].classList.toggle('is-active', on);
-    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
-  }
-  try { localStorage.setItem('cf-r37-mode', picked); } catch (e) { /* private mode */ }
-  cfVrSyncControls();
-}
-
 function cfVrUpdateWalletHint() {
   var hint = document.getElementById('cf-vr-wallet-hint');
   if (!hint) return;
   var purse = Number((document.getElementById('cf-vr-capital') || {}).value || 0);
-  hint.textContent = purse > 0 ? 'at most ' + _cfR37Usd(purse / 2) + ' in coin' : '';
+  hint.textContent = purse > 0 ? _cfR37Usd(purse / 2) : '$—';
 }
 
-// Which sections show is the switch; what the buttons say is the book.
 function cfVrSyncControls() {
-  var live = cfR37Mode() === 'live';
-  var symbol = _cfR37ActiveSymbol;
+  var symbol = (document.getElementById('cf-vr-symbol') || {}).value || '';
   var book = _cfVrBookFor(symbol);
   var on = !!(book && book.enabled);
-  var display = function (id, visible) { var n = document.getElementById(id); if (n) n.style.display = visible ? '' : 'none'; };
+  var badge = document.getElementById('cf-vr-state-badge');
+  var text = document.getElementById('cf-vr-state-text');
+  if (badge) {
+    badge.className = 'tp-badge ' + (on ? (book.mode === 'live' ? 'live' : 'running') : 'idle');
+    badge.textContent = on ? (book.mode === 'live' ? 'On · REAL MONEY' : 'On · paper') : (book ? 'Off' : 'No book');
+  }
+  if (text) text.textContent = book ? (on ? (book.last_error || book.note || '') : '') : '';
   var show = function (id, visible) { var n = document.getElementById(id); if (n) n.hidden = !visible; };
-  var paperSections = document.querySelectorAll('[data-cf-book="paper"]');
-  for (var i = 0; i < paperSections.length; i++) {
-    var sec = paperSections[i];
-    if (sec.id === 'cf-r37-warmup-card') {
-      // owned by cfR37RenderWarmup, which shows it only when there is something to show
-      if (live) sec.style.display = 'none';
-      continue;
-    }
-    sec.style.display = live ? 'none' : '';
-  }
-  display('cf-vr-stats', live);
-  display('cf-vr-ladders', live);
-  display('cf-vr-closed', live);
-  display('cf-vr-purse-field', live);
-  var kicker = document.getElementById('cf-r37-control-kicker');
-  if (kicker) kicker.textContent = live ? 'Live engine' : 'Paper engine';
-  var copy = document.getElementById('cf-r37-control-copy-text');
-  if (copy) copy.textContent = live
-    ? 'Choose the market, set the purse, then turn the live book on.'
-    : 'Choose the market to monitor, then manage its independent paper session.';
-  var note = document.getElementById('cf-r37-mode-note');
-  if (note) note.textContent = live ? 'Real orders, in its own engine.' : 'Simulated fills on real candles.';
-  show('cf-r37-reset-btn', !live);
-  if (live) {
-    show('cf-r37-start-btn', false);
-    show('cf-r37-stop-btn', false);
-    show('cf-vr-on-btn', !on);
-    show('cf-vr-save-btn', on);
-    show('cf-vr-off-btn', on);
+  show('cf-vr-on-btn', !on);
+  show('cf-vr-save-btn', on);
+  show('cf-vr-off-btn', on);
+}
+
+function cfVrSelectSymbol(symbol) {
+  var book = _cfVrBookFor(symbol);
+  if (book) {
     var purse = document.getElementById('cf-vr-capital');
-    if (purse && book && !purse.matches(':focus') && Number(book.start_capital_usd || 0) > 0) {
-      purse.value = Number(book.start_capital_usd);
-      cfVrUpdateWalletHint();
+    if (purse && Number(book.start_capital_usd || book.purse_usd || 0) > 0) {
+      purse.value = Number(book.start_capital_usd || book.purse_usd);
     }
-  } else {
-    show('cf-vr-on-btn', false);
-    show('cf-vr-save-btn', false);
-    show('cf-vr-off-btn', false);
-    if (_cfR37LastStatus) cfR37RenderStatus(_cfR37LastStatus);
+    cfVrSetMode(book.mode === 'live' ? 'live' : 'paper');
   }
-  // the chip at the top of the page says which book is running
-  var chip = document.getElementById('cf-r37-engine-chip');
-  var label = chip ? chip.querySelector('.cf-engine-label') : null;
-  var state = document.getElementById('cf-r37-engine-state');
-  if (live && chip) {
-    chip.setAttribute('data-state', on ? 'running' : 'idle');
-    if (label) label.textContent = 'Live';
-    if (state) state.textContent = on ? 'On' : 'Off';
-  } else if (label) {
-    label.textContent = 'Paper';
-  }
-  var vchip = document.getElementById('cf-vr-chip');
-  if (vchip) vchip.setAttribute('data-state', on ? 'running' : 'idle');
-  var vstate = document.getElementById('cf-vr-state');
-  if (vstate) vstate.textContent = on ? 'On · ' + symbol : 'Off';
-}
-
-var _CF_VR_ACTIVE = { WAITING_FIRST_DEPTH: 1, TRENDLINE_ACTIVE: 1, MOTHER_BREAK_PENDING: 1 };
-
-function cfVrRenderStats(data) {
-  var symbol = _cfR37ActiveSymbol;
-  var book = _cfVrBookFor(symbol) || {};
-  var mine = (Array.isArray(data && data.campaigns) ? data.campaigns : []).filter(function (c) {
-    return String(c.symbol || '').toUpperCase() === symbol;
-  });
-  var open = mine.filter(function (c) { return _CF_VR_ACTIVE[c.state]; });
-  var holding = 0, unrealised = 0, realised = 0;
-  open.forEach(function (c) {
-    var spent = Number(c.spent_usd || 0);
-    holding += spent;
-    var qty = Number(c.filled_base_qty || 0), px = Number(c.last_price || 0);
-    if (qty > 0 && px > 0) unrealised += qty * px - spent;
-  });
-  mine.forEach(function (c) { realised += Number(c.realized_pnl || 0); });
-  (Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : []).forEach(function (c) {
-    if (String(c.symbol || '').toUpperCase() === symbol && !mine.some(function (m) { return m.campaign_id === c.campaign_id; })) {
-      realised += Number(c.realized_pnl || 0);
-    }
-  });
-  var set = function (id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
-  set('cf-vr-purse', book.purse_usd != null ? _cfR37Usd(book.purse_usd) : '$—');
-  set('cf-vr-purse-sub', symbol + ' · live' + (book.pocket_usd ? ' · ' + _cfR37Usd(book.pocket_usd) + ' waiting to fold' : ''));
-  var rn = document.getElementById('cf-vr-realised');
-  if (rn) { rn.textContent = _cfR37Usd(realised); rn.style.color = realised >= 0 ? 'var(--green)' : 'var(--red)'; }
-  set('cf-vr-realised-sub', (book.folds || 0) + (book.folds === 1 ? ' fold' : ' folds') + ' into the purse');
-  set('cf-vr-open-count', String(open.length));
-  set('cf-vr-open-cost', 'holding ' + _cfR37Usd(holding));
-  var un = document.getElementById('cf-vr-unrealised');
-  if (un) { un.textContent = _cfR37Usd(unrealised); un.style.color = unrealised >= 0 ? 'var(--green)' : 'var(--red)'; }
-  set('cf-vr-last-scan', book.last_scan_ts ? _cfR37Ist(book.last_scan_ts) : '—');
-  set('cf-vr-last-scan-sub', book.enabled ? (book.last_error || book.note || 'IST · last closed 5m bar') : (book.symbol ? 'off' : 'no live book yet'));
-  set('cf-vr-since', book.start_ts ? _cfR37Ist(book.start_ts) + ' IST' : '—');
-}
-
-function cfVrRenderClosed(data) {
-  var body = document.getElementById('cf-vr-closed-body');
-  if (!body) return;
-  var symbol = _cfR37ActiveSymbol;
-  var rows = (Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : []).filter(function (c) {
-    return String(c.symbol || '').toUpperCase() === symbol;
-  }).slice().reverse();
-  if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="8" class="cf-table-empty-cell">No live ladder has ended yet.</td></tr>';
-    return;
-  }
-  var why = { target: 'target hit', cancelled: 'closed above the mother before a buy', stopped: 'turned off', mother_broken: 'mother broken' };
-  body.innerHTML = rows.map(function (c) {
-    var rounds = Array.isArray(c.rounds) ? c.rounds : [];
-    var last = rounds.length ? rounds[rounds.length - 1] : null;
-    var buys = rounds.reduce(function (n, r) { return n + ((r.fills || []).length || 0); }, 0);
-    var invested = rounds.reduce(function (n, r) { return n + Number(r.invested_usd || 0); }, 0);
-    var pnl = Number(c.realized_pnl || 0);
-    return '<tr>'
-      + '<td>' + _escapeHtml(Number(c.mother_high || 0).toLocaleString('en-US')) + '</td>'
-      + '<td class="num">' + buys + '</td>'
-      + '<td class="num">' + _cfR37Usd(invested) + '</td>'
-      + '<td class="num">' + (last && last.exit_price ? Number(last.exit_price).toLocaleString('en-US') : '—') + '</td>'
-      + '<td class="num" style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + _cfR37Usd(pnl) + '</td>'
-      + '<td>' + _escapeHtml(String(c.closed_at || '').slice(0, 16)) + '</td>'
-      + '<td>' + _escapeHtml(why[c.close_reason] || c.close_reason || '') + '</td>'
-      + '<td><button type="button" class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + _escapeHtml(c.campaign_id) + '\')">Chart</button></td>'
-      + '</tr>';
-  }).join('');
+  _cfVrSetError('');
+  cfVrUpdateWalletHint();
+  cfVrSyncControls();
 }
 
 function cfVrRenderStatus(data) {
-  _cfVrLast = data;
   _cfVrBooks = (data && data.books) || [];
   cfVrSyncControls();
-  cfVrRenderStats(data);
-  cfVrRenderClosed(data);
-  var symbol = _cfR37ActiveSymbol;
-  var mine = (Array.isArray(data && data.campaigns) ? data.campaigns : []).filter(function (c) {
-    return String(c.symbol || '').toUpperCase() === symbol;
-  });
-  cfRenderCascadeCampaigns(mine, (data && data.instruments) || {}, {
-    mountId: 'cf-vr-campaigns',
-    emptyText: 'Nothing running yet — turn the book on above.',
-    emptyLiveText: 'No ladder working — watching for the next V.'
-  });
+  cfRenderCascadeCampaigns(
+    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    (data && data.instruments) || {},
+    {
+      mountId: 'cf-vr-campaigns',
+      emptyText: 'Nothing live — start a book beside this, once the server is armed.',
+      emptyLiveText: 'No ladder working right now — the book is watching for its next V.'
+    }
+  );
 }
 
-async function cfVrRefresh() {
+async function cfVrRefresh(showToast) {
   try {
     var response = await cfApiFetch('/api/vrule/live/status', { cache: 'no-store' });
     if (response.status === 404) return;  // the server has not been restarted onto this build yet
     var data = await cfReadApiPayload(response);
-    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Live status unavailable'));
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'V-Rule live status unavailable'));
+    _cfVrSetError('');
     cfVrRenderStatus(data);
+    if (showToast) cfToast('V-Rule live refreshed', 'success');
   } catch (err) {
-    _cfR37SetError(String(err.message || err));
+    _cfVrSetError(String(err.message || err));
   }
+}
+
+var _CF_VR_BUTTONS = ['cf-vr-on-btn', 'cf-vr-save-btn', 'cf-vr-off-btn', 'cf-vr-refresh-btn'];
+
+function _cfVrSetBusy(busy, actingId) {
+  _cfVrBusy = busy;
+  _CF_VR_BUTTONS.forEach(function (id) {
+    var node = document.getElementById(id);
+    if (!node) return;
+    node.disabled = busy;
+    if (id !== actingId) return;
+    if (busy) {
+      node.setAttribute('data-cf-label', node.textContent);
+      node.textContent = 'Working…';
+    } else if (node.hasAttribute('data-cf-label')) {
+      node.textContent = node.getAttribute('data-cf-label');
+      node.removeAttribute('data-cf-label');
+    }
+  });
 }
 
 async function cfVrSaveBook(enabled) {
   if (_cfVrBusy) return;
-  var symbol = _cfR37ActiveSymbol;
+  var symbol = (document.getElementById('cf-vr-symbol') || {}).value || '';
   var capital = Number((document.getElementById('cf-vr-capital') || {}).value || 0);
-  if (enabled && !(capital > 0)) { _cfR37SetError('Set a purse bigger than zero'); return; }
+  if (!symbol) { _cfVrSetError('Choose a coin first'); return; }
+  if (enabled && !(capital > 0)) { _cfVrSetError('Set a purse bigger than zero'); return; }
   var wasOn = !!(_cfVrBookFor(symbol) || {}).enabled;
-  if (enabled && !wasOn) {
+  var mode = cfVrMode();
+  if (enabled && !wasOn && mode === 'live') {
     var ok = await cfConfirm(
       '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own, '
-      + 'from the next bar.</strong></p>'
-      + '<p>Up to <strong>' + _cfR37Usd(capital / 2) + '</strong> in coin at once, and '
-      + '<strong>no stop-loss</strong> — every exit is the target.</p>',
-      'Turn on the V-Rule live on ' + symbol + '?',
+      + 'from the next bar.</strong> Nobody clicks anything per trade.</p>'
+      + '<p>It may hold up to <strong>' + _cfR37Usd(capital / 2) + '</strong> in coin at once, '
+      + 'and it has <strong>no stop-loss</strong> — every exit is the target, so a ladder the '
+      + 'market does not turn for is simply held, for as long as it takes.</p>'
+      + '<p>It trades in its own engine, so your Cascade campaigns are not touched — but it '
+      + 'spends from the <strong>same exchange balance</strong>.</p>',
+      'Start the V-Rule on ' + symbol + ' with real money?',
       '⚠️', true
     );
     if (!ok) return;
   }
-  var btn = document.getElementById(enabled ? (wasOn ? 'cf-vr-save-btn' : 'cf-vr-on-btn') : 'cf-vr-off-btn');
-  _cfVrBusy = true;
-  if (btn) { btn.disabled = true; btn.setAttribute('data-cf-label', btn.textContent); btn.textContent = 'Working…'; }
+  var acting = enabled ? (wasOn ? 'cf-vr-save-btn' : 'cf-vr-on-btn') : 'cf-vr-off-btn';
+  _cfVrSetBusy(true, acting);
   try {
     var response = await cfApiFetch('/api/vrule/live/books', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol: symbol, mode: 'live', capital_usd: capital, enabled: !!enabled })
+      body: JSON.stringify({ symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled })
     });
     var data = await cfReadApiPayload(response);
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the live book'));
-    _cfR37SetError('');
+    _cfVrSetError('');
     cfVrRenderStatus(data);
-    cfToast(symbol + (enabled ? (wasOn ? ' saved' : ' is live') : ' live is off'), 'success');
+    cfToast(symbol + (enabled ? (wasOn ? ' saved' : ' is on') : ' is off'), 'success');
   } catch (err) {
-    _cfR37SetError(String(err.message || err));
-    cfToast(String(err.message || err), 'error');
+    _cfVrSetError(String(err.message || err));
   } finally {
-    _cfVrBusy = false;
-    if (btn) { btn.disabled = false; btn.textContent = btn.getAttribute('data-cf-label') || btn.textContent; btn.removeAttribute('data-cf-label'); }
+    _cfVrSetBusy(false, acting);
   }
 }
 
 function cfVrInit() {
+  var select = document.getElementById('cf-vr-symbol');
+  if (select && !select.options.length) {
+    // The same instruments the paper book offers.
+    ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'PAXGUSDT'].forEach(function (symbol) {
+      var option = document.createElement('option');
+      option.value = symbol;
+      option.textContent = symbol;
+      select.appendChild(option);
+    });
+  }
   var purseField = document.getElementById('cf-vr-capital');
   if (purseField && !purseField._cfVrBound) {
     purseField._cfVrBound = true;
     purseField.addEventListener('input', cfVrUpdateWalletHint);
   }
   cfVrUpdateWalletHint();
-  var remembered = 'paper';
-  try { remembered = localStorage.getItem('cf-r37-mode') || 'paper'; } catch (e) { /* private mode */ }
-  cfR37SetMode(remembered);
-  cfVrRefresh().then(function () {
-    // a live book that is ON for this instrument wins over memory
-    var book = _cfVrBookFor(_cfR37ActiveSymbol);
-    if (book && book.enabled && cfR37Mode() !== 'live') cfR37SetMode('live');
-  });
+  cfVrSyncControls();
+  cfVrRefresh(false);
   if (_cfVrPollTimer) clearInterval(_cfVrPollTimer);
-  _cfVrPollTimer = setInterval(function () { if (!document.hidden) cfVrRefresh(); }, 5000);
+  _cfVrPollTimer = setInterval(function () { cfVrRefresh(false); }, 20000);
 }
 
 function cfVrStopPolling() {
