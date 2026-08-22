@@ -98,6 +98,7 @@ from engine.live import LiveEngine
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade, normalize_scalp_order_type
 from engine.trade_journal import merge_with_sheet, pair_fills_into_trades
+from engine.vrule_live import VRuleLive
 from state_store import get_json_store
 
 
@@ -150,6 +151,13 @@ async def _shutdown_runtime_engines() -> None:
             await sandbox.shutdown()
         except Exception as exc:
             _logger.warning("Failed to shutdown the Auto-Cascade_Fib sandbox during app shutdown: %s", exc)
+    vrule_engine = globals().get("_vrule_engine")
+    if vrule_engine is not None:
+        try:
+            _save_vrule_runtime()
+            await vrule_engine.shutdown()
+        except Exception as exc:
+            _logger.warning("Failed to shutdown the V-Rule live engine during app shutdown: %s", exc)
     rule3070_services = globals().get("_rule3070_services") or {}
     legacy_rule3070 = globals().get("_rule3070_service")
     if legacy_rule3070 is not None:
@@ -189,6 +197,10 @@ async def _wake_cascade_on_boot() -> None:
         _get_auto_fib_engine()
     except Exception as exc:
         _logger.error("[AUTO-FIB] boot restore failed; the sandbox stays asleep: %s", exc)
+    try:
+        _get_vrule_engine()
+    except Exception as exc:
+        _logger.error("[V-RULE] boot restore failed; the live driver stays asleep: %s", exc)
     _resume_rule3070_on_boot()
 
 
@@ -791,6 +803,8 @@ _BUCKET_CASCADE_CLOSED = "cascade_closed"
 # Auto-Cascade_Fib's books: the purse, the pocket and which symbols are on.
 _BUCKET_AUTO_FIB = "auto_cascade_fib"
 _BUCKET_AUTO_FIB_RUNTIME = "auto_fib_runtime"
+_BUCKET_VRULE = "vrule_live"
+_BUCKET_VRULE_RUNTIME = "vrule_runtime"
 # One frozen chart payload per campaign, keyed by campaign_id — the permanent,
 # static "how the trade was taken" record shown from the journal.
 _BUCKET_CASCADE_CHART_SNAP = "cascade_chart_snap"
@@ -7844,6 +7858,8 @@ _cascade_engine: Optional[CascadeEngine] = None
 
 _auto_fib = None
 _auto_fib_engine = None
+_vrule = None
+_vrule_engine = None
 
 
 def _load_cascade_runtime() -> dict:
@@ -7882,6 +7898,9 @@ def _persist_cascade_runtime_snapshot(engine: "CascadeEngine") -> None:
     if _auto_fib is not None:
         _save_auto_fib()
         _save_auto_fib_runtime()
+    if _vrule is not None:
+        _save_vrule()
+        _save_vrule_runtime()
 
 
 def _load_cascade_events() -> list:
@@ -8247,48 +8266,45 @@ def _get_cascade_engine() -> "CascadeEngine":
         # list sees only half the claims on a symbol's balance, so each is told
         # how to ask the other. Lazy on purpose: reaching for the strategy
         # engine here would build it mid-construction of this one.
-        _cascade_engine.foreign_claims = _auto_fib_claimed_qty
+        _cascade_engine.foreign_claims = lambda symbol, venue="": _claims_from_other_engines("cascade", symbol, venue)
     return _cascade_engine
 
 
-def _auto_fib_claimed_qty(symbol: str, venue: str = "") -> float:
-    """Coin the strategy's LIVE campaigns hold, for the live engine to net off.
+def _live_claim_of(engine, symbol: str, venue: str) -> float:
+    """Coin one engine's LIVE campaigns hold on a symbol. Paper coin is
+    imaginary and claims nothing."""
+    total = 0.0
+    for campaign in list(engine.campaigns.values()):
+        if str(campaign.symbol or "").upper() != symbol:
+            continue
+        if str(getattr(campaign, "mode", "") or "") != "live":
+            continue
+        if venue and str(engine.venue_of(campaign) or "").lower() != venue:
+            continue
+        total += float(getattr(campaign, "filled_base_qty", 0.0) or 0.0)
+        total += float(getattr(campaign, "residual_base_qty", 0.0) or 0.0)
+    return total
 
-    Deliberately does not construct the strategy engine: if it does not exist
-    yet it is holding nothing, and building it from inside the live engine's
-    balance check would be a poor place to discover a broker problem.
+
+def _claims_from_other_engines(me: str, symbol: str, venue: str = "") -> float:
+    """Coin EVERY OTHER engine holds on this symbol, for `me` to net off.
+
+    Three engines trade one exchange account — the live Cascade, Auto-
+    Cascade_Fib, the V-Rule — and each one's own campaign list sees only its
+    own claims on a balance. Engines that do not exist yet hold nothing, and
+    are deliberately not constructed from inside a balance check.
     """
-    if _auto_fib is None:
-        return 0.0
-    try:
-        return float(_auto_fib.claimed_base_qty(symbol, venue))
-    except Exception as exc:
-        _logger.warning("[AUTO-FIB] claim lookup failed for %s: %s", symbol, exc)
-        return 0.0
-
-
-def _live_cascade_claimed_qty(symbol: str, venue: str = "") -> float:
-    """The mirror: coin the LIVE Cascade holds, for the strategy to net off."""
-    engine = _cascade_engine
-    if engine is None:
-        return 0.0
-    try:
-        symbol = str(symbol or "").upper()
-        venue = str(venue or "").lower()
-        total = 0.0
-        for campaign in list(engine.campaigns.values()):
-            if str(campaign.symbol or "").upper() != symbol:
-                continue
-            if str(getattr(campaign, "mode", "") or "") != "live":
-                continue
-            if venue and str(engine.venue_of(campaign) or "").lower() != venue:
-                continue
-            total += float(getattr(campaign, "filled_base_qty", 0.0) or 0.0)
-            total += float(getattr(campaign, "residual_base_qty", 0.0) or 0.0)
-        return total
-    except Exception as exc:
-        _logger.warning("[CASCADE] claim lookup failed for %s: %s", symbol, exc)
-        return 0.0
+    symbol = str(symbol or "").upper()
+    venue = str(venue or "").lower()
+    total = 0.0
+    for name, engine in (("cascade", _cascade_engine), ("auto_fib", _auto_fib_engine), ("vrule", _vrule_engine)):
+        if name == me or engine is None:
+            continue
+        try:
+            total += _live_claim_of(engine, symbol, venue)
+        except Exception as exc:
+            _logger.warning("[CASCADE] claim lookup on the %s engine failed for %s: %s", name, symbol, exc)
+    return total
 
 
 def _get_auto_fib_engine() -> "CascadeEngine":
@@ -8318,7 +8334,7 @@ def _get_auto_fib_engine() -> "CascadeEngine":
         # driver came back believing it had never started one.
         eng = CascadeEngine(PaperOnlyBroker(delta), on_update=_persist_auto_fib_update)
         eng._lock_path = os.path.join(_HERE, ".cascade-sandbox-writer.lock")
-        eng.foreign_claims = _live_cascade_claimed_qty
+        eng.foreign_claims = lambda symbol, venue="": _claims_from_other_engines("auto_fib", symbol, venue)
         state = _get_state_store().get(_BUCKET_AUTO_FIB_RUNTIME, "current", default={}) or {}
         if isinstance(state, dict):
             eng.load_capital_groups(state.get("capital_groups") or {})
@@ -8378,6 +8394,76 @@ def _attach_auto_fib(engine: "CascadeEngine") -> None:
         engine.strategy_drivers.append(_auto_fib)
     except Exception as exc:
         _logger.error("[AUTO-FIB] could not attach the driver; the strategy stays off: %s", exc)
+
+
+def _get_vrule_engine() -> "CascadeEngine":
+    """The V-Rule's OWN engine — the third on the account, walled off like the
+    second. Its broker wrapper is armed by CRYPTOFORGE_VRULE_LIVE, not the
+    Auto-Cascade_Fib switch: each strategy's live is its own decision."""
+    global _vrule_engine
+    if _vrule_engine is None:
+        from engine.vrule_live import LIVE_ARM_HINT, LIVE_ARMED
+
+        eng = CascadeEngine(
+            PaperOnlyBroker(delta, live_armed=LIVE_ARMED, arm_hint=LIVE_ARM_HINT),
+            on_update=_persist_vrule_update,
+        )
+        eng._lock_path = os.path.join(_HERE, ".cascade-vrule-writer.lock")
+        eng.foreign_claims = lambda symbol, venue="": _claims_from_other_engines("vrule", symbol, venue)
+        state = _get_state_store().get(_BUCKET_VRULE_RUNTIME, "current", default={}) or {}
+        if isinstance(state, dict):
+            eng.load_capital_groups(state.get("capital_groups") or {})
+            eng.load_closed_campaigns(state.get("closed_campaigns") or [])
+            snapshots = state.get("campaigns") or []
+            if snapshots:
+                eng.restore_campaigns(snapshots)
+        _vrule_engine = eng
+        _attach_vrule(eng)
+        if eng.active_campaigns or any(b.enabled for b in (_vrule.books.values() if _vrule else [])):
+            eng.start()
+    return _vrule_engine
+
+
+def _persist_vrule_update(status: dict) -> None:
+    try:
+        _get_state_store().put(_BUCKET_VRULE_RUNTIME, "current", _snapshot_cascade_runtime(status))
+    except Exception as exc:
+        _logger.error("[V-RULE] Failed to persist the live runtime: %s", exc)
+    if _vrule is not None:
+        _save_vrule()
+
+
+def _save_vrule_runtime() -> None:
+    if _vrule_engine is None:
+        return
+    try:
+        _get_state_store().put(_BUCKET_VRULE_RUNTIME, "current", _snapshot_cascade_runtime(_vrule_engine.get_status()))
+    except Exception as exc:
+        _logger.error("[V-RULE] Failed to persist the live runtime: %s", exc)
+
+
+def _attach_vrule(engine: "CascadeEngine") -> None:
+    global _vrule
+    try:
+        _vrule = VRuleLive(engine)
+        _vrule.load(_get_state_store().get(_BUCKET_VRULE, "books", default={}) or {})
+        engine.strategy_drivers.append(_vrule)
+    except Exception as exc:
+        _logger.error("[V-RULE] could not attach the live driver; it stays off: %s", exc)
+
+
+def _get_vrule() -> "VRuleLive":
+    _get_vrule_engine()
+    if _vrule is None:
+        raise HTTPException(status_code=503, detail="The V-Rule live driver is not available")
+    return _vrule
+
+
+def _save_vrule() -> None:
+    try:
+        _get_state_store().put(_BUCKET_VRULE, "books", _get_vrule().dump())
+    except Exception as exc:
+        _logger.error("[V-RULE] Failed to persist the books: %s", exc)
 
 
 def _get_auto_fib() -> "AutoCascadeFib":
@@ -9461,6 +9547,60 @@ async def auto_fib_set_book(request: Request):
     return {"status": "ok", **driver.status()}
 
 
+@app.get("/api/vrule/live/status")
+async def vrule_live_status():
+    """The V-Rule's live books and their ladders, in the Cascade shape."""
+    driver = _get_vrule()
+    engine_status = _get_vrule_engine().get_status()
+    return {
+        "status": "ok",
+        **driver.status(),
+        "campaigns": engine_status.get("campaigns") or [],
+        "instruments": engine_status.get("instruments") or {},
+    }
+
+
+@app.post("/api/vrule/live/books")
+async def vrule_live_set_book(request: Request):
+    """Turn a V-Rule live book on or off, or set its purse.
+
+    Live is refused by the driver unless the server is armed AND the venue's
+    keys are configured. Turning a book OFF withdraws every resting entry; a
+    position already held keeps its take-profit resting.
+    """
+    check_rate_limit("vrule_live_book", max_calls=6, window_sec=10)
+    body = await _read_json_body(request)
+    from engine.rule3070_paper import normalize_symbol
+
+    try:
+        symbol = normalize_symbol(body.get("symbol"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    driver = _get_vrule()
+    exchange = str(body.get("exchange") or "").strip().lower()
+    enabled = body.get("enabled")
+    try:
+        if enabled is False and f"{symbol}:{exchange}".lower() in driver.books:
+            await driver.stop_book(symbol, exchange)
+            book = driver.set_book(
+                symbol, mode=body.get("mode"), capital_usd=body.get("capital_usd"), exchange=exchange
+            )
+        else:
+            book = driver.set_book(
+                symbol,
+                enabled=enabled,
+                mode=body.get("mode"),
+                capital_usd=body.get("capital_usd", body.get("capital")),
+                exchange=exchange,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if book.enabled:
+        _get_vrule_engine().start()
+    _save_vrule()
+    return {"status": "ok", **driver.status()}
+
+
 @app.get("/api/cascade/status")
 async def cascade_status():
     eng = _get_cascade_engine()
@@ -9627,12 +9767,12 @@ async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto", end_
     # endpoint, two engines feeding it. Read-only either way, and checked first
     # so a sandbox id can never be answered from live history by accident.
     if campaign_id not in eng.campaigns and not any(c.get("campaign_id") == campaign_id for c in eng.closed_campaigns):
-        sandbox = _auto_fib_engine
-        if sandbox is not None and (
-            campaign_id in sandbox.campaigns
-            or any(c.get("campaign_id") == campaign_id for c in sandbox.closed_campaigns)
-        ):
-            return await sandbox.get_chart_data(campaign_id, timeframe=timeframe, end_ts=max(0, int(end_ts)))
+        for sandbox in (_auto_fib_engine, _vrule_engine):
+            if sandbox is not None and (
+                campaign_id in sandbox.campaigns
+                or any(c.get("campaign_id") == campaign_id for c in sandbox.closed_campaigns)
+            ):
+                return await sandbox.get_chart_data(campaign_id, timeframe=timeframe, end_ts=max(0, int(end_ts)))
     if not eng.closed_campaigns:
         # The chart works for ended campaigns too, and after a restart their
         # history has to be loaded before it can be found.

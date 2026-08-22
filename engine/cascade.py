@@ -1227,6 +1227,18 @@ class Campaign:
     # one Phil starts by hand. A named strategy's driver claims only its own,
     # so the two books can never manage each other's campaigns.
     strategy: str = ""
+    # A DRIVEN campaign has no geometry of its own. Its strategy driver decides
+    # the entry (arm_driven_entry) and the target (tp_override_price) from its
+    # own rules, and this engine only EXECUTES: the trailing buy stop, the
+    # resting take-profit, fill ingestion, restart reconciliation. The candle
+    # state machine — trendlines, fibs, ladders, mother-break watch, escalation
+    # — is skipped entirely, because the driver's rule is not the cascade's.
+    # False for every campaign that existed before this field, and for every
+    # one the Cascade page starts, so nothing about them changes.
+    driven: bool = False
+    # A target the driver sets outright, replacing the fib-level geometry.
+    # Still floored so it can never sell at a loss; see compute_tp_price.
+    tp_override_price: Optional[float] = None
     # Which exchange this campaign's money and orders live on. Empty means "the
     # one this engine was started with", which is what every campaign saved
     # before exchanges were a concept will read as — so nothing existing moves
@@ -1518,6 +1530,8 @@ class Campaign:
             "tp_fib_level": self.tp_fib_level,
             "strategy": self.strategy,
             "cap_timeframe": self.cap_timeframe,
+            "driven": self.driven,
+            "tp_override_price": self.tp_override_price,
             "exchange": self.exchange,
             "fee_pct_per_side": self.fee_pct_per_side,
             "funded_floor_price": self.funded_floor_price,
@@ -1609,6 +1623,8 @@ class Campaign:
             "tp_fib_level",
             "strategy",
             "cap_timeframe",
+            "driven",
+            "tp_override_price",
             "exchange",
             "fee_pct_per_side",
             "funded_floor_price",
@@ -1796,6 +1812,12 @@ def compute_tp_price(campaign: Campaign) -> Optional[float]:
         return None
     level = campaign.tp_fib_level if campaign.tp_fib_level is not None else TP_FIB_LEVEL
     geometric = anchor + level * (campaign.mother_high - anchor)
+    # A driven campaign's target comes from its own rule, not from the fib
+    # level. The fee floor below still applies to it: whatever the rule says,
+    # this engine never rests a sell that loses money.
+    override = _coerce_float(campaign.tp_override_price, 0.0)
+    if campaign.driven and override > 0:
+        geometric = override
     if not TP_MUST_CLEAR_FEES:
         return geometric
     floor = tp_breakeven_price(anchor, campaign_fee_pct(campaign)) * (1.0 + TP_MIN_NET_PCT / 100.0)
@@ -2548,6 +2570,7 @@ class CascadeEngine:
         strategy: str = "",
         tp_fib_level: Optional[float] = None,
         cap_timeframe: str = "",
+        driven: bool = False,
     ) -> dict:
         symbol = str(symbol or "").strip().upper()
         mode = "live" if str(mode or "").strip().lower() == "live" else "paper"
@@ -2765,6 +2788,9 @@ class CascadeEngine:
             strategy=str(strategy or ""),
             tp_fib_level=tp_fib_level,
             cap_timeframe=str(cap_timeframe or ""),
+            # A driven campaign never climbs the ladder: its strategy owns its
+            # timeframe the way it owns everything else about its geometry.
+            driven=bool(driven),
             # Stamped only when a venue was named. Left empty for the default
             # so existing campaigns and new ones are stored identically, and
             # an engine started on a different broker keeps behaving as before.
@@ -2785,6 +2811,8 @@ class CascadeEngine:
             mother_watch_last_5m_ts=mother_ts,
             window_start_ts=mother_ts,
         )
+        if campaign.driven:
+            campaign.escalates = False
         self.campaigns[campaign.campaign_id] = campaign
         self._log_event(
             campaign,
@@ -2842,6 +2870,94 @@ class CascadeEngine:
             )
         else:
             self._log_event(campaign, "stop", f"Campaign {campaign_id} stopped")
+        self._archive_campaign(campaign)
+        self._emit_update()
+        return {"status": "ok", "campaign": campaign.to_dict()}
+
+    # ── the surface a strategy driver uses on a DRIVEN campaign ──────
+    #
+    # A driver owns the rule; this engine owns the orders. The driver says
+    # "rest a buy of this much at this trigger" or "take it down", and sets the
+    # target outright. Everything between — placing, walking, ingesting fills,
+    # resting the TP, reconciling after a restart — is the same hardened path
+    # the Cascade's own campaigns take. Nothing here is reachable for a
+    # campaign that is not driven, so the Cascade page's campaigns are exactly
+    # as they were.
+
+    def arm_driven_entry(self, campaign: Campaign, usd: float, trigger: float, candle: "Candle") -> bool:
+        """Rest ONE buy stop of `usd` at `trigger` for a driven campaign.
+
+        Idempotent: the same money at the same trigger changes nothing and
+        re-places nothing. A moved trigger or a changed amount drops the
+        resting order's id so the exchange sweep cancels it and a fresh one
+        goes out at the new price — exactly how the cascade walks its own stop
+        down a fall. Returns True when something changed.
+        """
+        if not campaign.driven or campaign.state not in ACTIVE_STATES:
+            return False
+        # Full precision, not cents: the driver's target is a dollar-weighted
+        # average of its fills, and rounding the pot here moved that target in
+        # the fourth decimal against the rule it is meant to reproduce. The
+        # exchange rounds to its lot step at placement, where rounding belongs.
+        usd = round(max(_coerce_float(usd, 0.0), 0.0), 8)
+        trigger = _coerce_float(trigger, 0.0)
+        if usd <= 0 or trigger <= 0:
+            return self.disarm_driven_entry(campaign)
+        tick = _coerce_float(campaign.tick_size, DEFAULT_TICK_SIZE) or DEFAULT_TICK_SIZE
+        same_trigger = campaign.pending_stop_price is not None and abs(campaign.pending_stop_price - trigger) < tick / 2
+        same_usd = abs(_coerce_float(campaign.pending_usd, 0.0) - usd) < 1e-6
+        if same_trigger and same_usd:
+            return False
+        campaign.pending_usd = usd
+        # _set_pending_stop drops the old order id, bumps the revision and logs
+        # the walk — the one place every trigger change goes through.
+        self._set_pending_stop(campaign, trigger, candle)
+        return True
+
+    def disarm_driven_entry(self, campaign: Campaign) -> bool:
+        """Take the driven campaign's buy stop down, keeping any fill already booked.
+
+        The order id is dropped rather than cancelled here: the live sync's
+        entry sweep cancels every untracked `cf-csc-{id}-` order that is not a
+        TP, so the exchange is tidied on the next pass by the same code that
+        tidies the cascade's own. Returns True when there was something armed.
+        """
+        if not campaign.driven:
+            return False
+        had = bool(campaign.pending_usd > 0 or campaign.pending_stop_price or campaign.pending_order_id)
+        campaign.pending_usd = 0.0
+        campaign.pending_stop_price = None
+        campaign.pending_limit_price = None
+        campaign.pending_stop_ts = None
+        campaign.pending_last_red = None
+        campaign.pending_order_id = None
+        campaign.pending_filled_qty = 0.0
+        campaign.collected = []
+        campaign.pending_line = None
+        self._stale_pot_held.discard(campaign.campaign_id)
+        if had:
+            self._log_event(campaign, "order", "Buy stop withdrawn — the rule no longer wants an entry here")
+        return had
+
+    def complete_driven_campaign(self, campaign: Campaign, reason: str, note: str = "") -> dict:
+        """End a driven campaign on its own rule — target hit, or the rule cancelled it.
+
+        Distinct from stop_campaign, which is a person pulling the plug: this
+        is the rule finishing, so it is booked as COMPLETED with the rule's
+        reason. A position still held keeps its TP resting, as ever — ending a
+        campaign must never strand coin with nothing to sell it.
+        """
+        if not campaign.driven:
+            return {"error": "not a driven campaign"}
+        if campaign.state in FINAL_STATES:
+            return {"status": "ok", "campaign": campaign.to_dict()}
+        self.disarm_driven_entry(campaign)
+        campaign.state = "COMPLETED"
+        campaign.close_reason = str(reason or "completed")
+        campaign.closed_at = _ist_now_str()
+        self._log_event(
+            campaign, "stop", note or f"Campaign {campaign.campaign_id} completed — {campaign.close_reason}"
+        )
         self._archive_campaign(campaign)
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict()}
@@ -4303,8 +4419,10 @@ class CascadeEngine:
 
     async def _campaign_tick(self, campaign: Campaign) -> bool:
         changed = False
-        # New closed candles drive the state machine.
-        stepped = await self._candle_step(campaign)
+        # New closed candles drive the state machine — unless the campaign is
+        # DRIVEN, in which case its strategy driver steps it from its own
+        # candles and its own rules, and this engine only executes orders.
+        stepped = False if campaign.driven else await self._candle_step(campaign)
         changed |= stepped
         # Keep the live price fresh for the UI (Last Price) and paper TP checks.
         had_price = campaign.symbol in self._price_cache

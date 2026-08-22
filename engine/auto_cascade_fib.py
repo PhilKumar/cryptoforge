@@ -125,8 +125,11 @@ class PaperOnlyBroker:
         "get_balances",
     }
 
-    def __init__(self, real, live_armed: Optional[bool] = None):
+    def __init__(self, real, live_armed: Optional[bool] = None, arm_hint: str = "CRYPTOFORGE_AUTO_FIB_LIVE=1"):
         self._real = real
+        # Named in the refusal so the log says WHICH strategy's switch is off.
+        # Two strategies now wrap the same client, each behind its own arm.
+        self._arm_hint = str(arm_hint or "")
         # Captured per instance so a test can arm one without touching the
         # module, and so the value the engine was built with is the value it
         # keeps for its life — live must never flip under a running campaign.
@@ -156,10 +159,11 @@ class PaperOnlyBroker:
             if self._live_armed:
                 return getattr(self._real, name)
 
+            hint = self._arm_hint
+
             def _refused(*_args, **_kwargs):
                 raise RuntimeError(
-                    f"PaperOnlyBroker refused {name}() — Auto-Cascade_Fib is not armed for live "
-                    "(set CRYPTOFORGE_AUTO_FIB_LIVE=1 on the server)"
+                    f"PaperOnlyBroker refused {name}() — this strategy is not armed for live (set {hint} on the server)"
                 )
 
             return _refused

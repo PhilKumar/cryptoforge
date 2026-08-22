@@ -173,6 +173,10 @@ class Campaign:
     capital_at_fill: float = 0.0  # the purse when the first buy landed
     is_minor: bool = False  # a bounce-top campaign inside a busy major
     family_id: int = 0  # the fall this ladder belongs to (one fall = one budget)
+    # The bar whose first red confirmed the V — the bar this campaign was born
+    # on. Stepping begins on the NEXT bar. Recorded so a live driver can pick
+    # the campaign up at exactly the bar the rule did; it changes nothing here.
+    born_ts: Optional[pd.Timestamp] = None
     status: str = "DETECTED"
     events: List[str] = field(default_factory=list)
 
@@ -555,6 +559,7 @@ def run_ladder(df: pd.DataFrame, minors: bool = False) -> List[Campaign]:
                         swing_high=h[top_pos],
                     )
                     c._line = c.reference
+                    c.born_ts = df.index[pos]
                     c.is_minor = busy
                     if busy and parent is not None:
                         c.family_id = parent.family_id

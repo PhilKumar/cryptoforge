@@ -12921,8 +12921,9 @@ showPage = function(pageId, btn, options) {
     _cfR37PollTimer = null;
     if (_cfR37TickTimer) { clearInterval(_cfR37TickTimer); _cfR37TickTimer = null; }
   }
+  if (pageId !== 'rule3070-page') cfVrStopPolling();
   _cfR37OrigShowPage(pageId, btn, options);
-  if (pageId === 'rule3070-page') cfInitRule3070Page();
+  if (pageId === 'rule3070-page') { cfInitRule3070Page(); cfVrInit(); }
 };
 
 function _cfR37Usd(value) {
@@ -13316,6 +13317,198 @@ async function cfR37SelectSymbol(symbol) {
     _cfR37SetError(String(err.message || err));
     cfToast(String(err.message || err), 'error');
   }
+}
+
+// ── V-Rule, real money ────────────────────────────────────────────
+// The card on the V-Rule page that starts the rule against a live account.
+// Same shape as the Auto-Cascade_Fib controls: the server says whether live
+// is on offer, the buttons ARE the state, and the ladders are drawn by the
+// Cascade page's own renderer into this page's mount.
+
+var _cfVrPollTimer = null;
+var _cfVrBusy = false;
+var _cfVrBooks = [];
+var _cfVrLiveAvailable = false;
+
+function _cfVrSetError(message) {
+  var node = document.getElementById('cf-vr-error');
+  if (!node) return;
+  if (!message) { node.style.display = 'none'; node.textContent = ''; return; }
+  node.textContent = message;
+  node.style.display = '';
+}
+
+function _cfVrBookFor(symbol) {
+  var want = String(symbol || '').toUpperCase();
+  for (var i = 0; i < _cfVrBooks.length; i++) {
+    if (String(_cfVrBooks[i].symbol || '').toUpperCase() === want) return _cfVrBooks[i];
+  }
+  return null;
+}
+
+function cfVrUpdateWalletHint() {
+  var hint = document.getElementById('cf-vr-wallet-hint');
+  if (!hint) return;
+  var purse = Number((document.getElementById('cf-vr-capital') || {}).value || 0);
+  hint.textContent = purse > 0 ? _cfR37Usd(purse / 2) : '$—';
+}
+
+function cfVrSyncControls() {
+  var symbol = (document.getElementById('cf-vr-symbol') || {}).value || '';
+  var book = _cfVrBookFor(symbol);
+  var on = !!(book && book.enabled);
+  var badge = document.getElementById('cf-vr-state-badge');
+  var text = document.getElementById('cf-vr-state-text');
+  if (badge) {
+    badge.className = 'tp-badge ' + (on ? 'live' : 'idle');
+    badge.textContent = on ? 'On · REAL MONEY' : (book ? 'Off' : 'No book');
+  }
+  if (text) {
+    text.textContent = !_cfVrLiveAvailable
+      ? 'Live is not armed on the server (CRYPTOFORGE_VRULE_LIVE=1 and exchange keys) — nothing can start.'
+      : (!book
+        ? 'No live book for ' + (symbol || 'this coin') + ' yet — starting creates one.'
+        : (on
+          ? (book.last_error || book.note || 'Running. It marks its own Vs from the next bar.')
+          : ('Stopped. Its purse of ' + _cfR37Usd(book.purse_usd) + ' and its history are kept.')));
+  }
+  var show = function (id, visible) { var n = document.getElementById(id); if (n) n.hidden = !visible; };
+  show('cf-vr-on-btn', !on);
+  show('cf-vr-save-btn', on);
+  show('cf-vr-off-btn', on);
+  var onBtn = document.getElementById('cf-vr-on-btn');
+  if (onBtn) {
+    onBtn.disabled = !_cfVrLiveAvailable || _cfVrBusy;
+    onBtn.title = _cfVrLiveAvailable ? 'Real money, from the next bar' : 'Live is not armed on the server';
+  }
+}
+
+function cfVrSelectSymbol(symbol) {
+  var book = _cfVrBookFor(symbol);
+  if (book) {
+    var purse = document.getElementById('cf-vr-capital');
+    if (purse && Number(book.start_capital_usd || book.purse_usd || 0) > 0) {
+      purse.value = Number(book.start_capital_usd || book.purse_usd);
+    }
+  }
+  _cfVrSetError('');
+  cfVrUpdateWalletHint();
+  cfVrSyncControls();
+}
+
+function cfVrRenderStatus(data) {
+  _cfVrBooks = (data && data.books) || [];
+  _cfVrLiveAvailable = !!(data && data.live_available);
+  cfVrSyncControls();
+  cfRenderCascadeCampaigns(
+    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    (data && data.instruments) || {},
+    {
+      mountId: 'cf-vr-campaigns',
+      emptyText: 'Nothing live — start a book beside this, once the server is armed.',
+      emptyLiveText: 'No ladder working right now — the book is watching for its next V.'
+    }
+  );
+}
+
+async function cfVrRefresh(showToast) {
+  try {
+    var response = await cfApiFetch('/api/vrule/live/status', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'V-Rule live status unavailable'));
+    _cfVrSetError('');
+    cfVrRenderStatus(data);
+    if (showToast) cfToast('V-Rule live refreshed', 'success');
+  } catch (err) {
+    _cfVrSetError(String(err.message || err));
+  }
+}
+
+var _CF_VR_BUTTONS = ['cf-vr-on-btn', 'cf-vr-save-btn', 'cf-vr-off-btn', 'cf-vr-refresh-btn'];
+
+function _cfVrSetBusy(busy, actingId) {
+  _cfVrBusy = busy;
+  _CF_VR_BUTTONS.forEach(function (id) {
+    var node = document.getElementById(id);
+    if (!node) return;
+    node.disabled = busy || (id === 'cf-vr-on-btn' && !_cfVrLiveAvailable);
+    if (id !== actingId) return;
+    if (busy) {
+      node.setAttribute('data-cf-label', node.textContent);
+      node.textContent = 'Working…';
+    } else if (node.hasAttribute('data-cf-label')) {
+      node.textContent = node.getAttribute('data-cf-label');
+      node.removeAttribute('data-cf-label');
+    }
+  });
+}
+
+async function cfVrSaveBook(enabled) {
+  if (_cfVrBusy) return;
+  var symbol = (document.getElementById('cf-vr-symbol') || {}).value || '';
+  var capital = Number((document.getElementById('cf-vr-capital') || {}).value || 0);
+  if (!symbol) { _cfVrSetError('Choose a coin first'); return; }
+  if (enabled && !(capital > 0)) { _cfVrSetError('Set a purse bigger than zero'); return; }
+  var wasOn = !!(_cfVrBookFor(symbol) || {}).enabled;
+  if (enabled && !wasOn) {
+    var ok = await cfConfirm(
+      '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own, '
+      + 'from the next bar.</strong> Nobody clicks anything per trade.</p>'
+      + '<p>It may hold up to <strong>' + _cfR37Usd(capital / 2) + '</strong> in coin at once, '
+      + 'and it has <strong>no stop-loss</strong> — every exit is the target, so a ladder the '
+      + 'market does not turn for is simply held, for as long as it takes.</p>'
+      + '<p>It trades in its own engine, so your Cascade campaigns are not touched — but it '
+      + 'spends from the <strong>same exchange balance</strong>.</p>',
+      'Start the V-Rule on ' + symbol + ' with real money?',
+      '⚠️', true
+    );
+    if (!ok) return;
+  }
+  var acting = enabled ? (wasOn ? 'cf-vr-save-btn' : 'cf-vr-on-btn') : 'cf-vr-off-btn';
+  _cfVrSetBusy(true, acting);
+  try {
+    var response = await cfApiFetch('/api/vrule/live/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: symbol, mode: 'live', capital_usd: capital, enabled: !!enabled })
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the live book'));
+    _cfVrSetError('');
+    cfVrRenderStatus(data);
+    cfToast(symbol + (enabled ? (wasOn ? ' saved' : ' is trading live') : ' stopped'), 'success');
+  } catch (err) {
+    _cfVrSetError(String(err.message || err));
+  } finally {
+    _cfVrSetBusy(false, acting);
+  }
+}
+
+function cfVrInit() {
+  var select = document.getElementById('cf-vr-symbol');
+  if (select && !select.options.length) {
+    // The same instruments the paper book offers.
+    ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'PAXGUSDT'].forEach(function (symbol) {
+      var option = document.createElement('option');
+      option.value = symbol;
+      option.textContent = symbol;
+      select.appendChild(option);
+    });
+  }
+  var purseField = document.getElementById('cf-vr-capital');
+  if (purseField && !purseField._cfVrBound) {
+    purseField._cfVrBound = true;
+    purseField.addEventListener('input', cfVrUpdateWalletHint);
+  }
+  cfVrUpdateWalletHint();
+  cfVrSyncControls();
+  cfVrRefresh(false);
+  if (_cfVrPollTimer) clearInterval(_cfVrPollTimer);
+  _cfVrPollTimer = setInterval(function () { cfVrRefresh(false); }, 20000);
+}
+
+function cfVrStopPolling() {
+  if (_cfVrPollTimer) { clearInterval(_cfVrPollTimer); _cfVrPollTimer = null; }
 }
 
 // ── 30-70 trade chart ──────────────────────────────────────────────
