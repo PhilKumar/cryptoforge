@@ -307,6 +307,7 @@ class Trade:
     entry_spot: float
     entry_rung: str
     entry_bar_high: float
+    entry_ref: float
     entry_bar_low: float
     entry_st: float
     entry_bar_close: float
@@ -428,6 +429,13 @@ class Backtest:
         # Swapping the instrument and rewriting the exits are two different
         # experiments and must not be run as one.
         self.dirn = 1 if (self.side == "CE" and getattr(args, "mirror", False)) else -1
+        self.breakout_levels = [
+            x.strip().upper() for x in str(getattr(args, "breakout_levels", "TC,PDH")).split(",") if x.strip()
+        ]
+        prev = self.daily.shift(1)
+        self.prev_high = {d.date(): float(v) for d, v in prev["high"].items() if v == v}
+        self.prev_low = {d.date(): float(v) for d, v in prev["low"].items() if v == v}
+        self._entry_ref = 0.0
         self._flat_level, self._touches = None, 0
         self.skipped_no_entry_price = 0
         self.skipped_too_dear = 0
@@ -442,6 +450,30 @@ class Backtest:
         if (cand.date() - after.date()).days > limit_sessions + 4:
             return None
         return cand
+
+    def breakout_entry(self, lv: "Levels", bar, prev_close: float, day) -> Optional[str]:
+        """The bar that takes price through EVERY named level at once.
+
+        `--breakout-levels TC,PDH` means above the top of the CPR *and* above
+        yesterday's high, whichever is higher. Only the crossing bar counts: the
+        bar before it must not already have been through, or one breakout would
+        be bought again on every bar that stays above it.
+        """
+        marks = []
+        for name in self.breakout_levels:
+            if name == "PDH":
+                marks.append(self.prev_high.get(day))
+            elif name == "PDL":
+                marks.append(self.prev_low.get(day))
+            else:
+                marks.append(lv.rungs.get(name))
+        if any(m is None for m in marks):
+            return None
+        line = max(marks) if self.dirn > 0 else min(marks)
+        if not (self.dirn * (float(bar["close"]) - line) > 0 and self.dirn * (prev_close - line) <= 0):
+            return None
+        self._entry_ref = line
+        return "BRK"
 
     def candle_share_entry(self, lv: "Levels", bar) -> Optional[str]:
         """A level the candle straddles, accepted rather than rejected.
@@ -506,6 +538,9 @@ class Backtest:
             return trade.entry_st or trade.entry_bar_high
         if self.args.stop == "entry-high":
             return trade.entry_bar_high
+        if trade.entry_rung == "BRK":
+            # A breakout is wrong when price closes back through the line it broke.
+            return trade.entry_ref
         if trade.entry_rung == "ST":
             if self.args.stop != "rung":
                 # The double top's own high: the trade is wrong when price closes
@@ -595,7 +630,7 @@ class Backtest:
                 elif reason:
                     open_trade.notes.append(f"{reason} at {ts} but no minute to fill in")
                 else:
-                    if open_trade.entry_rung == "ST":
+                    if open_trade.entry_rung not in use.rungs:
                         ladder = [
                             (lb, pr) for lb, pr in use.rungs.items() if self.dirn * (pr - open_trade.entry_spot) > 0
                         ]
@@ -630,7 +665,11 @@ class Backtest:
             if self.args.ema > 0 and self.dirn * (bar["close"] - bar["ema"]) <= 0:
                 continue  # EMA20 vetoes a trade taken against the regime
 
-            if self.args.entry_mode == "candle-share":
+            if self.args.entry_mode == "breakout":
+                rung = self.breakout_entry(lv, bar, prev_close, day)
+                if rung is None:
+                    continue
+            elif self.args.entry_mode == "candle-share":
                 rung = self.candle_share_entry(lv, bar)
                 if rung is None:
                     continue
@@ -684,6 +723,7 @@ class Backtest:
                 entry_spot=spot,
                 entry_rung=rung,
                 entry_bar_high=float(bar["high"]),
+                entry_ref=float(self._entry_ref),
                 entry_bar_low=float(bar["low"]),
                 entry_st=float(bar["st"]) if "st" in bar.index and not pd.isna(bar["st"]) else 0.0,
                 entry_bar_close=float(bar["close"]),
@@ -698,7 +738,7 @@ class Backtest:
             live_levels, active_level, deepest_i = lv, None, -1
             # A supertrend entry is not on a rung, so there is no rung above it;
             # stop_level() reads the nearest one off the entry price instead.
-            if rung == "ST":
+            if rung not in lv.rungs:
                 stop_rung = None
             elif self.dirn < 0:
                 nxt = lv.above(rung)
@@ -809,6 +849,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 
     # --- the surviving rule -------------------------------------------------
+    ap.add_argument("--breakout-levels", default="TC,PDH", help="levels a breakout must clear together")
     ap.add_argument("--allow-thin-bars", action="store_true", help="permit sub-5-minute bars this data cannot support")
     ap.add_argument(
         "--block-hours", type=float, default=2.0, help="length of an intraday CPR block when --pivots block"
@@ -857,7 +898,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--entry-mode",
-        choices=["rung", "supertrend", "candle-share"],
+        choices=["rung", "supertrend", "candle-share", "breakout"],
         default="rung",
         help="buy the rejection at a pivot rung, or the nth touch of a flat supertrend",
     )
