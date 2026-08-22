@@ -8086,6 +8086,66 @@ def _load_cascade_closed() -> list:
         return []
 
 
+def _purge_stray_auto_fib_from_live() -> None:
+    """One-time sweep: take Auto-Cascade_Fib's campaigns out of the LIVE books.
+
+    Before 2026-08-21 this strategy started its campaigns inside the live
+    engine, and the runaway that day left 55 dead paper campaigns sitting in
+    Phil's Closed Campaigns table with roughly 4,700 event rows behind them.
+    They are not his trades and they are not the sandbox's either — the
+    sandbox keeps its own buckets now — so they are simply debris in the way
+    of reading the real book.
+
+    Idempotent by construction: it matches on strategy == STRATEGY, and once
+    the rows are gone there is nothing left to match, so every later boot is a
+    no-op. It never touches a campaign with an empty strategy field, which is
+    every campaign Phil started by hand.
+    """
+    from engine.auto_cascade_fib import STRATEGY
+
+    try:
+        store = _get_state_store()
+        stray_ids: set = set()
+
+        runtime = store.get(_BUCKET_CASCADE_RUNTIME, "current", default={})
+        if isinstance(runtime, dict):
+            changed = False
+            for key in ("campaigns", "closed_campaigns"):
+                rows = runtime.get(key) or []
+                keep = [r for r in rows if str((r or {}).get("strategy") or "") != STRATEGY]
+                if len(keep) != len(rows):
+                    stray_ids.update(str((r or {}).get("campaign_id") or "") for r in rows if r not in keep)
+                    runtime[key] = keep
+                    changed = True
+            if changed:
+                store.put(_BUCKET_CASCADE_RUNTIME, "current", runtime)
+
+        closed = store.get(_BUCKET_CASCADE_CLOSED, "campaigns", default=[])
+        if isinstance(closed, list):
+            keep = [r for r in closed if str((r or {}).get("strategy") or "") != STRATEGY]
+            if len(keep) != len(closed):
+                stray_ids.update(str((r or {}).get("campaign_id") or "") for r in closed if r not in keep)
+                store.put(_BUCKET_CASCADE_CLOSED, "campaigns", keep)
+
+        stray_ids.discard("")
+        if stray_ids:
+            events = store.get(_BUCKET_CASCADE_EVENTS, "log", default=[])
+            if isinstance(events, list):
+                keep_events = [e for e in events if str((e or {}).get("campaign_id") or "") not in stray_ids]
+                if len(keep_events) != len(events):
+                    store.put(_BUCKET_CASCADE_EVENTS, "log", keep_events)
+                    _logger.info(
+                        "[AUTO-FIB] swept %d stray campaigns and %d of their event rows out of the live books",
+                        len(stray_ids),
+                        len(events) - len(keep_events),
+                    )
+                    return
+            _logger.info("[AUTO-FIB] swept %d stray campaigns out of the live books", len(stray_ids))
+    except Exception as exc:
+        # Debris is cosmetic. Never let tidying it stop the engine coming up.
+        _logger.warning("[AUTO-FIB] could not sweep stray campaigns: %s", exc)
+
+
 def _restore_cascade_runtime(engine: "CascadeEngine") -> bool:
     # History lives in its own bucket and must be reloaded explicitly — the
     # engine's closed list is in-memory, so without this every restart or
@@ -8181,6 +8241,7 @@ def _get_cascade_engine() -> "CascadeEngine":
             on_alert=_cascade_alert,
             brokers=_cascade_broker_registry(),
         )
+        _purge_stray_auto_fib_from_live()
         _restore_cascade_runtime(_cascade_engine)
     return _cascade_engine
 
