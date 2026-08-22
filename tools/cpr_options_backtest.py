@@ -393,6 +393,28 @@ class Backtest:
             return None
         return cand
 
+    def candle_share_entry(self, lv: "Levels", bar) -> Optional[str]:
+        """A level the candle straddles, accepted rather than rejected.
+
+        The test is how much of the candle's range sits on the trade's side of
+        the level: more than the threshold and the level has been taken, which
+        is a buy. Rungs are tried from the trade's own side outward, so a call
+        is credited to the lowest level inside the candle -- the one it has
+        cleared by the most.
+        """
+        high, low = float(bar["high"]), float(bar["low"])
+        span = high - low
+        if span <= 0:
+            return None
+        for label in self.entry_rungs:
+            level = lv.rungs[label]
+            if not (low <= level <= high):
+                continue
+            share = (high - level) / span if self.dirn > 0 else (level - low) / span
+            if share > self.args.share_threshold:
+                return label
+        return None
+
     def supertrend_touch(self, k: int, bar) -> Optional[str]:
         """The nth touch of a flat supertrend, while the line is above price.
 
@@ -554,7 +576,11 @@ class Backtest:
             if self.args.ema > 0 and self.dirn * (bar["close"] - bar["ema"]) <= 0:
                 continue  # EMA20 vetoes a trade taken against the regime
 
-            if self.args.entry_mode == "supertrend":
+            if self.args.entry_mode == "candle-share":
+                rung = self.candle_share_entry(lv, bar)
+                if rung is None:
+                    continue
+            elif self.args.entry_mode == "supertrend":
                 rung = self.supertrend_touch(k, bar)
                 if rung is None:
                     continue
@@ -763,8 +789,14 @@ def main() -> None:
         "--mirror", action="store_true", help="additionally flip every target, stop and trail to the other side"
     )
     ap.add_argument(
+        "--share-threshold",
+        type=float,
+        default=0.5,
+        help="how much of the candle must sit on the trade's side of the level",
+    )
+    ap.add_argument(
         "--entry-mode",
-        choices=["rung", "supertrend"],
+        choices=["rung", "supertrend", "candle-share"],
         default="rung",
         help="buy the rejection at a pivot rung, or the nth touch of a flat supertrend",
     )
