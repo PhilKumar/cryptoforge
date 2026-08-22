@@ -85,6 +85,24 @@ RUNG_ORDER = [
 ]
 
 
+def _finer(rungs: dict) -> dict:
+    """Halve every gap between neighbouring R or S rungs, so the trail ratchets
+    twice as often. TC and BC are left alone -- the CPR band is not a pivot
+    step and interpolating across it would invent a level nobody draws."""
+    items = list(rungs.items())
+    out: dict = {}
+    for i, (label, price) in enumerate(items):
+        out[label] = price
+        if i + 1 >= len(items):
+            continue
+        nxt, nxt_price = items[i + 1]
+        if label[0] != nxt[0] or label[0] not in "RS":
+            continue
+        a, b = float(label[1:]), float(nxt[1:])
+        out[f"{label[0]}{(a + b) / 2:g}"] = (price + nxt_price) / 2.0
+    return out
+
+
 @dataclass(frozen=True)
 class Levels:
     """One week's floor pivots, as an ordered ladder of rungs."""
@@ -172,20 +190,27 @@ def _levels_from(hi: float, lo: float, cl: float) -> "Levels":
     return Levels(pivot=p, rungs={k: priced[k] for k in RUNG_ORDER})
 
 
-def daily_levels(daily: pd.DataFrame) -> dict:
+def _levels_at(hi, lo, cl, step: float) -> "Levels":
+    lv = _levels_from(hi, lo, cl)
+    return lv if step >= 0.5 else Levels(pivot=lv.pivot, rungs=_finer(lv.rungs))
+
+
+def daily_levels(daily: pd.DataFrame, step: float = 0.5) -> dict:
     """Each session's pivots, from the session before it. Keyed by session date."""
     out: dict = {}
     for i in range(1, len(daily)):
         prev = daily.iloc[i - 1]
-        out[daily.index[i].date()] = _levels_from(prev["high"], prev["low"], prev["close"])
+        out[daily.index[i].date()] = _levels_at(prev["high"], prev["low"], prev["close"], step)
     return out
 
 
-def levels_by_day(daily: pd.DataFrame, basis: str) -> dict:
+def levels_by_day(daily: pd.DataFrame, basis: str, step: float = 0.5) -> dict:
     """One Levels per session date, whichever basis draws them."""
     if basis == "daily":
-        return daily_levels(daily)
+        return daily_levels(daily, step)
     weekly = weekly_levels(daily)
+    if step < 0.5:
+        weekly = {k: Levels(pivot=v.pivot, rungs=_finer(v.rungs)) for k, v in weekly.items()}
     return {
         d.date(): weekly[d.date() - timedelta(days=d.weekday())]
         for d in daily.index
@@ -270,7 +295,7 @@ class Backtest:
         self.daily = to_daily(minute)
         self.session_days = sessions(minute)
         self.weeklies = weekly_expiries(self.session_days)
-        self.levels = levels_by_day(self.daily, args.pivots)
+        self.levels = levels_by_day(self.daily, args.pivots, getattr(args, "ladder_step", 0.5))
         self.minute_index = minute.index
         self.spot_at = minute["open"]
 
@@ -317,7 +342,12 @@ class Backtest:
             return trade.entry_bar_high
         if self.args.stop == "entry-close":
             return trade.entry_bar_close
-        return lv.rungs[stop_rung] if stop_rung else None
+        if not stop_rung:
+            return None
+        here, above = lv.rungs[trade.entry_rung], lv.rungs[stop_rung]
+        # 1.0 puts the stop on the rung above; 0.5 puts it halfway there, which
+        # on a half-step ladder is the quarter rung.
+        return here + self.args.stop_fraction * (above - here)
 
     @property
     def bar_span(self) -> timedelta:
