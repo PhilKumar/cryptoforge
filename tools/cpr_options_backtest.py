@@ -52,7 +52,7 @@ STORES = {
 }
 # A contract still open on its own expiry day is squared off here, not carried
 # into the settlement print.
-SQUARE_OFF = time(15, 15)
+SQUARE_OFF = time(15, 15)  # default; --square-off overrides per run
 SESSION_CLOSE = time(15, 30)
 
 
@@ -389,8 +389,9 @@ class Backtest:
         self.entry_cutoff = (
             datetime.combine(date(2000, 1, 1), SESSION_CLOSE) - timedelta(minutes=self.bar_minutes)
         ).time()
+        sq0 = str(getattr(args, "square_off", "15:15")).split(":")
         if getattr(args, "intraday", False):
-            self.entry_cutoff = min(self.entry_cutoff, SQUARE_OFF)
+            self.entry_cutoff = min(self.entry_cutoff, time(int(sq0[0]), int(sq0[1])))
         self.daily = to_daily(minute)
         self.session_days = sessions(minute)
         self.weeklies = weekly_expiries(self.session_days)
@@ -436,6 +437,9 @@ class Backtest:
         self.prev_high = {d.date(): float(v) for d, v in prev["high"].items() if v == v}
         self.prev_low = {d.date(): float(v) for d, v in prev["low"].items() if v == v}
         self._entry_ref = 0.0
+        self._taken_today: dict = {}
+        sq = str(getattr(args, "square_off", "15:15")).split(":")
+        self.square_off = time(int(sq[0]), int(sq[1]))
         self._flat_level, self._touches = None, 0
         self.skipped_no_entry_price = 0
         self.skipped_too_dear = 0
@@ -537,7 +541,9 @@ class Backtest:
         if self.args.stop == "st-line":
             return trade.entry_st or trade.entry_bar_high
         if self.args.stop == "entry-high":
-            return trade.entry_bar_high
+            # The far side of the entry candle, whichever side that is: a put is
+            # wrong above its high, a call is wrong below its low.
+            return trade.entry_bar_high if self.dirn < 0 else trade.entry_bar_low
         if trade.entry_rung == "BRK":
             # A breakout is wrong when price closes back through the line it broke.
             return trade.entry_ref
@@ -610,8 +616,10 @@ class Backtest:
                 use = live_levels if self.args.levels == "frozen" else lv
                 exit_now, reason = None, ""
 
-                if ts.time() >= SQUARE_OFF and (self.args.intraday or day == open_trade.expiry):
-                    exit_now = self.last_minute_before(ts.replace(hour=15, minute=15))
+                if ts.time() >= self.square_off and (self.args.intraday or day == open_trade.expiry):
+                    exit_now = self.last_minute_before(
+                        ts.replace(hour=self.square_off.hour, minute=self.square_off.minute)
+                    )
                     reason = "SQUARE_OFF" if self.args.intraday else "EXPIRY"
                 elif (
                     self.stop_level(open_trade, use, stop_rung) is not None
@@ -657,6 +665,8 @@ class Backtest:
                     continue
 
             if open_trade is not None:
+                continue
+            if self.args.max_trades_per_day and self._taken_today.get(day, 0) >= self.args.max_trades_per_day:
                 continue
             if ts.time() >= self.entry_cutoff:
                 continue  # nothing left of the session to fill an entry in
@@ -735,6 +745,7 @@ class Backtest:
                 bc=lv.bc,
                 tc=lv.tc,
             )
+            self._taken_today[day] = self._taken_today.get(day, 0) + 1
             live_levels, active_level, deepest_i = lv, None, -1
             # A supertrend entry is not on a rung, so there is no rung above it;
             # stop_level() reads the nearest one off the entry price instead.
@@ -849,6 +860,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 
     # --- the surviving rule -------------------------------------------------
+    ap.add_argument("--max-trades-per-day", type=int, default=0, help="cap entries per session; 0 is no cap")
+    ap.add_argument("--square-off", default="15:15", help="intraday exit time, HH:MM")
     ap.add_argument("--breakout-levels", default="TC,PDH", help="levels a breakout must clear together")
     ap.add_argument("--allow-thin-bars", action="store_true", help="permit sub-5-minute bars this data cannot support")
     ap.add_argument(
