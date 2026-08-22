@@ -10,6 +10,7 @@ The load-bearing test here is `test_empty_200_is_never_read_as_a_quiet_market`.
 Everything else supports it.
 """
 
+import importlib.util
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,13 @@ from options.dhan_client import (
     iter_windows,
 )
 from options.store import OptionStore, SeriesKey
+
+# The store writes parquet, which pandas cannot do without pyarrow. That is a
+# test-time dependency only -- the app never imports this package -- so it is
+# not in requirements.txt. Without it these skip and say so, rather than
+# failing with an ImportError that looks like a broken store.
+HAS_PARQUET = importlib.util.find_spec("pyarrow") is not None
+NEEDS_PARQUET = unittest.skipUnless(HAS_PARQUET, "pyarrow not installed")
 
 
 class FakeResponse:
@@ -201,6 +209,7 @@ class TestDocumentedLimits(unittest.TestCase):
             self.assertLessEqual((end - start).days + 1, 30)
 
 
+@NEEDS_PARQUET
 class TestStoreAndAudit(unittest.TestCase):
     def _store_with(self, tmp, sessions_spec):
         """sessions_spec: list of (strike_offset, day, bars_present)."""
