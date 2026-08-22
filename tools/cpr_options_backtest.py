@@ -210,6 +210,37 @@ def daily_levels(daily: pd.DataFrame, step: float = 0.5) -> dict:
     return out
 
 
+SESSION_START = time(9, 15)
+
+
+def block_levels(minute: pd.DataFrame, hours: float = 2.0, step: float = 0.5) -> dict:
+    """Pivots drawn from the previous intraday block of `hours`, keyed by the
+    start of the block they govern.
+
+    Blocks are measured from 09:15, so a 2-hour CPR runs 09:15, 11:15, 13:15 and
+    a short 15:15 stub. The first block of a day is governed by the last block of
+    the day before -- the same way a daily CPR is governed by yesterday.
+    """
+    idx = minute.index
+    day_open = pd.to_datetime(idx.normalize()) + pd.Timedelta(hours=SESSION_START.hour, minutes=SESSION_START.minute)
+    span = pd.Timedelta(hours=hours)
+    starts = day_open + ((idx - day_open) // span) * span
+    grouped = minute.groupby(starts)
+    agg = pd.DataFrame(
+        {"high": grouped["high"].max(), "low": grouped["low"].min(), "close": grouped["close"].last()}
+    ).sort_index()
+    out: dict = {}
+    for i in range(1, len(agg)):
+        prev = agg.iloc[i - 1]
+        out[agg.index[i]] = _levels_at(prev["high"], prev["low"], prev["close"], step)
+    return out
+
+
+def block_start(ts, hours: float = 2.0):
+    day_open = ts.normalize() + pd.Timedelta(hours=SESSION_START.hour, minutes=SESSION_START.minute)
+    return day_open + ((ts - day_open) // pd.Timedelta(hours=hours)) * pd.Timedelta(hours=hours)
+
+
 def levels_by_day(daily: pd.DataFrame, basis: str, step: float = 0.5) -> dict:
     """One Levels per session date, whichever basis draws them."""
     if basis == "daily":
@@ -339,16 +370,35 @@ class Backtest:
         )
         self.entry_rungs = [r for r in order if r in wanted]
         self.bar_minutes = int(args.bar_minutes)
+        if self.bar_minutes < 5 and not getattr(args, "allow_thin_bars", False):
+            raise SystemExit(
+                "This index is lifted from the `spot` stamped on option rows, and that field "
+                "carries ONE value per minute: 98.9% of 1-minute bars have high == low. A rule "
+                "that needs a wick inside the candle cannot be tested below 5 minutes on this "
+                "data -- it will quietly find almost no signals and look like a verdict. "
+                "5m bars are only 0.1% zero-range. Use --bar-minutes 5, or fetch real 1-minute "
+                "index candles from the broker and point this at them. --allow-thin-bars "
+                "overrides, for diagnostics only."
+            )
         self.bars = to_bars(minute, f"{self.bar_minutes}min")
         # An entry needs a minute after the signal bar to fill in, so the last
         # bar of a session cannot open a trade.
+        # An entry opened after the square-off bell is closed on the next bar,
+        # which is not a trade, it is a round trip's worth of charges.
         self.entry_cutoff = (
             datetime.combine(date(2000, 1, 1), SESSION_CLOSE) - timedelta(minutes=self.bar_minutes)
         ).time()
+        if getattr(args, "intraday", False):
+            self.entry_cutoff = min(self.entry_cutoff, SQUARE_OFF)
         self.daily = to_daily(minute)
         self.session_days = sessions(minute)
         self.weeklies = weekly_expiries(self.session_days)
-        self.levels = levels_by_day(self.daily, args.pivots, getattr(args, "ladder_step", 0.5))
+        step = getattr(args, "ladder_step", 0.5)
+        self.block_hours = float(getattr(args, "block_hours", 2.0))
+        if args.pivots == "block":
+            self.levels = block_levels(minute, self.block_hours, step)
+        else:
+            self.levels = levels_by_day(self.daily, args.pivots, step)
         self.minute_index = minute.index
         self.spot_at = minute["open"]
 
@@ -513,7 +563,11 @@ class Backtest:
             ts = stamps[k]
             bar = bars.iloc[k]
             day = ts.date()
-            lv = self.levels.get(day)
+            lv = (
+                self.levels.get(block_start(ts, self.block_hours))
+                if self.args.pivots == "block"
+                else self.levels.get(day)
+            )
             if lv is None:
                 continue
 
@@ -755,8 +809,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 
     # --- the surviving rule -------------------------------------------------
+    ap.add_argument("--allow-thin-bars", action="store_true", help="permit sub-5-minute bars this data cannot support")
     ap.add_argument(
-        "--pivots", choices=["weekly", "daily"], default="daily", help="draw the CPR from last week or from yesterday"
+        "--block-hours", type=float, default=2.0, help="length of an intraday CPR block when --pivots block"
+    )
+    ap.add_argument(
+        "--pivots",
+        choices=["weekly", "daily", "block"],
+        default="daily",
+        help="draw the CPR from last week, yesterday, or the previous intraday block",
     )
     ap.add_argument(
         "--intraday",
