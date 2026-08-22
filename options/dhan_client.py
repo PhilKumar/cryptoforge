@@ -39,9 +39,9 @@ ROLLING_OPTION_PATH = "/v2/charts/rollingoption"
 # enforced below, so a wrong entry surfaces as an exception on call one rather
 # than as a silently truncated dataset months later. Re-verify against the live
 # docs before trusting a full backfill.
-MAX_WINDOW_DAYS = 30          # max span of a single rollingoption request
-MAX_HISTORY_YEARS = 5         # documented depth of expired-options history
-MAX_STRIKE_OFFSET = 10        # coverage runs ATM-10 .. ATM+10
+MAX_WINDOW_DAYS = 30  # max span of a single rollingoption request
+MAX_HISTORY_YEARS = 5  # documented depth of expired-options history
+MAX_STRIKE_OFFSET = 10  # coverage runs ATM-10 .. ATM+10
 VALID_INTERVALS = ("1", "5", "15", "25", "60", "D")
 VALID_EXPIRY_FLAGS = ("WEEK", "MONTH")
 VALID_OPTION_TYPES = ("CALL", "PUT")
@@ -59,8 +59,8 @@ DEFAULT_MIN_INTERVAL_S = 1.0
 class FetchStatus(str, Enum):
     """Why a request produced the rows it produced — or produced none."""
 
-    OK = "ok"                  # candles returned
-    NO_DATA = "no_data"        # HTTP 200, zero candles: the source has nothing
+    OK = "ok"  # candles returned
+    NO_DATA = "no_data"  # HTTP 200, zero candles: the source has nothing
     RATE_LIMITED = "rate_limited"
     ERROR = "error"
 
@@ -227,8 +227,7 @@ class DhanClient:
         span = (end - start).days + 1
         if span > MAX_WINDOW_DAYS:
             raise DhanConfigError(
-                f"window of {span} days exceeds the {MAX_WINDOW_DAYS}-day cap; "
-                f"use iter_windows() to chunk the range"
+                f"window of {span} days exceeds the {MAX_WINDOW_DAYS}-day cap; use iter_windows() to chunk the range"
             )
 
         strike = "ATM" if strike_offset == 0 else f"ATM{strike_offset:+d}"
@@ -253,14 +252,10 @@ class DhanClient:
         for attempt in range(self.max_retries):
             self._throttle()
             try:
-                resp = self.session.post(
-                    url, json=payload, headers=self._headers(), timeout=self.timeout_s
-                )
+                resp = self.session.post(url, json=payload, headers=self._headers(), timeout=self.timeout_s)
             except requests.RequestException as exc:
-                last = FetchResult(
-                    status=FetchStatus.ERROR, detail=f"transport: {exc}", request=payload
-                )
-                self._sleep(2 ** attempt)
+                last = FetchResult(status=FetchStatus.ERROR, detail=f"transport: {exc}", request=payload)
+                self._sleep(2**attempt)
                 continue
 
             if resp.status_code == 429:
@@ -270,7 +265,7 @@ class DhanClient:
                     detail="throttled",
                     request=payload,
                 )
-                self._sleep(2 ** attempt)
+                self._sleep(2**attempt)
                 continue
 
             if resp.status_code in (401, 403):
@@ -288,7 +283,7 @@ class DhanClient:
                     detail=resp.text[:200],
                     request=payload,
                 )
-                self._sleep(2 ** attempt)
+                self._sleep(2**attempt)
                 continue
 
             if resp.status_code != 200:
@@ -301,9 +296,7 @@ class DhanClient:
 
             return self._parse_ok(resp, payload)
 
-        return last or FetchResult(
-            status=FetchStatus.ERROR, detail="retries exhausted", request=payload
-        )
+        return last or FetchResult(status=FetchStatus.ERROR, detail="retries exhausted", request=payload)
 
     def _parse_ok(self, resp, payload: Dict[str, Any]) -> FetchResult:
         """Turn a 200 into bars — or into an explicit NO_DATA.
@@ -345,23 +338,24 @@ class DhanClient:
 
         widths = {len(x) for x in (op, hi, lo, cl, vol, oi) if x is not None}
         if widths and widths != {len(ts)}:
-            raise DhanContractError(
-                f"ragged columns: timestamp={len(ts)} others={sorted(widths)}"
-            )
+            raise DhanContractError(f"ragged columns: timestamp={len(ts)} others={sorted(widths)}")
 
         bars: List[OptionBar] = []
         for i, raw_ts in enumerate(ts):
             bars.append(
                 OptionBar(
                     ts=_to_dt(raw_ts),
-                    open=_f(op[i]), high=_f(hi[i]), low=_f(lo[i]), close=_f(cl[i]),
-                    volume=_f(vol[i]), oi=_f(oi[i]),
-                    iv=_maybe_f(iv[i]), spot=_maybe_f(spot[i]),
+                    open=_f(op[i]),
+                    high=_f(hi[i]),
+                    low=_f(lo[i]),
+                    close=_f(cl[i]),
+                    volume=_f(vol[i]),
+                    oi=_f(oi[i]),
+                    iv=_maybe_f(iv[i]),
+                    spot=_maybe_f(spot[i]),
                 )
             )
-        return FetchResult(
-            status=FetchStatus.OK, bars=bars, http_status=200, request=payload
-        )
+        return FetchResult(status=FetchStatus.OK, bars=bars, http_status=200, request=payload)
 
 
 def _to_dt(raw) -> datetime:

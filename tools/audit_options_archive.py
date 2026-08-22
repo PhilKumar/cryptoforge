@@ -41,27 +41,22 @@ def _parse_map(pairs):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("path", help="file or directory holding the archive")
     p.add_argument("--table", default=None, help="sqlite table name")
     p.add_argument("--underlying", default="UNKNOWN")
     p.add_argument("--interval", default="1", help="bar interval: 1, 5, 15, 25, 60")
-    p.add_argument("--map", nargs="*", default=None,
-                   help="column overrides, e.g. ts=bar_time strike=strike_pr")
-    p.add_argument("--spot-file", default=None,
-                   help="optional underlying series (csv/parquet with ts,spot) "
-                        "to join, when the archive carries no spot column")
+    p.add_argument("--map", nargs="*", default=None, help="column overrides, e.g. ts=bar_time strike=strike_pr")
+    p.add_argument(
+        "--spot-file",
+        default=None,
+        help="optional underlying series (csv/parquet with ts,spot) to join, when the archive carries no spot column",
+    )
     args = p.parse_args(argv)
 
     spot = None
     if args.spot_file:
-        spot = (
-            pd.read_parquet(args.spot_file)
-            if args.spot_file.endswith(".parquet")
-            else pd.read_csv(args.spot_file)
-        )
+        spot = pd.read_parquet(args.spot_file) if args.spot_file.endswith(".parquet") else pd.read_csv(args.spot_file)
 
     res = load_external(
         args.path,

@@ -55,9 +55,11 @@ class FakeSession:
 
 def make_client(responses):
     return DhanClient(
-        client_id="X", access_token="Y",
+        client_id="X",
+        access_token="Y",
         session=FakeSession(responses),
-        min_interval_s=0.0, sleep=lambda s: None,
+        min_interval_s=0.0,
+        sleep=lambda s: None,
     )
 
 
@@ -82,9 +84,15 @@ class TestEmptyResponseHandling(unittest.TestCase):
         a distinct, inspectable outcome — and must yield no bars at all."""
         client = make_client([FakeResponse(200, {"timestamp": [], "open": []})])
         result = client.fetch_expired_option_window(
-            security_id="13", exchange_segment="NSE_FNO", instrument="OPTIDX",
-            expiry_flag="WEEK", expiry_code=0, strike_offset=0,
-            option_type="CALL", from_date="2025-01-01", to_date="2025-01-20",
+            security_id="13",
+            exchange_segment="NSE_FNO",
+            instrument="OPTIDX",
+            expiry_flag="WEEK",
+            expiry_code=0,
+            strike_offset=0,
+            option_type="CALL",
+            from_date="2025-01-01",
+            to_date="2025-01-20",
         )
         self.assertIs(result.status, FetchStatus.NO_DATA)
         self.assertEqual(result.bars, [])
@@ -95,9 +103,15 @@ class TestEmptyResponseHandling(unittest.TestCase):
     def test_populated_response_parses_every_field(self):
         client = make_client([FakeResponse(200, candle_payload(3))])
         result = client.fetch_expired_option_window(
-            security_id="13", exchange_segment="NSE_FNO", instrument="OPTIDX",
-            expiry_flag="WEEK", expiry_code=0, strike_offset=-2,
-            option_type="PUT", from_date="2025-01-01", to_date="2025-01-20",
+            security_id="13",
+            exchange_segment="NSE_FNO",
+            instrument="OPTIDX",
+            expiry_flag="WEEK",
+            expiry_code=0,
+            strike_offset=-2,
+            option_type="PUT",
+            from_date="2025-01-01",
+            to_date="2025-01-20",
         )
         self.assertIs(result.status, FetchStatus.OK)
         self.assertEqual(len(result.bars), 3)
@@ -115,20 +129,31 @@ class TestEmptyResponseHandling(unittest.TestCase):
         client = make_client([FakeResponse(200, bad)])
         with self.assertRaises(DhanContractError):
             client.fetch_expired_option_window(
-                security_id="13", exchange_segment="NSE_FNO", instrument="OPTIDX",
-                expiry_flag="WEEK", expiry_code=0, strike_offset=0,
-                option_type="CALL", from_date="2025-01-01", to_date="2025-01-20",
+                security_id="13",
+                exchange_segment="NSE_FNO",
+                instrument="OPTIDX",
+                expiry_flag="WEEK",
+                expiry_code=0,
+                strike_offset=0,
+                option_type="CALL",
+                from_date="2025-01-01",
+                to_date="2025-01-20",
             )
 
     def test_auth_failure_is_not_retried(self):
         session = FakeSession([FakeResponse(401, text="bad token")])
-        client = DhanClient("X", "Y", session=session, min_interval_s=0.0,
-                            sleep=lambda s: None)
+        client = DhanClient("X", "Y", session=session, min_interval_s=0.0, sleep=lambda s: None)
         with self.assertRaises(DhanConfigError):
             client.fetch_expired_option_window(
-                security_id="13", exchange_segment="NSE_FNO", instrument="OPTIDX",
-                expiry_flag="WEEK", expiry_code=0, strike_offset=0,
-                option_type="CALL", from_date="2025-01-01", to_date="2025-01-20",
+                security_id="13",
+                exchange_segment="NSE_FNO",
+                instrument="OPTIDX",
+                expiry_flag="WEEK",
+                expiry_code=0,
+                strike_offset=0,
+                option_type="CALL",
+                from_date="2025-01-01",
+                to_date="2025-01-20",
             )
         self.assertEqual(len(session.requests), 1)
 
@@ -140,18 +165,30 @@ class TestDocumentedLimits(unittest.TestCase):
         client = make_client([])
         with self.assertRaises(DhanConfigError):
             client.fetch_expired_option_window(
-                security_id="13", exchange_segment="NSE_FNO", instrument="OPTIDX",
-                expiry_flag="WEEK", expiry_code=0, strike_offset=15,
-                option_type="CALL", from_date="2025-01-01", to_date="2025-01-20",
+                security_id="13",
+                exchange_segment="NSE_FNO",
+                instrument="OPTIDX",
+                expiry_flag="WEEK",
+                expiry_code=0,
+                strike_offset=15,
+                option_type="CALL",
+                from_date="2025-01-01",
+                to_date="2025-01-20",
             )
 
     def test_window_longer_than_30_days_is_refused(self):
         client = make_client([])
         with self.assertRaises(DhanConfigError):
             client.fetch_expired_option_window(
-                security_id="13", exchange_segment="NSE_FNO", instrument="OPTIDX",
-                expiry_flag="WEEK", expiry_code=0, strike_offset=0,
-                option_type="CALL", from_date="2025-01-01", to_date="2025-03-01",
+                security_id="13",
+                exchange_segment="NSE_FNO",
+                instrument="OPTIDX",
+                expiry_flag="WEEK",
+                expiry_code=0,
+                strike_offset=0,
+                option_type="CALL",
+                from_date="2025-01-01",
+                to_date="2025-03-01",
             )
 
     def test_windows_tile_the_range_without_gap_or_overlap(self):
@@ -189,9 +226,7 @@ class TestStoreAndAudit(unittest.TestCase):
 
     def test_full_sessions_pass_the_audit(self):
         with TemporaryDirectory() as tmp:
-            store = self._store_with(
-                tmp, [(0, date(2025, 1, 2), 375), (1, date(2025, 1, 2), 375)]
-            )
+            store = self._store_with(tmp, [(0, date(2025, 1, 2), 375), (1, date(2025, 1, 2), 375)])
             verdict = audit(store.load_bars(), store.load_coverage())
             self.assertTrue(verdict.ok())
             self.assertEqual(verdict.usable_from, "2025-01")
@@ -203,8 +238,7 @@ class TestStoreAndAudit(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             store = self._store_with(
                 tmp,
-                [(0, date(2025, 1, 2), 12), (1, date(2025, 1, 2), 9),
-                 (8, date(2025, 1, 2), 375)],
+                [(0, date(2025, 1, 2), 12), (1, date(2025, 1, 2), 9), (8, date(2025, 1, 2), 375)],
             )
             verdict = audit(store.load_bars(), store.load_coverage())
             self.assertFalse(verdict.ok())
@@ -214,16 +248,25 @@ class TestStoreAndAudit(unittest.TestCase):
     def test_coverage_ledger_records_the_absences(self):
         with TemporaryDirectory() as tmp:
             store = OptionStore(tmp)
-            store.write_coverage([
-                {
-                    "requested_at": datetime.now(), "underlying": "NIFTY",
-                    "expiry_flag": "WEEK", "expiry_code": 0, "strike_offset": 0,
-                    "option_type": "CALL", "interval": "1",
-                    "from_date": "2022-01-01", "to_date": "2022-01-30",
-                    "status": "no_data", "http_status": 200,
-                    "bars_returned": 0, "detail": "empty",
-                }
-            ])
+            store.write_coverage(
+                [
+                    {
+                        "requested_at": datetime.now(),
+                        "underlying": "NIFTY",
+                        "expiry_flag": "WEEK",
+                        "expiry_code": 0,
+                        "strike_offset": 0,
+                        "option_type": "CALL",
+                        "interval": "1",
+                        "from_date": "2022-01-01",
+                        "to_date": "2022-01-30",
+                        "status": "no_data",
+                        "http_status": 200,
+                        "bars_returned": 0,
+                        "detail": "empty",
+                    }
+                ]
+            )
             verdict = audit(store.load_bars(), store.load_coverage())
             self.assertEqual(verdict.silent_empty_requests, 1)
             self.assertFalse(verdict.ok())
@@ -231,18 +274,27 @@ class TestStoreAndAudit(unittest.TestCase):
     def test_backfill_resumes_from_the_ledger(self):
         with TemporaryDirectory() as tmp:
             store = OptionStore(tmp)
-            store.write_coverage([{
-                "requested_at": datetime.now(), "underlying": "NIFTY",
-                "expiry_flag": "WEEK", "expiry_code": 0, "strike_offset": 0,
-                "option_type": "CALL", "interval": "1",
-                "from_date": "2025-01-01", "to_date": "2025-01-30",
-                "status": "ok", "http_status": 200, "bars_returned": 375,
-                "detail": "",
-            }])
-            done = store.completed_windows()
-            self.assertIn(
-                ("NIFTY", "WEEK", 0, 0, "CALL", "1", "2025-01-01", "2025-01-30"), done
+            store.write_coverage(
+                [
+                    {
+                        "requested_at": datetime.now(),
+                        "underlying": "NIFTY",
+                        "expiry_flag": "WEEK",
+                        "expiry_code": 0,
+                        "strike_offset": 0,
+                        "option_type": "CALL",
+                        "interval": "1",
+                        "from_date": "2025-01-01",
+                        "to_date": "2025-01-30",
+                        "status": "ok",
+                        "http_status": 200,
+                        "bars_returned": 375,
+                        "detail": "",
+                    }
+                ]
             )
+            done = store.completed_windows()
+            self.assertIn(("NIFTY", "WEEK", 0, 0, "CALL", "1", "2025-01-01", "2025-01-30"), done)
 
     def test_report_renders_on_an_empty_store(self):
         with TemporaryDirectory() as tmp:
@@ -261,8 +313,10 @@ class TestCharges(unittest.TestCase):
 
     def test_charges_are_on_premium_turnover_not_notional(self):
         c = round_trip_charges(
-            trade_date=date(2025, 1, 2), buy_premium=100.0,
-            sell_premium=120.0, quantity=75,
+            trade_date=date(2025, 1, 2),
+            buy_premium=100.0,
+            sell_premium=120.0,
+            quantity=75,
         )
         # STT is sell-side only: 0.1% of 120 * 75
         self.assertAlmostEqual(c.stt, 120.0 * 75 * 0.001, places=4)
@@ -297,8 +351,10 @@ class TestExternalArchiveAdapter(unittest.TestCase):
                     "candle_time": (base + timedelta(minutes=i)).isoformat(),
                     "strike_price": strike,
                     "instrument_type": "CE",
-                    "open_price": 100.0, "high_price": 101.0,
-                    "low_price": 99.0, "close_price": 100.5,
+                    "open_price": 100.0,
+                    "high_price": 101.0,
+                    "low_price": 99.0,
+                    "close_price": 100.5,
                     "traded_qty": 5000 if strike in (23500, 23550) else 10,
                     "open_interest": 1000,
                 }
@@ -346,8 +402,6 @@ class TestExternalArchiveAdapter(unittest.TestCase):
 
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "nostrike.csv"
-            pd.DataFrame([{"candle_time": "2025-01-02T09:15:00", "close_price": 1.0}]).to_csv(
-                path, index=False
-            )
+            pd.DataFrame([{"candle_time": "2025-01-02T09:15:00", "close_price": 1.0}]).to_csv(path, index=False)
             with self.assertRaises(ValueError):
                 load_external(path)

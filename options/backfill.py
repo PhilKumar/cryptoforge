@@ -58,9 +58,12 @@ class BackfillPlan:
                 for off in self.strike_offsets:
                     for opt in self.option_types:
                         yield SeriesKey(
-                            underlying=self.underlying, expiry_flag=flag,
-                            expiry_code=code, strike_offset=off,
-                            option_type=opt, interval=self.interval,
+                            underlying=self.underlying,
+                            expiry_flag=flag,
+                            expiry_code=code,
+                            strike_offset=off,
+                            option_type=opt,
+                            interval=self.interval,
                         )
 
 
@@ -75,11 +78,7 @@ class BackfillReport:
 
     def summary(self) -> str:
         delivered = f"{self.ok}/{self.requested - self.skipped}" if self.requested else "0/0"
-        pct = (
-            100.0 * self.no_data / (self.requested - self.skipped)
-            if self.requested - self.skipped
-            else 0.0
-        )
+        pct = 100.0 * self.no_data / (self.requested - self.skipped) if self.requested - self.skipped else 0.0
         return (
             f"requested={self.requested} skipped(resumed)={self.skipped} "
             f"delivered={delivered} empty={self.no_data} ({pct:.1f}%) "
@@ -109,8 +108,14 @@ def run_backfill(
                 return report
 
             fingerprint = (
-                key.underlying, key.expiry_flag, key.expiry_code, key.strike_offset,
-                key.option_type, key.interval, start.isoformat(), end.isoformat(),
+                key.underlying,
+                key.expiry_flag,
+                key.expiry_code,
+                key.strike_offset,
+                key.option_type,
+                key.interval,
+                start.isoformat(),
+                end.isoformat(),
             )
             report.requested += 1
             if fingerprint in done:
@@ -157,7 +162,11 @@ def run_backfill(
                 report.errors += 1
                 log.warning(
                     "fetch failed %s %s %s..%s: %s",
-                    key.underlying, key.option_type, start, end, result.detail,
+                    key.underlying,
+                    key.option_type,
+                    start,
+                    end,
+                    result.detail,
                 )
 
             if len(pending_coverage) >= 200:

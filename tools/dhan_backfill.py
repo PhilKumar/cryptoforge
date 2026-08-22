@@ -36,8 +36,7 @@ def _d(s):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--store", default="data/options")
     p.add_argument("--underlying", default="NIFTY")
     p.add_argument("--security-id", default="13")
@@ -46,11 +45,14 @@ def main(argv=None):
     p.add_argument("--from", dest="from_date", type=_d, default=date(2021, 8, 1))
     p.add_argument("--to", dest="to_date", type=_d, default=date.today())
     p.add_argument("--interval", default="1")
-    p.add_argument("--strikes", type=int, default=MAX_STRIKE_OFFSET,
-                   help=f"strike offsets each side of ATM (max {MAX_STRIKE_OFFSET})")
+    p.add_argument(
+        "--strikes",
+        type=int,
+        default=MAX_STRIKE_OFFSET,
+        help=f"strike offsets each side of ATM (max {MAX_STRIKE_OFFSET})",
+    )
     p.add_argument("--expiry-flags", nargs="+", default=["WEEK"])
-    p.add_argument("--max-requests", type=int, default=None,
-                   help="cap the run — use for the first probe")
+    p.add_argument("--max-requests", type=int, default=None, help="cap the run — use for the first probe")
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--audit-only", action="store_true")
     args = p.parse_args(argv)
@@ -74,9 +76,7 @@ def main(argv=None):
         strike_offsets=tuple(range(-args.strikes, args.strikes + 1)),
         interval=args.interval,
     )
-    report = run_backfill(client, store, plan,
-                          resume=not args.no_resume,
-                          max_requests=args.max_requests)
+    report = run_backfill(client, store, plan, resume=not args.no_resume, max_requests=args.max_requests)
     print(f"\nbackfill: {report.summary()}\n")
     print(format_report(store.load_bars(), store.load_coverage()))
     return 0

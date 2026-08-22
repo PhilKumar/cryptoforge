@@ -14,6 +14,7 @@ is the whole failure this class exists to prevent.
 
 from __future__ import annotations
 
+import json
 import os
 from bisect import bisect_left
 from datetime import date, datetime, timedelta
@@ -30,13 +31,56 @@ def monthly_expiries(weeklies: list[date]) -> list[date]:
     return sorted(last.values())
 
 
+INDEX_CACHE = "/Users/philipkumar/Documents/PhilForge/tools/.nifty_cache"
+
+# How far a row's own spot may sit from the index's real level before the row is
+# treated as belonging to another instrument entirely. Intraday drift inside a
+# day is well under a percent of the day's close; the rows this catches are out
+# by tens of percent.
+SPOT_TOLERANCE = 0.05
+
+
+def index_levels(underlying: str = "NIFTY", root: str = INDEX_CACHE) -> dict:
+    """A reference close per session day, read from the index candle cache."""
+    import glob
+
+    out: dict = {}
+    for path in sorted(glob.glob(os.path.join(root, f"{underlying}_5m_*.json"))):
+        rows = _read_candles(path)
+        for row in rows:
+            out[row[0][:10]] = float(row[4])
+    return out
+
+
+def _read_candles(path: str) -> list:
+    """One cache file, or an empty list and a word about why.
+
+    A cache directory picks up half-written and hand-made files over time. One
+    of those should cost the reference series that file, not the whole run --
+    but silently, and a missing reference later reads as a data gap that never
+    happened.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError) as exc:
+        print(f"[dhan_listed] ignoring unreadable candle cache {os.path.basename(path)}: {exc}")
+        return []
+
+
 class _Store:
     """One parquet directory, read a month at a time."""
 
-    def __init__(self, root: str, underlying: str = "NIFTY", keep: int = 2):
+    def __init__(self, root: str, underlying: str = "NIFTY", keep: int = 2, levels: dict | None = None):
         self.root, self.underlying, self.keep = root, underlying, keep
         self._cache: dict[str, dict] = {}
         self._order: list[str] = []
+        # Dhan's expiryCode=2 series bleeds other underlyings in -- 4.67% of the
+        # MONTH/2 store carries spot between 8,900 and 68,100 in files that are
+        # supposed to be NIFTY. Those rows are dropped on the way in; a wrong
+        # instrument priced as this one is the worst kind of silent error.
+        self.levels = levels if levels is not None else index_levels(underlying)
+        self.dropped = 0
 
     def month(self, key: str) -> dict:
         if key in self._cache:
@@ -44,7 +88,13 @@ class _Store:
         path = os.path.join(self.root, f"{self.underlying}_{key}.parquet")
         table: dict = {}
         if os.path.exists(path):
-            df = pd.read_parquet(path, columns=["ts", "strike", "side", "open"])
+            df = pd.read_parquet(path, columns=["ts", "strike", "side", "open", "spot"])
+            if self.levels is not None and len(df):
+                ref = df["ts"].dt.strftime("%Y-%m-%d").map(self.levels)
+                keep_row = ref.isna() | ((df["spot"] - ref).abs() / ref <= SPOT_TOLERANCE)
+                keep_row = keep_row | df["spot"].isna()
+                self.dropped += int((~keep_row).sum())
+                df = df[keep_row]
             table = {
                 (t.to_pydatetime(), int(s), sd): float(o)
                 for t, s, sd, o in zip(df["ts"], df["strike"], df["side"], df["open"])
@@ -68,7 +118,8 @@ class DhanListedSource:
     ):
         self.weeklies = sorted(weeklies)
         self.monthlies = monthly_expiries(self.weeklies)
-        self.stores = {k: _Store(v, underlying) for k, v in stores.items() if os.path.isdir(v)}
+        levels = index_levels(underlying)
+        self.stores = {k: _Store(v, underlying, levels=levels) for k, v in stores.items() if os.path.isdir(v)}
         self.nearest_within = int(nearest_within)
         # Why a lookup came back empty, counted so a run can be judged.
         self.misses = {"out_of_reach": 0, "no_bar": 0}
@@ -80,6 +131,14 @@ class DhanListedSource:
         self.served_exact = 0
         self.served_nearby = 0
         self.nearby_offsets: list = []
+        # Every minute at which this source could not answer. A caller cannot
+        # tell 'the option did not trade' from 'the vendor does not carry that
+        # strike', and the two settle very differently -- PhilForge's fib
+        # engine prices an unanswered exit at intrinsic value, which is right
+        # for the first and catastrophic for the second. Recording the misses
+        # lets a run drop the campaigns they touched instead of pricing them
+        # on a guess.
+        self.missed_at: set = set()
 
     # -- calendar ---------------------------------------------------------
     @staticmethod
@@ -115,6 +174,7 @@ class DhanListedSource:
         store = self.stores.get(which) if which else None
         if store is None:
             self.misses["out_of_reach"] += 1
+            self.missed_at.add(stamp.replace(second=0, microsecond=0))
             return None
 
         strike, side = int(contract.strike), str(contract.option_type).upper()
@@ -146,6 +206,7 @@ class DhanListedSource:
                     break
         if price is None or price <= 0:
             self.misses["no_bar"] += 1
+            self.missed_at.add(stamp.replace(second=0, microsecond=0))
             return None
         self.served += 1
         if exact:
@@ -164,5 +225,6 @@ class DhanListedSource:
             f"{self.served_exact:,} at the exact minute, "
             f"{self.served_nearby:,} substituted from a neighbouring one; "
             f"{self.misses['out_of_reach']:,} beyond the stores' expiries, "
-            f"{self.misses['no_bar']:,} with no bar"
+            f"{self.misses['no_bar']:,} with no bar; "
+            f"{sum(s.dropped for s in self.stores.values()):,} rows dropped as another instrument"
         )
