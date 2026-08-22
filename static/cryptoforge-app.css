@@ -1209,7 +1209,9 @@
       flex-direction: column;
       overflow: hidden;
     }
-    .allocator-grid > .allocator-result-panel > #cf-cascade-campaigns {
+    .allocator-grid > .allocator-result-panel > #cf-cascade-campaigns,
+    .allocator-grid > .allocator-result-panel > #cf-af-campaigns,
+    .allocator-grid > .allocator-result-panel > #cf-vr-campaigns {
       flex: 1 1 auto;
       min-height: 0;
       overflow-y: auto;
@@ -8678,6 +8680,11 @@ html[data-theme="light"] .journal-entry-notes section {
   border-color: rgba(148, 163, 184, 0.32);
   color: var(--muted);
   background: rgba(148, 163, 184, 0.08);
+}
+.cf-journal-src.is-strategy {
+  border-color: rgba(168, 85, 247, 0.38);
+  color: var(--purple, #a855f7);
+  background: rgba(168, 85, 247, 0.08);
 }
 .cf-journal-src.is-open {
   border-color: rgba(245, 158, 11, 0.4);

@@ -6061,6 +6061,13 @@ function _cfJournalSourceTag(t) {
   var bits = [];
   if (String(t.source || '') === 'binance') bits.push('<span class="cf-journal-src" title="Paired from your Binance fills — P&amp;L is net of commission">Binance</span>');
   else bits.push('<span class="cf-journal-src is-sheet" title="From the imported spreadsheet — P&amp;L is gross, fees not included">Sheet</span>');
+  // Which strategy placed it. Every strategy runs its own engine now, so a
+  // row that carries a campaign says whose campaign it was rather than
+  // leaving three strategies' trades looking alike.
+  if (t.strategy) {
+    bits.push('<span class="cf-journal-src is-strategy" title="Taken by the ' + _escapeHtml(String(t.strategy))
+      + ' strategy">' + _escapeHtml(String(t.strategy)) + '</span>');
+  }
   if (open && String(t.kind || '') === 'fee_float') {
     bits.push('<span class="cf-journal-src is-open" title="Coin held to pay exchange commission with, not a position — the exchange burns it a little at a time">Fee reserve</span>');
   } else if (open) {
@@ -12995,7 +13002,12 @@ async function cfR37Load(showToast, scan) {
   }
 }
 
+// The last paper status, so switching the panel back from Live can restore
+// Start/Stop/Reset from what the engine actually said rather than guessing.
+var _cfR37LastStatus = null;
+
 function cfR37RenderStatus(s) {
+  _cfR37LastStatus = s;
   var running = !!s.running;
   var selectedSymbol = String(s.symbol || _cfR37ActiveSymbol || 'BTCUSDT').toUpperCase();
   _cfR37ActiveSymbol = selectedSymbol;
@@ -13014,8 +13026,10 @@ function cfR37RenderStatus(s) {
   var resetBtn = document.getElementById('cf-r37-reset-btn');
   var symbolSelect = document.getElementById('cf-r37-symbol-select');
   var symbolNote = document.getElementById('cf-r37-symbol-note');
-  if (startBtn) startBtn.hidden = running;
-  if (stopBtn) stopBtn.hidden = !running;
+  var liveMode = (document.getElementById('cf-vr-mode') || {}).value === 'live';
+  if (startBtn) startBtn.hidden = running || liveMode;
+  if (stopBtn) stopBtn.hidden = !running || liveMode;
+  if (resetBtn) resetBtn.hidden = liveMode;
   if (startBtn) startBtn.disabled = _cfR37Switching;
   if (resetBtn) resetBtn.disabled = running || _cfR37Switching;
   if (symbolSelect) {
@@ -13370,6 +13384,8 @@ function cfVrSetMode(mode) {
     options[i].classList.toggle('is-active', on);
     options[i].setAttribute('aria-checked', on ? 'true' : 'false');
   }
+  // The panel's three buttons follow the book (Phil, option 2).
+  cfVrSyncPanelButtons();
 }
 
 function _cfVrSetError(message) {
@@ -13395,6 +13411,28 @@ function cfVrUpdateWalletHint() {
   hint.textContent = purse > 0 ? _cfR37Usd(purse / 2) : '$—';
 }
 
+// Phil, 2026-08-22 (option 2): in Live the V-Rule Controls panel's three
+// buttons become the live book's. The panel itself is untouched — same
+// layout, same instrument field, same three slots.
+function cfVrSyncPanelButtons() {
+  var live = (document.getElementById('cf-vr-mode') || {}).value === 'live';
+  var book = _cfVrBookFor((document.getElementById('cf-vr-symbol') || {}).value || '');
+  var on = !!(book && book.enabled);
+  var show = function (id, visible) { var n = document.getElementById(id); if (n) n.hidden = !visible; };
+  if (!live) {
+    show('cf-r37-panel-on', false);
+    show('cf-r37-panel-off', false);
+    // the paper renderer owns Start/Stop/Reset again
+    if (_cfR37LastStatus) cfR37RenderStatus(_cfR37LastStatus);
+    return;
+  }
+  show('cf-r37-start-btn', false);
+  show('cf-r37-stop-btn', false);
+  show('cf-r37-reset-btn', false);
+  show('cf-r37-panel-on', !on);
+  show('cf-r37-panel-off', on);
+}
+
 function cfVrSyncControls() {
   var symbol = (document.getElementById('cf-vr-symbol') || {}).value || '';
   var book = _cfVrBookFor(symbol);
@@ -13410,6 +13448,7 @@ function cfVrSyncControls() {
   show('cf-vr-on-btn', !on);
   show('cf-vr-save-btn', on);
   show('cf-vr-off-btn', on);
+  cfVrSyncPanelButtons();
 }
 
 function cfVrSelectSymbol(symbol) {

@@ -8836,8 +8836,18 @@ async def _broker_journal_trades(converts: Optional[list] = None) -> tuple[list,
         return [], str(exc)
 
 
+# Which strategy each engine's campaigns belong to, for the journal's label.
+# The live Cascade's campaigns carry an empty strategy field, so they are named
+# here rather than read off the campaign.
+_JOURNAL_ENGINE_LABELS = (
+    ("_cascade_engine", "Cascade"),
+    ("_auto_fib_engine", "Auto-Cascade_Fib"),
+    ("_vrule_engine", "V-Rule"),
+)
+
+
 def _cascade_order_id_index() -> dict:
-    """Map every Binance order id a Cascade campaign placed to its campaign.
+    """Map every Binance order id a campaign placed to its campaign.
 
     A paired journal round shares the exchange order id of the buy the engine
     placed, so this lets a journal row link straight to the campaign chart that
@@ -8846,41 +8856,49 @@ def _cascade_order_id_index() -> dict:
     moves its buys out of all_fills into rounds[].fills, both lists are read.
     Paper fills carry the sentinel order id "PAPER" and are skipped — there is
     no exchange order behind them to match.
+
+    EVERY engine is scanned, not just the live Cascade's. The strategies each
+    run their own CascadeEngine now, and a journal that only read the Cascade's
+    left their real trades sitting in the book with no chart and no name
+    (Phil, 2026-08-22). Engines that do not exist yet are skipped rather than
+    built: the journal must never be the thing that wakes a trading engine.
     """
-    engine = globals().get("_cascade_engine")
-    if engine is None:
-        return {}
     index: dict[str, dict] = {}
 
-    def _register(fills, campaign_id, seq):
+    def _register(fills, campaign_id, seq, strategy):
         for fill in fills or []:
             oid = fill.get("order_id") if isinstance(fill, dict) else getattr(fill, "order_id", None)
             oid = str(oid or "").strip()
             if oid and oid != "PAPER" and oid not in index:
-                index[oid] = {"campaign_id": campaign_id, "seq": seq}
+                index[oid] = {"campaign_id": campaign_id, "seq": seq, "strategy": strategy}
 
-    for camp in list(getattr(engine, "campaigns", {}).values()):
-        cid, seq = getattr(camp, "campaign_id", None), getattr(camp, "seq", None)
-        _register(getattr(camp, "all_fills", None), cid, seq)
-        for rnd in getattr(camp, "rounds", None) or []:
-            _register(getattr(rnd, "fills", None), cid, seq)
-
-    for camp in list(getattr(engine, "closed_campaigns", None) or []):
-        if not isinstance(camp, dict):
+    for attr, label in _JOURNAL_ENGINE_LABELS:
+        engine = globals().get(attr)
+        if engine is None:
             continue
-        cid, seq = camp.get("campaign_id"), camp.get("seq")
-        _register(camp.get("all_fills"), cid, seq)
-        for rnd in camp.get("rounds") or []:
-            if isinstance(rnd, dict):
-                _register(rnd.get("fills"), cid, seq)
+        for camp in list(getattr(engine, "campaigns", {}).values()):
+            cid, seq = getattr(camp, "campaign_id", None), getattr(camp, "seq", None)
+            _register(getattr(camp, "all_fills", None), cid, seq, label)
+            for rnd in getattr(camp, "rounds", None) or []:
+                _register(getattr(rnd, "fills", None), cid, seq, label)
+
+        for camp in list(getattr(engine, "closed_campaigns", None) or []):
+            if not isinstance(camp, dict):
+                continue
+            cid, seq = camp.get("campaign_id"), camp.get("seq")
+            _register(camp.get("all_fills"), cid, seq, label)
+            for rnd in camp.get("rounds") or []:
+                if isinstance(rnd, dict):
+                    _register(rnd.get("fills"), cid, seq, label)
     return index
 
 
 def _link_trades_to_campaigns(trades: list) -> None:
-    """Attach campaign_id/seq to each paired journal round whose buy order id
-    matches a Cascade campaign, so the row can offer its trade chart. Harmless
-    when the engine is absent or a trade was placed by hand: the internal
-    buy_order_ids key is stripped either way and unmatched rows get no chart."""
+    """Attach campaign_id/seq/strategy to each paired journal round whose buy
+    order id matches a campaign in ANY engine, so the row can offer its trade
+    chart and say which strategy took it. Harmless when the engines are absent
+    or a trade was placed by hand: the internal buy_order_ids key is stripped
+    either way and unmatched rows get no chart and no strategy."""
     index = _cascade_order_id_index()
     for trade in trades:
         if not isinstance(trade, dict):
@@ -8893,6 +8911,7 @@ def _link_trades_to_campaigns(trades: list) -> None:
             if hit:
                 trade["campaign_id"] = hit["campaign_id"]
                 trade["campaign_seq"] = hit["seq"]
+                trade["strategy"] = hit.get("strategy") or "Cascade"
                 break
 
 
