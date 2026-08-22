@@ -13381,6 +13381,10 @@ var _cfAfBusy = false;
 // what the picked coin is actually doing — without it the panel looks the
 // same whether a book is running or was never created.
 var _cfAfBooks = [];
+// Whether the SERVER will accept a live book. Live needs an arm on the box and
+// the venue's keys; the page only reflects that answer, never assumes it.
+var _cfAfLiveAvailable = false;
+var _cfAfLiveCeiling = 0;
 
 function _cfAfBookFor(symbol) {
   var want = String(symbol || '').toUpperCase();
@@ -13406,6 +13410,15 @@ function _cfAfSetError(message) {
 function cfAfRenderStatus(data) {
   var books = (data && data.books) || [];
   _cfAfBooks = books;
+  _cfAfLiveAvailable = !!(data && data.live_available);
+  _cfAfLiveCeiling = Number((data && data.live_ceiling_usd) || 0);
+  var liveBtn = document.querySelector('.cf-af-mode-option[data-mode="live"]');
+  if (liveBtn) {
+    liveBtn.setAttribute('aria-disabled', _cfAfLiveAvailable ? 'false' : 'true');
+    liveBtn.title = _cfAfLiveAvailable
+      ? 'Real money, in this strategy\'s own engine — the live Cascade is untouched'
+      : 'Paper only — live is not armed on the server';
+  }
   cfAfSyncControls();
   var body = document.getElementById('cf-af-books');
   var empty = document.getElementById('cf-af-books-empty');
@@ -13461,11 +13474,13 @@ function cfAfRenderStatus(data) {
 }
 
 function cfAfSetMode(mode) {
-  // Paper only since 2026-08-21: the strategy runs in a sandbox engine whose
-  // broker cannot place an order. The Live half of the toggle explains itself
-  // instead of arming a book that can never fire.
-  if (mode === 'live') {
-    _cfAfSetError('Paper only for now — the strategy runs in a sandbox that cannot reach real orders.');
+  // Live is the server's decision, not the page's. When it is not armed the
+  // toggle says why rather than arming a book that can never fire.
+  if (mode === 'live' && !_cfAfLiveAvailable) {
+    _cfAfSetError(
+      'Live is not armed on the server. It needs CRYPTOFORGE_AUTO_FIB_LIVE=1 and the '
+      + 'exchange keys configured — a click here cannot arm it.'
+    );
     return;
   }
   var picked = mode === 'live' ? 'live' : 'paper';
@@ -13490,7 +13505,9 @@ function cfAfSyncControls() {
   var text = document.getElementById('cf-af-state-text');
   if (badge) {
     badge.className = 'tp-badge ' + (on ? (book.mode === 'live' ? 'live' : 'running') : 'idle');
-    badge.textContent = on ? (book.mode === 'live' ? 'On · live' : 'On · paper') : (book ? 'Off' : 'No book');
+    badge.textContent = on
+      ? (book.mode === 'live' ? 'On · REAL MONEY' : 'On · paper')
+      : (book ? 'Off' : 'No book');
   }
   if (text) {
     text.textContent = !book
@@ -13639,10 +13656,15 @@ async function cfAfSaveBook(enabled) {
   // it asks once — the same courtesy the Cascade page gives a live campaign.
   if (enabled && mode === 'live') {
     var ok = await cfConfirm(
-      symbol + ' will trade with REAL money, on its own, from the next cycle. '
-      + 'It may hold up to ' + _cfAfUsd(capital / 2) + ' in coin at once. Start it?',
-      'Start ' + symbol + ' live?',
-      '⚠️'
+      '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own, '
+      + 'from the next cycle.</strong> Nobody clicks anything per trade.</p>'
+      + '<p>It may hold up to <strong>' + _cfAfUsd(capital / 2) + '</strong> in coin at once, '
+      + 'and it has <strong>no stop-loss</strong> — every exit is a target, so a position it '
+      + 'cannot sell is simply held, for as long as it takes.</p>'
+      + '<p>It trades in its own engine, so your Cascade campaigns are not touched — but it '
+      + 'spends from the <strong>same exchange balance</strong>.</p>',
+      'Start ' + symbol + ' with real money?',
+      '⚠️', true
     );
     if (!ok) return;
   }
@@ -13665,10 +13687,11 @@ async function cfAfToggleBook(symbol, enabled) {
   var book = _cfAfBookFor(symbol);
   if (enabled && book && book.mode === 'live') {
     var ok = await cfConfirm(
-      symbol + ' will trade with REAL money, on its own, from the next cycle. '
-      + 'It may hold up to ' + _cfAfUsd(book.wallet_cap_usd) + ' in coin at once. Start it?',
-      'Start ' + symbol + ' live?',
-      '⚠️'
+      '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own.</strong></p>'
+      + '<p>Up to <strong>' + _cfAfUsd(book.wallet_cap_usd) + '</strong> in coin at once, with no '
+      + 'stop-loss — every exit is a target.</p>',
+      'Start ' + symbol + ' with real money?',
+      '⚠️', true
     );
     if (!ok) return;
   }

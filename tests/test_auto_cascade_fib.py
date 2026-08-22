@@ -55,6 +55,9 @@ class FakeCampaign:
     timeframe: str = "5m"
     state: str = "TRENDLINE_ACTIVE"
     spent_usd: float = 0.0
+    mode: str = "paper"
+    filled_base_qty: float = 0.0
+    residual_base_qty: float = 0.0
     rounds: List[FakeRound] = field(default_factory=list)
 
 
@@ -67,10 +70,23 @@ class FakeCandle:
     close: float
 
 
+class FakeBroker:
+    """Stands in for PaperOnlyBroker: armed or not, keyed or not."""
+
+    def __init__(self, live_armed=False, configured=True):
+        self.live_armed = live_armed
+        self._configured = configured
+        self.display_name = "Fake"
+
+    def _is_configured(self):
+        return self.live_armed and self._configured
+
+
 class FakeEngine:
-    def __init__(self, candles=None, candles_1m=None):
+    def __init__(self, candles=None, candles_1m=None, broker=None):
         self.campaigns: Dict[str, FakeCampaign] = {}
         self.capital_groups: Dict[str, float] = {}
+        self.broker = broker or FakeBroker()
         self.started: List[dict] = []
         self._candles = candles or []
         # The 1m lane feeds the freshness guard. Empty means "no 1m data",
@@ -84,6 +100,9 @@ class FakeEngine:
 
     def set_capital_group(self, symbol, budget, exchange=""):
         self.capital_groups[f"{symbol}:{exchange}".lower()] = budget
+
+    def venue_of(self, campaign):
+        return str(getattr(campaign, "exchange", "") or "")
 
     async def _fetch_closed_candles(self, symbol, since_ts, timeframe="5m"):
         if timeframe == "1m":
@@ -406,11 +425,11 @@ def test_a_book_can_still_be_turned_OFF_while_disarmed(monkeypatch):
 # ── the 2026-08-21 runaway, closed for good ───────────────────────
 
 
-def test_live_mode_is_refused_outright():
-    """The sandbox cannot trade, so a live book must not even exist."""
-    engine = FakeEngine()
+def test_live_is_refused_when_the_server_is_not_armed():
+    """A click must never be able to reach real money on its own."""
+    engine = FakeEngine()  # its broker is not armed
     driver = AutoCascadeFib(engine)
-    with pytest.raises(ValueError, match="paper-only"):
+    with pytest.raises(ValueError, match="not armed for live"):
         driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=2000.0)
     assert driver.books == {}
 
@@ -507,3 +526,134 @@ def test_tried_anchors_and_cooldown_survive_a_save_and_load():
     twin = reloaded.books["btcusdt:"]
     assert twin.tried_anchors == book.tried_anchors
     assert twin.next_seed_ts == book.next_seed_ts
+
+
+# ── live trading: the three locks, and the shared account ─────────
+
+
+def _live_driver(monkeypatch, engine=None, capital=2000.0):
+    monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
+    engine = engine or FakeEngine(_rising_then_falling(), broker=FakeBroker(live_armed=True))
+    driver = AutoCascadeFib(engine)
+    driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=capital)
+    return driver
+
+
+def test_live_is_refused_when_the_keys_are_missing(monkeypatch):
+    """Armed on the server is not enough — the venue must be able to trade."""
+    monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
+    engine = FakeEngine(broker=FakeBroker(live_armed=True, configured=False))
+    driver = AutoCascadeFib(engine)
+    with pytest.raises(ValueError, match="not armed for live"):
+        driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=2000.0)
+
+
+def test_live_is_accepted_when_every_lock_is_open(monkeypatch):
+    driver = _live_driver(monkeypatch)
+    assert _book(driver).mode == "live"
+    assert driver.live_available() is True
+    assert driver.status()["live_available"] is True
+
+
+def test_a_live_purse_over_the_ceiling_is_refused(monkeypatch):
+    monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
+    monkeypatch.setattr(auto_fib, "LIVE_CEILING_USD", 2000.0)
+    engine = FakeEngine(broker=FakeBroker(live_armed=True))
+    driver = AutoCascadeFib(engine)
+    with pytest.raises(ValueError, match="at most"):
+        driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=50_000.0)
+
+
+def test_the_ceiling_is_rechecked_at_every_start_not_only_when_saved(monkeypatch):
+    """The purse grows by folding profit in, so a saved book can drift past."""
+    driver = _live_driver(monkeypatch)
+    book = _book(driver)
+    monkeypatch.setattr(auto_fib, "LIVE_CEILING_USD", 100.0)  # as if lowered on the server
+    assert asyncio.run(driver._seed_working_line(book)) is False
+    assert "ceiling" in book.note
+    assert driver.engine.started == []
+
+
+def test_a_live_book_restored_while_disarmed_comes_back_as_paper(monkeypatch):
+    """Saved state must never resume real trading the operator switched off."""
+    driver = _live_driver(monkeypatch)
+    dumped = driver.dump()
+    assert dumped["books"][0]["mode"] == "live"
+    monkeypatch.setattr(auto_fib, "LIVE_ARMED", False)
+    revived = AutoCascadeFib(FakeEngine())
+    revived.load(dumped)
+    assert revived.books["btcusdt:"].mode == "paper"
+
+
+def test_a_disarmed_broker_still_refuses_every_order():
+    from engine.auto_cascade_fib import PaperOnlyBroker
+
+    class Real:
+        broker_name = "binance"
+        display_name = "Binance Spot"
+        min_timeframe = "5m"
+
+        def _is_configured(self):
+            return True
+
+        def get_ticker(self, symbol):
+            return {"last": 1.0}
+
+        def place_order(self, *a, **k):  # pragma: no cover
+            raise AssertionError("reached the exchange while disarmed")
+
+    broker = PaperOnlyBroker(Real(), live_armed=False)
+    assert broker._is_configured() is False
+    with pytest.raises(RuntimeError, match="not armed for live"):
+        broker.place_order("BTCUSDT", 1.0, "buy")
+    assert broker.get_ticker("BTCUSDT")["last"] == 1.0
+
+
+def test_an_armed_broker_forwards_orders_and_reports_configured():
+    from engine.auto_cascade_fib import PaperOnlyBroker
+
+    calls = []
+
+    class Real:
+        broker_name = "binance"
+        display_name = "Binance Spot"
+        min_timeframe = "5m"
+
+        def _is_configured(self):
+            return True
+
+        def place_order(self, *a, **k):
+            calls.append(a)
+            return {"order_id": "1"}
+
+    broker = PaperOnlyBroker(Real(), live_armed=True)
+    assert broker._is_configured() is True
+    assert broker.place_order("BTCUSDT", 1.0, "buy") == {"order_id": "1"}
+    assert calls
+
+
+def test_an_armed_broker_with_no_keys_is_still_not_configured():
+    from engine.auto_cascade_fib import PaperOnlyBroker
+
+    class Real:
+        broker_name = "binance"
+        display_name = "Binance Spot"
+        min_timeframe = "5m"
+
+        def _is_configured(self):
+            return False
+
+    assert PaperOnlyBroker(Real(), live_armed=True)._is_configured() is False
+
+
+def test_the_strategy_declares_only_its_LIVE_coin_to_the_other_engine(monkeypatch):
+    """Paper coin is imaginary. Declaring it would make the live Cascade think
+    its own holding had vanished."""
+    driver = _live_driver(monkeypatch)
+    engine = driver.engine
+    engine.add(FakeCampaign("live1", symbol="BTCUSDT", mode="live", filled_base_qty=0.5, residual_base_qty=0.1))
+    engine.add(FakeCampaign("paper1", symbol="BTCUSDT", mode="paper", filled_base_qty=99.0))
+    engine.add(FakeCampaign("other", symbol="SOLUSDT", mode="live", filled_base_qty=7.0))
+    assert driver.claimed_base_qty("BTCUSDT") == pytest.approx(0.6)
+    assert driver.claimed_base_qty("SOLUSDT") == pytest.approx(7.0)
+    assert driver.claimed_base_qty("ETHUSDT") == 0.0

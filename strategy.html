@@ -1326,7 +1326,7 @@
   <div class="allocator-header">
     <div>
       <h2>Auto-Cascade_Fib <button type="button" class="cf-info" tabindex="0" data-cf-info="The cascade, running itself. It marks its own mother candles instead of waiting for you. Five rules, all from the August 2026 backtests. ONE: it sells HALF way back to the mother candle, not a quarter — fewer trades, each worth several times more. TWO: a line that cannot reach its target climbs 5m to 15m to 1H to 4H and then STOPS at 4H, holding that rung for as long as it takes rather than widening to daily. THREE: there is always exactly one 5-minute line working the near move; the moment it climbs to 1H it becomes a slow major and a fresh 5-minute line is anchored on the last confirmed swing high, so majors accumulate and the fast line is always fresh. FOUR: the book never holds more than HALF the purse in coin at once. FIVE: closed profit waits in a pocket and folds into the purse whenever it is worth a quarter of it, and the wallet limit grows with the purse — no money is ever added from outside. What to expect: about 22 to 26 percent a year, one trade every three or four days, and roughly ten lines open at once with most of the money parked in slow 4H positions waiting for their target. Every closed trade is a winner by construction, so the whole risk sits in coin still held." aria-label="How Auto-Cascade_Fib works">i</button></h2>
-      <div class="table-meta">Its own book. The Cascade page's campaigns are never touched.</div>
+      <div class="table-meta">Its own engine and its own book. The Cascade page's campaigns are never touched.</div>
     </div>
     <div class="cf-engine-chip" id="cf-af-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
@@ -1360,7 +1360,7 @@
 
   <div class="allocator-grid">
   <section class="card allocator-input-panel" aria-labelledby="cf-af-controls-title">
-    <h3 id="cf-af-controls-title">Add or change a book <button type="button" class="cf-info" tabindex="0" data-cf-info="One book per coin, each with its own purse. Paper books mark real candles and book simulated fills; live books place real orders. Purse is what the rung sizes are measured from — the wallet limit is half of it, and it grows as profit folds in. Changing the purse before any profit has folded resets it; afterwards it only moves the starting figure, so a compounded purse is never quietly shrunk." aria-label="What these controls do">i</button></h3>
+    <h3 id="cf-af-controls-title">Add or change a book <button type="button" class="cf-info" tabindex="0" data-cf-info="One book per coin, each with its own purse. Paper books mark real candles and book simulated fills; live books place real orders in this strategy's OWN engine, so the Cascade page's campaigns and capital groups are never touched — though both spend from the same exchange balance. Live has to be armed on the server before the page will offer it. Purse is what the rung sizes are measured from — the wallet limit is half of it, and it grows as profit folds in. Changing the purse before any profit has folded resets it; afterwards it only moves the starting figure, so a compounded purse is never quietly shrunk." aria-label="What these controls do">i</button></h3>
     <div class="cf-cascade-form">
       <div class="input-group">
         <label for="cf-af-symbol">Coin</label>
@@ -1377,7 +1377,7 @@
           <button type="button" class="cf-mode-option cf-af-mode-option is-active" data-mode="paper" role="radio"
                   aria-checked="true" data-cf-click="cfAfSetMode('paper')">Paper</button>
           <button type="button" class="cf-mode-option cf-af-mode-option" data-mode="live" role="radio"
-                  aria-checked="false" aria-disabled="true" title="Paper only — the strategy runs in a sandbox that cannot reach real orders"
+                  aria-checked="false" aria-disabled="true" title="Paper only — live is not armed on the server"
                   data-cf-click="cfAfSetMode('live')">Live</button>
         </div>
       </div>

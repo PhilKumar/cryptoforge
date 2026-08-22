@@ -72,6 +72,19 @@ STRATEGY = "auto-cascade-fib"
 # The env switch remains as the off-switch: CRYPTOFORGE_AUTO_FIB=0 disables
 # the driver entirely, books notwithstanding.
 DRIVER_ARMED = os.getenv("CRYPTOFORGE_AUTO_FIB", "").strip().lower() not in {"0", "false", "no", "off"}
+
+# ── live trading ─────────────────────────────────────────────────────────
+# Live is OFF unless deliberately armed on the server. A UI click can never
+# reach real money on its own: turning a book live needs this env AND the
+# venue's keys AND an explicit choice in the page, three independent locks.
+# The strategy's campaigns still live in their own engine, so the live
+# Cascade's books, capital groups and cross-campaign rules stay untouched —
+# that separation is what 2026-08-21 cost, and going live does not spend it.
+LIVE_ARMED = os.getenv("CRYPTOFORGE_AUTO_FIB_LIVE", "").strip().lower() in {"1", "true", "yes", "on"}
+# The most a single live book may ever hold in coin, whatever its purse says.
+# A backstop against a purse typo, not a strategy rule: the wallet fraction is
+# still the real limit and is almost always the binding one.
+LIVE_CEILING_USD = float(os.getenv("CRYPTOFORGE_AUTO_FIB_LIVE_MAX", "") or 2000.0)
 DISARMED_NOTE = "disarmed by CRYPTOFORGE_AUTO_FIB=0 on the server"
 
 SEED_COOLDOWN_SEC = 300  # one full 5m bar between starts — the churn brake
@@ -79,14 +92,21 @@ TRIED_ANCHOR_LIMIT = 50  # how many used anchors a book remembers
 
 
 class PaperOnlyBroker:
-    """A real broker's market data, and NOTHING else.
+    """The strategy's broker: market data always, orders only when armed.
 
-    The sandbox engine gets its candles, tickers and product metadata from the
-    same client the app already has — but if any code path in the shared
-    engine ever reaches for an order or account method on the sandbox, it must
-    fail LOUDLY rather than touch the exchange. Paper campaigns never place
-    orders, so nothing legitimate is lost; this exists for the illegitimate
-    paths.
+    The strategy engine gets its candles, tickers and product metadata from
+    the same client the app already has. Order and account methods are the
+    guarded half:
+
+      · LIVE_ARMED false — the default — every order and account call raises,
+        so no code path in the shared engine can reach the exchange even by
+        mistake, and `_is_configured()` reports False so nothing offers live;
+      · LIVE_ARMED true, keys present — they forward to the real client, and
+        the engine's own `campaign.mode == "live"` gates decide which
+        campaigns actually use them. Paper campaigns never call them at all.
+
+    The name is kept: paper is still what this broker is for, and live is the
+    exception it has to be asked for twice.
     """
 
     _FORWARD = {
@@ -105,25 +125,41 @@ class PaperOnlyBroker:
         "get_balances",
     }
 
-    def __init__(self, real):
+    def __init__(self, real, live_armed: Optional[bool] = None):
         self._real = real
+        # Captured per instance so a test can arm one without touching the
+        # module, and so the value the engine was built with is the value it
+        # keeps for its life — live must never flip under a running campaign.
+        self._live_armed = LIVE_ARMED if live_armed is None else bool(live_armed)
         self.broker_name = str(getattr(real, "broker_name", "") or "")
-        self.display_name = f"{getattr(real, 'display_name', 'Broker')} (sandbox, market data only)"
+        self.display_name = str(getattr(real, "display_name", "Broker")) + (
+            " (strategy, live)" if self._live_armed else " (strategy, market data only)"
+        )
         self.supports_cascade = True
         self.min_timeframe = str(getattr(real, "min_timeframe", "") or "")
 
+    @property
+    def live_armed(self) -> bool:
+        return self._live_armed
+
     def _is_configured(self) -> bool:
-        return False  # never tradable, so nothing ever offers it live
+        """Tradable only when armed AND the real client has its keys."""
+        if not self._live_armed:
+            return False
+        checker = getattr(self._real, "_is_configured", None)
+        return bool(checker()) if callable(checker) else False
 
     def __getattr__(self, name):
         if name in self._FORWARD:
             return getattr(self._real, name)
         if name in self._REFUSE:
+            if self._live_armed:
+                return getattr(self._real, name)
 
             def _refused(*_args, **_kwargs):
                 raise RuntimeError(
-                    f"PaperOnlyBroker refused {name}() — the Auto-Cascade_Fib sandbox "
-                    "must never reach orders or the account"
+                    f"PaperOnlyBroker refused {name}() — Auto-Cascade_Fib is not armed for live "
+                    "(set CRYPTOFORGE_AUTO_FIB_LIVE=1 on the server)"
                 )
 
             return _refused
@@ -203,9 +239,11 @@ class Book:
     def from_dict(cls, data: dict) -> "Book":
         book = cls(symbol=str(data.get("symbol") or "").upper())
         book.exchange = str(data.get("exchange") or "")
-        # Saved state predating 2026-08-21 could carry "live". The sandbox is
-        # paper-only, so a restore coerces rather than resurrects it.
-        book.mode = "paper"
+        # A live book restored while the server is not armed comes back as
+        # PAPER. Saved state must never be able to resume real trading that
+        # the operator has since switched off.
+        raw_mode = str(data.get("mode") or "").lower()
+        book.mode = "live" if (raw_mode == "live" and LIVE_ARMED) else "paper"
         book.enabled = bool(data.get("enabled"))
         book.start_capital_usd = _positive(data.get("start_capital_usd"), 2000.0)
         book.purse_usd = _positive(data.get("purse_usd"), book.start_capital_usd)
@@ -269,6 +307,44 @@ class AutoCascadeFib:
 
     # ── configuration ────────────────────────────────────────────
 
+    def live_available(self) -> bool:
+        """True only when real orders could actually be placed.
+
+        Three independent locks, all of which must be open: the server arm
+        (CRYPTOFORGE_AUTO_FIB_LIVE), the broker's own keys, and — implicitly —
+        the strategy engine having been built with an armed broker, since the
+        arm is captured at construction and never flips under a running
+        campaign.
+        """
+        broker = getattr(self.engine, "broker", None)
+        if broker is None or not getattr(broker, "live_armed", False):
+            return False
+        checker = getattr(broker, "_is_configured", None)
+        return bool(checker()) if callable(checker) else False
+
+    def claimed_base_qty(self, symbol: str, venue: str = "") -> float:
+        """Coin this strategy's campaigns hold, for the OTHER engine to net off.
+
+        Both engines trade one account, and each one's own campaign list sees
+        only half the claims on a symbol's balance. This is the half the live
+        Cascade cannot see.
+        """
+        from engine.cascade import FINAL_STATES  # noqa: F401  (kept explicit for the reader)
+
+        symbol = str(symbol or "").upper()
+        venue = str(venue or "").lower()
+        total = 0.0
+        for campaign in list(getattr(self.engine, "campaigns", {}).values()):
+            if str(campaign.symbol or "").upper() != symbol:
+                continue
+            if str(getattr(campaign, "mode", "") or "") != "live":
+                continue  # paper coin is imaginary and claims nothing
+            if venue and str(self.engine.venue_of(campaign) or "").lower() != venue:
+                continue
+            total += float(getattr(campaign, "filled_base_qty", 0.0) or 0.0)
+            total += float(getattr(campaign, "residual_base_qty", 0.0) or 0.0)
+        return total
+
     def set_book(
         self,
         symbol: str,
@@ -286,20 +362,27 @@ class AutoCascadeFib:
             # a driver that will never tick is a trap this strategy has already
             # fallen into once.
             raise ValueError("Auto-Cascade_Fib is switched off on the server (CRYPTOFORGE_AUTO_FIB=0).")
-        if mode is not None and str(mode).lower() == "live":
-            # The sandbox holds market data and paper fills, nothing else. A
-            # live book here would look armed and place nothing — worse than a
-            # refusal.
+        wants_live = mode is not None and str(mode).lower() == "live"
+        if wants_live and not self.live_available():
+            # Refuse rather than accept-and-ignore: a book reading "live" over
+            # a broker that cannot place an order is the trap this strategy
+            # has already fallen into once.
             raise ValueError(
-                "Auto-Cascade_Fib is paper-only. It runs in a sandbox that cannot reach "
-                "orders or the account; going live is a separate build, deliberately."
+                "Auto-Cascade_Fib is not armed for live trading. It needs "
+                "CRYPTOFORGE_AUTO_FIB_LIVE=1 on the server and the venue's API keys "
+                "configured — a click cannot arm it on its own."
+            )
+        if wants_live and _positive(capital_usd, 0.0) > LIVE_CEILING_USD:
+            raise ValueError(
+                f"A live book may hold at most ${LIVE_CEILING_USD:,.0f}. "
+                f"Lower the purse, or raise CRYPTOFORGE_AUTO_FIB_LIVE_MAX on the server."
             )
         key = f"{symbol}:{exchange}".lower()
         book = self.books.get(key) or Book(symbol=symbol, exchange=exchange)
         if enabled is not None:
             book.enabled = bool(enabled)
         if mode is not None:
-            book.mode = "paper"  # the only mode the sandbox has
+            book.mode = "live" if wants_live else "paper"
         if capital_usd is not None:
             fresh = _positive(capital_usd, book.start_capital_usd)
             # Changing the size before any profit has been folded resets the
@@ -316,6 +399,8 @@ class AutoCascadeFib:
             "strategy": STRATEGY,
             "armed": DRIVER_ARMED,
             "disarmed_reason": "" if DRIVER_ARMED else DISARMED_NOTE,
+            "live_available": self.live_available(),
+            "live_ceiling_usd": LIVE_CEILING_USD,
             "rules": {
                 "tp_fib_level": TP_FIB_LEVEL,
                 "cap_timeframe": CAP_TIMEFRAME,
@@ -489,6 +574,16 @@ class AutoCascadeFib:
             # failed, so there is nothing honest to hang a mother on yet.
             book.note = "waiting for a high to fail above the price"
             return False
+        if book.mode == "live":
+            # Re-checked at START, not only when the book was saved: the purse
+            # grows by folding profit in, so a book that was inside the ceiling
+            # when it was created can drift past it without anyone touching it.
+            if not self.live_available():
+                book.note = "live is not armed on the server — not starting"
+                return False
+            if book.wallet_cap_usd > LIVE_CEILING_USD:
+                book.note = f"live wallet cap ${book.wallet_cap_usd:,.0f} is over the ${LIVE_CEILING_USD:,.0f} ceiling"
+                return False
         fresh_high = await self._latest_1m_high(book)
         if fresh_high is not None and anchor.high <= fresh_high:
             # The 1m tape has already reached the anchor. Starting now would be

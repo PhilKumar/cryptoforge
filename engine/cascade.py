@@ -1994,6 +1994,13 @@ class CascadeEngine:
         }
         if self.primary_broker_name:
             self.brokers.setdefault(self.primary_broker_name, broker)
+        # Coin claimed by campaigns in ANOTHER engine on the same account.
+        # Two engines now share one Binance account (the live Cascade and the
+        # Auto-Cascade_Fib strategy), and each one's `self.campaigns` sees only
+        # half the claims on a symbol's balance. Left unset this is a no-op and
+        # the engine behaves exactly as a single engine always did.
+        # Signature: (symbol, venue) -> base-asset quantity claimed elsewhere.
+        self.foreign_claims: Optional[Callable[[str, str], float]] = None
         self.on_campaign_closed = on_campaign_closed
         self.on_event = on_event
         self.on_update = on_update
@@ -2932,6 +2939,18 @@ class CascadeEngine:
             for c in self.campaigns.values()
             if c.campaign_id != campaign.campaign_id and c.symbol == campaign.symbol and c.filled_base_qty > 0
         )
+        # A sibling ENGINE's campaigns hold coin in this same balance and are
+        # invisible to the loop above. Without them this campaign reads another
+        # engine's holding as unclaimed and concludes its own coin is present
+        # when it is not — the wrong answer in the quiet direction, which is
+        # worse than a false alarm because nobody is told anything.
+        if self.foreign_claims is not None:
+            try:
+                claimed_by_others += max(
+                    _coerce_float(self.foreign_claims(campaign.symbol, self.venue_of(campaign)), 0.0), 0.0
+                )
+            except Exception as exc:
+                _log.warning("[CASCADE] foreign-claim lookup failed for %s: %s", campaign.symbol, exc)
         mine = max(free - claimed_by_others, 0.0)
         campaign.exchange_qty = round(mine, 12)
         ours = _coerce_float(campaign.filled_base_qty, 0.0)

@@ -8243,7 +8243,52 @@ def _get_cascade_engine() -> "CascadeEngine":
         )
         _purge_stray_auto_fib_from_live()
         _restore_cascade_runtime(_cascade_engine)
+        # The two engines share one exchange account. Each one's own campaign
+        # list sees only half the claims on a symbol's balance, so each is told
+        # how to ask the other. Lazy on purpose: reaching for the strategy
+        # engine here would build it mid-construction of this one.
+        _cascade_engine.foreign_claims = _auto_fib_claimed_qty
     return _cascade_engine
+
+
+def _auto_fib_claimed_qty(symbol: str, venue: str = "") -> float:
+    """Coin the strategy's LIVE campaigns hold, for the live engine to net off.
+
+    Deliberately does not construct the strategy engine: if it does not exist
+    yet it is holding nothing, and building it from inside the live engine's
+    balance check would be a poor place to discover a broker problem.
+    """
+    if _auto_fib is None:
+        return 0.0
+    try:
+        return float(_auto_fib.claimed_base_qty(symbol, venue))
+    except Exception as exc:
+        _logger.warning("[AUTO-FIB] claim lookup failed for %s: %s", symbol, exc)
+        return 0.0
+
+
+def _live_cascade_claimed_qty(symbol: str, venue: str = "") -> float:
+    """The mirror: coin the LIVE Cascade holds, for the strategy to net off."""
+    engine = _cascade_engine
+    if engine is None:
+        return 0.0
+    try:
+        symbol = str(symbol or "").upper()
+        venue = str(venue or "").lower()
+        total = 0.0
+        for campaign in list(engine.campaigns.values()):
+            if str(campaign.symbol or "").upper() != symbol:
+                continue
+            if str(getattr(campaign, "mode", "") or "") != "live":
+                continue
+            if venue and str(engine.venue_of(campaign) or "").lower() != venue:
+                continue
+            total += float(getattr(campaign, "filled_base_qty", 0.0) or 0.0)
+            total += float(getattr(campaign, "residual_base_qty", 0.0) or 0.0)
+        return total
+    except Exception as exc:
+        _logger.warning("[CASCADE] claim lookup failed for %s: %s", symbol, exc)
+        return 0.0
 
 
 def _get_auto_fib_engine() -> "CascadeEngine":
@@ -8273,6 +8318,7 @@ def _get_auto_fib_engine() -> "CascadeEngine":
         # driver came back believing it had never started one.
         eng = CascadeEngine(PaperOnlyBroker(delta), on_update=_persist_auto_fib_update)
         eng._lock_path = os.path.join(_HERE, ".cascade-sandbox-writer.lock")
+        eng.foreign_claims = _live_cascade_claimed_qty
         state = _get_state_store().get(_BUCKET_AUTO_FIB_RUNTIME, "current", default={}) or {}
         if isinstance(state, dict):
             eng.load_capital_groups(state.get("capital_groups") or {})
@@ -9382,11 +9428,12 @@ async def auto_fib_status():
 
 @app.post("/api/auto-fib/books")
 async def auto_fib_set_book(request: Request):
-    """Turn a symbol on or off, or set its size. Paper only.
+    """Turn a symbol on or off, choose paper/live, or set its size.
 
-    Live mode is refused by the driver itself — the strategy runs in a sandbox
-    engine whose broker cannot place an order, and offering live from here
-    would arm a book that can never fire.
+    Live is refused by the driver unless the server is armed AND the venue's
+    keys are configured. The strategy keeps its own engine either way, so the
+    live Cascade's books, capital groups and cross-campaign rules are never
+    touched by anything decided here.
     """
     check_rate_limit("auto_fib_book", max_calls=6, window_sec=10)
     body = await _read_json_body(request)
