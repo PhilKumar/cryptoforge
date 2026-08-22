@@ -1491,57 +1491,49 @@
           </select>
           <small id="cf-r37-symbol-note">Each instrument keeps its own paper clock and journal.</small>
         </label>
+        <div class="cf-r37-symbol-field">
+          <span id="cf-r37-mode-label">Mode</span>
+          <div class="cf-mode-toggle" role="radiogroup" aria-labelledby="cf-r37-mode-label">
+            <input type="hidden" id="cf-r37-mode" value="paper">
+            <button type="button" class="cf-mode-option cf-r37-mode-option is-active" data-mode="paper" role="radio"
+                    aria-checked="true" data-cf-click="cfR37SetMode('paper')">Paper</button>
+            <button type="button" class="cf-mode-option cf-r37-mode-option" data-mode="live" role="radio"
+                    aria-checked="false" data-cf-click="cfR37SetMode('live')">Live</button>
+          </div>
+          <small id="cf-r37-mode-note">Paper replays the rule; Live trades it.</small>
+        </div>
+        <label class="cf-r37-symbol-field" for="cf-vr-capital" id="cf-vr-purse-field" hidden>
+          <span>Purse (USD)</span>
+          <input id="cf-vr-capital" type="number" min="10" step="10" value="200" inputmode="decimal">
+          <small id="cf-vr-wallet-hint">at most $100.00 in coin</small>
+        </label>
         <div class="cf-r37-control-actions">
           <button type="button" class="read-only-hide btn btn-primary btn-sm" id="cf-r37-start-btn" data-cf-click="cfR37Start()">Start Paper</button>
           <button type="button" class="read-only-hide btn btn-danger btn-sm" id="cf-r37-stop-btn" data-cf-click="cfR37Stop()" hidden>Stop Paper</button>
           <button type="button" class="read-only-hide btn btn-outline btn-sm" id="cf-r37-reset-btn" data-cf-click="cfR37Reset()">Reset Paper</button>
+          <button type="button" class="read-only-hide btn btn-danger btn-sm" id="cf-vr-on-btn" data-cf-click="cfVrSaveBook(true)" hidden>Start Live</button>
+          <button type="button" class="read-only-hide btn btn-danger btn-sm" id="cf-vr-off-btn" data-cf-click="cfVrSaveBook(false)" hidden>Stop Live</button>
         </div>
       </div>
     </div>
     <div class="cf-r37-control-error" id="cf-r37-error" role="status"></div>
   </section>
 
-  <!-- Real money. The paper book above is a replay the nine-year backtest
-       proved; this is the same rule trading a live account through its own
-       engine. Separate card, separate engine, separate switch — and a server
-       arm before the page will even offer it. -->
-  <div class="allocator-grid" id="cf-vr-grid">
-  <section class="card allocator-input-panel" aria-labelledby="cf-vr-title">
-    <h3 id="cf-vr-title">Real money <button type="button" class="cf-info" tabindex="0" data-cf-info="The V-Rule trading a live exchange account. The rule is the paper book's rule to the bar — a parity harness holds the live driver to the locked simulator on every fill, target and end — but its buys are real orders: a trailing buy stop that rests on the exchange and walks down with each new low, and a single take-profit that rests against the whole ladder. It runs in its OWN engine, so the Cascade page's campaigns and capital groups are never touched, though both spend from the same exchange balance. There is no stop-loss: every exit is the target, and a ladder the market does not turn for is simply held. Live has to be armed on the server before this card will start anything." aria-label="What real-money V-Rule does">i</button></h3>
-    <div class="cf-cascade-form">
-      <div class="input-group">
-        <label for="cf-vr-symbol">Coin</label>
-        <select id="cf-vr-symbol" data-cf-change="cfVrSelectSymbol(this.value)"></select>
+  <section class="card table-panel" id="cf-vr-ladders" hidden>
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Live Ladders <button type="button" class="cf-info" tabindex="0" data-cf-info="Every V the live book is working, drawn by the Cascade page's own renderer: the trailing buy resting on the exchange, each buy that filled, and the one target that sells the whole ladder. Stopping withdraws the resting buys; a position already held keeps its take-profit resting until it sells." aria-label="What the live ladders are">i</button></h3>
       </div>
-      <div class="input-group">
-        <label for="cf-vr-capital">Purse (USD)</label>
-        <input id="cf-vr-capital" type="number" min="10" step="10" value="200" inputmode="decimal">
+      <div class="cf-engine-chip" id="cf-vr-chip" data-state="idle">
+        <span class="cf-engine-dot" aria-hidden="true"></span>
+        <span class="cf-engine-label">Live</span>
+        <strong id="cf-vr-state">Off</strong>
       </div>
-      <div class="input-group">
-        <label id="cf-vr-wallet-label">In the market, at most</label>
-        <div class="cf-af-derived" id="cf-vr-wallet-hint" aria-labelledby="cf-vr-wallet-label">$100.00</div>
-      </div>
-      <div class="cf-cascade-form-note">Half the purse is the most this book ever holds in coin at once. Each buy is a share of the fall measured from the mother candle; closed profit folds into the purse at a quarter of it.</div>
     </div>
-    <div class="cf-af-state" id="cf-vr-state-line">
-      <span class="tp-badge idle" id="cf-vr-state-badge">No book</span>
-      <span id="cf-vr-state-text">Pick a coin to see where its live book stands.</span>
+    <div id="cf-vr-campaigns" style="padding:0 14px 14px;">
+      <div class="cf-table-empty-cell" style="padding:16px;">Nothing live yet.</div>
     </div>
-    <div class="allocator-actions">
-      <button type="button" id="cf-vr-on-btn" class="read-only-hide btn btn-danger" data-cf-click="cfVrSaveBook(true)">Start with real money</button>
-      <button type="button" id="cf-vr-save-btn" class="read-only-hide btn btn-primary" data-cf-click="cfVrSaveBook(true)" hidden>Save changes</button>
-      <button type="button" id="cf-vr-off-btn" class="read-only-hide btn btn-danger" data-cf-click="cfVrSaveBook(false)" hidden>Stop</button>
-      <button type="button" id="cf-vr-refresh-btn" class="btn btn-outline" data-cf-click="cfVrRefresh(true)">Refresh</button>
-    </div>
-    <div class="allocator-error" id="cf-vr-error" role="alert" aria-live="polite"></div>
-    <div class="table-meta" style="margin-top:8px;">Stopping withdraws every resting buy. A position already held keeps its take-profit resting until it sells.</div>
   </section>
-
-  <section class="card allocator-result-panel" aria-labelledby="cf-vr-lines-title">
-    <h3 id="cf-vr-lines-title">Live ladders <button type="button" class="cf-info" tabindex="0" data-cf-info="Every V the live book is working, drawn by the Cascade page's own renderer: the trailing buy resting on the exchange, each buy that filled, and the one target that sells the whole ladder. Each card opens the same chart the Cascade page uses." aria-label="What the live ladders are">i</button></h3>
-    <div id="cf-vr-campaigns">
-      <div class="cf-table-empty-cell" style="padding:16px;">Nothing live — start a book beside this, once the server is armed.</div>
-    </div>
   </section>
   </div>
 
