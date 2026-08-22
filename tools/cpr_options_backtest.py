@@ -360,6 +360,7 @@ class Trade:
     exit_reason: str = ""
     deepest: str = ""
     priced_exit: bool = True
+    unpriceable: bool = False
     mfe: float = 0.0
     charges: float = 0.0
     notes: list = field(default_factory=list)
@@ -488,6 +489,7 @@ class Backtest:
         self.skipped_no_entry_price = 0
         self.skipped_too_dear = 0
         self.unpriced_exits = 0
+        self.dropped_unpriceable = 0
 
     # -- plumbing ---------------------------------------------------------
     def next_minute(self, after: datetime, limit_sessions: int = 3) -> Optional[datetime]:
@@ -572,7 +574,15 @@ class Backtest:
         # tick -- which is what made the first supertrend run look like a losing
         # rule when it was really a losing stop.
         floor_ = trade.entry_spot - self.dirn * self.args.min_stop_points
-        return min(level, floor_) if self.dirn > 0 else max(level, floor_)
+        level = min(level, floor_) if self.dirn > 0 else max(level, floor_)
+        cap = getattr(self.args, "max_stop_points", 0.0)
+        if cap:
+            # Without this, a breakout entry that fills far past the line it broke
+            # keeps the LINE as its stop -- 413 points away at worst, which is not
+            # a stop, it is the whole premium. min_stop widens, this caps.
+            ceiling = trade.entry_spot - self.dirn * cap
+            level = max(level, ceiling) if self.dirn > 0 else min(level, ceiling)
+        return level
 
     def _raw_stop(self, trade: "Trade", lv: "Levels", stop_rung: Optional[str]) -> Optional[float]:
         """What a close has to clear to end the trade.
@@ -676,7 +686,8 @@ class Backtest:
 
                 if exit_now is not None:
                     self.close_trade(open_trade, exit_now, reason)
-                    trades.append(open_trade)
+                    if not open_trade.unpriceable:
+                        trades.append(open_trade)
                     open_trade, live_levels, active_level, deepest_i = None, None, None, -1
                     stop_rung = None
                 elif reason:
@@ -819,6 +830,12 @@ class Backtest:
             price = max(0.0, (spot - t.strike) if self.dirn > 0 else (t.strike - spot))
             t.priced_exit = False
             self.unpriced_exits += 1
+            if price <= 0:
+                # Out of the money with no quote. Intrinsic is zero, but the option
+                # is NOT worth zero -- booking it as one invents a total loss out of
+                # a missing tick. The trade is dropped and counted instead.
+                t.unpriceable = True
+                self.dropped_unpriceable += 1
         t.exit_ts, t.exit_spot, t.exit_premium, t.exit_reason = when, spot, price, reason
         slip = self.args.slippage_pct / 100.0
         buy = t.entry_premium * (1 + slip)
@@ -867,6 +884,11 @@ def report(trades: list, bt: Backtest, args) -> str:
             f"-- these are the deep winners Dhan's ATM band does not carry"
         )
     out.append(f"entries skipped     {bt.skipped_no_entry_price:,} (no price at the entry minute)")
+    if bt.dropped_unpriceable:
+        out.append(
+            f"trades dropped      {bt.dropped_unpriceable:,} (exit out of the money with no quote; "
+            f"valuing them at zero would invent a total loss)"
+        )
     out.append("")
     reasons: dict = {}
     for t in trades:
@@ -975,6 +997,9 @@ def main() -> None:
         help="0.25 halves every gap between R or S rungs, so the trail ratchets twice as often",
     )
     ap.add_argument("--stop", choices=["rung", "entry-high", "entry-close", "st-line"], default="rung")
+    ap.add_argument(
+        "--max-stop-points", type=float, default=0.0, help="cap the stop distance from entry; 0 is uncapped"
+    )
     ap.add_argument(
         "--min-stop-points", type=float, default=0.0, help="a floor under the stop distance, in index points"
     )
