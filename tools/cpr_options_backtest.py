@@ -213,6 +213,42 @@ def daily_levels(daily: pd.DataFrame, step: float = 0.5) -> dict:
 SESSION_START = time(9, 15)
 
 
+BROKER_CACHE = "/Users/philipkumar/Documents/PhilForge/tools/.nifty_cache"
+
+
+def broker_bars(bar_minutes: int = 5, root: str = BROKER_CACHE, underlying: str = "NIFTY") -> pd.DataFrame:
+    """NIFTY candles as the broker recorded them, for an independent second opinion."""
+    import glob
+    import json
+
+    frames = []
+    for path in sorted(glob.glob(os.path.join(root, f"{underlying}_5m_*.json"))):
+        rows = json.load(open(path))
+        # Some of these files carry a sixth column (volume); take the OHLC and drop the rest.
+        df = pd.DataFrame([r[:5] for r in rows], columns=["ts", "open", "high", "low", "close"])
+        df["ts"] = pd.to_datetime(df["ts"])
+        frames.append(df.set_index("ts"))
+    if not frames:
+        raise SystemExit(f"no broker candles under {root}")
+    bars = pd.concat(frames).sort_index()
+    bars = bars[~bars.index.duplicated(keep="first")]
+    bars = bars[(bars.index.time >= time(9, 15)) & (bars.index.time <= time(15, 25))]
+    if bar_minutes != 5:
+        bars = (
+            bars.resample(f"{bar_minutes}min", origin=pd.Timestamp("2021-01-01 09:15"))
+            .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+            .dropna()
+        )
+    return bars
+
+
+def broker_daily(bars: pd.DataFrame) -> pd.DataFrame:
+    g = bars.groupby(bars.index.normalize())
+    return pd.DataFrame(
+        {"open": g["open"].first(), "high": g["high"].max(), "low": g["low"].min(), "close": g["close"].last()}
+    )
+
+
 def block_levels(minute: pd.DataFrame, hours: float = 2.0, step: float = 0.5) -> dict:
     """Pivots drawn from the previous intraday block of `hours`, keyed by the
     start of the block they govern.
@@ -381,7 +417,15 @@ class Backtest:
                 "index candles from the broker and point this at them. --allow-thin-bars "
                 "overrides, for diagnostics only."
             )
-        self.bars = to_bars(minute, f"{self.bar_minutes}min")
+        src = getattr(args, "index_source", "dhan-spot")
+        if src == "broker":
+            # The signals come from the broker's own candles and only the fills
+            # come from the option tape. If a rule survives both index sources it
+            # is not an artefact of how this index was reconstructed.
+            self.bars = broker_bars(self.bar_minutes)
+            self.daily = broker_daily(self.bars)
+        else:
+            self.bars = to_bars(minute, f"{self.bar_minutes}min")
         # An entry needs a minute after the signal bar to fill in, so the last
         # bar of a session cannot open a trade.
         # An entry opened after the square-off bell is closed on the next bar,
@@ -860,6 +904,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 
     # --- the surviving rule -------------------------------------------------
+    ap.add_argument(
+        "--index-source",
+        choices=["dhan-spot", "broker"],
+        default="dhan-spot",
+        help="which NIFTY candles drive the signal; fills always come from the option tape",
+    )
     ap.add_argument("--max-trades-per-day", type=int, default=0, help="cap entries per session; 0 is no cap")
     ap.add_argument("--square-off", default="15:15", help="intraday exit time, HH:MM")
     ap.add_argument("--breakout-levels", default="TC,PDH", help="levels a breakout must clear together")
@@ -941,7 +991,41 @@ def main() -> None:
     ap.add_argument("--from", dest="start", default=None)
     ap.add_argument("--to", dest="end", default=None)
     ap.add_argument("--csv", default=None)
+    ap.add_argument(
+        "--rule",
+        choices=["pe-rejection", "ce-breakout"],
+        default=None,
+        help="a named, fixed rule; overrides the individual flags it owns",
+    )
     args = ap.parse_args()
+
+    # The two rules that survived, pinned. Anything not named here keeps its flag default.
+    PRESETS = {
+        "pe-rejection": dict(
+            side="PE",
+            mirror=False,
+            entry_mode="rung",
+            entry_rungs="R2,R1",
+            strike_offset=2,
+            stop_fraction=0.5,
+            min_stop_points=0.0,
+            max_trades_per_day=0,
+            trail_lag=0,
+        ),
+        "ce-breakout": dict(
+            side="CE",
+            mirror=True,
+            entry_mode="breakout",
+            breakout_levels="TC,PDH",
+            strike_offset=0,
+            min_stop_points=60.0,
+            max_trades_per_day=1,
+            trail_lag=0,
+        ),
+    }
+    if args.rule:
+        for k, v in PRESETS[args.rule].items():
+            setattr(args, k, v)
 
     bt = Backtest(args)
     trades = bt.run()
