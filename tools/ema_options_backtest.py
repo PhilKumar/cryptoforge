@@ -181,6 +181,52 @@ class Contract:
     option_type: str
 
 
+class HybridSource:
+    """Dhan first, Upstox second, and a count of who answered.
+
+    The two archives fail in opposite directions -- Dhan stops quoting a strike
+    that leaves the ATM band, Upstox only ever held the strikes PhilForge once
+    fetched -- so asking both covers more ground than either alone. It is not a
+    cure: on NIFTY the Upstox archive carries a median of 33 strikes per expiry
+    and as few as one, so a contract Dhan lost to a large move is often missing
+    from Upstox too. The counters exist so a run can say how much was really
+    rescued instead of implying it was all of it.
+    """
+
+    def __init__(self, dhan, upstox):
+        self.dhan, self.upstox = dhan, upstox
+        self.by_dhan = 0
+        self.by_upstox = 0
+        self.missed = 0
+
+    def lookup(self, when, contract):
+        px = self.dhan.lookup(when, contract)
+        if px is not None:
+            self.by_dhan += 1
+            return px
+        px = self.upstox.lookup(when, contract)
+        if px is not None:
+            self.by_upstox += 1
+            return px
+        self.missed += 1
+        return None
+
+    def lookup_forward(self, when, contract, minutes=15):
+        px = self.lookup(when, contract)
+        if px is not None:
+            return px, 0
+        return self.upstox.lookup_forward(when, contract, minutes)
+
+    def report(self):
+        total = self.by_dhan + self.by_upstox + self.missed
+        if not total:
+            return "no lookups"
+        return (
+            f"{self.by_dhan + self.by_upstox:,}/{total:,} served "
+            f"({self.by_dhan:,} by Dhan, {self.by_upstox:,} rescued from Upstox, {self.missed:,} by neither)"
+        )
+
+
 # ------------------------------------------------------------------- run ----
 class Backtest:
     def __init__(self, args):
@@ -210,7 +256,14 @@ class Backtest:
         )
 
         self.pricing = args.pricing
-        if self.pricing == "upstox":
+        if self.pricing == "hybrid":
+            index_close = {d.strftime("%Y-%m-%d"): float(c) for d, c in self.daily["close"].items()}
+            dh = DhanListedSource(self.weeklies, STORES, "NIFTY", nearest_within=0)
+            for store in dh.stores.values():
+                store.levels = index_close
+            self.source = HybridSource(dh, UpstoxArchiveSource(args.upstox_root, "NIFTY"))
+            self.priceable_expiries = None
+        elif self.pricing == "upstox":
             self.source = UpstoxArchiveSource(args.upstox_root, "NIFTY")
             if not self.source.expiries():
                 raise SystemExit(f"no Upstox archive under {args.upstox_root}")
@@ -764,7 +817,7 @@ def main() -> None:
     ap.add_argument("--max-premium", type=float, default=0.0, help="skip an entry costing more; 0 means no cap")
 
     # --- data ---------------------------------------------------------------
-    ap.add_argument("--pricing", choices=["dhan", "upstox"], default="dhan")
+    ap.add_argument("--pricing", choices=["dhan", "upstox", "hybrid"], default="dhan")
     ap.add_argument("--upstox-root", default=UPSTOX_ROOT)
     ap.add_argument(
         "--exit-search-minutes",
