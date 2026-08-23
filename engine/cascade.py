@@ -4833,6 +4833,12 @@ class CascadeEngine:
         history = self._candles.get(campaign.campaign_id) or []
         self._candles[campaign.campaign_id] = self._aggregate_candles(history, new_sec, old_sec)
         campaign.timeframe = new_tf
+        # A half-finished arm does not survive the change of candle size. The
+        # placed stop already blocks escalation above, but the FIRST red — the
+        # one still waiting for its confirmation — used to cross over and arm a
+        # trigger measured on bars that no longer exist. Two reds on the new
+        # timeframe, or nothing.
+        campaign.pending_last_red = None
         # The open of the last COMPLETE new-TF bucket, so the next fetch's
         # strict `> last_processed_ts` starts exactly at the next bucket —
         # no re-processed candles, no gap.
@@ -5467,10 +5473,19 @@ class CascadeEngine:
         probe = closed_candle
         if probe.timestamp == campaign.pending_stop_ts:
             return
+        # The line first, and for EVERY candle — a close back at or above it ends
+        # the fall this arm was confirming, whatever colour the candle is. The
+        # colour test used to come first, so a green close above the line left
+        # the half-finished confirmation standing and a red from the last fall
+        # could arm a stop for the next one: live BTCUSDT #424 rested a stop on
+        # 2026-08-23 at 76,491.54, the close of a 5m red from 2026-08-21 — 41
+        # hours and one escalation earlier — while the levels it funded were at
+        # 75,9xx. The POT is untouched; only the two-red confirmation restarts.
+        if probe.close >= campaign.pending_line:
+            campaign.pending_last_red = None
+            return
         if probe.close >= probe.open:
             return  # only red candles act, before arming and after
-        if probe.close >= campaign.pending_line:
-            return  # the line that completed the total has not broken yet
         if campaign.pending_last_red is None:
             campaign.pending_last_red = probe.close
             self._log_event(

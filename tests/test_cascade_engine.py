@@ -983,6 +983,78 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self.assertEqual(grandchild.barren_chain, 0)
 
 
+class CascadeStaleTwoRedTests(unittest.TestCase):
+    """The two-red confirmation must belong to the fall it is confirming.
+
+    Live BTCUSDT #424 rested a real buy stop on 2026-08-23 at trigger
+    76,491.54 — the close of a 5m red candle from 2026-08-21, 41 hours and one
+    escalation earlier, while the levels it was funding sat at 75,9xx. The
+    first red survived a spent trendline, a green close back above the line and
+    a move from 5m to 15m, then armed a stop for a completely different fall.
+    """
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.campaign = _mk_campaign(self.engine)
+        self.campaign.pending_usd = 32.72
+        self.campaign.pending_line = 100.0
+
+    def _bar(self, ts, open_, close):
+        return Candle(ts, open_, max(open_, close), min(open_, close), close)
+
+    def _first_red(self):
+        self.engine._advance_stop_entries(self.campaign, self._bar(300, 100.0, 98.0))
+        self.assertEqual(self.campaign.pending_last_red, 98.0)
+
+    def test_a_green_close_back_above_the_line_voids_the_confirmation(self):
+        self._first_red()
+        self.engine._advance_stop_entries(self.campaign, self._bar(600, 99.0, 101.0))  # green, above
+        self.assertIsNone(self.campaign.pending_last_red)
+        # A later fall must start its own confirmation, not inherit 98.0.
+        self.engine._advance_stop_entries(self.campaign, self._bar(900, 99.5, 97.0))
+        self.assertEqual(self.campaign.pending_last_red, 97.0)
+        self.assertIsNone(self.campaign.pending_stop_price)  # only one red so far
+
+    def test_a_red_close_back_above_the_line_voids_it_too(self):
+        self._first_red()
+        self.engine._advance_stop_entries(self.campaign, self._bar(600, 103.0, 100.5))  # red, above
+        self.assertIsNone(self.campaign.pending_last_red)
+
+    def test_the_pot_and_the_line_survive_the_reset(self):
+        self._first_red()
+        self.engine._advance_stop_entries(self.campaign, self._bar(600, 99.0, 101.0))
+        self.assertEqual(self.campaign.pending_usd, 32.72)
+        self.assertEqual(self.campaign.pending_line, 100.0)
+
+    def test_a_green_below_the_line_still_does_not_reset_it(self):
+        """Phil's rule is unchanged: greens inside the fall are ignored."""
+        self._first_red()
+        self.engine._advance_stop_entries(self.campaign, self._bar(600, 97.0, 99.0))  # green, below
+        self.assertEqual(self.campaign.pending_last_red, 98.0)
+
+    def test_two_reds_inside_one_fall_still_arm_the_stop(self):
+        self._first_red()
+        self.engine._advance_stop_entries(self.campaign, self._bar(600, 97.9, 96.0))
+        self.assertEqual(self.campaign.pending_stop_price, 98.0)  # the PREVIOUS red close
+
+    def test_escalating_voids_a_half_finished_arm(self):
+        """A first red measured on 5m must not arm a 15m stop."""
+        engine = _mk_engine()
+        campaign = _mk_campaign(engine)
+        campaign.mother_timestamp = 900000
+        campaign.state = "TRENDLINE_ACTIVE"
+        history = engine._candles.setdefault(campaign.campaign_id, [])
+        for i in range(203):
+            history.append(Candle(900000 + (i + 1) * 300, 100.0, 101.0, 99.0, 100.5))
+        campaign.pending_usd = 10.0
+        campaign.pending_line = 100.0
+        campaign.pending_last_red = 98.0
+        self.assertTrue(engine._maybe_escalate(campaign, history[-1]))
+        self.assertEqual(campaign.timeframe, "15m")
+        self.assertIsNone(campaign.pending_last_red)
+        self.assertEqual(campaign.pending_usd, 10.0, "the pot is untouched")
+
+
 class CascadeSuccessorInheritsTheRuleTests(unittest.TestCase):
     """A break moves the campaign; it must not change whose campaign it is.
 
