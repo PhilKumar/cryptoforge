@@ -11256,9 +11256,16 @@ function _cfCascadeChartSvg(d) {
   // Buys get an arrow pointing UP, sitting BELOW the candle — the way an entry
   // is marked on a real chart. A dot on the price line was invisible against
   // the candles and said nothing about direction.
+  //
+  // "Below the candle" is what this comment always claimed and what the code
+  // never did: it hung off Y(price), which is inside the body on a normal fill
+  // and clear off the bar when the price is not one the bar traded. Now it
+  // hangs off the bar's own low, and the price is written beside it.
   entryPts.forEach(function (f) {
-    if (!f || !f.price || !inView(f.price)) return;
-    var x = Xt(f.t), y = Y(f.price) + 10;
+    if (!f || !f.price) return;
+    var anchor = _cfChartBarEdge(d.candles, f.t, f.price, 'buy');
+    if (!inView(anchor)) return;
+    var x = Xt(f.t), y = Y(anchor) + 14;
     parts.push('<path d="M' + x.toFixed(1) + ' ' + (y - 9).toFixed(1)
       + 'L' + (x - 5).toFixed(1) + ' ' + y.toFixed(1)
       + 'L' + (x - 2).toFixed(1) + ' ' + y.toFixed(1)
@@ -11267,6 +11274,8 @@ function _cfCascadeChartSvg(d) {
       + 'L' + (x + 2).toFixed(1) + ' ' + y.toFixed(1)
       + 'L' + (x + 5).toFixed(1) + ' ' + y.toFixed(1)
       + 'Z" fill="' + PAL.buyMark + '" stroke="' + PAL.markRing + '" stroke-width="0.9"/>');
+    parts.push('<text x="' + x.toFixed(1) + '" y="' + (y + 18).toFixed(1) + '" fill="' + PAL.buyMark
+      + '" font-size="9.5" font-family="monospace" text-anchor="middle">BUY ' + fmt(f.price) + '</text>');
   });
 
   // Exits. Drawn as a downward triangle so an entry and an exit sitting at
@@ -11276,8 +11285,10 @@ function _cfCascadeChartSvg(d) {
   // on — mirror image of the buy, so entry and exit read at a glance even when
   // they sit at similar prices.
   (d.exits || []).forEach(function (x) {
-    if (!x || !x.price || !inView(x.price)) return;
-    var cx = Xt(x.t), cy = Y(x.price) - 10;
+    if (!x || !x.price) return;
+    var anchor = _cfChartBarEdge(d.candles, x.t, x.price, 'sell');
+    if (!inView(anchor)) return;
+    var cx = Xt(x.t), cy = Y(anchor) - 14;
     var pnl = Number(x.pnl) || 0;
     var col = PAL.sellMark;
     parts.push('<path d="M' + cx.toFixed(1) + ' ' + (cy + 9).toFixed(1)
@@ -11735,6 +11746,28 @@ function _cfChartCanvasFibs(c, p, PAL, labels) {
   return count;
 }
 
+// A buy marker belongs UNDER its bar and a sell marker OVER it — Phil,
+// 2026-08-23: "The buy has to be below the candle not above the candle."
+// Anchoring them to the fill PRICE put them wherever that price happened to
+// be, which is inside the body on a normal fill and clean off the bar when the
+// price is not one the bar traded: paper books a fill at the limit cap, so a
+// $2,390.25 entry floated thirteen dollars above a bar whose high was 2,377.21.
+// The bar is the thing the marker is about, so the bar is what it hangs off.
+// Falls back to the price when the bar is not in the payload (a roll-up window
+// can start after an old fill).
+function _cfChartBarEdge(candles, t, price, side) {
+  var rows = Array.isArray(candles) ? candles : [];
+  var want = Number(t) || 0, best = null;
+  for (var i = 0; i < rows.length; i++) {
+    var ts = Number(rows[i].t) || 0;
+    if (ts > want) break;
+    best = rows[i];  // the last bar that opened at or before the fill
+  }
+  if (!best) return Number(price) || 0;
+  var edge = side === 'buy' ? Number(best.l) : Number(best.h);
+  return isFinite(edge) && edge > 0 ? edge : (Number(price) || 0);
+}
+
 function _cfChartCanvasMarkers(c, p, PAL, labels) {
   var d = c.data || {}, ctx = c.ctx, count = 0;
   var entries = (d.entries && d.entries.length) ? d.entries : (d.fills || []).map(function (fill) {
@@ -11742,16 +11775,25 @@ function _cfChartCanvasMarkers(c, p, PAL, labels) {
   });
   _cfChartCanvasClip(ctx, p, function () {
     entries.forEach(function (fill) {
-      if (!fill || !fill.price || !p.inPrice(fill.price)) return;
-      var x = p.xOf(fill.t), y = p.yOf(fill.price) + 10;
+      if (!fill || !fill.price) return;
+      var anchor = _cfChartBarEdge(d.candles, fill.t, fill.price, 'buy');
+      if (!p.inPrice(anchor)) return;
+      var x = p.xOf(fill.t), y = p.yOf(anchor) + 14;
       ctx.fillStyle = PAL.buyMark; ctx.strokeStyle = PAL.markRing; ctx.lineWidth = 0.9;
       ctx.beginPath(); ctx.moveTo(x, y - 9); ctx.lineTo(x - 5, y); ctx.lineTo(x - 2, y); ctx.lineTo(x - 2, y + 6);
       ctx.lineTo(x + 2, y + 6); ctx.lineTo(x + 2, y); ctx.lineTo(x + 5, y); ctx.closePath(); ctx.fill(); ctx.stroke();
+      // The marker hangs off the bar now, so the fill PRICE has to be written
+      // down or it is no longer readable anywhere on the chart.
+      labels.push({ kind: 'marker', x: x, y: y + 15,
+        text: 'BUY ' + Number(fill.price).toLocaleString('en-US', { maximumFractionDigits: 2 }),
+        color: PAL.buyMark });
       count++;
     });
     (d.exits || []).forEach(function (exit) {
-      if (!exit || !exit.price || !p.inPrice(exit.price)) return;
-      var x = p.xOf(exit.t), y = p.yOf(exit.price) - 10;
+      if (!exit || !exit.price) return;
+      var anchor = _cfChartBarEdge(d.candles, exit.t, exit.price, 'sell');
+      if (!p.inPrice(anchor)) return;
+      var x = p.xOf(exit.t), y = p.yOf(anchor) - 14;
       ctx.fillStyle = PAL.sellMark; ctx.strokeStyle = PAL.markRing; ctx.lineWidth = 0.9;
       ctx.beginPath(); ctx.moveTo(x, y + 9); ctx.lineTo(x - 5, y); ctx.lineTo(x - 2, y); ctx.lineTo(x - 2, y - 6);
       ctx.lineTo(x + 2, y - 6); ctx.lineTo(x + 2, y); ctx.lineTo(x + 5, y); ctx.closePath(); ctx.fill(); ctx.stroke();
