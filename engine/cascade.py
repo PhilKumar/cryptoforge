@@ -2610,7 +2610,12 @@ class CascadeEngine:
         if not symbol:
             return {"error": "Symbol is required"}
         venue_floor = self.venue_min_timeframe(exchange)
-        if not self._timeframe_is_slower_or_equal(timeframe, venue_floor):
+        # The floor guards THIS engine's geometric target, which on a dear
+        # venue rarely clears its own fee from a 5m fall. A driven campaign's
+        # target is its strategy's, and compute_tp_price floors that one at
+        # the venue's fee regardless — so the floor has nothing to protect
+        # there, and refusing would only stop a 5m rule trading a 15m venue.
+        if not driven and not self._timeframe_is_slower_or_equal(timeframe, venue_floor):
             venue_label = str(getattr(venue, "display_name", "This exchange"))
             return {
                 "error": (

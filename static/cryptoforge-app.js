@@ -13727,9 +13727,53 @@ async function cfR37SelectSymbol(symbol) {
 // is on offer, the buttons ARE the state, and the ladders are drawn by the
 // Cascade page's own renderer into this page's mount.
 
+// ── one venue picker for the two strategy pages ───────────────────
+// The Cascade page's picker, in the Cascade page's shape: the server lists
+// the venues its engine holds, the default is sent BLANK, and a venue that
+// cannot go live says why rather than vanishing. A page with one venue shows
+// nothing — exactly what it showed before CoinDCX joined.
+function _cfStrategyRenderExchanges(groupId, selectId, list, onChange) {
+  var venues = Array.isArray(list) ? list : [];
+  var group = document.getElementById(groupId);
+  var select = document.getElementById(selectId);
+  if (!group || !select) return;
+  if (venues.length < 2) { group.hidden = true; return; }
+  group.hidden = false;
+  // The panel repaints on a timer; only redraw when the venues change, or a
+  // half-made choice is thrown away.
+  var signature = venues.map(function (x) { return x.name + ':' + x.live_available; }).join('|');
+  if (select.dataset.cfSignature === signature) return;
+  var chosen = select.value;
+  select.dataset.cfSignature = signature;
+  select.innerHTML = venues.map(function (x) {
+    var note = x.is_default ? ' — default' : '';
+    if (!x.live_available) note += ' · paper only';
+    return '<option value="' + _escapeHtml(x.is_default ? '' : x.name) + '">'
+      + _escapeHtml(x.label) + _escapeHtml(note) + '</option>';
+  }).join('');
+  if (chosen) select.value = chosen;
+  if (onChange && !select.dataset.cfBound) {
+    select.dataset.cfBound = '1';
+    select.addEventListener('change', onChange);
+  }
+}
+
+function _cfStrategyExchange(selectId) {
+  return String((document.getElementById(selectId) || {}).value || '').toLowerCase();
+}
+
+// A book on a venue other than the default says so beside its coin.
+function _cfStrategyVenueTag(list, exchange) {
+  var name = String(exchange || '').toLowerCase();
+  if (!name) return '';
+  var match = (Array.isArray(list) ? list : []).filter(function (x) { return x.name === name; })[0];
+  return ' <span class="table-meta">' + _escapeHtml(match ? match.label : name) + '</span>';
+}
+
 var _cfVrPollTimer = null;
 var _cfVrBusy = false;
 var _cfVrBooks = [];
+var _cfVrExchanges = [];
 
 function cfVrMode() {
   return (document.getElementById('cf-vr-mode') || {}).value === 'live' ? 'live' : 'paper';
@@ -13757,10 +13801,12 @@ function _cfVrSetError(message) {
   node.style.display = '';
 }
 
-function _cfVrBookFor(symbol) {
+function _cfVrBookFor(symbol, exchange) {
   var want = String(symbol || '').toUpperCase();
+  var venue = exchange === undefined ? _cfStrategyExchange('cf-vr-exchange') : String(exchange || '').toLowerCase();
   for (var i = 0; i < _cfVrBooks.length; i++) {
-    if (String(_cfVrBooks[i].symbol || '').toUpperCase() === want) return _cfVrBooks[i];
+    if (String(_cfVrBooks[i].symbol || '').toUpperCase() === want
+        && String(_cfVrBooks[i].exchange || '').toLowerCase() === venue) return _cfVrBooks[i];
   }
   return null;
 }
@@ -13828,6 +13874,10 @@ function cfVrSelectSymbol(symbol) {
 
 function cfVrRenderStatus(data) {
   _cfVrBooks = (data && data.books) || [];
+  _cfVrExchanges = (data && data.exchanges) || [];
+  _cfStrategyRenderExchanges('cf-vr-exchange-group', 'cf-vr-exchange', _cfVrExchanges, function () {
+    cfVrSelectSymbol((document.getElementById('cf-vr-symbol') || {}).value || '');
+  });
   cfVrSyncControls();
   cfRenderCascadeCampaigns(
     Array.isArray(data && data.campaigns) ? data.campaigns : [],
@@ -13879,11 +13929,14 @@ async function cfVrSaveBook(enabled) {
   var capital = Number((document.getElementById('cf-vr-capital') || {}).value || 0);
   if (!symbol) { _cfVrSetError('Choose a coin first'); return; }
   if (enabled && !(capital > 0)) { _cfVrSetError('Set a purse bigger than zero'); return; }
-  var wasOn = !!(_cfVrBookFor(symbol) || {}).enabled;
+  var exchange = _cfStrategyExchange('cf-vr-exchange');
+  var venueLabel = (_cfVrExchanges.filter(function (x) { return x.name === exchange; })[0] || {}).label || '';
+  var wasOn = !!(_cfVrBookFor(symbol, exchange) || {}).enabled;
   var mode = cfVrMode();
   if (enabled && !wasOn && mode === 'live') {
     var ok = await cfConfirm(
-      '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own, '
+      '<p><strong>' + _escapeHtml(symbol) + (venueLabel ? ' on ' + _escapeHtml(venueLabel) : '')
+      + ' will buy and sell with REAL money, on its own, '
       + 'from the next bar.</strong> Nobody clicks anything per trade.</p>'
       + '<p>It may hold up to <strong>' + _cfR37Usd(capital / 2) + '</strong> in coin at once, '
       + 'and it has <strong>no stop-loss</strong> — every exit is the target, so a ladder the '
@@ -13901,7 +13954,7 @@ async function cfVrSaveBook(enabled) {
     var response = await cfApiFetch('/api/vrule/live/books', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled })
+      body: JSON.stringify({ symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled, exchange: exchange })
     });
     var data = await cfReadApiPayload(response);
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the live book'));
@@ -14057,11 +14110,14 @@ var _cfAfBooks = [];
 // the venue's keys; the page only reflects that answer, never assumes it.
 var _cfAfLiveAvailable = false;
 var _cfAfLiveCeiling = 0;
+var _cfAfExchanges = [];
 
-function _cfAfBookFor(symbol) {
+function _cfAfBookFor(symbol, exchange) {
   var want = String(symbol || '').toUpperCase();
+  var venue = exchange === undefined ? _cfStrategyExchange('cf-af-exchange') : String(exchange || '').toLowerCase();
   for (var i = 0; i < _cfAfBooks.length; i++) {
-    if (String(_cfAfBooks[i].symbol || '').toUpperCase() === want) return _cfAfBooks[i];
+    if (String(_cfAfBooks[i].symbol || '').toUpperCase() === want
+        && String(_cfAfBooks[i].exchange || '').toLowerCase() === venue) return _cfAfBooks[i];
   }
   return null;
 }
@@ -14084,6 +14140,10 @@ function cfAfRenderStatus(data) {
   _cfAfBooks = books;
   _cfAfLiveAvailable = !!(data && data.live_available);
   _cfAfLiveCeiling = Number((data && data.live_ceiling_usd) || 0);
+  _cfAfExchanges = (data && data.exchanges) || [];
+  _cfStrategyRenderExchanges('cf-af-exchange-group', 'cf-af-exchange', _cfAfExchanges, function () {
+    cfAfSelectSymbol((document.getElementById('cf-af-symbol') || {}).value || '');
+  });
   var liveBtn = document.querySelector('.cf-af-mode-option[data-mode="live"]');
   if (liveBtn) {
     liveBtn.setAttribute('aria-disabled', 'false');
@@ -14120,8 +14180,9 @@ function cfAfRenderStatus(data) {
     // it says so. The driver reports why on every cycle; show it.
     var doing = b.enabled && b.note
       ? '<div class="table-meta">' + _escapeHtml(b.note) + '</div>' : '';
+    var rowKey = _escapeHtml((b.symbol || '') + (b.exchange ? '-' + b.exchange : ''));
     return '<tr>'
-      + '<td><strong>' + _escapeHtml(b.symbol || '') + '</strong>' + note + '</td>'
+      + '<td><strong>' + _escapeHtml(b.symbol || '') + '</strong>' + _cfStrategyVenueTag(_cfAfExchanges, b.exchange) + note + '</td>'
       + '<td>' + (b.mode === 'live'
         ? '<span class="tp-badge live">Live</span>'
         : '<span class="tp-badge idle">Paper</span>') + '</td>'
@@ -14135,10 +14196,11 @@ function cfAfRenderStatus(data) {
       + '<td class="num">' + (b.folds || 0) + '</td>'
       + '<td class="num">' + (b.campaigns || 0) + '</td>'
       + '<td>' + (b.working_line ? _escapeHtml(b.working_line) : '<span style="color:var(--muted);">—</span>') + '</td>'
-      + '<td class="read-only-hide"><button type="button" id="cf-af-row-' + _escapeHtml(b.symbol || '')
+      + '<td class="read-only-hide"><button type="button" id="cf-af-row-' + rowKey
       + '" class="btn btn-sm ' + (b.enabled ? 'btn-danger' : 'btn-primary')
       + '" data-cf-click="cfAfToggleBook(\'' + _escapeHtml(b.symbol || '') + '\', '
-      + (b.enabled ? 'false' : 'true') + ')">' + (b.enabled ? 'Turn off' : 'Turn on') + '</button></td>'
+      + (b.enabled ? 'false' : 'true') + ', \'' + _escapeHtml(b.exchange || '') + '\')">'
+      + (b.enabled ? 'Turn off' : 'Turn on') + '</button></td>'
       + '</tr>';
   }).join('');
 }
@@ -14318,12 +14380,15 @@ async function cfAfSaveBook(enabled) {
   var capital = Number((document.getElementById('cf-af-capital') || {}).value || 0);
   if (!symbol) { _cfAfSetError('Choose a coin first'); return; }
   if (enabled && !(capital > 0)) { _cfAfSetError('Set a purse bigger than zero'); return; }
-  var wasOn = !!(_cfAfBookFor(symbol) || {}).enabled;
+  var exchange = _cfStrategyExchange('cf-af-exchange');
+  var venueLabel = (_cfAfExchanges.filter(function (x) { return x.name === exchange; })[0] || {}).label || '';
+  var wasOn = !!(_cfAfBookFor(symbol, exchange) || {}).enabled;
   // Turning a book LIVE starts real orders with no further confirmation, so
   // it asks once — the same courtesy the Cascade page gives a live campaign.
   if (enabled && mode === 'live') {
     var ok = await cfConfirm(
-      '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own, '
+      '<p><strong>' + _escapeHtml(symbol) + (venueLabel ? ' on ' + _escapeHtml(venueLabel) : '')
+      + ' will buy and sell with REAL money, on its own, '
       + 'from the next cycle.</strong> Nobody clicks anything per trade.</p>'
       + '<p>It may hold up to <strong>' + _cfAfUsd(capital / 2) + '</strong> in coin at once, '
       + 'and it has <strong>no stop-loss</strong> — every exit is a target, so a position it '
@@ -14337,7 +14402,7 @@ async function cfAfSaveBook(enabled) {
   }
   var acting = enabled ? (wasOn ? 'cf-af-save-btn' : 'cf-af-on-btn') : 'cf-af-off-btn';
   var saved = await _cfAfPostBook(
-    { symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled },
+    { symbol: symbol, mode: mode, capital_usd: capital, enabled: !!enabled, exchange: exchange },
     acting
   );
   if (saved) {
@@ -14347,11 +14412,12 @@ async function cfAfSaveBook(enabled) {
 
 // The row switch changes ONE thing — on or off. It carries no purse or mode,
 // so a book toggled from the table keeps the size it was given.
-async function cfAfToggleBook(symbol, enabled) {
+async function cfAfToggleBook(symbol, enabled, exchange) {
   if (_cfAfBusy) return;
   symbol = String(symbol || '').toUpperCase();
+  exchange = String(exchange || '').toLowerCase();
   if (!symbol) return;
-  var book = _cfAfBookFor(symbol);
+  var book = _cfAfBookFor(symbol, exchange);
   if (enabled && book && book.mode === 'live') {
     var ok = await cfConfirm(
       '<p><strong>' + _escapeHtml(symbol) + ' will buy and sell with REAL money, on its own.</strong></p>'
@@ -14362,9 +14428,9 @@ async function cfAfToggleBook(symbol, enabled) {
     );
     if (!ok) return;
   }
-  var row = document.getElementById('cf-af-row-' + symbol);
+  var row = document.getElementById('cf-af-row-' + symbol + (exchange ? '-' + exchange : ''));
   if (row) { row.disabled = true; row.textContent = 'Working…'; }
-  var saved = await _cfAfPostBook({ symbol: symbol, enabled: !!enabled }, null);
+  var saved = await _cfAfPostBook({ symbol: symbol, enabled: !!enabled, exchange: exchange }, null);
   if (saved) cfToast(symbol + (enabled ? ' is on' : ' is off'), 'success');
 }
 

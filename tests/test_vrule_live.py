@@ -201,6 +201,107 @@ def test_a_live_book_restored_while_disarmed_comes_back_as_paper(monkeypatch):
     assert book.mode == "paper"
 
 
+# ── a second venue ────────────────────────────────────────────────
+
+
+class DearVenue(HarnessBroker):
+    """CoinDCX's shape: twice the fee, a 15m floor, a higher minimum."""
+
+    broker_name = "coindcx"
+    display_name = "CoinDCX Spot"
+    min_timeframe = "15m"
+    fee_pct_per_side = 0.2
+
+    def get_product_by_symbol(self, symbol):
+        return {**super().get_product_by_symbol(symbol), "min_notional": "11.0"}
+
+
+def _two_venue_engine(default=None, dear=None):
+    engine = CascadeEngine(default or HarnessBroker(), brokers={"coindcx": dear or DearVenue()})
+    engine.start = lambda: None
+    return engine
+
+
+def test_the_default_venue_is_stored_blank_and_an_unknown_one_is_refused():
+    driver = VRuleLive(_two_venue_engine())
+    first = driver.set_book("BTCUSDT", capital_usd=500.0, exchange="binance")
+    second = driver.set_book("BTCUSDT", capital_usd=600.0, exchange="")
+    assert first is second and first.exchange == "" and list(driver.books) == ["btcusdt:"]
+    with pytest.raises(ValueError, match="no client for 'kraken'"):
+        driver.set_book("BTCUSDT", capital_usd=500.0, exchange="kraken")
+    assert driver.set_book("BTCUSDT", capital_usd=500.0, exchange="CoinDCX").exchange == "coindcx"
+
+
+def test_live_is_judged_by_the_named_venues_own_keys(monkeypatch):
+    monkeypatch.setattr(vr, "LIVE_ARMED", True)
+
+    class ArmedDear(DearVenue):
+        live_armed = True
+
+        def _is_configured(self):
+            return False
+
+    driver = VRuleLive(_two_venue_engine(default=ArmedBroker(), dear=ArmedDear()))
+    assert driver.live_available() is True and driver.live_available("coindcx") is False
+    with pytest.raises(ValueError, match="CoinDCX Spot API keys are not configured"):
+        driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=500.0, exchange="coindcx")
+    venues = {v["name"]: v for v in driver.status()["exchanges"]}
+    assert venues["binance"]["live_available"] is True and venues["coindcx"]["live_available"] is False
+    assert venues["coindcx"]["fee_pct_per_side"] == 0.2
+
+
+def test_a_driven_5m_ladder_is_allowed_on_a_15m_floor_venue_and_priced_at_its_fee():
+    """The venue floor guards the engine's own target; a driven target is the
+    rule's, and it is fee-floored at the venue's rate whatever the rule says."""
+    engine = _two_venue_engine()
+    refused = asyncio.run(
+        engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=110.0,
+            mother_low=108.0,
+            mother_timestamp=int(__import__("time").time()) - 3600,
+            mode="paper",
+            timeframe="5m",
+            mc_kind="major",
+            exchange="coindcx",
+        )
+    )
+    assert "15m and slower" in refused.get("error", "")  # the Cascade page's campaign still is
+    result = asyncio.run(
+        engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=110.0,
+            mother_low=108.0,
+            mother_timestamp=int(__import__("time").time()) - 3600,
+            mode="paper",
+            timeframe="5m",
+            mc_kind="major",
+            exchange="coindcx",
+            strategy=vr.STRATEGY,
+            driven=True,
+        )
+    )
+    assert not result.get("error"), result
+    campaign = engine.campaigns[result["campaign"]["campaign_id"]]
+    assert campaign.timeframe == "5m" and campaign.exchange == "coindcx"
+    assert campaign.fee_pct_per_side == 0.2 and campaign.min_notional_usd == 11.0
+    assert engine.broker_for(campaign) is engine.brokers["coindcx"]
+    campaign.pending_usd = 100.0
+    engine._fill_pending(campaign, 100.0, 10)
+    campaign.tp_override_price = 100.3  # clears Binance's round trip, not CoinDCX's
+    assert compute_tp_price(campaign) > 100.4
+
+
+def test_the_paper_only_broker_hands_the_engine_the_venues_fee():
+    from engine.auto_cascade_fib import PaperOnlyBroker
+
+    engine = CascadeEngine(PaperOnlyBroker(HarnessBroker()), brokers={"coindcx": PaperOnlyBroker(DearVenue())})
+    assert engine.venue_min_timeframe("coindcx") == "15m"
+    assert {v["name"]: v["fee_pct_per_side"] for v in engine.available_exchanges()} == {"binance": 0.1, "coindcx": 0.2}
+
+
 def test_turning_a_book_on_starts_its_clock():
     driver = VRuleLive(_engine())
     book = driver.set_book("BTCUSDT", enabled=True, capital_usd=2000.0)

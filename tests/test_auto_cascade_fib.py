@@ -578,8 +578,92 @@ def test_live_is_refused_when_the_keys_are_missing(monkeypatch):
     monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
     engine = FakeEngine(broker=FakeBroker(live_armed=True, configured=False))
     driver = AutoCascadeFib(engine)
-    with pytest.raises(ValueError, match="switched off"):
+    with pytest.raises(ValueError, match="keys are not configured"):
         driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=2000.0)
+
+
+# ── a second venue ────────────────────────────────────────────────
+
+
+class VenueEngine(FakeEngine):
+    """A FakeEngine with the Cascade engine's venue registry."""
+
+    primary_broker_name = "binance"
+
+    def __init__(self, coindcx, **kwargs):
+        super().__init__(**kwargs)
+        self.broker.broker_name = "binance"
+        self.brokers = {"binance": self.broker, "coindcx": coindcx}
+
+    def available_exchanges(self):
+        return [
+            {"name": "binance", "label": "Binance", "is_default": True, "configured": self.broker._is_configured()},
+            {
+                "name": "coindcx",
+                "label": "CoinDCX",
+                "is_default": False,
+                "configured": self.brokers["coindcx"]._is_configured(),
+            },
+        ]
+
+
+def test_a_book_on_the_default_venue_is_stored_blank_whatever_name_it_was_given(monkeypatch):
+    engine = VenueEngine(FakeBroker())
+    driver = AutoCascadeFib(engine)
+    first = driver.set_book("BTCUSDT", enabled=True, capital_usd=500.0, exchange="")
+    second = driver.set_book("BTCUSDT", capital_usd=700.0, exchange="binance")
+    assert first is second and first.exchange == "" and list(driver.books) == ["btcusdt:"]
+
+
+def test_a_book_on_a_venue_the_engine_has_no_client_for_is_refused():
+    driver = AutoCascadeFib(VenueEngine(FakeBroker()))
+    with pytest.raises(ValueError, match="no client for 'kraken'"):
+        driver.set_book("BTCUSDT", enabled=True, capital_usd=500.0, exchange="kraken")
+    assert not driver.books
+
+
+def test_live_is_judged_by_the_named_venues_own_keys(monkeypatch):
+    """Binance keys say nothing about CoinDCX, and the other way round."""
+    monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
+    keyed_binance = FakeBroker(live_armed=True, configured=True)
+    unkeyed_coindcx = FakeBroker(live_armed=True, configured=False)
+    unkeyed_coindcx.display_name = "CoinDCX Spot"
+    driver = AutoCascadeFib(VenueEngine(unkeyed_coindcx, broker=keyed_binance))
+    assert driver.live_available() is True
+    assert driver.live_available("coindcx") is False
+    with pytest.raises(ValueError, match="CoinDCX Spot API keys are not configured"):
+        driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=500.0, exchange="coindcx")
+    # and a keyed CoinDCX beside an unkeyed Binance goes live on CoinDCX only
+    driver = AutoCascadeFib(
+        VenueEngine(FakeBroker(live_armed=True, configured=True), broker=FakeBroker(live_armed=True, configured=False))
+    )
+    book = driver.set_book("BTCUSDT", enabled=True, mode="live", capital_usd=500.0, exchange="coindcx")
+    assert book.exchange == "coindcx" and book.mode == "live"
+    venues = {v["name"]: v for v in driver.status()["exchanges"]}
+    assert venues["coindcx"]["live_available"] is True and venues["binance"]["live_available"] is False
+
+
+def test_a_coindcx_book_starts_its_campaign_on_coindcx():
+    """The venue the book names is the venue the campaign is started on."""
+    engine = VenueEngine(FakeBroker(), candles=_rising_then_falling())
+    driver = AutoCascadeFib(engine)
+    driver.set_book("BTCUSDT", enabled=True, capital_usd=2000.0, exchange="coindcx")
+    assert asyncio.run(driver._seed_working_line(driver.books["btcusdt:coindcx"])) is True
+    assert engine.started[0]["exchange"] == "coindcx"
+
+
+def test_the_paper_only_broker_carries_the_venues_fee():
+    from engine.auto_cascade_fib import PaperOnlyBroker
+
+    class Dear:
+        broker_name = "coindcx"
+        fee_pct_per_side = 0.2
+
+    class Silent:
+        broker_name = "x"
+
+    assert PaperOnlyBroker(Dear()).fee_pct_per_side == 0.2
+    assert getattr(PaperOnlyBroker(Silent()), "fee_pct_per_side", None) is None
 
 
 def test_live_is_accepted_when_every_lock_is_open(monkeypatch):

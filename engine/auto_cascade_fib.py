@@ -135,11 +135,21 @@ class PaperOnlyBroker:
         # keeps for its life — live must never flip under a running campaign.
         self._live_armed = LIVE_ARMED if live_armed is None else bool(live_armed)
         self.broker_name = str(getattr(real, "broker_name", "") or "")
-        self.display_name = str(getattr(real, "display_name", "Broker")) + (
+        # The venue's own name, for the page; display_name below is for logs.
+        self.venue_label = str(getattr(real, "display_name", "Broker"))
+        self.display_name = self.venue_label + (
             " (strategy, live)" if self._live_armed else " (strategy, market data only)"
         )
         self.supports_cascade = True
         self.min_timeframe = str(getattr(real, "min_timeframe", "") or "")
+        # The venue's commission rides along with its name. The engine stamps
+        # a campaign's fee at birth from the client it will trade on, and
+        # floors every take-profit above it; a wrapper that hid this would
+        # have a CoinDCX book (0.2% a side) priced at Binance's 0.1% — a
+        # target that sells below its own fee. Only set when the real client
+        # declares one, so a client without it still falls back to the default.
+        if getattr(real, "fee_pct_per_side", None) is not None:
+            self.fee_pct_per_side = float(real.fee_pct_per_side)
 
     @property
     def live_armed(self) -> bool:
@@ -311,20 +321,72 @@ class AutoCascadeFib:
 
     # ── configuration ────────────────────────────────────────────
 
-    def live_available(self) -> bool:
-        """True only when real orders could actually be placed.
+    def _venue_broker(self, exchange: str = ""):
+        """The client a book on `exchange` trades through.
+
+        A blank venue is the engine's own default — the only venue there was
+        before CoinDCX joined. A named venue resolves through the engine's
+        registry, and an unknown one resolves to None rather than the default:
+        a book must never read one exchange's keys and send its orders to
+        another.
+        """
+        name = str(exchange or "").strip().lower()
+        if not name or name == str(getattr(self.engine, "primary_broker_name", "") or "").lower():
+            return getattr(self.engine, "broker", None)
+        return (getattr(self.engine, "brokers", None) or {}).get(name)
+
+    def _normalise_exchange(self, exchange: str = "") -> str:
+        """The default venue is stored BLANK, whatever name the page sent.
+
+        The book key is `symbol:exchange`, so a book saved as "binance" and
+        one saved as "" would be two pots on the same account, each blind to
+        the other's claims. Unknown venues are refused here, at the door.
+        """
+        name = str(exchange or "").strip().lower()
+        if name == str(getattr(self.engine, "primary_broker_name", "") or "").lower():
+            return ""
+        if name and self._venue_broker(name) is None:
+            known = ", ".join(sorted(getattr(self.engine, "brokers", None) or {})) or "its default only"
+            raise ValueError(f"This strategy's engine has no client for '{name}' (it has: {known}).")
+        return name
+
+    def live_available(self, exchange: str = "") -> bool:
+        """True only when real orders could actually be placed on `exchange`.
 
         Three independent locks, all of which must be open: the server arm
-        (CRYPTOFORGE_AUTO_FIB_LIVE), the broker's own keys, and — implicitly —
+        (CRYPTOFORGE_AUTO_FIB_LIVE), THAT venue's own keys, and — implicitly —
         the strategy engine having been built with an armed broker, since the
         arm is captured at construction and never flips under a running
-        campaign.
+        campaign. Checked per venue: Binance keys say nothing about CoinDCX.
         """
-        broker = getattr(self.engine, "broker", None)
+        broker = self._venue_broker(exchange)
         if broker is None or not getattr(broker, "live_armed", False):
             return False
         checker = getattr(broker, "_is_configured", None)
         return bool(checker()) if callable(checker) else False
+
+    def _live_refusal(self, exchange: str = "") -> str:
+        """Why live is not on offer here — the arm, or THIS venue's keys."""
+        broker = self._venue_broker(exchange)
+        if broker is not None and getattr(broker, "live_armed", False):
+            label = str(
+                getattr(broker, "venue_label", "") or getattr(broker, "display_name", "") or exchange or "This exchange"
+            )
+            return f"{label} API keys are not configured on the server — live is off there."
+        return "Live is switched off on the server."
+
+    def exchanges(self) -> List[dict]:
+        """The venues a book may be opened on, in the Cascade page's shape."""
+        lister = getattr(self.engine, "available_exchanges", None)
+        if not callable(lister):
+            return []
+        out = []
+        for venue in lister() or []:
+            name = str(venue.get("name") or "")
+            broker = self._venue_broker(name)
+            label = str(getattr(broker, "venue_label", "") or venue.get("label") or name)
+            out.append({**venue, "label": label, "live_available": self.live_available(name)})
+        return out
 
     def claimed_base_qty(self, symbol: str, venue: str = "") -> float:
         """Coin this strategy's campaigns hold, for the OTHER engine to net off.
@@ -366,12 +428,13 @@ class AutoCascadeFib:
             # a driver that will never tick is a trap this strategy has already
             # fallen into once.
             raise ValueError("Auto-Cascade_Fib is switched off on the server (CRYPTOFORGE_AUTO_FIB=0).")
+        exchange = self._normalise_exchange(exchange)
         wants_live = mode is not None and str(mode).lower() == "live"
-        if wants_live and not self.live_available():
+        if wants_live and not self.live_available(exchange):
             # Refuse rather than accept-and-ignore: a book reading "live" over
             # a broker that cannot place an order is the trap this strategy
             # has already fallen into once.
-            raise ValueError("Live is switched off on the server.")
+            raise ValueError(self._live_refusal(exchange))
         if wants_live and _positive(capital_usd, 0.0) > LIVE_CEILING_USD:
             raise ValueError(
                 f"A live book may hold at most ${LIVE_CEILING_USD:,.0f}. "
@@ -400,6 +463,7 @@ class AutoCascadeFib:
             "armed": DRIVER_ARMED,
             "disarmed_reason": "" if DRIVER_ARMED else DISARMED_NOTE,
             "live_available": self.live_available(),
+            "exchanges": self.exchanges(),
             "live_ceiling_usd": LIVE_CEILING_USD,
             "rules": {
                 "tp_fib_level": TP_FIB_LEVEL,
@@ -578,7 +642,7 @@ class AutoCascadeFib:
             # Re-checked at START, not only when the book was saved: the purse
             # grows by folding profit in, so a book that was inside the ceiling
             # when it was created can drift past it without anyone touching it.
-            if not self.live_available():
+            if not self.live_available(book.exchange):
                 book.note = "live is not armed on the server — not starting"
                 return False
             if book.wallet_cap_usd > LIVE_CEILING_USD:

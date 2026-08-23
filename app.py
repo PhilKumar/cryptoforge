@@ -8550,6 +8550,22 @@ def _cascade_broker_registry() -> dict:
     return registry
 
 
+def _strategy_broker_registry(live_armed: bool, arm_hint: str) -> dict:
+    """The same venues the Cascade may name, each behind a strategy's own arm.
+
+    A strategy engine holds ONE wrapper per venue, built exactly like its
+    default: market data forwarded, orders refused until the strategy's env
+    arm is set, and that venue's own keys checked when a book goes live. The
+    wrapper carries the venue's name and fee, so a campaign the strategy
+    starts on CoinDCX resolves to CoinDCX's client and is priced at CoinDCX's
+    commission — never the default's.
+    """
+    return {
+        name: PaperOnlyBroker(client, live_armed=live_armed, arm_hint=arm_hint)
+        for name, client in _cascade_broker_registry().items()
+    }
+
+
 def _get_cascade_engine() -> "CascadeEngine":
     global _cascade_engine
     if _cascade_engine is None:
@@ -8633,7 +8649,13 @@ def _get_auto_fib_engine() -> "CascadeEngine":
         # whatever the LIVE engine happened to trigger — so a hard restart, or
         # an idle live engine, lost every campaign it was tracking and the
         # driver came back believing it had never started one.
-        eng = CascadeEngine(PaperOnlyBroker(delta), on_update=_persist_auto_fib_update)
+        from engine.auto_cascade_fib import LIVE_ARMED as _AUTO_FIB_LIVE_ARMED
+
+        eng = CascadeEngine(
+            PaperOnlyBroker(delta),
+            on_update=_persist_auto_fib_update,
+            brokers=_strategy_broker_registry(_AUTO_FIB_LIVE_ARMED, "CRYPTOFORGE_AUTO_FIB_LIVE=1"),
+        )
         eng._lock_path = os.path.join(_HERE, ".cascade-sandbox-writer.lock")
         eng.foreign_claims = lambda symbol, venue="": _claims_from_other_engines("auto_fib", symbol, venue)
         state = _get_state_store().get(_BUCKET_AUTO_FIB_RUNTIME, "current", default={}) or {}
@@ -8708,6 +8730,7 @@ def _get_vrule_engine() -> "CascadeEngine":
         eng = CascadeEngine(
             PaperOnlyBroker(delta, live_armed=LIVE_ARMED, arm_hint=LIVE_ARM_HINT),
             on_update=_persist_vrule_update,
+            brokers=_strategy_broker_registry(LIVE_ARMED, LIVE_ARM_HINT),
         )
         eng._lock_path = os.path.join(_HERE, ".cascade-vrule-writer.lock")
         eng.foreign_claims = lambda symbol, venue="": _claims_from_other_engines("vrule", symbol, venue)
@@ -9899,9 +9922,11 @@ async def vrule_live_set_book(request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     driver = _get_vrule()
-    exchange = str(body.get("exchange") or "").strip().lower()
     enabled = body.get("enabled")
     try:
+        # The default venue is stored blank; a page naming it must find the
+        # same book, not miss it and leave its ladders resting.
+        exchange = driver._normalise_exchange(str(body.get("exchange") or ""))
         if enabled is False and f"{symbol}:{exchange}".lower() in driver.books:
             await driver.stop_book(symbol, exchange)
             book = driver.set_book(

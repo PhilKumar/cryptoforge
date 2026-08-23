@@ -286,12 +286,57 @@ class VRuleLive:
 
     # ── books ────────────────────────────────────────────────────
 
-    def live_available(self) -> bool:
-        broker = getattr(self.engine, "broker", None)
+    def _venue_broker(self, exchange: str = ""):
+        """The client a book on `exchange` trades through — the engine's own
+        default for a blank venue, the registry for a named one, None for a
+        venue the engine was never given (never the default in its place)."""
+        name = str(exchange or "").strip().lower()
+        if not name or name == str(getattr(self.engine, "primary_broker_name", "") or "").lower():
+            return getattr(self.engine, "broker", None)
+        return (getattr(self.engine, "brokers", None) or {}).get(name)
+
+    def _normalise_exchange(self, exchange: str = "") -> str:
+        """The default venue is stored BLANK, whatever name the page sent —
+        the book key is `symbol:exchange`, and two spellings of one venue
+        would be two pots on one account. Unknown venues are refused here."""
+        name = str(exchange or "").strip().lower()
+        if name == str(getattr(self.engine, "primary_broker_name", "") or "").lower():
+            return ""
+        if name and self._venue_broker(name) is None:
+            known = ", ".join(sorted(getattr(self.engine, "brokers", None) or {})) or "its default only"
+            raise ValueError(f"The V-Rule's engine has no client for '{name}' (it has: {known}).")
+        return name
+
+    def live_available(self, exchange: str = "") -> bool:
+        """Armed on the server AND this venue's keys exist. Per venue:
+        Binance keys say nothing about CoinDCX."""
+        broker = self._venue_broker(exchange)
         if broker is None or not getattr(broker, "live_armed", False):
             return False
         checker = getattr(broker, "_is_configured", None)
         return bool(checker()) if callable(checker) else False
+
+    def _live_refusal(self, exchange: str = "") -> str:
+        broker = self._venue_broker(exchange)
+        if broker is not None and getattr(broker, "live_armed", False):
+            label = str(
+                getattr(broker, "venue_label", "") or getattr(broker, "display_name", "") or exchange or "This exchange"
+            )
+            return f"{label} API keys are not configured on the server — live is off there."
+        return "Live is switched off on the server."
+
+    def exchanges(self) -> List[dict]:
+        """The venues a book may be opened on, in the Cascade page's shape."""
+        lister = getattr(self.engine, "available_exchanges", None)
+        if not callable(lister):
+            return []
+        out = []
+        for venue in lister() or []:
+            name = str(venue.get("name") or "")
+            broker = self._venue_broker(name)
+            label = str(getattr(broker, "venue_label", "") or venue.get("label") or name)
+            out.append({**venue, "label": label, "live_available": self.live_available(name)})
+        return out
 
     def set_book(
         self,
@@ -307,9 +352,10 @@ class VRuleLive:
             raise ValueError("symbol is required")
         if enabled and not DRIVER_ARMED:
             raise ValueError("The V-Rule live driver is switched off on the server (CRYPTOFORGE_VRULE=0).")
+        exchange = self._normalise_exchange(exchange)
         wants_live = mode is not None and str(mode).lower() == "live"
-        if wants_live and not self.live_available():
-            raise ValueError("Live is switched off on the server.")
+        if wants_live and not self.live_available(exchange):
+            raise ValueError(self._live_refusal(exchange))
         if wants_live and _positive(capital_usd, 0.0) > LIVE_CEILING_USD:
             raise ValueError(
                 f"A live V-Rule book may size from at most ${LIVE_CEILING_USD:,.0f}. "
@@ -366,6 +412,7 @@ class VRuleLive:
             "armed": DRIVER_ARMED,
             "disarmed_reason": "" if DRIVER_ARMED else DISARMED_NOTE,
             "live_available": self.live_available(),
+            "exchanges": self.exchanges(),
             "live_ceiling_usd": LIVE_CEILING_USD,
             "rules": {
                 "split": list(SPLIT),
@@ -690,7 +737,14 @@ class VRuleLive:
             majors_held = self._bar_major_committed.get(book.key, 0.0)
             base = book.purse_usd if not ladder.is_minor else max(book.purse_usd - majors_held, 0.0)
             unit = base / 50.0 if ladder.fall_pct > 50 else base / 100.0
-            usd = max(ladder.fall_pct * unit * split, MIN_ORDER_USD)
+            # The rule's floor is Binance's. A venue with a higher minimum
+            # (stamped on the campaign at birth from its own product) lifts
+            # it; on Binance the stamp is $5 and this changes nothing.
+            usd = max(
+                ladder.fall_pct * unit * split,
+                MIN_ORDER_USD,
+                _positive(getattr(campaign, "min_notional_usd", 0.0), 0.0),
+            )
             if self._bar_committed.get(book.key, 0.0) + usd > book.purse_usd * BUDGET_CAP_FRAC:
                 # No free money. The rule stays armed and waits; the engine
                 # must NOT hold a buy stop it cannot pay for.
@@ -800,7 +854,7 @@ class VRuleLive:
         return changed
 
     async def _tick_book(self, book: Book, now: float) -> bool:
-        if book.mode == "live" and not self.live_available():
+        if book.mode == "live" and not self.live_available(book.exchange):
             book.note = "live is not armed on the server — not trading"
             return False
         if book.mode == "live" and book.purse_usd > LIVE_CEILING_USD:

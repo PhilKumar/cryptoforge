@@ -1372,6 +1372,12 @@
   <section class="card allocator-input-panel" aria-labelledby="cf-af-controls-title">
     <h3 id="cf-af-controls-title">Add or change a book <button type="button" class="cf-info" tabindex="0" data-cf-info="One book per coin, each with its own purse. Paper books mark real candles and book simulated fills; live books place real orders in this strategy's OWN engine, so the Cascade page's campaigns and capital groups are never touched — though both spend from the same exchange balance. Live has to be armed on the server before the page will offer it. Purse is what the rung sizes are measured from — the wallet limit is half of it, and it grows as profit folds in. Changing the purse before any profit has folded resets it; afterwards it only moves the starting figure, so a compounded purse is never quietly shrunk." aria-label="What these controls do">i</button></h3>
     <div class="cf-cascade-form">
+      <div class="input-group" id="cf-af-exchange-group" hidden>
+        <label for="cf-af-exchange">Exchange<button type="button" class="cf-info" tabindex="0"
+          data-cf-info="Which exchange this book trades on. A book is one coin on one exchange — the same coin on another exchange is a separate book with its own purse — and its lines are started, filled and priced on that exchange at its own commission. Live needs that exchange's keys on the server, not the default's. Only exchanges this strategy's engine can actually trade are listed."
+          aria-label="What does the exchange do?">i</button></label>
+        <select id="cf-af-exchange"></select>
+      </div>
       <div class="input-group">
         <label for="cf-af-symbol">Coin</label>
         <select id="cf-af-symbol" data-cf-change="cfAfSelectSymbol(this.value)"></select>
@@ -1520,6 +1526,12 @@
   <section class="card allocator-input-panel" aria-labelledby="cf-vr-title">
     <h3 id="cf-vr-title">Real money <button type="button" class="cf-info" tabindex="0" data-cf-info="The V-Rule trading a live exchange account. The rule is the paper book's rule to the bar — a parity harness holds the live driver to the locked simulator on every fill, target and end — but its buys are real orders: a trailing buy stop that rests on the exchange and walks down with each new low, and a single take-profit that rests against the whole ladder. It runs in its OWN engine, so the Cascade page's campaigns and capital groups are never touched, though both spend from the same exchange balance. There is no stop-loss: every exit is the target, and a ladder the market does not turn for is simply held." aria-label="What real-money V-Rule does">i</button></h3>
     <div class="cf-cascade-form">
+      <div class="input-group" id="cf-vr-exchange-group" hidden>
+        <label for="cf-vr-exchange">Exchange<button type="button" class="cf-info" tabindex="0"
+          data-cf-info="Which exchange this book trades on. The rule reads its structure from the same candles either way; the buys rest on, and are priced at the commission of, the exchange picked here. A book is one coin on one exchange, and live needs that exchange's keys on the server. Only exchanges the engine can actually trade are listed."
+          aria-label="What does the exchange do?">i</button></label>
+        <select id="cf-vr-exchange"></select>
+      </div>
       <div class="input-group">
         <label for="cf-vr-symbol">Coin</label>
         <select id="cf-vr-symbol" data-cf-change="cfVrSelectSymbol(this.value)"></select>
