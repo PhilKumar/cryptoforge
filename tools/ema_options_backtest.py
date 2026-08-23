@@ -347,7 +347,45 @@ class Backtest:
         return self.source.lookup(when, contract), 0
 
     # -- the rule ---------------------------------------------------------
+    def reset_counters(self) -> None:
+        """Everything run() accumulates, zeroed in one place.
+
+        A sweep reuses one Backtest across many thresholds. Resetting some
+        counters and not others is worse than resetting none: the tallies that
+        get missed keep summing across every pass, so a coverage or skip line
+        added to the sweep later would quietly report angle 30's numbers as the
+        total of every angle before it.
+        """
+        self.signals = {"CE": 0, "PE": 0}
+        self.vetoed_by_angle = {"CE": 0, "PE": 0}
+        self.vetoed_by_rsi = {"CE": 0, "PE": 0}
+        self.skipped_too_early = 0
+        self.skipped_too_cheap = 0
+        self.skipped_no_entry_price = 0
+        self.skipped_too_dear = 0
+        self.skipped_no_expiry = 0
+        self.unpriced_exits = 0
+        self.dropped_unpriceable = 0
+        src = self.source
+        for attr, blank in (
+            ("served", 0),
+            ("served_exact", 0),
+            ("served_nearby", 0),
+            ("by_dhan", 0),
+            ("by_upstox", 0),
+            ("missed", 0),
+        ):
+            if hasattr(src, attr):
+                setattr(src, attr, blank)
+        if hasattr(src, "misses"):
+            src.misses = dict.fromkeys(src.misses, 0)
+        if hasattr(src, "missed_at"):
+            src.missed_at = set()
+        if hasattr(src, "nearby_offsets"):
+            src.nearby_offsets = []
+
     def run(self) -> list:
+        self.reset_counters()
         bars = self.bars
         trades: list = []
         open_trade: Optional[Trade] = None
@@ -483,14 +521,19 @@ class Backtest:
                 # wearing a momentum rule's clothes.
                 self.skipped_too_early += 1
                 continue
-            if fill_ts.time() >= self.square_off and (self.args.intraday or fill_ts.date() == self.nth_weekly(day, 1)):
-                # The signal bar cleared the cutoff but the fill lands on the
-                # square-off minute itself, so the trade would open and close in
-                # the same minute: a round trip's charges and no position.
-                continue
             expiry = self.expiry_for(day)
             if expiry is None:
                 self.skipped_no_expiry += 1
+                continue
+            if fill_ts.time() >= self.square_off and (self.args.intraday or fill_ts.date() == expiry):
+                # The signal bar cleared the cutoff but the fill lands on the
+                # square-off minute itself, so the trade would open and close in
+                # the same minute: a round trip's charges and no position.
+                #
+                # It has to be THIS trade's expiry, not the nearest weekly. With
+                # --expiry 2 the two are different days, and keying on the nearest
+                # one threw away signals that would have been carried overnight
+                # to a contract expiring a week later.
                 continue
             spot = float(self.spot_at.loc[fill_ts])
             want = 1 if side == "CE" else -1
@@ -705,8 +748,6 @@ def sweep(bt: Backtest, args, angles: list) -> str:
     for a in angles:
         args.min_angle = a
         bt.args.min_angle = a
-        bt.signals = {"CE": 0, "PE": 0}
-        bt.vetoed_by_angle = {"CE": 0, "PE": 0}
         trades = bt.run()
         trades = window(trades, args)
         if not trades:
