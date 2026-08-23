@@ -150,7 +150,7 @@ async def _shutdown_runtime_engines() -> None:
             _save_auto_fib_runtime()
             await sandbox.shutdown()
         except Exception as exc:
-            _logger.warning("Failed to shutdown the Auto-Cascade_Fib sandbox during app shutdown: %s", exc)
+            _logger.warning("Failed to shutdown the Cascade_Auto sandbox during app shutdown: %s", exc)
     vrule_engine = globals().get("_vrule_engine")
     if vrule_engine is not None:
         try:
