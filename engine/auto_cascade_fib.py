@@ -623,6 +623,13 @@ class AutoCascadeFib:
 
     async def _seed_working_line(self, book: Book) -> bool:
         """Anchor a fresh 5m line on the latest confirmed swing high."""
+        if book.exchange and self._venue_broker(book.exchange) is None:
+            # A restored book names a venue this engine has no client for.
+            # Say so and stop: passing venue=None down would read the DEFAULT
+            # exchange's tape and anchor this book on a high its own venue
+            # may never have printed.
+            book.note = f"no client for {book.exchange} — not scanning"
+            return False
         if self._working_line_id(book):
             book.note = f"working a {self._line_timeframe(book)} line"
             return False

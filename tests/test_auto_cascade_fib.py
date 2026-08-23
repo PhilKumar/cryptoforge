@@ -93,6 +93,7 @@ class FakeEngine:
         # which skips the guard — most tests are not about it.
         self._candles_1m = candles_1m or []
         self.start_error: Optional[str] = None
+        self.fetched_from = None
 
     def add(self, campaign: FakeCampaign) -> FakeCampaign:
         self.campaigns[campaign.campaign_id] = campaign
@@ -614,6 +615,19 @@ def test_a_book_on_the_default_venue_is_stored_blank_whatever_name_it_was_given(
     first = driver.set_book("BTCUSDT", enabled=True, capital_usd=500.0, exchange="")
     second = driver.set_book("BTCUSDT", capital_usd=700.0, exchange="binance")
     assert first is second and first.exchange == "" and list(driver.books) == ["btcusdt:"]
+
+
+def test_a_restored_book_whose_venue_is_gone_never_scans_the_default_tape():
+    """set_book refuses an unknown venue, but load() restores whatever was
+    persisted — and reading the default exchange's tape for it would anchor
+    the book on a high its own venue may never have printed."""
+    engine = VenueEngine(FakeBroker(), candles=_rising_then_falling())
+    driver = AutoCascadeFib(engine)
+    driver.load({"books": [{"symbol": "BTCUSDT", "exchange": "kraken", "enabled": True, "purse_usd": 2000.0}]})
+    book = driver.books["btcusdt:kraken"]
+    assert asyncio.run(driver._seed_working_line(book)) is False
+    assert engine.started == [] and engine.fetched_from is None
+    assert "no client for kraken" in book.note
 
 
 def test_a_book_on_a_venue_the_engine_has_no_client_for_is_refused():

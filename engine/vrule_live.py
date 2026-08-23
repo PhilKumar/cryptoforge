@@ -301,6 +301,9 @@ class VRuleLive:
         self._load_window = window_loader or self._default_window_loader
         self._scan_structure = structure_scanner or self._default_structure_scanner
         self._last_tick_ts = 0.0
+        # The venue windows, one per book, so a second venue's thirty days of
+        # 1m-built 5m bars are pulled once and then only topped up each bar.
+        self._venue_windows: Dict[str, object] = {}
 
     # ── books ────────────────────────────────────────────────────
 
@@ -557,10 +560,6 @@ class VRuleLive:
 
     # ── structure: what the locked simulator says was born ───────
 
-    # The venue windows, one per book, so a second venue's thirty days of
-    # 1m-built 5m bars are pulled once and then only topped up each bar.
-    _venue_windows: Dict[str, object] = {}
-
     def _default_window_loader(self, book: Book):
         if not book.exchange:
             # The default venue: the paper book's own fetch, untouched.
@@ -598,6 +597,16 @@ class VRuleLive:
         fresh = fresh[keep]
         merged = pd.concat([cached, fresh]) if have else fresh
         merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        # Trim to the book's CURRENT warm-up, not the one the cache was built
+        # under. Turning a book off and on again moves history_start_ts
+        # forward; without this the kept window still reaches back to the
+        # older start, so the locked simulator is handed a longer window than
+        # fetch_window would ever return for the same book on Binance — a
+        # different scan, and a window that grows for as long as the book
+        # lives.
+        floor_ts = int(book.history_start_ts)
+        if floor_ts > 0 and len(merged):
+            merged = merged[merged.index >= pd.Timestamp(floor_ts, unit="s", tz="UTC")]
         merged.index.name = "datetime"
         self._venue_windows[book.key] = merged
         return merged

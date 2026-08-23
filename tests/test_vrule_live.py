@@ -385,6 +385,69 @@ def test_a_campaigns_price_and_candles_come_from_its_own_venue():
     assert len(default.candle_calls) == before + 1
 
 
+def test_a_restarted_book_gets_its_new_warm_up_not_the_cached_one():
+    """Turning a book off and on moves the warm-up forward. The kept window
+    must move with it, or the locked simulator scans a longer window than
+    fetch_window would ever hand the same book on Binance."""
+    import pandas as pd
+
+    now = int(__import__("time").time()) // 300 * 300
+
+    class LongTape(TapeVenue):
+        def get_candles(self, symbol, resolution="5m", start=None, end=None):
+            self.candle_calls.append((symbol, resolution, start))
+            n = 120 * 288  # 120 days of 5m bars, whatever is asked for
+            rows = [(now - 300 * (n - i), 100.0, 101.0, 99.0, 100.0) for i in range(n)]
+            df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close"])
+            df.index = pd.to_datetime(df.pop("ts"), unit="s", utc=True)
+            return df
+
+    driver = VRuleLive(_two_venue_engine(dear=LongTape()))
+    book = driver.set_book("BTCUSDT", enabled=True, capital_usd=500.0, exchange="coindcx")
+    book.history_start_ts = now - 90 * 86400  # an older, longer warm-up
+    wide = driver._load_window(book)
+    assert int(wide.index[0].timestamp()) >= book.history_start_ts
+    assert (wide.index[-1] - wide.index[0]).total_seconds() > 60 * 86400  # the long warm-up, cached
+    driver.set_book("BTCUSDT", enabled=False, exchange="coindcx")
+    fresh = driver.set_book("BTCUSDT", enabled=True, exchange="coindcx")
+    assert abs((now - fresh.history_start_ts) - vr.WARMUP_DAYS * 86400) < 600  # the clock moved on
+    window = driver._load_window(fresh)
+    # The cached 90 days must NOT survive into the new 30-day warm-up.
+    assert int(window.index[0].timestamp()) >= fresh.history_start_ts
+    assert (window.index[-1] - window.index[0]).total_seconds() <= vr.WARMUP_DAYS * 86400
+
+
+def test_a_campaign_on_a_venue_the_engine_lost_is_still_shown():
+    """broker_for refuses it, rightly — but get_status and the chart must
+    not die with it, or one orphan hides every other campaign."""
+    engine = _two_venue_engine()
+    result = asyncio.run(
+        engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=110.0,
+            mother_low=108.0,
+            mother_timestamp=int(__import__("time").time()) - 3600,
+            mode="paper",
+            timeframe="5m",
+            mc_kind="major",
+            exchange="coindcx",
+            strategy=vr.STRATEGY,
+            driven=True,
+        )
+    )
+    campaign = engine.campaigns[result["campaign"]["campaign_id"]]
+    del engine.brokers["coindcx"]  # the client failed to build on this restart
+    with pytest.raises(LookupError):
+        engine.broker_for(campaign)
+    assert engine._price_key(campaign) == "coindcx:BTCUSDT"
+    status = engine.get_status()
+    assert any(c["campaign_id"] == campaign.campaign_id for c in status["campaigns"])
+    # and the chart draws nothing rather than 500ing or drawing Binance's bars
+    campaign.mother_timestamp = int(__import__("time").time()) - 90 * 86400  # forces the paged branch
+    assert asyncio.run(engine.get_chart_data(campaign.campaign_id)).get("candles") == []
+
+
 def test_a_coindcx_book_scans_its_own_tape_and_only_tops_it_up_after():
     dear = TapeVenue()
     driver = VRuleLive(_two_venue_engine(dear=dear))

@@ -2319,10 +2319,13 @@ class CascadeEngine:
         always has. One on another venue gets that venue's name in front, so
         a CoinDCX campaign's price is never read from a Binance tick.
         """
-        client = self.broker_for(campaign)
-        if client is self.broker:
+        # From names, never from broker_for: that raises for a venue this
+        # engine has no client for, and this key is read by get_status and
+        # the chart — a campaign that cannot trade must still be SHOWN.
+        name = self.venue_of(campaign)
+        if not name or name == self.primary_broker_name:
             return campaign.symbol
-        return f"{self.venue_of(campaign)}:{campaign.symbol}"
+        return f"{name}:{campaign.symbol}"
 
     def venue_of(self, campaign: "Campaign") -> str:
         """The canonical exchange name a campaign's money belongs to.
@@ -3528,8 +3531,16 @@ class CascadeEngine:
         frozen = window_end < now - tf_sec * 2
         span_bars = (now - campaign.mother_timestamp) // max(tf_sec, 1)
         if frozen or (span_bars > KLINE_PAGE_BARS and max_candles > KLINE_PAGE_BARS):
+            try:
+                venue = self.broker_for(campaign)
+            except LookupError as exc:
+                # No client for this campaign's venue. Drawing the DEFAULT
+                # exchange's bars under its fibs would be a chart of a tape it
+                # never traded, so draw nothing and say why.
+                _log.warning("[CASCADE] chart unavailable for %s: %s", campaign.campaign_id, exc)
+                return []
             paged = await self._fetch_closed_candles(
-                campaign.symbol, campaign.mother_timestamp - tf_sec, campaign.timeframe, venue=self.broker_for(campaign)
+                campaign.symbol, campaign.mother_timestamp - tf_sec, campaign.timeframe, venue=venue
             )
             if frozen:
                 trimmed = [c for c in paged if c.timestamp <= window_end]
