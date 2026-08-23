@@ -10262,20 +10262,36 @@ function cfRenderCascadeCampaigns(campaigns, instruments, options) {
 
 // The campaigns behind the log as it currently stands, so paging can re-render
 // without waiting for the next status poll.
+// Keyed by mount id: the Cascade page and each strategy page keep their own
+// campaigns and their own page number, so paging one never moves another.
 var _cfCascadeLastCampaigns = null;
+var _cfEventsState = {};
 
-function cfRenderCascadeEvents(campaigns) {
-  var mount = document.getElementById('cf-cascade-events');
+function _cfEventsStateFor(mountId) {
+  if (!_cfEventsState[mountId]) _cfEventsState[mountId] = { campaigns: null, page: 0 };
+  return _cfEventsState[mountId];
+}
+
+// ONE event-log renderer. The Cascade page calls it with no options and is
+// untouched; a strategy page passes its own mount and pager ids. A second copy
+// would drift the moment either page changed.
+function cfRenderCascadeEvents(campaigns, options) {
+  var opts = options || {};
+  var mountId = opts.mountId || 'cf-cascade-events';
+  var pagerId = opts.pagerId || (mountId + '-pagination');
+  var mount = document.getElementById(mountId);
   if (!mount) return;
-  _cfCascadeLastCampaigns = campaigns;
+  var state = _cfEventsStateFor(mountId);
+  state.campaigns = campaigns;
+  if (mountId === 'cf-cascade-events') _cfCascadeLastCampaigns = campaigns;
   var events = [];
   campaigns.forEach(function(campaign) {
     (campaign.event_log || []).forEach(function(event) { events.push(event); });
   });
   events.sort(function(a, b) { return String(a.timestamp || '').localeCompare(String(b.timestamp || '')); });
   if (!events.length) {
-    mount.innerHTML = '<div class="cf-table-empty-cell">No events yet</div>';
-    _cfRenderEventsPager(0, 0);
+    mount.innerHTML = '<div class="cf-table-empty-cell">' + _escapeHtml(opts.emptyText || 'No events yet') + '</div>';
+    _cfRenderEventsPager(0, 0, mountId, pagerId);
     return;
   }
   // Paged rather than truncated. The old slice(-80) silently threw the older
@@ -10284,9 +10300,9 @@ function cfRenderCascadeEvents(campaigns) {
   // trying to reconstruct that.
   var ordered = events.slice().reverse();          // newest first
   var pages = Math.max(1, Math.ceil(ordered.length / _CF_EVENTS_PAGE_SIZE));
-  if (_cfCascadeEventsPage >= pages) _cfCascadeEventsPage = pages - 1;
-  if (_cfCascadeEventsPage < 0) _cfCascadeEventsPage = 0;
-  var from = _cfCascadeEventsPage * _CF_EVENTS_PAGE_SIZE;
+  if (state.page >= pages) state.page = pages - 1;
+  if (state.page < 0) state.page = 0;
+  var from = state.page * _CF_EVENTS_PAGE_SIZE;
   mount.innerHTML = ordered.slice(from, from + _CF_EVENTS_PAGE_SIZE).map(function(event) {
     var tone = event.level === 'error' || event.level === 'warn' ? 'var(--red, #d9534f)'
       : event.level === 'fill' || event.level === 'complete' ? 'var(--green, #3fae56)'
@@ -10297,39 +10313,44 @@ function cfRenderCascadeEvents(campaigns) {
       + _escapeHtml(event.message || '')
       + '</div>';
   }).join('');
-  _cfRenderEventsPager(pages, ordered.length);
+  _cfRenderEventsPager(pages, ordered.length, mountId, pagerId);
 }
 
 // Forty lines a page — about a screenful, and enough that a single fill and the
 // orders around it stay on one page together.
 var _CF_EVENTS_PAGE_SIZE = 40;
-var _cfCascadeEventsPage = 0;
 
-function cfCascadeEventsPage(delta) {
-  _cfCascadeEventsPage = Math.max(0, _cfCascadeEventsPage + delta);
-  if (_cfCascadeLastCampaigns) cfRenderCascadeEvents(_cfCascadeLastCampaigns);
+// The page buttons carry their own mount id, so the Cascade log and each
+// strategy log page independently.
+function cfCascadeEventsPage(delta, mountId) {
+  var id = mountId || 'cf-cascade-events';
+  var state = _cfEventsStateFor(id);
+  state.page = Math.max(0, state.page + delta);
+  if (state.campaigns) cfRenderCascadeEvents(state.campaigns, { mountId: id });
 }
 
-function _cfRenderEventsPager(pages, total) {
-  var host = document.getElementById('cf-cascade-events-pagination');
+function _cfRenderEventsPager(pages, total, mountId, pagerId) {
+  var id = mountId || 'cf-cascade-events';
+  var hostId = pagerId || (id + '-pagination');
+  var host = document.getElementById(hostId);
   if (!host) {
-    var mount = document.getElementById('cf-cascade-events');
+    var mount = document.getElementById(id);
     if (!mount) return;
     host = document.createElement('div');
-    host.id = 'cf-cascade-events-pagination';
+    host.id = hostId;
     host.className = 'pagination-bar';
     mount.insertAdjacentElement('afterend', host);
   }
   if (!total) { host.style.display = 'none'; host.innerHTML = ''; return; }
-  var page = _cfCascadeEventsPage;
+  var page = _cfEventsStateFor(id).page;
   var from = page * _CF_EVENTS_PAGE_SIZE;
   host.style.display = 'flex';
   host.innerHTML = '<div class="pagination-info">Showing ' + (from + 1) + '-'
       + Math.min(from + _CF_EVENTS_PAGE_SIZE, total) + ' of ' + total + '</div>'
     + '<div class="pagination-actions">'
-    + '<button class="page-btn" data-cf-click="cfCascadeEventsPage(-1)" ' + (page <= 0 ? 'disabled' : '') + '>‹</button>'
+    + '<button class="page-btn" data-cf-click="cfCascadeEventsPage(-1, \'' + _escapeHtml(id) + '\')" ' + (page <= 0 ? 'disabled' : '') + '>‹</button>'
     + '<button class="page-btn active">' + (page + 1) + ' / ' + pages + '</button>'
-    + '<button class="page-btn" data-cf-click="cfCascadeEventsPage(1)" ' + (page >= pages - 1 ? 'disabled' : '') + '>›</button>'
+    + '<button class="page-btn" data-cf-click="cfCascadeEventsPage(1, \'' + _escapeHtml(id) + '\')" ' + (page >= pages - 1 ? 'disabled' : '') + '>›</button>'
     + '</div>';
 }
 
@@ -13893,6 +13914,10 @@ function cfVrRenderStatus(data) {
     cfVrSelectSymbol((document.getElementById('cf-vr-symbol') || {}).value || '');
   });
   cfVrSyncControls();
+  cfRenderCascadeEvents(
+    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    { mountId: 'cf-vr-events', emptyText: 'No events yet — the live book has not opened a ladder.' }
+  );
   cfRenderCascadeCampaigns(
     Array.isArray(data && data.campaigns) ? data.campaigns : [],
     (data && data.instruments) || {},
@@ -14335,6 +14360,10 @@ function cfAfRenderStats(books) {
 // page's renderer into this page's own mount — never by a second copy of it,
 // which would drift the moment either page changed.
 function cfAfRenderLines(data) {
+  cfRenderCascadeEvents(
+    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    { mountId: 'cf-af-events', emptyText: 'No events yet — nothing has been anchored.' }
+  );
   cfRenderCascadeTrades(
     Array.isArray(data && data.campaigns) ? data.campaigns : [],
     { mountId: 'cf-af-trades', actions: false }
