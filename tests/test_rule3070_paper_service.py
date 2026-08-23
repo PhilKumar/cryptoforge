@@ -47,6 +47,26 @@ class Rule3070InstrumentTests(unittest.TestCase):
         service.stop()
         self.assertEqual(rule3070_paper.symbols_marked_running(), [])
 
+    def test_a_shutdown_does_not_look_like_a_decision_to_stop(self):
+        """The restart bug: every paper book came back stopped.
+
+        The app's shutdown called stop() like a person would, so it wrote
+        running=False for books that were merrily running — erasing the flag
+        symbols_marked_running() reads at boot. On 2026-08-23 the forced deploy
+        stamped False onto BTCUSDT, ETHUSDT and SOLUSDT inside one minute and
+        the V-Rule page read "PAPER Stopped" with nobody having stopped it.
+        """
+        service = rule3070_paper.Rule3070PaperService()
+        service._state = {"start_ts": 1, "running": True}
+        service._write_state()
+        service.stop(persist=False)  # what shutdown does now
+        self.assertEqual(
+            rule3070_paper.symbols_marked_running(),
+            ["BTCUSDT"],
+            "a process going down must not read as Phil switching the book off",
+        )
+        self.assertFalse(service.status().get("running"), "the thread is still stopped in memory")
+
     def test_six_supported_instruments_are_exposed(self):
         self.assertEqual(
             rule3070_paper.SUPPORTED_SYMBOLS,

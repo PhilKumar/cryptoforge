@@ -443,7 +443,22 @@ class Rule3070PaperService:
             now = time.time()
             time.sleep(300 - (now % 300) + 10)
 
-    def stop(self) -> dict:
+    def stop(self, persist: bool = True) -> dict:
+        """Stop the paper thread. `persist` records it as a DECISION.
+
+        A person switching a book off must outlive the process, or the next
+        boot would restart something deliberately turned off. But the app's
+        own shutdown used to call this too, and wrote `running: False` for
+        every book that was merrily running — erasing the exact flag
+        `symbols_marked_running()` reads at boot to bring them back. So the
+        resume could never fire, and a restart silently stopped every paper
+        book: on 2026-08-23 the forced deploy at 02:41 stamped False onto
+        BTCUSDT, ETHUSDT and SOLUSDT within the same minute, and Phil found
+        the V-Rule reading "PAPER Stopped" with no one having stopped it.
+
+        Shutdown passes persist=False: the thread ends and the writer lock is
+        released, but the book stays marked running and boot picks it up.
+        """
         with self._lock:
             self._stop.set()
             if self._thread:
@@ -451,10 +466,7 @@ class Rule3070PaperService:
             self._thread = None
             self._release_writer_lock()
             self._status["running"] = False
-            # Stopping is a decision, and it has to outlive the process too —
-            # otherwise the next boot would restart a book that was deliberately
-            # switched off.
-            if self._state:
+            if persist and self._state:
                 self._state["running"] = False
                 try:
                     self._write_state()

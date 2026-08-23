@@ -164,7 +164,11 @@ async def _shutdown_runtime_engines() -> None:
         rule3070_services = {**rule3070_services, "legacy": legacy_rule3070}
     for symbol, rule3070 in rule3070_services.items():
         try:
-            rule3070.stop()
+            # persist=False: the process going down is not Phil switching the
+            # book off. Writing the stop here erased the flag
+            # _resume_rule3070_on_boot reads, so every restart quietly stopped
+            # every paper book and the resume never fired.
+            rule3070.stop(persist=False)
         except Exception as exc:
             _logger.warning("Failed to stop %s V-Rule paper service during app shutdown: %s", symbol, exc)
     _shutdown_save_engines()
