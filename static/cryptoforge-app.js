@@ -8791,6 +8791,24 @@ function _cfCascadeUsd(value) {
   return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Strategies share one primary-nav tab, so their status belongs in one badge.
+// Each engine updates only its own flag; the badge then names every active
+// strategy without turning the nav into an unexplained row of dots.
+function _cfUpdateStrategiesTabDot(engine, active) {
+  var dot = document.getElementById('strategies-tab-dot');
+  if (!dot) return;
+  var key = engine === 'cascade' ? 'cascade' : (engine === 'vrule' ? 'vrule' : 'auto');
+  dot.dataset[key] = active ? 'true' : 'false';
+  var labels = [];
+  if (dot.dataset.cascade === 'true') labels.push('Cascade-Hybrid');
+  if (dot.dataset.vrule === 'true') labels.push('V-Rule');
+  if (dot.dataset.auto === 'true') labels.push('Cascade_Auto');
+  var message = labels.length ? labels.join(', ') + ' active' : 'No strategy engine active';
+  dot.classList.toggle('active', labels.length > 0);
+  dot.setAttribute('aria-label', message);
+  dot.title = message;
+}
+
 async function cfLoadCascadeStatus(showToast) {
   try {
     var response = await cfApiFetch('/api/cascade/status', { cache: 'no-store' });
@@ -8820,13 +8838,10 @@ function cfRenderCascadeStatus(data) {
 
   // The nav indicator follows the cascade engine: lit whenever it is running
   // with at least one campaign that has not ended.
-  var dot = document.getElementById('cascade-tab-dot');
-  if (dot) {
-    var live = (Array.isArray(data.campaigns) ? data.campaigns : []).some(function(c) {
-      return c.state === 'WAITING_FIRST_DEPTH' || c.state === 'TRENDLINE_ACTIVE';
-    });
-    dot.classList.toggle('active', !!data.running && live);
-  }
+  var live = (Array.isArray(data.campaigns) ? data.campaigns : []).some(function(c) {
+    return c.state === 'WAITING_FIRST_DEPTH' || c.state === 'TRENDLINE_ACTIVE';
+  });
+  _cfUpdateStrategiesTabDot('cascade', !!data.running && live);
   _cfWithScrollPreserved(document.getElementById('cascade-page'), function () {
     cfRenderCascadeTrades(Array.isArray(data.campaigns) ? data.campaigns : []);
     cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : [], data.instruments || {});
@@ -13380,8 +13395,7 @@ function cfR37RenderStatus(s) {
   if (stateNode) stateNode.textContent = running
     ? 'Running'
     : (anyRunning ? runningSymbols.length + ' Running' : (s.start_ts ? 'Stopped' : 'Idle'));
-  var dot = document.getElementById('rule3070-tab-dot');
-  if (dot) dot.classList.toggle('active', anyRunning);
+  _cfUpdateStrategiesTabDot('vrule', anyRunning);
   var startBtn = document.getElementById('cf-r37-start-btn');
   var stopBtn = document.getElementById('cf-r37-stop-btn');
   var resetBtn = document.getElementById('cf-r37-reset-btn');
@@ -14158,6 +14172,7 @@ function cfAfRenderStatus(data) {
 
   var on = books.filter(function (b) { return b.enabled; });
   var live = on.filter(function (b) { return b.mode === 'live'; });
+  _cfUpdateStrategiesTabDot('auto', on.length > 0);
   if (state) {
     state.textContent = on.length
       ? (on.length + ' on' + (live.length ? ' · ' + live.length + ' live' : ' · paper'))

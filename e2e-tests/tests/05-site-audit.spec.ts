@@ -234,6 +234,23 @@ test.describe('Comprehensive Site Audit', () => {
   test('segmented toggles are styled, not raw browser buttons', async ({ page }) => {
     await page.click('#nav-strategies');
     await expectActivePage(page, 'cascade-page', 'nav-strategies');
+    await expect(page.locator('#nav-strategies .live-dot'), 'one aggregate strategy status badge').toHaveCount(1);
+    await expect(page.locator('#strategies-tab-dot')).toHaveAttribute('role', 'status');
+    const aggregateStatus = await page.evaluate(() => {
+      const app = window as any;
+      app._cfUpdateStrategiesTabDot('cascade', true);
+      app._cfUpdateStrategiesTabDot('vrule', true);
+      const dot = document.getElementById('strategies-tab-dot')!;
+      const result = {
+        active: dot.classList.contains('active'),
+        label: dot.getAttribute('aria-label'),
+      };
+      app._cfUpdateStrategiesTabDot('cascade', false);
+      app._cfUpdateStrategiesTabDot('vrule', false);
+      app._cfUpdateStrategiesTabDot('auto', false);
+      return result;
+    });
+    expect(aggregateStatus).toEqual({ active: true, label: 'Cascade-Hybrid, V-Rule active' });
 
     // The Cascade/V-Rule selector is a desk CARD now (PhilForge's shape: icon
     // tile, name, one line) — it keeps a deliberate 1px border, so it is

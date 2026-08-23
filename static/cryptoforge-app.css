@@ -768,6 +768,21 @@
     background: #4a4d55; display: inline-block; flex-shrink: 0;
   }
   .nav-tab .live-dot.active { background: var(--green); animation: livePulse 2s ease-in-out infinite; }
+  #nav-strategies .strategy-tab-icon {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #nav-strategies .strategy-tab-icon .live-dot {
+    position: absolute;
+    top: -4px;
+    right: -5px;
+    width: 6px;
+    height: 6px;
+    margin: 0;
+    border: 1.5px solid var(--surface);
+  }
   @keyframes livePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.75); } }
 
   /* ── Pages ── */
@@ -8744,13 +8759,8 @@ html[data-theme="light"] .journal-entry-notes section {
      the desktop does — Journal first, in DOM order — and the default page is
      the first tab you see. */
 
-  /* The Cascade live dot sits inline rather than absolutely, so it cannot
-     land on top of a neighbouring tab now that they are packed tighter. */
-  .nav-tabs .nav-tab .live-dot {
-    position: static;
-    flex: 0 0 auto;
-    margin: 0;
-  }
+  /* The one Strategies status badge stays attached to its icon, so the tighter
+     phone strip never turns engine state into an extra item in the row. */
 }
 
 /* Very narrow phones. The row scrolls now, so tabs no longer have to shrink to
