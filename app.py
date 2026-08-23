@@ -847,6 +847,8 @@ _BUCKET_VRULE_RUNTIME = "vrule_runtime"
 _BUCKET_CASCADE_CHART_SNAP = "cascade_chart_snap"
 _BUCKET_APP_SETTINGS = "app_settings"
 _APP_SETTINGS_BROKER_KEY = "selected_broker"
+_APP_SETTINGS_SCALP_BROKER_KEY = "selected_scalp_broker"
+_SCALP_BROKER_NAMES = ("binance", "coindcx", "delta")
 
 
 def _bootstrap_session_store() -> None:
@@ -1170,6 +1172,84 @@ def _persist_selected_broker_name(name: str) -> None:
         _APP_SETTINGS_BROKER_KEY,
         {"broker": normalized, "updated_at": str(datetime.now())},
     )
+
+
+def _normalize_scalp_broker_name(raw, *, default: str = "binance") -> str:
+    name = _normalize_broker_name(raw, default=default)
+    if name in _SCALP_BROKER_NAMES:
+        return name
+    return default if default in _SCALP_BROKER_NAMES else _SCALP_BROKER_NAMES[0]
+
+
+def _load_selected_scalp_broker_name() -> str:
+    payload = _get_state_store().get(_BUCKET_APP_SETTINGS, _APP_SETTINGS_SCALP_BROKER_KEY, default={})
+    raw = payload.get("broker") if isinstance(payload, dict) else payload
+    # Existing Scalp runtime was Delta-only before broker selection existed.
+    # Preserve that migration default so a restart never reinterprets an old
+    # Delta position as a spot position merely because the application-wide
+    # broker happens to be Binance.
+    return _normalize_scalp_broker_name(raw, default="delta")
+
+
+def _persist_selected_scalp_broker_name(name: str) -> None:
+    normalized = _normalize_scalp_broker_name(name)
+    _get_state_store().put(
+        _BUCKET_APP_SETTINGS,
+        _APP_SETTINGS_SCALP_BROKER_KEY,
+        {"broker": normalized, "updated_at": str(datetime.now())},
+    )
+
+
+def _scalp_broker_client():
+    global _scalp_broker
+    current = globals().get("_scalp_broker")
+    if current is None:
+        current = get_broker_client(_load_selected_scalp_broker_name())
+        _scalp_broker = current
+    return current
+
+
+def _scalp_broker_summary(client=None) -> dict:
+    current = client or _scalp_broker_client()
+    capability_reader = getattr(current, "scalp_capabilities", None)
+    capabilities = dict(capability_reader() if callable(capability_reader) else {})
+    return {
+        "name": _normalize_scalp_broker_name(getattr(current, "broker_name", None)),
+        "label": str(getattr(current, "display_name", "Broker") or "Broker"),
+        "configured": _broker_is_configured(current),
+        "feed_kind": str(getattr(current, "get_market_feed_kind", lambda: "polling")() or "polling"),
+        "capabilities": capabilities,
+        **_broker_environment(current),
+    }
+
+
+def _available_scalp_broker_defs() -> list[dict]:
+    rows = []
+    for name in _SCALP_BROKER_NAMES:
+        client = get_broker_client(name)
+        summary = _scalp_broker_summary(client)
+        rows.append(summary)
+    return rows
+
+
+def _scalp_broker_settings_payload() -> dict:
+    current = _scalp_broker_summary()
+    engine = globals().get("_scalp_engine")
+    open_count = len(getattr(engine, "open_trades", {}) or {}) if engine else 0
+    pending_count = len(getattr(engine, "pending_entries", {}) or {}) if engine else 0
+    return {
+        "current_broker": current["name"],
+        "current_label": current["label"],
+        "configured": current["configured"],
+        "environment": current["environment"],
+        "testnet": current["testnet"],
+        "base_url": current["base_url"],
+        "feed_kind": current["feed_kind"],
+        "capabilities": current["capabilities"],
+        "available_brokers": _available_scalp_broker_defs(),
+        "switchable": open_count == 0 and pending_count == 0,
+        "runtime_locks": {"open_trades": open_count, "pending_entries": pending_count},
+    }
 
 
 def _set_active_broker(name: str, *, persist: bool) -> dict:
@@ -3470,7 +3550,7 @@ async def _rebind_broker_bound_engines() -> None:
     the next call rebuild them. Safe here: the caller has already verified no
     open scalp trades and no active cascade campaigns.
     """
-    global _scalp_engine
+    global _scalp_engine, _scalp_broker
 
     scalp_engine = globals().get("_scalp_engine")
     if scalp_engine is not None:
@@ -3479,6 +3559,7 @@ async def _rebind_broker_bound_engines() -> None:
         except Exception as exc:
             _logger.warning("Failed to shutdown scalp engine after config change: %s", exc)
     _scalp_engine = None
+    _scalp_broker = None
 
     cascade_engine = globals().get("_cascade_engine")
     if cascade_engine is not None:
@@ -3767,6 +3848,8 @@ def _production_readiness_payload() -> dict:
         "/api/paper/status",
         "/api/scalp/status",
         "/api/scalp/diagnostics",
+        "/api/scalp/broker",
+        "/api/scalp/leverage/{symbol}",
         "/api/market/top25",
         "/api/cascade/status",
         "/api/notifications",
@@ -3788,6 +3871,10 @@ def _production_readiness_payload() -> dict:
         ("PUT", "/api/scalp/trades/{trade_id}/targets"),
         ("POST", "/api/scalp/trades/{trade_id}/add"),
         ("POST", "/api/scalp/reconcile"),
+        ("PUT", "/api/scalp/broker"),
+        ("POST", "/api/scalp/broker/check"),
+        ("DELETE", "/api/scalp/pending/{entry_id}"),
+        ("POST", "/api/scalp/kill"),
         ("PUT", "/api/admin/config"),
         ("PUT", "/api/broker/settings"),
         ("POST", "/api/ops/state/restore"),
@@ -3856,6 +3943,11 @@ def _production_readiness_payload() -> dict:
                     "targets": _route_available("/api/scalp/trades/{trade_id}/targets", "PUT"),
                     "add": _route_available("/api/scalp/trades/{trade_id}/add", "POST"),
                     "reconcile": _route_available("/api/scalp/reconcile", "POST"),
+                    "broker": _route_available("/api/scalp/broker", "GET")
+                    and _route_available("/api/scalp/broker", "PUT"),
+                    "broker_check": _route_available("/api/scalp/broker/check", "POST"),
+                    "pending_cancel": _route_available("/api/scalp/pending/{entry_id}", "DELETE"),
+                    "kill": _route_available("/api/scalp/kill", "POST"),
                 },
                 "freshness_thresholds_ms": {
                     "ws": ScalpEngine._entry_freshness_thresholds("ws"),
@@ -7202,6 +7294,7 @@ async def export_live_trades_csv(run_id: str = ""):
 
 # ── Scalp Engine ──────────────────────────────────────────────────
 _scalp_engine: Optional[ScalpEngine] = None
+_scalp_broker = None
 _LEGACY_SCALP_FILE, _SCALP_FILE = _resolve_state_file("scalp_trades.json", "scalp")
 _LEGACY_SCALP_EVENTS_FILE, _SCALP_EVENTS_FILE = _resolve_state_file("scalp_events.json", "scalp")
 _LEGACY_SCALP_RUNTIME_FILE, _SCALP_RUNTIME_FILE = _resolve_state_file("scalp_runtime.json", "scalp")
@@ -7299,6 +7392,15 @@ def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
     pending_rows = runtime_state.get("pending_entries") or []
     if not open_rows and not pending_rows:
         return False
+    runtime_broker = str(runtime_state.get("broker_name") or "").strip().lower()
+    engine_broker = str(getattr(engine, "broker_name", "") or "").strip().lower()
+    if runtime_broker and engine_broker and runtime_broker != engine_broker:
+        _logger.error(
+            "[SCALP] Refusing to restore %s runtime into %s broker engine",
+            runtime_broker,
+            engine_broker,
+        )
+        return False
 
     restored_open = {}
     for row in open_rows:
@@ -7344,6 +7446,7 @@ def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
 def _snapshot_scalp_runtime(status: dict) -> dict:
     return {
         "saved_at": str(datetime.now()),
+        "broker_name": str(((status.get("broker") or {}).get("name") or "")),
         "open_trades": list(status.get("open_trades") or []),
         "pending_entries": list(status.get("pending_entries") or []),
         "event_log": list(status.get("event_log") or [])[-80:],
@@ -7373,6 +7476,7 @@ def _attach_scalp_runtime_metrics(result: dict, engine: ScalpEngine, symbol_hint
     result.setdefault("execution_metrics", dict(status.get("execution_metrics") or {}))
     result.setdefault("feed_metrics", dict(status.get("feed_metrics") or {}))
     result.setdefault("entry_controls", dict(status.get("entry_controls") or {}))
+    result.setdefault("broker", dict(status.get("broker") or {}))
     return result
 
 
@@ -7505,13 +7609,105 @@ def _get_scalp_engine():
     global _scalp_engine
     if _scalp_engine is None:
         _scalp_engine = ScalpEngine(
-            delta,
+            _scalp_broker_client(),
             on_trade_closed=_scalp_persist_trade,
             on_event=_scalp_persist_event,
             on_update=_broadcast_scalp_update,
         )
         _restore_scalp_runtime(_scalp_engine)
     return _scalp_engine
+
+
+@app.get("/api/scalp/broker")
+async def get_scalp_broker_settings():
+    return {"status": "ok", **_scalp_broker_settings_payload()}
+
+
+@app.put("/api/scalp/broker")
+async def update_scalp_broker(request: Request):
+    global _scalp_engine, _scalp_broker
+    check_rate_limit("scalp_broker_switch", max_calls=4, window_sec=60, client_ip=_client_ip(request))
+    body = await _read_json_body(request)
+    requested_raw = str(_body_value(body, "broker", "name", default="") or "").strip().lower()
+    if requested_raw not in _SCALP_BROKER_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unsupported Scalp broker: {requested_raw or 'missing'}")
+    requested = _normalize_scalp_broker_name(requested_raw)
+    current = _scalp_broker_summary()["name"]
+    if requested == current:
+        return {
+            "status": "ok",
+            "message": f"Scalp broker is already {_scalp_broker_summary()['label']}",
+            **_scalp_broker_settings_payload(),
+        }
+    settings = _scalp_broker_settings_payload()
+    if not settings.get("switchable"):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "locked",
+                "message": "Close Scalp positions and cancel pending entries before switching its broker.",
+                **settings,
+            },
+        )
+    if _scalp_engine is not None:
+        await _scalp_engine.shutdown()
+    _scalp_engine = None
+    _scalp_broker = get_broker_client(requested)
+    _persist_selected_scalp_broker_name(requested)
+    summary = _scalp_broker_summary(_scalp_broker)
+    _logger.info("Scalp broker switched to %s (%s)", summary["label"], summary["name"])
+    return {
+        "status": "ok",
+        "message": f"Scalp broker switched to {summary['label']}",
+        **_scalp_broker_settings_payload(),
+    }
+
+
+@app.post("/api/scalp/broker/check")
+async def check_scalp_broker(request: Request):
+    check_rate_limit("scalp_broker_check", max_calls=6, window_sec=60, client_ip=_client_ip(request))
+    client = _scalp_broker_client()
+    summary = _scalp_broker_summary(client)
+    if not summary["configured"]:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "error",
+                "message": f"{summary['label']} API credentials are not configured",
+                "broker": summary,
+            },
+        )
+    try:
+        wallet = await asyncio.to_thread(client.get_wallet)
+        if isinstance(wallet, dict) and wallet.get("error"):
+            raise RuntimeError(str(wallet.get("error")))
+        wallet_rows = len(wallet) if isinstance(wallet, list) else 1 if isinstance(wallet, dict) else 0
+        return {
+            "status": "ok",
+            "message": f"{summary['label']} private connection verified",
+            "broker": summary,
+            "wallet_rows": wallet_rows,
+        }
+    except Exception as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"status": "error", "message": f"{summary['label']} connection failed: {exc}", "broker": summary},
+        )
+
+
+@app.get("/api/scalp/leverage/{symbol}")
+async def get_scalp_leverage(symbol: str):
+    symbol = _normalize_scalp_symbol(symbol)
+    client = _scalp_broker_client()
+    summary = _scalp_broker_summary(client)
+    capabilities = dict(summary.get("capabilities") or {})
+    if not capabilities.get("supports_leverage"):
+        return {"status": "ok", "broker": summary["name"], "options": [1], "default": 1, "max": 1}
+    info = await asyncio.to_thread(client.get_leverage_info, symbol)
+    max_leverage = max(int((info or {}).get("max_leverage") or capabilities.get("max_leverage") or 1), 1)
+    options = client.build_standard_leverage_options(max_leverage)
+    default = 10 if 10 in options else options[-1]
+    return {"status": "ok", "broker": summary["name"], "options": options, "default": default, "max": max_leverage}
 
 
 @app.get("/api/scalp/status")
@@ -7559,11 +7755,40 @@ async def scalp_activity():
     }
 
 
+@app.delete("/api/scalp/pending/{entry_id}")
+async def cancel_scalp_pending(entry_id: int, request: Request):
+    check_rate_limit("scalp_pending_cancel", max_calls=10, window_sec=15, client_ip=_client_ip(request))
+    eng = _get_scalp_engine()
+    result = eng.cancel_pending_entry(entry_id)
+    _persist_scalp_runtime_snapshot(eng)
+    if result.get("status") == "error":
+        return _scalp_action_error_response(result, eng)
+    return _attach_scalp_runtime_metrics(result, eng)
+
+
+@app.post("/api/scalp/kill")
+async def kill_scalp(request: Request):
+    check_rate_limit("scalp_kill", max_calls=3, window_sec=30, client_ip=_client_ip(request))
+    eng = _get_scalp_engine()
+    result = await eng.kill()
+    _persist_scalp_runtime_snapshot(eng)
+    payload = _attach_scalp_runtime_metrics(result, eng)
+    return JSONResponse(payload, status_code=200 if result.get("status") == "ok" else 502)
+
+
 @app.post("/api/scalp/enter")
 async def scalp_enter(request: Request):
     check_rate_limit("scalp_enter", max_calls=6, window_sec=10, client_ip=_client_ip(request))
     body = await _read_json_body(request)
     eng = _get_scalp_engine()
+    requested_broker = str(_body_value(body, "broker", "broker_name", default="") or "").strip().lower()
+    if requested_broker and requested_broker not in _SCALP_BROKER_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unsupported Scalp broker: {requested_broker}")
+    if requested_broker and requested_broker != eng.broker_name:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Scalp broker changed to {eng.broker_label}; review the order and submit again",
+        )
     symbol = _normalize_scalp_symbol(_body_value(body, "symbol", default="BTCUSDT"))
     eng.watch_symbol(symbol)
     raw_side = str(_body_value(body, "side", default="BUY") or "BUY").upper()
@@ -7608,7 +7833,7 @@ async def scalp_enter(request: Request):
     if order_type == "trailing_stop" and trail_value <= 0:
         raise HTTPException(status_code=400, detail="trail_value must be greater than zero for Trailing Stop orders")
     if legacy_size <= 0 and qty_mode != "base" and qty_value > 0:
-        legacy_size = int(qty_value * leverage)
+        legacy_size = qty_value if eng.market_type == "spot" else int(qty_value * leverage)
 
     entry_controls = eng.get_status(symbol).get("entry_controls", {})
     pending_requested = order_type != "market" or entry_stop_price > 0 or entry_limit_price > 0

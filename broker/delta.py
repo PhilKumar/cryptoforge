@@ -142,6 +142,16 @@ class DeltaClient(BaseBroker):
 
     broker_name = "delta"
     display_name = "Delta Exchange"
+    market_type = "derivatives"
+    supports_short = True
+    supports_leverage = True
+    max_scalp_leverage = 200
+    # Delta supports native post-only orders, but Scalp must not expose them
+    # until it persists and reconciles resting entry orders end-to-end.
+    supports_post_only = False
+    supports_base_quantity = False
+    # Delta India taker fee 0.05% plus 18% GST, expressed as percent per side.
+    fee_pct_per_side = 0.059
 
     def __init__(self):
         self.api_key = config.DELTA_API_KEY
@@ -376,6 +386,7 @@ class DeltaClient(BaseBroker):
         limit_price: float = None,
         leverage: int = 10,
         reduce_only: bool = False,
+        post_only: bool = False,
         max_verify_attempts: int = 3,
     ) -> dict:
         """
@@ -397,6 +408,7 @@ class DeltaClient(BaseBroker):
             limit_price=limit_price,
             leverage=leverage,
             reduce_only=reduce_only,
+            post_only=post_only,
         )
         order_ack_ms = round((_time.perf_counter() - started_at) * 1000, 1)
 
@@ -433,6 +445,7 @@ class DeltaClient(BaseBroker):
 
         # Verification loop
         last_state = "submitted"
+        last_order = dict(result)
         for attempt in range(max_verify_attempts):
             await asyncio.sleep(2)  # Wait for fill
 
@@ -448,6 +461,7 @@ class DeltaClient(BaseBroker):
                 state = str((filled or {}).get("state", "")).lower()
                 if state:
                     last_state = state
+                    last_order = dict(filled or result)
                 if filled and state in ("filled", "closed", "completed"):
                     print(f"[DELTA] Order {order_id} VERIFIED filled (attempt {attempt + 1})")
                     fill_price = self._extract_fill_price(filled) or self._extract_fill_price(result)
@@ -491,8 +505,57 @@ class DeltaClient(BaseBroker):
             except Exception as e:
                 print(f"[DELTA] Verify error (attempt {attempt + 1}): {e}")
 
-        print(f"[DELTA] Order {order_id} UNVERIFIED after {max_verify_attempts} attempts")
-        lifecycle = "pending"
+        print(f"[DELTA] Order {order_id} UNVERIFIED after {max_verify_attempts} attempts — cancelling remainder")
+        cancel_result = await asyncio.to_thread(self.cancel_order, order_id, product_id)
+        cancel_error = str((cancel_result or {}).get("error") or "")
+        cancelled_remainder = not cancel_error
+        try:
+            final_orders = await asyncio.to_thread(self.get_orders, product_id, "closed")
+            for candidate in final_orders or []:
+                if str(candidate.get("id")) == str(order_id):
+                    last_order = dict(candidate)
+                    final_state = str(candidate.get("state") or "").lower()
+                    if final_state:
+                        last_state = final_state
+                    break
+        except Exception as exc:
+            if not cancel_error:
+                cancel_error = f"final state unavailable: {exc}"
+
+        total_size = abs(_as_float(last_order.get("size") or size, 0.0))
+        remaining_size = abs(
+            _as_float(
+                last_order.get("unfilled_size") or last_order.get("remaining_size") or last_order.get("remaining_qty"),
+                0.0,
+            )
+        )
+        filled_size = abs(
+            _as_float(
+                last_order.get("filled_size") or last_order.get("executed_size") or last_order.get("executed_quantity"),
+                0.0,
+            )
+        )
+        if filled_size <= 0 and total_size > 0 and remaining_size > 0:
+            filled_size = max(total_size - remaining_size, 0.0)
+        if last_state in {"filled", "closed", "completed"}:
+            return {
+                **result,
+                **last_order,
+                "verified": True,
+                "filled_size": filled_size or total_size,
+                "fill_status": last_state,
+                "order_lifecycle": "filled",
+                "exchange_state": last_state,
+                "verification_state": "filled",
+                "verification_summary": "Order filled while cancellation was being checked",
+                "cancelled_remainder": False,
+                "fill_price": self._extract_fill_price(last_order) or self._extract_fill_price(result) or None,
+                "verified_at_attempt": max_verify_attempts,
+                "order_ack_ms": order_ack_ms,
+                "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
+            }
+
+        lifecycle = "cancelled" if cancelled_remainder else "attention"
         if last_state in {"cancelled", "canceled"}:
             lifecycle = "cancelled"
         elif last_state in {"partial", "partially_filled", "partially-filled"}:
@@ -501,23 +564,52 @@ class DeltaClient(BaseBroker):
             lifecycle = "rejected"
         elif last_state in {"filled", "closed", "completed"}:
             lifecycle = "filled"
+        if filled_size > 0 and not reduce_only and cancelled_remainder:
+            return {
+                **result,
+                **last_order,
+                "verified": True,
+                "filled_size": filled_size,
+                "fill_status": "partial_fill",
+                "order_lifecycle": "partial_cancelled",
+                "exchange_state": last_state,
+                "verification_state": "filled",
+                "verification_summary": "Partial entry fill verified after the unfilled remainder was cancelled",
+                "cancelled_remainder": True,
+                "fill_price": self._extract_fill_price(last_order) or self._extract_fill_price(result) or None,
+                "verified_at_attempt": max_verify_attempts,
+                "order_ack_ms": order_ack_ms,
+                "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
+            }
+
         verification_summary = f"Order {order_id} could not be verified after {max_verify_attempts} attempts"
         if lifecycle == "cancelled":
-            verification_summary = "Exchange cancelled the order during verification"
+            verification_summary = "Unfilled order remainder was cancelled during verification"
         elif lifecycle == "partial":
             verification_summary = "Order partially filled but final position could not be confirmed"
         elif lifecycle == "rejected":
             verification_summary = "Exchange rejected the order during verification"
+        elif lifecycle == "attention":
+            verification_summary = (
+                f"Order remainder could not be verified cancelled{': ' + cancel_error if cancel_error else ''}"
+            )
+        if reduce_only and filled_size > 0:
+            lifecycle = "attention"
+            verification_summary = "Exit partially filled; position reconciliation is required before another action"
         return {
             **result,
+            **last_order,
             "verified": False,
+            "filled_size": filled_size,
             "fill_status": last_state,
             "order_lifecycle": lifecycle,
             "exchange_state": last_state,
             "verification_state": lifecycle,
             "verification_summary": verification_summary,
+            "cancelled_remainder": cancelled_remainder,
+            "requires_attention": lifecycle == "attention",
             "verified_at_attempt": max_verify_attempts,
-            "error": f"Order {order_id} could not be verified after {max_verify_attempts} attempts",
+            "error": verification_summary,
             "order_ack_ms": order_ack_ms,
             "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
         }
@@ -801,6 +893,7 @@ class DeltaClient(BaseBroker):
         limit_price: float = None,
         leverage: int = 10,
         reduce_only: bool = False,
+        post_only: bool = False,
     ) -> dict:
         """
         Place a futures order.
@@ -816,6 +909,7 @@ class DeltaClient(BaseBroker):
             "side": side,
             "order_type": order_type,
             "reduce_only": reduce_only,
+            "post_only": bool(post_only),
         }
         if order_type == "limit_order" and limit_price:
             data["limit_price"] = str(limit_price)

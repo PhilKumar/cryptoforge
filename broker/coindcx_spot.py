@@ -58,6 +58,12 @@ class CoinDCXSpotClient(BaseBroker):
     supports_funding = False
     # Stop-limit buys with client order ids, and a free/locked spot wallet.
     supports_cascade = True
+    market_type = "spot"
+    supports_short = False
+    supports_leverage = False
+    max_scalp_leverage = 1
+    supports_post_only = False
+    supports_base_quantity = True
     # 15m and above only. At 0.2% per side a round's geometric target does
     # not clear its own fee until the fall passes ~1.6% (against ~0.8% on
     # Binance at 0.1%), and 5m falls are rarely that deep — so a 5m campaign
@@ -675,27 +681,68 @@ class CoinDCXSpotClient(BaseBroker):
                 "order_ack_ms": order_ack_ms,
                 "broker_latency_ms": order_ack_ms,
             }
-        status = str(result.get("status") or "").upper()
-        verified = status in {"FILLED", "PARTIALLY_FILLED"}
-        fill_price = self.coerce_float(result.get("avgPrice") or result.get("price"), 0.0)
-        if not verified:
-            await asyncio.sleep(1)
-            checked = self.get_order(product_id, result.get("orderId"), client_order_id=client_order_id)
-            status = str(checked.get("status") or status).upper()
-            verified = status in {"FILLED", "PARTIALLY_FILLED"}
-            fill_price = self.coerce_float(checked.get("avgPrice") or fill_price, fill_price)
-        return {
-            **result,
-            "verified": verified,
-            "fill_status": status.lower() or "submitted",
-            "order_lifecycle": "filled" if verified else "pending",
-            "exchange_state": status.lower() or "submitted",
-            "verification_state": "filled" if verified else "pending",
-            "verification_summary": "CoinDCX order verified"
+        order = dict(result)
+        status = str(order.get("status") or "").upper()
+        order_id = order.get("orderId")
+        attempts = max(int(max_verify_attempts or 1), 1)
+        for _attempt in range(attempts):
+            if status == "FILLED":
+                break
+            await asyncio.sleep(0.35)
+            checked = self.get_order(product_id, order_id, client_order_id=client_order_id)
+            if isinstance(checked, dict) and checked:
+                order.update(checked)
+                status = str(order.get("status") or status).upper()
+
+        cancelled_remainder = False
+        cancel_error = ""
+        if status != "FILLED" and order_id:
+            # Scalp owns filled positions, not resting broker orders. Cancel an
+            # unfilled remainder before returning to prevent a late orphan fill.
+            cancel_result = self.cancel_order(order_id, product_id)
+            cancel_error = str((cancel_result or {}).get("error") or "")
+            final = self.get_order(product_id, order_id, client_order_id=client_order_id)
+            if isinstance(final, dict) and final:
+                order.update(final)
+                status = str(order.get("status") or status).upper()
+            cancelled_remainder = status in {"CANCELED", "CANCELLED", "EXPIRED", "FILLED"} and not cancel_error
+
+        executed_qty = self.coerce_float(order.get("executedQty") or order.get("filled_size"), 0.0)
+        verified = status == "FILLED" or (executed_qty > 0 and cancelled_remainder)
+        partial = verified and status != "FILLED"
+        fill_price = self.coerce_float(
+            order.get("avgPrice") or order.get("average_fill_price") or order.get("price"), 0.0
+        )
+        lifecycle = (
+            "partial_cancelled"
+            if partial
+            else "filled"
             if verified
-            else "CoinDCX order submitted but not filled yet",
+            else "cancelled"
+            if cancelled_remainder
+            else "attention"
+        )
+        summary = (
+            "CoinDCX order filled and verified"
+            if status == "FILLED"
+            else "CoinDCX partial fill verified after the unfilled remainder was cancelled"
+            if partial
+            else "CoinDCX unfilled order was cancelled"
+            if cancelled_remainder
+            else f"CoinDCX order is not filled and its remainder could not be verified cancelled{': ' + cancel_error if cancel_error else ''}"
+        )
+        return {
+            **order,
+            "verified": verified,
+            "fill_status": "partial_fill" if partial else status.lower() or "submitted",
+            "order_lifecycle": lifecycle,
+            "exchange_state": status.lower() or "submitted",
+            "verification_state": "filled" if verified else "cancelled" if cancelled_remainder else "attention",
+            "verification_summary": summary,
+            "cancelled_remainder": cancelled_remainder,
+            "requires_attention": not verified and not cancelled_remainder,
             "fill_price": fill_price or None,
-            "verified_at_attempt": 1,
+            "verified_at_attempt": attempts,
             "order_ack_ms": order_ack_ms,
             "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
         }

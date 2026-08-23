@@ -120,6 +120,12 @@ class ScalpTrade:
         qty_value: float = 0.0,
         base_qty: float = 0.0,
         margin_usd: float = 0.0,
+        broker_name: str = "delta",
+        broker_label: str = "Delta Exchange",
+        market_type: str = "derivatives",
+        fee_pct_per_side: float = 0.059,
+        entry_fee: Optional[float] = None,
+        exit_fee: Optional[float] = None,
         # Exit rules (at least one should be set)
         target_price: float = 0.0,  # absolute price to take profit
         sl_price: float = 0.0,  # absolute SL price
@@ -143,7 +149,7 @@ class ScalpTrade:
         self.symbol = symbol
         self.side = side
         self.product_id = product_id
-        self.size = size
+        self.size = _coerce_float(size, 0.0)
         self.entry_price = entry_price
         self.current_price = entry_price
         self.leverage = leverage
@@ -151,6 +157,12 @@ class ScalpTrade:
         self.qty_value = _coerce_float(qty_value, 0.0)
         self.base_qty = _coerce_float(base_qty, 0.0)
         self.margin_usd = _coerce_float(margin_usd, 0.0)
+        self.broker_name = str(broker_name or "delta").strip().lower()
+        self.broker_label = str(broker_label or self.broker_name.title())
+        self.market_type = "spot" if str(market_type or "").lower() == "spot" else "derivatives"
+        self.fee_pct_per_side = max(_coerce_float(fee_pct_per_side, 0.059), 0.0)
+        self.entry_fee = None if entry_fee is None else max(_coerce_float(entry_fee, 0.0), 0.0)
+        self.exit_fee = None if exit_fee is None else max(_coerce_float(exit_fee, 0.0), 0.0)
         self.order_id = order_id
         self.entry_time = entry_time or _now_utc()
         self.mode = mode
@@ -208,8 +220,12 @@ class ScalpTrade:
             self.sl_price = round(self.entry_price * (1 + mult * price_move_pct / 100), 6)
 
     def _refresh_derived_quantities(self) -> None:
-        self.margin_usd = round(self.size / max(self.leverage, 1), 4)
-        if self.entry_price > 0:
+        if self.market_type == "spot":
+            self.leverage = 1
+            self.margin_usd = round(self.size, 4)
+        else:
+            self.margin_usd = round(self.size / max(self.leverage, 1), 4)
+        if self.entry_price > 0 and (self.market_type != "spot" or self.base_qty <= 0):
             self.base_qty = round(self.size / self.entry_price, 8)
         if self.qty_mode == "base":
             if self.qty_value <= 0:
@@ -234,10 +250,6 @@ class ScalpTrade:
         now = now or _now_utc()
         return self._post_entry_price_ready and now >= self._exit_guard_until
 
-    # Delta Exchange India: taker 0.05%, 18% GST on fees
-    TAKER_FEE_RATE = 0.0005
-    GST_RATE = 0.18
-
     def _compute_pnl(self, price: float) -> float:
         """Gross PnL in USD (before fees). size = notional in USD (1 contract = $1)."""
         if not price or not self.entry_price or self.entry_price == 0:
@@ -248,10 +260,13 @@ class ScalpTrade:
             return (self.entry_price - price) / self.entry_price * self.size
 
     def _compute_fees(self, exit_price: float = 0.0) -> float:
-        """Trading fees in USD. Entry side always charged; exit side only if exit_price > 0."""
-        fee_per_side = self.size * self.TAKER_FEE_RATE * (1 + self.GST_RATE)
-        sides = 2 if exit_price > 0 else 1  # open = entry only, closed = entry + exit
-        return round(sides * fee_per_side, 4)
+        """Trading fees in quote currency, preferring broker-reported fills."""
+        modelled = self.size * (self.fee_pct_per_side / 100.0)
+        entry_fee = self.entry_fee if self.entry_fee is not None else modelled
+        exit_fee = 0.0
+        if exit_price > 0:
+            exit_fee = self.exit_fee if self.exit_fee is not None else modelled
+        return round(entry_fee + exit_fee, 4)
 
     def check_exit(self, price: float) -> Optional[str]:
         """Returns exit reason string if an exit rule fires, else None."""
@@ -294,6 +309,13 @@ class ScalpTrade:
             "qty_value": self.qty_value,
             "base_qty": self.base_qty,
             "margin_usd": self.margin_usd,
+            "broker_name": self.broker_name,
+            "broker_label": self.broker_label,
+            "market_type": self.market_type,
+            "fee_pct_per_side": self.fee_pct_per_side,
+            "entry_fee": self.entry_fee,
+            "exit_fee": self.exit_fee,
+            "fees_estimated": self.entry_fee is None or (self.exit_price > 0 and self.exit_fee is None),
             "entry_price": self.entry_price,
             "current_price": self.current_price,
             "target_price": self.target_price,
@@ -340,13 +362,19 @@ class ScalpTrade:
             symbol=str(data.get("symbol", "") or ""),
             side=str(data.get("side", "") or ""),
             product_id=data.get("product_id", 0) or 0,
-            size=int(data.get("size", 0) or 0),
+            size=_coerce_float(data.get("size"), 0.0),
             entry_price=_coerce_float(data.get("entry_price"), 0.0),
             leverage=int(data.get("leverage", 1) or 1),
             qty_mode=str(data.get("qty_mode", "usdt") or "usdt"),
             qty_value=_coerce_float(data.get("qty_value"), 0.0),
             base_qty=_coerce_float(data.get("base_qty"), 0.0),
             margin_usd=_coerce_float(data.get("margin_usd", data.get("qty_usdt")), 0.0),
+            broker_name=str(data.get("broker_name", "delta") or "delta"),
+            broker_label=str(data.get("broker_label", "") or ""),
+            market_type=str(data.get("market_type", "derivatives") or "derivatives"),
+            fee_pct_per_side=_coerce_float(data.get("fee_pct_per_side"), 0.059),
+            entry_fee=None if data.get("entry_fee") is None else _coerce_float(data.get("entry_fee"), 0.0),
+            exit_fee=None if data.get("exit_fee") is None else _coerce_float(data.get("exit_fee"), 0.0),
             target_price=_coerce_float(data.get("target_price"), 0.0),
             sl_price=_coerce_float(data.get("sl_price"), 0.0),
             target_pct=_coerce_float(data.get("target_pct"), 0.0),
@@ -393,12 +421,15 @@ class PendingScalpEntry:
         entry_id: int,
         symbol: str,
         side: str,
-        size: int,
+        size: float,
         leverage: int,
         qty_mode: str = "usdt",
         qty_value: float = 0.0,
         base_qty: float = 0.0,
         margin_usd: float = 0.0,
+        broker_name: str = "delta",
+        broker_label: str = "Delta Exchange",
+        market_type: str = "derivatives",
         entry_limit_price: float = 0.0,
         entry_stop_price: float = 0.0,
         guardrail_price: float = 0.0,
@@ -419,12 +450,15 @@ class PendingScalpEntry:
         self.entry_id = entry_id
         self.symbol = symbol
         self.side = side
-        self.size = size
+        self.size = _coerce_float(size, 0.0)
         self.leverage = leverage
         self.qty_mode = str(qty_mode or "usdt").lower()
         self.qty_value = _coerce_float(qty_value, 0.0)
         self.base_qty = _coerce_float(base_qty, 0.0)
         self.margin_usd = _coerce_float(margin_usd, 0.0)
+        self.broker_name = str(broker_name or "delta").strip().lower()
+        self.broker_label = str(broker_label or self.broker_name.title())
+        self.market_type = "spot" if str(market_type or "").lower() == "spot" else "derivatives"
         self.entry_limit_price = _coerce_float(entry_limit_price, 0.0)
         self.entry_stop_price = _coerce_float(entry_stop_price or guardrail_price, 0.0)
         self.guardrail_price = self.entry_stop_price
@@ -543,6 +577,9 @@ class PendingScalpEntry:
             "qty_value": self.qty_value,
             "base_qty": self.base_qty,
             "margin_usd": self.margin_usd or round(self.size / max(self.leverage, 1), 4),
+            "broker_name": self.broker_name,
+            "broker_label": self.broker_label,
+            "market_type": self.market_type,
             "entry_limit_price": self.entry_limit_price,
             "entry_stop_price": self.entry_stop_price,
             "guardrail_price": self.guardrail_price,
@@ -574,12 +611,15 @@ class PendingScalpEntry:
             entry_id=int(data.get("entry_id", 0) or 0),
             symbol=str(data.get("symbol", "") or ""),
             side=str(data.get("side", "") or ""),
-            size=int(data.get("size", 0) or 0),
+            size=_coerce_float(data.get("size"), 0.0),
             leverage=int(data.get("leverage", 1) or 1),
             qty_mode=str(data.get("qty_mode", "usdt") or "usdt"),
             qty_value=_coerce_float(data.get("qty_value"), 0.0),
             base_qty=_coerce_float(data.get("base_qty"), 0.0),
             margin_usd=_coerce_float(data.get("margin_usd", data.get("qty_usdt")), 0.0),
+            broker_name=str(data.get("broker_name", "delta") or "delta"),
+            broker_label=str(data.get("broker_label", "") or ""),
+            market_type=str(data.get("market_type", "derivatives") or "derivatives"),
             entry_limit_price=_coerce_float(data.get("entry_limit_price"), 0.0),
             entry_stop_price=_coerce_float(data.get("entry_stop_price", data.get("guardrail_price")), 0.0),
             guardrail_price=_coerce_float(data.get("guardrail_price"), 0.0),
@@ -617,6 +657,34 @@ class ScalpEngine:
         on_update: Optional[Callable[[dict], None]] = None,
     ):
         self.delta = delta_client
+        self.broker_name = str(getattr(delta_client, "broker_name", "delta") or "delta").lower()
+        self.broker_label = str(getattr(delta_client, "display_name", self.broker_name.title()) or self.broker_name)
+        capability_reader = getattr(delta_client, "scalp_capabilities", None)
+        self.broker_capabilities = dict(capability_reader() if callable(capability_reader) else {})
+        if not self.broker_capabilities:
+            # Backward-compatible contract for test doubles and older private
+            # adapters. Production BaseBroker subclasses always provide an
+            # explicit, fail-safe capability record.
+            self.broker_capabilities = {
+                "spot_only": False,
+                "supports_short": True,
+                "supports_leverage": True,
+                "supports_post_only": True,
+                "supports_base_quantity": False,
+                "leverage_options": [1, 2, 3, 5, 10, 20, 25, 50, 100, 200],
+                "order_types": [
+                    "market",
+                    "limit",
+                    "stop_market",
+                    "stop_limit",
+                    "take_profit_market",
+                    "take_profit_limit",
+                    "trailing_stop",
+                    "maker_only",
+                ],
+            }
+        self.market_type = "spot" if self.broker_capabilities.get("spot_only") else "derivatives"
+        self.fee_pct_per_side = max(_coerce_float(getattr(delta_client, "fee_pct_per_side", 0.059), 0.059), 0.0)
         # Callback invoked with trade dict whenever a trade is closed (for disk persistence).
         self._on_trade_closed = on_trade_closed
         self._on_event = on_event
@@ -888,6 +956,30 @@ class ScalpEngine:
             return {"error": "Broker does not support verified order placement", "verified": False}
         return await place_verified(**kwargs)
 
+    def _broker_order_kwargs(self, *, base_qty: float = 0.0, post_only: bool = False) -> dict:
+        kwargs: Dict[str, Any] = {}
+        if self.broker_capabilities.get("supports_base_quantity") and base_qty > 0:
+            kwargs["base_qty"] = base_qty
+        if self.broker_capabilities.get("supports_post_only"):
+            kwargs["post_only"] = bool(post_only)
+        return kwargs
+
+    @staticmethod
+    def _filled_base_qty(result: dict, fallback: float = 0.0) -> float:
+        for key in ("net_base_filled", "filled_size", "executedQty", "executed_quantity", "base_qty"):
+            value = _coerce_float((result or {}).get(key), 0.0)
+            if value > 0:
+                return value
+        return max(_coerce_float(fallback, 0.0), 0.0)
+
+    @staticmethod
+    def _reported_fee(result: dict) -> Optional[float]:
+        for key in ("paid_commission", "commission", "fee_amount", "fees"):
+            if key not in (result or {}) or (result or {}).get(key) in (None, ""):
+                continue
+            return max(_coerce_float((result or {}).get(key), 0.0), 0.0)
+        return None
+
     def _canonical_symbol(self, symbol: str) -> str:
         if not symbol:
             return ""
@@ -936,7 +1028,7 @@ class ScalpEngine:
             return price
         return _coerce_float(self._last_prices.get(canonical), 0.0)
 
-    def _resolve_contract_size(self, *, qty_mode: str, qty_value: float, price: float, leverage: int) -> int:
+    def _resolve_contract_size(self, *, qty_mode: str, qty_value: float, price: float, leverage: int) -> float:
         mode = str(qty_mode or "usdt").lower()
         value = _coerce_float(qty_value, 0.0)
         lev = max(int(leverage or 1), 1)
@@ -945,7 +1037,12 @@ class ScalpEngine:
         if mode == "base":
             if price <= 0:
                 return 0
-            return max(1, int(round(value * price)))
+            notional = value * price
+            if self.market_type == "spot":
+                return round(notional, 8)
+            return max(1, int(round(notional)))
+        if self.market_type == "spot":
+            return round(value, 8)
         return max(1, int(round(value * lev)))
 
     def _trade_action_lock(self, trade_id: int) -> asyncio.Lock:
@@ -1099,6 +1196,27 @@ class ScalpEngine:
         trail_value = _coerce_float(trail_value, 0.0)
         trail_mode = "pct" if str(trail_mode or "").strip().lower() in {"pct", "percent", "percentage"} else "usd"
         qty_value = _coerce_float(qty_value, 0.0)
+        capabilities = self.broker_capabilities
+        if side == "SHORT" and not capabilities.get("supports_short"):
+            return {
+                "status": "error",
+                "message": f"{self.broker_label} is spot-only in Scalp; SELL cannot open a short position",
+                "error_code": "short_not_supported",
+            }
+        allowed_leverage = {int(value) for value in (capabilities.get("leverage_options") or [1])}
+        if int(leverage or 1) not in allowed_leverage:
+            return {
+                "status": "error",
+                "message": f"{self.broker_label} Scalp allows leverage: {', '.join(str(v) + 'x' for v in sorted(allowed_leverage))}",
+                "error_code": "leverage_not_supported",
+            }
+        allowed_order_types = set(capabilities.get("order_types") or ["market"])
+        if order_type not in allowed_order_types:
+            return {
+                "status": "error",
+                "message": f"{self.broker_label} does not expose a verified {_scalp_order_type_label(order_type)} entry for Scalp",
+                "error_code": "order_type_not_supported",
+            }
         if order_type == "invalid":
             return {"status": "error", "message": "Unsupported scalp order type"}
         if order_type == "maker_only" and entry_limit_price <= 0:
@@ -1161,6 +1279,9 @@ class ScalpEngine:
                     maker_only=maker_only,
                     trail_value=trail_value,
                     trail_mode=trail_mode,
+                    broker_name=self.broker_name,
+                    broker_label=self.broker_label,
+                    market_type=self.market_type,
                 )
                 should_enter_now = probe.should_trigger(market_price)
             if not should_enter_now:
@@ -1197,6 +1318,9 @@ class ScalpEngine:
                     qty_value=qty_value,
                     base_qty=base_qty,
                     margin_usd=margin_usd,
+                    broker_name=self.broker_name,
+                    broker_label=self.broker_label,
+                    market_type=self.market_type,
                     entry_limit_price=entry_limit_price,
                     entry_stop_price=entry_stop_price,
                     order_type=order_type,
@@ -1321,11 +1445,13 @@ class ScalpEngine:
         trail_value = _coerce_float(trail_value, 0.0)
         trail_mode = "pct" if str(trail_mode or "").strip().lower() in {"pct", "percent", "percentage"} else "usd"
         broker_order_type = (
-            "limit_order"
-            if entry_order_type in {"maker_only", "stop_limit", "take_profit_limit"} and entry_limit_price > 0
+            ("maker_only" if self.broker_name == "binance" else "limit_order")
+            if entry_order_type == "maker_only" and entry_limit_price > 0
+            else "limit_order"
+            if entry_order_type in {"stop_limit", "take_profit_limit"} and entry_limit_price > 0
             else "market_order"
         )
-        broker_limit_price = entry_limit_price if broker_order_type == "limit_order" else None
+        broker_limit_price = entry_limit_price if broker_order_type in {"maker_only", "limit_order"} else None
 
         product_id = 0
         if mode != "paper":
@@ -1394,6 +1520,10 @@ class ScalpEngine:
                     order_type=broker_order_type,
                     limit_price=broker_limit_price,
                     leverage=leverage,
+                    **self._broker_order_kwargs(
+                        base_qty=qty_value if qty_mode == "base" else 0.0,
+                        post_only=entry_order_type == "maker_only",
+                    ),
                 )
                 if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
                     self._remember_execution(
@@ -1424,6 +1554,23 @@ class ScalpEngine:
                 )
                 return {"status": "error", "message": str(e)}
 
+        filled_base_qty = qty_value if qty_mode == "base" else (size / entry_price if entry_price > 0 else 0.0)
+        entry_fee = None
+        if mode != "paper":
+            entry_fee = self._reported_fee(result)
+            if self.market_type == "spot":
+                filled_base_qty = self._filled_base_qty(result, filled_base_qty)
+                filled_notional = _coerce_float(result.get("quote_size") or result.get("cummulativeQuoteQty"), 0.0)
+                if filled_notional <= 0 and filled_base_qty > 0 and entry_price > 0:
+                    filled_notional = filled_base_qty * entry_price
+                if filled_notional > 0:
+                    size = round(filled_notional, 8)
+                leverage = 1
+            else:
+                filled_contracts = _coerce_float(result.get("filled_size"), 0.0)
+                if filled_contracts > 0:
+                    size = filled_contracts
+
         self._trade_counter += 1
         trade = ScalpTrade(
             trade_id=self._trade_counter,
@@ -1435,8 +1582,13 @@ class ScalpEngine:
             leverage=leverage,
             qty_mode=qty_mode,
             qty_value=qty_value,
-            base_qty=qty_value if qty_mode == "base" else 0.0,
-            margin_usd=qty_value if qty_mode != "base" and qty_value > 0 else round(size / max(leverage, 1), 4),
+            base_qty=filled_base_qty,
+            margin_usd=size if self.market_type == "spot" else round(size / max(leverage, 1), 4),
+            broker_name=self.broker_name,
+            broker_label=self.broker_label,
+            market_type=self.market_type,
+            fee_pct_per_side=self.fee_pct_per_side,
+            entry_fee=entry_fee,
             target_price=target_price,
             sl_price=sl_price,
             target_pct=target_pct,
@@ -1531,6 +1683,72 @@ class ScalpEngine:
                 "retryable": True,
             }
         return result
+
+    def cancel_pending_entry(self, entry_id: int, reason: str = "manual_cancel") -> Dict[str, Any]:
+        pending = self.pending_entries.pop(int(entry_id or 0), None)
+        if pending is None:
+            return {
+                "status": "error",
+                "action": "cancel_pending",
+                "entry_id": int(entry_id or 0),
+                "message": f"Pending entry {entry_id} not found",
+                "error_code": "pending_not_found",
+            }
+        self._remember_execution(
+            phase="pending_cancel",
+            symbol=pending.symbol,
+            side=pending.side,
+            mode=pending.mode,
+            verified=True,
+            trade_id=pending.entry_id,
+            note=f"Pending entry cancelled ({reason})",
+            lifecycle="cancelled",
+            fill_status="cancelled",
+        )
+        self._log("info", f"Pending scalp entry {pending.entry_id} cancelled for {pending.side} {pending.symbol}.")
+        self._schedule_update(force=True)
+        return {
+            "status": "ok",
+            "action": "pending_cancelled",
+            "entry_id": pending.entry_id,
+            "pending_entry": pending.to_dict(),
+        }
+
+    async def kill(self) -> Dict[str, Any]:
+        """Cancel local pending entries and close only Scalp-owned positions."""
+        cancelled = []
+        for entry_id in list(self.pending_entries):
+            result = self.cancel_pending_entry(entry_id, reason="scalp_kill")
+            if result.get("status") == "ok":
+                cancelled.append(entry_id)
+
+        closed = []
+        failures = []
+        for trade_id in list(self.open_trades):
+            result = await self.exit_trade(trade_id, reason="scalp_kill")
+            if result.get("status") == "ok":
+                closed.append(trade_id)
+            else:
+                failures.append({"trade_id": trade_id, "message": result.get("message", "Exit failed")})
+
+        if not failures:
+            self.stop()
+        else:
+            # Keep monitoring any exposure whose broker exit was not verified.
+            if self.open_trades and not self._running:
+                self.start()
+        return {
+            "status": "ok" if not failures else "degraded",
+            "action": "scalp_kill",
+            "cancelled_pending": cancelled,
+            "closed_trades": closed,
+            "failures": failures,
+            "message": (
+                f"Scalp stopped: {len(closed)} position(s) closed and {len(cancelled)} pending entry(s) cancelled"
+                if not failures
+                else f"Scalp kill incomplete: {len(failures)} broker exit(s) need attention"
+            ),
+        }
 
     async def update_trade_targets(self, trade_id: int, **kwargs) -> Dict[str, Any]:
         """Update TP/SL for an open trade."""
@@ -1682,6 +1900,9 @@ class ScalpEngine:
                         side=order_side,
                         order_type="market_order",
                         leverage=trade.leverage,
+                        **self._broker_order_kwargs(
+                            base_qty=normalized_qty_value if normalized_qty_mode == "base" else 0.0,
+                        ),
                     )
                     if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
                         self._remember_execution(
@@ -1724,14 +1945,37 @@ class ScalpEngine:
                         "retryable": True,
                     }
 
-            old_size = max(int(trade.size or 0), 0)
+            filled_add_base = (
+                self._filled_base_qty(
+                    result,
+                    normalized_qty_value
+                    if normalized_qty_mode == "base"
+                    else (add_size / fill_price if fill_price > 0 else 0.0),
+                )
+                if trade.market_type == "spot" and trade.mode != "paper"
+                else normalized_qty_value
+                if trade.market_type == "spot" and normalized_qty_mode == "base"
+                else (add_size / fill_price if fill_price > 0 else 0.0)
+            )
+            if trade.market_type == "spot" and trade.mode != "paper":
+                filled_add_notional = _coerce_float(result.get("quote_size") or result.get("cummulativeQuoteQty"), 0.0)
+                if filled_add_notional <= 0:
+                    filled_add_notional = filled_add_base * fill_price
+                if filled_add_notional > 0:
+                    add_size = filled_add_notional
+            elif trade.market_type != "spot" and trade.mode != "paper":
+                filled_contracts = _coerce_float(result.get("filled_size"), 0.0)
+                if filled_contracts > 0:
+                    add_size = filled_contracts
+
+            old_size = max(_coerce_float(trade.size, 0.0), 0.0)
             total_size = old_size + add_size
             old_base_qty = _coerce_float(getattr(trade, "base_qty", 0.0), 0.0)
             if old_base_qty <= 0 and trade.entry_price > 0:
                 old_base_qty = old_size / trade.entry_price
             # Base exposure must follow the filled contract notional, not just
             # the requested input, because exchanges round contract size.
-            add_base_qty = add_size / fill_price if fill_price > 0 else 0.0
+            add_base_qty = filled_add_base
             total_base_qty = max(old_base_qty + add_base_qty, 0.0)
             weighted_price = (
                 total_size / total_base_qty
@@ -1750,6 +1994,9 @@ class ScalpEngine:
                 trade.base_qty = round(total_base_qty, 8)
                 if trade.qty_mode == "base":
                     trade.qty_value = trade.base_qty
+            reported_add_fee = self._reported_fee(result) if trade.mode != "paper" else None
+            if reported_add_fee is not None:
+                trade.entry_fee = (trade.entry_fee or 0.0) + reported_add_fee
             if trade.target_pct > 0:
                 trade.target_price = 0.0
             if trade.sl_pct > 0:
@@ -1851,6 +2098,12 @@ class ScalpEngine:
         return {
             "running": self._running,
             "in_trade": len(self.open_trades) > 0,
+            "broker": {
+                "name": self.broker_name,
+                "label": self.broker_label,
+                "configured": bool(getattr(self.delta, "_is_configured", lambda: False)()),
+                "capabilities": dict(self.broker_capabilities),
+            },
             "run_policy": {
                 "mode": "continuous",
                 "session_end_at": None,
@@ -2094,6 +2347,7 @@ class ScalpEngine:
                     order_type="market_order",
                     leverage=trade.leverage,
                     reduce_only=True,
+                    **self._broker_order_kwargs(base_qty=trade.base_qty),
                 )
                 if isinstance(result, dict) and (result.get("error") or not result.get("verified")):
                     # Broker rejected the exit — leave trade open so monitor retries.
@@ -2134,6 +2388,7 @@ class ScalpEngine:
                     }
                 exit_order_id = str(result.get("id", "closed"))
                 trade.current_price = self._extract_order_price(result, trade.current_price)
+                trade.exit_fee = self._reported_fee(result)
             except Exception as e:
                 trade._exit_attempts = getattr(trade, "_exit_attempts", 0) + 1
                 self._remember_execution(
@@ -2343,6 +2598,51 @@ async def _scalp_engine_reconcile_broker_positions(self, force: bool = False) ->
                 )
             continue
         summary["checked"] += 1
+        if str(getattr(self, "market_type", "derivatives")) == "spot":
+            # A spot wallet position is the account's aggregate asset balance,
+            # not this Scalp trade. Never overwrite the trade's entry/size with
+            # unrelated holdings and never declare it closed merely because an
+            # aggregate balance lookup is ambiguous.
+            expected_base = max(_coerce_float(getattr(trade, "base_qty", 0.0), 0.0), 0.0)
+            broker_base = max(
+                _coerce_float(position.get("base_size") or position.get("total_balance"), 0.0),
+                0.0,
+            )
+            broker_mark = _coerce_float(position.get("mark_price") or position.get("last_price"), 0.0)
+            if broker_mark > 0:
+                trade.current_price = broker_mark
+            tolerance = max(expected_base * 0.0025, 1e-10)
+            covered = expected_base > 0 and broker_base + tolerance >= expected_base
+            if not covered:
+                summary["errors"] += 1
+                summary["messages"].append(
+                    f"{getattr(trade, 'symbol', 'UNKNOWN')}: spot balance {broker_base:g} is below Scalp quantity {expected_base:g}"
+                )
+                if hasattr(self, "_remember_execution"):
+                    self._remember_execution(
+                        phase="reconcile_error",
+                        symbol=getattr(trade, "symbol", ""),
+                        side=getattr(trade, "side", ""),
+                        mode=getattr(trade, "mode", ""),
+                        verified=False,
+                        trade_id=getattr(trade, "trade_id", ""),
+                        error="Spot balance cannot cover the Scalp trade; local state was preserved.",
+                    )
+            else:
+                if hasattr(self, "_remember_execution"):
+                    self._remember_execution(
+                        phase="reconcile",
+                        lifecycle="verified",
+                        fill_status="open",
+                        symbol=getattr(trade, "symbol", ""),
+                        side=getattr(trade, "side", ""),
+                        mode=getattr(trade, "mode", ""),
+                        verified=True,
+                        trade_id=getattr(trade, "trade_id", ""),
+                        result={"broker_base_qty": broker_base, "expected_base_qty": expected_base},
+                        note="Spot balance covers the Scalp quantity; unrelated holdings were not imported.",
+                    )
+            continue
         broker_size = _scalp_position_size(position)
         if broker_size <= 0:
             exit_price = _coerce_float(getattr(trade, "current_price", 0.0), 0.0) or _coerce_float(

@@ -107,7 +107,8 @@ const _CF_VIEWER_BLOCKED = new Set([
   'deleteRun', 'bulkDeleteRuns',
   'connectBroker', 'disconnectBroker', 'toggleBrokerConnection', 'switchBroker',
   'cfSubmitScalp', 'cfExitScalpTrade', 'cfModifyScalpTrade', 'cfAddScalpQuantity',
-  'cfReconcileScalpBroker', 'cfToggleScalpExitEditors',
+  'cfReconcileScalpBroker', 'cfToggleScalpExitEditors', 'cfUpdateScalpBroker',
+  'cfCheckScalpBroker', 'cfCancelScalpPending', 'cfKillScalp',
   'cfCascadeStartCampaign', 'cfCascadeStopCampaign', 'cfCascadeLiquidate', 'cfCascadeSetLive',
   'cfCascadeDeleteCampaign', 'cfCascadeRecalculate', 'cfCascadeReconcile', 'cfCascadeRestructure',
   'cfCascadePurgeClosed', 'cfCascadeSetMcKind', 'cfCascadeSaveCapitalGroup',
@@ -6712,9 +6713,9 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStrategies();
   cfApplyScalpDefaults();
   cfUpdateSLTPHints();
-  cfUpdateScalpSymbol();
   cfUpdateScalpOrderTypeUi();
   cfToggleScalpLiveSafety();
+  cfLoadScalpBrokerSettings().then(function() { return cfUpdateScalpSymbol(); }).catch(function() { return null; });
   cfInitOperatorLounge();
   cfRefreshScalpEntryLaneFromState();
   cfSyncScalpLogPanelHeight();
@@ -6727,8 +6728,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (qtyModeEl) qtyModeEl.addEventListener('change', cfUpdateScalpQtyUi);
   var scalpAck = document.getElementById('cf-scalp-live-ack');
   if (scalpAck) scalpAck.addEventListener('change', cfRefreshScalpEntryLaneFromState);
-  var scalpMode = document.getElementById('cf-scalp-mode');
-  if (scalpMode) scalpMode.addEventListener('change', cfRefreshScalpEntryLaneFromState);
   var pfOrderSearch = document.getElementById('pf-orders-search');
   if (pfOrderSearch) {
     pfOrderSearch.addEventListener('input', function() {
@@ -6780,6 +6779,7 @@ var _cfScalpActivityTimer = null;
 var _cfScalpLastActivityFetch = 0;
 var _cfScalpActivityInFlight = null;
 var _cfLatestScalpStatus = {};
+var _cfScalpBrokerInfo = {};
 var _cfAppSocket = null;
 var _cfAppSocketConnected = false;
 var _cfScalpLastWsUpdateAt = 0;
@@ -6858,7 +6858,7 @@ const _CF_SCALP_DEFAULTS = Object.freeze({
   symbol: 'BTCUSDT',
   qtyMode: 'usdt',
   qty: '10000',
-  leverage: '10',
+  leverage: '1',
   sl: '1000',
   tp: '1000',
   slType: 'usdt',
@@ -6893,6 +6893,7 @@ function cfApplyScalpDefaults() {
   setValue('cf-sl-type', defaults.slType);
   setValue('cf-tp-type', defaults.tpType);
   setValue('cf-scalp-mode', defaults.mode);
+  cfSyncScalpExecutionModeToggle();
   setValue('cf-scalp-order-type', defaults.orderType);
   setValue('cf-scalp-entry-stop', defaults.entryStop);
   setValue('cf-scalp-entry-limit', defaults.entryLimit);
@@ -6917,9 +6918,137 @@ function cfScalpSelectedMode() {
   return el && el.value === 'live' ? 'live' : 'paper';
 }
 
+function cfSyncScalpExecutionModeToggle() {
+  var el = document.getElementById('cf-scalp-mode');
+  if (!el) return;
+  var isLive = el.value === 'live';
+  el.value = isLive ? 'live' : 'paper';
+  el.dataset.mode = isLive ? 'live' : 'paper';
+  el.setAttribute('aria-checked', isLive ? 'true' : 'false');
+  el.setAttribute('aria-label', 'Execution mode: ' + (isLive ? 'Live' : 'Paper'));
+  var help = document.getElementById('cf-scalp-mode-help');
+  if (help) {
+    help.textContent = isLive
+      ? 'Live mode • real broker orders require the confirmation below'
+      : 'Paper mode • simulated entries only';
+  }
+}
+
+function cfSetScalpExecutionMode(mode) {
+  var el = document.getElementById('cf-scalp-mode');
+  if (!el) return;
+  el.value = mode === 'live' ? 'live' : 'paper';
+  cfToggleScalpLiveSafety();
+}
+
+function cfToggleScalpExecutionMode() {
+  cfSetScalpExecutionMode(cfScalpSelectedMode() === 'paper' ? 'live' : 'paper');
+}
+
 function cfScalpSelectedQtyMode() {
   var el = document.getElementById('cf-scalp-qty-mode');
   return el && String(el.value).toLowerCase() === 'base' ? 'base' : 'usdt';
+}
+
+function cfScalpSelectedBroker() {
+  var el = document.getElementById('cf-scalp-broker');
+  return String((el && el.value) || _cfScalpBrokerInfo.current_broker || 'delta').toLowerCase();
+}
+
+function cfApplyScalpBrokerSettings(payload) {
+  var info = payload || {};
+  _cfScalpBrokerInfo = Object.assign({}, _cfScalpBrokerInfo || {}, info);
+  var select = document.getElementById('cf-scalp-broker');
+  var brokers = Array.isArray(info.available_brokers) ? info.available_brokers : [];
+  if (select && brokers.length) {
+    select.innerHTML = brokers.map(function(item) {
+      return '<option value="' + _escapeHtml(item.name || '') + '">' + _escapeHtml(item.label || item.name || 'Broker') + '</option>';
+    }).join('');
+    select.value = info.current_broker || brokers[0].name;
+    select.disabled = info.switchable === false;
+    select.title = info.switchable === false ? 'Close Scalp positions and cancel pending entries before switching broker' : 'Choose the Scalp execution broker';
+  }
+
+  var capabilities = info.capabilities || {};
+  var pill = document.getElementById('cf-scalp-broker-pill');
+  if (pill) {
+    pill.textContent = info.configured ? ((info.environment || 'LIVE') + ' READY') : 'KEYS NEEDED';
+    pill.dataset.state = info.configured ? (info.testnet ? 'ready' : 'live') : 'error';
+  }
+  var help = document.getElementById('cf-scalp-broker-help');
+  if (help) {
+    help.textContent = capabilities.spot_only
+      ? (info.current_label + ' • Spot cash only • 1x • BUY opens a position • SELL/short is disabled • no margin API is used.')
+      : (info.current_label + ' • Perpetual derivatives • LONG and SHORT • leverage capped by the selected contract.');
+  }
+
+  var orderSelect = document.getElementById('cf-scalp-order-type');
+  if (orderSelect) {
+    var allowed = Array.isArray(capabilities.order_types) && capabilities.order_types.length
+      ? capabilities.order_types
+      : ['market'];
+    var selected = allowed.includes(orderSelect.value) ? orderSelect.value : 'market';
+    orderSelect.innerHTML = allowed.map(function(value) {
+      return '<option value="' + _escapeHtml(value) + '">' + _escapeHtml(cfScalpOrderLabel(value)) + '</option>';
+    }).join('');
+    orderSelect.value = selected;
+  }
+  cfUpdateScalpOrderTypeUi();
+  cfUpdateScalpQtyUi();
+  cfRefreshScalpEntryLaneFromState();
+}
+
+async function cfLoadScalpBrokerSettings() {
+  var response = await cfApiFetch('/api/scalp/broker', { cache: 'no-store' });
+  var payload = await cfReadApiPayload(response);
+  if (!response.ok) throw new Error(cfApiErrorDetail(payload, 'Unable to load Scalp broker'));
+  cfApplyScalpBrokerSettings(payload || {});
+  return payload;
+}
+
+async function cfUpdateScalpBroker() {
+  var select = document.getElementById('cf-scalp-broker');
+  if (!select) return;
+  var requested = String(select.value || '').toLowerCase();
+  select.disabled = true;
+  try {
+    var response = await cfApiFetch('/api/scalp/broker', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ broker: requested })
+    });
+    var payload = await cfReadApiPayload(response);
+    cfApplyScalpBrokerSettings(payload || {});
+    if (!response.ok) {
+      cfToast(cfApiErrorDetail(payload, 'Scalp broker switch failed'), 'warning');
+      return;
+    }
+    _cfLatestScalpStatus = {};
+    cfToast(payload.message || 'Scalp broker changed', 'success');
+    await cfUpdateScalpSymbol();
+    await cfRefreshScalpWorkspace({ forceReload: true });
+  } catch (error) {
+    cfToast((error && error.message) || 'Scalp broker switch failed', 'danger');
+    await cfLoadScalpBrokerSettings().catch(function() { return null; });
+  } finally {
+    select.disabled = _cfScalpBrokerInfo.switchable === false;
+  }
+}
+
+async function cfCheckScalpBroker() {
+  var button = document.getElementById('cf-scalp-broker-check');
+  if (button) { button.disabled = true; button.textContent = 'Testing…'; }
+  try {
+    var response = await cfApiFetch('/api/scalp/broker/check', { method: 'POST', cache: 'no-store' });
+    var payload = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(payload, 'Connection test failed'));
+    cfToast(payload.message || 'Scalp broker connection verified', 'success');
+    await cfLoadScalpBrokerSettings();
+  } catch (error) {
+    cfToast((error && error.message) || 'Connection test failed', 'danger');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Test'; }
+  }
 }
 
 const _CF_SCALP_ORDER_HELP = Object.freeze({
@@ -6993,6 +7122,7 @@ function cfUpdateScalpOrderTypeUi() {
 
 function cfUpdateScalpQtyUi() {
   var mode = cfScalpSelectedQtyMode();
+  var spotOnly = !!((_cfScalpBrokerInfo.capabilities || {}).spot_only);
   var qtyEl = document.getElementById('cf-scalp-qty');
   var hintEl = document.getElementById('cf-scalp-qty-hint');
   if (!qtyEl) return;
@@ -7006,7 +7136,9 @@ function cfUpdateScalpQtyUi() {
     qtyEl.min = '1';
     qtyEl.step = '1';
     qtyEl.placeholder = '10000';
-    if (hintEl) hintEl.textContent = 'Margin in USD. Final notional scales by leverage.';
+    if (hintEl) hintEl.textContent = spotOnly
+      ? 'Cash spend in USDT. Spot Scalp is fixed at 1x and never calls a margin endpoint.'
+      : 'Margin in USD. Final notional scales by leverage.';
     if (!qtyEl.value || Number(qtyEl.value) <= 1) qtyEl.value = _CF_SCALP_DEFAULTS.qty;
   }
   cfRefreshScalpEntryLaneFromState();
@@ -7126,6 +7258,7 @@ function cfScalpPhaseLabel(value) {
     exit: 'Exit',
     armed: 'Pending Entry',
     targets: 'TP/SL Update',
+    pending_cancel: 'Pending Cancel',
     scale_in: 'Scale-In',
     reconcile: 'Broker Sync',
     scale_in_reject: 'Scale-In Reject',
@@ -7567,6 +7700,9 @@ function cfMergeScalpStatusPatch(payload) {
   if (payload.entry_controls) {
     merged.entry_controls = Object.assign({}, merged.entry_controls || {}, payload.entry_controls);
   }
+  if (payload.broker) {
+    merged.broker = Object.assign({}, merged.broker || {}, payload.broker);
+  }
   ['open_trades', 'pending_entries', 'closed_trades', 'event_log', 'file_trades', 'file_events'].forEach(function(key) {
     if (Array.isArray(payload[key])) merged[key] = payload[key].slice();
   });
@@ -7718,6 +7854,47 @@ async function cfRefreshScalpWorkspace(options) {
     return await _cfScalpRefreshInFlight;
   } finally {
     _cfScalpRefreshInFlight = null;
+  }
+}
+
+async function cfCancelScalpPending(entryId) {
+  var key = String(entryId || '');
+  if (!key) return;
+  try {
+    var response = await cfApiFetch('/api/scalp/pending/' + encodeURIComponent(key), { method: 'DELETE' });
+    var payload = await cfReadApiPayload(response);
+    cfMergeScalpStatusPatch(payload || {});
+    if (!response.ok) throw new Error(cfApiErrorDetail(payload, 'Pending entry cancellation failed'));
+    cfToast('Pending Scalp entry cancelled', 'success');
+    await cfRefreshScalpWorkspace({ forceReload: true });
+  } catch (error) {
+    cfToast((error && error.message) || 'Pending entry cancellation failed', 'danger');
+  }
+}
+
+async function cfKillScalp() {
+  var latest = _cfLatestScalpStatus || {};
+  var openCount = Array.isArray(latest.open_trades) ? latest.open_trades.length : 0;
+  var pendingCount = Array.isArray(latest.pending_entries) ? latest.pending_entries.length : 0;
+  var ok = await cfConfirm(
+    'This affects <b>Scalp only</b>: it cancels ' + pendingCount + ' pending Scalp entr' + (pendingCount === 1 ? 'y' : 'ies')
+      + ' and sends broker exits for ' + openCount + ' open Scalp position' + (openCount === 1 ? '' : 's')
+      + '. Strategies, Journal, Portfolio, Live, and Cascade are not stopped. Continue?',
+    'Stop Scalp Only', '⛔', true
+  );
+  if (!ok) return;
+  try {
+    var response = await cfApiFetch('/api/scalp/kill', { method: 'POST' });
+    var payload = await cfReadApiPayload(response);
+    cfMergeScalpStatusPatch(payload || {});
+    if (!response.ok) {
+      cfToast(cfApiErrorDetail(payload, payload.message || 'Scalp kill incomplete'), 'danger');
+    } else {
+      cfToast(payload.message || 'Scalp stopped', 'success');
+    }
+    await cfRefreshScalpWorkspace({ forceReload: true });
+  } catch (error) {
+    cfToast((error && error.message) || 'Scalp kill failed', 'danger');
   }
 }
 
@@ -7892,6 +8069,9 @@ function cfRefreshScalpEntryLaneFromState() {
   const orderType = cfScalpSelectedOrderType();
   const orderLabel = cfScalpOrderLabel(orderType);
   const pendingArmed = cfScalpPendingPriceActive();
+  const brokerCapabilities = _cfScalpBrokerInfo.capabilities || {};
+  const brokerConfigured = _cfScalpBrokerInfo.configured !== false;
+  const shortAllowed = brokerCapabilities.supports_short !== false;
   const status = _cfLatestScalpStatus || {};
   const entry = status.entry_controls || {};
   const feed = status.feed_metrics || {};
@@ -7904,12 +8084,15 @@ function cfRefreshScalpEntryLaneFromState() {
   let effectiveAllowed = mode === 'live' ? liveAllowed : paperAllowed;
   if (pendingArmed) effectiveAllowed = true;
   if (requiresAck) effectiveAllowed = false;
+  if (mode === 'live' && !brokerConfigured) effectiveAllowed = false;
 
   let note = '';
   if (pendingArmed) {
     note = orderLabel + ' order armed. The scalp engine will wait for the required trigger/fill condition.';
   } else if (requiresAck) {
     note = 'Confirm live mode to enable real orders.';
+  } else if (mode === 'live' && !brokerConfigured) {
+    note = 'Configure and test this broker before enabling real Scalp orders.';
   } else if (state === 'waiting') {
     note = 'Waiting for the first reliable market tick.';
   } else if (state === 'degraded') {
@@ -7944,7 +8127,11 @@ function cfRefreshScalpEntryLaneFromState() {
 
   const disableReason = pendingArmed ? '' : (note || entry.reason || feed.entry_block_reason || 'Entry unavailable');
   cfSetScalpEntryButtonState(buyBtn, effectiveAllowed, disableReason);
-  cfSetScalpEntryButtonState(sellBtn, effectiveAllowed, disableReason);
+  cfSetScalpEntryButtonState(
+    sellBtn,
+    effectiveAllowed && shortAllowed,
+    shortAllowed ? disableReason : 'Spot cash mode cannot open a short position'
+  );
   cfScalpSyncEntrySubmitUi();
 }
 
@@ -7952,6 +8139,16 @@ function cfApplyScalpStatus(d) {
   try {
     const status = d || {};
     _cfLatestScalpStatus = status;
+    if (status.broker && status.broker.name) {
+      _cfScalpBrokerInfo.current_broker = status.broker.name;
+      _cfScalpBrokerInfo.current_label = status.broker.label || status.broker.name;
+      _cfScalpBrokerInfo.configured = status.broker.configured;
+      _cfScalpBrokerInfo.capabilities = Object.assign(
+        {},
+        _cfScalpBrokerInfo.capabilities || {},
+        status.broker.capabilities || {}
+      );
+    }
     // The scalp engine is a runtime Emergency Stop can halt, so it has to be
     // able to summon the button — nothing else in the UI can stop it.
     cfUpdateKillSwitch({ scalp: status.running });
@@ -8043,6 +8240,7 @@ function cfApplyScalpStatus(d) {
                 <div>Lev: <span>${_escapeHtml(String(p.leverage || '—'))}x</span></div>
                 <div class="cf-scalp-pending-meta-wide">Armed: <span>${_escapeHtml(armedAt)}</span></div>
               </div>
+              <div class="cf-scalp-pending-actions"><button type="button" class="read-only-hide btn btn-outline btn-sm" data-cf-click="cfCancelScalpPending('${_escapeHtml(String(p.entry_id || ''))}')">Cancel</button></div>
             </div>`;
         }).join('');
       }
@@ -8087,7 +8285,8 @@ function _cfOpenTradeSignature(open) {
       t.sl_price || 0,
       t.target_usd || 0,
       t.sl_usd || 0,
-      t.mode || ''
+      t.mode || '',
+      t.broker_name || ''
     ].join(':');
   }).join('|');
 }
@@ -8169,7 +8368,7 @@ function cfRenderActivePositions(open, execMetrics) {
         : ((t.base_qty ? Number(t.base_qty).toFixed(6) + ' qty' : 'margin'));
       const addConfig = cfScalpTradeAddConfig(t);
       return `<tr data-tid="${tid}" data-pnl-state="${pnlState}">
-        <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">trade #${tid || '—'} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div><div class="cf-scalp-trade-exec" id="cf-trade-exec-${tid}" data-state="neutral"></div><div class="cf-scalp-trade-sync" id="cf-trade-sync-${tid}" data-state="idle"></div></td>
+        <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">trade #${tid || '—'} • ${_escapeHtml(t.broker_label || t.broker_name || 'Broker')} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div><div class="cf-scalp-trade-exec" id="cf-trade-exec-${tid}" data-state="neutral"></div><div class="cf-scalp-trade-sync" id="cf-trade-sync-${tid}" data-state="idle"></div></td>
         <td>${sideTag}</td>
         <td><div class="table-value-stack"><div class="table-value-main">${qtyMain}</div><div class="table-value-sub">${qtySub}</div></div></td>
         <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div><div class="table-value-sub">entry</div></div></td>
@@ -8222,7 +8421,7 @@ async function cfSubmitScalp(direction) {
     const symbol = symbolEl.value;
     const qtyMode = cfScalpSelectedQtyMode();
     const qty = cfFieldNumber('cf-scalp-qty', qtyMode === 'base' ? 0.0015 : 10000);
-    const leverage = parseInt(leverageEl.value, 10) || 10;
+    const leverage = parseInt(leverageEl.value, 10) || 1;
     const slVal = cfFieldNumber('cf-scalp-sl', 0);
     const tpVal = cfFieldNumber('cf-scalp-tp', 0);
     const slPrice = cfFieldNumber('cf-scalp-sl-price', 0);
@@ -8237,6 +8436,14 @@ async function cfSubmitScalp(direction) {
     const tpType = tpTypeEl.value;
     const mode = modeEl.value;
     const liveAck = cfEl('cf-scalp-live-ack');
+    const broker = cfScalpSelectedBroker();
+    const capabilities = _cfScalpBrokerInfo.capabilities || {};
+
+    if (direction === 'SELL' && capabilities.supports_short === false) {
+      if (statusEl) { statusEl.textContent = 'Short selling is unavailable on this spot broker'; statusEl.style.color = 'var(--red)'; }
+      cfToast('This Scalp broker is spot-only. SELL cannot open a short position.', 'warning');
+      return;
+    }
 
     if (mode === 'live' && liveAck && !liveAck.checked) {
       if (statusEl) { statusEl.textContent = 'Confirm live acknowledgement first'; statusEl.style.color = 'var(--red)'; }
@@ -8271,7 +8478,7 @@ async function cfSubmitScalp(direction) {
     }
     submitLocked = true;
     if (statusEl) statusEl.textContent = 'Submitting…';
-    const payload = { symbol, side: direction, qty_mode: qtyMode, qty_value: qty, leverage, mode, order_type: orderType };
+    const payload = { broker, symbol, side: direction, qty_mode: qtyMode, qty_value: qty, leverage, mode, order_type: orderType };
     if (slType === 'pct' && slVal > 0) payload.stop_loss_pct = slVal;
     else if (slVal > 0) payload.sl_usd = slVal;
     if (tpType === 'pct' && tpVal > 0) payload.take_profit_pct = tpVal;
@@ -8462,7 +8669,7 @@ async function cfUpdateScalpSymbol() {
   if (!symbolEl || !levEl) return;
   const preferred = String(levEl.value || _CF_SCALP_DEFAULTS.leverage || '10');
   try {
-    const r = await fetch('/api/leverage/' + symbolEl.value, { credentials: 'same-origin' });
+    const r = await fetch('/api/scalp/leverage/' + symbolEl.value, { credentials: 'same-origin' });
     const d = await r.json();
     if (d.status === 'ok' && Array.isArray(d.options) && d.options.length) {
       const options = d.options.map(function(lev) { return String(lev); });
@@ -8488,6 +8695,7 @@ function cfToggleScalpLiveSafety() {
   const wrap = document.getElementById('cf-scalp-live-safety');
   const ack = document.getElementById('cf-scalp-live-ack');
   const isLive = !!modeEl && modeEl.value === 'live';
+  cfSyncScalpExecutionModeToggle();
   if (wrap) wrap.hidden = !isLive;
   if (!isLive && ack) ack.checked = false;
   cfRefreshScalpEntryLaneFromState();

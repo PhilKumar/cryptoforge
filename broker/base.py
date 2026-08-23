@@ -33,6 +33,42 @@ class BaseBroker:
     # a target priced with one venue's rate on another venue's book sells below
     # its own commission. Adapters override with their measured rate.
     fee_pct_per_side = 0.1
+    # Scalp execution capabilities. These are deliberately fail-safe: an
+    # adapter must opt in before the UI or API may expose leveraged/short
+    # entries. Spot adapters override both flags to False; Delta opts in.
+    market_type = "derivatives"
+    supports_short = False
+    supports_leverage = False
+    max_scalp_leverage = 1
+    supports_post_only = False
+    supports_base_quantity = False
+
+    def scalp_capabilities(self) -> dict:
+        """Return the execution contract the Scalp page is allowed to offer."""
+        max_leverage = max(int(self.max_scalp_leverage or 1), 1)
+        leverage_options = self.build_standard_leverage_options(max_leverage) if self.supports_leverage else [1]
+        order_types = [
+            "market",
+            "stop_limit",
+            "stop_market",
+            "trailing_stop",
+            "take_profit_market",
+            "take_profit_limit",
+        ]
+        if self.supports_post_only:
+            order_types.insert(1, "maker_only")
+        return {
+            "market_type": str(self.market_type or "derivatives"),
+            "spot_only": str(self.market_type or "").lower() == "spot",
+            "supports_short": bool(self.supports_short),
+            "supports_leverage": bool(self.supports_leverage),
+            "supports_post_only": bool(self.supports_post_only),
+            "supports_base_quantity": bool(self.supports_base_quantity),
+            "max_leverage": max_leverage,
+            "leverage_options": leverage_options,
+            "order_types": order_types,
+            "fee_pct_per_side": float(self.fee_pct_per_side or 0.0),
+        }
 
     def get_convert_history(self, days: int = 30) -> list:
         """Off-orderbook conversions. Only Binance Spot has these; the default

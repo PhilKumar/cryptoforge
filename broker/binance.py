@@ -98,6 +98,14 @@ class BinanceSpotClient(BaseBroker):
     supports_funding = False  # spot has no funding rate or open interest
     # Stop-limit buys with client order ids, and a free/locked spot wallet.
     supports_cascade = True
+    market_type = "spot"
+    supports_short = False
+    supports_leverage = False
+    max_scalp_leverage = 1
+    # Scalp tracks only filled positions today, not resting entry orders. Keep
+    # post-only hidden until the engine owns the full open/cancel/fill lifecycle.
+    supports_post_only = False
+    supports_base_quantity = True
 
     _SYMBOL_ALIASES = {
         **BaseBroker._SYMBOL_ALIASES,
@@ -515,6 +523,8 @@ class BinanceSpotClient(BaseBroker):
     @staticmethod
     def _order_type(order_type: str) -> str:
         raw = str(order_type or "").lower()
+        if raw in {"maker", "maker_only", "post_only", "limit_maker"}:
+            return "LIMIT_MAKER"
         if raw in {"limit", "limit_order"}:
             return "LIMIT"
         if raw in {"stop_limit", "stop_limit_order", "stop_loss_limit"}:
@@ -601,6 +611,7 @@ class BinanceSpotClient(BaseBroker):
         base_qty: float = None,
         stop_price: float = None,
         time_in_force: str = None,
+        post_only: bool = False,
     ) -> dict:
         if not self._is_configured():
             return {"error": "API not configured"}
@@ -634,7 +645,7 @@ class BinanceSpotClient(BaseBroker):
         }
         if client_order_id:
             payload["newClientOrderId"] = str(client_order_id)
-        if order_type_upper in {"LIMIT", "STOP_LOSS_LIMIT"}:
+        if order_type_upper in {"LIMIT", "LIMIT_MAKER", "STOP_LOSS_LIMIT"}:
             if not limit_price:
                 return {"error": "Limit price is required for Binance Spot limit orders"}
             tick_price = self._round_price_to_tick(pair, self.coerce_float(limit_price, 0.0))
@@ -648,7 +659,11 @@ class BinanceSpotClient(BaseBroker):
             tif = str(time_in_force or "GTC").upper()
             if tif not in {"GTC", "IOC", "FOK"}:
                 return {"error": f"Unsupported timeInForce {tif!r} for Binance Spot"}
-            payload.update({"price": tick_price, "timeInForce": tif})
+            payload["price"] = tick_price
+            # LIMIT_MAKER is Binance Spot's native post-only order and rejects
+            # an immediately marketable price. It does not accept timeInForce.
+            if order_type_upper != "LIMIT_MAKER":
+                payload["timeInForce"] = tif
         if order_type_upper == "STOP_LOSS_LIMIT":
             if not stop_price:
                 return {"error": "Stop price is required for Binance Spot stop-limit orders"}
@@ -681,6 +696,7 @@ class BinanceSpotClient(BaseBroker):
         client_order_id: str = None,
         base_qty: float = None,
         stop_price: float = None,
+        post_only: bool = False,
     ) -> dict:
         started_at = _time.perf_counter()
         result = self.place_order(
@@ -694,6 +710,7 @@ class BinanceSpotClient(BaseBroker):
             client_order_id=client_order_id,
             base_qty=base_qty,
             stop_price=stop_price,
+            post_only=post_only,
         )
         order_ack_ms = round((_time.perf_counter() - started_at) * 1000, 1)
         if isinstance(result, dict) and result.get("error"):
@@ -708,28 +725,77 @@ class BinanceSpotClient(BaseBroker):
                 "order_ack_ms": order_ack_ms,
                 "broker_latency_ms": order_ack_ms,
             }
-        status = str(result.get("status") or "").upper()
-        verified = status in {"FILLED", "PARTIALLY_FILLED"}
-        fill_price = self.coerce_float(result.get("avgPrice") or result.get("price"), 0.0)
-        if not verified:
-            await asyncio.sleep(1)
-            order_id = result.get("orderId")
-            checked = self.get_order(product_id, order_id) if order_id else {}
-            status = str(checked.get("status") or status).upper()
-            verified = status in {"FILLED", "PARTIALLY_FILLED"}
-            fill_price = self.coerce_float(checked.get("avgPrice") or fill_price, fill_price)
-        return {
-            **result,
-            "verified": verified,
-            "fill_status": status.lower() or "submitted",
-            "order_lifecycle": "filled" if verified else "pending",
-            "exchange_state": status.lower() or "submitted",
-            "verification_state": "filled" if verified else "pending",
-            "verification_summary": "Binance order verified"
+        order = dict(result)
+        status = str(order.get("status") or "").upper()
+        order_id = order.get("orderId")
+        attempts = max(int(max_verify_attempts or 1), 1)
+        for _attempt in range(attempts):
+            if status == "FILLED":
+                break
+            await asyncio.sleep(0.35)
+            checked = (
+                self.get_order(product_id, order_id, client_order_id=client_order_id)
+                if order_id or client_order_id
+                else {}
+            )
+            if isinstance(checked, dict) and checked:
+                order.update(checked)
+                self._attach_spot_order_fill_fields(order, self.to_broker_symbol(product_id))
+                status = str(order.get("status") or status).upper()
+
+        cancelled_remainder = False
+        cancel_error = ""
+        if status != "FILLED" and (order_id or client_order_id):
+            # Scalp does not persist exchange-resting entries. Cancel any
+            # unfilled remainder before returning so a rejected UI action can
+            # never become an orphaned live order later.
+            cancel_result = (
+                self.cancel_order(order_id, product_id) if order_id else {"error": "Missing exchange order id"}
+            )
+            cancel_error = str((cancel_result or {}).get("error") or "")
+            final = self.get_order(product_id, order_id, client_order_id=client_order_id)
+            if isinstance(final, dict) and final:
+                order.update(final)
+                self._attach_spot_order_fill_fields(order, self.to_broker_symbol(product_id))
+                status = str(order.get("status") or status).upper()
+            cancelled_remainder = status in {"CANCELED", "CANCELLED", "EXPIRED", "FILLED"} and not cancel_error
+
+        executed_qty = self.coerce_float(order.get("executedQty") or order.get("filled_size"), 0.0)
+        verified = status == "FILLED" or (executed_qty > 0 and cancelled_remainder)
+        partial = verified and status != "FILLED"
+        fill_price = self.coerce_float(
+            order.get("avgPrice") or order.get("average_fill_price") or order.get("price"), 0.0
+        )
+        lifecycle = (
+            "partial_cancelled"
+            if partial
+            else "filled"
             if verified
-            else "Binance order submitted but not filled yet",
+            else "cancelled"
+            if cancelled_remainder
+            else "attention"
+        )
+        summary = (
+            "Binance order filled and verified"
+            if status == "FILLED"
+            else "Binance partial fill verified after the unfilled remainder was cancelled"
+            if partial
+            else "Binance unfilled order was cancelled"
+            if cancelled_remainder
+            else f"Binance order is not filled and its remainder could not be verified cancelled{': ' + cancel_error if cancel_error else ''}"
+        )
+        return {
+            **order,
+            "verified": verified,
+            "fill_status": "partial_fill" if partial else status.lower() or "submitted",
+            "order_lifecycle": lifecycle,
+            "exchange_state": status.lower() or "submitted",
+            "verification_state": "filled" if verified else "cancelled" if cancelled_remainder else "attention",
+            "verification_summary": summary,
+            "cancelled_remainder": cancelled_remainder,
+            "requires_attention": not verified and not cancelled_remainder,
             "fill_price": fill_price or None,
-            "verified_at_attempt": 1,
+            "verified_at_attempt": attempts,
             "order_ack_ms": order_ack_ms,
             "broker_latency_ms": round((_time.perf_counter() - started_at) * 1000, 1),
         }
@@ -877,6 +943,7 @@ class BinanceSpotClient(BaseBroker):
         weighted_quote = 0.0
         fill_qty = 0.0
         fee_quote = 0.0
+        base_fee = 0.0
         product = self.get_product_by_symbol(pair) or {}
         base_asset = str(product.get("base_asset") or "").upper()
         quote_asset = str(product.get("quote_asset") or self.quote_asset).upper()
@@ -890,6 +957,8 @@ class BinanceSpotClient(BaseBroker):
             # Same conversion as the history path, BNB commissions included —
             # this is the number an order's own result reports back.
             fee_quote += self._commission_in_quote(commission, commission_asset, base_asset, quote_asset, price)
+            if commission_asset == base_asset:
+                base_fee += commission
 
         avg_price = weighted_quote / fill_qty if fill_qty > 0 else 0.0
         if avg_price <= 0 and executed_qty > 0 and quote_qty > 0:
@@ -901,9 +970,11 @@ class BinanceSpotClient(BaseBroker):
         if executed_qty > 0:
             result.setdefault("filled_size", executed_qty)
             result.setdefault("size", executed_qty)
+            result.setdefault("net_base_filled", max(executed_qty - base_fee, 0.0))
         if quote_qty > 0:
             result.setdefault("quote_size", quote_qty)
-        result.setdefault("paid_commission", round(fee_quote, 8))
+        if fills:
+            result.setdefault("paid_commission", round(fee_quote, 8))
         return result
 
     _MAJOR_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
