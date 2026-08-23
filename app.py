@@ -8793,7 +8793,7 @@ def _save_vrule() -> None:
 def _get_auto_fib() -> "AutoCascadeFib":
     _get_auto_fib_engine()  # builds and attaches on first use
     if _auto_fib is None:
-        raise HTTPException(status_code=503, detail="Auto-Cascade_Fib is not available")
+        raise HTTPException(status_code=503, detail="Cascade_Auto is not available")
     return _auto_fib
 
 
@@ -9163,9 +9163,13 @@ async def _broker_journal_trades(converts: Optional[list] = None) -> tuple[list,
 # Which strategy each engine's campaigns belong to, for the journal's label.
 # The live Cascade's campaigns carry an empty strategy field, so they are named
 # here rather than read off the campaign.
+# DISPLAY names, renamed with the tabs on 2026-08-24. The persisted ids on the
+# campaigns themselves (STRATEGY = "auto-cascade-fib" / "v-rule") are untouched
+# — they are stamped on every stored campaign and fill, and renaming one would
+# orphan every record already written under it.
 _JOURNAL_ENGINE_LABELS = (
-    ("_cascade_engine", "Cascade"),
-    ("_auto_fib_engine", "Auto-Cascade_Fib"),
+    ("_cascade_engine", "Cascade-Hybrid"),
+    ("_auto_fib_engine", "Cascade_Auto"),
     ("_vrule_engine", "V-Rule"),
 )
 
