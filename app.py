@@ -205,10 +205,16 @@ async def _wake_cascade_on_boot() -> None:
         _get_vrule_engine()
     except Exception as exc:
         _logger.error("[V-RULE] boot restore failed; the live driver stays asleep: %s", exc)
-    _resume_rule3070_on_boot()
+    await _resume_rule3070_on_boot()
 
 
-def _resume_rule3070_on_boot() -> None:
+# The blue-green drain is 30s and the old unit can take another ~30s to stop,
+# so the window to outlast is about a minute. Twelve tries at 10s covers two.
+_RULE3070_RESUME_ATTEMPTS = 12
+_RULE3070_RESUME_DELAY_SEC = 10
+
+
+async def _resume_rule3070_on_boot() -> None:
     """Restart the V-Rule books that were running when the process went away.
 
     The paper trader is a thread, so it died with the old process and nothing
@@ -216,6 +222,16 @@ def _resume_rule3070_on_boot() -> None:
     returned reading "Stopped" over a journal that simply ended. `start()` now
     records the intent on disk and `stop()` clears it, so what resumes here is
     exactly what was deliberately left running.
+
+    It has to WAIT for the outgoing instance. A blue-green deploy starts this
+    process, drains the old one for 30s and only then stops it, so the paper
+    writer lock is still held by a live pid when boot gets here: on 2026-08-23
+    at 09:18:56 all three books failed with "Another paper writer is running
+    (pid 1242585)" — 31 seconds before that pid released them — and nothing
+    retried, so the books stayed marked running while nothing ran. The cascade
+    monitor already sits out that window by taking its lock per cycle; this had
+    no equivalent. Retrying is safe because a dead pid never blocks the lock
+    (see _acquire_writer_lock), so the first attempt after the handover wins.
 
     One symbol failing must not stop the rest, and none of it may stop the app
     from serving.
@@ -227,12 +243,29 @@ def _resume_rule3070_on_boot() -> None:
     except Exception as exc:
         _logger.error("[30-70] could not read which books were running: %s", exc)
         return
-    for symbol in wanted:
-        try:
-            _get_rule3070_service(symbol).start()
-            _logger.info("[30-70] resumed %s after restart", symbol)
-        except Exception as exc:
-            _logger.error("[30-70] could not resume %s: %s", symbol, exc)
+    # Comfortably past the 30s drain plus the old unit's stop, without holding
+    # anything up: the loop ends the moment every book is back.
+    for attempt in range(_RULE3070_RESUME_ATTEMPTS):
+        pending = []
+        for symbol in wanted:
+            try:
+                _get_rule3070_service(symbol).start()
+                _logger.info("[30-70] resumed %s after restart", symbol)
+            except Exception as exc:
+                pending.append(symbol)
+                if attempt == _RULE3070_RESUME_ATTEMPTS - 1:
+                    _logger.error("[30-70] could not resume %s: %s", symbol, exc)
+                else:
+                    _logger.info(
+                        "[30-70] %s not resumable yet (%s) — retrying in %ss",
+                        symbol,
+                        exc,
+                        _RULE3070_RESUME_DELAY_SEC,
+                    )
+        wanted = pending
+        if not wanted:
+            return
+        await asyncio.sleep(_RULE3070_RESUME_DELAY_SEC)
 
 
 @asynccontextmanager

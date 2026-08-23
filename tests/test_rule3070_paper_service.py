@@ -149,6 +149,78 @@ class Rule3070InstrumentTests(unittest.TestCase):
         self.assertTrue(os.path.exists(service.state_path + "." + result["archived_as"]))
 
 
+class Rule3070BootResumeTests(unittest.IsolatedAsyncioTestCase):
+    """Boot must outlast the outgoing instance, not race it.
+
+    A blue-green deploy starts this process, drains the old one for 30s, and
+    only then stops it — so the paper writer lock is still held by a LIVE pid
+    when boot reaches the resume. On 2026-08-23 at 09:18:56 all three books
+    failed with "Another paper writer is running (pid 1242585)", 31 seconds
+    before that pid let go, and nothing retried: the books stayed marked
+    running while nothing ran.
+    """
+
+    async def test_it_retries_until_the_old_instance_lets_go(self):
+        app_module = import_module("app")
+        attempts = {"n": 0}
+
+        class Svc:
+            def start(self_inner):
+                attempts["n"] += 1
+                if attempts["n"] < 3:
+                    raise RuntimeError("Another paper writer is running (pid 1242585) — stop it first")
+                return {"running": True}
+
+        with (
+            patch.object(app_module, "_RULE3070_RESUME_DELAY_SEC", 0),
+            patch.object(app_module, "_get_rule3070_service", lambda symbol: Svc()),
+            patch("engine.rule3070_paper.symbols_marked_running", lambda: ["BTCUSDT"]),
+        ):
+            await app_module._resume_rule3070_on_boot()
+        self.assertEqual(attempts["n"], 3, "it gave up before the handover finished")
+
+    async def test_it_gives_up_rather_than_retrying_for_ever(self):
+        app_module = import_module("app")
+        attempts = {"n": 0}
+
+        class Dead:
+            def start(self_inner):
+                attempts["n"] += 1
+                raise RuntimeError("Another paper writer is running (pid 999) — stop it first")
+
+        with (
+            patch.object(app_module, "_RULE3070_RESUME_DELAY_SEC", 0),
+            patch.object(app_module, "_RULE3070_RESUME_ATTEMPTS", 4),
+            patch.object(app_module, "_get_rule3070_service", lambda symbol: Dead()),
+            patch("engine.rule3070_paper.symbols_marked_running", lambda: ["BTCUSDT"]),
+        ):
+            await app_module._resume_rule3070_on_boot()
+        self.assertEqual(attempts["n"], 4, "boot must not retry for ever")
+
+    async def test_one_stuck_book_does_not_hold_up_the_others(self):
+        app_module = import_module("app")
+        started = []
+
+        class Svc:
+            def __init__(self_inner, symbol):
+                self_inner.symbol = symbol
+
+            def start(self_inner):
+                if self_inner.symbol == "ETHUSDT":
+                    raise RuntimeError("Another paper writer is running (pid 999) — stop it first")
+                started.append(self_inner.symbol)
+                return {"running": True}
+
+        with (
+            patch.object(app_module, "_RULE3070_RESUME_DELAY_SEC", 0),
+            patch.object(app_module, "_RULE3070_RESUME_ATTEMPTS", 2),
+            patch.object(app_module, "_get_rule3070_service", Svc),
+            patch("engine.rule3070_paper.symbols_marked_running", lambda: ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
+        ):
+            await app_module._resume_rule3070_on_boot()
+        self.assertEqual(started, ["BTCUSDT", "SOLUSDT"], "the healthy books must come back once each")
+
+
 class Rule3070RouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.app_module = import_module("app")
