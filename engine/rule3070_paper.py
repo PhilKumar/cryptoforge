@@ -857,7 +857,14 @@ class Rule3070PaperService:
                     "avg_entry": round(c.avg_buy, 2),
                 }
             )
-        pending_entry = c.entry_price() if c._touched and not c._exhausted else 0.0
+        # ARMED means the close below the reference has happened. Before that
+        # the buy is not resting anywhere — the setup is still waiting for its
+        # trigger. Drawing the white line on the TOUCH made the chart claim an
+        # order that did not exist (Phil, 2026-08-23: "Why it has not entered
+        # yet?" — because no candle had closed below the reference, only wicked
+        # under it once).
+        armed = c.trigger_ts is not None and not c._exhausted
+        pending_entry = c.entry_price() if armed else 0.0
         start_ts_state = int(self._state.get("start_ts") or 0) if self._state else 0
         frozen = bool(end_ts) or c.status == "TARGET HIT" or c.status.startswith("CANCELLED")
         return {
@@ -882,6 +889,12 @@ class Rule3070PaperService:
             # The armed buy, drawn white. Cascade has no equivalent — its orders
             # rest on fib levels — so the renderer gained one optional line.
             "entry_price": round(pending_entry, 2) if pending_entry else None,
+            # The low the buy is measured from, and the line the setup is
+            # waiting on. Both are drawn and labelled by the 30-70 chart only.
+            "low_price": round(c.lowest_low, 2) if c.lowest_low else None,
+            "low_ts": int(c.lowest_low_ts.timestamp()) if c.lowest_low_ts is not None else 0,
+            "reference_price": round(c.reference, 2),
+            "reference_armed": bool(armed),
             "last_price": round(float(df["close"].iloc[-1]), 2),
             "frozen": frozen,
             "trade_end_ts": int(c.target_ts.timestamp()) if c.target_ts is not None else 0,
@@ -891,15 +904,22 @@ class Rule3070PaperService:
                 "v_type": c.v_type,
                 "fall_pct": round(c.fall_pct, 2),
                 "pot_usd": round(c.pot_usd, 2),
-                # The three numbers the ENTRY line is made of. Phil, 2026-08-23:
-                # "the entry is 25%... I am unable to assume whether it is
-                # correct". Two different percentages sit on this chart and the
-                # chart named neither: 25% is the PRICE (a quarter of the fall
-                # back up to the mother) and 30% is the SHARE of the pot the
-                # first buy spends. Sending the parts lets the page show the sum.
+                # What STAGE the setup is in, so the chart can say it outright
+                # instead of leaving Phil to derive it from five lines
+                # (2026-08-23: "I am completely confused on how I need to see
+                # the chart.. My brain is draining").
+                #   touched -> the reference has been wicked into
+                #   armed   -> a candle CLOSED below it; the buy is now real
+                #   filled  -> money is in; target and frozen reference matter
                 "mother_high": round(c.mother_high, 2),
                 "lowest_low": round(c.lowest_low, 2) if c.lowest_low else None,
-                "entry_pullback_pct": 25,
+                "lowest_low_ts": int(c.lowest_low_ts.timestamp()) if c.lowest_low_ts is not None else 0,
+                "reference": round(c.reference, 2),
+                "touched": bool(c._touched),
+                "armed": bool(armed),
+                "trigger_when": (
+                    c.trigger_ts.tz_convert(IST).strftime("%d %b %H:%M") if c.trigger_ts is not None else None
+                ),
                 "minor": bool(c.is_minor),
                 "cost": round(cost, 2),
                 "paper": bool(c.fills and c.fills[0].ts.timestamp() >= start_ts_state) if start_ts_state else False,

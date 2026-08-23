@@ -11215,7 +11215,7 @@ function _cfCascadeChartSvg(d) {
       // No "L" prefix. The gutter is narrow and every character in it competes
       // with the price, which is the thing actually being read off the line.
       hline(Number(p), col,
-        lv + ' (' + fmt(p) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''),
+        _cfR37LineLabel(d, p, lv + ' (' + fmt(p) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : '')),
         null, 1.1, 0.9);
     });
     if (leg.touch_timestamp && inView(leg.touch_high)) {
@@ -11241,8 +11241,10 @@ function _cfCascadeChartSvg(d) {
   }
   // The armed buy waiting on the tape (30-70 only — Cascade rests its orders
   // on fib levels, which are already drawn).
+  if (d.low_price) hline(Number(d.low_price), PAL.avg,
+    'LOW ' + fmt(d.low_price) + ' · the buy is measured from here', '2,3', 1.0);
   if (d.entry_price) hline(Number(d.entry_price), PAL.buyMark,
-    'ENTRY · 25% back to mother (' + fmt(d.entry_price) + ')', null, 1.2);
+    'BUY ' + fmt(d.entry_price) + ' · follows the low down until it fills', null, 1.2);
 
   // Entries. On a finished trade these come from `entries`, which also carries
   // the buys of rounds that already closed — campaign.all_fills is emptied the
@@ -11710,7 +11712,8 @@ function _cfChartCanvasFibs(c, p, PAL, labels) {
       var order = (leg.orders || []).find(function (o) { return o.level === level; }) || {};
       var usd = Number(order.usd_notional) || 0;
       count += _cfChartCanvasHline(c, p, labels, Number(price), color,
-        level + ' (' + fmt(price) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : ''), [], 1.1, 0.9) ? 1 : 0;
+        _cfR37LineLabel(d, price, level + ' (' + fmt(price) + ')' + (usd > 0 ? '  $' + _cfCascadeUsd(usd) : '')),
+        [], 1.1, 0.9) ? 1 : 0;
     });
     if (leg.touch_timestamp && p.inPrice(leg.touch_high)) {
       var ctx = c.ctx;
@@ -11725,8 +11728,10 @@ function _cfChartCanvasFibs(c, p, PAL, labels) {
     (frozen ? 'SOLD AT (' : 'TARGET · open (') + fmt(d.tp_price) + ')', [6, 3], 1.2) ? 1 : 0;
   if (d.avg_entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.avg_entry_price), PAL.avg,
     (frozen ? 'AVG ENTRY (' : 'AVG ENTRY · open (') + fmt(d.avg_entry_price) + ')', [4, 4], 1.1) ? 1 : 0;
+  if (d.low_price) count += _cfChartCanvasHline(c, p, labels, Number(d.low_price), PAL.avg,
+    'LOW ' + fmt(d.low_price) + ' · the buy is measured from here', [2, 3], 1.0) ? 1 : 0;
   if (d.entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.entry_price), PAL.buyMark,
-    'ENTRY · 25% back to mother (' + fmt(d.entry_price) + ')', [], 1.2) ? 1 : 0;
+    'BUY ' + fmt(d.entry_price) + ' · follows the low down until it fills', [], 1.2) ? 1 : 0;
   return count;
 }
 
@@ -13842,30 +13847,48 @@ function cfR37ShowChart(mother, endTs) {
 
 // The 30-70 has no trendlines and no order book — its legend and its detail
 // table are its own; everything below the legend is the shared renderer.
-// TWO different percentages live on this chart and it named neither, so the
-// ENTRY line could not be checked by eye. Phil, 2026-08-23: "the entry is
-// 25%... I am unable to assume whether it is correct... I need clarity."
-//   25% is the PRICE  — a quarter of the fall back up to the mother
-//   30% is the MONEY  — the share of the pot this first buy spends
-// Printing the sum with its three parts means the number can be verified from
-// the chart itself instead of taken on trust.
-function _cfR37EntryExplainer(d, r) {
-  var entry = Number(d.entry_price) || 0;
-  var mother = Number(r.mother_high) || 0;
-  var low = Number(r.lowest_low) || 0;
-  if (!entry || !mother || !low || mother <= low) return '';
+// The 30-70 chart labels its lines by what they are DOING, not by their fib
+// number — the number tells Phil nothing about the stage the setup is in
+// (2026-08-23: "better mark the low and specify waiting for close below this
+// line"). Cascade sends no reference_price, so its charts are untouched.
+function _cfR37LineLabel(d, price, fallback) {
+  var ref = Number(d.reference_price) || 0;
+  if (!ref || Math.abs(Number(price) - ref) > 0.011) return fallback;
+  var shown = Number(price).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return d.reference_armed
+    ? 'REFERENCE ' + shown + ' \u00b7 frozen — the buy is live'
+    : 'REFERENCE ' + shown + ' \u00b7 waiting for a CLOSE below this line';
+}
+
+// ONE line saying which of the three stages the setup is in. The chart used
+// to leave that to be derived from five lines and two different percentages,
+// which is the whole of Phil's "My brain is draining" (2026-08-23).
+//   1 WAITING — the reference has been touched but not closed below
+//   2 ARMED   — it closed below; the buy is real and follows the low
+//   3 IN      — money is in; the target and the frozen reference are what matter
+function _cfR37Stage(d, r) {
   var n = function (v) { return Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
-  var fall = mother - low;
-  return '<div class="table-meta" style="padding:0 0 8px;">'
-    + '<strong>ENTRY ' + n(entry) + '</strong> = the lowest low ' + n(low)
-    + ' + 25% of its ' + n(fall) + ' fall back to the mother ' + n(mother) + '. '
-    + 'It follows every new low down and is never cancelled, so it moves whenever the low does. '
-    + '<br>The <strong>25% is the price</strong>; the <strong>30% is the money</strong> — the share of the '
-    + _cfR37Usd(r.pot_usd) + ' pot this first buy spends. Two different numbers, easily read as one.'
-    + (d.tp_price
-      ? ' <br>The target ' + n(d.tp_price) + ' is the average buy plus 25% of that same fall.'
-      : '')
-    + '</div>';
+  var ref = Number(r.reference) || Number(d.reference_price) || 0;
+  var low = Number(r.lowest_low) || 0;
+  var bits;
+  if (d.avg_entry_price) {
+    bits = '<strong>IN</strong> at ' + n(d.avg_entry_price)
+      + (d.tp_price ? ' · selling at <strong>' + n(d.tp_price) + '</strong>' : '')
+      + (ref ? ' · reference ' + n(ref) + ' is frozen now' : '');
+  } else if (d.entry_price) {
+    bits = '<strong>ARMED</strong>'
+      + (r.trigger_when ? ' since ' + _escapeHtml(r.trigger_when) : '')
+      + ' — the buy rests at <strong>' + n(d.entry_price) + '</strong>'
+      + (low ? ' and follows the low ' + n(low) + ' down until it fills' : '');
+  } else if (ref) {
+    bits = '<strong>WAITING</strong> — nothing is resting yet. A candle must <strong>CLOSE below '
+      + n(ref) + '</strong>'
+      + (r.touch_when ? ' (it has only touched it, ' + _escapeHtml(r.touch_when) + ')' : '')
+      + '. Only then does the buy appear.';
+  } else {
+    return '';
+  }
+  return '<div class="table-meta" style="padding:0 0 8px;">' + bits + '</div>';
 }
 
 function _cfR37ChartHtml(d, P) {
@@ -13894,7 +13917,7 @@ function _cfR37ChartHtml(d, P) {
     + (r.target_when ? ' · sold ' + _escapeHtml(r.target_when) : '')
     + (r.paper ? ' · PAPER TRADE' : ' · warm-up (never counted)')
     + '</div>'
-    + _cfR37EntryExplainer(d, r)
+    + _cfR37Stage(d, r)
     + (buys
       ? '<div class="table-surface"><div class="table-scroll"><table class="trade-table"><thead><tr>'
         + '<th>When</th><th>Buy</th><th class="num">Price</th><th class="num">Amount</th>'
