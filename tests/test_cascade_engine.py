@@ -983,6 +983,61 @@ class CascadeAutoRestartTests(unittest.TestCase):
         self.assertEqual(grandchild.barren_chain, 0)
 
 
+class CascadeExitBarStampTests(unittest.TestCase):
+    """A round is stamped with the bar it closed IN, not the last bar seen.
+
+    ETHUSDT #17 sold at 2,417.48 at 14:04:21 and was booked at 13:55 — a bar
+    whose high was 2,407.70. The chart draws the sell arrow at that stamp, so
+    it floated ten dollars above candles that never traded there (Phil,
+    2026-08-23: "The arrow points are not correct for the entry and exit").
+    """
+
+    def _campaign(self, engine):
+        campaign = _mk_campaign(engine)
+        campaign.timeframe = "5m"
+        campaign.state = "TRENDLINE_ACTIVE"
+        campaign.pending_usd = 20.0
+        engine._fill_pending(campaign, 100.0, 3000)
+        return campaign
+
+    def test_a_candle_driven_close_takes_that_candles_bar(self):
+        engine = _mk_engine()
+        campaign = self._campaign(engine)
+        engine._candles[campaign.campaign_id] = [Candle(9000, 100, 101, 99, 100)]
+        engine._close_round(campaign, 120.0, at_ts=6000)
+        self.assertEqual(campaign.rounds[-1].closed_ts, 6000, "the triggering candle, not the last one seen")
+
+    def test_a_live_price_close_lands_in_the_bar_in_progress(self):
+        engine = _mk_engine()
+        campaign = self._campaign(engine)
+        # Last bar PROCESSED opens at 13:55; the sale happens at 14:04:21.
+        stale = 1787473500
+        engine._candles[campaign.campaign_id] = [Candle(stale, 100, 101, 99, 100)]
+        sold_at = 1787474061  # 14:04:21 IST
+        engine._close_round(campaign, 120.0, at_ts=engine._bar_containing(campaign, sold_at))
+        self.assertEqual(
+            campaign.rounds[-1].closed_ts,
+            1787473800,  # the 14:00 bar, which is the one that contains 14:04
+            "a mid-bar sale must not be stamped on the previous bar",
+        )
+        self.assertGreater(campaign.rounds[-1].closed_ts, stale)
+
+    def test_without_a_stamp_it_still_falls_back_to_the_last_bar(self):
+        engine = _mk_engine()
+        campaign = self._campaign(engine)
+        engine._candles[campaign.campaign_id] = [Candle(9000, 100, 101, 99, 100)]
+        engine._close_round(campaign, 120.0)
+        self.assertEqual(campaign.rounds[-1].closed_ts, 9000)
+
+    def test_the_bar_helper_floors_to_the_campaigns_own_timeframe(self):
+        engine = _mk_engine()
+        campaign = self._campaign(engine)
+        campaign.timeframe = "15m"
+        self.assertEqual(engine._bar_containing(campaign, 1787474061), 1787473800)  # 14:00, a 15m bucket
+        campaign.timeframe = "5m"
+        self.assertEqual(engine._bar_containing(campaign, 1787474061), 1787473800)  # 14:00 again on 5m
+
+
 class CascadeStaleTwoRedTests(unittest.TestCase):
     """The two-red confirmation must belong to the fall it is confirming.
 

@@ -3009,7 +3009,13 @@ class CascadeEngine:
                 )
                 campaign.residual_base_qty = max(round(offered - executed, 12), 0.0)
                 sell_fee = await self._order_commission(campaign, campaign.tp_order_id)
-                self._close_round(campaign, exit_price, sold_qty=executed, sell_fee=sell_fee)
+                self._close_round(
+                    campaign,
+                    exit_price,
+                    sold_qty=executed,
+                    sell_fee=sell_fee,
+                    at_ts=self._bar_containing(campaign, exchange_fill_ts(row)),
+                )
                 campaign.exchange_qty = 0.0
                 campaign.position_checked_at = _ist_now_str()
                 self._log_event(
@@ -3151,7 +3157,7 @@ class CascadeEngine:
             price = _coerce_float(price_meta[0] if price_meta else 0.0)
             if price <= 0:
                 return {"error": "No price available to close the paper position against"}
-            self._close_round(campaign, price, sold_qty=desired_qty)
+            self._close_round(campaign, price, sold_qty=desired_qty, at_ts=self._bar_containing(campaign))
             self._log_event(campaign, "stop", f"Paper position closed at market {price:,.2f}")
             self._archive_campaign(campaign)
             self._emit_update()
@@ -3217,7 +3223,13 @@ class CascadeEngine:
         # A market sell reports its own fills, so its commission is known
         # without a second call — but only when the exchange returned one.
         sell_fee = _coerce_float(result.get("paid_commission"), -1.0)
-        self._close_round(campaign, exit_price, sold_qty=executed, sell_fee=sell_fee if sell_fee >= 0 else None)
+        self._close_round(
+            campaign,
+            exit_price,
+            sold_qty=executed,
+            sell_fee=sell_fee if sell_fee >= 0 else None,
+            at_ts=self._bar_containing(campaign, exchange_fill_ts(result)),
+        )
         self._log_event(
             campaign,
             "stop",
@@ -4508,7 +4520,9 @@ class CascadeEngine:
         if campaign.mode == "paper" and campaign.state in ACTIVE_STATES and campaign.filled_base_qty > 0:
             tp = compute_tp_price(campaign)
             if price and tp and price >= tp:
-                self._close_round(campaign, tp)
+                # The live price closes this mid-bar, so the bar it happened in
+                # is the one in progress — not the last one processed.
+                self._close_round(campaign, tp, at_ts=self._bar_containing(campaign))
                 changed = True
         # Live order sync (throttled).
         now = time.monotonic()
@@ -5372,7 +5386,7 @@ class CascadeEngine:
         # so the pessimistic reading is that the target comes later.
         if any(fill.timestamp >= closed_candle.timestamp for fill in campaign.all_fills):
             return
-        self._close_round(campaign, tp)
+        self._close_round(campaign, tp, at_ts=closed_candle.timestamp)
 
     def _release_closed_levels(self, campaign: Campaign, candle: Candle) -> None:
         """Give back the levels a closed round bought, once price breaks under
@@ -5697,12 +5711,26 @@ class CascadeEngine:
         # so the next buy is planned from the money actually still available.
         replan_ladder(campaign)
 
+    def _bar_containing(self, campaign: Campaign, when_ts: Optional[int] = None) -> int:
+        """The campaign's own bar that contains `when_ts` (default: now).
+
+        A round closed off the LIVE price, or off an exchange fill, happens
+        inside a bar that has not closed yet. Stamping it with the last bar the
+        campaign processed puts it up to a full bar early, at a price that bar
+        never traded — which is what put the sell arrow in mid-air.
+        """
+        try:
+            return bucket_start(int(when_ts or time.time()), campaign.timeframe_sec)
+        except Exception:
+            return int(when_ts or time.time())
+
     def _close_round(
         self,
         campaign: Campaign,
         exit_price: float,
         sold_qty: Optional[float] = None,
         sell_fee: Optional[float] = None,
+        at_ts: Optional[int] = None,
     ) -> None:
         """
         A TP fill closes the current open-to-TP round, not the campaign. The
@@ -5732,9 +5760,17 @@ class CascadeEngine:
             for fill in ordered_fills
         ]
         # Candle time, not wall-clock: in a backtest the two are years apart,
-        # and the UI reads every cascade timestamp as a candle in IST.
-        seen = self._candles.get(campaign.campaign_id) or []
-        closed_ts = int(seen[-1].timestamp) if seen else 0
+        # and the UI reads every cascade timestamp as a candle in IST. But it
+        # has to be the bar the exit HAPPENED in, and the last bar this
+        # campaign has PROCESSED is not that bar when the live price closes a
+        # paper round mid-bar. ETHUSDT #17 sold at 2,417.48 at 14:04:21 and was
+        # stamped 13:55 — a bar whose high was 2,407.70 — so the chart drew the
+        # sell arrow floating ten dollars above candles that never traded there
+        # (Phil, 2026-08-23: "The arrow points are not correct").
+        closed_ts = int(at_ts or 0)
+        if closed_ts <= 0:
+            seen = self._candles.get(campaign.campaign_id) or []
+            closed_ts = int(seen[-1].timestamp) if seen else 0
         gross = round((exit_price - avg) * qty, 8)
         # What the exchange charged beats what the model predicts. The model
         # cannot see the BNB discount, a VIP tier or a maker rebate, so a
@@ -5849,7 +5885,7 @@ class CascadeEngine:
         elif campaign.filled_base_qty > 0:
             tp = compute_tp_price(campaign)
             if tp and candle.high >= tp:
-                self._close_round(campaign, tp)
+                self._close_round(campaign, tp, at_ts=candle.timestamp)
         self._archive_campaign(campaign)
         self._auto_restart(campaign, candle)
 
@@ -6004,7 +6040,7 @@ class CascadeEngine:
             # has necessarily been reached, so close it as the live TP would.
             tp = compute_tp_price(campaign)
             if tp:
-                self._close_round(campaign, tp)
+                self._close_round(campaign, tp, at_ts=break_candle.timestamp)
         self._archive_campaign(campaign)
         self._auto_restart(campaign, break_candle)
 
@@ -6891,7 +6927,13 @@ class CascadeEngine:
                 sell_fee = await self._order_commission(campaign, campaign.tp_order_id)
                 # Entry buys that never filled stay resting — the campaign is
                 # still live and price can come back down to them.
-                self._close_round(campaign, exit_price, sold_qty=executed, sell_fee=sell_fee)
+                self._close_round(
+                    campaign,
+                    exit_price,
+                    sold_qty=executed,
+                    sell_fee=sell_fee,
+                    at_ts=self._bar_containing(campaign, exchange_fill_ts(status_row)),
+                )
                 return True
             campaign.tp_order_id = None
             campaign.tp_order_price = None

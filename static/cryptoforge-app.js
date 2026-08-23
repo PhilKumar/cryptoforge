@@ -11033,7 +11033,8 @@ function _cfCascadeChartSvg(d) {
   }
   // The armed buy waiting on the tape (30-70 only — Cascade rests its orders
   // on fib levels, which are already drawn).
-  if (d.entry_price) hline(Number(d.entry_price), PAL.buyMark, 'ENTRY (' + fmt(d.entry_price) + ')', null, 1.2);
+  if (d.entry_price) hline(Number(d.entry_price), PAL.buyMark,
+    'ENTRY · 25% back to mother (' + fmt(d.entry_price) + ')', null, 1.2);
 
   // Entries. On a finished trade these come from `entries`, which also carries
   // the buys of rounds that already closed — campaign.all_fills is emptied the
@@ -11517,7 +11518,7 @@ function _cfChartCanvasFibs(c, p, PAL, labels) {
   if (d.avg_entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.avg_entry_price), PAL.avg,
     (frozen ? 'AVG ENTRY (' : 'AVG ENTRY · open (') + fmt(d.avg_entry_price) + ')', [4, 4], 1.1) ? 1 : 0;
   if (d.entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.entry_price), PAL.buyMark,
-    'ENTRY (' + fmt(d.entry_price) + ')', [], 1.2) ? 1 : 0;
+    'ENTRY · 25% back to mother (' + fmt(d.entry_price) + ')', [], 1.2) ? 1 : 0;
   return count;
 }
 
@@ -13633,6 +13634,32 @@ function cfR37ShowChart(mother, endTs) {
 
 // The 30-70 has no trendlines and no order book — its legend and its detail
 // table are its own; everything below the legend is the shared renderer.
+// TWO different percentages live on this chart and it named neither, so the
+// ENTRY line could not be checked by eye. Phil, 2026-08-23: "the entry is
+// 25%... I am unable to assume whether it is correct... I need clarity."
+//   25% is the PRICE  — a quarter of the fall back up to the mother
+//   30% is the MONEY  — the share of the pot this first buy spends
+// Printing the sum with its three parts means the number can be verified from
+// the chart itself instead of taken on trust.
+function _cfR37EntryExplainer(d, r) {
+  var entry = Number(d.entry_price) || 0;
+  var mother = Number(r.mother_high) || 0;
+  var low = Number(r.lowest_low) || 0;
+  if (!entry || !mother || !low || mother <= low) return '';
+  var n = function (v) { return Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
+  var fall = mother - low;
+  return '<div class="table-meta" style="padding:0 0 8px;">'
+    + '<strong>ENTRY ' + n(entry) + '</strong> = the lowest low ' + n(low)
+    + ' + 25% of its ' + n(fall) + ' fall back to the mother ' + n(mother) + '. '
+    + 'It follows every new low down and is never cancelled, so it moves whenever the low does. '
+    + '<br>The <strong>25% is the price</strong>; the <strong>30% is the money</strong> — the share of the '
+    + _cfR37Usd(r.pot_usd) + ' pot this first buy spends. Two different numbers, easily read as one.'
+    + (d.tp_price
+      ? ' <br>The target ' + n(d.tp_price) + ' is the average buy plus 25% of that same fall.'
+      : '')
+    + '</div>';
+}
+
 function _cfR37ChartHtml(d, P) {
   var r = d.r37 || {};
   var legend = '<div class="table-meta cf-cascade-chart-legend" style="margin-bottom:8px;">'
@@ -13659,11 +13686,12 @@ function _cfR37ChartHtml(d, P) {
     + (r.target_when ? ' · sold ' + _escapeHtml(r.target_when) : '')
     + (r.paper ? ' · PAPER TRADE' : ' · warm-up (never counted)')
     + '</div>'
+    + _cfR37EntryExplainer(d, r)
     + (buys
       ? '<div class="table-surface"><div class="table-scroll"><table class="trade-table"><thead><tr>'
         + '<th>When</th><th>Buy</th><th class="num">Price</th><th class="num">Amount</th>'
         + '</tr></thead><tbody>' + buys + '</tbody></table></div></div>'
-      : '<div class="table-meta" style="padding:0 0 8px;">No buy has filled yet — the white ENTRY line is where the first one rests.</div>')
+      : '')
     + '</div>';
   return html;
 }

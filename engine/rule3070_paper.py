@@ -891,6 +891,15 @@ class Rule3070PaperService:
                 "v_type": c.v_type,
                 "fall_pct": round(c.fall_pct, 2),
                 "pot_usd": round(c.pot_usd, 2),
+                # The three numbers the ENTRY line is made of. Phil, 2026-08-23:
+                # "the entry is 25%... I am unable to assume whether it is
+                # correct". Two different percentages sit on this chart and the
+                # chart named neither: 25% is the PRICE (a quarter of the fall
+                # back up to the mother) and 30% is the SHARE of the pot the
+                # first buy spends. Sending the parts lets the page show the sum.
+                "mother_high": round(c.mother_high, 2),
+                "lowest_low": round(c.lowest_low, 2) if c.lowest_low else None,
+                "entry_pullback_pct": 25,
                 "minor": bool(c.is_minor),
                 "cost": round(cost, 2),
                 "paper": bool(c.fills and c.fills[0].ts.timestamp() >= start_ts_state) if start_ts_state else False,
