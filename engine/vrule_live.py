@@ -52,6 +52,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, List, Optional
 
 _log = logging.getLogger("cryptoforge.vrule_live")
@@ -556,10 +557,50 @@ class VRuleLive:
 
     # ── structure: what the locked simulator says was born ───────
 
-    def _default_window_loader(self, book: Book):
-        from engine.rule3070_paper import fetch_window
+    # The venue windows, one per book, so a second venue's thirty days of
+    # 1m-built 5m bars are pulled once and then only topped up each bar.
+    _venue_windows: Dict[str, object] = {}
 
-        return fetch_window(book.symbol, since_ts=book.history_start_ts)
+    def _default_window_loader(self, book: Book):
+        if not book.exchange:
+            # The default venue: the paper book's own fetch, untouched.
+            from engine.rule3070_paper import fetch_window
+
+            return fetch_window(book.symbol, since_ts=book.history_start_ts)
+        return self._venue_window(book)
+
+    def _venue_window(self, book: Book):
+        """CLOSED 5m candles from the book's OWN venue, oldest first.
+
+        The rule's structure must come from the tape its buys rest on: a V
+        that Binance printed and CoinDCX did not is a low no CoinDCX order
+        can ever fill at. Fetched in full on the first call, then only from
+        an hour before the last bar held, merged, and the still-forming bar
+        dropped — the same window shape fetch_window returns for Binance.
+        """
+        import pandas as pd
+
+        client = self._venue_broker(book.exchange)
+        if client is None:
+            raise LookupError(f"no client for venue '{book.exchange}'")
+        cached = self._venue_windows.get(book.key)
+        have = cached is not None and len(cached) > 0
+        since = int(cached.index[-1].timestamp()) - 3600 if have else int(book.history_start_ts)
+        start = datetime.utcfromtimestamp(max(since, 0)).strftime("%Y-%m-%d")
+        fresh = client.get_candles(book.symbol, resolution="5m", start=start)
+        if fresh is None or len(fresh) == 0:
+            return cached if have else pd.DataFrame(columns=["open", "high", "low", "close"])
+        fresh = fresh[["open", "high", "low", "close"]].astype(float)
+        now_bucket = (int(time.time()) // 300) * 300
+        keep = [
+            (int(ts.timestamp()) >= book.history_start_ts) and (int(ts.timestamp()) < now_bucket) for ts in fresh.index
+        ]
+        fresh = fresh[keep]
+        merged = pd.concat([cached, fresh]) if have else fresh
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        merged.index.name = "datetime"
+        self._venue_windows[book.key] = merged
+        return merged
 
     def _default_structure_scanner(self, book: Book, df):
         """Run the locked simulator read-only and return its campaigns.

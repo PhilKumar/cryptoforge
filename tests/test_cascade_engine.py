@@ -1327,12 +1327,12 @@ class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
         _recent_closed_candles, the campaign's own stepping pages via
         _fetch_closed_candles."""
 
-        async def _recent(symbol, tf, after_ts):
+        async def _recent(symbol, tf, after_ts, venue=None):
             if tf != timeframe:
                 return []
             return [Candle(ts, 100.0, high, 99.5, 104.0, timeframe=timeframe)]
 
-        async def _paged(symbol, since_ts, tf=None):
+        async def _paged(symbol, since_ts, tf=None, venue=None):
             return []
 
         engine._recent_closed_candles = _recent
@@ -5201,7 +5201,7 @@ class CascadeFrozenChartTests(unittest.IsolatedAsyncioTestCase):
         campaign = self._ended(engine)
         calls = []
 
-        async def _paged(symbol, since, timeframe):
+        async def _paged(symbol, since, timeframe, venue=None):
             calls.append((symbol, since, timeframe))
             return [Candle(ts, 100.0, 101.0, 99.0, 100.0) for ts in range(600, 60000, 300)]
 

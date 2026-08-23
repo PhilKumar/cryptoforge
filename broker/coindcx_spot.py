@@ -110,6 +110,11 @@ class CoinDCXSpotClient(BaseBroker):
     _CANDLE_DEFAULT_BARS = 1000
     _CANDLE_PAGE_LIMIT = 1000
     _CANDLE_MAX_PAGES = 6
+    # When the caller names a `start`, it means it: the Cascade restores a
+    # campaign from its mother candle and the V-Rule warms up on thirty days
+    # of 5m — forty-odd pages of 1m, which the six-page cap silently cut to
+    # four days. A hard ceiling stays so a bad date cannot page forever.
+    _CANDLE_MAX_PAGES_WITH_START = 64
 
     def __init__(self):
         self.api_key = config.COINDCX_API_KEY
@@ -299,7 +304,7 @@ class CoinDCXSpotClient(BaseBroker):
 
         rows: list = []
         cursor_end = end_ms
-        for _ in range(self._CANDLE_MAX_PAGES):
+        for _ in range(self._CANDLE_MAX_PAGES_WITH_START if start else self._CANDLE_MAX_PAGES):
             page = self._fetch_candle_page(pair, fetch_interval, end_ms=cursor_end, start_ms=start_ms)
             if not page:
                 break

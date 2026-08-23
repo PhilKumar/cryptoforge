@@ -608,7 +608,9 @@ class AutoCascadeFib:
         was already broken before its campaign existed.
         """
         try:
-            rows = await self.engine._fetch_closed_candles(book.symbol, int(time.time()) - 600, timeframe="1m")
+            rows = await self.engine._fetch_closed_candles(
+                book.symbol, int(time.time()) - 600, timeframe="1m", venue=self._venue_broker(book.exchange)
+            )
         except Exception:
             return None
         return float(rows[-1].high) if rows else None
@@ -633,7 +635,11 @@ class AutoCascadeFib:
             # per closed 5m bar — the 2026-08-21 runaway managed one every 15s.
             book.note = "cooling down after the last start"
             return False
-        candles = await self.engine._fetch_closed_candles(book.symbol, int(now) - SWING_LOOKBACK_BARS * 300)
+        # The book's own venue's tape: a swing high Binance printed and CoinDCX
+        # did not is an anchor the CoinDCX book can never be filled against.
+        candles = await self.engine._fetch_closed_candles(
+            book.symbol, int(now) - SWING_LOOKBACK_BARS * 300, venue=self._venue_broker(book.exchange)
+        )
         if not candles:
             book.note = "no candles yet"
             return False

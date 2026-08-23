@@ -104,7 +104,8 @@ class FakeEngine:
     def venue_of(self, campaign):
         return str(getattr(campaign, "exchange", "") or "")
 
-    async def _fetch_closed_candles(self, symbol, since_ts, timeframe="5m"):
+    async def _fetch_closed_candles(self, symbol, since_ts, timeframe="5m", venue=None):
+        self.fetched_from = venue
         if timeframe == "1m":
             return self._candles_1m
         return self._candles
@@ -650,6 +651,15 @@ def test_a_coindcx_book_starts_its_campaign_on_coindcx():
     driver.set_book("BTCUSDT", enabled=True, capital_usd=2000.0, exchange="coindcx")
     assert asyncio.run(driver._seed_working_line(driver.books["btcusdt:coindcx"])) is True
     assert engine.started[0]["exchange"] == "coindcx"
+    assert engine.fetched_from is engine.brokers["coindcx"]  # the anchor came from CoinDCX's own tape
+
+
+def test_a_default_venue_book_scans_the_default_broker():
+    engine = VenueEngine(FakeBroker(), candles=_rising_then_falling())
+    driver = AutoCascadeFib(engine)
+    driver.set_book("BTCUSDT", enabled=True, capital_usd=2000.0)
+    assert asyncio.run(driver._seed_working_line(driver.books["btcusdt:"])) is True
+    assert engine.fetched_from is engine.broker
 
 
 def test_the_paper_only_broker_carries_the_venues_fee():

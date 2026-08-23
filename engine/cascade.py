@@ -2312,6 +2312,18 @@ class CascadeEngine:
             )
         return client
 
+    def _price_key(self, campaign: "Campaign") -> str:
+        """Where this campaign's last price lives in the cache.
+
+        A campaign on the engine's default venue keys by symbol alone, as it
+        always has. One on another venue gets that venue's name in front, so
+        a CoinDCX campaign's price is never read from a Binance tick.
+        """
+        client = self.broker_for(campaign)
+        if client is self.broker:
+            return campaign.symbol
+        return f"{self.venue_of(campaign)}:{campaign.symbol}"
+
     def venue_of(self, campaign: "Campaign") -> str:
         """The canonical exchange name a campaign's money belongs to.
 
@@ -2709,7 +2721,7 @@ class CascadeEngine:
         # How loud this instrument is, in its own bars. The fib size filter is
         # scaled from this, so a quiet market like PAXG is not asked for a swing
         # bigger than it ever makes.
-        median_bar = await self._measure_median_bar_pct(symbol)
+        median_bar = await self._measure_median_bar_pct(symbol, venue=venue)
         min_fib_range = min_fib_range_for(symbol, median_bar)
 
         funded_bands, funded_by = self._birth_bands_for(symbol, mother_high) if CROSS_CAMPAIGN_NETTING else ([], [])
@@ -2736,7 +2748,7 @@ class CascadeEngine:
             # there. Defaulting to "now" would make the engine wait for future
             # candles forever and ignore all the history that already formed
             # the trendlines.
-            detected = await self._resolve_mother_timestamp(symbol, mother_high, timeframe)
+            detected = await self._resolve_mother_timestamp(symbol, mother_high, timeframe, venue=venue)
             if detected is None:
                 return {
                     "error": (
@@ -3158,7 +3170,7 @@ class CascadeEngine:
         if campaign.mode != "live":
             # Paper: there is nothing on an exchange to cancel or sell, so book
             # it against the last price the engine saw.
-            price_meta = self._price_cache.get(campaign.symbol)
+            price_meta = self._price_cache.get(self._price_key(campaign))
             price = _coerce_float(price_meta[0] if price_meta else 0.0)
             if price <= 0:
                 return {"error": "No price available to close the paper position against"}
@@ -3220,7 +3232,7 @@ class CascadeEngine:
 
         executed = _coerce_float(result.get("executedQty"), sell_qty)
         quote = _coerce_float(result.get("cummulativeQuoteQty"))
-        price_meta = self._price_cache.get(campaign.symbol)
+        price_meta = self._price_cache.get(self._price_key(campaign))
         exit_price = (
             quote / executed if executed > 0 and quote > 0 else _coerce_float(price_meta[0] if price_meta else 0.0)
         )
@@ -3389,7 +3401,7 @@ class CascadeEngine:
             payload["pending_stop_price"] = campaign.pending_stop_price
             payload["pending_limit_price"] = campaign.pending_limit_price
             payload["rung_usd"] = rung_size_usd(campaign)
-            price_meta = self._price_cache.get(campaign.symbol)
+            price_meta = self._price_cache.get(self._price_key(campaign))
             last_price = price_meta[0] if price_meta else None
             payload["last_price"] = last_price
             # How far price is down from the mother high right now, and how far
@@ -3479,7 +3491,7 @@ class CascadeEngine:
         span = (int(max_candles) + _CHART_TAIL_BUCKETS + 2) * tf_sec * 2
         since = max(int(campaign.mother_timestamp) - tf_sec, window_end - span)
         try:
-            rows = await self._fetch_closed_candles(campaign.symbol, since, timeframe)
+            rows = await self._fetch_closed_candles(campaign.symbol, since, timeframe, venue=self.broker_for(campaign))
         except Exception as exc:
             _log.warning("[CASCADE] fine chart fetch failed for %s %s: %s", campaign.symbol, timeframe, exc)
             return []
@@ -3517,7 +3529,7 @@ class CascadeEngine:
         span_bars = (now - campaign.mother_timestamp) // max(tf_sec, 1)
         if frozen or (span_bars > KLINE_PAGE_BARS and max_candles > KLINE_PAGE_BARS):
             paged = await self._fetch_closed_candles(
-                campaign.symbol, campaign.mother_timestamp - tf_sec, campaign.timeframe
+                campaign.symbol, campaign.mother_timestamp - tf_sec, campaign.timeframe, venue=self.broker_for(campaign)
             )
             if frozen:
                 trimmed = [c for c in paged if c.timestamp <= window_end]
@@ -4193,7 +4205,7 @@ class CascadeEngine:
                     ],
                 }
             )
-        price_meta = self._price_cache.get(campaign.symbol)
+        price_meta = self._price_cache.get(self._price_key(campaign))
         return {
             "status": "ok",
             "campaign_id": campaign.campaign_id,
@@ -4517,8 +4529,8 @@ class CascadeEngine:
         stepped = False if campaign.driven else await self._candle_step(campaign)
         changed |= stepped
         # Keep the live price fresh for the UI (Last Price) and paper TP checks.
-        had_price = campaign.symbol in self._price_cache
-        price = await self._get_price(campaign.symbol)
+        had_price = self._price_key(campaign) in self._price_cache
+        price = await self._get_price(campaign.symbol, venue=self.broker_for(campaign))
         if not had_price and price:
             changed = True  # surface the first price so the status card fills in
         # Paper TP check against the live price.
@@ -4542,21 +4554,25 @@ class CascadeEngine:
 
     # ── pricing / candles ────────────────────────────────────────
 
-    async def _get_price(self, symbol: str, max_age: float = 4.0) -> float:
-        cached = self._price_cache.get(symbol)
+    async def _get_price(self, symbol: str, max_age: float = 4.0, venue=None) -> float:
+        # `venue` is the client to read from; None is the engine's default, and
+        # the default keys the cache by symbol alone, exactly as before venues.
+        client = venue if venue is not None else self.broker
+        key = symbol if client is self.broker else f"{str(getattr(client, 'broker_name', '') or '').lower()}:{symbol}"
+        cached = self._price_cache.get(key)
         if cached and time.monotonic() - cached[1] < max_age:
             return cached[0]
         try:
-            ticker = await asyncio.to_thread(self.broker.get_ticker, symbol)
+            ticker = await asyncio.to_thread(client.get_ticker, symbol)
             price = _coerce_float(ticker.get("last_price") or ticker.get("mark_price"))
         except Exception as exc:
             _log.warning("[CASCADE] price fetch failed for %s: %s", symbol, exc)
             price = cached[0] if cached else 0.0
-        self._price_cache[symbol] = (price, time.monotonic())
+        self._price_cache[key] = (price, time.monotonic())
         return price
 
     async def _resolve_mother_timestamp(
-        self, symbol: str, mother_high: float, timeframe: str = BASE_TIMEFRAME
+        self, symbol: str, mother_high: float, timeframe: str = BASE_TIMEFRAME, venue=None
     ) -> Optional[int]:
         """
         Find the open timestamp of the recent closed candle whose high most
@@ -4565,8 +4581,9 @@ class CascadeEngine:
         (then the caller asks the user to supply the timestamp explicitly).
         """
         tf_sec = timeframe_seconds(timeframe)
+        client = venue if venue is not None else self.broker
         try:
-            df = await self.broker.async_get_candles(symbol, resolution=timeframe)
+            df = await client.async_get_candles(symbol, resolution=timeframe)
         except Exception as exc:
             _log.warning("[CASCADE] mother candle lookup failed for %s: %s", symbol, exc)
             return None
@@ -4586,7 +4603,7 @@ class CascadeEngine:
                 best_ts = ts
         return best_ts
 
-    async def _measure_median_bar_pct(self, symbol: str) -> float:
+    async def _measure_median_bar_pct(self, symbol: str, venue=None) -> float:
         """Median 5m high-low range on this symbol, as a fraction of price.
 
         How loud the instrument is in its own terms. Two days of bars is enough
@@ -4596,7 +4613,7 @@ class CascadeEngine:
         """
         try:
             since = int(time.time()) - 2 * 86400
-            candles = await self._fetch_closed_candles(symbol, since, BASE_TIMEFRAME)
+            candles = await self._fetch_closed_candles(symbol, since, BASE_TIMEFRAME, venue=venue)
         except Exception as exc:
             _log.warning("[CASCADE] bar measurement failed for %s: %s", symbol, exc)
             return 0.0
@@ -4605,8 +4622,19 @@ class CascadeEngine:
             return 0.0  # too little history to call it a measurement
         return pcts[len(pcts) // 2]
 
-    async def _fetch_closed_candles(self, symbol: str, since_ts: int, timeframe: str = BASE_TIMEFRAME) -> List[Candle]:
-        """Closed candles of `timeframe` with open ts > since_ts, paging as needed."""
+    async def _fetch_closed_candles(
+        self, symbol: str, since_ts: int, timeframe: str = BASE_TIMEFRAME, venue=None
+    ) -> List[Candle]:
+        """Closed candles of `timeframe` with open ts > since_ts, paging as needed.
+
+        `venue` is the client to read them from. None means the engine's
+        default, which is what every caller sent before a campaign could name
+        a venue — so a Binance campaign still reads exactly what it always
+        read. A campaign on another venue reads that venue's own tape: a fib
+        built from one exchange's bars and traded on another's is geometry
+        the second exchange never printed.
+        """
+        client = venue if venue is not None else self.broker
         tf_sec = timeframe_seconds(timeframe)
         now = int(time.time())
         candles: List[Candle] = []
@@ -4619,7 +4647,7 @@ class CascadeEngine:
         for _ in range(MAX_FETCH_PAGES):
             start = datetime.utcfromtimestamp(max(cursor - tf_sec, 0)).strftime("%Y-%m-%d")
             try:
-                df = await self.broker.async_get_candles(symbol, resolution=timeframe, start=start)
+                df = await client.async_get_candles(symbol, resolution=timeframe, start=start)
             except Exception as exc:
                 _log.warning("[CASCADE] candle fetch failed for %s: %s", symbol, exc)
                 hit_page_cap = False
@@ -4696,9 +4724,13 @@ class CascadeEngine:
             # Restored campaign: the structure window is derived from candle
             # history, so rebuild everything since the mother candle. Candles
             # already processed are backfilled without re-running the engine.
-            prior = await self._fetch_closed_candles(campaign.symbol, campaign.mother_timestamp, tf)
+            prior = await self._fetch_closed_candles(
+                campaign.symbol, campaign.mother_timestamp, tf, venue=self.broker_for(campaign)
+            )
             history.extend(c for c in prior if c.timestamp <= campaign.last_processed_ts)
-        new_candles = await self._fetch_closed_candles(campaign.symbol, campaign.last_processed_ts, tf)
+        new_candles = await self._fetch_closed_candles(
+            campaign.symbol, campaign.last_processed_ts, tf, venue=self.broker_for(campaign)
+        )
         if not new_candles:
             return False
         changed = False
@@ -4719,7 +4751,7 @@ class CascadeEngine:
                 break
         return changed
 
-    async def _recent_closed_candles(self, symbol: str, timeframe: str, after_ts: int) -> List[Candle]:
+    async def _recent_closed_candles(self, symbol: str, timeframe: str, after_ts: int, venue=None) -> List[Candle]:
         """The newest page of closed candles, filtered to those after `after_ts`.
 
         Deliberately NOT _fetch_closed_candles. That one pages from a DATE
@@ -4738,8 +4770,9 @@ class CascadeEngine:
         """
         now = int(time.time())
         tf_sec = timeframe_seconds(timeframe)
+        client = venue if venue is not None else self.broker
         try:
-            df = await self.broker.async_get_candles(symbol, resolution=timeframe)
+            df = await client.async_get_candles(symbol, resolution=timeframe)
         except Exception as exc:
             _log.warning("[CASCADE] %s candle fetch failed for %s: %s", timeframe, symbol, exc)
             return []
@@ -4785,7 +4818,9 @@ class CascadeEngine:
         newest_closed = (now // watch_sec) * watch_sec - watch_sec
         if cursor >= newest_closed:
             return False
-        candles = await self._recent_closed_candles(campaign.symbol, MOTHER_BREAK_WATCH_TIMEFRAME, cursor)
+        candles = await self._recent_closed_candles(
+            campaign.symbol, MOTHER_BREAK_WATCH_TIMEFRAME, cursor, venue=self.broker_for(campaign)
+        )
         for candle in candles:
             if candle.timestamp <= cursor:
                 continue
@@ -4808,7 +4843,9 @@ class CascadeEngine:
         after_ts = int(campaign.mother_break_last_5m_ts or 0)
         if after_ts <= 0:
             return False
-        candles = await self._fetch_closed_candles(campaign.symbol, after_ts, self.settle_timeframe(campaign))
+        candles = await self._fetch_closed_candles(
+            campaign.symbol, after_ts, self.settle_timeframe(campaign), venue=self.broker_for(campaign)
+        )
         changed = False
         for candle in candles:
             if candle.timestamp <= after_ts:
@@ -6676,7 +6713,7 @@ class CascadeEngine:
         # "would trigger immediately". Read a FRESH price (not the 4s cache): on
         # a thin book like PAXG the price crosses the trigger inside those 4
         # seconds. One ticker call is cheap — placement is gated on arming.
-        market = await self._get_price(campaign.symbol, max_age=1.0)
+        market = await self._get_price(campaign.symbol, max_age=1.0, venue=self.broker_for(campaign))
         # If price has ALREADY reached the trigger, a stop placed at the trigger
         # would be rejected -2010. The RIGHT answer is NOT a limit buy: a limit
         # fills on the way DOWN, so when the fall continues it buys into the

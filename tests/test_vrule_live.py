@@ -304,6 +304,114 @@ def test_the_fee_gate_is_the_venues_round_trip_plus_the_same_edge():
     assert vr.venue_net_margin(NS(fee_pct_per_side=None)) == vr.MIN_NET_MARGIN
 
 
+class TapeVenue(DearVenue):
+    """A venue with its own tape and ticker, and a record of who asked."""
+
+    def __init__(self, price=100.0):
+        self.price = price
+        self.candle_calls = []
+        self.ticker_calls = 0
+
+    def get_ticker(self, symbol):
+        self.ticker_calls += 1
+        return {"last_price": self.price}
+
+    def get_candles(self, symbol, resolution="5m", start=None, end=None):
+        import pandas as pd
+
+        self.candle_calls.append((symbol, resolution, start))
+        now = int(__import__("time").time()) // 300 * 300
+        rows = [(now - 300 * (i + 1), 100.0, 101.0, 99.0, 100.0) for i in range(30, 0, -1)]
+        rows.append((now, 100.0, 101.0, 99.0, 100.0))  # the still-forming bar
+        df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close"])
+        df.index = pd.to_datetime(df.pop("ts"), unit="s", utc=True)
+        return df
+
+    async def async_get_candles(self, symbol, **kwargs):
+        return self.get_candles(symbol, **kwargs)
+
+
+class TapeDefault(HarnessBroker):
+    def __init__(self):
+        self.ticker_calls = 0
+        self.candle_calls = []
+
+    def get_ticker(self, symbol):
+        self.ticker_calls += 1
+        return {"last_price": 50.0}
+
+    async def async_get_candles(self, symbol, **kwargs):
+        self.candle_calls.append(kwargs)
+        return await super().async_get_candles(symbol, **kwargs)
+
+
+def test_a_campaigns_price_and_candles_come_from_its_own_venue():
+    """Binance: the default client and the symbol-keyed cache, exactly as
+    before. CoinDCX: that venue's ticker and tape, under its own key."""
+    default, dear = TapeDefault(), TapeVenue(price=100.0)
+    engine = CascadeEngine(default, brokers={"coindcx": dear})
+    engine.start = lambda: None
+    binance = _driven(engine)
+    coindcx = asyncio.run(
+        engine.start_campaign(
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=110.0,
+            mother_low=108.0,
+            mother_timestamp=int(__import__("time").time()) - 3600,
+            mode="paper",
+            timeframe="5m",
+            mc_kind="major",
+            exchange="coindcx",
+            strategy=vr.STRATEGY,
+            driven=True,
+        )
+    )
+    coindcx = engine.campaigns[coindcx["campaign"]["campaign_id"]]
+    assert engine._price_key(binance) == "BTCUSDT"
+    assert engine._price_key(coindcx) == "coindcx:BTCUSDT"
+    assert asyncio.run(engine._get_price("BTCUSDT", venue=engine.broker_for(binance))) == 50.0
+    assert asyncio.run(engine._get_price("BTCUSDT", venue=engine.broker_for(coindcx))) == 100.0
+    assert engine._price_cache["BTCUSDT"][0] == 50.0 and engine._price_cache["coindcx:BTCUSDT"][0] == 100.0
+    assert default.ticker_calls == 1 and dear.ticker_calls == 1
+    since = int(__import__("time").time()) - 3600
+    rows = asyncio.run(engine._fetch_closed_candles("BTCUSDT", since, "5m", venue=engine.broker_for(coindcx)))
+    assert rows and dear.candle_calls and dear.candle_calls[-1][1] == "5m"
+    asyncio.run(engine._fetch_closed_candles("BTCUSDT", since, "5m", venue=engine.broker_for(binance)))
+    assert default.candle_calls  # the default venue still reads the default client
+    # and with no venue named at all, the default — the pre-venue call shape
+    before = len(default.candle_calls)
+    asyncio.run(engine._fetch_closed_candles("BTCUSDT", since, "5m"))
+    assert len(default.candle_calls) == before + 1
+
+
+def test_a_coindcx_book_scans_its_own_tape_and_only_tops_it_up_after():
+    dear = TapeVenue()
+    driver = VRuleLive(_two_venue_engine(dear=dear))
+    book = driver.set_book("BTCUSDT", enabled=True, capital_usd=500.0, exchange="coindcx")
+    df = driver._load_window(book)
+    now_bucket = int(__import__("time").time()) // 300 * 300
+    assert len(df) == 30 and int(df.index[-1].timestamp()) < now_bucket  # the forming bar is dropped
+    assert dear.candle_calls[0][2] == __import__("datetime").datetime.utcfromtimestamp(book.history_start_ts).strftime(
+        "%Y-%m-%d"
+    )
+    again = driver._load_window(book)
+    assert len(again) == 30 and len(dear.candle_calls) == 2
+    assert dear.candle_calls[1][2] >= dear.candle_calls[0][2]  # the top-up starts near the last bar, not 30 days back
+    # the default venue still goes through the paper book's own fetch
+    calls = []
+    import engine.rule3070_paper as paper
+
+    original = paper.fetch_window
+    paper.fetch_window = lambda symbol, since_ts=0, **kw: calls.append((symbol, since_ts)) or df
+    try:
+        plain = driver.set_book("BTCUSDT", enabled=True, capital_usd=500.0)
+        driver._load_window(plain)
+    finally:
+        paper.fetch_window = original
+    assert calls == [("BTCUSDT", plain.history_start_ts)]
+
+
 def test_the_paper_only_broker_hands_the_engine_the_venues_fee():
     from engine.auto_cascade_fib import PaperOnlyBroker
 
