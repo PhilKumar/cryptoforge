@@ -9194,7 +9194,7 @@ function _cfCascadeMcKindPill(campaign) {
   if (owner === 'auto-cascade-fib') {
     if (!minor) {
       return '<span class="admin-pill" data-state="info" title="'
-        + _escapeHtml('GRADUATED · 1H — this line climbed from 5m to the 1h rung, so Auto-Cascade_Fib '
+        + _escapeHtml('GRADUATED · 1H — this line climbed from 5m to the 1h rung, so Cascade_Auto '
           + 'left it to run on its own and started a fresh 5m working line behind it.')
         + '">GRADUATED &middot; 1H</span>';
     }
@@ -9207,7 +9207,7 @@ function _cfCascadeMcKindPill(campaign) {
       && String(afBook.working_line) === String(campaign.campaign_id));
     return '<span class="admin-pill" data-state="' + (isWorking ? 'ok' : 'info') + '" title="'
       + _escapeHtml(isWorking
-        ? 'WORKING LINE — the 5m line Auto-Cascade_Fib is feeding right now. There is one per '
+        ? 'WORKING LINE — the 5m line Cascade_Auto is feeding right now. There is one per '
           + 'symbol: the strategy finds it by this mark, and starts a fresh one only once this '
           + 'line has graduated to the 1h rung.'
         : '5M LINE — a 5m line of this book that the strategy is not feeding right now. Either it '
@@ -14339,12 +14339,12 @@ async function cfAfRefresh(showToast) {
   try {
     var response = await cfApiFetch('/api/auto-fib/status', { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
-    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Auto-Cascade_Fib status unavailable'));
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Cascade_Auto status unavailable'));
     _cfAfSetError('');
     cfAfRenderStatus(data);
     cfAfRenderStats((data && data.books) || []);
     cfAfRenderLines(data);
-    if (showToast) cfToast('Auto-Cascade_Fib refreshed', 'success');
+    if (showToast) cfToast('Cascade_Auto refreshed', 'success');
   } catch (err) {
     _cfAfSetError(String(err.message || err));
   }
