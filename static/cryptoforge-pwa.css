@@ -17,11 +17,16 @@ html, body {
 .cf-pwa-overlay {
   position: fixed;
   inset: 0;
-  z-index: 6000;
+  /* Install guidance is a modal. The global emergency control sits at 9999,
+     so the old 6000 layer let KILL ALL paint over the sheet's bottom action
+     on phones. Keep the entire modal above global floating controls. */
+  z-index: 12050;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: rgba(3, 6, 14, 0.68);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -29,6 +34,9 @@ html, body {
 
 .cf-pwa-sheet {
   width: min(460px, calc(100vw - 28px));
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 26px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
@@ -243,6 +251,7 @@ html[data-theme="light"] .cf-pwa-update-btn {
 
   .cf-pwa-sheet {
     width: 100%;
+    max-height: calc(100dvh - 28px);
     border-radius: 24px 24px 18px 18px;
     padding: 20px 18px calc(18px + env(safe-area-inset-bottom));
   }
@@ -251,9 +260,13 @@ html[data-theme="light"] .cf-pwa-update-btn {
     flex-direction: column-reverse;
   }
 
-  .cf-pwa-btn,
-  .cf-pwa-close {
+  .cf-pwa-btn {
     width: 100%;
+  }
+
+  .cf-pwa-close {
+    flex: 0 0 38px;
+    width: 38px;
   }
 
   .cf-pwa-update-banner {
@@ -263,5 +276,9 @@ html[data-theme="light"] .cf-pwa-update-btn {
 
   .cf-pwa-update-btn {
     width: 100%;
+  }
+
+  body.kill-switch-on .cf-pwa-update-banner {
+    bottom: calc(70px + env(safe-area-inset-bottom));
   }
 }
