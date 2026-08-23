@@ -294,6 +294,16 @@ def test_a_driven_5m_ladder_is_allowed_on_a_15m_floor_venue_and_priced_at_its_fe
     assert compute_tp_price(campaign) > 100.4
 
 
+def test_the_fee_gate_is_the_venues_round_trip_plus_the_same_edge():
+    """Binance: exactly the locked 0.35%. CoinDCX (0.2% a side): 0.55%. A
+    campaign that predates per-venue fees gets the locked number."""
+    from types import SimpleNamespace as NS
+
+    assert vr.venue_net_margin(NS(fee_pct_per_side=0.1)) == pytest.approx(vr.MIN_NET_MARGIN)
+    assert vr.venue_net_margin(NS(fee_pct_per_side=0.2)) == pytest.approx(0.0055)
+    assert vr.venue_net_margin(NS(fee_pct_per_side=None)) == vr.MIN_NET_MARGIN
+
+
 def test_the_paper_only_broker_hands_the_engine_the_venues_fee():
     from engine.auto_cascade_fib import PaperOnlyBroker
 

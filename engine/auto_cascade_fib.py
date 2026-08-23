@@ -613,10 +613,16 @@ class AutoCascadeFib:
             return None
         return float(rows[-1].high) if rows else None
 
+    def _line_timeframe(self, book: Book) -> str:
+        """What a fresh line actually runs on: 5m, or the venue's floor —
+        the engine lifts a minor to it, so the note must say the same."""
+        floor = getattr(self.engine, "venue_min_timeframe", None)
+        return str(floor(book.exchange) or "5m") if callable(floor) else "5m"
+
     async def _seed_working_line(self, book: Book) -> bool:
         """Anchor a fresh 5m line on the latest confirmed swing high."""
         if self._working_line_id(book):
-            book.note = "working a 5m line"
+            book.note = f"working a {self._line_timeframe(book)} line"
             return False
         if self._in_coin(book) >= book.wallet_cap_usd:
             book.note = "wallet full — no room to start another line"
@@ -677,11 +683,13 @@ class AutoCascadeFib:
             book.next_seed_ts = now + SEED_COOLDOWN_SEC
             return False
         book.last_error = ""
-        book.note = "started a 5m line"
+        book.note = f"started a {self._line_timeframe(book)} line"
         book.tried_anchors.append(int(anchor.timestamp))
         del book.tried_anchors[:-TRIED_ANCHOR_LIMIT]
         book.next_seed_ts = now + SEED_COOLDOWN_SEC
-        _log.info("[AUTO-FIB] %s new 5m line on the swing high at %.8f", book.symbol, anchor.high)
+        _log.info(
+            "[AUTO-FIB] %s new %s line on the swing high at %.8f", book.symbol, self._line_timeframe(book), anchor.high
+        )
         return True
 
     # ── the tick ─────────────────────────────────────────────────

@@ -76,12 +76,29 @@ SPLIT = (0.30, 0.70)
 MIN_ORDER_USD = 5.5  # Binance minimum notional
 MAX_BANDS = 2  # 2 bands = 4 buys, then hold for the target
 MIN_NET_MARGIN = 0.0035  # the fee gate: a quarter of the fall must beat 0.35%
+
+
 BUDGET_CAP_FRAC = 0.5  # never more than half the purse in the market
 FOLD_AT_FRACTION = 0.25  # closed profit folds in at a quarter of the purse
 FEE_PER_SIDE = 0.001  # the simulator's fee model, for the profit bank
 WARMUP_DAYS = 30  # history the scanner is given; same as paper
 HISTORY_LIMIT = 200  # ended ladders a book remembers (the parity harness lifts this)
 SCAN_GRACE_SEC = 10  # after a 5m close, let the bar settle before reading it
+
+# The gate is Binance's round trip (2 x 0.1%) plus this much edge. On a dearer
+# venue the same edge sits above THAT venue's round trip — otherwise the rule
+# arms buys whose target cannot pay the commission, the engine lifts the
+# target above the rule's, and the ladder waits for a price the rule never
+# asked for. On Binance the sum is exactly MIN_NET_MARGIN, so nothing moves.
+MIN_NET_EDGE = MIN_NET_MARGIN - 2 * FEE_PER_SIDE
+
+
+def venue_net_margin(campaign) -> float:
+    """The fee gate for this campaign's venue: its round trip plus the edge."""
+    rate = getattr(campaign, "fee_pct_per_side", None)
+    if rate is None:
+        return MIN_NET_MARGIN
+    return round(2 * float(rate) / 100.0 + MIN_NET_EDGE, 10)
 
 
 @dataclass
@@ -729,7 +746,8 @@ class VRuleLive:
 
         entry = ladder.entry_price()
         deep_enough = not fills or entry < fills[-1].price
-        if MIN_NET_MARGIN and 0.25 * (ladder.mother_high - ladder.lowest_low) / entry < MIN_NET_MARGIN:
+        margin = venue_net_margin(campaign)
+        if margin and 0.25 * (ladder.mother_high - ladder.lowest_low) / entry < margin:
             deep_enough = False  # the win would not beat the fee — wait for a deeper low
 
         if deep_enough:
