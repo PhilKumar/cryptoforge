@@ -9526,10 +9526,51 @@ function cfCascadeCloseMenu() {
   _cfCascadeRepaintCards();
 }
 
+// The campaign list is a SCROLLING pane, so an absolutely-positioned menu is
+// clipped at its edges — a card low in the pane opened a menu that was simply
+// cut off, and the click landed on whatever was painted there instead. It
+// cannot escape with position:fixed either: .cf-cascade-card carries a
+// backdrop-filter, which makes it the containing block for fixed descendants.
+//
+// So the menu is CLAMPED into the pane. Flipping it upward is not enough on
+// its own: with the pane 268px tall, a 136px menu and the button 138px down,
+// there was no room below (482 needed, 474 available) and none above either
+// (202 needed, 206 available) — it has to be placed where it fits, not merely
+// on the other side.
+//
+// Found on 2026-08-23 by moving the strategy switcher into the header: that
+// made the header ~86px taller, the panes are sized from --cf-shell-h, and the
+// menu that used to just fit stopped fitting. The clipping was always there;
+// the pane's height was the only thing hiding it.
+function _cfCascadePlaceMenu() {
+  var menu = document.querySelector('.cf-cascade-menu:not([hidden])');
+  if (!menu || !menu.parentElement) return;
+  menu.style.top = '';
+  menu.style.bottom = '';
+  var pane = menu.parentElement;
+  while (pane && pane !== document.body) {
+    var flow = window.getComputedStyle(pane).overflowY;
+    if (flow === 'auto' || flow === 'scroll') break;
+    pane = pane.parentElement;
+  }
+  if (!pane || pane === document.body) return;
+  var p = pane.getBoundingClientRect();
+  var box = menu.getBoundingClientRect();
+  var pad = 4;
+  if (box.top >= p.top + pad && box.bottom <= p.bottom - pad) return;  // already clear
+  // Prefer where it already is, but pull it inside the pane. A pane shorter
+  // than the menu keeps the top edge visible rather than centring it away.
+  var want = Math.min(box.top, p.bottom - box.height - pad);
+  if (want < p.top + pad) want = p.top + pad;
+  menu.style.top = (want - menu.parentElement.getBoundingClientRect().top) + 'px';
+  menu.style.bottom = 'auto';
+}
+
 function cfCascadeToggleMenu(cid) {
   var key = String(cid || '');
   _cfCascadeMenuOpenFor = _cfCascadeMenuOpenFor === key ? '' : key;
   _cfCascadeRepaintCards();
+  _cfCascadePlaceMenu();
 }
 
 // One entry point for everything behind the menu: close first, then act. Left
