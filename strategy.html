@@ -224,6 +224,33 @@
     </button>
   </div>
 </div>
+<!-- The strategy switcher belongs to the HEADER, not to the pages. It used to
+     be copied into each of the three pages, so it scrolled away with the
+     content and there was no way back to the other two without scrolling up
+     (Phil, 2026-08-23: "I want the 3 tabs not to scroll with the page scroll
+     ... like attaching it to the top headers like journal, portfolio"). One
+     copy lives here inside .sticky-shell, so it holds still exactly as the
+     nav above it does, and is shown only while a strategy page is open. -->
+<div class="cf-strat-tabs cf-strat-subnav" id="cf-strat-subnav" role="tablist" aria-label="Strategy" hidden>
+  <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
+          data-cf-strat-page="cascade-page"
+          data-cf-click="showPage('cascade-page', document.getElementById('nav-strategies'))">
+    <span class="cf-strat-icon cf-strat-icon-cascade" aria-hidden="true">&#8803;</span>
+    <span><strong>Cascade</strong><small>Live campaigns, 24/7</small></span>
+  </button>
+  <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
+          data-cf-strat-page="rule3070-page"
+          data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">
+    <span class="cf-strat-icon cf-strat-icon-vrule" aria-hidden="true">V</span>
+    <span><strong>V-Rule</strong><small>Paper &middot; the 30-70 rule</small></span>
+  </button>
+  <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
+          data-cf-strat-page="autofib-page"
+          data-cf-click="showPage('autofib-page', document.getElementById('nav-strategies'))">
+    <span class="cf-strat-icon cf-strat-icon-autofib" aria-hidden="true">&#8600;</span>
+    <span><strong>Auto-Cascade_Fib</strong><small>Automatic &middot; sells at half</small></span>
+  </button>
+</div>
 </div><!-- /sticky-shell -->
 
 
@@ -1305,23 +1332,6 @@
      the mother candles.
      ═══════════════════════════════════════════════════════ -->
 <div id="autofib-page" class="page-section">
-  <div class="cf-strat-tabs cf-strat-subnav" role="tablist" aria-label="Strategy">
-    <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
-            data-cf-click="showPage('cascade-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-cascade" aria-hidden="true">≣</span>
-      <span><strong>Cascade</strong><small>Live campaigns, 24/7</small></span>
-    </button>
-    <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
-            data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-vrule" aria-hidden="true">V</span>
-      <span><strong>V-Rule</strong><small>Paper · the 30-70 rule</small></span>
-    </button>
-    <button type="button" class="cf-strat-tab is-active" role="tab" aria-selected="true" tabindex="0"
-            data-cf-click="showPage('autofib-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-autofib" aria-hidden="true">⇘</span>
-      <span><strong>Auto-Cascade_Fib</strong><small>Automatic · sells at half</small></span>
-    </button>
-  </div>
 
   <div class="allocator-header">
     <div>
@@ -1458,23 +1468,6 @@
   <!-- The strategy selector, in PhilForge's desk-selector shape (Phil,
        2026-08-17: "Make Crypto tab sections like the one in philforge"):
        icon tile, name, one line of what it is. Same on both pages. -->
-  <div class="cf-strat-tabs cf-strat-subnav" role="tablist" aria-label="Strategy">
-    <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
-            data-cf-click="showPage('cascade-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-cascade" aria-hidden="true">≣</span>
-      <span><strong>Cascade</strong><small>Live campaigns, 24/7</small></span>
-    </button>
-    <button type="button" class="cf-strat-tab is-active" role="tab" aria-selected="true" tabindex="0"
-            data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-vrule" aria-hidden="true">V</span>
-      <span><strong>V-Rule</strong><small>Paper · the 30-70 rule</small></span>
-    </button>
-    <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
-            data-cf-click="showPage('autofib-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-autofib" aria-hidden="true">⇘</span>
-      <span><strong>Auto-Cascade_Fib</strong><small>Automatic · sells at half</small></span>
-    </button>
-  </div>
   <div class="allocator-header">
     <div>
       <h2>The V-Rule <button type="button" class="cf-info" tabindex="0" data-cf-info="A mother candle marks the top. After it falls, a V forms (a dip, two greens, a red). The book may NEVER hold more than half the purse at once — the safety rule the honest backtest was chosen on. The entry sits a quarter of the fall back up and trails the low down; buys alternate 30% and 70% of the pot down the sliding fibs, four buys maximum, then it holds. One target sells the whole ladder at the average buy plus a quarter of the fall. Money rules: pot is the fall percent of capital, a 0.35% fee gate, full-budget discipline and 25% profit reinvestment. This console runs it on PAPER using the same engine the nine-year backtest proved, bar for bar." aria-label="How the 30-70 Rule works">i</button></h2>
@@ -1749,23 +1742,6 @@
 </div>
 
 <div id="cascade-page" class="page-section">
-  <div class="cf-strat-tabs cf-strat-subnav" role="tablist" aria-label="Strategy">
-    <button type="button" class="cf-strat-tab is-active" role="tab" aria-selected="true" tabindex="0"
-            data-cf-click="showPage('cascade-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-cascade" aria-hidden="true">≣</span>
-      <span><strong>Cascade</strong><small>Live campaigns, 24/7</small></span>
-    </button>
-    <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
-            data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-vrule" aria-hidden="true">V</span>
-      <span><strong>V-Rule</strong><small>Paper · the 30-70 rule</small></span>
-    </button>
-    <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
-            data-cf-click="showPage('autofib-page', document.getElementById('nav-strategies'))">
-      <span class="cf-strat-icon cf-strat-icon-autofib" aria-hidden="true">⇘</span>
-      <span><strong>Auto-Cascade_Fib</strong><small>Automatic · sells at half</small></span>
-    </button>
-  </div>
   <div class="allocator-header">
     <div>
       <h2>Cascade Campaigns</h2>

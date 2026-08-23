@@ -69,26 +69,65 @@ class AutoFibOpenTradesTests(unittest.TestCase):
         self.assertIn("_renderTablePager(tableId, tableId, mountId + '-pagination');", self.js)
 
 
-class StrategySubnavStickyTests(unittest.TestCase):
-    """Phil: "The page scroll has to show the 3 strategies heading... It hides
-    those currently when scrolled below"."""
+class StrategySubnavInHeaderTests(unittest.TestCase):
+    """The strategy switcher belongs to the header, not to the pages.
+
+    It used to be copied into all three strategy pages, so it scrolled away
+    with the content. Making it sticky INSIDE the page was the wrong fix — it
+    left the tabs floating over the content mid-scroll (Phil, 2026-08-23: "not
+    putting something inside like a fool's work ... like attaching it to the
+    top headers like journal, portfolio"). One copy now lives in
+    .sticky-shell, beside the nav, and is shown only on a strategy page.
+    """
 
     def setUp(self):
-        self.css = _read(_CSS)
+        self.html = _read(_HTML)
         self.js = _read(_JS)
+        self.css = _read(_CSS)
 
-    def test_the_switcher_sticks_below_the_measured_topbar(self):
-        rule = re.search(r"\.cf-strat-subnav \{(.*?)\}", self.css, re.S)
-        self.assertIsNotNone(rule)
-        body = rule.group(1)
-        self.assertIn("position: sticky", body)
-        self.assertIn("top: var(--cf-shell-h", body)
+    def test_there_is_exactly_one_switcher(self):
+        # Count ELEMENTS, not substrings — the one element mentions the name
+        # twice, in its class and in its id.
+        self.assertEqual(len(re.findall(r'<div class="cf-strat-tabs cf-strat-subnav"', self.html)), 1)
+        self.assertEqual(len(re.findall(r'id="cf-strat-subnav"', self.html)), 1)
 
-    def test_it_paints_a_background_so_content_cannot_scroll_through_it(self):
-        rule = re.search(r"\.cf-strat-subnav \{(.*?)\}", self.css, re.S)
-        self.assertIn("background:", rule.group(1))
+    def test_it_lives_inside_the_sticky_shell(self):
+        shell_start = self.html.index('<div class="sticky-shell">')
+        shell_end = self.html.index("</div><!-- /sticky-shell -->")
+        at = self.html.index('id="cf-strat-subnav"')
+        self.assertGreater(at, shell_start)
+        self.assertLess(at, shell_end, "the switcher must be inside the header shell")
 
-    def test_the_shell_height_variable_is_actually_maintained(self):
-        """top: var(--cf-shell-h) is only correct while something sets it."""
-        self.assertIn("setProperty('--cf-shell-h'", self.js)
-        self.assertIn("ResizeObserver", self.js)
+    def test_no_strategy_page_carries_its_own_copy(self):
+        for page in ("cascade-page", "rule3070-page", "autofib-page"):
+            at = self.html.index('id="%s"' % page)
+            nxt = re.search(r'<div id="[^"]+" class="page-section"', self.html[at + 40 :])
+            section = self.html[at : at + 40 + nxt.start()] if nxt else self.html[at:]
+            self.assertNotIn("cf-strat-subnav", section, "%s still has its own switcher" % page)
+
+    def test_it_starts_hidden_and_css_can_hide_a_flex_row(self):
+        self.assertIn('id="cf-strat-subnav"', self.html)
+        bar = self.html[self.html.index('id="cf-strat-subnav"') :][:400]
+        self.assertIn("hidden", bar, "it must not show on non-strategy pages before any JS runs")
+        # .cf-strat-tabs sets display:flex, which beats the hidden attribute —
+        # so an explicit rule is required or a "hidden" bar still shows.
+        self.assertIn(".cf-strat-subnav[hidden] { display: none; }", self.css)
+
+    def test_it_is_no_longer_stuck_to_the_page(self):
+        rule = re.search(r"\.cf-strat-subnav \{(.*?)\}", self.css, re.S).group(1)
+        self.assertNotIn("position: sticky", rule)
+
+    def test_every_card_names_the_page_it_opens(self):
+        for page in ("cascade-page", "rule3070-page", "autofib-page"):
+            self.assertIn('data-cf-strat-page="%s"' % page, self.html)
+
+    def test_the_state_is_synced_from_the_one_place_pages_change(self):
+        self.assertIn("function cfSyncStrategySubnav(pageId)", self.js)
+        shell = re.search(r"function cfSetActivePageShell\(.*?\n\}", self.js, re.S).group(0)
+        self.assertIn("cfSyncStrategySubnav(pageId)", shell)
+
+    def test_the_already_active_shortcut_also_syncs_it(self):
+        """showPage returns early when the page is already open — the switcher
+        still has to be right, or re-clicking a tab blanks its highlight."""
+        early = self.js[self.js.index("if (alreadyActive && !opts.forceReload) {") :][:400]
+        self.assertIn("cfSyncStrategySubnav(pageId)", early)

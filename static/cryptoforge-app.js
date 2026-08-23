@@ -1188,10 +1188,26 @@ function cfScrollActiveTabIntoView(btn) {
   }
 }
 
+// The strategy switcher lives in the header now, so there is ONE of it and its
+// state is set here rather than baked into three copies of the markup.
+function cfSyncStrategySubnav(pageId) {
+  var bar = document.getElementById('cf-strat-subnav');
+  if (!bar) return;
+  var onStrategy = pageId === 'cascade-page' || pageId === 'rule3070-page' || pageId === 'autofib-page';
+  bar.hidden = !onStrategy;
+  bar.querySelectorAll('.cf-strat-tab').forEach(function (tab) {
+    var mine = tab.getAttribute('data-cf-strat-page') === pageId;
+    tab.classList.toggle('is-active', mine);
+    tab.setAttribute('aria-selected', mine ? 'true' : 'false');
+    tab.setAttribute('tabindex', mine ? '0' : '-1');
+  });
+}
+
 function cfSetActivePageShell(pageId, btn) {
   document.querySelectorAll('.page-section').forEach(function(p) { p.classList.remove('active-page'); });
   document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
   document.getElementById(pageId).classList.add('active-page');
+  cfSyncStrategySubnav(pageId);
   if (!btn) btn = cfNavButtonForPage(pageId);
   if (btn) { btn.classList.add('active'); cfScrollActiveTabIntoView(btn); }
 }
@@ -1204,6 +1220,7 @@ function showPage(pageId, btn, options) {
   var alreadyActive = activePage && activePage.id === pageId;
   if (alreadyActive && !opts.forceReload) {
     document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
+    cfSyncStrategySubnav(pageId);
     if (!btn) btn = cfNavButtonForPage(pageId);
     if (btn) btn.classList.add('active');
     localStorage.setItem('cf_active_tab', tabName);

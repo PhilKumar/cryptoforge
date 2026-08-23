@@ -261,23 +261,41 @@ test.describe('Comprehensive Site Audit', () => {
       expect(painted.borderTopWidth, `${toggle.label} has the wrong border`).toBe(toggle.border);
     }
 
-    // The desk card carries a name AND a one-line description on EVERY
-    // strategy page, and each page carries the whole set so the selector reads
-    // the same wherever you are standing.
+    // The desk card carries a name AND a one-line description. There is ONE
+    // selector now, in the header inside .sticky-shell, so it holds still with
+    // the nav instead of scrolling away with the page — and it must read the
+    // same, and stay visible, wherever among the three you are standing.
     const STRATEGIES = ['Cascade', 'V-Rule', 'Auto-Cascade_Fib'];
+    await expect(page.locator('.cf-strat-subnav'), 'one switcher, not one per page').toHaveCount(1);
+    await expect(
+      page.locator('.sticky-shell .cf-strat-subnav'),
+      'the switcher must live in the header shell',
+    ).toHaveCount(1);
     for (const pageId of ['cascade-page', 'rule3070-page', 'autofib-page']) {
-      const cards = page.locator(`#${pageId} .cf-strat-tab`);
+      await page.evaluate((id) => (window as any).showPage(id), pageId);
+      const bar = page.locator('#cf-strat-subnav');
+      await expect(bar, `${pageId} selector visible`).toBeVisible();
+      const cards = bar.locator('.cf-strat-tab');
       await expect(cards, `${pageId} selector`).toHaveCount(STRATEGIES.length);
       await expect(cards.locator('strong')).toHaveText(STRATEGIES);
       for (let i = 0; i < STRATEGIES.length; i++) {
         await expect(cards.nth(i).locator('small')).not.toBeEmpty();
       }
+      // The card for the page you are on is the marked one.
+      await expect(
+        bar.locator(`.cf-strat-tab[data-cf-strat-page="${pageId}"]`),
+        `${pageId} card marked active`,
+      ).toHaveClass(/is-active/);
     }
+    // And it is gone on a page that is not a strategy.
+    await page.evaluate(() => (window as any).showPage('journal-page'));
+    await expect(page.locator('#cf-strat-subnav'), 'hidden off the strategy pages').toBeHidden();
+    await page.evaluate(() => (window as any).showPage('cascade-page'));
 
     // Strategy cards stay compact and start at the left edge, leaving room in
     // the same row for future strategies instead of stretching two cards to
     // consume the whole page.
-    const layout = await page.locator('#cascade-page .cf-strat-tabs').evaluate((tabs) => {
+    const layout = await page.locator('#cf-strat-subnav').evaluate((tabs) => {
       const host = tabs.getBoundingClientRect();
       const cards = Array.from(tabs.querySelectorAll('.cf-strat-tab'))
         .map((card) => card.getBoundingClientRect());
