@@ -1408,6 +1408,23 @@
   </section>
   </div>
 
+  <!-- The same Open Trades table the Cascade page carries, drawn by the same
+       renderer with this page's ids. Phil, 2026-08-23: "Add a open trade
+       section in auto-cascade_fib tab same like cascade". No Action column
+       here — the Market Sell button posts to the LIVE Cascade engine, which
+       does not own these campaigns. -->
+  <section class="card table-panel" id="cf-af-trades-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Open Trades</h3>
+        <div class="table-meta" id="cf-af-trades-meta">Every line holding coin right now, what it cost, and what it is worth.</div>
+      </div>
+    </div>
+    <div id="cf-af-trades">
+      <div class="cf-table-empty-cell" style="padding:14px;">No open trades — nothing has been bought yet.</div>
+    </div>
+  </section>
+
   <section class="card allocator-result-panel" aria-labelledby="cf-af-books-title">
     <h3 id="cf-af-books-title">Books <button type="button" class="cf-info" tabindex="0" data-cf-info="Purse is the money the book sizes from. In coin is what it holds right now, and it can never pass the wallet limit. Pocket is closed profit waiting to fold; at the fold-at figure it goes into the purse whole and the limit rises with it. Lines is how many campaigns this book has running — expect several, most of them slow ones waiting on 4H. Working line is the 5-minute campaign fighting the near move; it is briefly empty after one graduates to 1H and before the next is anchored." aria-label="What the book columns mean">i</button></h3>
     <div class="table-scroll">

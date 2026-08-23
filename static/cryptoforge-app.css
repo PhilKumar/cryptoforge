@@ -7960,7 +7960,22 @@ html[data-theme="light"] .journal-entry-notes section {
      on this site's tokens. Its OWN block: landing anything inside the
      segmented-option selector list below once stripped Paper/Live back to raw
      browser buttons. */
-  .cf-strat-subnav { margin-bottom: 16px; }
+  /* The three strategy cards ARE the navigation between them, so they have to
+     stay reachable while a page is scrolled — Phil, 2026-08-23: "The page
+     scroll has to show the 3 strategies heading... It hides those currently
+     when scrolled below". --cf-shell-h is the real measured height of the
+     sticky topbar, already kept up to date in JS, so this sits directly under
+     it at every window size instead of guessing an offset. The background is
+     explicit: a transparent sticky bar lets candles and table rows scroll
+     through the tabs. */
+  .cf-strat-subnav {
+    margin-bottom: 16px;
+    position: sticky;
+    top: var(--cf-shell-h, 64px);
+    z-index: 40;
+    background: var(--bg);
+    padding-top: 8px;
+  }
   .cf-strat-tabs {
     display: flex;
     flex-wrap: wrap;

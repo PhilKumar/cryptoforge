@@ -105,14 +105,18 @@ class VRuleChartStageTests(unittest.TestCase):
     def _label(self, d, price, fallback):
         return self._run({"fn": "label", "d": d, "price": price, "fallback": fallback})
 
-    def test_the_reference_line_says_what_it_is_waiting_for(self):
+    def test_the_reference_line_is_named_rather_than_numbered(self):
+        """The gutter fits about twenty characters. A longer label is sliced off
+        at the canvas edge — Phil got "a CLOSE below this line" with no name in
+        front of it — so the line carries its NAME and the stage sentence below
+        carries the meaning."""
         out = self._label({"reference_price": REF}, REF, "2 (75,673.85)")
         self.assertIn("REFERENCE", out)
-        self.assertIn("CLOSE below", out)
+        self.assertNotIn("2 (", out, "the bare fib number is what it replaces")
+        self.assertLessEqual(len(out), 22, "longer than this and the gutter cuts it off")
 
-    def test_the_reference_line_reads_frozen_once_armed(self):
-        out = self._label({"reference_price": REF, "reference_armed": True}, REF, "2 (75,673.85)")
-        self.assertIn("frozen", out)
+    def test_the_explaining_happens_in_the_stage_line_not_on_the_gutter(self):
+        self.assertIn("CLOSE below 75,673.85", self._stage({"reference_price": REF}))
 
     def test_every_other_level_keeps_its_plain_label(self):
         self.assertEqual(self._label({"reference_price": REF}, 75002, "2 (75,002)"), "2 (75,002)")

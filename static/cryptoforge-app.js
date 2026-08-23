@@ -9901,9 +9901,17 @@ function _cfCascadeTradeAction(c) {
     + checked + '">Market Sell</button>';
 }
 
-function cfRenderCascadeTrades(campaigns) {
-  var mount = document.getElementById('cf-cascade-trades');
-  var meta = document.getElementById('cf-cascade-trades-meta');
+// opts lets a strategy tab reuse this table instead of growing a second one.
+// `actions` is off there deliberately: the Market Sell button posts to
+// /api/cascade/campaigns/<id>/liquidate, which is the LIVE Cascade engine —
+// a strategy's campaign lives in its own engine and would not be found, so the
+// button would be a dead control at best and a wrong-engine one at worst.
+function cfRenderCascadeTrades(campaigns, opts) {
+  var o = opts || {};
+  var mountId = o.mountId || 'cf-cascade-trades';
+  var actions = o.actions !== false;
+  var mount = document.getElementById(mountId);
+  var meta = document.getElementById(o.metaId || (mountId + '-meta'));
   if (!mount) return;
 
   var open = campaigns.filter(function (c) {
@@ -9973,22 +9981,23 @@ function cfRenderCascadeTrades(campaigns) {
       // to act on: its engine is gone, so nothing will manage this position
       // again. Give it the way out rather than leaving the coin orphaned under
       // a dead campaign's name.
-      + '<td>' + _cfCascadeTradeAction(c) + '</td>'
+      + (actions ? '<td>' + _cfCascadeTradeAction(c) + '</td>' : '')
       + '</tr>';
   }).join('');
 
   var totalPnl = totalNow - totalCost;
   var totalTone = totalPnl >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
+  var tableId = mountId + '-table';
   mount.innerHTML = '<div class="table-surface"><div class="table-scroll">'
-    + '<table class="trade-table" id="cf-cascade-trades-table"><thead><tr>'
+    + '<table class="trade-table" id="' + tableId + '"><thead><tr>'
     + '<th>Campaign</th><th>Symbol</th><th>Opened</th><th class="num">Avg entry</th>'
     + '<th class="num">Last</th><th class="num">Cost</th><th class="num">Unrealised</th>'
-    + '<th class="num">Target</th><th>Action</th>'
+    + '<th class="num">Target</th>' + (actions ? '<th>Action</th>' : '')
     + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   // Run several instruments and this table is the first one to outgrow a
   // screen. The generic pager hides rows in place, so it costs nothing when
   // there are only three of them.
-  _renderTablePager('cf-cascade-trades-table', 'cf-cascade-trades-table', 'cf-cascade-trades-pagination');
+  _renderTablePager(tableId, tableId, mountId + '-pagination');
   if (meta) {
     meta.innerHTML = open.length + ' open · $' + _cfCascadeUsd(totalCost) + ' invested · '
       + '<strong style="color:' + totalTone + ';">'
@@ -11242,9 +11251,9 @@ function _cfCascadeChartSvg(d) {
   // The armed buy waiting on the tape (30-70 only — Cascade rests its orders
   // on fib levels, which are already drawn).
   if (d.low_price) hline(Number(d.low_price), PAL.avg,
-    'LOW ' + fmt(d.low_price) + ' · the buy is measured from here', '2,3', 1.0);
+    'LOW ' + fmt(d.low_price), '2,3', 1.0);
   if (d.entry_price) hline(Number(d.entry_price), PAL.buyMark,
-    'BUY ' + fmt(d.entry_price) + ' · follows the low down until it fills', null, 1.2);
+    'BUY ' + fmt(d.entry_price), null, 1.2);
 
   // Entries. On a finished trade these come from `entries`, which also carries
   // the buys of rounds that already closed — campaign.all_fills is emptied the
@@ -11740,9 +11749,9 @@ function _cfChartCanvasFibs(c, p, PAL, labels) {
   if (d.avg_entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.avg_entry_price), PAL.avg,
     (frozen ? 'AVG ENTRY (' : 'AVG ENTRY · open (') + fmt(d.avg_entry_price) + ')', [4, 4], 1.1) ? 1 : 0;
   if (d.low_price) count += _cfChartCanvasHline(c, p, labels, Number(d.low_price), PAL.avg,
-    'LOW ' + fmt(d.low_price) + ' · the buy is measured from here', [2, 3], 1.0) ? 1 : 0;
+    'LOW ' + fmt(d.low_price), [2, 3], 1.0) ? 1 : 0;
   if (d.entry_price) count += _cfChartCanvasHline(c, p, labels, Number(d.entry_price), PAL.buyMark,
-    'BUY ' + fmt(d.entry_price) + ' · follows the low down until it fills', [], 1.2) ? 1 : 0;
+    'BUY ' + fmt(d.entry_price), [], 1.2) ? 1 : 0;
   return count;
 }
 
@@ -13897,9 +13906,12 @@ function _cfR37LineLabel(d, price, fallback) {
   var ref = Number(d.reference_price) || 0;
   if (!ref || Math.abs(Number(price) - ref) > 0.011) return fallback;
   var shown = Number(price).toLocaleString('en-US', { maximumFractionDigits: 2 });
-  return d.reference_armed
-    ? 'REFERENCE ' + shown + ' \u00b7 frozen — the buy is live'
-    : 'REFERENCE ' + shown + ' \u00b7 waiting for a CLOSE below this line';
+  // The gutter fits about twenty characters — "MOTHER (79,500)" is fifteen.
+  // The first attempt ran to fifty-six and was sliced off at the canvas edge,
+  // leaving "a CLOSE below this line" hanging with no line name in front of it
+  // (Phil, 2026-08-23: "The Buy spelling got cut"). Names go on the lines; the
+  // stage sentence under the chart is where the explaining happens.
+  return 'REFERENCE ' + shown;
 }
 
 // ONE line saying which of the three stages the setup is in. The chart used
@@ -14188,6 +14200,10 @@ function cfAfRenderStats(books) {
 // page's renderer into this page's own mount — never by a second copy of it,
 // which would drift the moment either page changed.
 function cfAfRenderLines(data) {
+  cfRenderCascadeTrades(
+    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    { mountId: 'cf-af-trades', actions: false }
+  );
   cfRenderCascadeCampaigns(
     Array.isArray(data && data.campaigns) ? data.campaigns : [],
     (data && data.instruments) || {},
