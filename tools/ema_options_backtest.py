@@ -240,6 +240,10 @@ class Backtest:
         if args.intraday:
             self.entry_cutoff = min(self.entry_cutoff, self.square_off)
 
+        ea = str(getattr(args, "entry_after", "09:16")).split(":")
+        self.entry_after = time(int(ea[0]), int(ea[1]))
+        self.skipped_too_early = 0
+        self.skipped_too_cheap = 0
         self.skipped_no_entry_price = 0
         self.skipped_too_dear = 0
         self.skipped_no_expiry = 0
@@ -301,6 +305,11 @@ class Backtest:
             ts, bar = stamps[k], bars.iloc[k]
             prev = bars.iloc[k - 1]
             day = ts.date()
+            if self.args.arm_same_day and armed is not None and armed[2] != day:
+                # A cross that armed yesterday firing on today's open is not this
+                # rule, it is a gap trade wearing its clothes. Overnight arming is
+                # where 70% of the profit was hiding.
+                armed = None
             close, ema, angle = float(bar["close"]), float(bar["ema"]), float(bar["angle"])
             if ema != ema:
                 continue
@@ -367,7 +376,7 @@ class Backtest:
                 crossed = on_side and want * (float(prev["close"]) - float(prev["ema"])) <= 0
                 if crossed:
                     self.signals[cand] += 1
-                    armed = (cand, 0)
+                    armed = (cand, 0, day)
                 if self.args.entry == "cross":
                     fires = crossed
                 else:
@@ -405,7 +414,7 @@ class Backtest:
                 break
             if armed is not None:
                 sgn = 1 if armed[0] == "CE" else -1
-                armed = (armed[0], armed[1] + 1) if sgn * (close - ema) > 0 else None
+                armed = (armed[0], armed[1] + 1, armed[2]) if sgn * (close - ema) > 0 else None
             if side is None:
                 continue
             if ts.time() >= self.entry_cutoff:
@@ -413,6 +422,13 @@ class Backtest:
 
             fill_ts = self.next_minute(ts + self.bar_span)
             if fill_ts is None or fill_ts.date() != day:
+                continue
+            if fill_ts.time() < self.entry_after:
+                # The session's opening print is the one bar this reconstructed
+                # index cannot be trusted on, and it is also where the gap lives.
+                # A rule that quietly earns most of its money there is a gap rule
+                # wearing a momentum rule's clothes.
+                self.skipped_too_early += 1
                 continue
             if fill_ts.time() >= self.square_off and (self.args.intraday or fill_ts.date() == self.nth_weekly(day, 1)):
                 # The signal bar cleared the cutoff but the fill lands on the
@@ -434,6 +450,9 @@ class Backtest:
             prem, _ = self.premium(fill_ts, contract)
             if prem is None:
                 self.skipped_no_entry_price += 1
+                continue
+            if self.args.min_premium and prem < self.args.min_premium:
+                self.skipped_too_cheap += 1
                 continue
             if self.args.max_premium and prem * self.args.lots * lot_size(expiry) > self.args.max_premium:
                 # A trade you could not fund is a trade you did not take.
@@ -579,7 +598,11 @@ def report(trades: list, bt: Backtest, args) -> str:
     if nearby:
         out.append(f"exits from a nearby minute {nearby:,} (same contract, next print inside the session)")
     out.append(
-        f"entries skipped     {bt.skipped_no_entry_price:,} no price"
+        f"entries skipped     {bt.skipped_too_early:,} before {args.entry_after}"
+        f" · {bt.skipped_too_cheap:,} under the Rs {args.min_premium:g} premium floor"
+    )
+    out.append(
+        f"                    {bt.skipped_no_entry_price:,} no price"
         f" · {bt.skipped_too_dear:,} over the premium cap"
         f" · {bt.skipped_no_expiry:,} no expiry this archive holds"
     )
@@ -708,6 +731,17 @@ def main() -> None:
         help="square off daily; the rule as stated holds until the EMA is crossed, so this is OFF",
     )
     ap.add_argument("--square-off", default="15:15", help="intraday / expiry-day exit time, HH:MM")
+    ap.add_argument(
+        "--entry-after",
+        default="09:16",
+        help="no fill before this time; raise it to refuse the session's opening bar",
+    )
+    ap.add_argument("--min-premium", type=float, default=0.0, help="skip an entry cheaper than this per unit")
+    ap.add_argument(
+        "--arm-same-day",
+        action="store_true",
+        help="a cross must arm and fire in the same session; kills overnight-armed gap entries",
+    )
     ap.add_argument("--max-hold-days", type=int, default=0, help="0 is no cap")
     ap.add_argument(
         "--target-points",
