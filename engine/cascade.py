@@ -413,6 +413,21 @@ MOTHER_RETEST_PCT = 0.0005
 # before any structure could form. A real departure is a fall of this much from
 # the mother HIGH, which is an order of magnitude past the retest tolerance.
 MOTHER_DEPART_PCT = 0.005
+# The name Phil reads on the tab, keyed by the campaign's own strategy field.
+# An empty strategy IS the Cascade page — every campaign that predates
+# strategies, and every one he starts by hand.
+STRATEGY_LABELS = {
+    "": "Cascade-Hybrid",
+    "auto-cascade-fib": "Cascade_Auto",
+    "v-rule": "V-Rule",
+}
+
+
+def strategy_label(strategy: str) -> str:
+    name = str(strategy or "")
+    return STRATEGY_LABELS.get(name) or name
+
+
 MAX_ACTIVE_BEFORE_ALERT = 10
 STALL_ALERT_SEC = 15 * 60
 # How many closed campaigns stay in memory. This was written as a bare 50 in
@@ -2262,7 +2277,12 @@ class CascadeEngine:
             return
         raw_title = title
         if campaign is not None:
-            title = f"{campaign.symbol} #{campaign.seq} — {title}"
+            # Which BOOK made it, then which instrument, then what happened.
+            # Three strategies now raise the same events on the same coins, so
+            # without the book "BTCUSDT #12 — TARGET hit" does not say whose
+            # money it was (Phil, 2026-08-24: "I need which strategy made
+            # profit printed on the telegram headline").
+            title = f"{strategy_label(campaign.strategy)} · {campaign.symbol} #{campaign.seq} — {title}"
             if not dedupe_key and dedupe_sec > 0:
                 dedupe_key = f"{raw_title}|{campaign.campaign_id}"
         if dedupe_sec > 0:

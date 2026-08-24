@@ -1727,6 +1727,54 @@ class CascadeAlertTests(unittest.TestCase):
         self.engine._check_watchdogs()
         self.assertEqual(self.sent, [])
 
+    # ── what the headline says ────────────────────────────────────
+
+    def test_the_headline_names_the_book_the_instrument_and_the_event(self):
+        """Phil, 2026-08-24: "I need which strategy made profit printed on the
+        telegram headline". Three strategies raise the same events on the same
+        coins, so the book has to lead."""
+        c = self._campaign("c1")
+        c.seq = 424
+        self.engine._alert("TARGET hit", "body", level="success", campaign=c)
+        self.assertEqual(self.sent[0][0], "Cascade-Hybrid · BTCUSDT #424 — TARGET hit")
+
+    def test_each_strategy_is_named_by_the_tab_phil_reads(self):
+        for strategy, label in (
+            ("", "Cascade-Hybrid"),
+            ("auto-cascade-fib", "Cascade_Auto"),
+            ("v-rule", "V-Rule"),
+        ):
+            with self.subTest(strategy=strategy):
+                self.sent.clear()
+                c = self._campaign("k" + strategy)
+                c.seq = 7
+                c.strategy = strategy
+                self.engine._alert("ENTRY filled", "body", level="success", campaign=c)
+                self.assertTrue(self.sent[0][0].startswith(label + " · "), self.sent[0][0])
+
+    def test_an_unknown_strategy_is_printed_rather_than_hidden(self):
+        c = self._campaign("c2")
+        c.strategy = "something-new"
+        self.engine._alert("ENTRY filled", "body", campaign=c)
+        self.assertTrue(self.sent[0][0].startswith("something-new · "), self.sent[0][0])
+
+    def test_an_engine_wide_alert_names_no_instrument(self):
+        """Nothing to attribute — it must not pretend otherwise."""
+        self._campaign("c3")
+        self.engine._last_candle_ts = time.monotonic() - 10_000
+        self.engine._check_watchdogs()
+        self.assertEqual([t for t, _ in self.sent], ["Cascade engine STALLED"])
+
+    def test_unique_headlines_do_not_widen_dedupe_into_silence(self):
+        """The key is the RAW title plus the campaign, so two coins raising the
+        same event both get through — and one coin repeating it does not."""
+        a, b = self._campaign("a"), self._campaign("b")
+        a.symbol, b.symbol = "BTCUSDT", "SOLUSDT"
+        for _ in range(2):
+            self.engine._alert("Order FAILED", "x", dedupe_sec=600, campaign=a)
+            self.engine._alert("Order FAILED", "x", dedupe_sec=600, campaign=b)
+        self.assertEqual(len(self.sent), 2, [t for t, _ in self.sent])
+
     # ── the false alarm ───────────────────────────────────────────
 
     def test_a_frozen_mother_break_is_not_a_stall(self):
@@ -1791,7 +1839,10 @@ class CascadeAlertTests(unittest.TestCase):
         restarted = [t for t in titles if t.endswith("Auto-restarted")]
         self.assertEqual(len(restarted), 1, titles)
         self.assertEqual(dict((t, lvl) for t, lvl in self.sent)[restarted[0]], "warn")
-        self.assertTrue(restarted[0].startswith("BTCUSDT #"), "the instrument leads the headline: " + restarted[0])
+        self.assertTrue(
+            restarted[0].startswith("Cascade-Hybrid \u00b7 BTCUSDT #"),
+            "the book then the instrument lead the headline: " + restarted[0],
+        )
 
     def test_a_missing_alert_hook_is_harmless(self):
         self.engine.on_alert = None
