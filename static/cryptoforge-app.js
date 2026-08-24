@@ -10354,16 +10354,30 @@ function _cfRenderEventsPager(pages, total, mountId, pagerId) {
     + '</div>';
 }
 
-var _cfCascadeClosedCoin = 'ALL';
-var _cfCascadeClosedAll = [];
+// Two pages draw this table now — Cascade and Cascade_Auto — so the filter,
+// the page number and the rows are kept PER TABLE rather than in three
+// globals. One renderer, two books; the Cascade page's ids are the default so
+// nothing about it changes (Phil, 2026-08-24: "Cascade_Auto has no Closed
+// Campaigns panel ... Add one with freezed chart").
+var _cfClosedBooks = {};
 
-function cfCascadeSetClosedFilter(coin) {
-  _cfCascadeClosedCoin = coin || 'ALL';
-  cfRenderCascadeClosed(_cfCascadeClosedAll);
+function _cfClosedBook(key) {
+  var id = key || 'cf-cascade-closed';
+  if (!_cfClosedBooks[id]) _cfClosedBooks[id] = { coin: 'ALL', page: 0, rows: [] };
+  return _cfClosedBooks[id];
 }
 
-function _cfRenderClosedFilters(rows) {
-  var mount = document.getElementById('cf-cascade-closed-filters');
+function cfCascadeSetClosedFilter(coin, key) {
+  var book = _cfClosedBook(key);
+  book.coin = coin || 'ALL';
+  book.page = 0;                       // a new filter starts at its first page
+  cfRenderCascadeClosed(book.rows, key);
+}
+
+function _cfRenderClosedFilters(rows, key) {
+  var id = key || 'cf-cascade-closed';
+  var book = _cfClosedBook(key);
+  var mount = document.getElementById(id + '-filters');
   if (!mount) return;
   var coins = [];
   rows.forEach(function(r) {
@@ -10373,34 +10387,36 @@ function _cfRenderClosedFilters(rows) {
   coins.sort();
   if (coins.length < 2) { mount.innerHTML = ''; return; }
   mount.innerHTML = ['ALL'].concat(coins).map(function(name) {
-    var on = name === _cfCascadeClosedCoin;
+    var on = name === book.coin;
     return '<button type="button" class="cf-tf-option' + (on ? ' is-active' : '') + '"'
       + ' role="radio" aria-checked="' + (on ? 'true' : 'false') + '"'
-      + ' data-cf-click="cfCascadeSetClosedFilter(\'' + name + '\')">'
+      + ' data-cf-click="cfCascadeSetClosedFilter(\'' + name + '\',\'' + id + '\')">'
       + _escapeHtml(name === 'ALL' ? 'All' : name.replace('USDT', '')) + '</button>';
   }).join('');
 }
 
-function cfRenderCascadeClosed(closed) {
-  var body = document.getElementById('cf-cascade-closed-body');
+function cfRenderCascadeClosed(closed, key) {
+  var id = key || 'cf-cascade-closed';
+  var book = _cfClosedBook(key);
+  var body = document.getElementById(id + '-body');
   if (!body) return;
-  _cfCascadeClosedAll = Array.isArray(closed) ? closed : [];
-  _cfRenderClosedFilters(_cfCascadeClosedAll);
-  if (_cfCascadeClosedCoin !== 'ALL') {
-    closed = _cfCascadeClosedAll.filter(function(r) { return r.symbol === _cfCascadeClosedCoin; });
+  book.rows = Array.isArray(closed) ? closed : [];
+  _cfRenderClosedFilters(book.rows, id);
+  if (book.coin !== 'ALL') {
+    closed = book.rows.filter(function(r) { return r.symbol === book.coin; });
   } else {
-    closed = _cfCascadeClosedAll;
+    closed = book.rows;
   }
   if (!closed.length) {
     body.innerHTML = '<tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>';
-    _cfRenderClosedPager(0, 0);
+    _cfRenderClosedPager(0, 0, id);
     return;
   }
   var ordered = closed.slice().reverse();          // newest first
   var pages = Math.max(1, Math.ceil(ordered.length / _CF_CLOSED_PAGE_SIZE));
-  if (_cfCascadeClosedPage >= pages) _cfCascadeClosedPage = pages - 1;
-  if (_cfCascadeClosedPage < 0) _cfCascadeClosedPage = 0;
-  var from = _cfCascadeClosedPage * _CF_CLOSED_PAGE_SIZE;
+  if (book.page >= pages) book.page = pages - 1;
+  if (book.page < 0) book.page = 0;
+  var from = book.page * _CF_CLOSED_PAGE_SIZE;
   var REASONS = _CF_CASCADE_REASONS;
   body.innerHTML = ordered.slice(from, from + _CF_CLOSED_PAGE_SIZE).map(function(campaign) {
     // Realised P&L across every round, not just the last one.
@@ -10435,30 +10451,32 @@ function cfRenderCascadeClosed(closed) {
           + ' data-cf-click="cfCascadePurgeClosed(\'' + cid + '\')">Remove</button></td>'
       + '</tr>';
   }).join('');
-  _cfRenderClosedPager(pages, ordered.length);
+  _cfRenderClosedPager(pages, ordered.length, id);
 }
 
 // Ten rows a page. The history only grows, and a table you have to scroll past
 // to reach anything else stops being history and starts being an obstacle.
 var _CF_CLOSED_PAGE_SIZE = 10;
-var _cfCascadeClosedPage = 0;
 
-function _cfRenderClosedPager(pages, total) {
-  var host = document.getElementById('cf-cascade-closed-pager');
+function _cfRenderClosedPager(pages, total, key) {
+  var id = key || 'cf-cascade-closed';
+  var book = _cfClosedBook(key);
+  var host = document.getElementById(id + '-pager');
   if (!host) return;
   if (!total) { host.innerHTML = ''; return; }
-  var from = _cfCascadeClosedPage * _CF_CLOSED_PAGE_SIZE + 1;
+  var from = book.page * _CF_CLOSED_PAGE_SIZE + 1;
   var to = Math.min(from + _CF_CLOSED_PAGE_SIZE - 1, total);
   host.innerHTML = '<span class="table-meta">' + from + '\u2013' + to + ' of ' + total + '</span>'
-    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeClosedPage === 0 ? 'disabled' : '')
-      + ' data-cf-click="cfCascadeClosedPage(-1)">Newer</button>'
-    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeClosedPage >= pages - 1 ? 'disabled' : '')
-      + ' data-cf-click="cfCascadeClosedPage(1)">Older</button>';
+    + '<button class="btn btn-outline btn-sm" ' + (book.page === 0 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeClosedPage(-1,\'' + id + '\')">Newer</button>'
+    + '<button class="btn btn-outline btn-sm" ' + (book.page >= pages - 1 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeClosedPage(1,\'' + id + '\')">Older</button>';
 }
 
-function cfCascadeClosedPage(step) {
-  _cfCascadeClosedPage += step;
-  cfRenderCascadeClosed(_cfCascadeClosedAll);
+function cfCascadeClosedPage(step, key) {
+  var book = _cfClosedBook(key);
+  book.page += step;
+  cfRenderCascadeClosed(book.rows, key);
 }
 
 // ═══ CASCADE CLOSED-ROUND LEDGER ════════════════════════════════
@@ -14414,6 +14432,11 @@ function cfAfRenderStats(books) {
 // page's renderer into this page's own mount — never by a second copy of it,
 // which would drift the moment either page changed.
 function cfAfRenderLines(data) {
+  // The ended lines come from the sandbox engine on this page's own status.
+  cfRenderCascadeClosed(
+    Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : [],
+    'cf-af-closed'
+  );
   cfRenderCascadeEvents(
     Array.isArray(data && data.campaigns) ? data.campaigns : [],
     { mountId: 'cf-af-events', emptyText: 'No events yet — nothing has been anchored.' }

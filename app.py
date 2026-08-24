@@ -9874,12 +9874,18 @@ async def auto_fib_status():
     sandbox engine, which is the only place they exist.
     """
     driver = _get_auto_fib()
-    engine_status = _get_auto_fib_engine().get_status()
+    engine = _get_auto_fib_engine()
+    engine_status = engine.get_status()
     return {
         "status": "ok",
         **driver.status(),
         "campaigns": engine_status.get("campaigns") or [],
         "instruments": engine_status.get("instruments") or {},
+        # The ended lines, in the same shape the Cascade page's status carries,
+        # so the SAME closed-campaigns table draws them (Phil, 2026-08-24:
+        # "Cascade_Auto has no Closed Campaigns panel"). Read straight off the
+        # sandbox engine — its history is the only place these exist.
+        "closed_campaigns": list(engine.closed_campaigns)[-CLOSED_HISTORY_LIMIT:],
     }
 
 
@@ -10235,6 +10241,26 @@ async def cascade_purge_closed(campaign_id: str):
     eng = _get_cascade_engine()
     if not eng.closed_campaigns:
         _restore_cascade_runtime(eng)
+    # A strategy's ended line is owned by ITS engine, and the live engine has
+    # never heard of it — removing one from the Cascade_Auto table used to
+    # report success while deleting nothing. Checked the same way the chart
+    # endpoint checks, and checked FIRST for the same reason: an id must never
+    # be answered from the wrong engine's history.
+    if not any(row.get("campaign_id") == campaign_id for row in eng.closed_campaigns):
+        for sandbox, save in (
+            (_auto_fib_engine, _save_auto_fib_runtime),
+            (_vrule_engine, _save_vrule_runtime),
+        ):
+            if sandbox is None:
+                continue
+            if any(row.get("campaign_id") == campaign_id for row in sandbox.closed_campaigns):
+                result = sandbox.purge_closed_campaign(campaign_id)
+                save()
+                return {
+                    "status": "ok",
+                    "campaign_id": campaign_id,
+                    "removed": result.get("removed", False),
+                }
     result = eng.purge_closed_campaign(campaign_id)
     _cascade_persist_closed_list(eng)
     _persist_cascade_runtime_snapshot(eng)
