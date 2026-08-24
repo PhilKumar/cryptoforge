@@ -2184,6 +2184,13 @@ class CascadeEngine:
             "message": message,
             "campaign_id": campaign.campaign_id if campaign else None,
             "symbol": campaign.symbol if campaign else None,
+            # Which book this line came from. The event travels to the phone
+            # through app.py, which has the campaign_id but no way to look the
+            # rule up once the campaign is gone — so the headline it builds
+            # could only ever say the coin (2026-08-24: "I need which strategy
+            # made profit printed on the telegram headline").
+            "strategy": campaign.strategy if campaign else None,
+            "seq": campaign.seq if campaign else None,
         }
         if campaign is not None:
             campaign.event_log.append(event)

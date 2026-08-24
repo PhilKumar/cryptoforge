@@ -78,7 +78,7 @@ from engine.billing import (
     verify_signature,
 )
 from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
-from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine
+from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine, strategy_label
 from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
 from engine.cascade import MODEL_VERSION as CASCADE_MODEL_VERSION
 from engine.cascade_feed import (
@@ -8207,6 +8207,33 @@ _CASCADE_NOTIFY_LEVELS = {
     "start": ("Campaign started", "info"),
 }
 
+# What actually ended the campaign, in the words the icon matcher already
+# knows: "target" earns 🎯, the other two fall through to the level icon.
+_CLOSE_REASON_HEADLINES = {
+    "tp_filled": "TARGET closed",
+    "mother_broken": "Closed on mother break",
+    "stopped": "Closed by hand",
+}
+
+
+def _cascade_headline(
+    title: str,
+    strategy: Optional[str],
+    symbol: str,
+    seq: Optional[int] = None,
+) -> str:
+    """Which book, which coin, which campaign — then what happened.
+
+    Three engines now raise alerts into the same Telegram chat, so "Campaign
+    closed" alone could have come from any of them. Anything missing simply
+    drops out rather than printing a placeholder.
+    """
+    parts = [p for p in (strategy_label(strategy or ""), symbol) if p]
+    lead = " · ".join(parts)
+    if lead and seq is not None:
+        lead = f"{lead} #{seq}"
+    return f"{lead} — {title}" if lead else title
+
 
 def _cascade_notify(event: dict) -> None:
     level = str((event or {}).get("level") or "").lower()
@@ -8219,7 +8246,7 @@ def _cascade_notify(event: dict) -> None:
     campaign_id = str(event.get("campaign_id") or "")
     _notify_push(
         f"cascade_{level}",
-        f"{symbol} — {title}" if symbol else title,
+        _cascade_headline(title, event.get("strategy"), symbol, event.get("seq")),
         message,
         level=severity,
         symbol=symbol,
@@ -8322,12 +8349,18 @@ def _cascade_persist_closed(campaign: dict) -> None:
         pnl = campaign.get("realized_pnl")
         symbol = str(campaign.get("symbol") or "")
         try:
-            pnl_text = f"P&L ${float(pnl):,.2f}. " if pnl is not None else ""
+            pnl_num = float(pnl) if pnl is not None else None
         except (TypeError, ValueError):
-            pnl_text = ""
+            pnl_num = None
+        pnl_text = f"P&L ${pnl_num:,.2f}. " if pnl_num is not None else ""
+        # The headline carries the money too, because this is the alert that
+        # answers "did it earn?" — reading it should not need the body.
+        money = f" {pnl_num:+,.2f} USD" if pnl_num is not None else ""
+        what = _CLOSE_REASON_HEADLINES.get(reason, "Campaign closed")
+        headline = _cascade_headline(f"{what}{money}", campaign.get("strategy"), symbol, campaign.get("seq"))
         _notify_push(
             "cascade_closed",
-            f"{symbol} — Campaign closed" if symbol else "Campaign closed",
+            headline,
             f"{pnl_text}Reason: {reason}. Avg entry {campaign.get('avg_entry_price') or '—'}, "
             f"TP {campaign.get('tp_price') or '—'} ({campaign.get('mode', '')}).",
             level="success" if reason == "tp_filled" else "warn",
@@ -8336,12 +8369,12 @@ def _cascade_persist_closed(campaign: dict) -> None:
             dedupe_key=f"cascade-closed|{cid}|{reason}",
         )
         alerter.alert(
-            "Cascade Campaign Closed",
+            headline,
             f"Symbol: {campaign.get('symbol', '—')}\nMode: {campaign.get('mode', '')}\n"
             f"Reason: {reason}\n"
-            + (f"P&L: ${float(pnl):,.2f}\n" if pnl is not None else "")
+            + (f"P&L: ${pnl_num:,.2f}\n" if pnl_num is not None else "")
             + f"Avg entry: {campaign.get('avg_entry_price') or '—'}\nTP: {campaign.get('tp_price') or '—'}",
-            level="info" if reason == "tp_filled" else "warn",
+            level="success" if reason == "tp_filled" else "warn",
         )
 
 

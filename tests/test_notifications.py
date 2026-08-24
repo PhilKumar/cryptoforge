@@ -95,7 +95,12 @@ class NotificationInboxTests(unittest.IsolatedAsyncioTestCase):
             {"level": "trendline", "message": "New trendline drawn", "symbol": "BTCUSDT", "campaign_id": "c1"}
         )
         titles = [row["title"] for row in app._notify_load()]
-        self.assertEqual(titles, ["BTCUSDT — Campaign stopped", "BTCUSDT — Cascade error"])
+        # An event with no strategy on it came from the live book, which is
+        # what "Cascade-Hybrid" names (2026-08-24: three engines, one chat).
+        self.assertEqual(
+            titles,
+            ["Cascade-Hybrid · BTCUSDT — Campaign stopped", "Cascade-Hybrid · BTCUSDT — Cascade error"],
+        )
 
     async def test_money_moving_events_are_announced_once(self):
         """A fill and a target already raise a richer engine alert of their own.
