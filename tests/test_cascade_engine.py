@@ -1,5 +1,6 @@
 """CascadeEngine tests: paper-mode state machine + live desired-state order sync."""
 
+import asyncio
 import json
 import os
 import tempfile
@@ -1251,18 +1252,22 @@ class CascadeRestartAlertNoiseTests(unittest.TestCase):
             parent = child
         return parent
 
+    def _headline_count(self, ending):
+        """Headlines now lead with "<SYMBOL> #<seq> — "; match on the event."""
+        return sum(1 for t in self._titles() if t.endswith(ending))
+
     def _titles(self):
         return [t for t, _ in self.alerts]
 
     def test_nine_barren_restarts_raise_one_alert(self):
         self._chain(9)
         self.assertEqual(
-            self._titles().count("Cascade auto-restarted"), 1, f"expected one head-of-chain alert, got {self._titles()}"
+            self._headline_count("Auto-restarted"), 1, f"expected one head-of-chain alert, got {self._titles()}"
         )
 
     def test_the_head_of_the_chain_says_the_rest_will_be_quiet(self):
         self._chain(3)
-        body = next(b for t, b in self.alerts if t == "Cascade auto-restarted")
+        body = next(b for t, b in self.alerts if t.endswith("Auto-restarted"))
         self.assertIn("logged only", body)
 
     def test_a_restart_after_real_structure_still_alerts(self):
@@ -1275,7 +1280,7 @@ class CascadeRestartAlertNoiseTests(unittest.TestCase):
         traded.legs.append(drew)
         traded.close_reason = "mother_broken"
         self.engine._auto_restart(traded, Candle(9000, 1.0, 2.0, 0.5, 1.5))
-        self.assertEqual(self._titles().count("Cascade auto-restarted"), 1)
+        self.assertEqual(self._headline_count("Auto-restarted"), 1)
 
     def test_a_leg_with_no_fib_is_not_structure(self):
         """barren_chain has always documented itself as counting restarts that
@@ -1294,8 +1299,7 @@ class CascadeRestartAlertNoiseTests(unittest.TestCase):
         """The opposite of noise: the engine has stopped restarting, so nothing
         is watching that break until someone starts one by hand."""
         self._chain(cascade_module.MAX_BARREN_AUTO_RESTARTS + 3)
-        self.assertIn("Cascade restart chain stopped", self._titles())
-        self.assertEqual(self._titles().count("Cascade restart chain stopped"), 1)
+        self.assertEqual(self._headline_count("Restart chain stopped"), 1)
 
 
 class CascadeEscalatedMotherWatchTests(unittest.IsolatedAsyncioTestCase):
@@ -1654,6 +1658,15 @@ class CascadeMotherRetestTests(unittest.TestCase):
         self.assertEqual(self.campaign.close_reason, "")
 
 
+def _fake_candles(rows):
+    """Stand in for a candle fetch, ignoring whatever arguments it is given."""
+
+    async def _fetch(*_args, **_kwargs):
+        return list(rows)
+
+    return _fetch
+
+
 class CascadeAlertTests(unittest.TestCase):
     """The watchdogs exist to fire while nobody is watching the screen."""
 
@@ -1684,7 +1697,7 @@ class CascadeAlertTests(unittest.TestCase):
         self.assertEqual(self.sent, [])
         self._campaign("one-too-many")
         self.engine._check_watchdogs()
-        self.assertEqual([t for t, _ in self.sent], ["Cascade campaign count high"])
+        self.assertEqual([t for t, _ in self.sent], ["Campaign count high"])
 
     def test_the_count_alert_does_not_repeat_every_tick(self):
         from engine.cascade import MAX_ACTIVE_BEFORE_ALERT
@@ -1714,13 +1727,71 @@ class CascadeAlertTests(unittest.TestCase):
         self.engine._check_watchdogs()
         self.assertEqual(self.sent, [])
 
+    # ── the false alarm ───────────────────────────────────────────
+
+    def test_a_frozen_mother_break_is_not_a_stall(self):
+        """The alarm Phil kept getting while the engine was working.
+
+        A campaign frozen in a mother break steps no ladder for three 5m
+        candles BY DESIGN — fifteen minutes, exactly the alarm's threshold. Only
+        the ladder stamped proof of life, so every mother break raised "engine
+        STALLED" at an engine whose own log showed it stepping right through
+        the alert (2026-08-24, 13:05 / 13:10 / 13:15 / 13:20).
+        """
+        import time as _t
+
+        from engine.cascade import MOTHER_BREAK_PENDING, STALL_ALERT_SEC
+
+        campaign = self._campaign("frozen")
+        campaign.state = MOTHER_BREAK_PENDING
+        campaign.mother_break_wait_remaining = 2
+        campaign.mother_break_last_5m_ts = 3000
+        self.engine._last_candle_ts = _t.monotonic() - (STALL_ALERT_SEC + 60)
+        self.engine._fetch_closed_candles = _fake_candles([Candle(3300, 1.0, 2.0, 0.5, 1.5)])
+        asyncio.run(self.engine._mother_break_confirmation_step(campaign))
+        self.engine._check_watchdogs()
+        self.assertEqual(self.sent, [], "consuming a confirmation candle IS proof of life")
+
+    def test_the_one_minute_watcher_is_proof_of_life_too(self):
+        """It runs for EVERY active campaign, every minute — the surest sign
+        the engine is alive, and it stamped nothing."""
+        import time as _t
+
+        from engine.cascade import STALL_ALERT_SEC
+
+        campaign = self._campaign("watched")
+        campaign.state = "TRENDLINE_ACTIVE"
+        campaign.mother_timestamp = int(_t.time()) - 600
+        campaign.mother_watch_last_5m_ts = campaign.mother_timestamp
+        self.engine._last_candle_ts = _t.monotonic() - (STALL_ALERT_SEC + 60)
+        fresh = int(_t.time()) - 60
+        # Under the mother high: the watcher advances its cursor, finds no break.
+        self.engine._recent_closed_candles = _fake_candles([Candle(fresh, 100.0, 200.0, 50.0, 150.0)])
+        broke = asyncio.run(self.engine._mother_break_watch_step(campaign))
+        self.assertFalse(broke, "no break — it only advanced the cursor")
+        self.engine._check_watchdogs()
+        self.assertEqual(self.sent, [], "seeing a closed 1m bar IS proof of life")
+
+    def test_a_real_stall_still_alerts(self):
+        """The guard must not be softened into silence."""
+        import time as _t
+
+        from engine.cascade import STALL_ALERT_SEC
+
+        self._campaign("c1")
+        self.engine._last_candle_ts = _t.monotonic() - (STALL_ALERT_SEC + 60)
+        self.engine._check_watchdogs()
+        self.assertIn("Cascade engine STALLED", [t for t, _ in self.sent])
+
     def test_an_auto_restart_raises_an_alert(self):
         parent = self._campaign("p", mode="live")
         parent.close_reason = "mother_broken"
         self.engine._auto_restart(parent, Candle(3000, 1.0, 2.0, 0.5, 1.5))
         titles = [t for t, _ in self.sent]
-        self.assertIn("Cascade auto-restarted", titles)
-        self.assertEqual(dict((t, lvl) for t, lvl in self.sent)["Cascade auto-restarted"], "warn")
+        restarted = [t for t in titles if t.endswith("Auto-restarted")]
+        self.assertEqual(len(restarted), 1, titles)
+        self.assertEqual(dict((t, lvl) for t, lvl in self.sent)[restarted[0]], "warn")
+        self.assertTrue(restarted[0].startswith("BTCUSDT #"), "the instrument leads the headline: " + restarted[0])
 
     def test_a_missing_alert_hook_is_harmless(self):
         self.engine.on_alert = None

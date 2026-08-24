@@ -110,18 +110,55 @@ async def _dispatch(text_html: str, text_plain: str) -> None:
 # ── Public API ────────────────────────────────────────────────────
 
 
+# What the alert IS, not merely how loud it is. Three coloured circles and a
+# white one for anything unmapped told Phil nothing at a glance on a phone —
+# a filled entry and a hit target both arrived as the same dot, and "success"
+# was not in the map at all, so the two things that went RIGHT came through as
+# the blank ⚪ (2026-08-24: "The red sphere and the white sphere... Make
+# meaningful icons for target, entry and status and warning").
+#
+# Matched on the words the engine already uses in its own headlines, longest
+# intent first, so a new alert inherits a sensible icon without being listed.
+_INTENT_ICONS = (
+    ("target", "🎯"),
+    ("entry filled", "✅"),
+    ("bought", "✅"),
+    ("filled", "✅"),
+    ("stalled", "🛑"),
+    ("failed", "❌"),
+    ("cancelled", "🚫"),
+    ("blocked", "🚫"),
+    ("missing", "🔍"),
+    ("escalated", "⏫"),
+    ("restarted", "🔄"),
+    ("retired", "🏁"),
+    ("count high", "📈"),
+    ("truncated", "✂️"),
+)
+_LEVEL_ICONS = {"error": "🔴", "warn": "⚠️", "info": "ℹ️", "success": "✅"}
+
+
+def _icon_for(title: str, level: str) -> str:
+    """The icon says what happened; the level only says how loud."""
+    lowered = str(title or "").lower()
+    for word, icon in _INTENT_ICONS:
+        if word in lowered:
+            return icon
+    return _LEVEL_ICONS.get(level, "ℹ️")
+
+
 def alert(title: str, body: str, level: str = "error") -> None:
     """Fire-and-forget alert. Safe to call from any async context.
 
     Args:
-        title: Short heading, e.g. "Order Failed"
-        body:  Details — symbol, error message, etc.
-        level: "error" | "warn" | "info"  (controls emoji prefix)
+        title: Short heading, e.g. "BTCUSDT #12 — TARGET hit"
+        body:  Details — error message, prices, etc.
+        level: "error" | "warn" | "info" | "success"
     """
     if not (_TELEGRAM_OK or _DISCORD_OK):
         return
 
-    icon = {"error": "🔴", "warn": "🟡", "info": "🟢"}.get(level, "⚪")
+    icon = _icon_for(title, level)
     ts = _ist_timestamp()
 
     # HTML for Telegram

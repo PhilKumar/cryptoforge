@@ -2186,13 +2186,23 @@ class CascadeEngine:
         Two things that are invisible on screen: an engine that has quietly
         stopped stepping candles, and a campaign list that has grown past what
         one person can keep track of.
+
+        The stall alarm cried wolf for months because proof of life was stamped
+        ONLY by the ladder step. A campaign frozen in a mother break steps no
+        ladder for three 5m candles BY DESIGN — fifteen minutes, which is
+        exactly the alarm's threshold — so every mother break raised "engine
+        STALLED" at an engine that was demonstrably working (Phil, 2026-08-24:
+        "Why I am getting this again and again?"; the log showed it stepping at
+        13:05, 13:10, 13:15 and 13:20 through the alert). The mother-break
+        watcher and the confirmation step stamp it too now, because consuming a
+        closed candle is the proof the alarm is actually asking for.
         """
         active = self.active_campaigns
         if len(active) > MAX_ACTIVE_BEFORE_ALERT:
             live = sum(1 for c in active if c.mode == "live")
             deployed = sum(c.spent_usd for c in active)
             self._alert(
-                "Cascade campaign count high",
+                "Campaign count high",
                 f"{len(active)} campaigns are active ({live} live).\n"
                 f"Capital committed right now: ${deployed:,.2f}\n\n"
                 f"Auto-restart keeps opening a new one on every mother break.",
@@ -2219,7 +2229,15 @@ class CascadeEngine:
                 dedupe_sec=1800,
             )
 
-    def _alert(self, title: str, body: str, level: str = "warn", dedupe_sec: float = 0.0, dedupe_key: str = "") -> None:
+    def _alert(
+        self,
+        title: str,
+        body: str,
+        level: str = "warn",
+        dedupe_sec: float = 0.0,
+        dedupe_key: str = "",
+        campaign: Optional["Campaign"] = None,
+    ) -> None:
         """
         Push something worth waking up for. `dedupe_sec` suppresses a repeat of
         the same key within that window, so a condition that stays true (five
@@ -2230,9 +2248,23 @@ class CascadeEngine:
         raise at the same time: keyed on title alone, the first campaign's alert
         silences every sibling's for the whole window, so you hear about one
         broken position and never learn about the other three.
+
+        Pass `campaign` and the INSTRUMENT leads the headline. On a phone the
+        headline is often all that is read, and every one of these began
+        "Cascade ..." with the symbol buried in the body — so three coins
+        raising the same event were indistinguishable at a glance (Phil,
+        2026-08-24: "in Telegram I am unable to get the instrument on the
+        headline... I need a meaningful headline to immediately get the alert
+        from what it is"). The dedupe key keeps using the RAW title plus the
+        campaign, so making headlines unique does not quietly widen dedupe.
         """
         if not self.on_alert:
             return
+        raw_title = title
+        if campaign is not None:
+            title = f"{campaign.symbol} #{campaign.seq} — {title}"
+            if not dedupe_key and dedupe_sec > 0:
+                dedupe_key = f"{raw_title}|{campaign.campaign_id}"
         if dedupe_sec > 0:
             now = time.monotonic()
             key = dedupe_key or title
@@ -3045,10 +3077,11 @@ class CascadeEngine:
                     f"booked now. The position is closed and nothing is held.",
                 )
                 self._alert(
-                    "Cascade TARGET hit (ended campaign)",
+                    "TARGET hit (ended campaign)",
                     f"{campaign.symbol} #{campaign.seq} had been stopped, but its resting take-profit "
                     f"filled at {exit_price:,.2f}.\n\nBooked now — the position is closed.",
                     level="success",
+                    campaign=campaign,
                 )
                 self._archive_campaign(campaign)
                 return True
@@ -3122,13 +3155,14 @@ class CascadeEngine:
             f"the sale price is unknown. Market Sell is disabled; settle this one by hand.",
         )
         self._alert(
-            "Cascade position missing on the exchange",
+            "Position missing on the exchange",
             f"{campaign.symbol} #{campaign.seq} (ended) claims {ours:.8f} but the exchange has "
             f"{mine:.8f} free.\n\nNo take-profit of ours explains it. Nothing was booked — the "
             f"sale price is unknown.",
             level="warn",
             dedupe_sec=3600,
             dedupe_key=f"position-missing:{campaign.campaign_id}",
+            campaign=campaign,
         )
         return True
 
@@ -3225,11 +3259,12 @@ class CascadeEngine:
         if error:
             self._log_event(campaign, "error", f"Market sell failed: {error}")
             self._alert(
-                "Cascade market sell FAILED",
+                "Market sell FAILED",
                 f"{campaign.symbol} #{campaign.seq} (LIVE)\n"
                 f"Tried to sell {sell_qty:.8f} at market and Binance refused: {error}\n\n"
                 f"The take-profit has already been cancelled — this position now has NO resting sell.",
                 level="error",
+                campaign=campaign,
             )
             return {"error": str(error)}
 
@@ -4703,7 +4738,7 @@ class CascadeEngine:
                 behind_sec / 3600.0,
             )
             self._alert(
-                "Cascade candle replay truncated",
+                f"{symbol} — Candle replay truncated",
                 f"{symbol} {timeframe} ran out of fetch pages {behind_sec / 3600.0:,.1f} hours short of now.\n"
                 f"Geometry built from this window is INCOMPLETE — do not trust fibs or trendlines "
                 f"on this campaign until it has caught up.",
@@ -4836,6 +4871,10 @@ class CascadeEngine:
             if candle.timestamp <= cursor:
                 continue
             campaign.mother_watch_last_5m_ts = candle.timestamp
+            # Proof of life. This watcher consuming a closed 1m bar is the
+            # engine working, and the stall watchdog only ever heard from the
+            # ladder step — see _check_watchdogs.
+            self._last_candle_ts = time.monotonic()
             if candle.high > campaign.mother_high:
                 self._mother_broken(campaign, candle)
                 return True
@@ -4862,6 +4901,7 @@ class CascadeEngine:
             if candle.timestamp <= after_ts:
                 continue
             campaign.mother_break_last_5m_ts = candle.timestamp
+            self._last_candle_ts = time.monotonic()  # proof of life, as above
             self._advance_mother_break_confirmation(campaign, candle)
             changed = True
             if campaign.state != MOTHER_BREAK_PENDING:
@@ -4918,7 +4958,7 @@ class CascadeEngine:
             f"untouched; only new structure is drawn on {new_tf} candles.",
         )
         self._alert(
-            "Cascade escalated",
+            "Escalated timeframe",
             f"{campaign.symbol} #{campaign.seq} outgrew {old_tf} ({bars:.0f} bars since the "
             f"mother candle) and now steps {new_tf} candles.\n\n"
             f"Nothing already built was changed. "
@@ -4929,6 +4969,7 @@ class CascadeEngine:
             ),
             level="info",
             dedupe_sec=60.0,
+            campaign=campaign,
         )
         return True
 
@@ -5716,13 +5757,14 @@ class CascadeEngine:
         # An entry is money leaving the account. Not deduped: every fill is a
         # distinct event and skipping one would hide a real position.
         self._alert(
-            "Cascade ENTRY filled",
+            "ENTRY filled",
             f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()}) — {campaign.mc_kind.upper()} MC\n"
             f"Bought ${usd:,.2f} at {price:,.2f}\n"
             f"{len(levels)} level(s) collected down to {deepest:,.2f}\n"
             f"Average entry: {campaign.avg_entry_price:,.2f}\n"
             f"Target: {campaign.tp_price:,.2f}",
             level="success",
+            campaign=campaign,
         )
 
     def _record_fill(
@@ -5859,7 +5901,7 @@ class CascadeEngine:
         # announced itself when the mother finally broke could be hours late or
         # never arrive at all.
         self._alert(
-            "Cascade TARGET hit",
+            "TARGET hit",
             f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()}) — {campaign.mc_kind.upper()} MC\n"
             f"Round {rnd.round_id} closed at {exit_price:,.2f}\n"
             f"Average entry: {avg:,.2f}  ·  Qty: {qty:g}\n"
@@ -5868,6 +5910,7 @@ class CascadeEngine:
             f"Campaign realised so far: ${campaign.realized_pnl_total:,.2f}. "
             f"The campaign keeps running — only a mother break or a stop ends it.",
             level="success",
+            campaign=campaign,
         )
 
         # Flatten the position: principal returns to available capital.
@@ -6217,12 +6260,13 @@ class CascadeEngine:
             f"so only one campaign runs on from here. Its capital returns to the group.",
         )
         self._alert(
-            "Cascade minor MC retired at the break",
+            "Minor MC retired at the break",
             f"{parent.symbol} #{parent.seq} (MINOR MC, {parent.mode.upper()}) broke together with "
             f"major campaign #{major.seq}.\n\n"
             f"Only the major restarts. The minor ends here and its ${parent.capital_usd:,.2f} goes "
             f"back to the {parent.symbol} group.",
             level="warn",
+            campaign=parent,
         )
         return True
 
@@ -6262,13 +6306,14 @@ class CascadeEngine:
             # a campaign by hand. It is the opposite of the noise suppressed
             # below — rare, terminal, and actionable.
             self._alert(
-                "Cascade restart chain stopped",
+                "Restart chain stopped",
                 f"{parent.symbol} — {barren - 1} auto-restarts in a row drew no fib, so the chain was cut "
                 f"instead of multiplying.\n\nNothing is running on this break now. Start a campaign by hand "
                 f"once the move settles.",
                 level="warn",
                 dedupe_sec=3600,
                 dedupe_key=f"barren-chain-cut|{parent.symbol}|{parent.mode}",
+                campaign=parent,
             )
             return None
         if candle.high <= candle.low:
@@ -6298,11 +6343,12 @@ class CascadeEngine:
                     f"a sibling campaign or raise the budget, then start one by hand.",
                 )
                 self._alert(
-                    "Cascade restart blocked — capital group exhausted",
+                    "Restart blocked — capital group exhausted",
                     f"{parent.symbol} #{parent.seq} ended on a mother break, but the capital group "
                     f"has ${max(available, 0):,.2f} left of ${group_budget:g}, so no successor "
                     f"was started.",
                     level="warn",
+                    campaign=parent,
                 )
                 return None
 
@@ -6413,13 +6459,14 @@ class CascadeEngine:
         if barren < 2:
             trailer = "\n\nFurther restarts on this move are logged only, until one draws a fib." if barren == 1 else ""
             self._alert(
-                "Cascade auto-restarted",
+                "Auto-restarted",
                 f"{child.symbol} — campaign #{parent.seq}'s mother candle {why}.\n\n"
                 f"New campaign #{child.seq} ({child.mode.upper()}, generation {child.generation})\n"
                 f"New mother candle: high {candle.high:,.2f} / low {candle.low:,.2f}\n"
                 f"Capital: ${child.capital_usd:,.2f}\n\n"
                 f"Nothing was carried over — it starts from scratch." + trailer,
                 level="warn" if child.mode == "live" else "info",
+                campaign=child,
             )
         else:
             self._log_event(
@@ -6616,7 +6663,7 @@ class CascadeEngine:
                             "REJECTED": "the exchange never accepted it",
                         }.get(status, "the exchange returned it unfilled")
                         self._alert(
-                            "Cascade entry CANCELLED",
+                            "Entry CANCELLED",
                             f"{campaign.symbol} #{campaign.seq} (LIVE) — {campaign.mc_kind.upper()} MC\n"
                             f"The ${campaign.pending_usd:,.2f} buy stop came back {status}: {meaning}.\n"
                             f"Trigger {campaign.pending_stop_price} / limit {campaign.pending_limit_price}\n\n"
@@ -6624,6 +6671,7 @@ class CascadeEngine:
                             level="warn",
                             dedupe_sec=900,
                             dedupe_key=f"entry-cancelled:{campaign.campaign_id}",
+                            campaign=campaign,
                         )
                     campaign.pending_order_id = None
                     # Executed-so-far is per ORDER. Carrying the old order's
@@ -6661,13 +6709,14 @@ class CascadeEngine:
             except Exception as exc:
                 _log.warning("[CASCADE] buy stop placement failed for %s: %s", campaign.campaign_id, exc)
                 self._alert(
-                    "Cascade entry not placed",
+                    "Entry not placed",
                     f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
                     f"${campaign.pending_usd:,.2f} collected but the buy stop could not be placed.\n"
                     f"{type(exc).__name__}: {exc}",
                     level="error",
                     dedupe_sec=900,
                     dedupe_key=f"entry-not-placed:{campaign.campaign_id}",
+                    campaign=campaign,
                 )
 
         # 3) TP management.
@@ -6839,13 +6888,14 @@ class CascadeEngine:
                         f"${campaign.pending_usd:,.2f} stays collected and unarmed.",
                     )
                     self._alert(
-                        "Cascade entry keeps being cancelled",
+                        "Entry keeps being cancelled",
                         f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
                         f"${campaign.pending_usd:,.2f} buy stop at {stop:,.2f} will not rest.\n"
                         f"Stopped retrying to protect the rate limit.",
                         level="error",
                         dedupe_sec=1800,
                         dedupe_key=f"entry-churn:{campaign.campaign_id}",
+                        campaign=campaign,
                     )
                 return False
             self._place_attempts[campaign.campaign_id] = (attempts[0], attempts[1] + 1)
@@ -6936,7 +6986,7 @@ class CascadeEngine:
             return False
         self._log_event(campaign, "error", f"Failed to place the buy stop: {error}")
         self._alert(
-            "Cascade order FAILED",
+            "Order FAILED",
             f"{campaign.symbol} campaign #{campaign.seq} (LIVE)\n"
             f"${campaign.pending_usd:,.2f} buy stop at {stop:,.2f}\n"
             f"Binance said: {error}\n\n"
@@ -6944,6 +6994,7 @@ class CascadeEngine:
             level="error",
             dedupe_sec=300,
             dedupe_key=f"order-failed:{campaign.campaign_id}",
+            campaign=campaign,
         )
         return False
 
