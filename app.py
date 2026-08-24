@@ -130,34 +130,58 @@ import atexit
 atexit.register(_shutdown_save_engines)
 
 
+async def _shutdown_step(name: str, call, timeout: float = 6.0) -> None:
+    """Run one shutdown step under a clock and a cap.
+
+    systemd gives the worker 30s (TimeoutStopSec) before SIGKILL. On
+    2026-08-24 a deploy spent all 30 of them inside this sequence and the
+    process was killed mid-shutdown — and because no step logged anything,
+    the journal showed "Waiting for application shutdown." followed by a
+    silent half-minute and a kill, with nothing to say which step was
+    responsible.
+
+    So every step is now timed and capped. An await that overruns is
+    abandoned and named in the log; a synchronous step cannot be interrupted
+    but is still timed, which is enough to identify it next time. Continuing
+    past a slow step is safe: each engine's state is persisted BEFORE it is
+    shut down, and every engine also persists on each change while running.
+    """
+    started = time.monotonic()
+    try:
+        result = call()
+        if inspect.isawaitable(result):
+            await asyncio.wait_for(result, timeout)
+    except asyncio.TimeoutError:
+        _logger.warning("[SHUTDOWN] %s did not finish in %.0fs — continuing without it", name, timeout)
+    except Exception as exc:
+        _logger.warning("[SHUTDOWN] %s failed: %s", name, exc)
+    else:
+        elapsed = time.monotonic() - started
+        if elapsed >= 1.0:
+            _logger.warning("[SHUTDOWN] %s took %.1fs", name, elapsed)
+
+
 async def _shutdown_runtime_engines() -> None:
+    started = time.monotonic()
+    # FIRST, before anything that can hang: the engine runs that only get
+    # written at shutdown. Everything below re-persists state that is already
+    # written on every change, so this is the one thing a kill would lose.
+    await _shutdown_step("save engine runs", _shutdown_save_engines)
     scalp_engine = globals().get("_scalp_engine")
     if scalp_engine is not None:
-        try:
-            await scalp_engine.shutdown()
-        except Exception as exc:
-            _logger.warning("Failed to shutdown scalp engine during app shutdown: %s", exc)
+        await _shutdown_step("scalp engine", scalp_engine.shutdown)
     cascade_engine = globals().get("_cascade_engine")
     if cascade_engine is not None:
-        try:
-            _persist_cascade_runtime_snapshot(cascade_engine)
-            await cascade_engine.shutdown()
-        except Exception as exc:
-            _logger.warning("Failed to shutdown cascade engine during app shutdown: %s", exc)
+        await _shutdown_step("persist cascade runtime", lambda: _persist_cascade_runtime_snapshot(cascade_engine))
+        await _shutdown_step("cascade engine", cascade_engine.shutdown)
     sandbox = globals().get("_auto_fib_engine")
     if sandbox is not None:
-        try:
-            _save_auto_fib_runtime()
-            await sandbox.shutdown()
-        except Exception as exc:
-            _logger.warning("Failed to shutdown the Cascade_Auto sandbox during app shutdown: %s", exc)
+        await _shutdown_step("persist Cascade_Auto runtime", _save_auto_fib_runtime)
+        await _shutdown_step("Cascade_Auto sandbox", sandbox.shutdown)
     vrule_engine = globals().get("_vrule_engine")
     if vrule_engine is not None:
-        try:
-            _save_vrule_runtime()
-            await vrule_engine.shutdown()
-        except Exception as exc:
-            _logger.warning("Failed to shutdown the V-Rule live engine during app shutdown: %s", exc)
+        await _shutdown_step("persist V-Rule runtime", _save_vrule_runtime)
+        await _shutdown_step("V-Rule live engine", vrule_engine.shutdown)
     rule3070_services = globals().get("_rule3070_services") or {}
     legacy_rule3070 = globals().get("_rule3070_service")
     if legacy_rule3070 is not None:
@@ -171,7 +195,7 @@ async def _shutdown_runtime_engines() -> None:
             rule3070.stop(persist=False)
         except Exception as exc:
             _logger.warning("Failed to stop %s V-Rule paper service during app shutdown: %s", symbol, exc)
-    _shutdown_save_engines()
+    _logger.info("[SHUTDOWN] runtime engines stopped in %.1fs", time.monotonic() - started)
 
 
 async def _wake_cascade_on_boot() -> None:
