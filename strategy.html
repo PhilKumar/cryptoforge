@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260823-scalp-brokers-live-2">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260824-bilingual-info-panels">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -1333,13 +1333,48 @@
 
   <div class="allocator-header">
     <div>
-      <h2>Cascade_Auto <button type="button" class="cf-info" tabindex="0" data-cf-info="The cascade, running itself. It marks its own mother candles instead of waiting for you. Five rules, all from the August 2026 backtests. ONE: it sells HALF way back to the mother candle, not a quarter — fewer trades, each worth several times more. TWO: a line that cannot reach its target climbs 5m to 15m to 1H to 4H and then STOPS at 4H, holding that rung for as long as it takes rather than widening to daily. THREE: there is always exactly one 5-minute line working the near move; the moment it climbs to 1H it becomes a slow major and a fresh 5-minute line is anchored on the last confirmed swing high, so majors accumulate and the fast line is always fresh. FOUR: the book never holds more than HALF the purse in coin at once. FIVE: closed profit waits in a pocket and folds into the purse whenever it is worth a quarter of it, and the wallet limit grows with the purse — no money is ever added from outside. What to expect: about 22 to 26 percent a year, one trade every three or four days, and roughly ten lines open at once with most of the money parked in slow 4H positions waiting for their target. Every closed trade is a winner by construction, so the whole risk sits in coin still held." aria-label="How Cascade_Auto works">i</button></h2>
-      <div class="table-meta">Its own engine and its own book. The Cascade page's campaigns are never touched.</div>
+      <h2>Cascade_Auto <button type="button" class="cf-info" tabindex="0"
+        data-cf-info-target="cf-af-strategy-info" aria-controls="cf-af-strategy-info"
+        aria-expanded="false" aria-label="Read the complete Cascade Auto strategy in English or Tamil">i</button></h2>
     </div>
     <div class="cf-engine-chip" id="cf-af-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
       <span class="cf-engine-label">Books</span>
       <strong id="cf-af-engine-state">Off</strong>
+    </div>
+  </div>
+
+  <div id="cf-af-strategy-info" class="cf-info-panel cf-info-doc" role="region"
+       aria-label="Cascade Auto strategy explanation" hidden>
+    <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
+      <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
+              role="tab" aria-selected="true">English</button>
+      <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
+              role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+    </div>
+    <div class="cf-info-language is-active" data-cf-info-language="en">
+      <p class="cf-info-lede">Cascade_Auto is the self-running Cascade book. It identifies its own mother candles, keeps one fast line working near price, graduates older structures into slower lines, and manages paper or live orders in its <strong>own engine and capital book</strong>. Cascade-Hybrid campaigns are never altered.</p>
+      <section><h4>1 · Automatic structure</h4><p>You choose the exchange, coin, purse and mode. The engine finds confirmed mother candles itself and starts the working structure without requiring a manually entered candle.</p></section>
+      <section><h4>2 · Halfway exit</h4><p>The whole basket exits halfway from its average entry back toward the mother high. This is a larger target than Cascade-Hybrid&rsquo;s quarter-way exit, so trades are fewer and may remain open longer.</p></section>
+      <section><h4>3 · Timeframe ladder</h4><p>A line that outgrows its chart climbs <strong>5m &rarr; 15m &rarr; 1H &rarr; 4H</strong>. It stops at 4H and holds that structure for as long as necessary; it never widens into daily or weekly candles.</p></section>
+      <section><h4>4 · One fresh working line</h4><p>Exactly one 5-minute line works the nearby move. When it graduates to 1H it becomes a slow major, and a new 5-minute line anchors to the latest confirmed swing high. Slow majors can accumulate while the near-price line stays fresh.</p></section>
+      <section><h4>5 · Wallet safety</h4><p>The value held in coin may never exceed <strong>half of the purse</strong>. Lines share that book-level limit, so adding more campaigns does not create more spendable capital.</p></section>
+      <section><h4>6 · Profit folding</h4><p>Closed profit waits in the pocket. When the pocket reaches one quarter of the purse it folds into the purse, and the wallet limit grows with it. No outside capital is silently added.</p></section>
+      <section><h4>7 · What the screen means</h4><p><strong>Lines</strong> are the active Cascade structures. <strong>Books</strong> show each coin&rsquo;s purse, wallet limit, amount in coin, profit pocket and current working line. Paper books simulate fills; live books use real exchange orders only when live trading is armed.</p></section>
+      <section><h4>8 · Risk to understand</h4><p>Closed rounds are designed to leave only at their target; the unresolved risk is therefore the coin still held in open slow lines. A strong return to the mother can close them, while a prolonged fall can keep capital parked for a long time.</p></section>
+      <section><h4>9 · Backtest profile</h4><p>The August 2026 tests measured roughly <strong>22–26% a year</strong>, about one closed trade every three or four days and around ten lines open at once, with most capital parked in slow 4H positions. Those are historical test characteristics, not a guaranteed future return.</p></section>
+    </div>
+    <div class="cf-info-language" data-cf-info-language="ta">
+      <p class="cf-info-lede">Cascade_Auto என்பது தானாக இயங்கும் Cascade book. இது தானாகவே mother candle-களை கண்டறிந்து, விலைக்கு அருகில் ஒரு வேகமான line-ஐ தொடர்ந்து வைத்துக்கொண்டு, பழைய அமைப்புகளை மெதுவான timeframe-களுக்கு உயர்த்தி, paper அல்லது live order-களை தனது <strong>தனி engine மற்றும் capital book</strong>-இல் நிர்வகிக்கும். Cascade-Hybrid campaign-களை இது மாற்றாது.</p>
+      <section><h4>1 · தானியங்கி அமைப்பு</h4><p>Exchange, coin, purse, mode ஆகியவற்றை நீங்கள் தேர்வு செய்கிறீர்கள். உறுதிப்படுத்தப்பட்ட mother candle-ஐ engine தானாகக் கண்டுபிடித்து, நீங்கள் candle நேரத்தை உள்ளிடாமல் working structure-ஐ தொடங்கும்.</p></section>
+      <section><h4>2 · பாதி தூர இலக்கு</h4><p>முழு basket-உம் அதன் சராசரி entry-யிலிருந்து mother high நோக்கிய பாதி தூரத்தில் வெளியேறும். இது Cascade-Hybrid-இன் கால் தூர target-ஐ விட பெரியது; எனவே trade குறைவாகவும், நீண்ட நேரம் திறந்தும் இருக்கலாம்.</p></section>
+      <section><h4>3 · Timeframe ஏணி</h4><p>ஒரு line தனது chart அளவை மீறும்போது <strong>5m &rarr; 15m &rarr; 1H &rarr; 4H</strong> என ஏறும். 4H-இல் நின்று தேவையான காலம் அதே அமைப்பை தக்கவைக்கும்; daily அல்லது weekly candle-க்கு செல்லாது.</p></section>
+      <section><h4>4 · எப்போதும் ஒரு புதிய working line</h4><p>அருகிலுள்ள move-ஐ கையாள ஒரே ஒரு 5-minute line இருக்கும். அது 1H-க்கு உயர்ந்ததும் slow major ஆகி, கடைசியாக உறுதிப்பட்ட swing high-இல் புதிய 5-minute line தொடங்கும். Slow major-கள் சேரலாம்; அருகிலுள்ள line மட்டும் புதியதாக இருக்கும்.</p></section>
+      <section><h4>5 · Wallet பாதுகாப்பு</h4><p>Coin-இல் வைத்திருக்கும் மதிப்பு <strong>purse-இன் பாதியை</strong> ஒருபோதும் மீறாது. எல்லா line-களும் ஒரே book-level limit-ஐ பகிர்வதால், அதிக campaign தொடங்கினாலும் செலவிடும் capital அதிகரிக்காது.</p></section>
+      <section><h4>6 · லாபத்தை purse-இல் சேர்த்தல்</h4><p>மூடிய trade-களின் லாபம் pocket-இல் காத்திருக்கும். அது purse-இன் கால் பங்கை எட்டியதும் முழுதாக purse-இல் சேர்ந்து, wallet limit-உம் உயரும். வெளியில் இருந்து பணம் அமைதியாகச் சேர்க்கப்படாது.</p></section>
+      <section><h4>7 · இந்தப் பக்கத்தின் பொருள்</h4><p><strong>Lines</strong> என்பது இயங்கும் Cascade அமைப்புகள். <strong>Books</strong> பகுதியில் ஒவ்வொரு coin-இன் purse, wallet limit, coin-இல் உள்ள தொகை, profit pocket, working line ஆகியவை காட்டப்படும். Paper book fill-களை simulation செய்கிறது; live armed ஆனபின் மட்டுமே live book உண்மையான exchange order-களை இடும்.</p></section>
+      <section><h4>8 · புரிந்துகொள்ள வேண்டிய ஆபத்து</h4><p>மூடிய round-கள் target-இல் மட்டுமே வெளியேறும்படி அமைக்கப்பட்டவை; ஆகவே தீராத ஆபத்து slow line-களில் இன்னும் வைத்திருக்கும் coin-இல் உள்ளது. விலை mother high நோக்கி திரும்பினால் அவை மூடலாம்; நீண்ட வீழ்ச்சி capital-ஐ நீண்ட காலம் முடக்கி வைக்கலாம்.</p></section>
+      <section><h4>9 · Backtest நடை</h4><p>ஆகஸ்ட் 2026 சோதனைகளில் வருடத்திற்கு சுமார் <strong>22–26%</strong>, மூன்று அல்லது நான்கு நாளுக்கு ஒரு closed trade, ஒரே நேரத்தில் சுமார் பத்து open line-கள் என அளந்தது; பெரும்பாலான capital மெதுவான 4H position-களில் இருந்தது. இவை வரலாற்றுச் சோதனை பண்புகள் மட்டுமே; எதிர்கால லாப உத்தரவாதம் அல்ல.</p></section>
     </div>
   </div>
 
@@ -1491,13 +1526,46 @@
        icon tile, name, one line of what it is. Same on both pages. -->
   <div class="allocator-header">
     <div>
-      <h2>The V-Rule <button type="button" class="cf-info" tabindex="0" data-cf-info="A mother candle marks the top. After it falls, a V forms (a dip, two greens, a red). The book may NEVER hold more than half the purse at once — the safety rule the honest backtest was chosen on. The entry sits a quarter of the fall back up and trails the low down; buys alternate 30% and 70% of the pot down the sliding fibs, four buys maximum, then it holds. One target sells the whole ladder at the average buy plus a quarter of the fall. Money rules: pot is the fall percent of capital, a 0.35% fee gate, full-budget discipline and 25% profit reinvestment. This console runs it on PAPER using the same engine the nine-year backtest proved, bar for bar." aria-label="How the 30-70 Rule works">i</button></h2>
-      <div class="table-meta">Paper replay above, real money below in its own engine — the Cascade page is never touched.</div>
+      <h2>The V-Rule <button type="button" class="cf-info" tabindex="0"
+        data-cf-info-target="cf-vrule-strategy-info" aria-controls="cf-vrule-strategy-info"
+        aria-expanded="false" aria-label="Read the complete V-Rule strategy in English or Tamil">i</button></h2>
     </div>
     <div class="cf-engine-chip" id="cf-r37-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
       <span class="cf-engine-label">Paper</span>
       <strong id="cf-r37-engine-state">Idle</strong>
+    </div>
+  </div>
+
+  <div id="cf-vrule-strategy-info" class="cf-info-panel cf-info-doc" role="region"
+       aria-label="V-Rule strategy explanation" hidden>
+    <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
+      <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
+              role="tab" aria-selected="true">English</button>
+      <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
+              role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+    </div>
+    <div class="cf-info-language is-active" data-cf-info-language="en">
+      <p class="cf-info-lede">The V-Rule waits for a measured fall below a mother candle, confirms that the fall has begun to turn, then builds one controlled ladder. The paper console uses the same bar-by-bar engine used by the nine-year backtest, and the separate real-money driver is held to that rule; Cascade-Hybrid and Cascade_Auto remain untouched.</p>
+      <section><h4>1 · Mother and V confirmation</h4><p>A mother candle marks the top of the move. Below it the engine waits for a dip, two green candles and the first red candle. That completed V confirms the setup; a falling market without the pattern is not bought.</p></section>
+      <section><h4>2 · Trailing entry</h4><p>The first entry is placed one quarter of the fall back up and follows new lows downward. The order fills only when price turns back through the armed entry, so the rule waits for reversal instead of buying every lower print.</p></section>
+      <section><h4>3 · 30–70 ladder</h4><p>Buy sizes alternate between <strong>30% and 70%</strong> of the available pot across the sliding fib levels. The ladder allows at most four buys; after the fourth it holds rather than adding indefinitely.</p></section>
+      <section><h4>4 · Purse and exposure</h4><p>The pot is derived from the fall as a percentage of capital. The book may never hold more than <strong>half of the purse</strong> in coin. A 0.35% fee gate and full-budget discipline prevent tiny or unaccounted entries.</p></section>
+      <section><h4>5 · One basket target</h4><p>Every filled buy is combined into one average entry. The entire ladder exits at <strong>average entry + one quarter of the move back to the mother high</strong>. There is no separate stop-loss; a ladder that has not turned is held for its target.</p></section>
+      <section><h4>6 · Profit reinvestment</h4><p>Twenty-five percent of realised profit is reinvested under the rule&rsquo;s money-management contract. Paper P&amp;L counts only activity after the paper clock starts; warm-up structure remains visible but does not become a claimed result.</p></section>
+      <section><h4>7 · Paper operation</h4><p>Each instrument keeps an independent paper clock and journal. The engine scans after closed 5-minute candles. Stop preserves the book; Reset archives that instrument&rsquo;s journal and starts a fresh paper clock.</p></section>
+      <section><h4>8 · Live operation</h4><p>The live driver places a trailing buy-stop on the selected exchange and one take-profit against the whole ladder. A parity harness checks the live path against the locked simulator. Live orders use real money only after the server gate is armed.</p></section>
+    </div>
+    <div class="cf-info-language" data-cf-info-language="ta">
+      <p class="cf-info-lede">V-Rule ஒரு mother candle-க்கு கீழே அளவிடப்பட்ட வீழ்ச்சிக்காகக் காத்திருந்து, அந்த வீழ்ச்சி திரும்பத் தொடங்கியதை உறுதிசெய்த பிறகு கட்டுப்படுத்தப்பட்ட ஒரு ladder-ஐ உருவாக்கும். Paper console, ஒன்பது ஆண்டு backtest பயன்படுத்திய அதே bar-by-bar engine-ஐ இயக்குகிறது; தனி real-money driver-உம் அதே விதியுடன் பொருந்தச் சரிபார்க்கப்படும். Cascade-Hybrid மற்றும் Cascade_Auto மாற்றப்படாது.</p>
+      <section><h4>1 · Mother மற்றும் V உறுதிப்பாடு</h4><p>Mother candle move-இன் உச்சத்தை குறிக்கும். அதன் கீழே dip, இரண்டு பச்சை candle, அதன்பின் முதல் சிவப்பு candle வர engine காத்திருக்கும். இந்த முழுமையான V setup-ஐ உறுதிப்படுத்தும்; pattern இல்லாமல் தொடர்ந்து விழும் சந்தையை வாங்காது.</p></section>
+      <section><h4>2 · கீழே நகரும் entry</h4><p>முதல் entry, வீழ்ச்சியிலிருந்து கால் தூரம் மேலே வைக்கப்பட்டு, புதிய low உருவானால் கீழே நகரும். விலை armed entry-ஐ மீண்டும் மேலே கடக்கும்போது மட்டுமே fill ஆகும்; ஒவ்வொரு கீழ் விலையையும் வாங்காமல் reversal-க்காக காத்திருக்கும்.</p></section>
+      <section><h4>3 · 30–70 ladder</h4><p>Sliding fib level-களில் கிடைக்கும் pot-இன் <strong>30% மற்றும் 70%</strong> என buy size மாறிமாறி வரும். அதிகபட்சம் நான்கு வாங்கல்கள் மட்டுமே; நான்கிற்குப் பிறகு மேலும் சேர்க்காமல் hold செய்யும்.</p></section>
+      <section><h4>4 · Purse மற்றும் exposure</h4><p>Capital-இன் சதவீதமாக வீழ்ச்சியின் அளவிலிருந்து pot கணக்கிடப்படும். Coin-இல் வைத்திருப்பது <strong>purse-இன் பாதியை</strong> ஒருபோதும் மீறாது. 0.35% fee gate மற்றும் முழு-budget ஒழுங்கு மிகச் சிறிய அல்லது கணக்கில் இல்லாத entry-களைத் தடுக்கிறது.</p></section>
+      <section><h4>5 · முழு basket-க்கு ஒரே target</h4><p>நிறைவேறிய எல்லா வாங்கல்களும் ஒரே average entry ஆக இணைக்கப்படும். முழு ladder-உம் <strong>average entry + mother high நோக்கிய மீள்ச்சியின் கால் பங்கு</strong> என்ற target-இல் வெளியேறும். தனி stop-loss இல்லை; திரும்பாத ladder target-க்காக hold செய்யப்படும்.</p></section>
+      <section><h4>6 · லாப மறுமுதலீடு</h4><p>Realised profit-இன் 25% பணநிர்வாக விதிப்படி மீண்டும் முதலீடு செய்யப்படும். Paper clock தொடங்கிய பிந்தைய activity மட்டுமே paper P&amp;L-இல் கணக்காகும்; warm-up structure காட்டப்படும், ஆனால் claimed result ஆகாது.</p></section>
+      <section><h4>7 · Paper இயக்கம்</h4><p>ஒவ்வொரு instrument-க்கும் தனி paper clock மற்றும் journal இருக்கும். மூடிய 5-minute candle-களுக்குப் பிறகு engine scan செய்யும். Stop book-ஐ பாதுகாக்கும்; Reset அந்த instrument-இன் journal-ஐ archive செய்து புதிய paper clock தொடங்கும்.</p></section>
+      <section><h4>8 · Live இயக்கம்</h4><p>Live driver தேர்ந்த exchange-இல் trailing buy-stop மற்றும் முழு ladder-க்கு ஒரே take-profit வைக்கும். Live நடை locked simulator-உடன் பொருந்துகிறதா என்பதை parity harness சரிபார்க்கும். Server live gate armed ஆனபின் மட்டுமே உண்மையான பண order இடப்படும்.</p></section>
     </div>
   </div>
   <div class="stats-grid" style="margin-bottom:20px;">
@@ -1791,13 +1859,48 @@
 <div id="cascade-page" class="page-section">
   <div class="allocator-header">
     <div>
-      <h2>Cascade-Hybrid Campaigns</h2>
-      <div class="table-meta">Mother-candle trendline system: resting limit buys at fib levels 2/4/8 (20/30/50%), funded by the fall % from the mother high down to each fib 1. TP = average entry + 0.25 of the move back to the mother high. Campaigns run autonomously 24/7.</div>
+      <h2>Cascade-Hybrid Campaigns <button type="button" class="cf-info" tabindex="0"
+        data-cf-info-target="cf-cascade-strategy-info" aria-controls="cf-cascade-strategy-info"
+        aria-expanded="false" aria-label="Read the complete Cascade Hybrid strategy in English or Tamil">i</button></h2>
     </div>
     <div class="cf-engine-chip" id="cf-cascade-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
       <span class="cf-engine-label">Engine</span>
       <strong id="cf-cascade-engine-state">Idle</strong>
+    </div>
+  </div>
+
+  <div id="cf-cascade-strategy-info" class="cf-info-panel cf-info-doc" role="region"
+       aria-label="Cascade Hybrid strategy explanation" hidden>
+    <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
+      <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
+              role="tab" aria-selected="true">English</button>
+      <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
+              role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+    </div>
+    <div class="cf-info-language is-active" data-cf-info-language="en">
+      <p class="cf-info-lede">Cascade-Hybrid is the operator-anchored mother-candle campaign. You choose the exchange, symbol, capital and starting mother; the engine then follows the trendline structure, funds the fib ladder, manages entries and maintains one basket target autonomously around the clock.</p>
+      <section><h4>1 · Campaign anchor</h4><p>You select a mother candle by time, or type its high and low when necessary. The exchange supplies the candle prices when a time is used. The mother high is the ceiling from which the campaign&rsquo;s fall and recovery are measured.</p></section>
+      <section><h4>2 · Major and minor mothers</h4><p>A fresh campaign is normally <strong>Major</strong>. Minor is reserved for a sub-mother inside an already running move. When a Major and Minor break together on the same symbol, the Major has priority.</p></section>
+      <section><h4>3 · Trendline legs</h4><p>The campaign follows lower structure away from the mother. Each confirmed leg creates its own measured range; later levels and capital allocations are tied to that leg rather than to an arbitrary fixed percentage.</p></section>
+      <section><h4>4 · Fib ladder and funding</h4><p>Each leg places buy levels at <strong>L2, L4 and L8</strong>. The leg&rsquo;s capital pool is derived from the fall percentage, then divided <strong>20% / 30% / 50%</strong>, deliberately reserving the largest share for the deepest level.</p></section>
+      <section><h4>5 · Entries and average price</h4><p>Orders wait at the campaign&rsquo;s calculated levels. As buys fill, the engine combines quantity and cost into one average entry and keeps the remaining ladder visible. Exchange, symbol and campaign capital remain isolated for the life of that campaign.</p></section>
+      <section><h4>6 · One basket target</h4><p>The take-profit for the whole filled basket is <strong>average entry + 0.25 &times; (mother high &minus; average entry)</strong>. It is a quarter of the recovery toward the mother, not a fixed percentage above each individual buy.</p></section>
+      <section><h4>7 · Timeframe behaviour</h4><p>A 5m, 15m or 1H structure may climb <strong>5m &rarr; 15m &rarr; 1H &rarr; 4H</strong> as it outgrows the screen. 4H is the cap. A campaign started on fixed 4H, 1D or 1W remains on that timeframe. A mother break restarts structure from 5m.</p></section>
+      <section><h4>8 · Capital groups and modes</h4><p>An optional group fund caps all campaigns for one symbol on one exchange; a fund on another exchange is separate. Paper mode simulates orders. Live mode uses real broker orders only when the live gate and that exchange&rsquo;s credentials are available.</p></section>
+      <section><h4>9 · Continuous operation</h4><p>After you start it, the campaign monitors prices and orders 24/7 until it is stopped or its lifecycle ends. Stopping automation and liquidating holdings are separate actions, so the interface always distinguishes cancelling work from selling coin.</p></section>
+    </div>
+    <div class="cf-info-language" data-cf-info-language="ta">
+      <p class="cf-info-lede">Cascade-Hybrid என்பது operator தேர்ந்தெடுக்கும் mother-candle campaign. Exchange, symbol, capital, starting mother ஆகியவற்றை நீங்கள் கொடுக்கிறீர்கள்; அதன் பிறகு engine trendline structure-ஐ பின்தொடர்ந்து, fib ladder-க்கு நிதி ஒதுக்கி, entry-களை நிர்வகித்து, முழு basket-க்கும் ஒரே target-ஐ 24/7 தானாக பராமரிக்கும்.</p>
+      <section><h4>1 · Campaign தொடக்க anchor</h4><p>Mother candle-ஐ அதன் நேரத்தால் தேர்வு செய்யலாம்; அவசியமெனில் high மற்றும் low-ஐ உள்ளிடலாம். நேரத்தைப் பயன்படுத்தினால் exchange அந்த candle விலைகளைத் தரும். Mother high தான் campaign வீழ்ச்சியும் மீள்ச்சியும் அளக்கப்படும் கூரை.</p></section>
+      <section><h4>2 · Major மற்றும் Minor mother</h4><p>புதிய campaign பொதுவாக <strong>Major</strong>. ஏற்கனவே ஓடும் move-இன் உள்ளே உள்ள sub-mother-க்கு மட்டும் Minor பயன்படுத்த வேண்டும். ஒரே symbol-இல் Major மற்றும் Minor ஒரே நேரத்தில் break ஆனால் Major-க்கு முன்னுரிமை.</p></section>
+      <section><h4>3 · Trendline leg-கள்</h4><p>Campaign mother-இலிருந்து கீழே செல்லும் structure-ஐ பின்தொடரும். உறுதிப்படுத்தப்பட்ட ஒவ்வொரு leg-க்கும் தனி range உருவாகும்; அடுத்த level மற்றும் capital allocation நிலையான சதவீதத்திலிருந்து அல்ல, அந்த leg-இலிருந்தே கணக்கிடப்படும்.</p></section>
+      <section><h4>4 · Fib ladder மற்றும் நிதி</h4><p>ஒவ்வொரு leg-லும் <strong>L2, L4, L8</strong> buy level-கள் அமைக்கப்படும். வீழ்ச்சியின் சதவீதத்திலிருந்து அந்த leg-இன் capital pool கணக்கிட்டு, <strong>20% / 30% / 50%</strong> எனப் பிரிக்கப்படும்; அதிகபட்ச பங்கு ஆழமான level-க்கு திட்டமிட்டு ஒதுக்கப்படும்.</p></section>
+      <section><h4>5 · Entry மற்றும் சராசரி விலை</h4><p>Campaign கணக்கிட்ட level-களில் order-கள் காத்திருக்கும். Buy fill ஆகும்போது quantity மற்றும் cost ஒன்றாக இணைந்து average entry கணக்கிடப்படும்; மீதமுள்ள ladder தெளிவாகத் தெரியும். Campaign முழுவதும் exchange, symbol, capital தனித்தனியாகவே இருக்கும்.</p></section>
+      <section><h4>6 · முழு basket-க்கு ஒரே target</h4><p>நிறைவேறிய முழு basket-இன் take-profit: <strong>average entry + 0.25 &times; (mother high &minus; average entry)</strong>. இது ஒவ்வொரு buy-க்கும் மேலான fixed percentage அல்ல; mother நோக்கிய மீள்ச்சியின் கால் தூரம்.</p></section>
+      <section><h4>7 · Timeframe நடை</h4><p>5m, 15m அல்லது 1H structure chart-ஐ மீறும்போது <strong>5m &rarr; 15m &rarr; 1H &rarr; 4H</strong> என ஏறலாம். 4H தான் cap. Fixed 4H, 1D அல்லது 1W-இல் தொடங்கிய campaign அதே timeframe-இல் இருக்கும். Mother break ஆனால் structure 5m-இலிருந்து மீண்டும் தொடங்கும்.</p></section>
+      <section><h4>8 · Capital group மற்றும் mode</h4><p>விருப்ப group fund, ஒரே exchange-இல் ஒரே symbol-க்கு உள்ள எல்லா campaign-களையும் கட்டுப்படுத்தும்; வேறு exchange fund தனி. Paper mode order-களை simulation செய்கிறது. Live gate மற்றும் அந்த exchange credential தயாரானபின் மட்டுமே Live mode உண்மையான broker order-களை இடும்.</p></section>
+      <section><h4>9 · தொடர்ச்சியான இயக்கம்</h4><p>நீங்கள் தொடங்கிய பிறகு campaign நிறுத்தப்படும் வரை அல்லது அதன் lifecycle முடியும் வரை price மற்றும் order-களை 24/7 கண்காணிக்கும். Automation-ஐ நிறுத்துவது, coin-ஐ market-இல் விற்பது இரண்டும் தனி action; interface அவற்றை தெளிவாகப் பிரிக்கிறது.</p></section>
     </div>
   </div>
 
@@ -2918,7 +3021,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260823-scalp-brokers-live-2" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260824-bilingual-info-panels" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 </body>

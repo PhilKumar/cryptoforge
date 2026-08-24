@@ -337,4 +337,46 @@ test.describe('Comprehensive Site Audit', () => {
     const lastCard = layout.cards[layout.cards.length - 1];
     expect(layout.host.right - lastCard.right).toBeGreaterThan(100);
   });
+
+  test('information icons open readable fold-down panels with bilingual strategy manuals', async ({ page }) => {
+    await page.evaluate(() => (window as any).showPage('cascade-page'));
+
+    const strategyButton = page.locator('#cascade-page .allocator-header h2 .cf-info');
+    const strategyPanel = page.locator('#cf-cascade-strategy-info');
+    await expect(strategyPanel).toBeHidden();
+    await strategyButton.click();
+    await expect(strategyPanel).toBeVisible();
+    await expect(strategyButton).toHaveAttribute('aria-expanded', 'true');
+    await expect(strategyPanel.locator('[data-cf-info-language="en"]')).toHaveClass(/is-active/);
+
+    const panelLayout = await strategyPanel.evaluate((panel) => {
+      const style = getComputedStyle(panel as HTMLElement);
+      const rect = panel.getBoundingClientRect();
+      return { position: style.position, width: rect.width };
+    });
+    expect(panelLayout.position).not.toBe('fixed');
+    expect(panelLayout.width).toBeGreaterThan(600);
+
+    await strategyPanel.getByRole('tab', { name: 'தமிழ்' }).click();
+    await expect(strategyPanel.locator('[data-cf-info-language="ta"]')).toHaveClass(/is-active/);
+    await expect(strategyPanel.locator('[data-cf-info-language="en"]')).not.toHaveClass(/is-active/);
+
+    // The language is one site-wide reading choice, like the PhilForge
+    // reference. It remains Tamil when another strategy explanation opens.
+    await page.evaluate(() => (window as any).showPage('rule3070-page'));
+    await page.locator('#rule3070-page .allocator-header h2 .cf-info').click();
+    await expect(page.locator('#cf-vrule-strategy-info [data-cf-info-language="ta"]')).toHaveClass(/is-active/);
+
+    // Short field help uses the same normal-flow disclosure, not the old
+    // floating tooltip. Escape folds every open information panel away.
+    await page.evaluate(() => (window as any).showPage('cascade-page'));
+    const fieldButton = page.locator('label[for="cf-cascade-timeframe"] .cf-info');
+    await fieldButton.click();
+    const fieldPanel = page.locator('#' + await fieldButton.getAttribute('aria-controls'));
+    await expect(fieldPanel).toBeVisible();
+    expect(await fieldPanel.evaluate((panel) => getComputedStyle(panel as HTMLElement).position)).not.toBe('fixed');
+    await page.keyboard.press('Escape');
+    await expect(fieldPanel).toBeHidden();
+    await expect(fieldButton).toHaveAttribute('aria-expanded', 'false');
+  });
 });

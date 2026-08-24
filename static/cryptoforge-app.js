@@ -12689,70 +12689,124 @@ function cfCascadeChartBackdrop(event) {
   }
 }
 
-// ── Info icon tooltips ────────────────────────────────────────────
-// The Cascade start form used to carry three paragraphs of rules under the
-// fields. Every one of them mattered exactly once — at the moment of choosing
-// that field — so they live behind an (i) on the label instead, on hover and
-// on click/focus for touch and keyboard.
-function _cfInfoBubble() {
-  var el = document.getElementById('cf-info-bubble');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'cf-info-bubble';
-    el.className = 'cf-info-bubble';
-    el.setAttribute('role', 'tooltip');
-    el.hidden = true;
-    document.body.appendChild(el);
-  }
-  return el;
+// ── Fold-down information panels ─────────────────────────────────
+// Information used to appear in a small fixed tooltip. Long strategy rules
+// were difficult to read, clipped on narrow screens, and vanished as soon as
+// the pointer moved. Every (i) now opens a normal-flow panel directly below
+// the heading or field it explains. Existing data-cf-info copy is converted
+// safely with textContent; long, structured strategy documents point to a
+// hand-authored panel with data-cf-info-target.
+var _cfInfoPanelSequence = 0;
+
+function _cfInfoTriggerSelector() {
+  return '.cf-info[data-cf-info], .cf-info[data-cf-info-target]';
+}
+
+function _cfInfoAnchor(trigger) {
+  return trigger.closest('h1, h2, h3, h4, label, .cf-journal-kpi-label, .stat-label')
+    || trigger.parentElement;
+}
+
+function _cfInfoPanel(trigger) {
+  if (!trigger) return null;
+  var targetId = trigger.getAttribute('data-cf-info-target') || trigger.getAttribute('aria-controls');
+  var existing = targetId ? document.getElementById(targetId) : null;
+  if (existing) return existing;
+
+  var text = trigger.getAttribute('data-cf-info');
+  if (!text) return null;
+  var anchor = _cfInfoAnchor(trigger);
+  if (!anchor || !anchor.parentElement) return null;
+
+  _cfInfoPanelSequence += 1;
+  var panel = document.createElement('div');
+  panel.id = 'cf-info-panel-' + _cfInfoPanelSequence;
+  panel.className = 'cf-info-panel';
+  panel.hidden = true;
+  panel.setAttribute('role', 'region');
+  panel.setAttribute('aria-label', trigger.getAttribute('aria-label') || 'More information');
+  var paragraph = document.createElement('p');
+  paragraph.textContent = text;
+  panel.appendChild(paragraph);
+  anchor.insertAdjacentElement('afterend', panel);
+  trigger.setAttribute('aria-controls', panel.id);
+  return panel;
 }
 
 function cfInfoShow(trigger) {
-  var text = trigger && trigger.getAttribute('data-cf-info');
-  if (!text) return;
-  var bubble = _cfInfoBubble();
-  bubble.textContent = text;
-  bubble.hidden = false;
-  var rect = trigger.getBoundingClientRect();
-  var width = Math.min(320, window.innerWidth - 24);
-  bubble.style.width = width + 'px';
-  bubble.style.left = Math.max(12, Math.min(rect.left - 8, window.innerWidth - width - 12)) + 'px';
-  // Prefer below; flip above when the bubble would run off the bottom.
-  var below = rect.bottom + 8;
-  bubble.style.top = below + 'px';
-  var overflow = below + bubble.offsetHeight - window.innerHeight + 12;
-  if (overflow > 0) bubble.style.top = Math.max(12, rect.top - bubble.offsetHeight - 8) + 'px';
+  var panel = _cfInfoPanel(trigger);
+  if (!panel) return;
+  panel.hidden = false;
+  panel.classList.add('is-open');
+  trigger.setAttribute('aria-expanded', 'true');
 }
 
-function cfInfoHide() {
-  var bubble = document.getElementById('cf-info-bubble');
-  if (bubble) bubble.hidden = true;
-}
-
-document.addEventListener('mouseover', function (event) {
-  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
-  if (trigger) cfInfoShow(trigger);
-});
-document.addEventListener('mouseout', function (event) {
-  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
-  if (trigger) cfInfoHide();
-});
-document.addEventListener('click', function (event) {
-  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
+function cfInfoHide(trigger) {
   if (trigger) {
-    event.preventDefault();
-    var bubble = document.getElementById('cf-info-bubble');
-    if (bubble && !bubble.hidden && bubble.textContent === trigger.getAttribute('data-cf-info')) cfInfoHide();
-    else cfInfoShow(trigger);
+    var panel = _cfInfoPanel(trigger);
+    if (panel) {
+      panel.hidden = true;
+      panel.classList.remove('is-open');
+    }
+    trigger.setAttribute('aria-expanded', 'false');
     return;
   }
-  cfInfoHide();
+  document.querySelectorAll('.cf-info-panel.is-open').forEach(function (panel) {
+    panel.hidden = true;
+    panel.classList.remove('is-open');
+  });
+  document.querySelectorAll(_cfInfoTriggerSelector()).forEach(function (button) {
+    button.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function cfInfoToggle(trigger) {
+  var panel = _cfInfoPanel(trigger);
+  if (!panel) return;
+  if (panel.hidden) cfInfoShow(trigger);
+  else cfInfoHide(trigger);
+}
+
+function _cfApplyInfoLanguage(language) {
+  var picked = language === 'ta' ? 'ta' : 'en';
+  document.querySelectorAll('.cf-info-language').forEach(function (section) {
+    section.classList.toggle('is-active', section.getAttribute('data-cf-info-language') === picked);
+  });
+  document.querySelectorAll('.cf-info-language-button').forEach(function (button) {
+    var active = button.getAttribute('data-cf-info-language-button') === picked;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+    button.setAttribute('tabindex', active ? '0' : '-1');
+  });
+}
+
+document.addEventListener('click', function (event) {
+  var languageButton = event.target.closest && event.target.closest('.cf-info-language-button');
+  if (languageButton) {
+    event.preventDefault();
+    var language = languageButton.getAttribute('data-cf-info-language-button') || 'en';
+    _cfApplyInfoLanguage(language);
+    try { localStorage.setItem('cf-info-language', language); } catch (error) {}
+    return;
+  }
+
+  var trigger = event.target.closest && event.target.closest(_cfInfoTriggerSelector());
+  if (!trigger) return;
+  event.preventDefault();
+  cfInfoToggle(trigger);
 });
-document.addEventListener('focusin', function (event) {
-  var trigger = event.target.closest && event.target.closest('[data-cf-info]');
-  if (trigger) cfInfoShow(trigger);
+
+document.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape') cfInfoHide();
 });
-document.addEventListener('keydown', function (event) { if (event.key === 'Escape') cfInfoHide(); });
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll(_cfInfoTriggerSelector()).forEach(function (button) {
+    button.setAttribute('aria-expanded', 'false');
+  });
+  try { _cfApplyInfoLanguage(localStorage.getItem('cf-info-language') || 'en'); }
+  catch (error) { _cfApplyInfoLanguage('en'); }
+});
 
 // Show/hide the typed mother high & low. Hidden by default: the MC time is the
 // safer path, and two blank number boxes labelled "optional" only invited the
