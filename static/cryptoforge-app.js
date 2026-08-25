@@ -4301,7 +4301,12 @@ function _cfFilledOrderNetPnl(order) {
 }
 
 function _cfFilledOrderPnlSubtext(order, hasPnl) {
-  if (hasPnl) return order && order.pnl_status === 'broker' ? 'broker net' : 'net realized';
+  // "account FIFO net", not "net realized": the matcher closes this sell
+  // against the OLDEST coins the whole account holds, whichever strategy or
+  // hand bought them — so the figure is an inventory gain, not what the
+  // strategy that sold made. Phil's 27-cent cascade exit showed +$4.25
+  // because it released a gain bought on 13 Aug (2026-08-24).
+  if (hasPnl) return order && order.pnl_status === 'broker' ? 'broker net' : 'account FIFO net';
   var status = String((order && order.pnl_status) || '').toLowerCase();
   if (status === 'entry') return 'entry fill';
   if (status === 'unmatched') return 'no matched entry';
@@ -4736,7 +4741,7 @@ function showFilledOrderPnlDetails(key) {
     + '<div><span>Net P&L</span><strong class="' + (hasPnl && net >= 0 ? 'positive' : 'negative') + '">' + (hasPnl ? ((net >= 0 ? '+' : '') + fmtINR(net)) : '—') + '</strong><em>' + (hasPnl ? fmtRupeesFromUsd(net) : '') + '</em></div>'
     + '<div><span>Status</span><strong>' + _escapeHtml(status) + '</strong></div>'
     + '</div>'
-    + '<div class="pf-audit-note">' + (hasPnl ? 'Net P&L is gross matched-fill P&L minus entry and exit fees. INR is display-only using ' + _escapeHtml(fmtPortfolioRateLabel()) + '.' : 'This fill has not been matched to a closing fill yet, so realized net P&L is not available.') + '</div>';
+    + '<div class="pf-audit-note">' + (hasPnl ? 'FIFO across the whole account: this sell was matched against the oldest coins held, whatever strategy or hand bought them — an inventory gain, not the selling strategy\u2019s own P&L. Net is gross matched-fill P&L minus entry and exit fees. INR is display-only using ' + _escapeHtml(fmtPortfolioRateLabel()) + '.' : 'This fill has not been matched to a closing fill yet, so realized net P&L is not available.') + '</div>';
   cfModal('Filled Order P&L Audit', { html: html }, '₹', [{label:'OK', cls:'btn-primary'}]);
 }
 
@@ -5243,9 +5248,37 @@ function _getLiveClosedTradeRows(data) {
   return rows.reverse();
 }
 
+// Real conversion for a stamp that declares its zone. The broker returns
+// '2026-08-23T11:21:20+00:00' and the old path regexed the digits out and
+// appended a literal ' IST' — so every broker fill read 5h30m early with an
+// IST badge on it (Phil's 16:51 exit showed as "11:21:21 IST"). Naive stamps
+// never come here: the engine writes those in IST already.
+function _cfIstDateParts(d) {
+  var parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(d).forEach(function(p) { parts[p.type] = p.value; });
+  var date = parts.day + ' ' + parts.month + ' ' + parts.year;
+  var time = parts.hour + ':' + parts.minute + ':' + parts.second + ' IST';
+  return { date: date, time: time, label: date + ', ' + time };
+}
+
+var _CF_ZONE_AWARE_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?\s*(?:Z|[+-]\d{2}:?\d{2})$/;
+
 function _getTradeDateParts(raw) {
   if (!raw || raw === 'None') return { date: '—', time: '—', label: '—' };
-  var s = String(raw).trim().replace('T', ' ');
+  var s0 = String(raw).trim();
+  if (_CF_ZONE_AWARE_RE.test(s0)) {
+    var aware = new Date(s0.replace(' ', 'T'));
+    if (!isNaN(aware.getTime())) return _cfIstDateParts(aware);
+  }
+  var epoch = /^\d{10,13}(?:\.\d+)?$/.test(s0) ? parseFloat(s0) : null;
+  if (epoch !== null) {
+    var fromEpoch = new Date(epoch < 100000000000 ? epoch * 1000 : epoch);
+    if (!isNaN(fromEpoch.getTime())) return _cfIstDateParts(fromEpoch);
+  }
+  var s = s0.replace('T', ' ');
   var full = s.match(/(\d{4})-(\d{2})-(\d{2}).*?(\d{2}:\d{2}:\d{2})/);
   if (full) {
     var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -5262,6 +5295,11 @@ function _getTradeDateParts(raw) {
 function _tradeDateSortValue(raw) {
   if (!raw || raw === 'None') return 0;
   var s = String(raw).trim();
+  if (_CF_ZONE_AWARE_RE.test(s)) {
+    // Let the offset mean what it says instead of reading the digits as UTC.
+    var awareMs = Date.parse(s.replace(' ', 'T'));
+    if (isFinite(awareMs)) return awareMs;
+  }
   var numeric = Number(s);
   if (Number.isFinite(numeric) && numeric > 0) {
     return numeric < 100000000000 ? numeric * 1000 : numeric;
