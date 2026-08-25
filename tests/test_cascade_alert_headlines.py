@@ -45,7 +45,7 @@ def test_headline_names_the_book_the_coin_and_the_number():
     )
     assert (
         app_module._cascade_headline("Campaign started", AUTO_FIB, "ETHUSDT", 46)
-        == "Cascade_Auto · ETHUSDT #46 — Campaign started"
+        == "Cascade-Auto · ETHUSDT #46 — Campaign started"
     )
     assert app_module._cascade_headline("Entry filled", "v-rule", "SOLUSDT", 3) == "V-Rule · SOLUSDT #3 — Entry filled"
 
@@ -104,7 +104,7 @@ def test_a_target_that_filled_says_which_book_earned_and_how_much(monkeypatch):
 
 def test_the_sandbox_book_is_named_as_itself(monkeypatch):
     rec = _closed(monkeypatch, strategy=AUTO_FIB, seq=17, symbol="ETHUSDT")
-    assert rec.telegram[0][0].startswith("Cascade_Auto · ETHUSDT #17 — TARGET closed")
+    assert rec.telegram[0][0].startswith("Cascade-Auto · ETHUSDT #17 — TARGET closed")
 
 
 def test_a_loss_prints_its_sign(monkeypatch):
@@ -152,7 +152,7 @@ def test_the_event_alert_names_the_book_too(monkeypatch):
             "seq": 40,
         }
     )
-    assert rec.push[0][0] == "Cascade_Auto · SOLUSDT #40 — Campaign started"
+    assert rec.push[0][0] == "Cascade-Auto · SOLUSDT #40 — Campaign started"
 
 
 def test_an_event_from_an_older_build_still_alerts(monkeypatch):

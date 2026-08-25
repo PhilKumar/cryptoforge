@@ -176,8 +176,8 @@ async def _shutdown_runtime_engines() -> None:
         await _shutdown_step("cascade engine", cascade_engine.shutdown)
     sandbox = globals().get("_auto_fib_engine")
     if sandbox is not None:
-        await _shutdown_step("persist Cascade_Auto runtime", _save_auto_fib_runtime)
-        await _shutdown_step("Cascade_Auto sandbox", sandbox.shutdown)
+        await _shutdown_step("persist Cascade-Auto runtime", _save_auto_fib_runtime)
+        await _shutdown_step("Cascade-Auto sandbox", sandbox.shutdown)
     vrule_engine = globals().get("_vrule_engine")
     if vrule_engine is not None:
         await _shutdown_step("persist V-Rule runtime", _save_vrule_runtime)
@@ -8850,7 +8850,7 @@ def _save_vrule() -> None:
 def _get_auto_fib() -> "AutoCascadeFib":
     _get_auto_fib_engine()  # builds and attaches on first use
     if _auto_fib is None:
-        raise HTTPException(status_code=503, detail="Cascade_Auto is not available")
+        raise HTTPException(status_code=503, detail="Cascade-Auto is not available")
     return _auto_fib
 
 
@@ -9226,7 +9226,7 @@ async def _broker_journal_trades(converts: Optional[list] = None) -> tuple[list,
 # orphan every record already written under it.
 _JOURNAL_ENGINE_LABELS = (
     ("_cascade_engine", "Cascade-Hybrid"),
-    ("_auto_fib_engine", "Cascade_Auto"),
+    ("_auto_fib_engine", "Cascade-Auto"),
     ("_vrule_engine", "V-Rule"),
 )
 
@@ -9916,7 +9916,7 @@ async def auto_fib_status():
         "instruments": engine_status.get("instruments") or {},
         # The ended lines, in the same shape the Cascade page's status carries,
         # so the SAME closed-campaigns table draws them (Phil, 2026-08-24:
-        # "Cascade_Auto has no Closed Campaigns panel"). Read straight off the
+        # "Cascade-Auto has no Closed Campaigns panel"). Read straight off the
         # sandbox engine — its history is the only place these exist.
         "closed_campaigns": list(engine.closed_campaigns)[-CLOSED_HISTORY_LIMIT:],
     }
@@ -10275,7 +10275,7 @@ async def cascade_purge_closed(campaign_id: str):
     if not eng.closed_campaigns:
         _restore_cascade_runtime(eng)
     # A strategy's ended line is owned by ITS engine, and the live engine has
-    # never heard of it — removing one from the Cascade_Auto table used to
+    # never heard of it — removing one from the Cascade-Auto table used to
     # report success while deleting nothing. Checked the same way the chart
     # endpoint checks, and checked FIRST for the same reason: an id must never
     # be answered from the wrong engine's history.

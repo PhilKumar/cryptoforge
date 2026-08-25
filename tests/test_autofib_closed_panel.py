@@ -1,7 +1,7 @@
 """
-The Closed Campaigns panel on the Cascade_Auto page.
+The Closed Campaigns panel on the Cascade-Auto page.
 
-Phil, 2026-08-24: "Cascade_Auto has no Closed Campaigns panel ... Add one with
+Phil, 2026-08-24: "Cascade-Auto has no Closed Campaigns panel ... Add one with
 freezed chart". It is the SAME table and the SAME renderer as the Cascade
 page's, given this page's ids — not a second one.
 

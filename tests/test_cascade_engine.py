@@ -1741,7 +1741,7 @@ class CascadeAlertTests(unittest.TestCase):
     def test_each_strategy_is_named_by_the_tab_phil_reads(self):
         for strategy, label in (
             ("", "Cascade-Hybrid"),
-            ("auto-cascade-fib", "Cascade_Auto"),
+            ("auto-cascade-fib", "Cascade-Auto"),
             ("v-rule", "V-Rule"),
         ):
             with self.subTest(strategy=strategy):

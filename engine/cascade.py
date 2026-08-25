@@ -418,7 +418,7 @@ MOTHER_DEPART_PCT = 0.005
 # strategies, and every one he starts by hand.
 STRATEGY_LABELS = {
     "": "Cascade-Hybrid",
-    "auto-cascade-fib": "Cascade_Auto",
+    "auto-cascade-fib": "Cascade-Auto",
     "v-rule": "V-Rule",
 }
 

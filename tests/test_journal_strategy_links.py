@@ -70,8 +70,8 @@ def engines(monkeypatch):
 def test_every_engines_orders_are_indexed_with_its_strategy(engines):
     index = app_module._cascade_order_id_index()
     assert index["100"]["strategy"] == "Cascade-Hybrid"
-    assert index["200"]["strategy"] == "Cascade_Auto"
-    assert index["201"]["strategy"] == "Cascade_Auto"  # a closed round's fills too
+    assert index["200"]["strategy"] == "Cascade-Auto"
+    assert index["201"]["strategy"] == "Cascade-Auto"  # a closed round's fills too
     assert index["300"]["strategy"] == "V-Rule"  # from closed history
     assert index["301"]["strategy"] == "V-Rule"
 
@@ -84,7 +84,7 @@ def test_paper_fills_are_never_indexed(engines):
 def test_a_trade_is_linked_to_the_strategy_that_placed_it(engines):
     trades = [{"buy_order_ids": ["200"]}, {"buy_order_ids": ["301"]}, {"buy_order_ids": ["999"]}]
     app_module._link_trades_to_campaigns(trades)
-    assert trades[0] == {"campaign_id": "af1", "campaign_seq": 22, "strategy": "Cascade_Auto"}
+    assert trades[0] == {"campaign_id": "af1", "campaign_seq": 22, "strategy": "Cascade-Auto"}
     assert trades[1] == {"campaign_id": "vr1", "campaign_seq": 33, "strategy": "V-Rule"}
     assert trades[2] == {}  # a hand-placed trade gets no chart and no strategy
 

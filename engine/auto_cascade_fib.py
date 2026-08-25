@@ -427,7 +427,7 @@ class AutoCascadeFib:
             # Refuse rather than accept-and-ignore: a book that reads "On" over
             # a driver that will never tick is a trap this strategy has already
             # fallen into once.
-            raise ValueError("Cascade_Auto is switched off on the server (CRYPTOFORGE_AUTO_FIB=0).")
+            raise ValueError("Cascade-Auto is switched off on the server (CRYPTOFORGE_AUTO_FIB=0).")
         exchange = self._normalise_exchange(exchange)
         wants_live = mode is not None and str(mode).lower() == "live"
         if wants_live and not self.live_available(exchange):

@@ -8840,7 +8840,7 @@ function _cfUpdateStrategiesTabDot(engine, active) {
   var labels = [];
   if (dot.dataset.cascade === 'true') labels.push('Cascade-Hybrid');
   if (dot.dataset.vrule === 'true') labels.push('V-Rule');
-  if (dot.dataset.auto === 'true') labels.push('Cascade_Auto');
+  if (dot.dataset.auto === 'true') labels.push('Cascade-Auto');
   var message = labels.length ? labels.join(', ') + ' active' : 'No strategy engine active';
   dot.classList.toggle('active', labels.length > 0);
   dot.setAttribute('aria-label', message);
@@ -9247,7 +9247,7 @@ function _cfCascadeMcKindPill(campaign) {
   if (owner === 'auto-cascade-fib') {
     if (!minor) {
       return '<span class="admin-pill" data-state="info" title="'
-        + _escapeHtml('GRADUATED · 1H — this line climbed from 5m to the 1h rung, so Cascade_Auto '
+        + _escapeHtml('GRADUATED · 1H — this line climbed from 5m to the 1h rung, so Cascade-Auto '
           + 'left it to run on its own and started a fresh 5m working line behind it.')
         + '">GRADUATED &middot; 1H</span>';
     }
@@ -9260,7 +9260,7 @@ function _cfCascadeMcKindPill(campaign) {
       && String(afBook.working_line) === String(campaign.campaign_id));
     return '<span class="admin-pill" data-state="' + (isWorking ? 'ok' : 'info') + '" title="'
       + _escapeHtml(isWorking
-        ? 'WORKING LINE — the 5m line Cascade_Auto is feeding right now. There is one per '
+        ? 'WORKING LINE — the 5m line Cascade-Auto is feeding right now. There is one per '
           + 'symbol: the strategy finds it by this mark, and starts a fresh one only once this '
           + 'line has graduated to the 1h rung.'
         : '5M LINE — a 5m line of this book that the strategy is not feeding right now. Either it '
@@ -10392,10 +10392,10 @@ function _cfRenderEventsPager(pages, total, mountId, pagerId) {
     + '</div>';
 }
 
-// Two pages draw this table now — Cascade and Cascade_Auto — so the filter,
+// Two pages draw this table now — Cascade and Cascade-Auto — so the filter,
 // the page number and the rows are kept PER TABLE rather than in three
 // globals. One renderer, two books; the Cascade page's ids are the default so
-// nothing about it changes (Phil, 2026-08-24: "Cascade_Auto has no Closed
+// nothing about it changes (Phil, 2026-08-24: "Cascade-Auto has no Closed
 // Campaigns panel ... Add one with freezed chart").
 var _cfClosedBooks = {};
 
@@ -10527,9 +10527,18 @@ function cfCascadeClosedPage(step, key) {
 // three rounds is history as much as an ended one, and leaving it out would
 // make the ledger disagree with the totals on the cards above it.
 var _CF_LEDGER_PAGE_SIZE = 5;
-var _cfCascadeLedgerPage = 0;
-var _cfCascadeLedgerCoin = 'ALL';
-var _cfCascadeLedgerAll = [];
+// Two pages draw this ledger now — Cascade-Hybrid and Cascade-Auto — so the
+// filter, the page number and the rows live PER TABLE, the same shape as
+// _cfClosedBooks above. The Cascade page's ids stay the default so nothing
+// about it changes (Phil, 2026-08-24: "Add paper journal in Cascade-Auto same
+// like other strategies").
+var _cfLedgerBooks = {};
+
+function _cfLedgerBook(key) {
+  var id = key || 'cf-cascade-ledger';
+  if (!_cfLedgerBooks[id]) _cfLedgerBooks[id] = { coin: 'ALL', page: 0, rows: [], paperOnly: false };
+  return _cfLedgerBooks[id];
+}
 
 function _cfCascadeCampaignHasEnded(campaign) {
   var state = String((campaign || {}).state || '');
@@ -10587,59 +10596,72 @@ function _cfCascadeCollectRounds(status) {
   return out;
 }
 
-function cfCascadeSetLedgerFilter(coin) {
-  _cfCascadeLedgerCoin = coin || 'ALL';
-  _cfCascadeLedgerPage = 0;
-  _cfCascadeRenderLedgerRows();
+function cfCascadeSetLedgerFilter(coin, key) {
+  var book = _cfLedgerBook(key);
+  book.coin = coin || 'ALL';
+  book.page = 0;                       // a new filter starts at its first page
+  _cfCascadeRenderLedgerRows(key);
 }
 
-function cfCascadeLedgerPage(step) {
-  _cfCascadeLedgerPage += step;
-  _cfCascadeRenderLedgerRows();
+function cfCascadeLedgerPage(step, key) {
+  _cfLedgerBook(key).page += step;
+  _cfCascadeRenderLedgerRows(key);
 }
 
-function cfRenderCascadeLedger(status) {
-  _cfCascadeLedgerAll = _cfCascadeCollectRounds(status || {});
-  var mount = document.getElementById('cf-cascade-ledger-filters');
+// `paperOnly` is for a book that has no real money in it at all: Cascade-Auto
+// is a paper-only sandbox, so "0 live rounds closed" would be the whole truth
+// and none of the point. There it counts the paper rounds and says they are
+// paper, instead of listing them uncounted under a zero.
+function cfRenderCascadeLedger(status, key, opts) {
+  var id = key || 'cf-cascade-ledger';
+  var book = _cfLedgerBook(key);
+  book.paperOnly = !!(opts && opts.paperOnly);
+  book.rows = _cfCascadeCollectRounds(status || {});
+  var mount = document.getElementById(id + '-filters');
   if (mount) {
     var coins = [];
-    _cfCascadeLedgerAll.forEach(function(row) {
+    book.rows.forEach(function(row) {
       if (row.symbol && coins.indexOf(row.symbol) === -1) coins.push(row.symbol);
     });
     coins.sort();
     if (coins.length < 2) {
       mount.innerHTML = '';
-      if (coins.length < 2 && _cfCascadeLedgerCoin !== 'ALL') _cfCascadeLedgerCoin = 'ALL';
+      if (book.coin !== 'ALL') book.coin = 'ALL';
     } else {
       mount.innerHTML = ['ALL'].concat(coins).map(function(name) {
-        var on = name === _cfCascadeLedgerCoin;
+        var on = name === book.coin;
         return '<button type="button" class="cf-tf-option' + (on ? ' is-active' : '') + '"'
           + ' role="radio" aria-checked="' + (on ? 'true' : 'false') + '"'
-          + ' data-cf-click="cfCascadeSetLedgerFilter(\'' + _escapeHtml(name) + '\')">'
+          + ' data-cf-click="cfCascadeSetLedgerFilter(\'' + _escapeHtml(name) + '\',\'' + id + '\')">'
           + _escapeHtml(name === 'ALL' ? 'All' : name.replace('USDT', '')) + '</button>';
       }).join('');
     }
   }
-  _cfCascadeRenderLedgerRows();
+  _cfCascadeRenderLedgerRows(key);
 }
 
-function _cfCascadeRenderLedgerRows() {
-  var body = document.getElementById('cf-cascade-ledger-body');
+function _cfCascadeRenderLedgerRows(key) {
+  var id = key || 'cf-cascade-ledger';
+  var book = _cfLedgerBook(key);
+  var body = document.getElementById(id + '-body');
   if (!body) return;
-  var meta = document.getElementById('cf-cascade-ledger-meta');
-  var rows = _cfCascadeLedgerCoin === 'ALL'
-    ? _cfCascadeLedgerAll
-    : _cfCascadeLedgerAll.filter(function(row) { return row.symbol === _cfCascadeLedgerCoin; });
+  var meta = document.getElementById(id + '-meta');
+  var rows = book.coin === 'ALL'
+    ? book.rows
+    : book.rows.filter(function(row) { return row.symbol === book.coin; });
 
   if (!rows.length) {
     body.innerHTML = '<tr><td colspan="14" class="cf-table-empty-cell">'
-      + (_cfCascadeLedgerAll.length ? 'No closed rounds for this coin' : 'No closed rounds yet')
+      + (book.rows.length ? 'No closed rounds for this coin' : 'No closed rounds yet')
       + '</td></tr>';
-    _cfCascadeRenderLedgerPager(0, 0);
+    _cfCascadeRenderLedgerPager(0, 0, key);
     if (meta) {
-      meta.textContent = 'Every round that reached its target, across every campaign — '
-        + 'running and ended alike. Paper rounds are listed but never counted in the '
-        + 'totals. Nothing has closed yet.';
+      meta.textContent = book.paperOnly
+        ? 'Every paper round this book has closed at target, newest first. '
+          + 'Nothing has closed yet.'
+        : 'Every round that reached its target, across every campaign — '
+          + 'running and ended alike. Paper rounds are listed but never counted in the '
+          + 'totals. Nothing has closed yet.';
     }
     return;
   }
@@ -10647,7 +10669,7 @@ function _cfCascadeRenderLedgerRows() {
   var invested = 0, realised = 0, wins = 0, feesPaid = 0, feesEstimated = 0, counted = 0, paperRows = 0;
   rows.forEach(function(row) {
     // Every row is shown; only real money is added up.
-    if (row.paper) { paperRows++; return; }
+    if (row.paper && !book.paperOnly) { paperRows++; return; }
     counted++;
     invested += Number(row.round.invested_usd) || 0;
     realised += Number(row.round.pnl) || 0;
@@ -10660,9 +10682,9 @@ function _cfCascadeRenderLedgerRows() {
   });
 
   var pages = Math.max(1, Math.ceil(rows.length / _CF_LEDGER_PAGE_SIZE));
-  if (_cfCascadeLedgerPage >= pages) _cfCascadeLedgerPage = pages - 1;
-  if (_cfCascadeLedgerPage < 0) _cfCascadeLedgerPage = 0;
-  var from = _cfCascadeLedgerPage * _CF_LEDGER_PAGE_SIZE;
+  if (book.page >= pages) book.page = pages - 1;
+  if (book.page < 0) book.page = 0;
+  var from = book.page * _CF_LEDGER_PAGE_SIZE;
 
   body.innerHTML = rows.slice(from, from + _CF_LEDGER_PAGE_SIZE).map(function(row) {
     var campaign = row.campaign;
@@ -10681,12 +10703,13 @@ function _cfCascadeRenderLedgerRows() {
       : _escapeHtml(String(r.closed_at || '--')) + '<div class="table-meta">server clock</div>';
     // A paper row is dimmed and says so, because its numbers are real-looking
     // but are not in any of the totals above it.
-    return '<tr' + (row.paper ? ' style="opacity:0.55;"' : '') + '>'
+    var dim = row.paper && !book.paperOnly;
+    return '<tr' + (dim ? ' style="opacity:0.55;"' : '') + '>'
       + '<td style="white-space:nowrap;">' + when + '</td>'
       + '<td>' + _escapeHtml(row.symbol) + '</td>'
       + '<td>' + _escapeHtml(num)
         + (row.ended ? '<div class="table-meta">ended</div>' : '<div class="table-meta">running</div>')
-        + (row.paper ? '<div class="table-meta">paper — not counted</div>' : '') + '</td>'
+        + (dim ? '<div class="table-meta">paper — not counted</div>' : '') + '</td>'
       + '<td>#' + _escapeHtml(String(r.round_id)) + '</td>'
       + '<td>' + _escapeHtml(String(r.leg_id || '--')) + '</td>'
       + '<td class="num">' + _cfCascadeFmt(r.avg_entry) + '</td>'
@@ -10706,7 +10729,7 @@ function _cfCascadeRenderLedgerRows() {
 
   if (meta) {
     var tone = realised >= 0 ? 'var(--green,#3fae56)' : 'var(--red,#e2574c)';
-    meta.innerHTML = counted + ' live round' + (counted === 1 ? '' : 's') + ' closed at target · '
+    meta.innerHTML = counted + (book.paperOnly ? ' paper round' : ' live round') + (counted === 1 ? '' : 's') + ' closed at target · '
       + '$' + _cfCascadeUsd(invested) + ' deployed · '
       + '<strong style="color:' + tone + ';">' + (realised >= 0 ? '+' : '') + '$'
       + _cfCascadeUsd(realised) + ' realised</strong>'
@@ -10726,22 +10749,25 @@ function _cfCascadeRenderLedgerRows() {
               + ' ($' + _cfCascadeUsd(feesEstimated) + ' of it estimated)</span>'
             : '')
         : '')
+      + (book.paperOnly ? ' · <span class="table-meta">paper money — simulated fills, no real orders</span>' : '')
       + '. Log opens the individual buys behind each average.';
   }
-  _cfCascadeRenderLedgerPager(pages, rows.length);
+  _cfCascadeRenderLedgerPager(pages, rows.length, key);
 }
 
-function _cfCascadeRenderLedgerPager(pages, total) {
-  var host = document.getElementById('cf-cascade-ledger-pager');
+function _cfCascadeRenderLedgerPager(pages, total, key) {
+  var id = key || 'cf-cascade-ledger';
+  var book = _cfLedgerBook(key);
+  var host = document.getElementById(id + '-pager');
   if (!host) return;
   if (!total) { host.innerHTML = ''; return; }
-  var from = _cfCascadeLedgerPage * _CF_LEDGER_PAGE_SIZE + 1;
+  var from = book.page * _CF_LEDGER_PAGE_SIZE + 1;
   var to = Math.min(from + _CF_LEDGER_PAGE_SIZE - 1, total);
   host.innerHTML = '<span class="table-meta">' + from + '–' + to + ' of ' + total + '</span>'
-    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeLedgerPage === 0 ? 'disabled' : '')
-      + ' data-cf-click="cfCascadeLedgerPage(-1)">Newer</button>'
-    + '<button class="btn btn-outline btn-sm" ' + (_cfCascadeLedgerPage >= pages - 1 ? 'disabled' : '')
-      + ' data-cf-click="cfCascadeLedgerPage(1)">Older</button>';
+    + '<button class="btn btn-outline btn-sm" ' + (book.page === 0 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeLedgerPage(-1,\'' + id + '\')">Newer</button>'
+    + '<button class="btn btn-outline btn-sm" ' + (book.page >= pages - 1 ? 'disabled' : '')
+      + ' data-cf-click="cfCascadeLedgerPage(1,\'' + id + '\')">Older</button>';
 }
 
 async function cfCascadePurgeClosed(campaignId) {
@@ -14475,6 +14501,11 @@ function cfAfRenderLines(data) {
     Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : [],
     'cf-af-closed'
   );
+  // The Paper Journal is the Cascade page's round ledger under this page's
+  // ids. It takes the WHOLE status, not one list: a round belongs to a
+  // campaign that may still be running, so the running pool matters as much
+  // as the ended one. paperOnly, because this sandbox never holds real money.
+  cfRenderCascadeLedger(data || {}, 'cf-af-ledger', { paperOnly: true });
   cfRenderCascadeEvents(
     Array.isArray(data && data.campaigns) ? data.campaigns : [],
     { mountId: 'cf-af-events', emptyText: 'No events yet — nothing has been anchored.' }
@@ -14498,12 +14529,12 @@ async function cfAfRefresh(showToast) {
   try {
     var response = await cfApiFetch('/api/auto-fib/status', { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
-    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Cascade_Auto status unavailable'));
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Cascade-Auto status unavailable'));
     _cfAfSetError('');
     cfAfRenderStatus(data);
     cfAfRenderStats((data && data.books) || []);
     cfAfRenderLines(data);
-    if (showToast) cfToast('Cascade_Auto refreshed', 'success');
+    if (showToast) cfToast('Cascade-Auto refreshed', 'success');
   } catch (err) {
     _cfAfSetError(String(err.message || err));
   }
