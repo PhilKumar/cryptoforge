@@ -67,6 +67,25 @@ class AutoFibPaperJournalMarkupTests(unittest.TestCase):
     def test_it_is_wired_to_the_shared_renderer_as_paper_only(self):
         self.assertIn("cfRenderCascadeLedger(data || {}, 'cf-af-ledger', { paperOnly: true });", self.js)
 
+    def test_every_ledger_table_on_the_page_has_the_same_14_columns(self):
+        """Page-WIDE, not per-section.
+
+        The section-scoped count below passed while Playwright went red on
+        main: it asserts `.cf-cascade-ledger thead th` across the whole
+        document, and a second table under the same class made that 28. The
+        class is shared on purpose — it carries the ledger's CSS — so the
+        thing worth pinning is that every table wearing it agrees on width.
+        """
+        tables = re.findall(
+            r'<table[^>]*class="[^"]*cf-cascade-ledger[^"]*"[^>]*>.*?</table>',
+            self.html,
+            re.S,
+        )
+        self.assertGreaterEqual(len(tables), 2, "expected the Cascade and Cascade-Auto ledgers")
+        for i, table in enumerate(tables):
+            self.assertEqual(len(re.findall(r"<th[ >]", table)), 14, "table %d" % i)
+            self.assertIn('colspan="14"', table, "table %d" % i)
+
     def test_the_cascade_page_keeps_its_own_ids_untouched(self):
         for part in ("body", "meta", "filters", "pager"):
             self.assertIn('id="cf-cascade-ledger-%s"' % part, self.html, part)

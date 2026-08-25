@@ -175,8 +175,10 @@ test.describe('Cascade closed-rounds ledger', () => {
     const rows = page.locator('#cf-cascade-ledger-body tr');
     await expect(rows).toHaveCount(3);
     // Header, body and the empty-state colspan all have to agree, or the table
-    // shears sideways the moment a column is added.
-    await expect(page.locator('.cf-cascade-ledger thead th')).toHaveCount(14);
+    // shears sideways the moment a column is added. Scoped to THIS page's
+    // ledger: Cascade-Auto's Paper Journal is the same table under the same
+    // class, so an unscoped count reads both and returns 28.
+    await expect(page.locator('#cascade-page .cf-cascade-ledger thead th')).toHaveCount(14);
     await expect(rows.first().locator('td')).toHaveCount(14);
 
     // Read back from the exchange: a bare figure.
