@@ -3750,6 +3750,7 @@ function connectWS() {
       if (data.source === 'cascade' && data.type === 'cascade_status') {
         if (typeof cfRenderCascadeStatus === 'function' && document.getElementById('cf-cascade-campaigns')) {
           _cfCascadeLastStatus = data.status || {};
+          _cfCascadeRememberStatus('cascade', _cfCascadeLastStatus);
           cfRenderCascadeStatus(_cfCascadeLastStatus);
         }
         return;
@@ -8782,6 +8783,22 @@ document.addEventListener('keydown', function(e) {
 var _cfCascadePollTimer = null;
 var _cfCascadeLastStatus = null;
 
+// Every status payload that has drawn rounds on screen, keyed by the book it
+// came from. The Log button carries a campaign_id and a round number and
+// nothing else, and _cfCascadeFindRound used to look only in the LIVE
+// Cascade's status — so every Log button on a Cascade-Auto round, in its
+// Paper Journal and on its campaign cards alike, reported "no longer in the
+// current status payload" and opened an empty box (Phil, 2026-08-25: "The log
+// button is not working on the paper journal"). Same shape as the bug where
+// Remove on that page deleted nothing: the live engine has never heard of a
+// strategy's campaign. Campaign ids are uuid hex, so scanning every pool
+// cannot collide.
+var _cfCascadeStatusPools = {};
+
+function _cfCascadeRememberStatus(key, status) {
+  if (status) _cfCascadeStatusPools[key || 'cascade'] = status;
+}
+
 function cfInitCascadePage() {
   cfLoadCascadeStatus(false);
   if (!_cfCascadePollTimer) {
@@ -8853,6 +8870,7 @@ async function cfLoadCascadeStatus(showToast) {
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Cascade status unavailable'));
     _cfCascadeLastStatus = data;
+    _cfCascadeRememberStatus('cascade', data);
     cfRenderCascadeStatus(data);
     // The status poll is the source of live Cascade changes. Canvas is the
     // only renderer whose refresh preserves its own viewport, so refresh an
@@ -10965,8 +10983,15 @@ function cfCascadeReconcile() {
 // ═══ CASCADE CLOSED-ROUND TRADE LOG ═════════════════════════════
 
 function _cfCascadeFindRound(campaignId, roundId) {
-  var status = _cfCascadeLastStatus || {};
-  var pools = [status.campaigns || [], status.closed_campaigns || []];
+  var pools = [];
+  // The live Cascade first, so its behaviour is bit-for-bit what it was.
+  var live = _cfCascadeLastStatus || {};
+  pools.push(live.campaigns || [], live.closed_campaigns || []);
+  Object.keys(_cfCascadeStatusPools).forEach(function(key) {
+    var status = _cfCascadeStatusPools[key] || {};
+    if (status === live) return;
+    pools.push(status.campaigns || [], status.closed_campaigns || []);
+  });
   for (var p = 0; p < pools.length; p++) {
     for (var i = 0; i < pools[p].length; i++) {
       var campaign = pools[p][i];
@@ -14496,6 +14521,10 @@ function cfAfRenderStats(books) {
 // page's renderer into this page's own mount — never by a second copy of it,
 // which would drift the moment either page changed.
 function cfAfRenderLines(data) {
+  // Register before drawing: the Log button on any round this call paints
+  // looks the campaign up by id, and the sandbox's campaigns are never in the
+  // live Cascade's status.
+  _cfCascadeRememberStatus('auto-fib', data || {});
   // The ended lines come from the sandbox engine on this page's own status.
   cfRenderCascadeClosed(
     Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : [],
