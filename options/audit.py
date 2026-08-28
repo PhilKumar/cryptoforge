@@ -69,8 +69,7 @@ def session_completeness(bars: pd.DataFrame) -> pd.DataFrame:
     df["session"] = df["ts"].dt.date
     grouped = (
         df.groupby(
-            ["underlying", "expiry_flag", "expiry_code", "strike_offset",
-             "option_type", "interval", "session"],
+            ["underlying", "expiry_flag", "expiry_code", "strike_offset", "option_type", "interval", "session"],
             dropna=False,
         )
         .size()
@@ -130,8 +129,7 @@ def audit(bars: pd.DataFrame, coverage: pd.DataFrame) -> AuditVerdict:
     notes = []
 
     if sessions.empty:
-        return AuditVerdict(None, 0, 0, 0, 0.0, len(silent_empties(coverage)),
-                            ["no bars in store — nothing to audit"])
+        return AuditVerdict(None, 0, 0, 0, 0.0, len(silent_empties(coverage)), ["no bars in store — nothing to audit"])
 
     months = by_month(sessions)
     good_months = months[months["mean_completeness"] >= SESSION_COMPLETE_THRESHOLD]
@@ -175,9 +173,11 @@ def format_report(bars: pd.DataFrame, coverage: pd.DataFrame) -> str:
     sessions = session_completeness(bars)
     v = audit(bars, coverage)
     out = ["=" * 66, "OPTIONS DATA COVERAGE AUDIT", "=" * 66]
-    out.append(f"bars={v.total_bars:,}  contract-sessions={v.sessions:,}  "
-               f"complete={v.complete_sessions:,} "
-               f"({(v.complete_sessions / v.sessions if v.sessions else 0):.0%})")
+    out.append(
+        f"bars={v.total_bars:,}  contract-sessions={v.sessions:,}  "
+        f"complete={v.complete_sessions:,} "
+        f"({(v.complete_sessions / v.sessions if v.sessions else 0):.0%})"
+    )
     out.append(f"usable history begins: {v.usable_from or 'NEVER — no month passes threshold'}")
     out.append(f"near-ATM completeness: {v.atm_completeness:.0%}")
     out.append(f"silent empty responses: {v.silent_empty_requests}")

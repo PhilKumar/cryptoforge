@@ -24,15 +24,37 @@ from typing import Iterable, Optional, Sequence
 import pandas as pd
 
 BARS_COLUMNS = [
-    "ts", "underlying", "expiry_flag", "expiry_code", "strike_offset",
-    "option_type", "interval", "open", "high", "low", "close",
-    "volume", "oi", "iv", "spot",
+    "ts",
+    "underlying",
+    "expiry_flag",
+    "expiry_code",
+    "strike_offset",
+    "option_type",
+    "interval",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "oi",
+    "iv",
+    "spot",
 ]
 
 COVERAGE_COLUMNS = [
-    "requested_at", "underlying", "expiry_flag", "expiry_code", "strike_offset",
-    "option_type", "interval", "from_date", "to_date", "status", "http_status",
-    "bars_returned", "detail",
+    "requested_at",
+    "underlying",
+    "expiry_flag",
+    "expiry_code",
+    "strike_offset",
+    "option_type",
+    "interval",
+    "from_date",
+    "to_date",
+    "status",
+    "http_status",
+    "bars_returned",
+    "detail",
 ]
 
 
@@ -77,12 +99,21 @@ class OptionStore:
         for b in bars:
             rows.append(
                 {
-                    "ts": b.ts, "underlying": key.underlying,
-                    "expiry_flag": key.expiry_flag, "expiry_code": key.expiry_code,
-                    "strike_offset": key.strike_offset, "option_type": key.option_type,
+                    "ts": b.ts,
+                    "underlying": key.underlying,
+                    "expiry_flag": key.expiry_flag,
+                    "expiry_code": key.expiry_code,
+                    "strike_offset": key.strike_offset,
+                    "option_type": key.option_type,
                     "interval": key.interval,
-                    "open": b.open, "high": b.high, "low": b.low, "close": b.close,
-                    "volume": b.volume, "oi": b.oi, "iv": b.iv, "spot": b.spot,
+                    "open": b.open,
+                    "high": b.high,
+                    "low": b.low,
+                    "close": b.close,
+                    "volume": b.volume,
+                    "oi": b.oi,
+                    "iv": b.iv,
+                    "spot": b.spot,
                 }
             )
         df = pd.DataFrame(rows, columns=BARS_COLUMNS)
@@ -109,9 +140,7 @@ class OptionStore:
 
     # ── reads ────────────────────────────────────────────────────────────
     def load_bars(self, underlying: Optional[str] = None) -> pd.DataFrame:
-        pattern = (
-            f"underlying={underlying}/**/*.parquet" if underlying else "**/*.parquet"
-        )
+        pattern = f"underlying={underlying}/**/*.parquet" if underlying else "**/*.parquet"
         files = sorted(self.bars_dir.glob(pattern))
         if not files:
             return pd.DataFrame(columns=BARS_COLUMNS)
@@ -133,8 +162,14 @@ class OptionStore:
             return set()
         return {
             (
-                r.underlying, r.expiry_flag, int(r.expiry_code), int(r.strike_offset),
-                r.option_type, r.interval, str(r.from_date), str(r.to_date),
+                r.underlying,
+                r.expiry_flag,
+                int(r.expiry_code),
+                int(r.strike_offset),
+                r.option_type,
+                r.interval,
+                str(r.from_date),
+                str(r.to_date),
             )
             for r in cov.itertuples()
         }

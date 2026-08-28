@@ -35,8 +35,7 @@ from options.store import BARS_COLUMNS
 # Column names seen in the wild, mapped to ours. Extend freely — a name that is
 # missing here costs an explicit --map flag, not a wrong answer.
 ALIASES: Dict[str, tuple] = {
-    "ts": ("ts", "timestamp", "datetime", "date_time", "time", "candle_time",
-           "start_time", "start_Time", "date"),
+    "ts": ("ts", "timestamp", "datetime", "date_time", "time", "candle_time", "start_time", "start_Time", "date"),
     "open": ("open", "o", "open_price"),
     "high": ("high", "h", "high_price"),
     "low": ("low", "l", "low_price"),
@@ -46,16 +45,15 @@ ALIASES: Dict[str, tuple] = {
     "iv": ("iv", "IV", "implied_volatility", "impliedvolatility"),
     "spot": ("spot", "SPOT", "underlying", "underlying_price", "spot_price", "index"),
     "strike": ("strike", "strike_price", "strikeprice", "strike_pr"),
-    "option_type": ("option_type", "opt_type", "instrument_type", "cp", "call_put",
-                    "right", "drv_option_type"),
+    "option_type": ("option_type", "opt_type", "instrument_type", "cp", "call_put", "right", "drv_option_type"),
     "underlying": ("underlying_symbol", "symbol", "name", "index_name", "ticker"),
     "expiry": ("expiry", "expiry_date", "expirydate", "expiry_dt"),
 }
 
 
 class AtmBasis(str, Enum):
-    EXACT = "exact"        # spot on the row
-    JOINED = "joined"      # spot joined from a separate series
+    EXACT = "exact"  # spot on the row
+    JOINED = "joined"  # spot joined from a separate series
     INFERRED = "inferred"  # most-traded strike of the session
 
 
@@ -89,14 +87,17 @@ def _read_any(path: str | Path, table: Optional[str] = None) -> pd.DataFrame:
     if p.suffix in (".csv", ".txt"):
         return pd.read_csv(p)
     if p.suffix in (".db", ".sqlite", ".sqlite3"):
-        if not table:
-            with sqlite3.connect(p) as con:
-                names = pd.read_sql_query(
-                    "SELECT name FROM sqlite_master WHERE type='table'", con
-                )["name"].tolist()
-            raise ValueError(f"pass table= for sqlite; tables here: {names}")
         with sqlite3.connect(p) as con:
-            return pd.read_sql_query(f"SELECT * FROM {table}", con)
+            names = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", con)["name"].tolist()
+            if not table:
+                raise ValueError(f"pass table= for sqlite; tables here: {names}")
+            # SQL cannot bind an identifier, so the name is checked against the
+            # database's own catalogue and the matching entry -- not the
+            # caller's string -- is what gets interpolated.
+            match = next((n for n in names if n == table), None)
+            if match is None:
+                raise ValueError(f"no table {table!r} in {p.name}; tables here: {names}")
+            return pd.read_sql_query(f"SELECT * FROM {match}", con)  # nosec B608 - name came from sqlite_master
     raise ValueError(f"unsupported archive format: {p.suffix}")
 
 
@@ -136,8 +137,7 @@ def load_external(
 
     if "ts" not in cols:
         raise ValueError(
-            f"could not find a timestamp column; got {list(raw.columns)[:15]}. "
-            f"Pass column_map={{'ts': '<name>'}}."
+            f"could not find a timestamp column; got {list(raw.columns)[:15]}. Pass column_map={{'ts': '<name>'}}."
         )
 
     out = pd.DataFrame()
@@ -146,17 +146,10 @@ def load_external(
     keep = raw.loc[out.index]
 
     for field in ("open", "high", "low", "close", "volume", "oi", "iv"):
-        out[field] = (
-            pd.to_numeric(keep[cols[field]], errors="coerce") if field in cols else pd.NA
-        )
+        out[field] = pd.to_numeric(keep[cols[field]], errors="coerce") if field in cols else pd.NA
 
-    out["underlying"] = (
-        keep[cols["underlying"]] if "underlying" in cols else underlying_name
-    )
-    out["option_type"] = (
-        _normalise_option_type(keep[cols["option_type"]])
-        if "option_type" in cols else "CALL"
-    )
+    out["underlying"] = keep[cols["underlying"]] if "underlying" in cols else underlying_name
+    out["option_type"] = _normalise_option_type(keep[cols["option_type"]]) if "option_type" in cols else "CALL"
     out["interval"] = interval
     out["expiry_flag"] = "WEEK"
     out["expiry_code"] = 0
@@ -170,8 +163,10 @@ def load_external(
         s = spot_series.copy()
         s["ts"] = pd.to_datetime(s["ts"])
         out = pd.merge_asof(
-            out.sort_values("ts"), s.sort_values("ts")[["ts", "spot"]],
-            on="ts", direction="nearest",
+            out.sort_values("ts"),
+            s.sort_values("ts")[["ts", "spot"]],
+            on="ts",
+            direction="nearest",
         )
         keep = keep.loc[out.index] if len(keep) == len(out) else keep
         basis = AtmBasis.JOINED
@@ -196,8 +191,7 @@ def load_external(
         atm = (
             out.assign(_v=vol)
             .groupby("_session")
-            .apply(lambda g: g.loc[g["_v"].idxmax(), "_strike"] if len(g) else pd.NA,
-                   include_groups=False)
+            .apply(lambda g: g.loc[g["_v"].idxmax(), "_strike"] if len(g) else pd.NA, include_groups=False)
         )
         out["_atm"] = out["_session"].map(atm)
         notes.append("ATM inferred from most-traded strike per session")

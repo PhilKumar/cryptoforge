@@ -32,11 +32,11 @@ from typing import List, Optional
 class ChargeRates:
     effective_from: date
     brokerage_per_order: float
-    stt_sell_pct: float          # % of sell premium turnover
-    exchange_txn_pct: float      # % of premium turnover, both sides
-    sebi_turnover_pct: float     # % of premium turnover, both sides
-    stamp_duty_buy_pct: float    # % of buy premium turnover
-    gst_pct: float               # % on brokerage + txn + sebi
+    stt_sell_pct: float  # % of sell premium turnover
+    exchange_txn_pct: float  # % of premium turnover, both sides
+    sebi_turnover_pct: float  # % of premium turnover, both sides
+    stamp_duty_buy_pct: float  # % of buy premium turnover
+    gst_pct: float  # % on brokerage + txn + sebi
     source_note: str
 
 
@@ -91,16 +91,18 @@ class ChargeBreakdown:
     @property
     def total(self) -> float:
         return round(
-            self.brokerage + self.stt + self.exchange_txn
-            + self.sebi + self.stamp_duty + self.gst,
+            self.brokerage + self.stt + self.exchange_txn + self.sebi + self.stamp_duty + self.gst,
             2,
         )
 
     def as_dict(self) -> dict:
         d = {
-            "brokerage": round(self.brokerage, 2), "stt": round(self.stt, 2),
-            "exchange_txn": round(self.exchange_txn, 2), "sebi": round(self.sebi, 2),
-            "stamp_duty": round(self.stamp_duty, 2), "gst": round(self.gst, 2),
+            "brokerage": round(self.brokerage, 2),
+            "stt": round(self.stt, 2),
+            "exchange_txn": round(self.exchange_txn, 2),
+            "sebi": round(self.sebi, 2),
+            "stamp_duty": round(self.stamp_duty, 2),
+            "gst": round(self.gst, 2),
         }
         d["total"] = self.total
         return d
@@ -125,7 +127,7 @@ def round_trip_charges(
     sell_turnover = sell_premium * quantity
     turnover = buy_turnover + sell_turnover
 
-    brokerage = 2 * r.brokerage_per_order          # one order each way
+    brokerage = 2 * r.brokerage_per_order  # one order each way
     stt = sell_turnover * r.stt_sell_pct / 100.0
     exchange_txn = turnover * r.exchange_txn_pct / 100.0
     sebi = turnover * r.sebi_turnover_pct / 100.0
