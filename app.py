@@ -7,6 +7,7 @@ Production-ready: multi-engine, market feed, portfolio history, full CRUD.
 import asyncio
 import base64
 import hashlib
+import html
 import inspect
 import json
 import logging
@@ -21,6 +22,7 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional
 from urllib import error as urllib_error
 from urllib.parse import urlparse
@@ -339,6 +341,7 @@ def _broker_label() -> str:
 
 
 _PORTFOLIO_USD_INR_CACHE: dict = {}
+_CRYPTO_NEWS_CACHE: dict = {}
 _DELTA_INDIA_USD_INR_RATE = 85.0
 _DELTA_INDIA_USD_INR_SOURCE = "https://guides.delta.exchange/delta-exchange-india-user-guide/account-setup/usd-inr-rate"
 
@@ -487,6 +490,207 @@ def _portfolio_usd_inr_rate() -> dict:
             "error": str(exc)[:160],
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
             "ttl_sec": _portfolio_fx_cache_ttl_sec(),
+        }
+
+
+# ── Crypto news ticker ───────────────────────────────────────────────────
+# The headline rail that replaced the quick-asset switcher: a USD/INR reading
+# and a one-line roll of crypto news. Built the same way as the FX rate above
+# — HTTPS only, several providers so one going down is not an outage, a TTL
+# cache, and a stale reading kept rather than a blank strip.
+
+_CRYPTO_NEWS_LIMIT = 24
+_CRYPTO_NEWS_TITLE_MAX = 160
+
+# Parsed with regex, not an XML parser, deliberately: these are third-party
+# documents fetched over the network, and an XML parser is an entity-expansion
+# and external-entity surface for exactly nothing gained. Three fields are
+# wanted — title, link, date — and none of them need a tree.
+_RSS_ITEM_RE = re.compile(r"<item[\s>].*?</item>|<entry[\s>].*?</entry>", re.S | re.I)
+_RSS_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
+_RSS_LINK_RE = re.compile(r"<link[^>]*>(.*?)</link>", re.S | re.I)
+_RSS_HREF_RE = re.compile(r"<link[^>]*href=[\"']([^\"']+)[\"']", re.I)
+_RSS_DATE_RE = re.compile(r"<(?:pubDate|published|updated)[^>]*>(.*?)</(?:pubDate|published|updated)>", re.S | re.I)
+_CDATA_RE = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _crypto_news_ttl_sec() -> int:
+    try:
+        return max(60, int(os.getenv("CRYPTOFORGE_NEWS_TTL_SEC", "300")))
+    except ValueError:
+        return 300
+
+
+def _crypto_news_timeout_sec() -> float:
+    try:
+        return max(1.0, float(os.getenv("CRYPTOFORGE_NEWS_TIMEOUT_SEC", "6")))
+    except ValueError:
+        return 6.0
+
+
+def _crypto_news_feeds() -> list[tuple[str, str]]:
+    """(label, url) pairs. The env override takes `Label=url` or bare urls."""
+    raw = (os.getenv("CRYPTOFORGE_NEWS_RSS_URLS") or "").strip()
+    if raw:
+        feeds = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            label, _, url = part.partition("=")
+            feeds.append((label.strip(), url.strip()) if url else (urlparse(part).netloc, part))
+        return feeds
+    # CoinDesk is listed WITHOUT the trailing slash: with it the feed answers
+    # 308 and urlopen does not carry the redirect for us.
+    return [
+        ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss"),
+        ("Cointelegraph", "https://cointelegraph.com/rss"),
+        ("Decrypt", "https://decrypt.co/feed"),
+    ]
+
+
+def _rss_text(raw: str) -> str:
+    """One headline's worth of plain text out of a feed's markup.
+
+    Unescape THEN strip, twice. Stripping first leaves an escaped tag intact:
+    "&lt;script&gt;" survives the strip untouched and the unescape then turns
+    it into a live-looking "<script>" inside the headline. The page escapes on
+    the way out too, so nothing could ever have run — but a headline should
+    not carry a tag at all, and two passes also settle the double-encoded
+    entities these feeds really do ship ("Britain&amp;#39;s").
+    """
+    text = _CDATA_RE.sub(r"\1", raw or "")
+    for _ in range(2):
+        text = _TAG_RE.sub(" ", html.unescape(text))
+    return " ".join(text.split()).strip()
+
+
+def _rss_timestamp(raw: str) -> float:
+    stamp = _rss_text(raw)
+    if not stamp:
+        return 0.0
+    try:
+        return parsedate_to_datetime(stamp).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        pass
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _parse_rss_headlines(document: str, source: str) -> list[dict]:
+    items = []
+    for chunk in _RSS_ITEM_RE.findall(document or ""):
+        title_match = _RSS_TITLE_RE.search(chunk)
+        if not title_match:
+            continue
+        title = _rss_text(title_match.group(1))
+        if not title:
+            continue
+        if len(title) > _CRYPTO_NEWS_TITLE_MAX:
+            title = title[: _CRYPTO_NEWS_TITLE_MAX - 1].rstrip() + "\u2026"
+        link_match = _RSS_LINK_RE.search(chunk)
+        link = _rss_text(link_match.group(1)) if link_match else ""
+        if not link:
+            href = _RSS_HREF_RE.search(chunk)
+            link = href.group(1).strip() if href else ""
+        # Only http(s) survives: a headline becomes an anchor on the page, and
+        # a javascript: url out of a third-party feed must never get there.
+        if not link.lower().startswith(("http://", "https://")):
+            link = ""
+        date_match = _RSS_DATE_RE.search(chunk)
+        items.append(
+            {
+                "title": title,
+                "link": link,
+                "source": source,
+                "ts": _rss_timestamp(date_match.group(1) if date_match else ""),
+            }
+        )
+    return items
+
+
+def _fetch_crypto_news() -> dict:
+    headlines: list[dict] = []
+    errors: list[str] = []
+    reached: list[str] = []
+    for label, url in _crypto_news_feeds():
+        try:
+            if urlparse(url).scheme != "https":
+                raise ValueError("news feed URL must use HTTPS")
+            req = UrlRequest(
+                url,
+                headers={
+                    "Accept": "application/rss+xml, application/xml, text/xml",
+                    "User-Agent": "CryptoForge/2.0 (+https://crypto.philforge.in)",
+                },
+            )
+            with urlopen(req, timeout=_crypto_news_timeout_sec()) as response:  # nosec B310 - HTTPS-only URL.
+                raw = response.read(512000)
+            found = _parse_rss_headlines(raw.decode("utf-8", "replace"), label)
+            if found:
+                reached.append(label)
+                headlines.extend(found)
+        except (OSError, TimeoutError, ValueError, urllib_error.URLError) as exc:
+            errors.append(f"{label}: {str(exc)[:120]}")
+
+    # Newest first, one row per headline. Two outlets covering the same story
+    # word for word is the only case this drops.
+    seen: set[str] = set()
+    unique = []
+    for item in sorted(headlines, key=lambda row: row.get("ts") or 0.0, reverse=True):
+        key = item["title"].casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    if not unique:
+        raise RuntimeError("; ".join(errors) or "No news feeds configured")
+    return {
+        "items": unique[:_CRYPTO_NEWS_LIMIT],
+        "sources": reached,
+        "error": "; ".join(errors),
+    }
+
+
+def _crypto_news() -> dict:
+    now = time.time()
+    cached = _CRYPTO_NEWS_CACHE.get("meta")
+    if cached and now < float(_CRYPTO_NEWS_CACHE.get("expires_at", 0) or 0):
+        return dict(cached)
+    try:
+        meta = _fetch_crypto_news()
+        meta.update(
+            {
+                "live": True,
+                "stale": False,
+                "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                "ttl_sec": _crypto_news_ttl_sec(),
+            }
+        )
+        _CRYPTO_NEWS_CACHE["meta"] = dict(meta)
+        _CRYPTO_NEWS_CACHE["expires_at"] = now + _crypto_news_ttl_sec()
+        return dict(meta)
+    except (OSError, TimeoutError, RuntimeError, ValueError, urllib_error.URLError) as exc:
+        # Yesterday's headlines beat an empty rail. Retried sooner than the
+        # full TTL so a blip does not freeze the strip for five minutes.
+        if cached:
+            meta = dict(cached)
+            meta.update({"live": False, "stale": True, "error": str(exc)[:160]})
+            _CRYPTO_NEWS_CACHE["meta"] = dict(meta)
+            _CRYPTO_NEWS_CACHE["expires_at"] = now + min(60, _crypto_news_ttl_sec())
+            return meta
+        return {
+            "items": [],
+            "sources": [],
+            "live": False,
+            "stale": True,
+            "error": str(exc)[:160],
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "ttl_sec": _crypto_news_ttl_sec(),
         }
 
 
@@ -4723,6 +4927,39 @@ _CG_TO_TRADE = {
     "doge": "DOGEUSDT",
     "paxg": "PAXGUSD",
 }
+
+
+@app.get("/api/market/ticker")
+async def get_market_ticker():
+    """The header rail: one USD/INR reading and a roll of crypto headlines.
+
+    Both halves are cached and both degrade rather than fail — a dead feed
+    leaves the last headlines with `stale: true` rather than emptying the
+    strip, and the rate falls back the same way it does for the portfolio.
+    Fetched off the event loop: these are third-party HTTP calls and must not
+    hold up the engine's own polling.
+    """
+    fx, news = await asyncio.gather(
+        asyncio.to_thread(_portfolio_usd_inr_rate),
+        asyncio.to_thread(_crypto_news),
+    )
+    return {
+        "status": "ok",
+        "usd_inr": {
+            "rate": fx.get("rate") or fx.get("last_rate") or 0.0,
+            "live": bool(fx.get("live")),
+            "stale": bool(fx.get("stale")),
+            "source": fx.get("source") or "",
+            "fetched_at": fx.get("fetched_at") or "",
+        },
+        "news": {
+            "items": news.get("items") or [],
+            "sources": news.get("sources") or [],
+            "live": bool(news.get("live")),
+            "stale": bool(news.get("stale")),
+            "fetched_at": news.get("fetched_at") or "",
+        },
+    }
 
 
 @app.get("/api/market/top25")

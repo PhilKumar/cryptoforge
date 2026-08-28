@@ -553,22 +553,117 @@ function updateDeployModalState() {
  * Quick Asset Switcher: sets the active asset globally.
  * Updates the builder crypto selector AND navigates to the builder tab.
  */
-function setQuickAsset(symbol, pillEl) {
-  selectedCrypto = symbol;
-  // Update pill UI
-  document.querySelectorAll('.asset-pill').forEach(p => p.classList.remove('active'));
-  if (pillEl) pillEl.classList.add('active');
-  // Sync builder selector if it exists
-  if (typeof initCryptoSelector === 'function') initCryptoSelector();
-  if (typeof fetchLeverage === 'function') fetchLeverage(symbol);
-  // Navigate to builder
-  var builderNav = document.getElementById('nav-builder');
-  showPage('builder-page', builderNav);
-  // Toast feedback
-  var coin = TOP_25.find(c => c.symbol === symbol);
-  if (coin && typeof cfToast === 'function') {
-    cfToast(coin.icon + ' ' + coin.name + ' selected', 'info');
+// ── Market Rail ────────────────────────────────────────────
+// USD/INR and a roll of crypto headlines, in the strip where the quick-asset
+// switcher used to sit. That switcher only set `selectedCrypto` and jumped to
+// the builder page, which has its own coin grid — so nothing lost the ability
+// to choose an instrument when it went.
+
+var _CF_MARKET_RAIL_MS = 300000;   // the server caches for 300s; asking faster only burns requests
+var _cfMarketRailTimer = null;
+// What is currently painted. The rail re-reads every 5 minutes and the
+// headlines usually have not moved; rebuilding the track anyway would restart
+// the animation from zero each time — and worse, throw away the time the
+// reader spent hovering it, so the text would jump the moment they let go.
+var _cfMarketRailSignature = '';
+
+function _cfMarketRailFx(fx) {
+  var rateEl = document.getElementById('cf-mr-fx-rate');
+  var noteEl = document.getElementById('cf-mr-fx-note');
+  var wrap = document.getElementById('cf-mr-fx');
+  if (!rateEl) return;
+  var rate = Number(fx && fx.rate) || 0;
+  rateEl.textContent = rate > 0 ? '\u20b9' + rate.toFixed(2) : '--';
+  // Stale is said in words. A rate quietly going grey reads as a style choice.
+  var stale = !!(fx && fx.stale) && rate > 0;
+  if (noteEl) noteEl.textContent = stale ? 'last known' : '';
+  if (wrap) {
+    wrap.classList.toggle('is-stale', stale);
+    wrap.title = rate > 0
+      ? ('USD/INR ' + rate.toFixed(4) + (fx.source ? ' \u00b7 ' + fx.source : '') + (stale ? ' (last known)' : ''))
+      : 'USD/INR unavailable';
   }
+}
+
+function _cfMarketRailNewsHtml(items) {
+  return items.map(function(item) {
+    var title = _escapeHtml(String(item.title || ''));
+    var src = _escapeHtml(String(item.source || ''));
+    var chip = src ? '<span class="mr-news-src">' + src + '</span>' : '';
+    var body = chip + title
+      + '<span class="mr-news-dot" aria-hidden="true">\u2022</span>';
+    var href = String(item.link || '');
+    // Only http(s) becomes a link. The server strips anything else already;
+    // this is the second lock, because these strings are written by outlets.
+    if (/^https?:\/\//i.test(href)) {
+      return '<a class="mr-news-item" href="' + _escapeHtml(href) + '"'
+        + ' target="_blank" rel="noopener noreferrer nofollow">' + body + '</a>';
+    }
+    return '<span class="mr-news-item">' + body + '</span>';
+  }).join('');
+}
+
+function _cfMarketRailRender(payload) {
+  _cfMarketRailFx((payload && payload.usd_inr) || {});
+
+  var view = document.getElementById('cf-mr-news-view');
+  var track = document.getElementById('cf-mr-news-track');
+  if (!view || !track) return;
+  var news = (payload && payload.news) || {};
+  var items = news.items || [];
+  if (!items.length) {
+    view.classList.remove('is-rolling');
+    _cfMarqueeClear(track);
+    _cfMarketRailSignature = '';
+    track.innerHTML = '<span class="mr-news-empty">Crypto headlines are unavailable right now.</span>';
+    return;
+  }
+
+  var signature = items.map(function(i) { return i.title; }).join('\u0001');
+  if (signature === _cfMarketRailSignature && track.querySelector('.mr-news-item')) return;
+  _cfMarketRailSignature = signature;
+
+  // Two copies: the animation travels exactly one copy's width, so the second
+  // is sitting where the first began and the loop has no seam.
+  var one = _cfMarketRailNewsHtml(items);
+  track.innerHTML = one + one;
+  view.setAttribute('aria-label', items.length + ' crypto headlines'
+    + (news.stale ? ', last known' : ''));
+
+  // Duration from distance, at the same reading speed the campaign strip uses,
+  // so twenty-four headlines do not race past faster than three.
+  var distance = track.scrollWidth / 2;
+  if (distance > 4) {
+    view.classList.add('is-rolling');
+    _cfMarqueeTune(track, distance, 1, 20, 600, 'cf-market-rail');
+  } else {
+    view.classList.remove('is-rolling');
+    _cfMarqueeClear(track);
+  }
+}
+
+async function cfLoadMarketRail() {
+  if (!document.getElementById('cf-market-rail')) return;
+  try {
+    var response = await cfApiFetch('/api/market/ticker', { cache: 'no-store' });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Market rail unavailable'));
+    _cfMarketRailRender(data);
+  } catch (err) {
+    // The rail is decoration around the trading UI: it must never toast, never
+    // throw, and never blank a reading it already has.
+    var track = document.getElementById('cf-mr-news-track');
+    if (track && !track.querySelector('.mr-news-item')) {
+      track.innerHTML = '<span class="mr-news-empty">Crypto headlines are unavailable right now.</span>';
+    }
+  }
+}
+
+function cfStartMarketRail() {
+  if (!document.getElementById('cf-market-rail')) return;
+  cfLoadMarketRail();
+  if (_cfMarketRailTimer) clearInterval(_cfMarketRailTimer);
+  _cfMarketRailTimer = setInterval(cfLoadMarketRail, _CF_MARKET_RAIL_MS);
 }
 
 // ── Custom Modal System ────────────────────────────────────
@@ -6763,6 +6858,7 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshBrokerState(true);
   loadDashboard();
   refreshTopbarTicker();
+  cfStartMarketRail();
   connectWS();
   requestNotificationPermission();
   cfInitAlerts();

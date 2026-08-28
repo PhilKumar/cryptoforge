@@ -116,50 +116,24 @@
   </div>
 </div>
 
-<!-- Quick Asset Switcher -->
-<div class="asset-switcher" id="asset-switcher">
-  <span class="asset-switcher-label">Trade</span>
-  <div class="asset-pills-scroll">
-    <div class="asset-pill active" id="ap-BTCUSDT" role="button" tabindex="0" aria-label="Trade Bitcoin (BTCUSDT)" data-cf-click="setQuickAsset('BTCUSDT',this)">
-      <span class="ap-icon">₿</span> BTC <span class="ap-name">Bitcoin</span>
-    </div>
-    <div class="asset-pill" id="ap-ETHUSDT" role="button" tabindex="0" aria-label="Trade Ethereum (ETHUSDT)" data-cf-click="setQuickAsset('ETHUSDT',this)">
-      <span class="ap-icon">Ξ</span> ETH <span class="ap-name">Ethereum</span>
-    </div>
-    <div class="asset-pill" id="ap-SOLUSDT" role="button" tabindex="0" aria-label="Trade Solana (SOLUSDT)" data-cf-click="setQuickAsset('SOLUSDT',this)">
-      <span class="ap-icon">◎</span> SOL <span class="ap-name">Solana</span>
-    </div>
-    <div class="asset-pill-divider"></div>
-    <div class="asset-pill" id="ap-XRPUSDT" role="button" tabindex="0" aria-label="Trade XRP (XRPUSDT)" data-cf-click="setQuickAsset('XRPUSDT',this)">
-      <span class="ap-icon">✕</span> XRP
-    </div>
-    <div class="asset-pill" id="ap-DOGEUSDT" role="button" tabindex="0" aria-label="Trade Dogecoin (DOGEUSDT)" data-cf-click="setQuickAsset('DOGEUSDT',this)">
-      <span class="ap-icon">Ð</span> DOGE
-    </div>
-    <div class="asset-pill" id="ap-PAXGUSD" role="button" tabindex="0" aria-label="Trade PAX Gold (PAXGUSD)" data-cf-click="setQuickAsset('PAXGUSD',this)">
-      <span class="ap-icon">Au</span> PAXGUSD
-    </div>
-    <div class="asset-pill-divider"></div>
-    <div class="asset-pill" id="ap-BNBUSDT" role="button" tabindex="0" aria-label="Trade BNB (BNBUSDT)" data-cf-click="setQuickAsset('BNBUSDT',this)">
-      <span class="ap-icon">◈</span> BNB
-    </div>
-    <div class="asset-pill" id="ap-ADAUSDT" role="button" tabindex="0" aria-label="Trade Cardano (ADAUSDT)" data-cf-click="setQuickAsset('ADAUSDT',this)">
-      <span class="ap-icon">₳</span> ADA
-    </div>
-    <div class="asset-pill" id="ap-AVAXUSDT" role="button" tabindex="0" aria-label="Trade Avalanche (AVAXUSDT)" data-cf-click="setQuickAsset('AVAXUSDT',this)">
-      <span class="ap-icon">△</span> AVAX
-    </div>
-    <div class="asset-pill" id="ap-LINKUSDT" role="button" tabindex="0" aria-label="Trade Chainlink (LINKUSDT)" data-cf-click="setQuickAsset('LINKUSDT',this)">
-      <span class="ap-icon">⬡</span> LINK
-    </div>
-    <div class="asset-pill" id="ap-DOTUSDT" role="button" tabindex="0" aria-label="Trade Polkadot (DOTUSDT)" data-cf-click="setQuickAsset('DOTUSDT',this)">
-      <span class="ap-icon">●</span> DOT
-    </div>
-    <div class="asset-pill" id="ap-MATICUSDT" role="button" tabindex="0" aria-label="Trade Polygon (MATICUSDT)" data-cf-click="setQuickAsset('MATICUSDT',this)">
-      <span class="ap-icon">⬟</span> MATIC
+<!-- Market Rail — USD/INR and the crypto headline roll.
+     Replaced the quick-asset switcher, which was a shortcut into the builder
+     page; the builder's own coin grid is the way to pick an instrument. -->
+<div class="market-rail" id="cf-market-rail">
+  <div class="mr-fx" id="cf-mr-fx" title="USD/INR spot">
+    <span class="mr-fx-pair">USD/INR</span>
+    <span class="mr-fx-rate" id="cf-mr-fx-rate">--</span>
+    <span class="mr-fx-note" id="cf-mr-fx-note"></span>
+  </div>
+  <div class="mr-divider"></div>
+  <span class="mr-label">NEWS</span>
+  <!-- The rail scrolls its own copy of the headlines twice over, so the loop
+       has no seam; hovering holds it still to read. -->
+  <div class="mr-news-view" id="cf-mr-news-view">
+    <div class="mr-news-track" id="cf-mr-news-track">
+      <span class="mr-news-empty">Loading crypto headlines\u2026</span>
     </div>
   </div>
-  <span class="inr-rate-badge" id="inr-rate-badge" style="display:none;"></span>
 </div>
 
 <!-- Funding Rate Strip -->

@@ -2748,11 +2748,11 @@
   /* ── Responsive ── */
   @media (max-width: 1100px) { .topbar-ticker { display: none; } }
 
-  /* ── Quick Asset Switcher ── */
-  .asset-switcher {
+  /* ── Market Rail ── */
+  .market-rail {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     padding: 8px 20px;
     background: rgba(8,11,22,0.75);
     border: 1px solid rgba(255,255,255,0.04);
@@ -2760,78 +2760,120 @@
     backdrop-filter: blur(20px);
     overflow: hidden;
   }
-  .asset-pills-scroll {
+  .mr-fx {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 1;
-    overflow-x: auto;
+    align-items: baseline;
+    gap: 7px;
     white-space: nowrap;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+    flex: none;
   }
-  .asset-pills-scroll::-webkit-scrollbar { display: none; }
-  /* The rail clips off-screen with no scrollbar — fade the cut edge so the
-     overflow is visible as such instead of looking like the last coin. */
-  .asset-pills-scroll {
-    -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 42px), transparent 100%);
-    mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 42px), transparent 100%);
-  }
-  .asset-switcher-label {
+  .mr-fx-pair {
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 1px;
     color: var(--muted);
     text-transform: uppercase;
-    margin-right: 4px;
-    white-space: nowrap;
   }
-  .asset-pill {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 14px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.08);
-    background: rgba(255,255,255,0.03);
-    cursor: pointer;
-    font-size: 13px;
+  .mr-fx-rate {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
     font-weight: 700;
-    color: var(--muted);
-    transition: all 0.18s ease;
-    font-family: 'Outfit', sans-serif;
-  }
-  .asset-pill:hover {
-    background: rgba(var(--tint-primary-rgb),0.1);
-    border-color: rgba(var(--tint-primary-rgb),0.3);
     color: var(--text);
   }
-  .asset-pill.active {
-    background: linear-gradient(135deg, rgba(var(--tint-primary-rgb),0.2), rgba(var(--tint-secondary-rgb),0.15));
-    border-color: rgba(var(--tint-primary-rgb),0.45);
-    color: #c4b5fd;
-    box-shadow: 0 0 12px rgba(var(--tint-primary-rgb),0.15);
-  }
-  .asset-pill .ap-icon { font-size: 14px; }
-  .asset-pill .ap-name { font-size: 10px; font-weight: 500; color: var(--muted); margin-left: 2px; }
-  .asset-pill.active .ap-name { color: rgba(196,181,253,0.7); }
-  .asset-pill-divider {
-    width: 1px; height: 18px;
-    background: rgba(255,255,255,0.06);
-    margin: 0 4px;
-  }
-  .inr-rate-badge {
-    margin-left: auto;
+  /* "stale" is said in words, not by colour alone. */
+  .mr-fx-note {
     font-size: 10px;
     font-weight: 600;
     color: var(--muted);
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 6px;
-    padding: 3px 8px;
-    font-family: 'JetBrains Mono', monospace;
+  }
+  .mr-fx.is-stale .mr-fx-rate { color: var(--muted); }
+  .mr-divider {
+    width: 1px;
+    height: 18px;
+    background: rgba(255,255,255,0.08);
+    flex: none;
+  }
+  .mr-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--muted);
+    text-transform: uppercase;
+    white-space: nowrap;
+    flex: none;
+  }
+  /* The window the headlines slide through. min-width:0 is what lets it
+     actually shrink inside the flex row instead of pushing the rail wide. */
+  .mr-news-view {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
+  }
+  .mr-news-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    white-space: nowrap;
+    will-change: transform;
+  }
+  /* Duration comes from JS, from how far the track has to travel, so the text
+     reads at one speed whether there are three headlines or twenty-four —
+     the same rule the campaign strip's marquee follows. */
+  .mr-news-view.is-rolling > .mr-news-track {
+    animation: cfNewsMarquee var(--cf-marquee-time, 60s) linear infinite;
+    animation-delay: var(--cf-marquee-delay, 0s);
+  }
+  /* Hover holds it still to be read, and CSS does the holding — it lands on
+     the exact frame the pointer arrives, with no script. */
+  .mr-news-view.is-rolling:hover > .mr-news-track { animation-play-state: paused; }
+  /* Exactly one copy's width: the second copy is then where the first began,
+     so the loop has no seam and nothing slides backwards. */
+  @keyframes cfNewsMarquee {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Parked, and scrollable by hand — motion is never the only way to read. */
+    .mr-news-view.is-rolling > .mr-news-track { animation: none; }
+    .mr-news-view { overflow-x: auto; scrollbar-width: none; }
+    .mr-news-view::-webkit-scrollbar { display: none; }
+  }
+  .mr-news-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 18px;
+    font-size: 12.5px;
+    color: var(--text);
+    text-decoration: none;
     white-space: nowrap;
   }
+  a.mr-news-item:hover { color: var(--accent, #00bfa5); text-decoration: underline; }
+  .mr-news-src {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+    padding: 1px 5px;
+    flex: none;
+  }
+  .mr-news-dot { color: var(--muted); opacity: 0.5; }
+  .mr-news-empty { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+
+  @media (max-width: 700px) {
+    .market-rail { padding: 7px 14px; gap: 8px; }
+    /* The word NEWS is the first thing to go; the source chips still say
+       where each headline came from. */
+    .mr-label { display: none; }
+    .mr-news-item { font-size: 12px; padding: 0 14px; }
+  }
+
   @media (max-width: 900px) {
     .nav-tab { padding: 12px 14px; font-size: 13px; }
     .nav-tab .tab-label { display: none; }
@@ -2876,9 +2918,9 @@
     border-color: rgba(15,23,42,0.06);
     box-shadow: 0 4px 12px -4px rgba(0,0,0,0.06);
   }
-  [data-theme="light"] .asset-switcher { background: rgba(248,250,252,0.97); border-color: rgba(15,23,42,0.04); }
-  [data-theme="light"] .asset-pill { background: rgba(15,23,42,0.03); border-color: rgba(15,23,42,0.06); color: #475569; }
-  [data-theme="light"] .asset-pill.active { background: rgba(124,58,237,0.08); color: var(--accent2); border-color: rgba(124,58,237,0.18); }
+  [data-theme="light"] .market-rail { background: rgba(248,250,252,0.97); border-color: rgba(15,23,42,0.04); }
+  [data-theme="light"] .mr-news-item { color: #334155; }
+  [data-theme="light"] .mr-news-src { border-color: rgba(15,23,42,0.10); color: #64748b; }
   [data-theme="light"] .sticky-shell { background: var(--bg); }
   [data-theme="light"] .nav-tab { color: #64748b; }
   [data-theme="light"] .nav-tab:hover { color: #0f172a; background: rgba(15,23,42,0.03); }
@@ -4366,11 +4408,11 @@
     .topbar-icon-btn { flex: 0 0 32px; }
 
     /* -- Asset switcher: compact -- */
-    .asset-switcher { padding: 6px 10px !important; gap: 4px !important; }
-    .asset-switcher-label { display: none; }
-    .asset-pill { padding: 4px 10px; font-size: 11px; gap: 4px; }
-    .asset-pill .ap-name { display: none; }
-    .inr-rate-badge { font-size: 9px; padding: 2px 6px; }
+    .market-rail { padding: 6px 10px !important; gap: 6px !important; }
+    .mr-label { display: none; }
+    .mr-news-item { padding: 0 12px; font-size: 11.5px; gap: 5px; }
+    .mr-fx-rate { font-size: 12.5px; }
+    .mr-fx-note { display: none; }
 
     /* -- Funding bar: horizontal scroll, no wrap -- */
     .funding-bar {
@@ -6399,7 +6441,8 @@ h1, h2, h3, h4, h5, h6,
 }
 .input-group label,
 .cf-scalp-kicker,
-.asset-switcher-label {
+.mr-label,
+.mr-fx-pair {
   font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -6452,7 +6495,7 @@ h1, h2, h3, h4, h5, h6,
 }
 .topbar-ticker,
 .funding-bar,
-.asset-switcher,
+.market-rail,
 .nav-bar {
   background: rgba(4, 10, 22, 0.86);
   border-color: rgba(148,178,211,0.11);
@@ -6560,36 +6603,18 @@ h1, h2, h3, h4, h5, h6,
   border-color: rgba(34,211,238,0.28);
   box-shadow: 0 0 18px rgba(34,211,238,0.12);
 }
-.asset-pill {
-  font-family: var(--font-display) !important;
-  font-size: 15px;
-  letter-spacing: 0.02em;
-  background: linear-gradient(180deg, rgba(25,36,56,0.92), rgba(9,16,29,0.96));
-  border-color: rgba(148,178,211,0.16);
-  color: rgba(215,232,248,0.74);
+.mr-fx-rate {
+  font-family: var(--font-display);
+  color: #ecfeff;
 }
-.asset-pill .ap-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 5px;
-  border-radius: 999px;
+.mr-news-item { color: rgba(215,232,248,0.82); }
+.mr-news-src {
   background: rgba(34,211,238,0.10);
-  border: 1px solid rgba(34,211,238,0.18);
+  border-color: rgba(34,211,238,0.18);
   color: #a5f3fc;
   font-family: var(--font-display);
-  font-weight: 700;
 }
-.asset-pill:hover,
-.asset-pill.active {
-  color: #ecfeff;
-  border-color: rgba(34,211,238,0.42);
-  background: linear-gradient(135deg, rgba(34,211,238,0.18), rgba(245,158,11,0.10));
-  box-shadow: 0 12px 26px rgba(2,6,23,0.22);
-}
-.asset-pill.active .ap-name { color: rgba(236,254,255,0.72); }
+a.mr-news-item:hover { color: #ecfeff; }
 .funding-chip-btc,
 .funding-chip-volume {
   background: rgba(245,158,11,0.13);
@@ -6661,7 +6686,7 @@ h1, h2, h3, h4, h5, h6,
 [data-theme="light"] .app-topbar,
 [data-theme="light"] .nav-bar,
 [data-theme="light"] .funding-bar,
-[data-theme="light"] .asset-switcher {
+[data-theme="light"] .market-rail {
   background: rgba(255,255,255,0.93);
   border-color: rgba(15,23,42,0.08);
   box-shadow: 0 12px 30px rgba(15,23,42,0.08), inset 0 1px 0 rgba(255,255,255,0.92);
@@ -6675,7 +6700,8 @@ h1, h2, h3, h4, h5, h6,
   background-clip: text;
 }
 [data-theme="light"] .topbar-brand-sub,
-[data-theme="light"] .asset-switcher-label,
+[data-theme="light"] .mr-label,
+[data-theme="light"] .mr-fx-pair,
 [data-theme="light"] .stat-label,
 [data-theme="light"] .admin-kicker { color: #64748b; }
 [data-theme="light"] .card,
@@ -6741,19 +6767,11 @@ h1, h2, h3, h4, h5, h6,
   border-bottom-color: #0891b2;
   background: linear-gradient(180deg, rgba(8,145,178,0.09), rgba(8,145,178,0.02));
 }
-[data-theme="light"] .asset-pill {
-  color: #475569;
-  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.96));
-  border-color: rgba(15,23,42,0.10);
-}
-[data-theme="light"] .asset-pill:hover,
-[data-theme="light"] .asset-pill.active {
-  /* 4.45:1 against the pill's own pale tint — a rounding away from the floor. */
-  color: #155e75;
-  border-color: rgba(8,145,178,0.30);
-  background: linear-gradient(135deg, rgba(8,145,178,0.09), rgba(217,119,6,0.06));
-}
-[data-theme="light"] .asset-pill .ap-icon {
+[data-theme="light"] .mr-fx-rate { color: #0f172a; }
+[data-theme="light"] .mr-news-item { color: #334155; }
+/* 4.6:1 on the rail's pale ground — a rounding away from the floor. */
+[data-theme="light"] a.mr-news-item:hover { color: #155e75; }
+[data-theme="light"] .mr-news-src {
   background: rgba(8,145,178,0.08);
   border-color: rgba(8,145,178,0.18);
   color: #0e7490;
@@ -6882,8 +6900,7 @@ body {
 }
 .topbar-brand-icon,
 .topbar-icon-btn:hover,
-.asset-pill:hover,
-.asset-pill.active,
+.mr-news-src,
 .nav-tab.active .tab-icon,
 .appearance-option.active {
   border-color: rgba(var(--tint-primary-rgb),0.44);
@@ -6896,13 +6913,12 @@ body {
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
-.asset-pill .ap-icon,
+.mr-news-src,
 .nav-tab.active,
 .text-accent,
 .log-info { color: var(--accent) !important; }
 .nav-tab.active,
 .nav-tab.active .tab-icon,
-.asset-pill.active .ap-icon,
 .topbar-console-btn,
 .topbar-appearance-btn {
   box-shadow: 0 0 22px rgba(var(--tint-primary-rgb),0.14), inset 0 1px 0 rgba(255,255,255,0.12);
