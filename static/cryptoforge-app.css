@@ -2873,6 +2873,32 @@
   }
   .mr-news-empty { font-size: 12.5px; color: var(--muted); line-height: var(--mr-line); }
 
+  /* The funding chips now ride on this same line. Addressed by id so this
+     beats the [data-theme] rules that style .funding-bar as a strip of its
+     own further down the sheet — nesting one bar's chrome inside another
+     paints a box inside a box. The chips themselves keep every rule they
+     had, including their per-instrument colours. */
+  .market-rail #funding-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    padding: 0;
+    margin: 0;
+    background: none;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    justify-content: flex-end;
+  }
+
+  @media (max-width: 1024px) {
+    /* Below this the three chips and a readable headline cannot share a row.
+       The chips go rather than the news, because the news is what this rail
+       was asked for — the funding numbers are on the dashboard as well. */
+    .market-rail #funding-bar { display: none; }
+  }
+
   @media (max-width: 700px) {
     .market-rail { padding: 7px 14px; gap: 8px; }
     /* The word NEWS is the first thing to go; the source chips still say
@@ -2885,7 +2911,6 @@
     .nav-tab { padding: 12px 14px; font-size: 13px; }
     .nav-tab .tab-label { display: none; }
     .nav-tab .tab-icon { font-size: 20px; }
-    .funding-bar { flex-wrap: wrap; gap: 8px; padding: 8px 14px; }
     .cf-modal { min-width: 280px; padding: 24px; }
   }
 
@@ -4417,21 +4442,13 @@
     /* -- Asset switcher: compact -- */
     .market-rail { padding: 6px 10px !important; gap: 6px !important; }
     .mr-label { display: none; }
-    .mr-news-item { padding: 0 12px; font-size: 11.5px; gap: 5px; }
+    /* No horizontal padding: the roll is one line in a fixed window now, and
+       the padding the sideways marquee needed indents the headline instead. */
+    .mr-news-item { font-size: 11.5px; gap: 5px; }
     .mr-fx-rate { font-size: 12.5px; }
     .mr-fx-note { display: none; }
-
-    /* -- Funding bar: horizontal scroll, no wrap -- */
-    .funding-bar {
-      flex-wrap: nowrap !important;
-      overflow-x: auto;
-      scrollbar-width: none;
-      -webkit-overflow-scrolling: touch;
-      padding: 5px 10px !important;
-      gap: 6px !important;
-    }
-    .funding-bar::-webkit-scrollbar { display: none; }
-    .funding-chip { flex-shrink: 0; font-size: 11px !important; padding: 4px 10px !important; white-space: nowrap; }
+    /* The funding chips are hidden at this width, so the rules that made
+       their old standalone strip scroll sideways are gone with it. */
 
     /* -- Nav tabs: horizontal scroll, hidden scrollbar -- */
     .nav-bar { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }

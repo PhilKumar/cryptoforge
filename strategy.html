@@ -135,18 +135,20 @@
       <div class="mr-news-line"><span class="mr-news-empty">Loading crypto headlines&#8230;</span></div>
     </div>
   </div>
-</div>
-
-<!-- Funding Rate Strip -->
-<div class="funding-bar" id="funding-bar">
-  <div class="funding-chip funding-chip-btc">
-    <span id="fund-btc-label">BTC FUNDING</span> <span id="fund-btc">--</span>
-  </div>
-  <div class="funding-chip funding-chip-eth">
-    <span id="fund-eth-label">ETH FUNDING</span> <span id="fund-eth">--</span>
-  </div>
-  <div class="funding-chip funding-chip-volume">
-    24H VOL <span id="total-vol">--</span>
+  <div class="mr-divider"></div>
+  <!-- The funding chips, kept as their own group with their own ids so the
+       ticker poll still writes straight into them; only the strip that used
+       to wrap them is gone, which is what puts them on this line. -->
+  <div class="funding-bar" id="funding-bar">
+    <div class="funding-chip funding-chip-btc">
+      <span id="fund-btc-label">BTC FUNDING</span> <span id="fund-btc">--</span>
+    </div>
+    <div class="funding-chip funding-chip-eth">
+      <span id="fund-eth-label">ETH FUNDING</span> <span id="fund-eth">--</span>
+    </div>
+    <div class="funding-chip funding-chip-volume">
+      24H VOL <span id="total-vol">--</span>
+    </div>
   </div>
 </div>
 

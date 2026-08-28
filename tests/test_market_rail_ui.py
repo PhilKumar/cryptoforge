@@ -172,6 +172,53 @@ process.stdout.write(items.map(_cfMarketRailLine).join(''));
         self.assertNotIn("mr-news-time", stale)
 
 
+class OneLineTests(unittest.TestCase):
+    """USD/INR, the headline roll and the funding chips share one row.
+
+    Phil, 2026-08-28: "Place them on the same line". The funding chips kept
+    their own ids and their own container so the ticker poll still writes
+    straight into them — only the strip that used to wrap them is gone.
+    """
+
+    def setUp(self):
+        self.html = open(_HTML, encoding="utf-8").read()
+        self.css = open(_CSS, encoding="utf-8").read()
+        self.js = open(_JS, encoding="utf-8").read()
+
+    def test_the_funding_chips_live_inside_the_rail_now(self):
+        rail = self.html.index('id="cf-market-rail"')
+        end = self.html.index('class="nav-bar"', rail)
+        block = self.html[rail:end]
+        self.assertIn('id="funding-bar"', block)
+        self.assertIn('id="cf-mr-news-view"', block)
+
+    def test_there_is_only_one_funding_bar(self):
+        """Moving it and forgetting to delete the original leaves two, and the
+        ticker writes into whichever getElementById reaches first."""
+        self.assertEqual(self.html.count('id="funding-bar"'), 1)
+        for node_id in ("fund-btc", "fund-eth", "total-vol", "fund-btc-label", "fund-eth-label"):
+            self.assertEqual(self.html.count(f'id="{node_id}"'), 1, node_id)
+
+    def test_the_ids_the_ticker_writes_into_all_still_exist(self):
+        for node_id in ("fund-btc", "fund-eth", "total-vol"):
+            self.assertIn(f"getElementById('{node_id}')", self.js, node_id)
+            self.assertIn(f'id="{node_id}"', self.html, node_id)
+
+    def test_the_nested_group_is_not_painted_as_a_strip_of_its_own(self):
+        """A bar inside a bar draws a box inside a box. Addressed by id so it
+        outranks the [data-theme] rules that style .funding-bar further down."""
+        rule = self.css[self.css.index(".market-rail #funding-bar {") :][:400]
+        self.assertIn("background: none", rule)
+        self.assertIn("border: none", rule)
+        self.assertIn("padding: 0", rule)
+        self.assertIn("backdrop-filter: none", rule)
+
+    def test_the_chips_step_aside_before_the_headline_does(self):
+        """Narrow screens cannot hold both; the news is what the rail is for,
+        and the funding numbers are on the dashboard too."""
+        self.assertIn(".market-rail #funding-bar { display: none; }", self.css)
+
+
 class VerticalRollTests(unittest.TestCase):
     """The roll itself, read out of the source.
 
