@@ -85,7 +85,12 @@ class RailMarkupTests(unittest.TestCase):
 
 @unittest.skipUnless(_NODE, "node is not installed")
 class RailRenderTests(unittest.TestCase):
-    """_cfMarketRailNewsHtml, out of the real bundle."""
+    """_cfMarketRailLine, out of the real bundle.
+
+    The rail rolls one headline at a time, bottom to top — not a horizontal
+    marquee (Phil, 2026-08-28: "not as a marquee.. it has to roll down to up
+    like one one message").
+    """
 
     HARNESS = r"""
 const fs = require('fs');
@@ -98,8 +103,9 @@ function grab(start, stop) {
   eval.call(globalThis, src.slice(s, e));
 }
 grab('function _escapeHtml(', 'function ');
-grab('function _cfMarketRailNewsHtml(', 'function _cfMarketRailRender');
-process.stdout.write(_cfMarketRailNewsHtml(JSON.parse(process.argv[2])));
+grab('function _cfMarketRailAgo(', 'function _cfMarketRailStopRoll');
+const items = JSON.parse(process.argv[2]);
+process.stdout.write(items.map(_cfMarketRailLine).join(''));
 """
 
     def _render(self, items):
@@ -111,6 +117,11 @@ process.stdout.write(_cfMarketRailNewsHtml(JSON.parse(process.argv[2])));
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout
+
+    def test_each_headline_is_its_own_line(self):
+        """One line per headline is what makes the step a whole line high."""
+        out = self._render([{"title": f"H{n}", "link": "", "source": "F"} for n in range(5)])
+        self.assertEqual(out.count('class="mr-news-line"'), 5)
 
     def test_a_headline_becomes_a_link_that_opens_safely(self):
         out = self._render([{"title": "BTC up", "link": "https://example.com/a", "source": "CoinDesk"}])
@@ -136,6 +147,72 @@ process.stdout.write(_cfMarketRailNewsHtml(JSON.parse(process.argv[2])));
         out = self._render([{"title": "t", "link": "", "source": '"><script>x</script>'}])
         self.assertNotIn("<script", out)
 
-    def test_every_headline_is_rendered(self):
-        items = [{"title": f"H{n}", "link": "", "source": "F"} for n in range(5)]
-        self.assertEqual(self._render(items).count("mr-news-item"), 5)
+    def test_the_title_sits_in_its_own_span_so_it_can_ellipsis(self):
+        """A headline wider than the rail must end in "…", not be sliced."""
+        out = self._render([{"title": "a long one", "link": "", "source": "F"}])
+        self.assertIn('class="mr-news-title"', out)
+
+    def test_age_is_shown_when_known_and_omitted_when_not(self):
+        # Offsets sit INSIDE their bucket, not on its edge: the clock ticks
+        # between building the stamp here and reading Date.now() in node, and
+        # exactly 600s intermittently renders as "9m".
+        import time as _t
+
+        now = _t.time()
+        for offset, expected in ((630, "10m"), (9000, "2h"), (86400 * 3 + 600, "3d")):
+            out = self._render([{"title": "t", "link": "", "source": "F", "ts": now - offset}])
+            self.assertIn('class="mr-news-time"', out)
+            self.assertIn(expected, out, f"{offset}s should read {expected}")
+
+        none = self._render([{"title": "t", "link": "", "source": "F", "ts": 0}])
+        self.assertNotIn("mr-news-time", none)
+
+        # Older than a week says nothing rather than "412d".
+        stale = self._render([{"title": "t", "link": "", "source": "F", "ts": now - 86400 * 40}])
+        self.assertNotIn("mr-news-time", stale)
+
+
+class VerticalRollTests(unittest.TestCase):
+    """The roll itself, read out of the source.
+
+    These are structural rather than behavioural — the behaviour was verified
+    in a browser (one line visible at rest, hover holds, leaving resumes) —
+    but each pins a thing whose loss would be silent.
+    """
+
+    def setUp(self):
+        self.js = open(_JS, encoding="utf-8").read()
+        self.css = open(_CSS, encoding="utf-8").read()
+
+    def test_the_step_and_the_line_height_are_the_same_variable(self):
+        """If they ever drift, a headline parks half in and half out of view."""
+        self.assertIn("height: var(--mr-line)", self.css)
+        self.assertIn("calc(var(--mr-index, 0) * var(--mr-line) * -1)", self.css)
+
+    def test_the_window_is_exactly_one_line_tall(self):
+        view = self.css[self.css.index(".mr-news-view {") :][:400]
+        self.assertIn("height: var(--mr-line)", view)
+        self.assertIn("overflow: hidden", view)
+
+    def test_the_first_headline_is_repeated_at_the_tail(self):
+        """So the roll only ever travels upward and the wrap is off-screen."""
+        self.assertIn("if (items.length > 1) lines += _cfMarketRailLine(items[0]);", self.js)
+
+    def test_the_wrap_back_to_the_top_is_not_animated(self):
+        self.assertIn(".mr-news-track.is-instant { transition: none; }", self.css)
+        self.assertIn("void track.offsetHeight;", self.js)
+
+    def test_hovering_holds_the_roll(self):
+        self.assertIn("if (view.matches(':hover')) return;", self.js)
+
+    def test_a_hidden_tab_does_not_roll(self):
+        self.assertIn("if (document.hidden) return;", self.js)
+
+    def test_a_single_headline_does_not_roll_against_itself(self):
+        self.assertIn("if (items.length > 1) {", self.js)
+        self.assertIn("_cfMarketRailCount < 2", self.js)
+
+    def test_nothing_of_the_horizontal_marquee_is_left_on_the_rail(self):
+        for token in ("cfNewsMarquee", "is-rolling", "mr-news-dot"):
+            self.assertNotIn(token, self.css, token)
+        self.assertNotIn("cfNewsMarquee", self.js)

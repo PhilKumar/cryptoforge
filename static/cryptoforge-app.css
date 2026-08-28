@@ -2802,56 +2802,58 @@
     white-space: nowrap;
     flex: none;
   }
-  /* The window the headlines slide through. min-width:0 is what lets it
-     actually shrink inside the flex row instead of pushing the rail wide. */
+  /* One headline at a time, in a window exactly one line tall. min-width:0 is
+     what lets it shrink inside the flex row instead of pushing the rail wide. */
   .mr-news-view {
+    --mr-line: 22px;
     position: relative;
     flex: 1;
     min-width: 0;
+    height: var(--mr-line);
     overflow: hidden;
-    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
-    mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
   }
+  /* The track is the full stack of headlines; moving it up by whole lines is
+     what brings the next one into the window. The line height and the step
+     are the SAME variable, so they cannot drift apart and leave a headline
+     parked half in view. */
   .mr-news-track {
-    display: inline-flex;
-    align-items: center;
-    gap: 0;
-    white-space: nowrap;
+    transform: translateY(calc(var(--mr-index, 0) * var(--mr-line) * -1));
+    transition: transform 0.55s cubic-bezier(0.4, 0, 0.2, 1);
     will-change: transform;
   }
-  /* Duration comes from JS, from how far the track has to travel, so the text
-     reads at one speed whether there are three headlines or twenty-four —
-     the same rule the campaign strip's marquee follows. */
-  .mr-news-view.is-rolling > .mr-news-track {
-    animation: cfNewsMarquee var(--cf-marquee-time, 60s) linear infinite;
-    animation-delay: var(--cf-marquee-delay, 0s);
-  }
-  /* Hover holds it still to be read, and CSS does the holding — it lands on
-     the exact frame the pointer arrives, with no script. */
-  .mr-news-view.is-rolling:hover > .mr-news-track { animation-play-state: paused; }
-  /* Exactly one copy's width: the second copy is then where the first began,
-     so the loop has no seam and nothing slides backwards. */
-  @keyframes cfNewsMarquee {
-    from { transform: translateX(0); }
-    to   { transform: translateX(-50%); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    /* Parked, and scrollable by hand — motion is never the only way to read. */
-    .mr-news-view.is-rolling > .mr-news-track { animation: none; }
-    .mr-news-view { overflow-x: auto; scrollbar-width: none; }
-    .mr-news-view::-webkit-scrollbar { display: none; }
-  }
-  .mr-news-item {
-    display: inline-flex;
+  /* Used for one frame when the roll wraps from the tail clone back to the
+     real first line — the jump must not be animated or it rewinds on screen. */
+  .mr-news-track.is-instant { transition: none; }
+  .mr-news-line {
+    height: var(--mr-line);
+    display: flex;
     align-items: center;
     gap: 7px;
-    padding: 0 18px;
+    min-width: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Still advances — the headlines are the point — but it cuts instead of
+       sliding. Motion is never the only thing carrying the content. */
+    .mr-news-track { transition: none; }
+  }
+  .mr-news-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
     font-size: 12.5px;
     color: var(--text);
     text-decoration: none;
-    white-space: nowrap;
   }
-  a.mr-news-item:hover { color: var(--accent, #00bfa5); text-decoration: underline; }
+  /* A headline longer than the rail ends in an ellipsis rather than being
+     sliced mid-letter at the edge. */
+  .mr-news-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  a.mr-news-item:hover .mr-news-title { color: var(--accent, #00bfa5); text-decoration: underline; }
   .mr-news-src {
     font-size: 9.5px;
     font-weight: 700;
@@ -2863,8 +2865,13 @@
     padding: 1px 5px;
     flex: none;
   }
-  .mr-news-dot { color: var(--muted); opacity: 0.5; }
-  .mr-news-empty { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+  .mr-news-time {
+    font-size: 10px;
+    color: var(--muted);
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .mr-news-empty { font-size: 12.5px; color: var(--muted); line-height: var(--mr-line); }
 
   @media (max-width: 700px) {
     .market-rail { padding: 7px 14px; gap: 8px; }

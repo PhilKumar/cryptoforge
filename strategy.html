@@ -127,11 +127,12 @@
   </div>
   <div class="mr-divider"></div>
   <span class="mr-label">NEWS</span>
-  <!-- The rail scrolls its own copy of the headlines twice over, so the loop
-       has no seam; hovering holds it still to read. -->
-  <div class="mr-news-view" id="cf-mr-news-view">
+  <!-- One headline at a time, each rolling up to the next. aria-live is off
+       deliberately: a ticker that announced itself every five seconds would
+       talk over everything else a screen reader is trying to say. -->
+  <div class="mr-news-view" id="cf-mr-news-view" aria-live="off">
     <div class="mr-news-track" id="cf-mr-news-track">
-      <span class="mr-news-empty">Loading crypto headlines\u2026</span>
+      <div class="mr-news-line"><span class="mr-news-empty">Loading crypto headlines&#8230;</span></div>
     </div>
   </div>
 </div>

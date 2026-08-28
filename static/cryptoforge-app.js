@@ -560,11 +560,14 @@ function updateDeployModalState() {
 // to choose an instrument when it went.
 
 var _CF_MARKET_RAIL_MS = 300000;   // the server caches for 300s; asking faster only burns requests
+var _CF_MARKET_RAIL_HOLD_MS = 5000; // how long one headline stays up before the next rolls in
 var _cfMarketRailTimer = null;
+var _cfMarketRailRollTimer = null;
+var _cfMarketRailIndex = 0;
+var _cfMarketRailCount = 0;
 // What is currently painted. The rail re-reads every 5 minutes and the
-// headlines usually have not moved; rebuilding the track anyway would restart
-// the animation from zero each time — and worse, throw away the time the
-// reader spent hovering it, so the text would jump the moment they let go.
+// headlines usually have not moved; rebuilding the track anyway would throw
+// the reader back to the first headline mid-sentence every time.
 var _cfMarketRailSignature = '';
 
 function _cfMarketRailFx(fx) {
@@ -585,22 +588,68 @@ function _cfMarketRailFx(fx) {
   }
 }
 
-function _cfMarketRailNewsHtml(items) {
-  return items.map(function(item) {
-    var title = _escapeHtml(String(item.title || ''));
-    var src = _escapeHtml(String(item.source || ''));
-    var chip = src ? '<span class="mr-news-src">' + src + '</span>' : '';
-    var body = chip + title
-      + '<span class="mr-news-dot" aria-hidden="true">\u2022</span>';
-    var href = String(item.link || '');
-    // Only http(s) becomes a link. The server strips anything else already;
-    // this is the second lock, because these strings are written by outlets.
-    if (/^https?:\/\//i.test(href)) {
-      return '<a class="mr-news-item" href="' + _escapeHtml(href) + '"'
-        + ' target="_blank" rel="noopener noreferrer nofollow">' + body + '</a>';
-    }
-    return '<span class="mr-news-item">' + body + '</span>';
-  }).join('');
+function _cfMarketRailAgo(ts) {
+  var secs = Math.floor(Date.now() / 1000) - (Number(ts) || 0);
+  if (!ts || secs < 0 || secs > 86400 * 7) return '';
+  if (secs < 3600) return Math.max(1, Math.floor(secs / 60)) + 'm';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h';
+  return Math.floor(secs / 86400) + 'd';
+}
+
+function _cfMarketRailLine(item) {
+  var title = _escapeHtml(String(item.title || ''));
+  var src = _escapeHtml(String(item.source || ''));
+  var ago = _cfMarketRailAgo(item.ts);
+  var body = (src ? '<span class="mr-news-src">' + src + '</span>' : '')
+    + '<span class="mr-news-title">' + title + '</span>'
+    + (ago ? '<span class="mr-news-time">' + _escapeHtml(ago) + '</span>' : '');
+  var href = String(item.link || '');
+  // Only http(s) becomes a link. The server strips anything else already;
+  // this is the second lock, because these strings are written by outlets.
+  var inner = /^https?:\/\//i.test(href)
+    ? '<a class="mr-news-item" href="' + _escapeHtml(href) + '" target="_blank" rel="noopener noreferrer nofollow">' + body + '</a>'
+    : '<span class="mr-news-item">' + body + '</span>';
+  return '<div class="mr-news-line">' + inner + '</div>';
+}
+
+function _cfMarketRailStopRoll() {
+  if (_cfMarketRailRollTimer) clearInterval(_cfMarketRailRollTimer);
+  _cfMarketRailRollTimer = null;
+}
+
+function _cfMarketRailShow(index, instant) {
+  var track = document.getElementById('cf-mr-news-track');
+  if (!track) return;
+  if (instant) {
+    track.classList.add('is-instant');
+    track.style.setProperty('--mr-index', String(index));
+    // Read back a layout value so the browser applies the jump BEFORE the
+    // transition is allowed again; without this the class removal coalesces
+    // into the same frame and the wrap animates backwards through every line.
+    void track.offsetHeight;
+    track.classList.remove('is-instant');
+  } else {
+    track.style.setProperty('--mr-index', String(index));
+  }
+}
+
+function _cfMarketRailAdvance() {
+  var view = document.getElementById('cf-mr-news-view');
+  if (!view || _cfMarketRailCount < 2) return;
+  // Reading beats rolling: while the pointer is on the rail it holds still.
+  if (view.matches(':hover')) return;
+  if (document.hidden) return;
+
+  _cfMarketRailIndex += 1;
+  _cfMarketRailShow(_cfMarketRailIndex, false);
+  if (_cfMarketRailIndex >= _cfMarketRailCount) {
+    // The last line is a copy of the first, so the roll always travels
+    // upward; once it has arrived, swap to the real first line unanimated.
+    window.setTimeout(function() {
+      _cfMarketRailIndex = 0;
+      _cfMarketRailShow(0, true);
+    }, 600);
+  }
 }
 
 function _cfMarketRailRender(payload) {
@@ -612,33 +661,32 @@ function _cfMarketRailRender(payload) {
   var news = (payload && payload.news) || {};
   var items = news.items || [];
   if (!items.length) {
-    view.classList.remove('is-rolling');
-    _cfMarqueeClear(track);
+    _cfMarketRailStopRoll();
+    _cfMarketRailCount = 0;
     _cfMarketRailSignature = '';
-    track.innerHTML = '<span class="mr-news-empty">Crypto headlines are unavailable right now.</span>';
+    track.style.removeProperty('--mr-index');
+    track.innerHTML = '<div class="mr-news-line"><span class="mr-news-empty">Crypto headlines are unavailable right now.</span></div>';
     return;
   }
 
   var signature = items.map(function(i) { return i.title; }).join('\u0001');
-  if (signature === _cfMarketRailSignature && track.querySelector('.mr-news-item')) return;
+  if (signature === _cfMarketRailSignature && track.querySelector('.mr-news-line')) return;
   _cfMarketRailSignature = signature;
 
-  // Two copies: the animation travels exactly one copy's width, so the second
-  // is sitting where the first began and the loop has no seam.
-  var one = _cfMarketRailNewsHtml(items);
-  track.innerHTML = one + one;
+  // The first headline again at the tail: the roll then only ever moves up,
+  // and the wrap back to the top happens off-screen in a single frame.
+  var lines = items.map(_cfMarketRailLine).join('');
+  if (items.length > 1) lines += _cfMarketRailLine(items[0]);
+  track.innerHTML = lines;
+  _cfMarketRailCount = items.length;
+  _cfMarketRailIndex = 0;
+  _cfMarketRailShow(0, true);
   view.setAttribute('aria-label', items.length + ' crypto headlines'
     + (news.stale ? ', last known' : ''));
 
-  // Duration from distance, at the same reading speed the campaign strip uses,
-  // so twenty-four headlines do not race past faster than three.
-  var distance = track.scrollWidth / 2;
-  if (distance > 4) {
-    view.classList.add('is-rolling');
-    _cfMarqueeTune(track, distance, 1, 20, 600, 'cf-market-rail');
-  } else {
-    view.classList.remove('is-rolling');
-    _cfMarqueeClear(track);
+  _cfMarketRailStopRoll();
+  if (items.length > 1) {
+    _cfMarketRailRollTimer = setInterval(_cfMarketRailAdvance, _CF_MARKET_RAIL_HOLD_MS);
   }
 }
 
@@ -654,7 +702,7 @@ async function cfLoadMarketRail() {
     // throw, and never blank a reading it already has.
     var track = document.getElementById('cf-mr-news-track');
     if (track && !track.querySelector('.mr-news-item')) {
-      track.innerHTML = '<span class="mr-news-empty">Crypto headlines are unavailable right now.</span>';
+      track.innerHTML = '<div class="mr-news-line"><span class="mr-news-empty">Crypto headlines are unavailable right now.</span></div>';
     }
   }
 }
