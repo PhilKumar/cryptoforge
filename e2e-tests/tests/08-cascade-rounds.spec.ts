@@ -525,6 +525,45 @@ test.describe('Cascade strip menu stacking', () => {
       .toContain('cf-cascade-menu-item');
   });
 
+  test('the menu stays on screen when the pane runs past the fold', async ({ page }) => {
+    // The pane scrolls, so it can extend well below the window. Clamping the
+    // menu to the PANE alone let it sit legally inside that pane and entirely
+    // under the bottom of the screen — unreadable and unclickable. How much of
+    // the pane is on screen moves with the header height, so this was one
+    // layout change away from happening at any time, and did happen when the
+    // market rail replaced two stacked strips.
+    await page.setViewportSize({ width: 1280, height: 560 });
+    await login(page);
+    await serveStatus(page, statusWithStack());
+    await page.evaluate(() => (window as any).showPage(
+      'cascade-page', (window as any).cfNavButtonForPage('cascade-page'), { skipHistory: true },
+    ));
+    await page.evaluate(() => (window as any).cfLoadCascadeStatus(false));
+    await expect(page.locator('#cf-cascade-campaigns .cf-cascade-card')).toHaveCount(4);
+
+    await page.locator('.cf-cascade-card').nth(1).scrollIntoViewIfNeeded();
+    await page.locator('.cf-cascade-card').nth(1).locator('.cf-cascade-more-btn').click();
+    const menu = page.locator('.cf-cascade-card .cf-cascade-menu:not([hidden])');
+    await expect(menu).toBeVisible();
+
+    const fits = await menu.evaluate((el) => {
+      const b = el.getBoundingClientRect();
+      return { top: Math.round(b.top), bottom: Math.round(b.bottom), h: window.innerHeight };
+    });
+    expect(fits.top, 'the menu must not start above the window').toBeGreaterThanOrEqual(0);
+    expect(fits.bottom, 'the menu must not end below the window').toBeLessThanOrEqual(fits.h);
+
+    // And the LAST item is the one that reaches deepest, so hit-test it too.
+    const topmost = await menu.evaluate((el) => {
+      const items = el.querySelectorAll('.cf-cascade-menu-item');
+      const item = items[items.length - 1] as HTMLElement;
+      const b = item.getBoundingClientRect();
+      const hit = document.elementFromPoint(Math.round(b.x + b.width / 2), Math.round(b.y + b.height / 2));
+      return hit ? String((hit as HTMLElement).className) : 'nothing';
+    });
+    expect(topmost, 'the last item must be reachable').toContain('cf-cascade-menu-item');
+  });
+
   test('an instrument\u2019s campaigns are drawn inside its group, and others are not', async ({ page }) => {
     await login(page);
     await serveStatus(page, statusWithStack());

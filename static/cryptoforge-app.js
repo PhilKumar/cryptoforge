@@ -9772,11 +9772,20 @@ function _cfCascadePlaceMenu() {
   var p = pane.getBoundingClientRect();
   var box = menu.getBoundingClientRect();
   var pad = 4;
-  if (box.top >= p.top + pad && box.bottom <= p.bottom - pad) return;  // already clear
-  // Prefer where it already is, but pull it inside the pane. A pane shorter
-  // than the menu keeps the top edge visible rather than centring it away.
-  var want = Math.min(box.top, p.bottom - box.height - pad);
-  if (want < p.top + pad) want = p.top + pad;
+  // The band the menu has to fit in is the pane AND the window. Clamping to
+  // the pane alone was not enough: a pane that runs past the fold let the
+  // menu sit legally inside it and entirely below the bottom of the screen,
+  // where the last item cannot be read or clicked. How much of the pane is
+  // on screen moves with the header height, so this was one layout change
+  // away from happening at any time.
+  var top = Math.max(p.top, 0) + pad;
+  var bottom = Math.min(p.bottom, window.innerHeight || p.bottom) - pad;
+  if (box.top >= top && box.bottom <= bottom) return;  // already clear
+  // Prefer where it already is, but pull it into the band. A band shorter
+  // than the menu keeps the TOP edge visible rather than centring it away —
+  // the first items matter more than the last.
+  var want = Math.min(box.top, bottom - box.height);
+  if (want < top) want = top;
   menu.style.top = (want - menu.parentElement.getBoundingClientRect().top) + 'px';
   menu.style.bottom = 'auto';
 }
