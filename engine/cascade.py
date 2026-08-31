@@ -3136,10 +3136,28 @@ class CascadeEngine:
             campaign.exchange_qty = None  # could not read — say nothing
             return False
         free = owned
+        # Only campaigns that could still be HOLDING count. A closed one's
+        # filled_base_qty is a historical record of what it once bought, not a
+        # claim on today's balance — and it is never zeroed on close, so those
+        # numbers accumulate forever. On 2026-08-31 sixteen BTCUSDT campaigns
+        # closed between 26 July and that morning were still claiming
+        # 0.00040274 between them against a real balance of 0.00025, so every
+        # live campaign netted out to zero and the sweep reported perfectly
+        # present coin as "gone". Phil had just stopped one campaign and
+        # started another, which is what changed the numbers enough to re-arm
+        # the once-only notice and make it look like the new campaign caused it.
+        #
+        # `mode` is filtered for the same reason app.py's _live_claim_of does:
+        # paper coin is imaginary and cannot hold a share of a real balance.
         claimed_by_others = sum(
             _coerce_float(c.filled_base_qty, 0.0) + _coerce_float(c.residual_base_qty, 0.0)
             for c in self.campaigns.values()
-            if c.campaign_id != campaign.campaign_id and c.symbol == campaign.symbol and c.filled_base_qty > 0
+            if c.campaign_id != campaign.campaign_id
+            and c.symbol == campaign.symbol
+            and c.filled_base_qty > 0
+            and str(getattr(c, "mode", "") or "") == "live"
+            and not c.closed_at
+            and str(c.state or "") not in FINAL_STATES
         )
         # A sibling ENGINE's campaigns hold coin in this same balance and are
         # invisible to the loop above. Without them this campaign reads another
@@ -5775,11 +5793,18 @@ class CascadeEngine:
         self._settle_pending(campaign, price, timestamp)
         recompute_avg_entry_price(campaign)
         campaign.tp_price = compute_tp_price(campaign)
+        # "collected down to 77,255.41" read as "price fell to 77,255 and we
+        # bought 735 above the low" — a terrible fill. It was not: 77,255 is a
+        # LADDER LEVEL, the market low that morning was 77,864, and the buy at
+        # 77,990 was 0.16% off it. Phil drew the only conclusion the sentence
+        # allowed (2026-08-31: "Doesn't it seems bought it at a high value?").
+        # A level is now named as a level, and never phrased as somewhere the
+        # price went.
         self._log_event(
             campaign,
             "fill",
-            f"Bought ${usd:,.2f} at {price:,.2f} on the turn — {len(levels)} level(s) collected down to "
-            f"{deepest:,.2f} (avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
+            f"Bought ${usd:,.2f} at {price:,.2f} on the turn — {len(levels)} ladder level(s) collected, "
+            f"deepest level {deepest:,.2f} (avg {campaign.avg_entry_price:,.2f}, TP {campaign.tp_price:,.2f})",
         )
         # An entry is money leaving the account. Not deduped: every fill is a
         # distinct event and skipping one would hide a real position.
@@ -5787,7 +5812,7 @@ class CascadeEngine:
             "ENTRY filled",
             f"{campaign.symbol} #{campaign.seq} ({campaign.mode.upper()}) — {campaign.mc_kind.upper()} MC\n"
             f"Bought ${usd:,.2f} at {price:,.2f}\n"
-            f"{len(levels)} level(s) collected down to {deepest:,.2f}\n"
+            f"{len(levels)} ladder level(s) collected, deepest level {deepest:,.2f}\n"
             f"Average entry: {campaign.avg_entry_price:,.2f}\n"
             f"Target: {campaign.tp_price:,.2f}",
             level="success",
