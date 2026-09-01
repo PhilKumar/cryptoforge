@@ -9273,8 +9273,15 @@ def _journal_summary(trades: List[dict], capital_base: float, account_value: Opt
     for day in sorted(by_day):
         row = by_day[day]
         row["invested"] = round(row["invested"], 2)
-        row["pnl"] = round(row["pnl"], 2)
-        running += row["pnl"]
+        # Accumulate the RAW day, then round for display. Rounding each day to
+        # cents first and summing the rounded values let the error compound: the
+        # public curve's last point read $7.74 while the headline tile, which
+        # rounds the unrounded total once, read $7.72 — the same money, two
+        # different answers, on one screen. Over 38 days that is 2 cents; it
+        # grows with every trading day.
+        raw_day = row["pnl"]
+        row["pnl"] = round(raw_day, 2)
+        running += raw_day
         equity.append({"date": day, "pnl": row["pnl"], "cumulative_pnl": round(running, 4)})
 
     return {
