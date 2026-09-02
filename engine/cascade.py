@@ -2020,6 +2020,7 @@ class CascadeEngine:
         on_update: Optional[Callable] = None,
         on_alert: Optional[Callable] = None,
         brokers: Optional[Dict[str, object]] = None,
+        alerts_live_only: bool = False,
     ):
         # `broker` stays the default and is what every existing campaign uses.
         # `brokers` is the optional registry for additional venues; a campaign
@@ -2042,6 +2043,17 @@ class CascadeEngine:
         self.on_event = on_event
         self.on_update = on_update
         self.on_alert = on_alert
+        # Whether a PAPER campaign on this engine may raise an alert.
+        #
+        # False on the Cascade page, which has always announced its paper
+        # campaigns and must keep doing so. True on a strategy's own engine,
+        # where paper is the sandbox the strategy lives in day to day: the
+        # Auto-Cascade_Fib runaway would have fired twenty alerts in
+        # forty-five minutes, and books that run continuously in paper would
+        # bury the one thing worth waking up for. Engine-WIDE alerts (a stall,
+        # a broker that cannot be reached — anything raised with no campaign)
+        # are never suppressed; they are about the engine, not a position.
+        self.alerts_live_only = bool(alerts_live_only)
         self._alert_state: Dict[str, float] = {}  # de-dupe key -> last sent monotonic time
         self.campaigns: Dict[str, Campaign] = {}
         self.closed_campaigns: List[dict] = []
@@ -2191,6 +2203,12 @@ class CascadeEngine:
             # made profit printed on the telegram headline").
             "strategy": campaign.strategy if campaign else None,
             "seq": campaign.seq if campaign else None,
+            # Paper or live. The event travels to app.py, which decides whether
+            # it is worth a phone notification — and on a strategy's own engine
+            # that answer turns entirely on whether real money moved. Without
+            # this the callback would have to look the campaign up, and a line
+            # logged as a campaign closes outlives the campaign itself.
+            "mode": campaign.mode if campaign else None,
         }
         if campaign is not None:
             campaign.event_log.append(event)
@@ -2251,6 +2269,19 @@ class CascadeEngine:
                 dedupe_sec=1800,
             )
 
+    def holds_live_money(self) -> bool:
+        """Has this engine an open campaign trading real money?
+
+        The question an engine-wide alarm has to answer before it is worth a
+        phone notification: a stalled engine matters because orders are resting
+        on an exchange and nothing is stepping them. With every book in paper
+        there is nothing on any exchange to go wrong.
+        """
+        return any(
+            str(getattr(c, "mode", "") or "") == "live" and not getattr(c, "closed_at", "")
+            for c in self.campaigns.values()
+        )
+
     def _alert(
         self,
         title: str,
@@ -2282,6 +2313,17 @@ class CascadeEngine:
         """
         if not self.on_alert:
             return
+        if self.alerts_live_only:
+            if campaign is not None:
+                if str(getattr(campaign, "mode", "") or "") != "live":
+                    return
+            elif not self.holds_live_money():
+                # Engine-wide: a stall or a high campaign count. Real while the
+                # engine has money on the exchange, noise while it does not —
+                # and Cascade-Auto sits above MAX_ACTIVE_BEFORE_ALERT on paper
+                # alone, so without this the sandbox would have raised
+                # "Campaign count high" every hour, forever, about nothing.
+                return
         raw_title = title
         if campaign is not None:
             # Which BOOK made it, then which instrument, then what happened.

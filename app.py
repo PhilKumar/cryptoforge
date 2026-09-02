@@ -8556,28 +8556,14 @@ async def _capture_chart_snapshot(engine: "CascadeEngine", campaign_id: str) -> 
         _logger.warning("[CASCADE] chart snapshot capture failed for %s: %s", campaign_id, exc)
 
 
-def _cascade_persist_closed(campaign: dict) -> None:
-    try:
-        store = _get_state_store()
-        closed = store.get(_BUCKET_CASCADE_CLOSED, "campaigns", default=[])
-        closed = closed if isinstance(closed, list) else []
-        key = campaign.get("campaign_id")
-        closed = [row for row in closed if row.get("campaign_id") != key]
-        closed.append(dict(campaign or {}))
-        store.put(_BUCKET_CASCADE_CLOSED, "campaigns", closed[-100:])
-    except Exception as exc:
-        _logger.error("[CASCADE] Failed to persist closed campaign: %s", exc)
-    # Freeze the trade's chart record the moment it closes.
-    cid = campaign.get("campaign_id") if isinstance(campaign, dict) else None
-    engine = globals().get("_cascade_engine")
-    if cid and engine is not None:
-        try:
-            task = asyncio.get_running_loop().create_task(_capture_chart_snapshot(engine, cid))
-            _inflight_tasks.add(task)
-            task.add_done_callback(_inflight_tasks.discard)
-        except RuntimeError:
-            pass
+def _cascade_closed_alert(campaign: dict) -> None:
+    """Announce a campaign that has ended, whichever engine ran it.
 
+    Split out of _cascade_persist_closed so the strategy engines can raise the
+    same alert without also writing into the Cascade page's own closed list —
+    their history is persisted by their own on_update, into their own bucket.
+    """
+    cid = campaign.get("campaign_id") if isinstance(campaign, dict) else None
     reason = str(campaign.get("close_reason") or "")
     # "stopped" is included: a campaign ending by hand is exactly as worth
     # knowing about as one ending on a break — more so when it was stopped from
@@ -8613,6 +8599,68 @@ def _cascade_persist_closed(campaign: dict) -> None:
             + f"Avg entry: {campaign.get('avg_entry_price') or '—'}\nTP: {campaign.get('tp_price') or '—'}",
             level="success" if reason == "tp_filled" else "warn",
         )
+
+
+def _cascade_persist_closed(campaign: dict) -> None:
+    try:
+        store = _get_state_store()
+        closed = store.get(_BUCKET_CASCADE_CLOSED, "campaigns", default=[])
+        closed = closed if isinstance(closed, list) else []
+        key = campaign.get("campaign_id")
+        closed = [row for row in closed if row.get("campaign_id") != key]
+        closed.append(dict(campaign or {}))
+        store.put(_BUCKET_CASCADE_CLOSED, "campaigns", closed[-100:])
+    except Exception as exc:
+        _logger.error("[CASCADE] Failed to persist closed campaign: %s", exc)
+    # Freeze the trade's chart record the moment it closes.
+    cid = campaign.get("campaign_id") if isinstance(campaign, dict) else None
+    engine = globals().get("_cascade_engine")
+    if cid and engine is not None:
+        try:
+            task = asyncio.get_running_loop().create_task(_capture_chart_snapshot(engine, cid))
+            _inflight_tasks.add(task)
+            task.add_done_callback(_inflight_tasks.discard)
+        except RuntimeError:
+            pass
+
+    _cascade_closed_alert(campaign)
+
+
+# ── what a strategy's own engine is allowed to say ────────────────
+#
+# The Auto-Cascade_Fib and V-Rule engines were built deliberately mute: they
+# were given `on_update` alone, so `CascadeEngine._alert()` returned at its
+# first line and neither book could reach Telegram — no fill, no target, no
+# failure. That was right while both were sandboxes. It is wrong the moment a
+# book trades real money, which is the only thing standing between these two
+# strategies and going live.
+#
+# So they get the same three callbacks the Cascade page has, with two
+# differences. Their campaign history is NOT written into the Cascade's closed
+# list or its event log — each engine already persists its own through its own
+# on_update, and mixing them was one of the three things the sandbox split
+# ended. And paper stays silent, via `alerts_live_only=True` on the engine plus
+# the mode guards below: a strategy runs in paper continuously, and books that
+# announced every paper fill would bury the one alert worth waking up for.
+
+
+def _strategy_event(event: dict) -> None:
+    """A strategy engine's event log line. Notified only when money moved.
+
+    Deliberately does NOT append to _BUCKET_CASCADE_EVENTS: that bucket is the
+    Cascade page's own log. The line is already kept on the campaign's
+    `event_log`, which the strategy's page reads.
+    """
+    if str((event or {}).get("mode") or "") != "live":
+        return
+    _cascade_notify(event)
+
+
+def _strategy_closed(campaign: dict) -> None:
+    """A strategy engine's campaign ended — announce it if it was real money."""
+    if str((campaign or {}).get("mode") or "") != "live":
+        return
+    _cascade_closed_alert(campaign)
 
 
 def _broadcast_cascade_update(status: dict) -> None:
@@ -8948,6 +8996,10 @@ def _get_auto_fib_engine() -> "CascadeEngine":
         eng = CascadeEngine(
             PaperOnlyBroker(delta),
             on_update=_persist_auto_fib_update,
+            on_alert=_cascade_alert,
+            on_event=_strategy_event,
+            on_campaign_closed=_strategy_closed,
+            alerts_live_only=True,
             brokers=_strategy_broker_registry(_AUTO_FIB_LIVE_ARMED, "CRYPTOFORGE_AUTO_FIB_LIVE=1"),
         )
         eng._lock_path = os.path.join(_HERE, ".cascade-sandbox-writer.lock")
@@ -9024,6 +9076,10 @@ def _get_vrule_engine() -> "CascadeEngine":
         eng = CascadeEngine(
             PaperOnlyBroker(delta, live_armed=LIVE_ARMED, arm_hint=LIVE_ARM_HINT),
             on_update=_persist_vrule_update,
+            on_alert=_cascade_alert,
+            on_event=_strategy_event,
+            on_campaign_closed=_strategy_closed,
+            alerts_live_only=True,
             brokers=_strategy_broker_registry(LIVE_ARMED, LIVE_ARM_HINT),
         )
         eng._lock_path = os.path.join(_HERE, ".cascade-vrule-writer.lock")
