@@ -294,11 +294,46 @@ async def _resume_rule3070_on_boot() -> None:
         await asyncio.sleep(_RULE3070_RESUME_DELAY_SEC)
 
 
+# The public landing's snapshot is only written while /api/journal/trades is
+# being served — that is, when somebody opens the Journal. So the figures on
+# crypto.philforge.in were only ever as fresh as the last time Phil looked at
+# his own book, and a quiet fortnight left the page quoting a fortnight-old
+# "as of" date to strangers. This refreshes it on its own.
+#
+# It is deliberately cheap and deliberately silent: one pass a week is three
+# Binance calls, the same three the Journal already makes, and every failure is
+# swallowed with a log line. Nothing here may ever interrupt trading.
+_LANDING_LEDGER_REFRESH_SEC = 7 * 24 * 60 * 60
+_LANDING_LEDGER_FIRST_DELAY_SEC = 5 * 60
+
+
+async def _refresh_landing_ledger_periodically() -> None:
+    """Keep the public ledger snapshot current without anyone opening a page."""
+    # Let the boot path settle first: restoring engines matters more than a
+    # marketing page, and both want the same event loop in the first minute.
+    await asyncio.sleep(_LANDING_LEDGER_FIRST_DELAY_SEC)
+    while True:
+        try:
+            # The endpoint writes the snapshot as a side effect when broker
+            # rows are present; calling it directly skips the HTTP layer but
+            # runs exactly the same summary the Journal shows.
+            await journal_trades()
+            _logger.info("Landing ledger snapshot refreshed")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # never let a marketing refresh reach trading
+            _logger.warning("Landing ledger refresh failed, will retry next week: %s", exc)
+        await asyncio.sleep(_LANDING_LEDGER_REFRESH_SEC)
+
+
 @asynccontextmanager
 async def _app_lifespan(_: FastAPI):
     boot_task = asyncio.create_task(_wake_cascade_on_boot())
     _inflight_tasks.add(boot_task)
     boot_task.add_done_callback(_inflight_tasks.discard)
+    ledger_task = asyncio.create_task(_refresh_landing_ledger_periodically())
+    _inflight_tasks.add(ledger_task)
+    ledger_task.add_done_callback(_inflight_tasks.discard)
     try:
         yield
     finally:
