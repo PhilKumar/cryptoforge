@@ -13775,14 +13775,8 @@ function cfR37RenderStatus(s) {
   // this instant are counted (warm-up ladders never are).
   var wins = (closed.count || 0) + (closed.count === 1 ? ' win' : ' wins');
   set('cf-r37-closed-count', s.start_ts ? wins + ' · since ' + _cfR37Ist(s.start_ts) + ' IST' : wins);
-  var opens = s.opens || {};
-  set('cf-r37-open-count', String(opens.count || 0));
-  set('cf-r37-open-cost', 'holding ' + _cfR37Usd(opens.cost || 0));
-  var un = document.getElementById('cf-r37-unrealised');
-  if (un) {
-    un.textContent = _cfR37Usd(opens.unrealised || 0);
-    un.style.color = (opens.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)';
-  }
+  // Open count, cost and unrealised are no longer headline cards — Open Paper
+  // Trades below prints all three, per row, and totals them itself.
 
   var problems = [];
   if (s.writer_conflict) problems.push('Another paper writer is running (' + s.writer_conflict + ') — stop the terminal runner before starting the console.');
