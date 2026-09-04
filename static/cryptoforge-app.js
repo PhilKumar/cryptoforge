@@ -13776,12 +13776,7 @@ function cfR37RenderStatus(s) {
   var wins = (closed.count || 0) + (closed.count === 1 ? ' win' : ' wins');
   set('cf-r37-closed-count', s.start_ts ? wins + ' · since ' + _cfR37Ist(s.start_ts) + ' IST' : wins);
   // Open count, cost and unrealised are no longer headline cards — Open Paper
-  // Trades below prints all three, per row, and totals them itself. `opens`
-  // still has to be declared: the Open Paper Trades body a few lines down is
-  // built from it, and deleting this line with the cards threw a
-  // ReferenceError that took the whole status render with it — the watch
-  // cards stayed on their placeholders and the page looked dead.
-  var opens = s.opens || {};
+  // Trades below prints all three, per row, and totals them itself.
 
   var problems = [];
   if (s.writer_conflict) problems.push('Another paper writer is running (' + s.writer_conflict + ') — stop the terminal runner before starting the console.');
