@@ -10304,10 +10304,12 @@ async def auto_fib_status():
     driver = _get_auto_fib()
     engine = _get_auto_fib_engine()
     engine_status = engine.get_status()
+    campaigns = [_slim_ended_campaign(c) for c in (engine_status.get("campaigns") or [])]
     return {
         "status": "ok",
         **driver.status(),
-        "campaigns": engine_status.get("campaigns") or [],
+        "campaigns": campaigns,
+        "watching": sum(1 for c in campaigns if not _cascade_campaign_working(c)),
         "instruments": engine_status.get("instruments") or {},
         # The ended lines, in the same shape the Cascade page's status carries,
         # so the SAME closed-campaigns table draws them (Phil, 2026-08-24:
@@ -10350,6 +10352,48 @@ async def auto_fib_set_book(request: Request):
         _get_auto_fib_engine().start()
     _save_auto_fib()
     return {"status": "ok", **driver.status()}
+
+
+# Geometry only a CARD or a chart draws. An ended campaign gets neither: the
+# cards list holds the working ladders, and a chart is fetched per campaign
+# from /api/cascade/campaigns/{id}/chart, which reads the engine directly. On
+# Cascade-Auto these five fields were 38% of a 1.3 MB status payload — 454 KB
+# of `legs` alone across 242 campaigns — repeated on every poll.
+_ENDED_CAMPAIGN_DROP = ("legs", "trendlines", "mother_break_candle", "mother_break_top_candle", "pending_fibs")
+
+
+def _cascade_campaign_working(campaign: dict) -> bool:
+    """Is this ladder armed or holding coin — something a person can act on?"""
+    if campaign.get("closed_at") or str(campaign.get("state") or "") in CASCADE_FINAL_STATES:
+        return False
+    if _coerce_float_safe(campaign.get("filled_base_qty")) > 0:
+        return True
+    if _coerce_float_safe(campaign.get("pending_usd")) > 0:
+        return True
+    return bool(campaign.get("pending_stop_price") or campaign.get("pending_order_id"))
+
+
+def _slim_ended_campaign(campaign: dict) -> dict:
+    """Drop an ended campaign's ladder geometry, keep everything that is read.
+
+    Deliberately NOT the same treatment the V-Rule gets. There, ended campaigns
+    are left out of `campaigns` entirely — safe, because that page reads its
+    history from `closed_campaigns`. Here it would be wrong: 191 of Cascade-
+    Auto's 231 ended campaigns are NOT in `closed_campaigns` (it keeps the last
+    CLOSED_HISTORY_LIMIT), and the Paper Journal builds its rounds from both
+    pools. Filtering would have quietly deleted 15 booked rounds from the P&L.
+
+    So every campaign still travels, and only the parts nothing renders for a
+    finished one are left behind. `rounds`, `event_log`, `all_fills` and the
+    money fields are untouched — the ledger, the event log and Open Trades read
+    those. The event log in particular is PAGED rather than truncated by
+    design, so its history must arrive whole.
+    """
+    if not isinstance(campaign, dict):
+        return campaign
+    if not (campaign.get("closed_at") or str(campaign.get("state") or "") in CASCADE_FINAL_STATES):
+        return campaign
+    return {k: v for k, v in campaign.items() if k not in _ENDED_CAMPAIGN_DROP}
 
 
 def _vrule_working(campaign: dict) -> bool:

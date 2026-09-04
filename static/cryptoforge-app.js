@@ -14298,6 +14298,18 @@ function cfVrSelectSymbol(symbol) {
   cfVrSyncControls();
 }
 
+// Armed, or holding coin. The one definition both strategy pages use for
+// "this ladder is doing something", mirroring _cascade_campaign_working on
+// the server so the two cannot drift.
+function _cfCascadeCampaignWorking(campaign) {
+  var c = campaign || {};
+  if (c.closed_at) return false;
+  if (['COMPLETED', 'MOTHER_BROKEN', 'STOPPED'].indexOf(String(c.state || '')) !== -1) return false;
+  if ((Number(c.filled_base_qty) || 0) > 0) return true;
+  if ((Number(c.pending_usd) || 0) > 0) return true;
+  return !!(c.pending_stop_price || c.pending_order_id);
+}
+
 function cfVrRenderStatus(data) {
   _cfVrBooks = (data && data.books) || [];
   _cfVrExchanges = (data && data.exchanges) || [];
@@ -14794,15 +14806,33 @@ function cfAfRenderLines(data) {
     Array.isArray(data && data.campaigns) ? data.campaigns : [],
     { mountId: 'cf-af-trades', actions: false }
   );
+  // Only the ladders doing something get a card. Every campaign still arrives
+  // in the payload — the ledger above builds its rounds from them and the
+  // event log reads their logs — but 242 cards for 5 working ladders is not a
+  // list anyone can use (Phil, 2026-09-04: "can we decrease this?").
+  var afAll = Array.isArray(data && data.campaigns) ? data.campaigns : [];
+  var afWorking = afAll.filter(_cfCascadeCampaignWorking);
+  var afWatching = afAll.length - afWorking.length;
   cfRenderCascadeCampaigns(
-    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    afWorking,
     (data && data.instruments) || {},
     {
       mountId: 'cf-af-campaigns',
       emptyText: 'Nothing running yet — turn a book on beside this.',
-      emptyLiveText: 'Nothing running right now — the finished lines stay in this page\'s books.'
+      emptyLiveText: afWatching
+        ? (afWatching.toLocaleString('en-US') + ' ladder' + (afWatching === 1 ? '' : 's')
+           + ' watching for an entry — none armed and nothing held yet.')
+        : 'Nothing running right now — the finished lines stay in this page\'s books.'
     }
   );
+  var afNote = document.getElementById('cf-af-watching');
+  if (afNote) {
+    afNote.textContent = afWatching
+      ? ('Showing ' + afWorking.length + ' working ladder' + (afWorking.length === 1 ? '' : 's')
+         + ' · ' + afWatching.toLocaleString('en-US') + ' more are watching or finished — their rounds stay in the books below.')
+      : '';
+    afNote.hidden = !afWatching;
+  }
 }
 
 async function cfAfRefresh(showToast) {
