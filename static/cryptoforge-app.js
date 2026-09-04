@@ -13770,7 +13770,11 @@ function cfR37RenderStatus(s) {
     netNode.textContent = _cfR37Usd(closed.net || 0);
     netNode.style.color = (closed.net || 0) >= 0 ? 'var(--green)' : 'var(--red)';
   }
-  set('cf-r37-closed-count', (closed.count || 0) + (closed.count === 1 ? ' win' : ' wins'));
+  // The paper clock rides here rather than in a card of its own: it is not a
+  // sixth measurement, it is the qualifier on THIS number — only trades after
+  // this instant are counted (warm-up ladders never are).
+  var wins = (closed.count || 0) + (closed.count === 1 ? ' win' : ' wins');
+  set('cf-r37-closed-count', s.start_ts ? wins + ' · since ' + _cfR37Ist(s.start_ts) + ' IST' : wins);
   var opens = s.opens || {};
   set('cf-r37-open-count', String(opens.count || 0));
   set('cf-r37-open-cost', 'holding ' + _cfR37Usd(opens.cost || 0));
@@ -13779,9 +13783,6 @@ function cfR37RenderStatus(s) {
     un.textContent = _cfR37Usd(opens.unrealised || 0);
     un.style.color = (opens.unrealised || 0) >= 0 ? 'var(--green)' : 'var(--red)';
   }
-  set('cf-r37-last-close', s.last_close != null ? Number(s.last_close).toLocaleString('en-US') : '—');
-  set('cf-r37-last-tick', s.last_tick_ts ? ('tick ' + _cfR37Ist(s.last_tick_ts) + ' IST · ' + (s.bars || 0).toLocaleString('en-US') + ' bars') : 'waiting for the engine');
-  set('cf-r37-since', s.start_ts ? _cfR37Ist(s.start_ts) + ' IST' : '—');
 
   var problems = [];
   if (s.writer_conflict) problems.push('Another paper writer is running (' + s.writer_conflict + ') — stop the terminal runner before starting the console.');
