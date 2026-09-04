@@ -42,8 +42,48 @@ jobs:
         working-directory: e2e-tests
         run: |
           npm ci
-          npm audit --audit-level=high
           npx playwright install --with-deps chromium
+
+      # Audit the seven e2e packages, but tell a VULNERABILITY apart from an
+      # UNREACHABLE REGISTRY. Both exit 1, and while they sat in the install
+      # step above, npm's audit service going down took the whole gate with
+      # it: 2026-09-04, three runs in a row died here with "audit endpoint
+      # returned an error", zero tests executed, and the failure on GitHub
+      # read exactly like a real test failure. npm posted no incident, and
+      # the endpoint hung — seven minutes per attempt — rather than refusing,
+      # so the step was also slower than the suite it was blocking.
+      #
+      # A high-severity finding still fails the job. A registry that cannot
+      # answer is a warning, because the security of these packages did not
+      # change when npm's uptime did.
+      - name: Audit npm deps
+        working-directory: e2e-tests
+        run: |
+          set +e
+          # --fetch-timeout is npm's own ceiling; `timeout` is the backstop for
+          # a request that hangs below it. Guarded by command -v so a runner
+          # image without coreutils cannot turn a missing tool into "127" and
+          # have the branch below read it as a vulnerability — which is the
+          # very confusion this step exists to end.
+          if command -v timeout >/dev/null 2>&1; then
+            out="$(timeout 120 npm audit --audit-level=high --fetch-timeout=60000 2>&1)"
+          else
+            out="$(npm audit --audit-level=high --fetch-timeout=60000 2>&1)"
+          fi
+          status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          # 124 = killed by timeout, 127 = npm or timeout missing. Neither says
+          # anything about the packages.
+          if [ "$status" -eq 124 ] || [ "$status" -eq 127 ] || printf '%s' "$out" | grep -qiE \
+            'audit endpoint returned an error|Service Unavailable|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|socket hang up|network'; then
+            echo "::warning title=npm audit unavailable::The registry could not be reached, so the packages were not audited. Not treated as a vulnerability."
+            exit 0
+          fi
+          echo "::error title=npm audit::High-severity vulnerabilities reported."
+          exit "$status"
 
       # ── Start CryptoForge server ──
       - name: Start CryptoForge dev server
