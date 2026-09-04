@@ -1663,16 +1663,14 @@
       <div class="stat-value" id="cf-r37-unrealised">$0.00</div>
       <div class="stat-sub">marked to last close</div>
     </div>
-    <div class="stat-box">
-      <div class="stat-label">Last Tick</div>
-      <div class="stat-value" id="cf-r37-last-close" style="color:var(--accent);">&mdash;</div>
-      <div class="stat-sub" id="cf-r37-last-tick">waiting for the engine</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Paper Since</div>
-      <div class="stat-value" id="cf-r37-since" style="font-size:16px;">&mdash;</div>
-      <div class="stat-sub">only trades after this count</div>
-    </div>
+    <!-- "Last Tick" and "Paper Since" used to sit here. Last Tick printed
+         `last_close`, which is `df["close"].iloc[-1]` — the very number
+         Watching Now prints as Price Now, from the same bar, a few inches
+         below (Phil, 2026-09-04: "Delete repeated cards on this page").
+         Its only unique content was a bar count, which is diagnostics, not
+         something you operate on. Paper Since is not a measurement at all;
+         it qualifies the P&L, so it now rides on the P&L's own sub-line
+         where it cannot be read as a sixth statistic. -->
   </div>
 
 
