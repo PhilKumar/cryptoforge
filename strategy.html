@@ -1605,11 +1605,6 @@
       <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=vrule"
          title="The V-Rule book, measured over every coin's whole history">Tearsheet</a>
     </div>
-    <div class="cf-engine-chip" id="cf-r37-engine-chip" data-state="idle">
-      <span class="cf-engine-dot" aria-hidden="true"></span>
-      <span class="cf-engine-label">Paper</span>
-      <strong id="cf-r37-engine-state">Idle</strong>
-    </div>
   </div>
 
   <div id="cf-vrule-strategy-info" class="cf-info-panel cf-info-doc" role="region"
@@ -1718,6 +1713,101 @@
     </div>
   </section>
 
+
+  <!-- The real-money book's own Open Trades, Closed Campaigns and Closed
+       Rounds, drawn by the Cascade page's renderers under this page's ids —
+       the same way Cascade-Auto gets them. The live half had none of the
+       three: it showed working ladders and an event log and nothing else, so
+       there was nowhere to see what was held, what had ended, or what any of
+       it earned (Phil, 2026-09-04: "There is no open trades panel / No closed
+       rounds... or no closed campaigns"). -->
+<section class="card table-panel" id="cf-vr-trades-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Open Trades</h3>
+        <div class="table-meta" id="cf-vr-trades-meta">Every line holding coin right now, what it cost, and what it is worth.</div>
+      </div>
+    </div>
+    <div id="cf-vr-trades">
+      <div class="cf-table-empty-cell" style="padding:14px;">No open trades — nothing has been bought yet.</div>
+    </div>
+  </section>
+
+<section class="card table-panel" id="cf-vr-closed-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Closed Campaigns</h3>
+        <div class="table-meta">Every line of this strategy that has ended — target hit, mother broken, stopped, or deleted. Chart shows it frozen as it ended.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Filter closed lines by coin" id="cf-vr-closed-filters"></div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th>Campaign</th>
+              <th>Symbol</th>
+              <th>Mode</th>
+              <th>Result</th>
+              <th class="num">Avg Entry</th>
+              <th class="num">Exit</th>
+              <th class="num">P&amp;L $</th>
+              <th>Closed At</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-vr-closed-body">
+            <tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="cf-cascade-pager" id="cf-vr-closed-pager"></div>
+  </section>
+
+<section class="card table-panel" id="cf-vr-ledger-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Closed Rounds <button type="button" class="cf-info" tabindex="0" data-cf-info="Every paper round this book has closed at target, newest first — one row per round, not per line. These are simulated fills on real candles: no order ever reached an exchange. This is the record the decision to let this strategy touch real money will be judged on. Log opens the individual buys behind each average." aria-label="What the Closed Rounds is">i</button></h3>
+        <div class="table-meta" id="cf-vr-ledger-meta">Every paper round this book has closed at target, newest first. Log opens the individual buys behind each average.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Filter paper rounds by coin" id="cf-vr-ledger-filters"></div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table cf-cascade-ledger">
+          <thead>
+            <tr>
+              <th>Closed</th>
+              <th>Symbol</th>
+              <th>Campaign</th>
+              <th>Round</th>
+              <th>Fib</th>
+              <th class="num">Avg Entry</th>
+              <th class="num">Exit</th>
+              <th class="num">Quantity</th>
+              <th class="num">Invested</th>
+              <th class="num" title="Modelled commission, both sides — no real order was placed, so nothing was read back from an exchange.">Fees</th>
+              <th class="num" title="After fees">P&amp;L $</th>
+              <th class="num">ROI</th>
+              <th>Held</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-vr-ledger-body">
+            <tr><td colspan="14" class="cf-table-empty-cell">No paper rounds yet &mdash; the first one appears here when a line reaches its target.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="cf-cascade-pager" id="cf-vr-ledger-pager"></div>
+  </section>
+
   <!-- Everything below is the PAPER book: the replay the nine-year
        backtest was run on, and the console that drives it. It is folded
        because the page's subject is the money (Phil, 2026-09-04: "Leave
@@ -1732,7 +1822,7 @@
        contents stay in the DOM while closed, so the paper renderer goes
        on updating and the book is current the moment it is opened. -->
   <details class="dashboard-fold" id="cf-r37-paper-fold">
-    <summary><strong>Paper book</strong><span>The proving ground &mdash; controls, watch list, open trades, armed orders and the journal</span></summary>
+    <summary><strong>Paper book &mdash; the 30-70 replay</strong><span>A DIFFERENT engine from the real-money book above, with its own start and stop. Controls, watch list, open trades, armed orders and the journal.</span><div class="cf-engine-chip" id="cf-r37-engine-chip" data-state="idle"><span class="cf-engine-dot" aria-hidden="true"></span><span class="cf-engine-label">Replay</span><strong id="cf-r37-engine-state">Idle</strong></div></summary>
     <div class="dashboard-fold-content">
   <div class="stats-grid" style="margin-bottom:20px;">
     <div class="stat-box">

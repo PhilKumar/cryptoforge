@@ -10396,23 +10396,6 @@ def _slim_ended_campaign(campaign: dict) -> dict:
     return {k: v for k, v in campaign.items() if k not in _ENDED_CAMPAIGN_DROP}
 
 
-def _vrule_working(campaign: dict) -> bool:
-    """Is this ladder doing something a person can act on?
-
-    The V-Rule is born on every confirmed V and most of them never arm: the
-    market simply does not come back to the entry. Those campaigns are real
-    history but they are not a position and not an order, and there is nothing
-    to do about one.
-    """
-    if campaign.get("closed_at") or str(campaign.get("state") or "") in CASCADE_FINAL_STATES:
-        return False
-    if _coerce_float_safe(campaign.get("filled_base_qty")) > 0:
-        return True  # holding coin
-    if _coerce_float_safe(campaign.get("pending_usd")) > 0:
-        return True  # money committed to a resting buy
-    return bool(campaign.get("pending_stop_price") or campaign.get("pending_order_id"))
-
-
 @app.get("/api/vrule/live/status")
 async def vrule_live_status():
     """The V-Rule's live books and their ladders, in the Cascade shape.
@@ -10431,13 +10414,19 @@ async def vrule_live_status():
     driver = _get_vrule()
     engine = _get_vrule_engine()
     engine_status = engine.get_status()
-    everything = engine_status.get("campaigns") or []
-    working = [c for c in everything if _vrule_working(c)]
+    # Every campaign travels, ended ones slimmed — the same treatment
+    # Cascade-Auto gets, and for the same reason. Sending only the working
+    # ladders starved the panels this page was missing: 211 of 251 ended
+    # campaigns are NOT in `closed_campaigns` (it keeps the last
+    # CLOSED_HISTORY_LIMIT), and they hold the only six booked rounds, so a
+    # Closed Rounds table fed from the filtered list would have read zero.
+    # The CARDS are filtered on the client instead.
+    campaigns = [_slim_ended_campaign(c) for c in (engine_status.get("campaigns") or [])]
     return {
         "status": "ok",
         **driver.status(),
-        "campaigns": working,
-        "watching": max(len(everything) - len(working), 0),
+        "campaigns": campaigns,
+        "watching": sum(1 for c in campaigns if not _cascade_campaign_working(c)),
         "closed_campaigns": list(engine_status.get("closed_campaigns") or engine.closed_campaigns or [])[-50:],
         "instruments": engine_status.get("instruments") or {},
     }

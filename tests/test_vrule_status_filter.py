@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app as app_module  # noqa: E402
 
-working = app_module._vrule_working
+working = app_module._cascade_campaign_working
 
 
 def campaign(**over):
@@ -97,7 +97,7 @@ def _status(monkeypatch, campaigns):
     return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(app_module.vrule_live_status())
 
 
-def test_only_the_working_ladders_ride_in_campaigns(monkeypatch):
+def test_every_campaign_still_travels_so_the_ledger_keeps_its_rounds(monkeypatch):
     rows = [
         campaign(campaign_id="held", filled_base_qty=0.01),
         campaign(campaign_id="armed", pending_usd=5.5),
@@ -106,19 +106,23 @@ def test_only_the_working_ladders_ride_in_campaigns(monkeypatch):
         campaign(campaign_id="broke", state="MOTHER_BROKEN"),
     ]
     out = _status(monkeypatch, rows)
-    assert [c["campaign_id"] for c in out["campaigns"]] == ["held", "armed"]
+    # All five, because the Closed Rounds table reads its rounds off ended
+    # campaigns that closed_campaigns does not keep. The CARDS are filtered on
+    # the client; the payload is not.
+    assert [c["campaign_id"] for c in out["campaigns"]] == ["held", "armed", "waiting", "done", "broke"]
+    assert out["watching"] == 3
 
 
 def test_the_ones_left_out_are_counted_not_silently_dropped(monkeypatch):
     rows = [campaign(campaign_id="armed", pending_usd=5.5)] + [campaign(campaign_id=f"w{i}") for i in range(24)]
     out = _status(monkeypatch, rows)
     assert out["watching"] == 24
-    assert len(out["campaigns"]) == 1
+    assert len(out["campaigns"]) == 25
 
 
 def test_nothing_working_still_reports_the_watchers(monkeypatch):
     out = _status(monkeypatch, [campaign(campaign_id=f"w{i}") for i in range(7)])
-    assert out["campaigns"] == []
+    assert len(out["campaigns"]) == 7
     assert out["watching"] == 7
 
 

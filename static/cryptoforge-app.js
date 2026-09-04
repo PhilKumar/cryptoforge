@@ -13731,6 +13731,8 @@ function cfR37RenderStatus(s) {
   var chip = document.getElementById('cf-r37-engine-chip');
   if (chip) chip.setAttribute('data-state', anyRunning ? 'running' : (s.start_ts ? 'stopped' : 'idle'));
   var stateNode = document.getElementById('cf-r37-engine-state');
+  // "Replay Stopped" — the label beside it says which engine this is, so it
+  // can no longer be read as a verdict on the real-money driver above.
   if (stateNode) stateNode.textContent = running
     ? 'Running'
     : (anyRunning ? runningSymbols.length + ' Running' : (s.start_ts ? 'Stopped' : 'Idle'));
@@ -14274,7 +14276,14 @@ function cfVrSyncControls() {
   var text = document.getElementById('cf-vr-state-text');
   if (badge) {
     badge.className = 'tp-badge ' + (on ? (book.mode === 'live' ? 'live' : 'running') : 'idle');
-    badge.textContent = on ? (book.mode === 'live' ? 'On · REAL MONEY' : 'On · paper') : (book ? 'Off' : 'No book');
+    // Name the BOOK, not just the mode. The 30-70 replay carries its own
+    // Paper chip, and with this card at the top of the page the two sat side
+    // by side reading "ON · PAPER" and "PAPER Stopped" about different
+    // engines (Phil, 2026-09-04: "If the paper is stopped then why I am
+    // getting this? Completely contradicting").
+    badge.textContent = on
+      ? (book.mode === 'live' ? 'Driver · REAL MONEY' : 'Driver · paper')
+      : (book ? 'Driver · off' : 'No book');
   }
   if (text) text.textContent = book ? (on ? (book.last_error || book.note || '') : '') : '';
   var show = function (id, visible) { var n = document.getElementById(id); if (n) n.hidden = !visible; };
@@ -14317,20 +14326,30 @@ function cfVrRenderStatus(data) {
     cfVrSelectSymbol((document.getElementById('cf-vr-symbol') || {}).value || '');
   });
   cfVrSyncControls();
-  var working = Array.isArray(data && data.campaigns) ? data.campaigns : [];
+  var all = Array.isArray(data && data.campaigns) ? data.campaigns : [];
   var closed = Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : [];
-  // The event log reads each campaign's own log, and `campaigns` now carries
-  // only the ladders still working — so the finished ones come from the closed
-  // history, or the log would have shrunk to whatever is open this minute.
+  var working = all.filter(_cfCascadeCampaignWorking);
+  // Register before drawing: a round's Log button looks its campaign up by id,
+  // and the driver's campaigns are never in the live Cascade's status.
+  _cfCascadeRememberStatus('vrule', data || {});
   cfRenderCascadeEvents(
-    working.concat(closed),
+    all,
     { mountId: 'cf-vr-events', emptyText: 'No events yet — the live book has not opened a ladder.' }
   );
+  // What is held right now, what has ended, and what any of it earned. The
+  // live half had none of these three; it is the Cascade page's own renderers
+  // under this page's ids, exactly as Cascade-Auto does it. paperOnly follows
+  // the book: a driver book in paper mode never held real money.
+  cfRenderCascadeTrades(all, { mountId: 'cf-vr-trades', actions: false });
+  cfRenderCascadeClosed(closed, 'cf-vr-closed');
+  cfRenderCascadeLedger(data || {}, 'cf-vr-ledger', {
+    paperOnly: !(_cfVrBooks || []).some(function (b) { return b && b.enabled && b.mode === 'live'; })
+  });
   // A V-Rule book opens a campaign on every confirmed V and most never arm.
   // Those are history, not something to act on, so the server leaves them out
   // and sends their count instead (Phil, 2026-09-04: "Can we put only those
   // were armed or in the trade?").
-  var watching = Number(data && data.watching) || 0;
+  var watching = all.length - working.length;
   cfRenderCascadeCampaigns(
     working,
     (data && data.instruments) || {},
