@@ -2769,14 +2769,26 @@ async def serve_assets_tearsheet(request: Request, doc: str = "hybrid"):
         fragment = handle.read()
     theme = request.query_params.get("theme", "")
     theme_attr = f' data-theme="{theme}"' if theme in {"light", "dark"} else ""
+    # The look and the reader are ordinary /static files, NOT inline blocks:
+    # this app sends `style-src-elem 'self'` and `script-src-elem 'self'`, so an
+    # inline <style> or <script> is dropped by the browser and the document
+    # renders as raw unstyled HTML with a dead contents rail. PhilForge carries
+    # its sheets inline because it has no such policy; this one cannot.
+    sheet = str(doc).lower() if str(doc).lower() in _TEARSHEET_DOCS else "hybrid"
+    css_href = f"/static/tearsheet-{sheet}.css"
+    js_src = "/static/tearsheet.js"
+    css_v = _asset_version(css_href)
+    js_v = _asset_version(js_src)
     shell = (
         "<!DOCTYPE html>\n"
-        f'<html lang="en"{theme_attr}>\n<head>\n'
+        f'<html lang="en"{theme_attr} data-sheet="{sheet}">\n<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         '<meta name="color-scheme" content="dark light">\n'
+        f'<link rel="stylesheet" href="{css_href}{f"?v={css_v}" if css_v else ""}">\n'
         "</head>\n<body>\n"
         f"{fragment}\n"
+        f'<script src="{js_src}{f"?v={js_v}" if js_v else ""}" defer></script>\n'
         "</body>\n</html>\n"
     )
     resp = HTMLResponse(shell)

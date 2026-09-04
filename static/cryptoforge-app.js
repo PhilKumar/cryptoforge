@@ -11169,6 +11169,10 @@ function cfCascadeShowRoundLog(campaignId, roundId) {
 
   var found = _cfCascadeFindRound(campaignId, roundId);
   if (!found) {
+    // Clear the heading too: leaving the last round's title above "not found"
+    // reads as the wrong trade's log rather than as a miss.
+    if (title) title.textContent = 'Closed Trades';
+    if (meta) meta.textContent = '';
     body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
       + 'That round is no longer in the current status payload.</div>';
     overlay.style.display = '';
@@ -14021,7 +14025,12 @@ function cfR37RenderJournal(events) {
   // The same rows, twice: the rounds ledger above, the event journal below, so
   // this page reads like the other two. Paper-only — no order this console
   // places has ever reached an exchange.
-  cfRenderCascadeLedger(_cfR37LedgerShape(events), 'cf-r37-ledger', { paperOnly: true });
+  var shape = _cfR37LedgerShape(events);
+  // The Log button looks a round up across every REGISTERED book. Without this
+  // the V-Rule's rounds are in no pool, the lookup fails, and the overlay opens
+  // on whatever it was showing last.
+  _cfCascadeRememberStatus('vrule', shape);
+  cfRenderCascadeLedger(shape, 'cf-r37-ledger', { paperOnly: true });
   var body = document.getElementById('cf-r37-journal-body');
   if (!body) return;
   if (!events.length) {

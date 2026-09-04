@@ -43,6 +43,7 @@ table.heat tbody tr:nth-child(even) { background:var(--surface-2); }
 """
 
 OUT_DIR = _REPO / "docs" / "assets"
+STATIC_DIR = _REPO / "static"
 DATA_DIR = _HERE / "data"
 
 COIN_NAME = {"BTCUSDT": "Bitcoin", "ETHUSDT": "Ether", "SOLUSDT": "Solana", "PAXGUSDT": "PAX Gold"}
@@ -484,6 +485,7 @@ def build(key: str) -> pathlib.Path:
     span = f"{min(c['first_day'] for c in coins)} → {max(c['last_day'] for c in coins)}"
 
     css = kit.recolour(kit.STYLE, key).replace("{{", "{").replace("}}", "}") + LANG_CSS + EXTRA_CSS
+    reader_js = "\n".join(block.replace("<script>", "").replace("</script>", "") for block in (kit.READER_JS, LANG_JS))
     bodies = {
         "headline": headline(book),
         "coins": coin_table(book),
@@ -501,8 +503,17 @@ def build(key: str) -> pathlib.Path:
         for anchor, en, ta in SECTIONS
     )
 
-    doc = f"""<style>{css}</style>
-<div class="reading-progress" aria-hidden="true"><span id="reading-progress-bar"></span></div>
+    # Written once per build, shared by all three documents. Their only
+    # difference is the accent, so each gets its own recoloured stylesheet
+    # rather than a cascade of overrides that would miss the literal rgba()
+    # values recolour() rewrites.
+    STATIC_DIR.mkdir(parents=True, exist_ok=True)
+    # Trailing newline: the repo's end-of-file hook adds one, and a builder
+    # that writes the file back without it makes the two fight on every commit.
+    (STATIC_DIR / f"tearsheet-{key}.css").write_text(css.rstrip("\n") + "\n", encoding="utf-8")
+    (STATIC_DIR / "tearsheet.js").write_text(reader_js.rstrip("\n") + "\n", encoding="utf-8")
+
+    doc = f"""<div class="reading-progress" aria-hidden="true"><span id="reading-progress-bar"></span></div>
 <div class="wrap">
 {hero(cfg, book, span)}
 <div class="reader-toolbar">
@@ -525,8 +536,6 @@ def build(key: str) -> pathlib.Path:
   </article>
 </div>
 </div>
-{kit.READER_JS}
-{LANG_JS}
 """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / cfg["file"]

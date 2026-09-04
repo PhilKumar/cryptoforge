@@ -167,6 +167,56 @@ class SheetDataTests(unittest.TestCase):
                 self.assertGreater(spans["PAXGUSDT"], 5.5)
 
 
+class ContentSecurityPolicyTests(unittest.TestCase):
+    """The document must survive this app's own CSP.
+
+    Phil, 2026-09-04, on the first published version: the tearsheet opened as
+    raw serif text over black shapes. It carried its whole look in an inline
+    <style> and its reader in inline <script>, the way PhilForge's sheets do —
+    but this app sends `style-src-elem 'self'` and `script-src-elem 'self'`, so
+    the browser dropped both and rendered the bare markup. Nothing errored
+    anywhere; it simply looked like garbage.
+    """
+
+    def setUp(self):
+        self.app_module = import_module("app")
+
+    def test_the_policy_still_forbids_inline(self):
+        """If this ever relaxes, the reason for the split below is gone — but
+        until it does, the split is load-bearing."""
+        source = open(self.app_module.__file__, encoding="utf-8").read()
+        policy = source.split("csp = (", 1)[1].split(")", 1)[0]
+        self.assertIn("style-src-elem 'self'", policy)
+        self.assertIn("script-src-elem 'self'", policy)
+        self.assertNotIn("style-src-elem 'self' 'unsafe-inline'", policy)
+
+    def test_no_sheet_carries_an_inline_style_or_script(self):
+        for key in SHEETS:
+            html = _published(key)
+            if html is None:
+                continue
+            with self.subTest(key):
+                self.assertNotIn("<style", html, f"{key} has an inline <style> the CSP will drop")
+                self.assertNotIn("<script", html, f"{key} has an inline <script> the CSP will drop")
+
+    def test_the_look_and_the_reader_ship_as_static_files(self):
+        static = os.path.join(_HERE, "static")
+        self.assertTrue(os.path.exists(os.path.join(static, "tearsheet.js")))
+        for key in SHEETS:
+            with self.subTest(key):
+                self.assertTrue(os.path.exists(os.path.join(static, f"tearsheet-{key}.css")))
+
+    def test_the_reader_file_is_loadable_javascript(self):
+        """It is assembled from two blocks that each carried their own <script>
+        tag; leaving one in is a syntax error on line one and a dead page."""
+        with open(os.path.join(_HERE, "static", "tearsheet.js"), encoding="utf-8") as handle:
+            js = handle.read()
+        self.assertNotIn("<script", js)
+        self.assertNotIn("</script>", js)
+        self.assertIn("document-toc", js)
+        self.assertIn("langbar", js)
+
+
 class TearsheetRouteTests(unittest.TestCase):
     def setUp(self):
         self.app_module = import_module("app")
