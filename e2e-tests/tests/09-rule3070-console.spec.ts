@@ -134,7 +134,7 @@ function status(running: boolean, symbol = 'BTCUSDT', runningSymbols = running ?
   };
 }
 
-async function open3070(page: Page, running: boolean) {
+async function open3070(page: Page, running: boolean, leaveFoldClosed = false) {
   await page.route('**/api/rule3070/status**', (route) =>
     route.fulfill({ json: status(running) }));
   await page.route('**/api/rule3070/journal**', (route) =>
@@ -156,10 +156,69 @@ async function open3070(page: Page, running: boolean) {
   // Strategies opens on the last-used sub-page; make sure we are on the V-Rule
   await page.evaluate(() => (window as any).showPage('rule3070-page', document.getElementById('nav-strategies')));
   await expect(page.locator('#rule3070-page')).toBeVisible();
+  // The page leads with real money now and the paper console sits behind a
+  // fold, closed on arrival. Everything below this line asserts on that
+  // console — its cards, its buttons, its tables — so open it first. A closed
+  // <details> hides its contents outright, which is why these tests read
+  // placeholders and timed out clicking Chart buttons when the fold landed.
+  // The default-closed state is itself checked in "the page leads with the
+  // money" below, so opening it here loses no coverage.
+  if (leaveFoldClosed) return;
+  await page.locator('#cf-r37-paper-fold > summary').click();
+  await expect(page.locator('#cf-r37-paper-fold')).toHaveAttribute('open', '');
   await expect(page.locator('#cf-r37-watch-price')).toContainText('64,010');
 }
 
 test.describe('30-70 console', () => {
+  // Guards the layout the fold was introduced for (Phil, 2026-09-04: "Leave
+  // only what is necessary for Live"). open3070 opens the fold, so without
+  // this nothing would notice if it silently defaulted back to open, or if
+  // the paper console drifted back above the money.
+  test('the page leads with the money, paper folded away beneath it', async ({ page }) => {
+    await open3070(page, true, /* leaveFoldClosed */ true);
+
+    // Real money and its ladders are the first thing on the page.
+    await expect(page.locator('#cf-vr-grid')).toBeVisible();
+    await expect(page.locator('#cf-vr-campaigns')).toBeVisible();
+
+    // The paper half is present but folded, so none of it is on screen.
+    const fold = page.locator('#cf-r37-paper-fold');
+    await expect(fold).toHaveCount(1);
+    await expect(fold).not.toHaveAttribute('open', '');
+    await expect(page.locator('#cf-r37-watch-price')).toBeHidden();
+    await expect(page.locator('#cf-r37-start-btn')).toBeHidden();
+
+    // Real money sits ABOVE the fold in the document, not merely elsewhere.
+    const moneyFirst = await page.evaluate(() => {
+      const money = document.getElementById('cf-vr-grid');
+      const fold = document.getElementById('cf-r37-paper-fold');
+      if (!money || !fold) return null;
+      // Node.DOCUMENT_POSITION_FOLLOWING === 4
+      return (money.compareDocumentPosition(fold) & 4) === 4;
+    });
+    expect(moneyFirst).toBe(true);
+
+    // And the summary opens it.
+    await page.locator('#cf-r37-paper-fold > summary').click();
+    await expect(page.locator('#cf-r37-watch-price')).toBeVisible();
+  });
+
+  // The four headline cards the page carried are down to two: the duplicated
+  // price (Last Tick repeated Watching Now's Price Now from the same bar) and
+  // the three totals the Open Paper Trades table restates are gone.
+  test('the headline row is Purse and P&L, with the paper clock on the P&L', async ({ page }) => {
+    await open3070(page, true);
+    const grid = page.locator('#rule3070-page .dashboard-fold-content > .stats-grid').first();
+    await expect(grid.locator('.stat-box')).toHaveCount(2);
+    await expect(grid).toContainText('Purse');
+    await expect(grid).toContainText('Paper P&L');
+    await expect(page.locator('#cf-r37-closed-count')).toContainText('since');
+    for (const gone of ['#cf-r37-last-close', '#cf-r37-last-tick', '#cf-r37-since',
+                        '#cf-r37-open-count', '#cf-r37-unrealised']) {
+      await expect(page.locator(gone)).toHaveCount(0);
+    }
+  });
+
   test('the wait is on screen: mother, V stage, armed orders and activity', async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(String(e)));
