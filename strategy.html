@@ -1639,6 +1639,30 @@
     </div>
   </div>
 
+
+  <!-- What the book is HOLDING leads the page, above the controls that
+       start a ladder — the order Cascade-Hybrid uses, and for the same
+       reason: this is the money at risk right now (Phil, 2026-09-04:
+       "Open trades to top.. same setup like the cascade-hybrid"). -->
+<!-- The real-money book's own Open Trades, Closed Campaigns and Closed
+       Rounds, drawn by the Cascade page's renderers under this page's ids —
+       the same way Cascade-Auto gets them. The live half had none of the
+       three: it showed working ladders and an event log and nothing else, so
+       there was nowhere to see what was held, what had ended, or what any of
+       it earned (Phil, 2026-09-04: "There is no open trades panel / No closed
+       rounds... or no closed campaigns"). -->
+<section class="card table-panel" id="cf-vr-trades-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Open Trades</h3>
+        <div class="table-meta" id="cf-vr-trades-meta">Every line holding coin right now, what it cost, and what it is worth.</div>
+      </div>
+    </div>
+    <div id="cf-vr-trades">
+      <div class="cf-table-empty-cell" style="padding:14px;">No open trades — nothing has been bought yet.</div>
+    </div>
+  </section>
+
   <div class="allocator-grid" id="cf-vr-grid">
   <section class="card allocator-input-panel" aria-labelledby="cf-vr-title">
     <h3 id="cf-vr-title">Real money <button type="button" class="cf-info" tabindex="0" data-cf-info="The V-Rule trading a live exchange account. The rule is the paper book's rule to the bar — a parity harness holds the live driver to the locked simulator on every fill, target and end — but its buys are real orders: a trailing buy stop that rests on the exchange and walks down with each new low, and a single take-profit that rests against the whole ladder. It runs in its OWN engine, so the Cascade page's campaigns and capital groups are never touched, though both spend from the same exchange balance. There is no stop-loss: every exit is the target, and a ladder the market does not turn for is simply held." aria-label="What real-money V-Rule does">i</button></h3>
@@ -1696,77 +1720,15 @@
   </section>
   </div>
 
-  <!-- The Cascade page's Campaign Event Log, drawn by the SAME renderer with
-       this page's ids (Phil, 2026-08-24: "add campaign event log in every
-       strategy like cascade"). The events ride in this page's own status
-       payload — every campaign already carries its event_log — so there is no
-       second endpoint and no second renderer to drift. -->
-  <section class="card table-panel">
-    <div class="table-toolbar">
-      <div class="table-title-group">
-        <h3 class="table-title">Campaign Event Log</h3>
-        <div class="table-meta">Every buy the live ladders rest, each fill, and each target — for the real-money book.</div>
-      </div>
-    </div>
-    <div id="cf-vr-events" class="cf-scalp-log-panel" style="max-height:280px;overflow-y:auto;padding:10px 14px;">
-      <div class="cf-table-empty-cell">No events yet</div>
-    </div>
-  </section>
 
 
-  <!-- The real-money book's own Open Trades, Closed Campaigns and Closed
-       Rounds, drawn by the Cascade page's renderers under this page's ids —
-       the same way Cascade-Auto gets them. The live half had none of the
-       three: it showed working ladders and an event log and nothing else, so
-       there was nowhere to see what was held, what had ended, or what any of
-       it earned (Phil, 2026-09-04: "There is no open trades panel / No closed
-       rounds... or no closed campaigns"). -->
-<section class="card table-panel" id="cf-vr-trades-panel">
-    <div class="table-toolbar">
-      <div class="table-title-group">
-        <h3 class="table-title">Open Trades</h3>
-        <div class="table-meta" id="cf-vr-trades-meta">Every line holding coin right now, what it cost, and what it is worth.</div>
-      </div>
-    </div>
-    <div id="cf-vr-trades">
-      <div class="cf-table-empty-cell" style="padding:14px;">No open trades — nothing has been bought yet.</div>
-    </div>
-  </section>
 
-<section class="card table-panel" id="cf-vr-closed-panel">
-    <div class="table-toolbar">
-      <div class="table-title-group">
-        <h3 class="table-title">Closed Campaigns</h3>
-        <div class="table-meta">Every line of this strategy that has ended — target hit, mother broken, stopped, or deleted. Chart shows it frozen as it ended.</div>
-      </div>
-      <div class="admin-inline-actions">
-        <div class="cf-tf-toggle" role="radiogroup" aria-label="Filter closed lines by coin" id="cf-vr-closed-filters"></div>
-      </div>
-    </div>
-    <div class="table-surface">
-      <div class="table-scroll">
-        <table class="trade-table">
-          <thead>
-            <tr>
-              <th>Campaign</th>
-              <th>Symbol</th>
-              <th>Mode</th>
-              <th>Result</th>
-              <th class="num">Avg Entry</th>
-              <th class="num">Exit</th>
-              <th class="num">P&amp;L $</th>
-              <th>Closed At</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="cf-vr-closed-body">
-            <tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div class="cf-cascade-pager" id="cf-vr-closed-pager"></div>
-  </section>
+
+
+
+
+
+
 
 <section class="card table-panel" id="cf-vr-ledger-panel">
     <div class="table-toolbar">
@@ -1806,6 +1768,58 @@
       </div>
     </div>
     <div class="cf-cascade-pager" id="cf-vr-ledger-pager"></div>
+  </section>
+
+<!-- The Cascade page's Campaign Event Log, drawn by the SAME renderer with
+       this page's ids (Phil, 2026-08-24: "add campaign event log in every
+       strategy like cascade"). The events ride in this page's own status
+       payload — every campaign already carries its event_log — so there is no
+       second endpoint and no second renderer to drift. -->
+  <section class="card table-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Campaign Event Log</h3>
+        <div class="table-meta">Every buy the live ladders rest, each fill, and each target — for the real-money book.</div>
+      </div>
+    </div>
+    <div id="cf-vr-events" class="cf-scalp-log-panel" style="max-height:280px;overflow-y:auto;padding:10px 14px;">
+      <div class="cf-table-empty-cell">No events yet</div>
+    </div>
+  </section>
+
+<section class="card table-panel" id="cf-vr-closed-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Closed Campaigns</h3>
+        <div class="table-meta">Every line of this strategy that has ended — target hit, mother broken, stopped, or deleted. Chart shows it frozen as it ended.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Filter closed lines by coin" id="cf-vr-closed-filters"></div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th>Campaign</th>
+              <th>Symbol</th>
+              <th>Mode</th>
+              <th>Result</th>
+              <th class="num">Avg Entry</th>
+              <th class="num">Exit</th>
+              <th class="num">P&amp;L $</th>
+              <th>Closed At</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-vr-closed-body">
+            <tr><td colspan="9" class="cf-table-empty-cell">No closed campaigns yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="cf-cascade-pager" id="cf-vr-closed-pager"></div>
   </section>
 
   <!-- Everything below is the PAPER book: the replay the nine-year
