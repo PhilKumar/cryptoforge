@@ -1313,6 +1313,11 @@
       <h2>Cascade-Auto <button type="button" class="cf-info" tabindex="0"
         data-cf-info-target="cf-af-strategy-info" aria-controls="cf-af-strategy-info"
         aria-expanded="false" aria-label="Read the complete Cascade Auto strategy in English or Tamil">i</button></h2>
+      <!-- The published book for this strategy: every 5m bar Binance holds,
+           run through the SHIPPED configuration. Built by
+           tools/tearsheet/build_sheets.py, served by /assets/tearsheet. -->
+      <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=auto"
+         target="_blank" rel="noopener" title="The Cascade-Auto book, measured over every coin's whole history">Tearsheet</a>
     </div>
     <div class="cf-engine-chip" id="cf-af-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
@@ -1593,6 +1598,11 @@
       <h2>The V-Rule <button type="button" class="cf-info" tabindex="0"
         data-cf-info-target="cf-vrule-strategy-info" aria-controls="cf-vrule-strategy-info"
         aria-expanded="false" aria-label="Read the complete V-Rule strategy in English or Tamil">i</button></h2>
+      <!-- The published book for this strategy: every 5m bar Binance holds,
+           run through the SHIPPED configuration. Built by
+           tools/tearsheet/build_sheets.py, served by /assets/tearsheet. -->
+      <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=vrule"
+         target="_blank" rel="noopener" title="The V-Rule book, measured over every coin's whole history">Tearsheet</a>
     </div>
     <div class="cf-engine-chip" id="cf-r37-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
@@ -1895,6 +1905,53 @@
     <div class="pagination-bar" id="cf-r37-warmup-pagination" style="display:none;"></div>
   </section>
 
+  <!-- The same rounds ledger the two Cascade pages carry, drawn by the same
+       renderer with this page's ids (Phil, 2026-09-03: "make V-Rule and
+       Cascade-Auto panels resemble Cascade Hybrid"). The V-Rule keeps an event
+       journal rather than campaign objects, so _cfR37LedgerShape folds the
+       journal into the shape this renderer reads — quantity from each buy's
+       own price, average entry from cost over that quantity, and the fee is
+       the engine's own 0.1% a side, marked estimated. No column is invented. -->
+  <section class="card table-panel" id="cf-r37-ledger-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Closed Rounds &mdash; Every Trade <button type="button" class="cf-info" tabindex="0" data-cf-info="Every paper round this book has closed at target, newest first — one row per round, not per buy. These are simulated fills on real candles: no order ever reached an exchange. Log opens the individual buys behind each average." aria-label="What the Closed Rounds ledger is">i</button></h3>
+        <div class="table-meta" id="cf-r37-ledger-meta">Every ladder this strategy sold at target, newest first. Log opens the individual buys behind each average.</div>
+      </div>
+      <div class="admin-inline-actions">
+        <div class="cf-tf-toggle" role="radiogroup" aria-label="Filter paper rounds by coin" id="cf-r37-ledger-filters"></div>
+      </div>
+    </div>
+    <div class="table-surface">
+      <div class="table-scroll">
+        <table class="trade-table cf-cascade-ledger">
+          <thead>
+            <tr>
+              <th>Closed</th>
+              <th>Symbol</th>
+              <th>Campaign</th>
+              <th>Round</th>
+              <th>Fib</th>
+              <th class="num">Avg Entry</th>
+              <th class="num">Exit</th>
+              <th class="num">Quantity</th>
+              <th class="num">Invested</th>
+              <th class="num" title="Modelled commission, both sides &mdash; no real order was placed, so nothing was read back from an exchange.">Fees</th>
+              <th class="num" title="After fees">P&amp;L $</th>
+              <th class="num">ROI</th>
+              <th>Held</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cf-r37-ledger-body">
+            <tr><td colspan="14" class="cf-table-empty-cell">No paper rounds yet &mdash; the first one appears here when a ladder reaches its target.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="cf-cascade-pager" id="cf-r37-ledger-pager"></div>
+  </section>
+
   <section class="card table-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
@@ -1926,6 +1983,11 @@
       <h2>Cascade-Hybrid Campaigns <button type="button" class="cf-info" tabindex="0"
         data-cf-info-target="cf-cascade-strategy-info" aria-controls="cf-cascade-strategy-info"
         aria-expanded="false" aria-label="Read the complete Cascade Hybrid strategy in English or Tamil">i</button></h2>
+      <!-- The published book for this strategy: every 5m bar Binance holds,
+           run through the SHIPPED configuration. Built by
+           tools/tearsheet/build_sheets.py, served by /assets/tearsheet. -->
+      <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=hybrid"
+         target="_blank" rel="noopener" title="The Cascade Hybrid book, measured over every coin's whole history">Tearsheet</a>
     </div>
     <div class="cf-engine-chip" id="cf-cascade-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>

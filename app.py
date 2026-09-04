@@ -2736,6 +2736,54 @@ async def serve_frontend(request: Request):
     return HTMLResponse("<h2>strategy.html not found</h2>")
 
 
+# The three strategy tearsheets, each a FRAGMENT built by
+# tools/tearsheet/build_sheets.py from tools/tearsheet/run_backtests.py's
+# measurements. They are stored exactly as they were published: a document that
+# quietly re-rendered itself against today's data would not be a record of
+# anything. An unregistered key falls back to the Cascade Hybrid sheet
+# SILENTLY, so a doc is registered here before anything links to it.
+_TEARSHEET_DOCS = {
+    "hybrid": os.path.join(_HERE, "docs", "assets", "cascade-hybrid-tearsheet.html"),
+    "auto": os.path.join(_HERE, "docs", "assets", "cascade-auto-tearsheet.html"),
+    "vrule": os.path.join(_HERE, "docs", "assets", "vrule-tearsheet.html"),
+}
+
+
+@app.get("/assets/tearsheet", response_class=HTMLResponse)
+async def serve_assets_tearsheet(request: Request, doc: str = "hybrid"):
+    """Serve one tearsheet as a standalone private document.
+
+    One route, one shell, one theme contract — the same shape PhilForge serves
+    its five sheets through, so a reader who has opened one of those opens this
+    one without learning anything new. The workspace owns the theme; the
+    document follows the `theme` it is given rather than deciding for itself,
+    or the embed would fight the page around it.
+    """
+    token = _get_session_token(request)
+    if not _validate_session(token, request=request):
+        return RedirectResponse("/app", status_code=307)
+    path = _TEARSHEET_DOCS.get(str(doc).lower(), _TEARSHEET_DOCS["hybrid"])
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Tearsheet document not found")
+    with open(path, encoding="utf-8") as handle:
+        fragment = handle.read()
+    theme = request.query_params.get("theme", "")
+    theme_attr = f' data-theme="{theme}"' if theme in {"light", "dark"} else ""
+    shell = (
+        "<!DOCTYPE html>\n"
+        f'<html lang="en"{theme_attr}>\n<head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="color-scheme" content="dark light">\n'
+        "</head>\n<body>\n"
+        f"{fragment}\n"
+        "</body>\n</html>\n"
+    )
+    resp = HTMLResponse(shell)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 _HTML_TAG_RE = re.compile(r"<html\b([^>]*)>", re.IGNORECASE)
 
 

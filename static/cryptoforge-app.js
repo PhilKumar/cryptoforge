@@ -13953,7 +13953,75 @@ function cfR37RenderActivity(lines) {
   }).join('');
 }
 
+// The V-Rule's rounds, in the shape the Cascade ledger reads.
+//
+// Phil, 2026-09-03: the three strategy pages should carry the same panels. The
+// V-Rule keeps an event journal (a BUY row per fill, a TARGET row per sale)
+// rather than the Cascade's campaign/round objects, so this folds the journal
+// into that shape and hands it to the SAME renderer — no second ledger to
+// drift, and no column invented.
+//
+// Everything below is DERIVED FROM THE JOURNAL'S OWN ROWS: quantity is the sum
+// of each buy's dollars over its own price, the average entry is cost over that
+// quantity, and the fee is the engine's own 0.1% a side — marked estimated, so
+// the cell renders with the "~" the Cascade ledger already uses for a modelled
+// figure. A round whose buys are not in the window shows the columns it can
+// fill and dashes the rest, which is the honest answer to a partial journal.
+function _cfR37LedgerShape(events) {
+  var buysBy = {};
+  (events || []).forEach(function(e) {
+    if (e.kind !== 'BUY') return;
+    var key = String(e.cid || e.mts || '');
+    (buysBy[key] = buysBy[key] || []).push(e);
+  });
+  var campaigns = {};
+  (events || []).forEach(function(e) {
+    if (e.kind !== 'TARGET') return;
+    var key = String(e.cid || e.mts || '');
+    var buys = buysBy[key] || [];
+    var cost = Number(e.cost) || 0;
+    var qty = 0;
+    buys.forEach(function(b) {
+      var price = Number(b.price) || 0;
+      if (price > 0) qty += (Number(b.usd) || 0) / price;
+    });
+    var exit = Number(e.price) || 0;
+    var campaign = campaigns[key] || (campaigns[key] = {
+      campaign_id: key,
+      seq: 0,
+      symbol: e.symbol || _cfR37ActiveSymbol || '',
+      mode: 'paper',
+      state: 'COMPLETED',
+      rounds: []
+    });
+    campaign.rounds.push({
+      round_id: campaign.rounds.length + 1,
+      leg_id: e.minor ? 'minor' : 'major',
+      closed_ts: Number(e.ts) || 0,
+      closed_at: e.when || '',
+      opened_ts: buys.length ? (Number(buys[0].ts) || 0) : 0,
+      avg_entry: qty > 0 ? cost / qty : 0,
+      exit_price: exit,
+      quantity: qty,
+      invested_usd: cost,
+      pnl: Number(e.net) || 0,
+      fees_usd: qty > 0 ? 0.001 * (cost + qty * exit) : 0,
+      fees_estimated: true,
+      fills: buys.map(function(b) {
+        return { price: Number(b.price) || 0, usd: Number(b.usd) || 0, label: b.label || '', when: b.when || '' };
+      })
+    });
+  });
+  var out = [];
+  Object.keys(campaigns).forEach(function(k) { out.push(campaigns[k]); });
+  return { campaigns: out, closed_campaigns: [] };
+}
+
 function cfR37RenderJournal(events) {
+  // The same rows, twice: the rounds ledger above, the event journal below, so
+  // this page reads like the other two. Paper-only — no order this console
+  // places has ever reached an exchange.
+  cfRenderCascadeLedger(_cfR37LedgerShape(events), 'cf-r37-ledger', { paperOnly: true });
   var body = document.getElementById('cf-r37-journal-body');
   if (!body) return;
   if (!events.length) {

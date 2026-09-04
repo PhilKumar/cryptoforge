@@ -256,6 +256,12 @@
   /* `.btn` sets display:inline-flex, which outranks the browser's own
      [hidden] rule — so every `button.btn` marked hidden in JS stayed on
      screen (the 30-70 Stop button sat next to Start while stopped). */
+  /* The Tearsheet control is an <a>, because it opens a document in its own
+     tab; .btn sets a colour but not text-decoration, so without this the
+     button wears a link underline. */
+  a.cf-tearsheet-link { text-decoration: none; }
+  a.cf-tearsheet-link:hover { text-decoration: none; }
+
   .btn[hidden] { display: none; }
   .btn {
     padding: 10px 22px;
