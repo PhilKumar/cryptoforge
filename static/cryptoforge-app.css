@@ -1078,13 +1078,6 @@
   .dashboard-fold:not([open]) .dashboard-fold-content {
     display: none;
   }
-  /* The V-Rule's paper half folds behind this same disclosure and is styled
-     by the rules above with NOTHING added. That is deliberate: the obvious
-     tidy — stripping the fold's panel and moving its border to the summary,
-     so the paper cards keep page width — has to name #cf-r37-paper-fold, and
-     an id outranks `html[data-theme="light"] .dashboard-fold` further down
-     this file. The fold would have kept its dark panel on a light page. The
-     paper book genuinely is a container, so it can look like one. */
   .dashboard-fold-actions {
     display: flex;
     justify-content: flex-end;
