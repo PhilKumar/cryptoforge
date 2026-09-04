@@ -10352,16 +10352,48 @@ async def auto_fib_set_book(request: Request):
     return {"status": "ok", **driver.status()}
 
 
+def _vrule_working(campaign: dict) -> bool:
+    """Is this ladder doing something a person can act on?
+
+    The V-Rule is born on every confirmed V and most of them never arm: the
+    market simply does not come back to the entry. Those campaigns are real
+    history but they are not a position and not an order, and there is nothing
+    to do about one.
+    """
+    if campaign.get("closed_at") or str(campaign.get("state") or "") in CASCADE_FINAL_STATES:
+        return False
+    if _coerce_float_safe(campaign.get("filled_base_qty")) > 0:
+        return True  # holding coin
+    if _coerce_float_safe(campaign.get("pending_usd")) > 0:
+        return True  # money committed to a resting buy
+    return bool(campaign.get("pending_stop_price") or campaign.get("pending_order_id"))
+
+
 @app.get("/api/vrule/live/status")
 async def vrule_live_status():
-    """The V-Rule's live books and their ladders, in the Cascade shape."""
+    """The V-Rule's live books and their ladders, in the Cascade shape.
+
+    Only the WORKING ladders ride in `campaigns` — armed, or holding coin.
+    The driver opens a campaign for every confirmed V, so the list grew to 260
+    in two days, of which 5 were doing anything at all; the page rendered a
+    card for each and the payload reached 796 KB on a poll that repeats every
+    few seconds (Phil, 2026-09-04: "Why so much campaigns are shown here, can
+    we decrease this? Can we put only those were armed or in the trade?").
+
+    The ones left out are not lost: every campaign that ended is in
+    `closed_campaigns`, and `watching` counts the ones still waiting for their
+    entry so the page can say so in a line instead of five hundred rows.
+    """
     driver = _get_vrule()
     engine = _get_vrule_engine()
     engine_status = engine.get_status()
+    everything = engine_status.get("campaigns") or []
+    working = [c for c in everything if _vrule_working(c)]
     return {
         "status": "ok",
         **driver.status(),
-        "campaigns": engine_status.get("campaigns") or [],
+        "campaigns": working,
+        "watching": max(len(everything) - len(working), 0),
         "closed_campaigns": list(engine_status.get("closed_campaigns") or engine.closed_campaigns or [])[-50:],
         "instruments": engine_status.get("instruments") or {},
     }

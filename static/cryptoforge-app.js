@@ -14305,19 +14305,40 @@ function cfVrRenderStatus(data) {
     cfVrSelectSymbol((document.getElementById('cf-vr-symbol') || {}).value || '');
   });
   cfVrSyncControls();
+  var working = Array.isArray(data && data.campaigns) ? data.campaigns : [];
+  var closed = Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : [];
+  // The event log reads each campaign's own log, and `campaigns` now carries
+  // only the ladders still working — so the finished ones come from the closed
+  // history, or the log would have shrunk to whatever is open this minute.
   cfRenderCascadeEvents(
-    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    working.concat(closed),
     { mountId: 'cf-vr-events', emptyText: 'No events yet — the live book has not opened a ladder.' }
   );
+  // A V-Rule book opens a campaign on every confirmed V and most never arm.
+  // Those are history, not something to act on, so the server leaves them out
+  // and sends their count instead (Phil, 2026-09-04: "Can we put only those
+  // were armed or in the trade?").
+  var watching = Number(data && data.watching) || 0;
   cfRenderCascadeCampaigns(
-    Array.isArray(data && data.campaigns) ? data.campaigns : [],
+    working,
     (data && data.instruments) || {},
     {
       mountId: 'cf-vr-campaigns',
       emptyText: 'Nothing live — start a book beside this, once the server is armed.',
-      emptyLiveText: 'No ladder working right now — the book is watching for its next V.'
+      emptyLiveText: watching
+        ? (watching.toLocaleString('en-US') + ' ladder' + (watching === 1 ? '' : 's')
+           + ' watching for an entry — none armed and nothing held yet.')
+        : 'No ladder working right now — the book is watching for its next V.'
     }
   );
+  var note = document.getElementById('cf-vr-watching');
+  if (note) {
+    note.textContent = watching
+      ? ('Showing ' + working.length + ' working ladder' + (working.length === 1 ? '' : 's')
+         + ' · ' + watching.toLocaleString('en-US') + ' more are watching for an entry and are not listed.')
+      : '';
+    note.hidden = !watching;
+  }
 }
 
 async function cfVrRefresh(showToast) {
