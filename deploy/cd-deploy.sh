@@ -15,8 +15,20 @@ UPSTREAM_CONF="/etc/nginx/conf.d/${APP}-upstream.conf"
 STATE_DIR="${CRYPTOFORGE_STATE_DIR:-$HOME/.cryptoforge}"
 
 HEALTH_PATH="/api/health"
-HEALTH_TIMEOUT=30
-DRAIN_TIMEOUT=30
+# One second per attempt. 30 was sized for a lighter box and a smaller state
+# file, and on 2026-09-07 it rolled back a healthy deploy that was merely late:
+# the standby answered at 37s and the budget ran out at 30.
+#
+# Blue-green holds BOTH workers in memory for the length of the swap, and this
+# box runs CryptoForge and PhilForge on 916 MB with a few hundred MB already in
+# swap. The second worker therefore thrashes its way through imports — 26s
+# before it even registered error handlers — and then restores 463 campaigns
+# before uvicorn serves anything. A minute is normal here; 30s was not a health
+# verdict, it was a stopwatch.
+#
+# Overridable from the environment so tuning this never needs another deploy.
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
+DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-30}"
 
 LOG_TAG="[DEPLOY]"
 
