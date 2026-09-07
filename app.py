@@ -10373,7 +10373,7 @@ def _cascade_campaign_working(campaign: dict) -> bool:
     return bool(campaign.get("pending_stop_price") or campaign.get("pending_order_id"))
 
 
-def _slim_ended_campaign(campaign: dict) -> dict:
+def _slim_ended_campaign(campaign: dict, drop_events: bool = False) -> dict:
     """Drop an ended campaign's ladder geometry, keep everything that is read.
 
     Deliberately NOT the same treatment the V-Rule gets. There, ended campaigns
@@ -10384,16 +10384,23 @@ def _slim_ended_campaign(campaign: dict) -> dict:
     pools. Filtering would have quietly deleted 15 booked rounds from the P&L.
 
     So every campaign still travels, and only the parts nothing renders for a
-    finished one are left behind. `rounds`, `event_log`, `all_fills` and the
-    money fields are untouched — the ledger, the event log and Open Trades read
-    those. The event log in particular is PAGED rather than truncated by
-    design, so its history must arrive whole.
+    finished one are left behind. `rounds`, `all_fills` and the money fields are
+    untouched — the ledger and Open Trades read those.
+
+    `drop_events` additionally leaves an ended campaign's `event_log` behind. It
+    is set ONLY by the Cascade page, and only because that page has a second
+    source for the same lines: `_BUCKET_CASCADE_EVENTS` is the live engine's own
+    persisted log, which the status payload now carries whole. The strategy
+    pages have no such bucket — `_strategy_event` deliberately does not write to
+    it — so for V-Rule and Cascade-Auto the campaign's own `event_log` is the
+    only copy and must still arrive whole.
     """
     if not isinstance(campaign, dict):
         return campaign
     if not (campaign.get("closed_at") or str(campaign.get("state") or "") in CASCADE_FINAL_STATES):
         return campaign
-    return {k: v for k, v in campaign.items() if k not in _ENDED_CAMPAIGN_DROP}
+    drop = _ENDED_CAMPAIGN_DROP + (("event_log",) if drop_events else ())
+    return {k: v for k, v in campaign.items() if k not in drop}
 
 
 @app.get("/api/vrule/live/status")
@@ -10480,7 +10487,20 @@ async def cascade_status():
     eng = _get_cascade_engine()
     if not eng.campaigns:
         _restore_cascade_runtime(eng)
-    return eng.get_status()
+    status = eng.get_status()
+    # This endpoint is polled every 3 seconds by every open tab, and it was
+    # shipping 3.75 MB each time: 463 campaigns of which 459 had already ended,
+    # each still carrying its full ladder geometry and event log. 5,567 of the
+    # 5,721 event lines belonged to finished campaigns.
+    #
+    # The geometry goes for the same reason it goes on the strategy pages, and
+    # the ended campaigns' event lines go because the page has a second, bounded
+    # copy: `events` below is the engine's own persisted log. Campaigns still
+    # travel whole otherwise — `closed_campaigns` is capped at the last 40, so
+    # dropping ended ones outright would delete booked rounds from the ledger.
+    status["campaigns"] = [_slim_ended_campaign(c, drop_events=True) for c in (status.get("campaigns") or [])]
+    status["events"] = _load_cascade_events()
+    return status
 
 
 @app.post("/api/cascade/campaigns")

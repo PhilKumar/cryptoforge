@@ -9045,7 +9045,8 @@ function cfRenderCascadeStatus(data) {
   _cfWithScrollPreserved(document.getElementById('cascade-page'), function () {
     cfRenderCascadeTrades(Array.isArray(data.campaigns) ? data.campaigns : []);
     cfRenderCascadeCampaigns(Array.isArray(data.campaigns) ? data.campaigns : [], data.instruments || {});
-    cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : []);
+    cfRenderCascadeEvents(Array.isArray(data.campaigns) ? data.campaigns : [],
+      { extraEvents: Array.isArray(data.events) ? data.events : [] });
     cfRenderCascadeClosed(Array.isArray(data.closed_campaigns) ? data.closed_campaigns : []);
     cfRenderCascadeGroups(data.capital_groups || {});
     _cfCascadeRenderExchanges(data.exchanges || []);
@@ -10477,7 +10478,7 @@ var _cfCascadeLastCampaigns = null;
 var _cfEventsState = {};
 
 function _cfEventsStateFor(mountId) {
-  if (!_cfEventsState[mountId]) _cfEventsState[mountId] = { campaigns: null, page: 0 };
+  if (!_cfEventsState[mountId]) _cfEventsState[mountId] = { campaigns: null, extraEvents: null, page: 0 };
   return _cfEventsState[mountId];
 }
 
@@ -10492,11 +10493,32 @@ function cfRenderCascadeEvents(campaigns, options) {
   if (!mount) return;
   var state = _cfEventsStateFor(mountId);
   state.campaigns = campaigns;
+  // Remembered alongside the campaigns, or turning the page would re-render
+  // from campaigns alone and silently drop every persisted line.
+  if (opts.extraEvents !== undefined) state.extraEvents = opts.extraEvents;
   if (mountId === 'cf-cascade-events') _cfCascadeLastCampaigns = campaigns;
   var events = [];
+  var seen = {};
+  // Two sources, deliberately. The Cascade page passes `extraEvents` — the
+  // engine's own persisted log — because ended campaigns no longer carry their
+  // event_log in the status payload (it was 5,567 of 5,721 lines, re-sent every
+  // 3 seconds). Working campaigns still carry theirs, and those same lines are
+  // also in the persisted log, so the two overlap and must be de-duplicated.
+  //
+  // The strategy pages pass nothing here and are unchanged: their campaigns are
+  // still the only copy of their events.
+  function pushEvent(event) {
+    if (!event) return;
+    var key = String(event.timestamp || '') + '|' + String(event.campaign_id || '') + '|'
+      + String(event.level || '') + '|' + String(event.message || '');
+    if (seen[key]) return;
+    seen[key] = 1;
+    events.push(event);
+  }
   campaigns.forEach(function(campaign) {
-    (campaign.event_log || []).forEach(function(event) { events.push(event); });
+    (campaign.event_log || []).forEach(pushEvent);
   });
+  (Array.isArray(state.extraEvents) ? state.extraEvents : []).forEach(pushEvent);
   events.sort(function(a, b) { return String(a.timestamp || '').localeCompare(String(b.timestamp || '')); });
   if (!events.length) {
     mount.innerHTML = '<div class="cf-table-empty-cell">' + _escapeHtml(opts.emptyText || 'No events yet') + '</div>';
