@@ -174,6 +174,9 @@ async def _shutdown_runtime_engines() -> None:
         await _shutdown_step("scalp engine", scalp_engine.shutdown)
     cascade_engine = globals().get("_cascade_engine")
     if cascade_engine is not None:
+        # Stop the coalescing writer FIRST so it cannot be mid-write against
+        # the store's lock while the authoritative shutdown snapshot is taken.
+        await _shutdown_step("stop snapshot writer", _stop_snapshot_writer)
         await _shutdown_step("persist cascade runtime", lambda: _persist_cascade_runtime_snapshot(cascade_engine))
         await _shutdown_step("cascade engine", cascade_engine.shutdown)
     sandbox = globals().get("_auto_fib_engine")
@@ -8504,8 +8507,101 @@ def _snapshot_cascade_runtime(status: dict) -> dict:
     }
 
 
+# ── The runtime snapshot writer ──────────────────────────────
+#
+# The engine emits an update on EVERY geometry change — eighteen call sites in
+# engine/cascade.py — and each one used to serialize the whole runtime document
+# and write it to SQLite ON THE EVENT LOOP. Measured on the production box that
+# is 3.76 MB and 0.64 s of json.dumps before the write even starts.
+#
+# This process runs a SINGLE uvicorn worker, so for that whole time the site
+# served NOTHING. Not the journal, not a chart, not the ticker. Requests were
+# running past nginx's 30 s proxy_read_timeout and coming back 504 while
+# browsers gave up first with 499s, and it read as "the whole site is slow"
+# because it was: one thread, blocked, over and over.
+#
+# The document exists so a crashed process can be restored. It does not need
+# writing eighteen times a tick — it needs to be a few seconds fresh, and it
+# needs to be EXACT at shutdown. So writes are coalesced: the newest snapshot
+# is held in memory, a background thread writes it at most once every
+# _SNAPSHOT_MIN_INTERVAL_SEC, and anything still pending is flushed on the way
+# down. Nothing is dropped; a snapshot that arrives during the interval simply
+# replaces the pending one, so the newest state always wins and the queue never
+# grows.
+#
+# The store is safe to write from another thread — it guards every operation
+# with an RLock and opens its connections with check_same_thread=False.
+_SNAPSHOT_MIN_INTERVAL_SEC = 5.0
+
+_snapshot_cv = threading.Condition()
+_snapshot_pending: Optional[dict] = None
+_snapshot_stop = False
+_snapshot_thread: Optional[threading.Thread] = None
+
+
+def _snapshot_writer_loop() -> None:
+    global _snapshot_pending
+    while True:
+        with _snapshot_cv:
+            while _snapshot_pending is None and not _snapshot_stop:
+                _snapshot_cv.wait()
+            payload, _snapshot_pending = _snapshot_pending, None
+            stopping = _snapshot_stop
+        if payload is not None:
+            try:
+                _save_cascade_runtime(payload)
+            except Exception as exc:
+                _logger.error("[CASCADE] Failed to persist runtime state: %s", exc)
+        if stopping:
+            return
+        # Rate limit AFTER the write, not before: the first change lands
+        # immediately and only a burst behind it is made to wait.
+        with _snapshot_cv:
+            if not _snapshot_stop:
+                _snapshot_cv.wait(timeout=_SNAPSHOT_MIN_INTERVAL_SEC)
+
+
+def _ensure_snapshot_writer() -> None:
+    global _snapshot_thread
+    if _snapshot_thread is not None and _snapshot_thread.is_alive():
+        return
+    _snapshot_thread = threading.Thread(target=_snapshot_writer_loop, name="cascade-snapshot-writer", daemon=True)
+    _snapshot_thread.start()
+
+
+def _queue_cascade_runtime_snapshot(snapshot: dict) -> None:
+    """Hand the newest runtime document to the writer and return at once."""
+    global _snapshot_pending
+    _ensure_snapshot_writer()
+    with _snapshot_cv:
+        _snapshot_pending = snapshot
+        _snapshot_cv.notify()
+
+
+def _stop_snapshot_writer() -> None:
+    """Stop the writer and let it finish whatever it is holding.
+
+    Called before the shutdown path re-persists from the engine, so the two are
+    never queued against the store's lock at the same time.
+    """
+    global _snapshot_stop
+    with _snapshot_cv:
+        _snapshot_stop = True
+        _snapshot_cv.notify_all()
+    thread = _snapshot_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=15)
+
+
 def _persist_cascade_runtime_snapshot(engine: "CascadeEngine") -> None:
     try:
+        # A deliberate action — starting or stopping a campaign, or shutting
+        # down — writes THROUGH the coalescing, and drops whatever the writer
+        # was holding: this snapshot is built fresh from the engine and is
+        # strictly newer than anything already queued.
+        global _snapshot_pending
+        with _snapshot_cv:
+            _snapshot_pending = None
         _save_cascade_runtime(_snapshot_cascade_runtime(engine.get_status()))
     except Exception as exc:
         _logger.error("[CASCADE] Failed to persist runtime snapshot: %s", exc)
@@ -8760,9 +8856,12 @@ def _strategy_closed(campaign: dict) -> None:
 
 def _broadcast_cascade_update(status: dict) -> None:
     try:
-        _save_cascade_runtime(_snapshot_cascade_runtime(status))
+        # Queued, not written. Building the snapshot is cheap list/dict work;
+        # it is the json.dumps and the SQLite write inside the store that cost
+        # 0.64 s, and those now happen on the writer thread.
+        _queue_cascade_runtime_snapshot(_snapshot_cascade_runtime(status))
     except Exception as exc:
-        _logger.error("[CASCADE] Failed to persist runtime state: %s", exc)
+        _logger.error("[CASCADE] Failed to queue runtime state: %s", exc)
 
     # The signal feed rides this callback rather than living inside the engine.
     # The engine trades real money and every line added to it is a line that
