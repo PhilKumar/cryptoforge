@@ -8895,11 +8895,38 @@ def _broadcast_cascade_update(status: dict) -> None:
     except Exception as exc:
         _logger.error("[FEED] publish failed: %s", exc)
 
+    # This is where the site was actually dying, and it took a profiler to see
+    # it: py-spy caught the main thread inside json.encoder, under
+    # starlette's send_json, under this push. Two things were wrong.
+    #
+    # First, `send_json` serializes ONCE PER CLIENT, on the event loop. Two open
+    # tabs meant two full encodes of the status per geometry change.
+    #
+    # Second, it sent the RAW status — every ended campaign with its ladder
+    # geometry and its whole event log. The HTTP endpoint had been slimmed and
+    # this had not, and both feed the same renderer, so every push undid the
+    # saving the poll had just made.
+    #
+    # Now the payload is slimmed exactly as /api/cascade/status slims it,
+    # encoded ONCE, and all of that — including the persisted-events read —
+    # happens on a worker thread. Only the sending is left on the loop.
+    def _render_push() -> str:
+        slim = dict(status)
+        slim["campaigns"] = [_slim_ended_campaign(c, drop_events=True) for c in (status.get("campaigns") or [])]
+        slim["events"] = _load_cascade_events()
+        return json.dumps(
+            {"source": "cascade", "type": "cascade_status", "status": slim},
+            default=str,
+        )
+
     async def _push():
-        payload = {"source": "cascade", "type": "cascade_status", "status": status}
+        # Nobody watching, nothing to encode. The whole cost above is skipped.
+        if not ws_clients:
+            return
+        text = await asyncio.to_thread(_render_push)
         for ws in ws_clients.copy():
             try:
-                await ws.send_json(payload)
+                await ws.send_text(text)
             except Exception:
                 if ws in ws_clients:
                     ws_clients.remove(ws)

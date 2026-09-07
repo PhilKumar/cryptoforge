@@ -203,3 +203,53 @@ def test_writer_drains_every_bucket(_reset_writer, monkeypatch):
         app_module._BUCKET_AUTO_FIB_RUNTIME,
         app_module._BUCKET_VRULE_RUNTIME,
     }
+
+
+def test_websocket_push_is_slimmed_encoded_once_and_off_thread(monkeypatch):
+    """Where the site was actually dying, found with py-spy.
+
+    starlette's `send_json` encodes ONCE PER CLIENT on the event loop, and the
+    payload was the RAW status — every ended campaign with its geometry and its
+    whole event log. The HTTP endpoint had been slimmed; this had not, and both
+    feed the same renderer, so every push undid the poll's saving.
+    """
+    import asyncio
+    import json as _json
+
+    sent = []
+
+    class WS:
+        async def send_text(self, text):
+            sent.append(text)
+
+        async def send_json(self, payload):  # must NOT be used
+            raise AssertionError("send_json re-encodes per client on the loop")
+
+    ended = {"campaign_id": "old", "state": "COMPLETED", "event_log": [{"m": "x"}], "legs": [1, 2]}
+    live = {"campaign_id": "new", "state": "TRENDLINE_ACTIVE", "event_log": [{"m": "y"}]}
+    status = {"campaigns": [ended, live]}
+
+    monkeypatch.setattr(app_module, "_load_cascade_events", lambda: [{"m": "persisted"}])
+    monkeypatch.setattr(app_module, "_queue_cascade_runtime_snapshot", lambda s: None)
+    monkeypatch.setattr(app_module, "_snapshot_cascade_runtime", lambda s: {})
+    monkeypatch.setattr(app_module, "_get_cascade_feed_publisher", lambda: None)
+    monkeypatch.setattr(app_module, "ws_clients", [WS(), WS()], raising=False)
+
+    async def drive():
+        app_module._broadcast_cascade_update(status)
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            if len(sent) >= 2:
+                break
+
+    asyncio.run(drive())
+
+    assert len(sent) == 2, "both clients must be served"
+    assert sent[0] is sent[1] or sent[0] == sent[1], "encoded once, reused for every client"
+
+    body = _json.loads(sent[0])["status"]
+    by_id = {c["campaign_id"]: c for c in body["campaigns"]}
+    assert "event_log" not in by_id["old"], "ended campaign must not carry its log"
+    assert "legs" not in by_id["old"], "ended campaign must not carry its geometry"
+    assert by_id["new"]["event_log"] == [{"m": "y"}], "a working campaign keeps its log"
+    assert body["events"] == [{"m": "persisted"}], "the persisted log must ride along"
