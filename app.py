@@ -8533,25 +8533,38 @@ def _snapshot_cascade_runtime(status: dict) -> dict:
 # with an RLock and opens its connections with check_same_thread=False.
 _SNAPSHOT_MIN_INTERVAL_SEC = 5.0
 
+# All THREE engines do this, not just the live one: Cascade-Auto writes 2.10 MB
+# and V-Rule 2.01 MB from their own on_update callbacks. Fixing only the live
+# engine left the loop still stalling — measured p90 1.6 s, p99 3.2 s on an
+# unauthenticated health poll, with both remaining 504s landing on
+# /api/vrule/live/status. So the writer is keyed by bucket and carries all of
+# them.
 _snapshot_cv = threading.Condition()
-_snapshot_pending: Optional[dict] = None
+_snapshot_pending: Dict[str, dict] = {}
 _snapshot_stop = False
 _snapshot_thread: Optional[threading.Thread] = None
+
+
+def _write_runtime_bucket(bucket: str, payload: dict) -> None:
+    if bucket == _BUCKET_CASCADE_RUNTIME:
+        _save_cascade_runtime(payload)
+    else:
+        _get_state_store().put(bucket, "current", payload)
 
 
 def _snapshot_writer_loop() -> None:
     global _snapshot_pending
     while True:
         with _snapshot_cv:
-            while _snapshot_pending is None and not _snapshot_stop:
+            while not _snapshot_pending and not _snapshot_stop:
                 _snapshot_cv.wait()
-            payload, _snapshot_pending = _snapshot_pending, None
+            batch, _snapshot_pending = dict(_snapshot_pending), {}
             stopping = _snapshot_stop
-        if payload is not None:
+        for bucket, payload in batch.items():
             try:
-                _save_cascade_runtime(payload)
+                _write_runtime_bucket(bucket, payload)
             except Exception as exc:
-                _logger.error("[CASCADE] Failed to persist runtime state: %s", exc)
+                _logger.error("[CASCADE] Failed to persist runtime state for %s: %s", bucket, exc)
         if stopping:
             return
         # Rate limit AFTER the write, not before: the first change lands
@@ -8569,13 +8582,22 @@ def _ensure_snapshot_writer() -> None:
     _snapshot_thread.start()
 
 
-def _queue_cascade_runtime_snapshot(snapshot: dict) -> None:
+def _queue_runtime_snapshot(bucket: str, snapshot: dict) -> None:
     """Hand the newest runtime document to the writer and return at once."""
-    global _snapshot_pending
     _ensure_snapshot_writer()
     with _snapshot_cv:
-        _snapshot_pending = snapshot
+        _snapshot_pending[bucket] = snapshot
         _snapshot_cv.notify()
+
+
+def _queue_cascade_runtime_snapshot(snapshot: dict) -> None:
+    _queue_runtime_snapshot(_BUCKET_CASCADE_RUNTIME, snapshot)
+
+
+def _drop_pending_snapshot(bucket: str) -> None:
+    """Forget a queued document because a fresher one is being written now."""
+    with _snapshot_cv:
+        _snapshot_pending.pop(bucket, None)
 
 
 def _stop_snapshot_writer() -> None:
@@ -8599,9 +8621,7 @@ def _persist_cascade_runtime_snapshot(engine: "CascadeEngine") -> None:
         # down — writes THROUGH the coalescing, and drops whatever the writer
         # was holding: this snapshot is built fresh from the engine and is
         # strictly newer than anything already queued.
-        global _snapshot_pending
-        with _snapshot_cv:
-            _snapshot_pending = None
+        _drop_pending_snapshot(_BUCKET_CASCADE_RUNTIME)
         _save_cascade_runtime(_snapshot_cascade_runtime(engine.get_status()))
     except Exception as exc:
         _logger.error("[CASCADE] Failed to persist runtime snapshot: %s", exc)
@@ -9223,9 +9243,9 @@ def _persist_auto_fib_update(status: dict) -> None:
     but the strategy page.
     """
     try:
-        _get_state_store().put(_BUCKET_AUTO_FIB_RUNTIME, "current", _snapshot_cascade_runtime(status))
+        _queue_runtime_snapshot(_BUCKET_AUTO_FIB_RUNTIME, _snapshot_cascade_runtime(status))
     except Exception as exc:
-        _logger.error("[AUTO-FIB] Failed to persist the sandbox runtime: %s", exc)
+        _logger.error("[AUTO-FIB] Failed to queue the sandbox runtime: %s", exc)
     # The purse and the fold counter move inside the driver, not the engine, so
     # they ride the same hook rather than waiting for the next API call.
     if _auto_fib is not None:
@@ -9236,6 +9256,7 @@ def _save_auto_fib_runtime() -> None:
     if _auto_fib_engine is None:
         return
     try:
+        _drop_pending_snapshot(_BUCKET_AUTO_FIB_RUNTIME)
         _get_state_store().put(
             _BUCKET_AUTO_FIB_RUNTIME, "current", _snapshot_cascade_runtime(_auto_fib_engine.get_status())
         )
@@ -9294,9 +9315,9 @@ def _get_vrule_engine() -> "CascadeEngine":
 
 def _persist_vrule_update(status: dict) -> None:
     try:
-        _get_state_store().put(_BUCKET_VRULE_RUNTIME, "current", _snapshot_cascade_runtime(status))
+        _queue_runtime_snapshot(_BUCKET_VRULE_RUNTIME, _snapshot_cascade_runtime(status))
     except Exception as exc:
-        _logger.error("[V-RULE] Failed to persist the live runtime: %s", exc)
+        _logger.error("[V-RULE] Failed to queue the live runtime: %s", exc)
     if _vrule is not None:
         _save_vrule()
 
@@ -9305,6 +9326,7 @@ def _save_vrule_runtime() -> None:
     if _vrule_engine is None:
         return
     try:
+        _drop_pending_snapshot(_BUCKET_VRULE_RUNTIME)
         _get_state_store().put(_BUCKET_VRULE_RUNTIME, "current", _snapshot_cascade_runtime(_vrule_engine.get_status()))
     except Exception as exc:
         _logger.error("[V-RULE] Failed to persist the live runtime: %s", exc)

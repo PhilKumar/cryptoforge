@@ -42,7 +42,7 @@ def _reset_writer(monkeypatch):
     monkeypatch.setattr(app_module, "_save_cascade_runtime", record)
     monkeypatch.setattr(app_module, "_SNAPSHOT_MIN_INTERVAL_SEC", 0.2)
     app_module._snapshot_stop = False
-    app_module._snapshot_pending = None
+    app_module._snapshot_pending = {}
     app_module._snapshot_thread = None
     yield writes
     app_module._stop_snapshot_writer()
@@ -91,7 +91,7 @@ def test_nothing_is_left_pending_after_a_burst(_reset_writer):
     for i in range(10):
         app_module._queue_cascade_runtime_snapshot({"n": i})
     assert _wait_for(lambda: writes and writes[-1]["n"] == 9)
-    assert _wait_for(lambda: app_module._snapshot_pending is None)
+    assert _wait_for(lambda: not app_module._snapshot_pending)
 
 
 def test_stop_ends_the_thread(_reset_writer):
@@ -112,7 +112,7 @@ def test_deliberate_persist_writes_through_and_clears_the_queue(monkeypatch):
     monkeypatch.setattr(app_module, "_auto_fib", None, raising=False)
     monkeypatch.setattr(app_module, "_vrule", None, raising=False)
 
-    app_module._snapshot_pending = {"stale": True}
+    app_module._snapshot_pending = {app_module._BUCKET_CASCADE_RUNTIME: {"stale": True}}
 
     class Engine:
         def get_status(self):
@@ -120,7 +120,7 @@ def test_deliberate_persist_writes_through_and_clears_the_queue(monkeypatch):
 
     app_module._persist_cascade_runtime_snapshot(Engine())
     assert written == [{"from": "engine"}]
-    assert app_module._snapshot_pending is None
+    assert not app_module._snapshot_pending
 
 
 def test_a_failing_write_does_not_kill_the_writer(_reset_writer, monkeypatch):
@@ -158,3 +158,48 @@ def test_broadcast_queues_instead_of_writing_inline(monkeypatch):
 
     assert queued == [{"snap": True}], "broadcast must hand the snapshot to the writer"
     assert inline == [], "broadcast must NOT write on the calling thread"
+
+
+def test_all_three_engines_queue_instead_of_writing(monkeypatch):
+    """Cascade-Auto and V-Rule stall the loop exactly as the live engine did.
+
+    Fixing only the live engine was not enough: those two write 2.10 MB and
+    2.01 MB from their own on_update callbacks, and the loop still showed p99
+    3.2 s with both surviving 504s landing on /api/vrule/live/status.
+    """
+    put = []
+
+    class Store:
+        def put(self, bucket, key, payload):
+            put.append(bucket)
+
+    monkeypatch.setattr(app_module, "_get_state_store", lambda: Store())
+    monkeypatch.setattr(app_module, "_snapshot_cascade_runtime", lambda s: {"snap": True})
+    monkeypatch.setattr(app_module, "_auto_fib", None, raising=False)
+    monkeypatch.setattr(app_module, "_vrule", None, raising=False)
+    queued = []
+    monkeypatch.setattr(app_module, "_queue_runtime_snapshot", lambda b, s: queued.append(b))
+
+    app_module._persist_auto_fib_update({})
+    app_module._persist_vrule_update({})
+
+    assert queued == [app_module._BUCKET_AUTO_FIB_RUNTIME, app_module._BUCKET_VRULE_RUNTIME]
+    assert put == [], "neither strategy may write on the calling thread"
+
+
+def test_writer_drains_every_bucket(_reset_writer, monkeypatch):
+    """One pass must persist all three engines, not just whichever came last."""
+    written = []
+
+    class Store:
+        def put(self, bucket, key, payload):
+            written.append((bucket, payload))
+
+    monkeypatch.setattr(app_module, "_get_state_store", lambda: Store())
+    app_module._queue_runtime_snapshot(app_module._BUCKET_AUTO_FIB_RUNTIME, {"a": 1})
+    app_module._queue_runtime_snapshot(app_module._BUCKET_VRULE_RUNTIME, {"v": 1})
+    assert _wait_for(lambda: len(written) == 2), written
+    assert {b for b, _ in written} == {
+        app_module._BUCKET_AUTO_FIB_RUNTIME,
+        app_module._BUCKET_VRULE_RUNTIME,
+    }
