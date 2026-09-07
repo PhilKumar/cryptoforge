@@ -1844,7 +1844,9 @@ class RouteAuditTests(unittest.IsolatedAsyncioTestCase):
                 {"target-run": {"strategy_name": "Stopped Paper", "total_pnl": 44, "mode": "paper"}},
             ),
         ):
-            status = await self.app_module.paper_status("target-run")
+            raw = await self.app_module.paper_status("target-run")
+            # Route returns a Response now — see _fast_json_route.
+            status = json.loads(raw.body)
 
         self.assertEqual(status["strategy_name"], "Stopped Paper")
         self.assertFalse(status["running"])
@@ -2815,7 +2817,9 @@ class RouteAuditContinuationTests(unittest.IsolatedAsyncioTestCase):
                 {"target-live": {"strategy_name": "Stopped Live", "total_pnl": 77, "mode": "live"}},
             ),
         ):
-            status = await self.app_module.live_status("target-live")
+            raw = await self.app_module.live_status("target-live")
+            # Route returns a Response now — see _fast_json_route.
+            status = json.loads(raw.body)
 
         self.assertEqual(status["strategy_name"], "Stopped Live")
         self.assertFalse(status["running"])

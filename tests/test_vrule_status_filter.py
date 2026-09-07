@@ -10,6 +10,7 @@ Nothing is lost by leaving them out: a campaign that ended is in
 `closed_campaigns`, and the ones still waiting are counted in `watching`.
 """
 
+import json
 import os
 import sys
 
@@ -94,7 +95,10 @@ def _status(monkeypatch, campaigns):
 
     monkeypatch.setattr(app_module, "_get_vrule", lambda: FakeDriver())
     monkeypatch.setattr(app_module, "_get_vrule_engine", lambda: FakeEngine(campaigns))
-    return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(app_module.vrule_live_status())
+    out = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(app_module.vrule_live_status())
+    # The route now returns a Response directly, to skip FastAPI's
+    # jsonable_encoder (5.44 s against 0.80 s on the real payload).
+    return json.loads(out.body)
 
 
 def test_every_campaign_still_travels_so_the_ledger_keeps_its_rounds(monkeypatch):

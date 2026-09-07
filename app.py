@@ -6,6 +6,7 @@ Production-ready: multi-engine, market feed, portfolio history, full CRUD.
 
 import asyncio
 import base64
+import functools
 import hashlib
 import html
 import inspect
@@ -994,6 +995,44 @@ def _viewer_may_call(method: str, path: str) -> bool:
     if str(method or "").upper() in _SAFE_METHODS:
         return not path.startswith(VIEWER_REFUSED_READ_PREFIXES)
     return path in VIEWER_WRITE_ALLOWLIST or path.startswith(_VIEWER_WRITE_PREFIXES)
+
+
+class _FastJSON(JSONResponse):
+    """A JSON response that skips FastAPI's jsonable_encoder.
+
+    When an endpoint returns a plain dict, FastAPI walks the ENTIRE structure
+    with jsonable_encoder — calling is_dataclass on every node — before
+    serializing it. Measured on the production box against the Cascade status
+    payload: 5.44 s for jsonable_encoder against 0.80 s for json.dumps of the
+    same object. Nearly seven times the cost, on the event loop, per request.
+
+    py-spy found it: jsonable_encoder frames were all over the main thread
+    while the site was timing out, and 5.44 s lines up with the p99 of 6.1 s
+    that survived three earlier rounds of moving work off the loop.
+
+    default=str keeps the behaviour dicts already relied on for datetimes.
+    """
+
+    def render(self, content) -> bytes:
+        return json.dumps(content, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def _fast_json_route(fn):
+    """Serialize this route's payload directly, bypassing jsonable_encoder.
+
+    Applied to the polled status endpoints, which carry the big payloads and
+    are hit every few seconds by every open tab. A route that already returns a
+    Response is passed through untouched.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        result = await fn(*args, **kwargs)
+        if isinstance(result, Response):
+            return result
+        return _FastJSON(result)
+
+    return wrapper
 
 
 def _role_refusal(request: Request) -> Optional[JSONResponse]:
@@ -5729,6 +5768,7 @@ async def live_stop(request: Request):
 
 
 @app.get("/api/live/status")
+@_fast_json_route
 async def live_status(run_id: str = ""):
     if run_id and run_id in live_engines:
         return live_engines[run_id].get_status()
@@ -5922,6 +5962,7 @@ def _history_engine_status(mode: str) -> dict:
 
 
 @app.get("/api/paper/status")
+@_fast_json_route
 async def paper_status(run_id: str = ""):
     if run_id and run_id in paper_engines:
         return paper_engines[run_id].get_status()
@@ -6927,6 +6968,7 @@ def _save_scalp_trade_to_history(trade: dict) -> None:
 
 # ── Combined Engines Status (Multi-Strategy Monitor) ─────────────
 @app.get("/api/engines/all")
+@_fast_json_route
 async def engines_all():
     engines = []
     for run_id, engine in paper_engines.items():
@@ -7272,7 +7314,33 @@ def _save(d):
     )
 
 
+# /api/paper/status and /api/live/status call _load_runs on EVERY poll, and it
+# reads all 239 run documents and json-decodes 3.37 MB of them — measured at
+# 1.12 s on the production box — to look at runs[-1]. py-spy caught it: those
+# frames were the single most common thing the main thread was doing while the
+# site was timing out.
+#
+# A short TTL rather than cache-until-written: _save_runs is the only writer I
+# can find, and it clears this, but a TTL means anything I have missed can only
+# ever be five seconds stale instead of permanently wrong. The readers show a
+# summary of the last run, so five seconds costs nothing.
+_RUNS_CACHE_TTL_SEC = 5.0
+_runs_cache_lock = threading.Lock()
+_runs_cache: Optional[list] = None
+_runs_cache_at = 0.0
+
+
+def _invalidate_runs_cache() -> None:
+    global _runs_cache
+    with _runs_cache_lock:
+        _runs_cache = None
+
+
 def _load_runs():
+    global _runs_cache, _runs_cache_at
+    with _runs_cache_lock:
+        if _runs_cache is not None and (time.monotonic() - _runs_cache_at) < _RUNS_CACHE_TTL_SEC:
+            return _runs_cache
     try:
         store = _seed_list_bucket(
             _BUCKET_RUNS,
@@ -7281,10 +7349,14 @@ def _load_runs():
             key_fn=lambda row, idx: str(int((row or {}).get("id", 0) or idx + 1)),
         )
         records = list(store.list(_BUCKET_RUNS, order_by="doc_key"))
-        return sorted(records, key=lambda row: int((row or {}).get("id", 0) or 0))
+        records = sorted(records, key=lambda row: int((row or {}).get("id", 0) or 0))
     except Exception as e:
         _logger.warning("Failed to load runs from %s: %s", _current_state_db_file(), e)
         return []
+    with _runs_cache_lock:
+        _runs_cache = records
+        _runs_cache_at = time.monotonic()
+    return records
 
 
 def _save_runs(d):
@@ -7294,6 +7366,8 @@ def _save_runs(d):
         list(d or []),
         key_fn=lambda row, idx: str(int((row or {}).get("id", 0) or idx + 1)),
     )
+    # A write must be visible to the next read, not in five seconds.
+    _invalidate_runs_cache()
 
 
 @app.get("/api/strategies")
@@ -8070,6 +8144,7 @@ async def get_scalp_leverage(symbol: str):
 
 
 @app.get("/api/scalp/status")
+@_fast_json_route
 async def scalp_status(symbol: str = "", include_activity: bool = False):
     eng = _get_scalp_engine()
     if symbol:
@@ -10442,6 +10517,7 @@ async def cascade_feed_keys():
 
 
 @app.get("/api/auto-fib/status")
+@_fast_json_route
 async def auto_fib_status():
     """The books, and the sandbox engine's campaigns in the Cascade shape.
 
@@ -10552,6 +10628,7 @@ def _slim_ended_campaign(campaign: dict, drop_events: bool = False) -> dict:
 
 
 @app.get("/api/vrule/live/status")
+@_fast_json_route
 async def vrule_live_status():
     """The V-Rule's live books and their ladders, in the Cascade shape.
 
@@ -10631,6 +10708,7 @@ async def vrule_live_set_book(request: Request):
 
 
 @app.get("/api/cascade/status")
+@_fast_json_route
 async def cascade_status():
     eng = _get_cascade_engine()
     if not eng.campaigns:
