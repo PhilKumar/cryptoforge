@@ -14492,6 +14492,9 @@ function cfVrRenderStats(books, campaigns) {
   set('cf-vr-stat-pocket-sub', 'folds at ' + _cfAfUsd(foldAt));
   set('cf-vr-stat-lines', String(working));
   set('cf-vr-stat-lines-sub', holding ? (holding + ' holding coin') : 'none holding');
+  _cfStatTone('cf-vr-stat-incoin', _cfStatExposureTone(inCoin, cap));
+  _cfStatTone('cf-vr-stat-pocket', pocket > 0 ? 'is-good' : 'is-idle');
+  _cfStatTone('cf-vr-stat-lines', working > 0 ? null : 'is-idle');
 }
 
 function cfVrRenderStatus(data) {
@@ -14949,6 +14952,27 @@ function cfAfUpdateWalletHint() {
   hint.textContent = purse > 0 ? _cfAfUsd(purse / 2) : '$—';
 }
 
+// Colour a strip value by what the number MEANS, not by which tile it is.
+//
+// Three tones only — good, watch, idle — and a tile with no verdict to give
+// keeps the ordinary text colour. Colouring all four would be decoration: if
+// everything is coloured, nothing is being said.
+function _cfStatTone(id, tone) {
+  var node = document.getElementById(id);
+  if (!node) return;
+  node.classList.remove('is-good', 'is-watch', 'is-idle');
+  if (tone) node.classList.add(tone);
+}
+
+// Money in coin against the limit that governs it. Amber from three quarters
+// of the way up: that is the point past which the book stops being able to
+// open a new line, so it is worth seeing before it bites rather than after.
+function _cfStatExposureTone(inCoin, cap) {
+  if (!(cap > 0)) return inCoin > 0 ? 'is-watch' : 'is-idle';
+  if (inCoin <= 0) return 'is-idle';
+  return inCoin / cap >= 0.75 ? 'is-watch' : 'is-good';
+}
+
 function cfAfRenderStats(books) {
   var purse = 0, cap = 0, inCoin = 0, pocket = 0, foldAt = 0, lines = 0, working = 0;
   books.forEach(function (b) {
@@ -14971,6 +14995,10 @@ function cfAfRenderStats(books) {
   set('cf-af-stat-pocket-sub', 'folds at ' + _cfAfUsd(foldAt));
   set('cf-af-stat-lines', String(lines));
   set('cf-af-stat-lines-sub', working ? (working + ' working the near move') : 'none working');
+  // Purse is just the size of the book — it has no good or bad, so no colour.
+  _cfStatTone('cf-af-stat-incoin', _cfStatExposureTone(inCoin, cap));
+  _cfStatTone('cf-af-stat-pocket', pocket > 0 ? 'is-good' : 'is-idle');
+  _cfStatTone('cf-af-stat-lines', lines > 0 ? null : 'is-idle');
 }
 
 // The strategy's campaigns live in its own SANDBOX engine — after 2026-08-21

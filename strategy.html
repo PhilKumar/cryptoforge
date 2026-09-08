@@ -1323,6 +1323,28 @@
       <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=auto"
          title="The Cascade-Auto book, measured over every coin's whole history">Tearsheet</a>
     </div>
+    <div class="cf-stat-strip" id="cf-af-stats">
+      <div class="stat-box">
+        <div class="stat-label">Purse</div>
+        <div class="stat-value" id="cf-af-stat-purse">$0.00</div>
+        <div class="stat-sub" id="cf-af-stat-purse-sub">across every book</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">In coin</div>
+        <div class="stat-value" id="cf-af-stat-incoin">$0.00</div>
+        <div class="stat-sub" id="cf-af-stat-incoin-sub">of a $0.00 limit</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Pocket</div>
+        <div class="stat-value" id="cf-af-stat-pocket">$0.00</div>
+        <div class="stat-sub" id="cf-af-stat-pocket-sub">folds at $0.00</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Lines running</div>
+        <div class="stat-value" id="cf-af-stat-lines">0</div>
+        <div class="stat-sub" id="cf-af-stat-lines-sub">none working</div>
+      </div>
+    </div>
     <div class="cf-engine-chip" id="cf-af-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
       <span class="cf-engine-label">Books</span>
@@ -1361,29 +1383,6 @@
       <section><h4>7 · இந்தப் பக்கத்தின் பொருள்</h4><p><strong>Lines</strong> என்பது இயங்கும் Cascade அமைப்புகள். <strong>Books</strong> பகுதியில் ஒவ்வொரு coin-இன் purse, wallet limit, coin-இல் உள்ள தொகை, profit pocket, working line ஆகியவை காட்டப்படும். Paper book fill-களை simulation செய்கிறது; live armed ஆனபின் மட்டுமே live book உண்மையான exchange order-களை இடும்.</p></section>
       <section><h4>8 · புரிந்துகொள்ள வேண்டிய ஆபத்து</h4><p>மூடிய round-கள் target-இல் மட்டுமே வெளியேறும்படி அமைக்கப்பட்டவை; ஆகவே தீராத ஆபத்து slow line-களில் இன்னும் வைத்திருக்கும் coin-இல் உள்ளது. விலை mother high நோக்கி திரும்பினால் அவை மூடலாம்; நீண்ட வீழ்ச்சி capital-ஐ நீண்ட காலம் முடக்கி வைக்கலாம்.</p></section>
       <section><h4>9 · Backtest நடை</h4><p>ஆகஸ்ட் 2026 சோதனைகளில் வருடத்திற்கு சுமார் <strong>22–26%</strong>, மூன்று அல்லது நான்கு நாளுக்கு ஒரு closed trade, ஒரே நேரத்தில் சுமார் பத்து open line-கள் என அளந்தது; பெரும்பாலான capital மெதுவான 4H position-களில் இருந்தது. இவை வரலாற்றுச் சோதனை பண்புகள் மட்டுமே; எதிர்கால லாப உத்தரவாதம் அல்ல.</p></section>
-    </div>
-  </div>
-
-  <div class="stats-grid" id="cf-af-stats">
-    <div class="stat-box">
-      <div class="stat-label">Purse</div>
-      <div class="stat-value" id="cf-af-stat-purse">$0.00</div>
-      <div class="stat-sub" id="cf-af-stat-purse-sub">across every book</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">In coin</div>
-      <div class="stat-value" id="cf-af-stat-incoin">$0.00</div>
-      <div class="stat-sub" id="cf-af-stat-incoin-sub">of a $0.00 limit</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Pocket</div>
-      <div class="stat-value" id="cf-af-stat-pocket">$0.00</div>
-      <div class="stat-sub" id="cf-af-stat-pocket-sub">folds at $0.00</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Lines running</div>
-      <div class="stat-value" id="cf-af-stat-lines">0</div>
-      <div class="stat-sub" id="cf-af-stat-lines-sub">none working</div>
     </div>
   </div>
 
@@ -1609,6 +1608,28 @@
       <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=vrule"
          title="The V-Rule book, measured over every coin's whole history">Tearsheet</a>
     </div>
+    <div class="cf-stat-strip" id="cf-vr-stats">
+      <div class="stat-box">
+        <div class="stat-label">Purse</div>
+        <div class="stat-value" id="cf-vr-stat-purse">$0.00</div>
+        <div class="stat-sub" id="cf-vr-stat-purse-sub">across every book</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">In coin</div>
+        <div class="stat-value" id="cf-vr-stat-incoin">$0.00</div>
+        <div class="stat-sub" id="cf-vr-stat-incoin-sub">of a $0.00 limit</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Booked</div>
+        <div class="stat-value" id="cf-vr-stat-pocket">$0.00</div>
+        <div class="stat-sub" id="cf-vr-stat-pocket-sub">folds at $0.00</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Ladders working</div>
+        <div class="stat-value" id="cf-vr-stat-lines">0</div>
+        <div class="stat-sub" id="cf-vr-stat-lines-sub">none holding</div>
+      </div>
+    </div>
   </div>
 
   <div id="cf-vrule-strategy-info" class="cf-info-panel cf-info-doc" role="region"
@@ -1663,29 +1684,6 @@
      Cascade-Auto carries, off the same fields — the driver already reports
      purse_usd, in_coin_usd, pocket_usd, wallet_cap_usd and fold_threshold_usd
      on every book. -->
-<div class="stats-grid" id="cf-vr-stats">
-  <div class="stat-box">
-    <div class="stat-label">Purse</div>
-    <div class="stat-value" id="cf-vr-stat-purse">$0.00</div>
-    <div class="stat-sub" id="cf-vr-stat-purse-sub">across every book</div>
-  </div>
-  <div class="stat-box">
-    <div class="stat-label">In coin</div>
-    <div class="stat-value" id="cf-vr-stat-incoin">$0.00</div>
-    <div class="stat-sub" id="cf-vr-stat-incoin-sub">of a $0.00 limit</div>
-  </div>
-  <div class="stat-box">
-    <div class="stat-label">Booked</div>
-    <div class="stat-value" id="cf-vr-stat-pocket">$0.00</div>
-    <div class="stat-sub" id="cf-vr-stat-pocket-sub">folds at $0.00</div>
-  </div>
-  <div class="stat-box">
-    <div class="stat-label">Ladders working</div>
-    <div class="stat-value" id="cf-vr-stat-lines">0</div>
-    <div class="stat-sub" id="cf-vr-stat-lines-sub">none holding</div>
-  </div>
-</div>
-
 <section class="card table-panel" id="cf-vr-trades-panel">
     <div class="table-toolbar">
       <div class="table-title-group">

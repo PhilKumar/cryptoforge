@@ -154,6 +154,86 @@
   .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.9px; margin-bottom: 6px; font-weight: 600; }
   .stat-value { font-size: 22px; font-weight: 700; font-family: var(--font-mono); letter-spacing: -0.5px; line-height: 1.1; }
 
+  /* ── Compact stat strip ─────────────────────────────────────
+     Phil, 2026-09-08: "Stretch the tiles and put the text inside on a single
+     row... Don't make bigger panels and leave space on both sides."
+
+     So: one full-width row of four equal tiles, each reading LABEL VALUE sub
+     across a single line instead of stacking three lines. It replaces a grid
+     row of 90px cards that pushed Open Trades below the fold; this is 34px and
+     spans the width, with no dead margin either side.
+
+     Reuses .stat-box so the tile keeps its border, hover and theming — only
+     the metrics and the axis change — rather than forking a second card that
+     would drift the moment either was touched.
+
+     The COLOUR carries meaning and is set from the numbers in JS, never from
+     the markup: money at risk goes amber as it approaches its own limit, money
+     earned reads green, and a strip with nothing working stays muted so a
+     resting book does not look like a busy one. A tile with no verdict to give
+     keeps the ordinary text colour — colouring all four would say nothing. */
+  .cf-stat-strip {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    /* Beside the heading, taking every pixel between the title and whatever
+       sits on the right. flex:1 is what makes it stretch instead of hugging
+       its content and leaving a gap on both sides; min-width:0 lets it shrink
+       under pressure rather than pushing the engine chip off the row. */
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+  .cf-stat-strip .stat-box {
+    /* Equal shares of the row. min-width:0 or a long value refuses to shrink
+       and pushes the last tile off the end. */
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 10px;
+  }
+  .cf-stat-strip .stat-label {
+    font-size: 9px;
+    letter-spacing: 0.7px;
+    margin-bottom: 0;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .cf-stat-strip .stat-value {
+    font-size: 15px;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .cf-stat-strip .stat-sub {
+    font-size: 10px;
+    /* The first thing to go when the row is tight: the label and the number
+       must survive, the qualifier is the part you can read from the panel
+       below it. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  /* The tones. Deliberately only three: good, watch, idle. */
+  .cf-stat-strip .stat-value.is-good { color: var(--green); }
+  .cf-stat-strip .stat-value.is-watch { color: var(--yellow); }
+  .cf-stat-strip .stat-value.is-idle { color: var(--muted); }
+  @media (max-width: 1100px) {
+    /* Four single-line tiles beside a heading stop fitting well before phone
+       width: the row goes under the title and spans it instead. */
+    .cf-stat-strip { flex-wrap: wrap; width: 100%; flex-basis: 100%; }
+    .cf-stat-strip .stat-box { flex: 1 1 calc(50% - 4px); }
+  }
+  @media (max-width: 620px) {
+    /* The qualifier drops out entirely rather than being clipped to nothing —
+       the label and the number are what must survive. */
+    .cf-stat-strip .stat-sub { display: none; }
+  }
+
   /* ── Hero P&L card variant ── */
   .stat-box.pnl-hero {
     border-color: rgba(var(--tint-primary-rgb),0.2);
