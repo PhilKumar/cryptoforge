@@ -436,6 +436,11 @@ STALL_ALERT_SEC = 15 * 60
 # campaigns the rest of the system was trying to keep, and the panel lost
 # history that was still in the database. One name, one number.
 CLOSED_HISTORY_LIMIT = 100
+# How many ended-but-never-traded campaigns stay in the LIVE set. They carry no
+# money — no rounds, no fills, no coin — so they exist only to be looked at and
+# deleted, and the last few dozen is all anyone ever looks at. Keeping a tail
+# means a campaign stopped by hand is still there to click Delete on.
+KEEP_RECENT_DEAD_CAMPAIGNS = 50
 # 21 = the adjudicated two-stage geometry (2026-07-31): trendlines drawn on
 # locked-low breaks with highest-red-open anchors and stand until closed above;
 # fibs drawn only when their own level 1 breaks, fib 0 = the top graze.
@@ -4577,7 +4582,59 @@ class CascadeEngine:
         if adopted:
             self.closed_campaigns = self.closed_campaigns[-CLOSED_HISTORY_LIMIT:]
             _log.info("[CASCADE] adopted %s ended campaign(s) into closed history", adopted)
+        # Now that history has them, the ones that never traded need not stay in
+        # the live set. Without this the list only grows, forever.
+        self.prune_dead_campaigns()
         return adopted
+
+    def prune_dead_campaigns(self) -> int:
+        """Drop ended campaigns that never traded. THIS is the growth leak.
+
+        _adopt_ended_campaigns copies a finished campaign into closed_campaigns
+        but leaves it in self.campaigns forever, so the live set only ever grows.
+        The V-Rule driver opens a campaign on every confirmed V and most never
+        come back to their entry: from 2026-09-02 it added ~130 a day and by
+        2026-09-08 was carrying 738, of which 660 had never placed a trade —
+        85% of its payload. Cascade held 420 such of 465, Cascade-Auto 246 of
+        277. Everything that hurt scaled with that number: get_status building a
+        dict per campaign, FastAPI encoding them, and the runtime snapshot
+        serializing them on every geometry change. The site did not get slower
+        because the code changed; it got slower because this list grew.
+
+        A campaign that ENDED WITHOUT EVER TRADING carries no financial record:
+        no rounds, no fills, no realised P&L, no coin. Nothing can read money
+        out of it. The last CLOSED_HISTORY_LIMIT of them still sit in
+        closed_campaigns for display.
+
+        Anything that ever traded STAYS, whatever its age. The ledger builds its
+        rounds from both pools and closed_campaigns keeps only the last hundred,
+        so dropping a traded campaign would delete booked P&L — the same trap
+        the status endpoints were written around.
+        """
+        dead = [
+            (str(campaign.closed_at or ""), campaign_id)
+            for campaign_id, campaign in self.campaigns.items()
+            if (campaign.state in FINAL_STATES or campaign.closed_at)
+            and not campaign.rounds
+            and not campaign.all_fills
+            and not campaign.filled_base_qty
+            and not campaign.realized_pnl_total
+        ]
+        # The most recent survive. One just stopped by hand is still on screen
+        # and still has a Delete button behind it, and vanishing the instant it
+        # closed would 404 that button. The backlog is what costs; a short tail
+        # costs nothing.
+        dead.sort()
+        for _, campaign_id in dead[:-KEEP_RECENT_DEAD_CAMPAIGNS] if KEEP_RECENT_DEAD_CAMPAIGNS else dead:
+            self.campaigns.pop(campaign_id, None)
+        dead = dead[:-KEEP_RECENT_DEAD_CAMPAIGNS] if KEEP_RECENT_DEAD_CAMPAIGNS else dead
+        if dead:
+            _log.info(
+                "[CASCADE] pruned %s ended campaign(s) that never traded — %s left",
+                len(dead),
+                len(self.campaigns),
+            )
+        return len(dead)
 
     async def reconcile(self, campaign_id: Optional[str] = None) -> dict:
         """Restart recovery: replay missed candles, then sync live orders."""
@@ -6592,6 +6649,8 @@ class CascadeEngine:
                 self.on_campaign_closed(payload)
             except Exception as exc:
                 _log.warning("[CASCADE] on_campaign_closed callback failed: %s", exc)
+        # Keep the live set from growing between restarts, not just across them.
+        self.prune_dead_campaigns()
 
     # ── live order sync ──────────────────────────────────────────
 
