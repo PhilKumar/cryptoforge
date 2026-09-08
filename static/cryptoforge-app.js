@@ -1050,7 +1050,7 @@ function cfRenderAlerts() {
     ack.type = 'button';
     ack.className = 'cf-alert-card-ack';
     ack.textContent = 'Got it';
-    ack.addEventListener('click', function() { cfAckAlert(item.id); });
+    ack.addEventListener('click', function() { cfAckAlert(item.id, ack); });
 
     card.appendChild(icon);
     card.appendChild(main);
@@ -1088,29 +1088,62 @@ function cfPushAlert(item) {
   sendTradeNotification(item.title || 'Trade alert', item.body || '');
 }
 
+// Ten seconds, because there is no such thing as a slow ack that is still
+// useful. Without a deadline a hung request leaves the handler awaiting
+// forever and the button silently dead: 2026-09-08, three clicks on a stuck
+// card produced NO network request at all, while the two acks that did go out
+// during the same period came back 499 — the browser giving up mid-flight.
+// A dead-looking button is the worst outcome here, so it always resolves.
+var _CF_ACK_TIMEOUT_MS = 10000;
+
 async function cfAckAlerts(payload) {
   // A viewer's "Got it" clears the card from THEIR screen and nothing else.
   // The server would refuse the ack anyway; more to the point, seen-state is
   // Phil's — an alert he has not read must not be marked read by a visitor.
   if (isReadOnlyAccount()) return true;
+  var controller = null;
+  var timer = null;
   try {
-    var r = await cfApiFetch('/api/notifications/ack', {
+    var opts = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    });
+    };
+    if (typeof AbortController === 'function') {
+      controller = new AbortController();
+      opts.signal = controller.signal;
+      timer = setTimeout(function () { controller.abort(); }, _CF_ACK_TIMEOUT_MS);
+    }
+    var r = await cfApiFetch('/api/notifications/ack', opts);
     if (!r.ok) { cfToast('Could not clear the alert — it stays until the server confirms', 'warning'); return false; }
     return true;
   } catch (e) {
-    cfToast('Could not clear the alert: ' + e.message, 'warning');
+    var aborted = e && (e.name === 'AbortError');
+    cfToast(
+      aborted
+        ? 'The server did not answer — the alert stays. Try again.'
+        : 'Could not clear the alert: ' + (e && e.message ? e.message : e),
+      'warning',
+    );
     return false;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
-async function cfAckAlert(id) {
-  if (!(await cfAckAlerts({ ids: [id] }))) return;
+async function cfAckAlert(id, btn) {
+  // Answer the click on the spot. The round-trip can be slow or can fail, and
+  // a button that looks identical before and after being pressed is the thing
+  // that reads as broken — which is exactly how this was reported.
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  var ok = await cfAckAlerts({ ids: [id] });
+  if (!ok) {
+    // Put it back so the card can be dismissed again once the server is well.
+    if (btn) { btn.disabled = false; btn.textContent = 'Got it'; }
+    return;
+  }
   _cfAlertsAcked[id] = true;
-  _cfAlerts = _cfAlerts.filter(function(row) { return row.id !== id; });
+  _cfAlerts = _cfAlerts.filter(function(row) { return String(row.id) !== String(id); });
   cfRenderAlerts();
 }
 
@@ -9448,6 +9481,20 @@ function _cfCascadeStateLabel(state) {
   return _CF_CASCADE_STATE_LABELS[raw] || raw.replace(/_/g, ' ').toLowerCase();
 }
 
+// What the ladder is DOING, which is not always what its state constant says.
+//
+// The V-Rule driver opens a campaign and fills it itself; the cascade state
+// machine underneath never leaves WAITING_FIRST_DEPTH, so on 2026-09-08 all
+// thirteen ladders holding $121 of coin were labelled "Waiting" — and the list
+// read as a screenful of ladders doing nothing, which is exactly how it was
+// reported. Money in the market outranks the constant.
+function _cfCascadeLiveStateLabel(campaign) {
+  if ((Number(campaign.filled_base_qty) || 0) > 0) return 'Holding';
+  if ((Number(campaign.pending_usd) || 0) > 0) return 'Armed';
+  if (campaign.pending_stop_price || campaign.pending_order_id) return 'Armed';
+  return _cfCascadeStateLabel(campaign.state);
+}
+
 // Which kind of mother candle this campaign is anchored to. The timeframe pill
 // implies it (5m means minor), but two campaigns can run on the same symbol at
 // once and the one thing you need to read off the strip is which structure each
@@ -9630,7 +9677,7 @@ function _cfCascadeCampaignCard(campaign) {
   var menuOpen = _cfCascadeMenuOpenFor === String(campaign.campaign_id || '');
   // An ended campaign shows WHY it ended, not just that it did.
   var reasonMeta = _CF_CASCADE_REASONS[String(campaign.close_reason || '')];
-  var stateLabel = (ended && reasonMeta) ? reasonMeta[0] : _cfCascadeStateLabel(campaign.state);
+  var stateLabel = (ended && reasonMeta) ? reasonMeta[0] : _cfCascadeLiveStateLabel(campaign);
   var num = Number(campaign.seq) > 0 ? '#' + campaign.seq : '#' + cid;
   var rounds = Array.isArray(campaign.rounds) ? campaign.rounds : [];
   var realised = rounds.reduce(function(sum, r) { return sum + (Number(r.pnl) || 0); }, 0);
@@ -14415,6 +14462,38 @@ function _cfCascadeCampaignWorking(campaign) {
   return !!(c.pending_stop_price || c.pending_order_id);
 }
 
+// The headline the page never had: purse, what is committed, what has been
+// booked but not yet folded, and how many ladders are actually holding. Same
+// four boxes and the same fields as Cascade-Auto — the driver already reports
+// every one of them per book.
+function cfVrRenderStats(books, campaigns) {
+  var purse = 0, cap = 0, inCoin = 0, pocket = 0, foldAt = 0, on = 0;
+  (books || []).forEach(function (b) {
+    if (!b || !b.enabled) return;
+    on += 1;
+    purse += Number(b.purse_usd || 0);
+    cap += Number(b.wallet_cap_usd || 0);
+    inCoin += Number(b.in_coin_usd || 0);
+    pocket += Number(b.pocket_usd || 0);
+    foldAt += Number(b.fold_threshold_usd || 0);
+  });
+  // Counted off the campaigns rather than the book's own tally: "working" here
+  // means holding coin or money committed, which is what the list below shows.
+  var holding = (campaigns || []).filter(function (c) {
+    return (Number(c.filled_base_qty) || 0) > 0;
+  }).length;
+  var working = (campaigns || []).filter(_cfCascadeCampaignWorking).length;
+  var set = function (id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
+  set('cf-vr-stat-purse', _cfAfUsd(purse));
+  set('cf-vr-stat-purse-sub', on === 1 ? 'one book on' : on + ' books on');
+  set('cf-vr-stat-incoin', _cfAfUsd(inCoin));
+  set('cf-vr-stat-incoin-sub', 'of a ' + _cfAfUsd(cap) + ' limit');
+  set('cf-vr-stat-pocket', _cfAfUsd(pocket));
+  set('cf-vr-stat-pocket-sub', 'folds at ' + _cfAfUsd(foldAt));
+  set('cf-vr-stat-lines', String(working));
+  set('cf-vr-stat-lines-sub', holding ? (holding + ' holding coin') : 'none holding');
+}
+
 function cfVrRenderStatus(data) {
   _cfVrBooks = (data && data.books) || [];
   _cfVrExchanges = (data && data.exchanges) || [];
@@ -14425,6 +14504,7 @@ function cfVrRenderStatus(data) {
   var all = Array.isArray(data && data.campaigns) ? data.campaigns : [];
   var closed = Array.isArray(data && data.closed_campaigns) ? data.closed_campaigns : [];
   var working = all.filter(_cfCascadeCampaignWorking);
+  cfVrRenderStats(_cfVrBooks, all);
   // Register before drawing: a round's Log button looks its campaign up by id,
   // and the driver's campaigns are never in the live Cascade's status.
   _cfCascadeRememberStatus('vrule', data || {});
