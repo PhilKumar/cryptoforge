@@ -70,6 +70,8 @@ CAPITAL_BY_STRATEGY = {
     "auto": 2000.0,
 }
 CAPITAL = CAPITAL_BY_STRATEGY["hybrid"]
+# Set by --target; None keeps each strategy's shipped level.
+TARGET_OVERRIDE = None
 MONTHS = 110  # deeper than any coin's listing, so each one returns all it has
 FEE = 0.001  # 0.1% per side, the rate every engine here already charges
 WALLET_FRACTION = 0.5  # auto_cascade_fib: at most half the purse in coin at once
@@ -117,7 +119,11 @@ def _cascade(symbol: str, auto: bool) -> dict:
     # and the two books would then differ by nothing at all.
     import engine.cascade as cascade
 
-    cascade.TP_FIB_LEVEL = 0.5 if auto else 0.25
+    # The shipped targets: auto sells half the way back to the mother, hybrid a
+    # quarter. TARGET_OVERRIDE lets a run ask "what if this book took its
+    # profit sooner", which is the single biggest lever in this family — see
+    # proj_cascade_target_level_finding. None means "use what ships".
+    cascade.TP_FIB_LEVEL = TARGET_OVERRIDE if TARGET_OVERRIDE else (0.5 if auto else 0.25)
 
     if not auto:
         return run_one(args)
@@ -278,8 +284,26 @@ def _shape(payload: dict, symbol: str, strategy: str) -> dict:
     years = max(row["span_days"] / 365.25, 1e-9)
     row["years"] = round(years, 3)
     total = row.get("total_pnl", 0.0)
-    row["return_pct"] = round(total / CAPITAL * 100, 3)
-    row["per_year_pct"] = round(total / years / CAPITAL * 100, 3)
+    # Derived HERE, for both paths, because the two harnesses disagree about
+    # what the field means. The V-Rule side computes it; the cascade sweep sets
+    # `result.final_capital = self.capital`, which is its own pot — and these
+    # runs are deliberately non-compounding, so that pot never moves and every
+    # cascade row published "final capital = the money you started with",
+    # profit and all. Correct inside the sweep, nonsense on a tearsheet.
+    #
+    # Fixed once in the data by hand on 2026-09-08 and it came straight back on
+    # the next run, which is what a fix in the wrong place does. The bag is
+    # included: a round only ever closes AT TARGET here, so every closed round
+    # is a winner by construction and the whole loss sits in the open positions.
+    #
+    # All three read the purse off the ROW, not the module. They agreed only
+    # because main() happens to set the global before building the row; two
+    # sources of truth for one number is how a rate ends up quoted against a
+    # purse the run never used.
+    purse = float(row.get("capital") or CAPITAL)
+    row["final_capital"] = round(purse + total, 4)
+    row["return_pct"] = round(total / purse * 100, 3)
+    row["per_year_pct"] = round(total / years / purse * 100, 3)
     # On the money it really tied up, not the number at the top of the page.
     peak = row.get("peak_deployed") or 0.0
     row["per_year_on_peak_pct"] = round(total / years / peak * 100, 3) if peak else 0.0
@@ -317,10 +341,16 @@ def run(strategy: str, symbols: tuple) -> dict:
 
 
 def main() -> int:
-    global CAPITAL  # the harnesses read it off the module at fill time
+    global CAPITAL, TARGET_OVERRIDE  # the harnesses read these off the module at fill time
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--symbol", action="append", default=[], help="repeatable; default all four")
     ap.add_argument("--strategy", action="append", default=[], choices=STRATEGIES)
+    ap.add_argument(
+        "--target",
+        type=float,
+        default=None,
+        help="override TP_FIB_LEVEL (0.25 = a quarter of the way back, 0.5 = half)",
+    )
     ap.add_argument(
         "--capital",
         type=float,
@@ -328,13 +358,15 @@ def main() -> int:
         help="override the purse; default is per-strategy (see CAPITAL_BY_STRATEGY)",
     )
     args = ap.parse_args()
+    TARGET_OVERRIDE = float(args.target) if args.target else None
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     symbols = tuple(s.upper() for s in args.symbol) or SYMBOLS
     strategies = tuple(args.strategy) or STRATEGIES
     os.makedirs(DATA_DIR, exist_ok=True)
     for strategy in strategies:
         CAPITAL = float(args.capital) if args.capital else CAPITAL_BY_STRATEGY.get(strategy, 1000.0)
-        _log(f"── {strategy}  (purse ${CAPITAL:,.0f})")
+        tgt = TARGET_OVERRIDE if TARGET_OVERRIDE else (0.5 if strategy == "auto" else 0.25)
+        _log(f"── {strategy}  (purse ${CAPITAL:,.0f}, target {tgt})")
         book = run(strategy, symbols)
         path = os.path.join(DATA_DIR, f"{strategy}_report_data.json")
         with open(path, "w", encoding="utf-8") as handle:
