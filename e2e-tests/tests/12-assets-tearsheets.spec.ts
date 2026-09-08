@@ -73,6 +73,50 @@ test.describe('Assets — the strategy tearsheets', () => {
       .toContainText(/Cascade-Auto/i, { timeout: 20_000 });  // hyphen is the enforced name
   });
 
+  test('the page has an even rhythm and the tabs span to the panel edge', async ({ page }) => {
+    await login(page);
+    await openAssets(page);
+    const m = await page.evaluate(() => {
+      const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const head = r('#assets-page .page-header');
+      const nav = r('#cf-assets-subnav');
+      const card = r('.cf-assets-frame-card');
+      const tabs = [...document.querySelectorAll('#cf-assets-subnav .cf-strat-tab')]
+        .map((e) => Math.round(e.getBoundingClientRect().width));
+      const last = document.querySelector('#cf-assets-subnav .cf-strat-tab:last-child')!.getBoundingClientRect();
+      return {
+        headToNav: Math.round(nav.top - head.bottom),
+        navToCard: Math.round(card.top - nav.bottom),
+        tabs,
+        lastTabRight: Math.round(last.right),
+        cardRight: Math.round(card.right),
+      };
+    });
+    // Everything was flush — 0px between each — which read as unfinished.
+    expect(m.headToNav).toBeGreaterThanOrEqual(12);
+    expect(m.navToCard).toBeGreaterThanOrEqual(12);
+    expect(m.headToNav, 'the two gaps match').toBe(m.navToCard);
+    // Three equal tabs, ending exactly where the panel ends.
+    expect(new Set(m.tabs).size, 'tabs are equal width').toBe(1);
+    expect(Math.abs(m.lastTabRight - m.cardRight)).toBeLessThanOrEqual(1);
+  });
+
+  test('the panel fills the viewport without a second scrollbar', async ({ page }) => {
+    // The sheet scrolls INSIDE its frame. A page scrollbar as well means the
+    // frame is taller than the space left for it — which is what a guessed
+    // pixel offset does the moment the window is a different height.
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await login(page);
+    await openAssets(page);
+    const m = await page.evaluate(() => ({
+      over: document.documentElement.scrollHeight - window.innerHeight,
+      cardBottom: Math.round(document.querySelector('.cf-assets-frame-card')!.getBoundingClientRect().bottom),
+      vh: window.innerHeight,
+    }));
+    expect(m.over, 'no page scrollbar under the sheet').toBeLessThanOrEqual(2);
+    expect(m.cardBottom).toBeLessThanOrEqual(m.vh);
+  });
+
   test('the workspace theme reaches the document', async ({ page }) => {
     await login(page);
     await openAssets(page);

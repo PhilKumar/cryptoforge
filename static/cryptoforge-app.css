@@ -9374,18 +9374,57 @@ html[data-theme="light"] .journal-entry-notes section {
    210px` computes NEGATIVE and silently collapses to min-height,
    which is exactly the short frame this replaces. The extra ~150px
    is this page's own title and sub-tab strip. */
+/* The page reads as one block: title, then the three sheets to choose from,
+   then the sheet. Every one of these was flush against the next — measured 0px
+   between the header and the tabs, and 0px between the tabs and the panel —
+   which is what made it look unfinished rather than dense. */
+#assets-page .page-header { margin-bottom: 16px; }
+#cf-assets-subnav { margin-bottom: 16px; }
+/* Three equal tabs spanning the row, ending exactly where the panel below them
+   ends. SCOPED to this page deliberately: .cf-strat-tab is shared with the
+   Strategies switcher in the sticky shell, where a fixed 320px basis is right
+   and stretching them would be wrong. */
+#cf-assets-subnav .cf-strat-tab { flex: 1 1 0; }
+
 .cf-assets-frame-card {
   padding: 0;
   overflow: hidden;
+  /* The document brings its own ground; without this the card's background
+     shows as a seam down the side of the sheet. */
+  background: var(--bg, #0b0f14);
+}
+/* The page is a column and the panel takes whatever is left.
+   NO magic offset: the previous height subtracted a guessed 226px for the
+   header and tabs, which was right at 1500x900 and 76px too tall at 1280x720,
+   so the page grew a scrollbar under the sheet's own. --cf-shell-h is measured
+   live by cfSyncShellHeight, and flex:1 measures the rest, so this cannot
+   drift when anything above it changes height. */
+#assets-page.active-page {
+  display: flex;
+  flex-direction: column;
+  /* 34px = the body's own padding above and below the page column.
+     Measured, not guessed: at 28px the page overflowed by exactly 6. */
+  height: calc(100dvh - var(--cf-shell-h, 168px) - 34px);
+}
+#assets-page .page-header { flex: 0 0 auto; }
+#cf-assets-subnav { flex: 0 0 auto; }
+.cf-assets-frame-card {
+  flex: 1 1 auto;
+  min-height: 0;   /* or a flex child refuses to shrink below its content */
+  margin-bottom: 0;
 }
 .cf-assets-frame {
   display: block;
   width: 100%;
-  height: calc(100dvh - var(--cf-shell-h, 168px) - 190px);
-  min-height: 420px;
+  height: 100%;
+  min-height: 0;
   border: 0;
   background: var(--bg, #0b0f14);
 }
 @media (max-width: 720px) {
-  .cf-assets-frame { height: calc(100dvh - var(--cf-shell-h, 168px) - 240px); }
+  /* A phone gets a scrolling page instead: pinning the column to the viewport
+     leaves the sheet a few hundred pixels to render a document in. */
+  #assets-page.active-page { display: block; height: auto; }
+  .cf-assets-frame-card { margin-bottom: 14px; }
+  .cf-assets-frame { height: 70dvh; min-height: 360px; }
 }
