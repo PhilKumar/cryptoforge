@@ -119,8 +119,18 @@ jobs:
         run: npx playwright test --project=cryptoforge
 
       # ── Upload artifacts on failure ──
+      #
+      # continue-on-error: this step must NEVER decide whether the suite passed.
+      # 2026-09-08: 93 passed, 1 flaky, and the job still went red because
+      # GitHub's artifact storage answered the finalize with a 403 — which then
+      # skipped the deploy. The report is a diagnostic, not a gate, and the same
+      # rule already written above applies to it: a red mark that means
+      # "everything is fine" is worse than no mark at all.
+      #
+      # The suite's own exit code is what gates the deploy, and it is unaffected.
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-cryptoforge
