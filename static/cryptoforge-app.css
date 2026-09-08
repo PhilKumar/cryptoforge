@@ -9280,3 +9280,26 @@ html[data-theme="light"] .journal-entry-notes section {
     margin-top: 2px;
     font-size: 11px;
   }
+
+/* ── Assets: the framed tearsheets ───────────────────────────
+   The sheet is a whole document with its own scroll, so the frame
+   is given a tall fixed viewport rather than being sized to its
+   content — a same-origin frame cannot report its height back
+   without script on both sides, and the sheet already scrolls.
+   Sized off --cf-shell-h so it follows the workspace the way the
+   other panes do. */
+.cf-assets-frame-card {
+  padding: 0;
+  overflow: hidden;
+}
+.cf-assets-frame {
+  display: block;
+  width: 100%;
+  height: calc(var(--cf-shell-h, 100vh) - 210px);
+  min-height: 420px;
+  border: 0;
+  background: var(--bg, #0b0f14);
+}
+@media (max-width: 720px) {
+  .cf-assets-frame { height: calc(var(--cf-shell-h, 100vh) - 260px); }
+}

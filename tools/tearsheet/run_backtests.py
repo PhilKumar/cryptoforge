@@ -54,7 +54,22 @@ sys.path.insert(0, _REPO)
 DATA_DIR = os.path.join(_HERE, "data")
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "PAXGUSDT")
 STRATEGIES = ("hybrid", "auto", "vrule")
-CAPITAL = 1000.0
+# The purse each strategy is measured on. These are NOT the same number any
+# more: the three sheets used to share $1,000 so they could be read against each
+# other, but Phil runs them at different scale in reality — V-Rule sizes its
+# orders at $200 (engine/vrule_live.py CAPITAL_USD), Cascade-Auto works a
+# $2,000 book, and Cascade-Hybrid takes $1,000 per coin. A sheet that quotes a
+# purse nobody uses is answering the wrong question.
+#
+# The cost of that: the three sheets are no longer comparable to each other.
+# Every rate on every sheet is quoted against PEAK CAPITAL USED rather than the
+# nameplate, which is what makes them still mean something individually.
+CAPITAL_BY_STRATEGY = {
+    "hybrid": 1000.0,
+    "vrule": 200.0,
+    "auto": 2000.0,
+}
+CAPITAL = CAPITAL_BY_STRATEGY["hybrid"]
 MONTHS = 110  # deeper than any coin's listing, so each one returns all it has
 FEE = 0.001  # 0.1% per side, the rate every engine here already charges
 WALLET_FRACTION = 0.5  # auto_cascade_fib: at most half the purse in coin at once
@@ -296,16 +311,24 @@ def run(strategy: str, symbols: tuple) -> dict:
 
 
 def main() -> int:
+    global CAPITAL  # the harnesses read it off the module at fill time
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--symbol", action="append", default=[], help="repeatable; default all four")
     ap.add_argument("--strategy", action="append", default=[], choices=STRATEGIES)
+    ap.add_argument(
+        "--capital",
+        type=float,
+        default=None,
+        help="override the purse; default is per-strategy (see CAPITAL_BY_STRATEGY)",
+    )
     args = ap.parse_args()
     logging.getLogger("cryptoforge.cascade").setLevel(logging.CRITICAL)
     symbols = tuple(s.upper() for s in args.symbol) or SYMBOLS
     strategies = tuple(args.strategy) or STRATEGIES
     os.makedirs(DATA_DIR, exist_ok=True)
     for strategy in strategies:
-        _log(f"── {strategy}")
+        CAPITAL = float(args.capital) if args.capital else CAPITAL_BY_STRATEGY.get(strategy, 1000.0)
+        _log(f"── {strategy}  (purse ${CAPITAL:,.0f})")
         book = run(strategy, symbols)
         path = os.path.join(DATA_DIR, f"{strategy}_report_data.json")
         with open(path, "w", encoding="utf-8") as handle:

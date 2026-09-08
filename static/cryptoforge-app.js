@@ -1273,6 +1273,80 @@ function cfNavButtonForPage(pageId) {
 }
 
 // The Strategies tab reopens whichever strategy page was used last.
+// ── Assets: the three tearsheets ─────────────────────────────
+//
+// The sheets are complete published documents — their own stylesheet, reader
+// and element ids — so they are FRAMED, not inlined. Two full stylesheets in
+// one document collide, and these same bytes are what a buyer is handed.
+//
+// The workspace owns the theme. The document renders whatever `theme` it is
+// given rather than deciding for itself, or the embed fights the page around
+// it. Resolved the same way the chart palette resolves it, so a sheet and a
+// chart never disagree about what "auto" means.
+var _CF_ASSET_DOCS = ['hybrid', 'vrule', 'auto'];
+
+function _cfAssetsTheme() {
+  var theme = document.documentElement.getAttribute('data-theme');
+  if (!theme || theme === 'auto') {
+    theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  return theme === 'light' ? 'light' : 'dark';
+}
+
+function cfShowAssetDoc(doc) {
+  if (_CF_ASSET_DOCS.indexOf(doc) === -1) doc = 'hybrid';
+  try { localStorage.setItem('cf-assets-doc', doc); } catch (e) {}
+  var frame = document.getElementById('cf-assets-frame');
+  if (frame) {
+    var want = '/assets/tearsheet?doc=' + encodeURIComponent(doc) + '&theme=' + _cfAssetsTheme();
+    // Compared against the CURRENT src, so re-selecting the open sheet does not
+    // reload it and throw away the reader's scroll position.
+    if (frame.getAttribute('data-cf-doc') !== doc || frame.src.indexOf('theme=' + _cfAssetsTheme()) === -1) {
+      frame.src = want;
+      frame.setAttribute('data-cf-doc', doc);
+    }
+  }
+  var bar = document.getElementById('cf-assets-subnav');
+  if (!bar) return;
+  bar.querySelectorAll('[data-cf-assets-doc]').forEach(function (tab) {
+    var mine = tab.getAttribute('data-cf-assets-doc') === doc;
+    tab.classList.toggle('is-active', mine);
+    tab.setAttribute('aria-selected', mine ? 'true' : 'false');
+    tab.setAttribute('tabindex', mine ? '0' : '-1');
+  });
+}
+
+function cfOpenAssets(btn) {
+  var last = 'hybrid';
+  try { last = localStorage.getItem('cf-assets-doc') || 'hybrid'; } catch (e) {}
+  showPage('assets-page', btn);
+  cfShowAssetDoc(last);
+}
+
+// A theme swap has to reach INSIDE the frame: the sheet paints its chart from
+// CSS tokens read at paint time, so re-pointing the src is what re-reads them.
+function cfSyncAssetsTheme() {
+  var frame = document.getElementById('cf-assets-frame');
+  if (!frame || !frame.getAttribute('data-cf-doc')) return;
+  cfShowAssetDoc(frame.getAttribute('data-cf-doc'));
+}
+
+// Watched rather than called from the toggle: the theme is also set on boot and
+// by the system-preference watcher, and an observer catches all three without
+// boot.js needing to know this page exists.
+(function cfWatchAssetsTheme() {
+  if (!window.MutationObserver) return;
+  var observer = new MutationObserver(cfSyncAssetsTheme);
+  var start = function () {
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+})();
+
 function cfOpenStrategies(btn) {
   var last = localStorage.getItem('cf-strat-sub');
   if (last !== 'cascade-page' && last !== 'rule3070-page' && last !== 'autofib-page') last = 'cascade-page';

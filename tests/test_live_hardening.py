@@ -2335,7 +2335,18 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         csp = response.headers.get("content-security-policy", "")
         self.assertIn("connect-src 'self' ws: wss:;", csp)
         self.assertNotIn("connect-src 'self' ws: wss: https:", csp)
-        self.assertIn("frame-src 'none'", csp)
+        # Was 'none' until the Assets page had to frame its own tearsheets.
+        # 'self' is the whole relaxation: same-origin frames load, every other
+        # origin is still refused. If either of these ever reads '*' or drops a
+        # scheme in, the clickjacking cover is gone.
+        self.assertIn("frame-src 'self'", csp)
+        self.assertNotIn("frame-src *", csp)
+        self.assertNotIn("frame-src 'none'", csp)
+        # And who may frame US: our own origin only, for the same reason —
+        # 'none' blocks a same-origin parent too, which is the half of this that
+        # looks identical to the first and is missed twice as often.
+        self.assertIn("frame-ancestors 'self'", csp)
+        self.assertNotIn("frame-ancestors *", csp)
 
     async def test_pwa_shell_routes_are_not_cacheable(self):
         transport = httpx.ASGITransport(app=self.app_module.app)

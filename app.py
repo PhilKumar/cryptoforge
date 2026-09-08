@@ -1988,8 +1988,21 @@ def _apply_security_headers(request: Request, response: Response) -> Response:
         "worker-src 'self' blob:; "
         "media-src 'self' data: blob:; "
         "manifest-src 'self'; "
-        "frame-src 'none'; "
-        "frame-ancestors 'none'; "
+        # SAME-ORIGIN ONLY, and only because the Assets page frames the strategy
+        # tearsheets from /assets/tearsheet. They are complete published
+        # documents — own stylesheet, own reader, own element ids — so they are
+        # framed rather than inlined; two full stylesheets in one document
+        # collide. At 'none' the frame renders BLANK with nothing but a console
+        # line, which is how the same change was first missed on PhilForge.
+        # Third-party framing stays forbidden.
+        "frame-src 'self'; "
+        # Who may frame US: our own origin only. It has to be 'self' rather than
+        # 'none' for the Assets page to frame its own tearsheet — 'none' blocks
+        # a SAME-ORIGIN parent too, which is the second half of this trap and
+        # looks identical to the first: a blank frame and one console line.
+        # Every other origin is still refused, so clickjacking cover is intact,
+        # and this matches what prod nginx already sends.
+        "frame-ancestors 'self'; "
         "base-uri 'self'; "
         "form-action 'self'; "
         "object-src 'none'"
