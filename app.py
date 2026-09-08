@@ -1969,7 +1969,18 @@ async def _call_next_or_client_closed(request: Request, call_next):
 
 
 def _apply_security_headers(request: Request, response: Response) -> Response:
-    response.headers["X-Frame-Options"] = "DENY"
+    # SAMEORIGIN, not DENY. This is the LEGACY twin of `frame-ancestors` and it
+    # is enforced alongside the CSP, not replaced by it — so DENY here kept the
+    # Assets page's tearsheet blank on prod long after frame-src and
+    # frame-ancestors had both been opened to 'self'. Three headers had to
+    # agree, and this was the third; the browser says nothing beyond one
+    # console line, which is why it survived a local suite that passed.
+    #
+    # Our own origin may frame our own pages. Every other origin is still
+    # refused, so the clickjacking cover is unchanged, and it now matches the
+    # SAMEORIGIN prod nginx has always sent (deploy/nginx.conf sends DENY and
+    # is NOT the file in use — see proj_philforge_nginx_not_deployed).
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"

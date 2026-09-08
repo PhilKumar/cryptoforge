@@ -57,7 +57,13 @@ class SheetKitTests(unittest.TestCase):
         names -= {"tr"}
         for name in sorted(names):
             with self.subTest(name):
-                styled = self.kit.STYLE + import_module("build_sheets").EXTRA_CSS
+                # All THREE blobs, in the order build_sheets.py:492 composes
+                # them. Checking only STYLE + EXTRA_CSS left LANG_CSS out, so a
+                # class styled there read as unstyled — which is how a correct
+                # fix to the ledger year chips failed this test on 2026-09-09.
+                styled = (
+                    self.kit.STYLE + import_module("build_sheets").LANG_CSS + import_module("build_sheets").EXTRA_CSS
+                )
                 self.assertIn(f".{name}", styled, f".{name} is drawn but never styled")
 
     def test_each_sheet_gets_its_own_accent(self):
@@ -240,3 +246,31 @@ class TearsheetRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_ledger_year_chips_use_the_class_the_kit_styles():
+    """The year filter must be `ledger-controls`, never `reader-toolbar`.
+
+    The kit styles `.ledger-controls button` — pill, mono, accent when pressed
+    — and styles NOTHING for a bare button. Emitted under `reader-toolbar` (a
+    74px sticky shell meant for the search bar) the chips fell back to Chrome's
+    default grey buttons floating in an empty panel, which is exactly how Phil
+    saw them on 2026-09-09. Nothing errors; it just looks unfinished.
+    """
+    import os
+    import re
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name in ("cascade-hybrid", "vrule", "cascade-auto"):
+        path = os.path.join(here, "docs", "assets", f"{name}-tearsheet.html")
+        html = open(path, encoding="utf-8").read()
+        m = re.search(r"<div id='ledger-years' class='([a-z-]+)'", html)
+        assert m, f"{name}: no ledger year bar"
+        assert m.group(1) == "ledger-controls", (
+            f"{name}: year chips are in '{m.group(1)}' — the kit only styles .ledger-controls button"
+        )
+        # and the class it uses must actually be styled, or this is theatre
+        css = open(
+            os.path.join(here, "static", f"tearsheet-{name.replace('cascade-', '')}.css"), encoding="utf-8"
+        ).read()
+        assert ".ledger-controls button" in css, f"{name}: nothing styles the chips"

@@ -2347,6 +2347,12 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         # looks identical to the first and is missed twice as often.
         self.assertIn("frame-ancestors 'self'", csp)
         self.assertNotIn("frame-ancestors *", csp)
+        # THE THIRD HEADER, and the one that kept the Assets tearsheet blank on
+        # prod after both CSP directives had been opened. X-Frame-Options is the
+        # legacy twin of frame-ancestors and browsers enforce it ALONGSIDE the
+        # CSP, so DENY here overrode 'self' there and nothing rendered. Three
+        # headers have to agree; a local suite that checked two still passed.
+        self.assertEqual(response.headers.get("x-frame-options"), "SAMEORIGIN")
 
     async def test_pwa_shell_routes_are_not_cacheable(self):
         transport = httpx.ASGITransport(app=self.app_module.app)

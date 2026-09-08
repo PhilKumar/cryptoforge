@@ -460,7 +460,12 @@ def ledger(book: dict) -> str:
                 f"<td class='num {kit.cls(value)}'>{usd(value)}</td></tr>"
             )
     return (
-        f"<div id='ledger-years' class='reader-toolbar'>{btns}</div>"
+        # `ledger-controls`, NOT `reader-toolbar`. The kit styles
+        # `.ledger-controls button` — pill, mono, accent when pressed — and
+        # styles nothing for a bare button, so under reader-toolbar (a 74px
+        # sticky shell meant for the search bar) the year chips rendered as
+        # Chrome's default grey buttons floating in an empty panel.
+        f"<div id='ledger-years' class='ledger-controls'>{btns}</div>"
         f"<p class='kpi-s'><span id='ledger-count'>{count}</span> {t('months', 'மாதங்கள்')}</p>"
         f"<div class='tblwrap'><table><thead><tr><th>{t('Month', 'மாதம்')}</th><th>{t('Coin', 'நாணயம்')}</th>"
         f"<th>{t('Booked', 'பதிவானது')}</th></tr></thead><tbody>{rows}</tbody></table></div>"
