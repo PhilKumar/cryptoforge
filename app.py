@@ -8615,16 +8615,16 @@ _SNAPSHOT_MIN_INTERVAL_SEC = 5.0
 # /api/vrule/live/status. So the writer is keyed by bucket and carries all of
 # them.
 _snapshot_cv = threading.Condition()
-_snapshot_pending: Dict[str, dict] = {}
+_snapshot_pending: Dict[tuple, dict] = {}
 _snapshot_stop = False
 _snapshot_thread: Optional[threading.Thread] = None
 
 
-def _write_runtime_bucket(bucket: str, payload: dict) -> None:
+def _write_runtime_bucket(bucket: str, doc_key: str, payload: dict) -> None:
     if bucket == _BUCKET_CASCADE_RUNTIME:
         _save_cascade_runtime(payload)
     else:
-        _get_state_store().put(bucket, "current", payload)
+        _get_state_store().put(bucket, doc_key, payload)
 
 
 def _snapshot_writer_loop() -> None:
@@ -8635,9 +8635,9 @@ def _snapshot_writer_loop() -> None:
                 _snapshot_cv.wait()
             batch, _snapshot_pending = dict(_snapshot_pending), {}
             stopping = _snapshot_stop
-        for bucket, payload in batch.items():
+        for (bucket, doc_key), payload in batch.items():
             try:
-                _write_runtime_bucket(bucket, payload)
+                _write_runtime_bucket(bucket, doc_key, payload)
             except Exception as exc:
                 _logger.error("[CASCADE] Failed to persist runtime state for %s: %s", bucket, exc)
         if stopping:
@@ -8657,22 +8657,22 @@ def _ensure_snapshot_writer() -> None:
     _snapshot_thread.start()
 
 
-def _queue_runtime_snapshot(bucket: str, snapshot: dict) -> None:
+def _queue_runtime_snapshot(bucket: str, snapshot: dict, doc_key: str = "current") -> None:
     """Hand the newest runtime document to the writer and return at once."""
     _ensure_snapshot_writer()
     with _snapshot_cv:
-        _snapshot_pending[bucket] = snapshot
+        _snapshot_pending[(bucket, doc_key)] = snapshot
         _snapshot_cv.notify()
 
 
 def _queue_cascade_runtime_snapshot(snapshot: dict) -> None:
-    _queue_runtime_snapshot(_BUCKET_CASCADE_RUNTIME, snapshot)
+    _queue_runtime_snapshot(_BUCKET_CASCADE_RUNTIME, snapshot, "current")
 
 
-def _drop_pending_snapshot(bucket: str) -> None:
+def _drop_pending_snapshot(bucket: str, doc_key: str = "current") -> None:
     """Forget a queued document because a fresher one is being written now."""
     with _snapshot_cv:
-        _snapshot_pending.pop(bucket, None)
+        _snapshot_pending.pop((bucket, doc_key), None)
 
 
 def _stop_snapshot_writer() -> None:
@@ -9350,8 +9350,10 @@ def _persist_auto_fib_update(status: dict) -> None:
         _logger.error("[AUTO-FIB] Failed to queue the sandbox runtime: %s", exc)
     # The purse and the fold counter move inside the driver, not the engine, so
     # they ride the same hook rather than waiting for the next API call.
+    # QUEUED, not written: this hook fires on every emit, and the inline write
+    # here was 30% of every main-thread sample py-spy took.
     if _auto_fib is not None:
-        _save_auto_fib()
+        _queue_save_auto_fib()
 
 
 def _save_auto_fib_runtime() -> None:
@@ -9420,8 +9422,9 @@ def _persist_vrule_update(status: dict) -> None:
         _queue_runtime_snapshot(_BUCKET_VRULE_RUNTIME, _snapshot_cascade_runtime(status))
     except Exception as exc:
         _logger.error("[V-RULE] Failed to queue the live runtime: %s", exc)
+    # Queued for the same reason as the sandbox's books, above.
     if _vrule is not None:
-        _save_vrule()
+        _queue_save_vrule()
 
 
 def _save_vrule_runtime() -> None:
@@ -9452,10 +9455,20 @@ def _get_vrule() -> "VRuleLive":
 
 
 def _save_vrule() -> None:
+    """Write the books NOW. For deliberate actions and shutdown."""
     try:
+        _drop_pending_snapshot(_BUCKET_VRULE, "books")
         _get_state_store().put(_BUCKET_VRULE, "books", _get_vrule().dump())
     except Exception as exc:
         _logger.error("[V-RULE] Failed to persist the books: %s", exc)
+
+
+def _queue_save_vrule() -> None:
+    """The tick path's twin: coalesced onto the writer thread."""
+    try:
+        _queue_runtime_snapshot(_BUCKET_VRULE, _get_vrule().dump(), "books")
+    except Exception as exc:
+        _logger.error("[V-RULE] Failed to queue the books: %s", exc)
 
 
 def _get_auto_fib() -> "AutoCascadeFib":
@@ -9466,10 +9479,27 @@ def _get_auto_fib() -> "AutoCascadeFib":
 
 
 def _save_auto_fib() -> None:
+    """Write the books NOW. For deliberate actions and shutdown."""
     try:
+        _drop_pending_snapshot(_BUCKET_AUTO_FIB, "books")
         _get_state_store().put(_BUCKET_AUTO_FIB, "books", _get_auto_fib().dump())
     except Exception as exc:
         _logger.error("[AUTO-FIB] Failed to persist the books: %s", exc)
+
+
+def _queue_save_auto_fib() -> None:
+    """The tick path's twin: coalesced onto the writer thread.
+
+    py-spy: this write was 30% of every main-thread sample. It is a SMALL
+    document, which is why it was dismissed earlier — but _apply_wallet_cap
+    calls set_capital_group whenever the wallet cap drifts, that emits an
+    update, and every emit opened a fresh SQLite connection here, inline on the
+    event loop.
+    """
+    try:
+        _queue_runtime_snapshot(_BUCKET_AUTO_FIB, _get_auto_fib().dump(), "books")
+    except Exception as exc:
+        _logger.error("[AUTO-FIB] Failed to queue the books: %s", exc)
 
 
 _TRADE_JOURNAL_FILE = os.path.join(_HERE, "data", "trade_journal.json")

@@ -112,7 +112,7 @@ def test_deliberate_persist_writes_through_and_clears_the_queue(monkeypatch):
     monkeypatch.setattr(app_module, "_auto_fib", None, raising=False)
     monkeypatch.setattr(app_module, "_vrule", None, raising=False)
 
-    app_module._snapshot_pending = {app_module._BUCKET_CASCADE_RUNTIME: {"stale": True}}
+    app_module._snapshot_pending = {(app_module._BUCKET_CASCADE_RUNTIME, "current"): {"stale": True}}
 
     class Engine:
         def get_status(self):
@@ -203,6 +203,62 @@ def test_writer_drains_every_bucket(_reset_writer, monkeypatch):
         app_module._BUCKET_AUTO_FIB_RUNTIME,
         app_module._BUCKET_VRULE_RUNTIME,
     }
+
+
+def test_the_books_ride_the_writer_on_the_tick_path(monkeypatch):
+    """py-spy: this small write was 30% of every main-thread sample.
+
+    _apply_wallet_cap calls set_capital_group whenever the wallet cap drifts,
+    that emits an update, and the emit hook opened a fresh SQLite connection
+    inline to save the books. Small document, punishing frequency.
+    """
+    put = []
+
+    class Store:
+        def put(self, bucket, key, payload):
+            put.append((bucket, key))
+
+    class Books:
+        def dump(self):
+            return {"books": []}
+
+    monkeypatch.setattr(app_module, "_get_state_store", lambda: Store())
+    monkeypatch.setattr(app_module, "_get_auto_fib", lambda: Books())
+    monkeypatch.setattr(app_module, "_get_vrule", lambda: Books())
+    monkeypatch.setattr(app_module, "_snapshot_cascade_runtime", lambda s: {})
+    monkeypatch.setattr(app_module, "_auto_fib", object(), raising=False)
+    monkeypatch.setattr(app_module, "_vrule", object(), raising=False)
+    queued = []
+    monkeypatch.setattr(app_module, "_queue_runtime_snapshot", lambda b, s, k="current": queued.append((b, k)))
+
+    app_module._persist_auto_fib_update({})
+    app_module._persist_vrule_update({})
+
+    assert (app_module._BUCKET_AUTO_FIB, "books") in queued
+    assert (app_module._BUCKET_VRULE, "books") in queued
+    assert put == [], "the tick path must not write the books on the loop"
+
+
+def test_a_deliberate_book_save_still_writes_through(monkeypatch):
+    """Stopping a book must hit the disk now, not in five seconds."""
+    put = []
+
+    class Store:
+        def put(self, bucket, key, payload):
+            put.append((bucket, key))
+
+    class Books:
+        def dump(self):
+            return {"books": []}
+
+    monkeypatch.setattr(app_module, "_get_state_store", lambda: Store())
+    monkeypatch.setattr(app_module, "_get_auto_fib", lambda: Books())
+    app_module._snapshot_pending = {(app_module._BUCKET_AUTO_FIB, "books"): {"stale": True}}
+
+    app_module._save_auto_fib()
+
+    assert put == [(app_module._BUCKET_AUTO_FIB, "books")]
+    assert not app_module._snapshot_pending, "a write-through must drop the queued copy"
 
 
 def test_websocket_push_is_slimmed_encoded_once_and_off_thread(monkeypatch):
