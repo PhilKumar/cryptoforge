@@ -154,6 +154,25 @@ jobs:
             StrictHostKeyChecking accept-new
           EOF
 
+      # FORCE_DEPLOY=1: deploy even while real trading is in flight.
+      #
+      # Phil's call, 2026-09-08, after every push that day skipped on open
+      # campaigns and had to be finished by hand over SSH. Cascade holds live
+      # positions around the clock, so "wait until the book is flat" means
+      # "never" — from 12 to 17 Aug 2026 the process ran a 5-day-old build
+      # while its checkout said otherwise.
+      #
+      # What still protects the live book, and why this is not reckless:
+      #   * it runs only AFTER the tests are green
+      #   * the flip is blue-green — the standby must pass its own health check
+      #     before nginx points at it, and cd-deploy.sh ROLLS BACK if it fails,
+      #     leaving the running worker untouched
+      #   * the incoming worker restores every campaign and reconciles it
+      #     against the exchange, and the monitor's writer lock keeps the two
+      #     workers from ever acting at once
+      #
+      # The exit-75 branch below is now unreachable for the open-positions
+      # case; it is kept because the script may skip for other reasons.
       # cd-deploy.sh exits 75 when it refuses to restart the service because
       # real trading is in flight. That is the gate working, not a broken
       # build, so it must not paint a green test run red — a red mark that
@@ -162,7 +181,7 @@ jobs:
         id: deploy
         run: |
           set +e
-          ssh deploy-target "cd ~/cryptoforge && git fetch origin main && git reset --hard origin/main && bash deploy/cd-deploy.sh"
+          ssh deploy-target "cd ~/cryptoforge && git fetch origin main && git reset --hard origin/main && FORCE_DEPLOY=1 bash deploy/cd-deploy.sh"
           status=$?
           set -e
           if [[ "$status" -eq 75 ]]; then
