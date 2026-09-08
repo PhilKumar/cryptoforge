@@ -56,7 +56,30 @@ health_check() {
 
 runtime_is_active() {
     local payload
-    if ! payload=$(curl -sf --max-time 5 "http://127.0.0.1:${1}/api/ready"); then
+    # RETRIED, and that is not belt-and-braces. One 5s curl decides whether the
+    # deploy is allowed to proceed at all, and it is asked immediately after
+    # `git reset --hard` has rewritten the checkout — which evicts the page
+    # cache on a box already several hundred MB into swap, so the very next
+    # request faults its way off disk. Twice on 2026-09-08 that answered in
+    # over five seconds and the deploy died on "did not return runtime state"
+    # while the worker was perfectly healthy: probed straight after, /api/ready
+    # came back 200 in 8ms, twelve times out of twelve.
+    #
+    # It matters more now that deploys are automatic (FORCE_DEPLOY, 7e373ea):
+    # this branch is NOT covered by the force, so a slow disk read silently
+    # stops the ship.
+    #
+    # Three tries with a longer budget. A worker that is genuinely gone fails
+    # all three and the gate still closes; only the false alarm is removed.
+    local attempt
+    for attempt in 1 2 3; do
+        if payload=$(curl -sf --max-time 15 "http://127.0.0.1:${1}/api/ready"); then
+            break
+        fi
+        payload=""
+        [[ "$attempt" -lt 3 ]] && sleep 3
+    done
+    if [[ -z "$payload" ]]; then
         return 2
     fi
     printf '%s' "$payload" | "$VENV/bin/python" -c '
