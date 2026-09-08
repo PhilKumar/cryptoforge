@@ -44,6 +44,9 @@ class NavOrderTests(unittest.TestCase):
                 "nav-builder",
                 "nav-market",
                 "nav-results",
+                # Assets last: the tearsheets are reference reading, not a desk
+                # you work from, so it sits after everything you act on.
+                "nav-assets",
             ],
         )
 

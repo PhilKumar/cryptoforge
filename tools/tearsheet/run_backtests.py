@@ -248,7 +248,13 @@ def _vrule(symbol: str) -> dict:
         "open_positions": len(open_),
         "open_pnl": round(bag_value - bag_cost, 4),
         "total_pnl": round(net_closed + bag_value - bag_cost, 4),
-        "final_capital": round(CAPITAL + net_closed, 4),
+        # The bag counts. This was CAPITAL + net_closed, which books the closed
+        # rounds and quietly ignores whatever the open positions are worth — and
+        # in these strategies a round only ever closes AT TARGET, so every
+        # closed round is a winner by construction and the entire loss lives in
+        # the bag. On the old V-Rule BTC run that read $9,881 against a true
+        # $8,128: overstated by the exact size of the bag it left out.
+        "final_capital": round(CAPITAL + net_closed + bag_value - bag_cost, 4),
         "monthly": monthly,
         "equity": equity,
         "seconds": round(time.time() - started, 2),

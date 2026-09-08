@@ -9283,11 +9283,17 @@ html[data-theme="light"] .journal-entry-notes section {
 
 /* ── Assets: the framed tearsheets ───────────────────────────
    The sheet is a whole document with its own scroll, so the frame
-   is given a tall fixed viewport rather than being sized to its
-   content — a same-origin frame cannot report its height back
-   without script on both sides, and the sheet already scrolls.
-   Sized off --cf-shell-h so it follows the workspace the way the
-   other panes do. */
+   gets a viewport rather than being sized to its content — a
+   same-origin frame cannot report its height back without script on
+   both sides, and the sheet already scrolls itself.
+
+   --cf-shell-h is the STICKY HEADER's height (~168px), not the
+   viewport's; the panel rule at the top of this file uses it the
+   same way. Subtracting it from 100dvh is what leaves the frame the
+   room actually below the header — writing `var(--cf-shell-h) -
+   210px` computes NEGATIVE and silently collapses to min-height,
+   which is exactly the short frame this replaces. The extra ~150px
+   is this page's own title and sub-tab strip. */
 .cf-assets-frame-card {
   padding: 0;
   overflow: hidden;
@@ -9295,11 +9301,11 @@ html[data-theme="light"] .journal-entry-notes section {
 .cf-assets-frame {
   display: block;
   width: 100%;
-  height: calc(var(--cf-shell-h, 100vh) - 210px);
+  height: calc(100dvh - var(--cf-shell-h, 168px) - 190px);
   min-height: 420px;
   border: 0;
   background: var(--bg, #0b0f14);
 }
 @media (max-width: 720px) {
-  .cf-assets-frame { height: calc(var(--cf-shell-h, 100vh) - 260px); }
+  .cf-assets-frame { height: calc(100dvh - var(--cf-shell-h, 168px) - 240px); }
 }
