@@ -2487,8 +2487,15 @@ class CascadeEngine:
         venue, _, symbol = str(key or "").partition(":")
         return symbol if venue == self.primary_broker_name else key
 
-    def set_capital_group(self, symbol: str, budget_usd, exchange: str = "") -> dict:
-        """Set (or clear, with 0/blank) the one budget a symbol's campaigns share."""
+    def set_capital_group(self, symbol: str, budget_usd, exchange: str = "", *, emit: bool = True) -> dict:
+        """Set (or clear, with 0/blank) the one budget a symbol's campaigns share.
+
+        emit=False is for callers already inside a tick that will publish its
+        own update. _emit_update builds the ENTIRE status, and Cascade-Auto
+        re-set this cap every tick as the purse drifted by more than a cent —
+        so a full status was being rendered on the event loop, per book, per
+        cycle, for a number nobody was waiting to see.
+        """
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return {"error": "Symbol is required"}
@@ -2496,11 +2503,13 @@ class CascadeEngine:
         budget = _coerce_float(budget_usd)
         if budget <= 0:
             existed = self.capital_groups.pop(key, None) is not None
-            self._emit_update()
+            if emit:
+                self._emit_update()
             return {"status": "ok", "symbol": symbol, "exchange": key.split(":", 1)[0], "removed": existed}
         committed = self.group_committed_usd(symbol, exchange)
         self.capital_groups[key] = budget
-        self._emit_update()
+        if emit:
+            self._emit_update()
         return {
             "status": "ok",
             "symbol": symbol,

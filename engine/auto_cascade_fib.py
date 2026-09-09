@@ -571,7 +571,12 @@ class AutoCascadeFib:
         wanted = book.wallet_cap_usd
         if abs(current - wanted) < 0.01:
             return False
-        setter(book.symbol, wanted, book.exchange)
+        # No emit: the tick reports `changed` and the monitor loop publishes
+        # once. Emitting here rendered the whole status again, on the loop.
+        try:
+            setter(book.symbol, wanted, book.exchange, emit=False)
+        except TypeError:  # an engine without the flag still works
+            setter(book.symbol, wanted, book.exchange)
         return True
 
     # ── the working line ─────────────────────────────────────────

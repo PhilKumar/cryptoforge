@@ -933,7 +933,13 @@ class VRuleLive:
             book.note = "no candles yet"
             return False
         sim_campaigns = await asyncio.to_thread(self._scan_structure, book, df)
-        bars = bars_from_df(df)
+        # Off the loop, like the two calls above it. This walks the whole
+        # replay window and builds a Bar per row, and pandas' own datetime
+        # iterator is not cheap: on 09-Sep-2026 nine of twenty-four samples of
+        # the event loop were inside here or in _tick_book waiting on it,
+        # while /api/health took 2.4-7.6s and nginx returned 504 to the tab.
+        # It is a pure function of df, so a thread is safe.
+        bars = await asyncio.to_thread(bars_from_df, df)
         changed = False
         # Every ladder advances through the same bar before any moves to the
         # next — the budget is measured per bar, across the book. And the bars
