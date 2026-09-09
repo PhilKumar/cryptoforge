@@ -3311,6 +3311,29 @@ class CascadeEngine:
             price_meta = self._price_cache.get(self._price_key(campaign))
             price = _coerce_float(price_meta[0] if price_meta else 0.0)
             if price <= 0:
+                # An ENDED campaign is not ticked, so nothing refreshes its
+                # price — and the cache is empty after every restart. That left
+                # the only way out of a stranded paper position refusing with
+                # "No price available", which is exactly where Phil was stuck
+                # on 09-Sep-2026: four rows, a Market Sell button on each, and
+                # every click a no-op. Ask the venue for a price instead.
+                try:
+                    price = await self._get_price(campaign.symbol, venue=self.broker_for(campaign))
+                except Exception as exc:
+                    _log.warning("[CASCADE] price fetch for paper liquidation of %s failed: %s", campaign_id, exc)
+                    price = 0.0
+            if price <= 0:
+                # Last resort: the campaign's own average entry. It books the
+                # round flat rather than leaving a position that cannot be
+                # closed at all — and for paper money a flat book is a far
+                # better answer than a row nothing can ever clear.
+                price = _coerce_float(campaign.avg_entry_price, 0.0)
+                if price > 0:
+                    _log.info(
+                        "[CASCADE] %s: no live price for a paper liquidation, booking flat at the average entry",
+                        campaign_id,
+                    )
+            if price <= 0:
                 return {"error": "No price available to close the paper position against"}
             self._close_round(campaign, price, sold_qty=desired_qty, at_ts=self._bar_containing(campaign))
             self._log_event(campaign, "stop", f"Paper position closed at market {price:,.2f}")
