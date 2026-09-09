@@ -212,6 +212,12 @@
      nav above it does, and is shown only while a strategy page is open. -->
 <div class="cf-strat-tabs cf-strat-subnav" id="cf-strat-subnav" role="tablist" aria-label="Strategy" hidden>
   <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
+          data-cf-strat-page="autofib-page"
+          data-cf-click="showPage('autofib-page', document.getElementById('nav-strategies'))">
+    <span class="cf-strat-icon cf-strat-icon-autofib" aria-hidden="true">&#8600;</span>
+    <span><strong>Cascade-Auto</strong><small>Automatic &middot; sells at half</small></span>
+  </button>
+  <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
           data-cf-strat-page="cascade-page"
           data-cf-click="showPage('cascade-page', document.getElementById('nav-strategies'))">
     <span class="cf-strat-icon cf-strat-icon-cascade" aria-hidden="true">&#8803;</span>
@@ -222,12 +228,6 @@
           data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">
     <span class="cf-strat-icon cf-strat-icon-vrule" aria-hidden="true">V</span>
     <span><strong>V-Rule</strong><small>Paper &middot; the 30-70 rule</small></span>
-  </button>
-  <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
-          data-cf-strat-page="autofib-page"
-          data-cf-click="showPage('autofib-page', document.getElementById('nav-strategies'))">
-    <span class="cf-strat-icon cf-strat-icon-autofib" aria-hidden="true">&#8600;</span>
-    <span><strong>Cascade-Auto</strong><small>Automatic &middot; sells at half</small></span>
   </button>
 </div>
 </div><!-- /sticky-shell -->

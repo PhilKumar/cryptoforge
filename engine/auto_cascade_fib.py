@@ -513,6 +513,31 @@ class AutoCascadeFib:
             out.append(campaign)
         return out
 
+    async def _stop_orphaned_lines(self, book: Book) -> bool:
+        """Stop the working lines of a book that is switched off.
+
+        Safe by construction rather than by care: stop_campaign pulls the
+        resting BUYS and, when coin is held, deliberately leaves the
+        take-profit resting so the position still exits at its target. Nothing
+        is stranded and the rounds stay in the books.
+
+        Idempotent — a stopped campaign is in FINAL_STATES, so the next tick
+        finds nothing to do.
+        """
+        working = self._live_campaigns(book)
+        if not working:
+            return False
+        stopped = 0
+        for campaign in working:
+            try:
+                await self.engine.stop_campaign(campaign.campaign_id)
+                stopped += 1
+            except Exception as exc:  # one line must not block the others
+                _log.warning("[AUTO-FIB] %s is off but %s would not stop: %s", book.symbol, campaign.campaign_id, exc)
+        if stopped:
+            _log.info("[AUTO-FIB] %s is switched off — stopped %d line(s) it had left working", book.symbol, stopped)
+        return bool(stopped)
+
     def _live_campaigns(self, book: Book) -> List:
         from engine.cascade import FINAL_STATES
 
@@ -724,6 +749,12 @@ class AutoCascadeFib:
         changed = False
         for book in list(self.books.values()):
             if not book.enabled:
+                # OFF has to mean off, and it has to mean it for books that
+                # were ALREADY off. Stopping only at the moment of the switch
+                # left every line an earlier switch had orphaned working for
+                # ever: BTCUSDT read "Switched off" on 09-Sep-2026 over three
+                # ladders that kept holding and kept taking targets.
+                changed |= await self._stop_orphaned_lines(book)
                 continue
             try:
                 changed |= self._bank_and_fold(book)

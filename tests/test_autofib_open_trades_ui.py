@@ -91,6 +91,17 @@ class StrategySubnavInHeaderTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r'<div class="cf-strat-tabs cf-strat-subnav"', self.html)), 1)
         self.assertEqual(len(re.findall(r'id="cf-strat-subnav"', self.html)), 1)
 
+    def test_cascade_auto_is_the_first_tab(self):
+        """Phil's order, 09-Sep-2026: Auto first, then the other two.
+
+        Auto is the one he is taking live; it should not be the tab he has to
+        reach past the other two to find.
+        """
+        bar_at = self.html.index('id="cf-strat-subnav"')
+        bar = self.html[bar_at : self.html.index("</div>", self.html.index("Cascade-Auto", bar_at))]
+        order = re.findall(r'data-cf-strat-page="([a-z0-9-]+)"', bar)
+        self.assertEqual(order[:3], ["autofib-page", "cascade-page", "rule3070-page"])
+
     def test_it_lives_inside_the_sticky_shell(self):
         shell_start = self.html.index('<div class="sticky-shell">')
         shell_end = self.html.index("</div><!-- /sticky-shell -->")
