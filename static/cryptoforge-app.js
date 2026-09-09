@@ -15077,6 +15077,29 @@ function cfAfRenderStats(books) {
 // auto-fib status payload, in the Cascade shape, and are drawn by the Cascade
 // page's renderer into this page's own mount — never by a second copy of it,
 // which would drift the moment either page changed.
+// Which ladders get a card on Cascade-Auto: the ones DOING something, plus
+// each book's own working line.
+//
+// _cfCascadeCampaignWorking asks whether a ladder holds coin, has money
+// committed, or has an order resting. A freshly seeded line has none of those
+// — it is watching for price to reach its first rung. So on 09-Sep-2026 Phil
+// switched two books to LIVE, the driver seeded a line on each, the Books
+// table read "LINES 1 · WORKING LINE 7ffe21e5b3", and the Lines panel said
+// "Nothing running yet". Hybrid never showed this because a hand-started
+// campaign arms an order at once and passes the filter.
+//
+// The rest stay out on purpose: 242 cards for five working ladders is not a
+// list anyone can read (Phil, 2026-09-04: "can we decrease this?").
+function _cfAfVisibleLines(campaigns, books) {
+  var named = {};
+  (books || []).forEach(function (b) {
+    if (b && b.working_line) named[String(b.working_line)] = true;
+  });
+  return (campaigns || []).filter(function (c) {
+    return _cfCascadeCampaignWorking(c) || named[String((c || {}).campaign_id)];
+  });
+}
+
 function cfAfRenderLines(data) {
   // Register before drawing: the Log button on any round this call paints
   // looks the campaign up by id, and the sandbox's campaigns are never in the
@@ -15105,7 +15128,7 @@ function cfAfRenderLines(data) {
   // event log reads their logs — but 242 cards for 5 working ladders is not a
   // list anyone can use (Phil, 2026-09-04: "can we decrease this?").
   var afAll = Array.isArray(data && data.campaigns) ? data.campaigns : [];
-  var afWorking = afAll.filter(_cfCascadeCampaignWorking);
+  var afWorking = _cfAfVisibleLines(afAll, (data && data.books) || []);
   var afWatching = afAll.length - afWorking.length;
   cfRenderCascadeCampaigns(
     afWorking,
