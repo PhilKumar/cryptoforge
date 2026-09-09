@@ -246,8 +246,7 @@ async def _wake_cascade_on_boot() -> None:
     try:
         scalp_runtime = _load_scalp_runtime()
         if scalp_runtime.get("open_trades") or scalp_runtime.get("pending_entries"):
-            _get_scalp_engine()
-            _logger.info("[SCALP] boot restore resumed the open book")
+            await _resume_scalp_on_boot()
     except Exception as exc:
         _logger.error("[SCALP] boot restore failed; open trades stay unwatched: %s", exc)
     await _resume_rule3070_on_boot()
@@ -311,6 +310,40 @@ async def _resume_rule3070_on_boot() -> None:
         if not wanted:
             return
         await asyncio.sleep(_RULE3070_RESUME_DELAY_SEC)
+
+
+async def _resume_scalp_on_boot() -> None:
+    """Bring back a scalp book that was open when the process went away.
+
+    The monitor is asked to reconcile BEFORE it is allowed to act. A restored
+    book can be stale — a trade closed by hand, or one whose position the
+    exchange no longer holds — and the loop's first move on a stale trade is
+    an exit order for something that is not there.
+
+    If the broker cannot be reached, it starts ANYWAY and says so loudly. The
+    two failures are not equal: a stale book produces an order the exchange
+    rejects, while an unwatched real position has no stop being honoured at
+    all. The second is the one that costs money.
+    """
+    engine = _get_scalp_engine(autostart=False)
+    try:
+        await engine.reconcile_broker_positions(force=True)
+    except Exception as exc:
+        _logger.error(
+            "[SCALP] boot reconcile failed (%s) — resuming the book unreconciled rather than leaving it unwatched",
+            exc,
+        )
+    if not engine.open_trades and not engine.pending_entries:
+        _logger.info("[SCALP] boot restore found nothing the exchange still holds")
+        return
+    if not getattr(engine, "_running", False):
+        engine.start()
+    _logger.info(
+        "[SCALP] boot restore resumed %d open trade(s) and %d pending entr(y/ies)",
+        len(engine.open_trades or {}),
+        len(engine.pending_entries or {}),
+    )
+    _persist_scalp_runtime_snapshot(engine)
 
 
 # The public landing's snapshot is only written while /api/journal/trades is
@@ -7858,7 +7891,7 @@ def _save_scalp_runtime(runtime_state: dict) -> None:
     store.put(_BUCKET_SCALP_RUNTIME, "current", dict(runtime_state or {}))
 
 
-def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
+def _restore_scalp_runtime(engine: ScalpEngine, *, autostart: bool = True) -> bool:
     runtime_state = _load_scalp_runtime()
     open_rows = runtime_state.get("open_trades") or []
     pending_rows = runtime_state.get("pending_entries") or []
@@ -7910,7 +7943,12 @@ def _restore_scalp_runtime(engine: ScalpEngine) -> bool:
         engine._canonical_symbol(p.symbol) for p in engine.pending_entries.values()
     }
     engine._watch_symbols = {sym for sym in tracked if sym}
-    if (engine.open_trades or engine.pending_entries) and not getattr(engine, "_running", False):
+    # autostart=False is for the boot path, which reconciles against the
+    # exchange BEFORE letting the monitor act: a restored book can be stale,
+    # and the loop's first move on a stale trade is an exit for a position
+    # that is not there. Every other caller is a live request whose book was
+    # already current, so they keep the immediate start.
+    if autostart and (engine.open_trades or engine.pending_entries) and not getattr(engine, "_running", False):
         engine.start()
     return bool(engine.open_trades or engine.pending_entries)
 
@@ -8077,7 +8115,7 @@ async def _broadcast_scalp_update(status: dict) -> None:
                 ws_clients.remove(ws)
 
 
-def _get_scalp_engine():
+def _get_scalp_engine(*, autostart: bool = True):
     global _scalp_engine
     if _scalp_engine is None:
         _scalp_engine = ScalpEngine(
@@ -8086,7 +8124,7 @@ def _get_scalp_engine():
             on_event=_scalp_persist_event,
             on_update=_broadcast_scalp_update,
         )
-        _restore_scalp_runtime(_scalp_engine)
+        _restore_scalp_runtime(_scalp_engine, autostart=autostart)
     return _scalp_engine
 
 
@@ -10062,7 +10100,11 @@ async def notifications_list(include_seen: bool = False, limit: int = 50):
 @app.post("/api/notifications/ack")
 async def notifications_ack(request: Request):
     body = await _read_json_body(request)
-    return _notify_ack(ids=body.get("ids"), ack_all=bool(body.get("all")))
+    # Off the event loop. _notify_ack takes a threading lock and does a SQLite
+    # read-modify-write, and there is ONE uvicorn worker: run inline, an ack
+    # queues behind whatever else the loop is doing and can outlast the
+    # browser's 10s deadline. Phil saw that as "the server did not answer".
+    return await asyncio.to_thread(_notify_ack, body.get("ids"), bool(body.get("all")))
 
 
 _FEED_KEYSET_FILE = os.path.join(_STATE_DIR, "feed_keyset.json")

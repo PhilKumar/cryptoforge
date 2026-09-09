@@ -9115,7 +9115,40 @@ function _cfUpdateStrategiesTabDot(engine, active) {
   dot.title = message;
 }
 
+// At most ONE /api/cascade/status may be in flight, ever.
+//
+// The payload is ~87 KB and the poll fires every 3s. When the box is busy the
+// response outlasts the interval, so the requests PILED UP: the prod access
+// log on 09-Sep-2026 shows five landing inside the same second, over and over.
+// Chrome allows six connections per host, so those five starved everything
+// else the page wanted to do — a "Got it" POST never got a socket at all and
+// died on its own 10s deadline, which is exactly the "The server did not
+// answer" toast Phil kept seeing while /api/notifications/ack appears NOWHERE
+// in the server log. The dead-looking button was a symptom; this was the bug.
+//
+// Callers now share the request that is already running instead of opening
+// another. That also stops the single uvicorn worker being asked to render
+// the same 87 KB five times over.
+var _cfCascadeStatusInFlight = null;
+
 async function cfLoadCascadeStatus(showToast) {
+  if (_cfCascadeStatusInFlight) {
+    var shared = await _cfCascadeStatusInFlight;
+    // A hand-driven refresh still deserves an answer, even when it rode along
+    // on a poll that was already out.
+    if (showToast) cfToast(shared ? 'Cascade status refreshed' : 'Cascade refresh failed', shared ? 'success' : 'danger');
+    return shared;
+  }
+  // Assigned before the first await, so a second caller in the same tick sees it.
+  _cfCascadeStatusInFlight = _cfLoadCascadeStatusOnce(showToast);
+  try {
+    return await _cfCascadeStatusInFlight;
+  } finally {
+    _cfCascadeStatusInFlight = null;
+  }
+}
+
+async function _cfLoadCascadeStatusOnce(showToast) {
   try {
     var response = await cfApiFetch('/api/cascade/status', { cache: 'no-store' });
     var data = await cfReadApiPayload(response);
@@ -9129,8 +9162,10 @@ async function cfLoadCascadeStatus(showToast) {
     // SVG behaviour or journal snapshots.
     await _cfCascadeRefreshOpenCanvasChartFromPoll();
     if (showToast) cfToast('Cascade status refreshed', 'success');
+    return true;
   } catch (error) {
     if (showToast) cfToast('Cascade refresh failed: ' + error.message, 'danger');
+    return false;
   }
 }
 

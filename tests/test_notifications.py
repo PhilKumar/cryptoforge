@@ -82,6 +82,46 @@ class NotificationInboxTests(unittest.IsolatedAsyncioTestCase):
         # Acknowledged is not deleted — the history is still readable.
         self.assertEqual(empty.json()["total"], 2)
 
+    async def test_an_ack_does_not_block_the_event_loop(self):
+        """There is ONE uvicorn worker, so a blocking ack freezes the site.
+
+        _notify_ack takes a threading lock and does a SQLite read-modify-write.
+        Run inline in the coroutine it holds the loop, and on 09-Sep-2026 acks
+        took longer than the browser's 10s deadline and were reported as "The
+        server did not answer". Here a deliberately slow ack must not stop
+        /api/health being answered while it runs.
+        """
+        import asyncio
+        import time
+
+        app = self.app_module
+        app._notify_push("trade_entry", "Live entry", "BTCUSDT", dedupe_key="slow")
+        original = app._notify_ack
+
+        def slow_ack(ids=None, ack_all=False):
+            time.sleep(0.5)
+            return original(ids=ids, ack_all=ack_all)
+
+        app._notify_ack = slow_ack
+        self.addCleanup(lambda: setattr(app, "_notify_ack", original))
+
+        async with self._client() as client:
+            started = time.monotonic()
+            ack = asyncio.create_task(
+                client.post("/api/notifications/ack", json={"all": True}, headers=self._csrf_headers)
+            )
+            await asyncio.sleep(0.05)
+            health = await client.get("/api/health")
+            served_at = time.monotonic() - started
+            await ack
+
+        self.assertEqual(health.status_code, 200)
+        self.assertLess(
+            served_at,
+            0.45,
+            "health waited for the ack — the ack is still running on the event loop",
+        )
+
     async def test_cascade_event_levels_that_raise_an_alert(self):
         app = self.app_module
         app._cascade_persist_event(

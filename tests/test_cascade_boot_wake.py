@@ -60,12 +60,41 @@ class CascadeBootWakeTests(unittest.TestCase):
         self.assertEqual(served, ["yes"])
 
 
+class _FakeScalpEngine:
+    """Just enough engine to see the ORDER of what boot does."""
+
+    def __init__(self, open_trades=None, pending=None, reconcile_error=None, clears=False):
+        self.open_trades = dict(open_trades or {})
+        self.pending_entries = dict(pending or {})
+        self._running = False
+        self._reconcile_error = reconcile_error
+        self._clears = clears
+        self.calls = []
+
+    async def reconcile_broker_positions(self, force=False):
+        self.calls.append("reconcile")
+        if self._reconcile_error:
+            raise self._reconcile_error
+        if self._clears:
+            self.open_trades = {}
+            self.pending_entries = {}
+        return {"checked": 1}
+
+    def start(self):
+        self.calls.append("start")
+        self._running = True
+
+
 class ScalpBootResumeTests(unittest.TestCase):
     """Scalp's monitor is what honours a target and a stop.
 
     It is built lazily like the cascade engine, so an open trade carried
     across a deploy was unwatched until somebody opened the Scalp tab. On
     2026-09-08 there were four deploys in a day.
+
+    The restored book is reconciled BEFORE the loop may act: restoring a stale
+    one locally on 09-Sep instantly "exited" a fixture trade at the live price
+    for a nonsense +$38M.
     """
 
     def setUp(self):
@@ -94,7 +123,7 @@ class ScalpBootResumeTests(unittest.TestCase):
         for name, value in saved.items():
             setattr(self.app, name, value)
 
-    def _drive(self, runtime):
+    def _drive(self, runtime, engine=None):
         built = []
         served = []
 
@@ -102,30 +131,63 @@ class ScalpBootResumeTests(unittest.TestCase):
             saved = self._isolate_boot()
             original_get = self.app._get_scalp_engine
             original_load = self.app._load_scalp_runtime
+            original_persist = self.app._persist_scalp_runtime_snapshot
             self.app._load_scalp_runtime = lambda: runtime
-            self.app._get_scalp_engine = lambda: built.append("built")
+            self.app._persist_scalp_runtime_snapshot = lambda *a, **k: None
+
+            def fake_get(*, autostart=True):
+                built.append(autostart)
+                return engine if engine is not None else _FakeScalpEngine()
+
+            self.app._get_scalp_engine = fake_get
             try:
                 async with self.app._app_lifespan(None):
                     served.append("yes")
-                    for _ in range(10):
+                    for _ in range(20):
                         if built:
                             break
+                        await asyncio.sleep(0)
+                    # Let the reconcile await finish.
+                    for _ in range(20):
                         await asyncio.sleep(0)
             finally:
                 self.app._get_scalp_engine = original_get
                 self.app._load_scalp_runtime = original_load
+                self.app._persist_scalp_runtime_snapshot = original_persist
                 self._restore_boot(saved)
 
         asyncio.run(drive())
         return built, served
 
     def test_an_open_trade_is_restored_without_any_request(self):
-        built, _ = self._drive({"open_trades": [{"trade_id": 1}], "pending_entries": []})
-        self.assertEqual(built, ["built"], "boot never restored the open scalp book")
+        engine = _FakeScalpEngine(open_trades={1: object()})
+        built, _ = self._drive({"open_trades": [{"trade_id": 1}], "pending_entries": []}, engine)
+        self.assertEqual(built, [False], "boot never restored the open scalp book")
+        self.assertEqual(engine.calls, ["reconcile", "start"])
 
     def test_a_pending_entry_is_restored_too(self):
-        built, _ = self._drive({"open_trades": [], "pending_entries": [{"entry_id": 7}]})
-        self.assertEqual(built, ["built"])
+        engine = _FakeScalpEngine(pending={7: object()})
+        _, _ = self._drive({"open_trades": [], "pending_entries": [{"entry_id": 7}]}, engine)
+        self.assertEqual(engine.calls, ["reconcile", "start"])
+
+    def test_the_book_is_reconciled_before_the_loop_may_act(self):
+        """A stale trade must never be acted on. Order is the whole point."""
+        engine = _FakeScalpEngine(open_trades={1: object()})
+        self._drive({"open_trades": [{"trade_id": 1}], "pending_entries": []}, engine)
+        self.assertEqual(engine.calls[0], "reconcile")
+
+    def test_nothing_starts_when_the_exchange_holds_none_of_it(self):
+        engine = _FakeScalpEngine(open_trades={1: object()}, clears=True)
+        self._drive({"open_trades": [{"trade_id": 1}], "pending_entries": []}, engine)
+        self.assertEqual(engine.calls, ["reconcile"], "a book the exchange has closed was restarted")
+        self.assertFalse(engine._running)
+
+    def test_an_unreachable_broker_still_leaves_the_position_watched(self):
+        """Unwatched real money is worse than an order the exchange rejects."""
+        engine = _FakeScalpEngine(open_trades={1: object()}, reconcile_error=RuntimeError("broker down"))
+        self._drive({"open_trades": [{"trade_id": 1}], "pending_entries": []}, engine)
+        self.assertEqual(engine.calls, ["reconcile", "start"])
+        self.assertTrue(engine._running)
 
     def test_an_idle_scalp_does_not_build_a_broker_client_on_every_boot(self):
         built, _ = self._drive({"open_trades": [], "pending_entries": []})
