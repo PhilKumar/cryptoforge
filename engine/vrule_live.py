@@ -583,7 +583,14 @@ class VRuleLive:
         # A book turned off and on again moves history_start_ts FORWARD, and
         # the trim in _merge_window handles that. A warm-up reaching further
         # BACK than the cache cannot be served from it — take the lot again.
-        if have and int(book.history_start_ts) < int(cached.index[0].timestamp()):
+        #
+        # ONLY when the book names a start. history_start_ts defaults to 0,
+        # which means "the trailing WINDOW_DAYS", not "the epoch" — and read
+        # as a timestamp it is below every cached bar, so this threw the cache
+        # away on every scan and refetched all thirty days. That is the very
+        # thing this method exists to stop, and it shipped in c3f4332.
+        floor_ts = int(book.history_start_ts)
+        if have and floor_ts > 0 and floor_ts < int(cached.index[0].timestamp()):
             have = False
         # An hour of overlap, the same margin the venue path uses: enough that
         # a bar revised after its close is refetched, cheap enough to be free.

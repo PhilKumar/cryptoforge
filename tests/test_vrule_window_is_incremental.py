@@ -105,6 +105,29 @@ class VRuleWindowIsIncrementalTests(unittest.TestCase):
         second = self.driver._default_window_loader(self.book)
         self.assertEqual(len(second), len(first))
 
+    def test_a_book_with_no_named_start_still_keeps_its_window(self):
+        """history_start_ts is 0 by default, meaning "the trailing window".
+
+        Read as a timestamp it sits below every cached bar, so a naive
+        "does the warm-up reach further back?" check threw the cache away on
+        every single scan and refetched all thirty days — the exact thing this
+        method exists to prevent. It shipped that way in c3f4332.
+        """
+        self.book.history_start_ts = 0
+
+        def fake(symbol, since_ts=0):
+            self.asked.append(since_ts)
+            if len(self.asked) == 1:
+                return _frame(self.start, 100)
+            return _frame(self.start + 99 * 300, 2)
+
+        self._install(fake)
+        self.driver._default_window_loader(self.book)
+        self.driver._default_window_loader(self.book)
+        self.assertEqual(self.asked[0], 0, "the first scan should take the trailing window")
+        self.assertNotEqual(self.asked[1], 0, "the whole window was fetched again")
+        self.assertEqual(self.asked[1], self.start + 99 * 300 - 3600)
+
     def test_a_venue_book_does_not_take_this_path(self):
         self.book.exchange = "coindcx"
         calls = []
