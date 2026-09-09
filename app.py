@@ -235,6 +235,21 @@ async def _wake_cascade_on_boot() -> None:
         _get_vrule_engine()
     except Exception as exc:
         _logger.error("[V-RULE] boot restore failed; the live driver stays asleep: %s", exc)
+    # Scalp holds real positions whose target and stop live only in the monitor
+    # loop, and that engine is built lazily by the first request to touch a
+    # scalp route. So a trade carried across a deploy sat unwatched until Phil
+    # opened the Scalp tab — on 2026-09-08, four deploys, four such windows.
+    # _get_scalp_engine restores the persisted book and starts the loop ONLY
+    # when something is actually open, so this resumes what was left running
+    # and can never open a new trade. Reading the runtime first keeps an idle
+    # Scalp from building a broker client on every boot.
+    try:
+        scalp_runtime = _load_scalp_runtime()
+        if scalp_runtime.get("open_trades") or scalp_runtime.get("pending_entries"):
+            _get_scalp_engine()
+            _logger.info("[SCALP] boot restore resumed the open book")
+    except Exception as exc:
+        _logger.error("[SCALP] boot restore failed; open trades stay unwatched: %s", exc)
     await _resume_rule3070_on_boot()
 
 
