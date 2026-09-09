@@ -282,7 +282,8 @@ test.describe('Comprehensive Site Audit', () => {
     // selector now, in the header inside .sticky-shell, so it holds still with
     // the nav instead of scrolling away with the page — and it must read the
     // same, and stay visible, wherever among the three you are standing.
-    const STRATEGIES = ['Cascade-Hybrid', 'V-Rule', 'Cascade-Auto'];
+    // Phil's order, 09-Sep-2026: Auto leads, it is the one going live.
+    const STRATEGIES = ['Cascade-Auto', 'Cascade-Hybrid', 'V-Rule'];
     await expect(page.locator('.cf-strat-subnav'), 'one switcher, not one per page').toHaveCount(1);
     await expect(
       page.locator('.sticky-shell .cf-strat-subnav'),
