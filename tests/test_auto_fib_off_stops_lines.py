@@ -70,6 +70,10 @@ class AutoFibOffStopsItsLinesTests(unittest.IsolatedAsyncioTestCase):
             def _live_campaigns(self, book):
                 return [FakeCampaign("c1"), FakeCampaign("c2")]
 
+            async def _stop_orphaned_lines(self, book):
+                self._outer.stopped.append(book.symbol)
+                return True
+
             def status(self):
                 return {"books": []}
 
@@ -94,7 +98,10 @@ class AutoFibOffStopsItsLinesTests(unittest.IsolatedAsyncioTestCase):
             }
             yield client
 
-    async def test_switching_a_book_off_stops_its_working_lines(self):
+    async def test_switching_a_book_off_clears_its_lines_at_once(self):
+        """The switch delegates to the SAME step the tick repeats, so the two
+        can never disagree about what off means — see
+        tests/test_auto_fib_off_stops_orphans.py for what that step does."""
         async with self._client() as client:
             response = await client.post(
                 "/api/auto-fib/books",
@@ -102,8 +109,8 @@ class AutoFibOffStopsItsLinesTests(unittest.IsolatedAsyncioTestCase):
                 headers=self.headers,
             )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.stopped, ["c1", "c2"], "the book went off and its ladders kept working")
-        self.assertEqual(response.json()["stopped_campaigns"], ["c1", "c2"])
+        self.assertEqual(self.stopped, ["BTCUSDT"], "the book went off and nothing cleared its lines")
+        self.assertTrue(response.json()["stopped_lines"])
 
     async def test_switching_it_on_stops_nothing(self):
         self.driver.book.enabled = False
@@ -135,30 +142,6 @@ class AutoFibOffStopsItsLinesTests(unittest.IsolatedAsyncioTestCase):
                 headers=self.headers,
             )
         self.assertEqual(self.stopped, [])
-
-    async def test_one_campaign_failing_to_stop_does_not_block_the_rest(self):
-        class HalfBrokenEngine:
-            def __init__(self, outer):
-                self._outer = outer
-
-            def start(self):
-                pass
-
-            async def stop_campaign(self, campaign_id, cancel_orders=True):
-                if campaign_id == "c1":
-                    raise RuntimeError("exchange unreachable")
-                self._outer.stopped.append(campaign_id)
-                return {"status": "ok"}
-
-        self.app_module._get_auto_fib_engine = lambda: HalfBrokenEngine(self)
-        async with self._client() as client:
-            response = await client.post(
-                "/api/auto-fib/books",
-                json={"symbol": "BTCUSDT", "enabled": False},
-                headers=self.headers,
-            )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.stopped, ["c2"])
 
 
 if __name__ == "__main__":

@@ -311,6 +311,14 @@ def latest_swing_high(candles, close: float, swing_bars: int = SWING_BARS, exclu
     return None
 
 
+def _holds_coin(campaign) -> bool:
+    """Has this campaign actually bought anything that still needs selling?"""
+    try:
+        return float(getattr(campaign, "filled_base_qty", 0.0) or 0.0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 class AutoCascadeFib:
     """The driver. Owns no orders — it only starts campaigns and sets budgets."""
 
@@ -524,7 +532,15 @@ class AutoCascadeFib:
         Idempotent — a stopped campaign is in FINAL_STATES, so the next tick
         finds nothing to do.
         """
-        working = self._live_campaigns(book)
+        # A line HOLDING coin is left alone to finish. Stopping it does not
+        # sell it: the post-stop take-profit settlement runs for live
+        # campaigns only (engine/cascade.py:3114), so a stopped PAPER holder
+        # keeps its coin with nothing left to sell it and the panel asks Phil
+        # to exit by hand. That is what 7d7f18c did to four positions.
+        #
+        # Off therefore means: open nothing new, and let what is already held
+        # sell itself at its target and close on its own. No babysitting.
+        working = [c for c in self._live_campaigns(book) if not _holds_coin(c)]
         if not working:
             return False
         stopped = 0

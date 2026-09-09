@@ -10695,17 +10695,14 @@ async def auto_fib_set_book(request: Request):
     # held, deliberately leaves the take-profit resting so the position still
     # exits at its target (engine/cascade.py:2986). Nothing is stranded, and
     # the rounds stay in the books.
-    stopped = []
+    stopped = False
     if was_enabled and not book.enabled:
-        engine = _get_auto_fib_engine()
-        for campaign in driver._live_campaigns(book):
-            try:
-                await engine.stop_campaign(campaign.campaign_id)
-                stopped.append(campaign.campaign_id)
-            except Exception as exc:
-                _logger.warning("[AUTO-FIB] could not stop %s with its book: %s", campaign.campaign_id, exc)
-        if stopped:
-            _logger.info("[AUTO-FIB] %s switched off — stopped %d working line(s)", book.symbol, len(stopped))
+        # One implementation, so the switch and the tick cannot disagree: it
+        # stops the lines holding nothing and leaves a position to sell itself
+        # at its target. The tick repeats this every cycle, which is what
+        # heals a book that was already off.
+        _get_auto_fib_engine()  # the driver stops through its own engine
+        stopped = await driver._stop_orphaned_lines(book)
     # The driver only runs inside its engine's monitor loop. On a book turned
     # on while nothing else is running — the ordinary case — the loop is
     # asleep, so the book would sit there looking armed and do nothing at all.
@@ -10713,7 +10710,7 @@ async def auto_fib_set_book(request: Request):
     if book.enabled:
         _get_auto_fib_engine().start()
     _save_auto_fib()
-    return {"status": "ok", "stopped_campaigns": stopped, **driver.status()}
+    return {"status": "ok", "stopped_lines": bool(stopped), **driver.status()}
 
 
 # Geometry only a CARD or a chart draws. An ended campaign gets neither: the

@@ -14,9 +14,10 @@ from engine import auto_cascade_fib as auto
 
 
 class _Campaign:
-    def __init__(self, cid, state="ACTIVE"):
+    def __init__(self, cid, state="ACTIVE", filled_base_qty=0.0):
         self.campaign_id = cid
         self.state = state
+        self.filled_base_qty = filled_base_qty
 
 
 class _Engine:
@@ -58,6 +59,24 @@ class AutoFibOffStopsOrphansTests(unittest.TestCase):
             campaign.state = "STOPPED"
         asyncio.run(self.driver.tick())
         self.assertEqual(self.engine.stopped, ["c1", "c2"], "the tick tried to stop them twice")
+
+    def test_a_line_HOLDING_coin_is_left_to_sell_itself(self):
+        """Stopping a holder does not sell it.
+
+        The post-stop take-profit settlement runs for LIVE campaigns only
+        (engine/cascade.py:3114), so a stopped paper holder keeps its coin
+        with nothing left to sell it and the panel asks for a manual exit.
+        7d7f18c did exactly that to four of Phil's positions.
+        """
+        self.working = [_Campaign("empty"), _Campaign("holding", filled_base_qty=0.42)]
+        asyncio.run(self.driver.tick())
+        self.assertEqual(self.engine.stopped, ["empty"], "a position was stopped instead of being left to finish")
+
+    def test_a_book_of_nothing_but_holders_stops_nothing(self):
+        self.working = [_Campaign("h1", filled_base_qty=1.0), _Campaign("h2", filled_base_qty=2.0)]
+        changed = asyncio.run(self.driver.tick())
+        self.assertEqual(self.engine.stopped, [])
+        self.assertFalse(changed)
 
     def test_a_book_that_is_ON_keeps_its_lines(self):
         self.book.enabled = True
