@@ -42,7 +42,24 @@ jobs:
         working-directory: e2e-tests
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          # --with-deps shells out to apt, which fetches Google's package index
+          # — and on 2026-09-09 that index served a bad hash twice in a row:
+          #
+          #   E: Failed to fetch .../chrome-stable/.../Packages.gz  Hash Sum mismatch
+          #   Failed to install browsers
+          #
+          # The gate died before a single test ran, and with the deploy job
+          # gated on it, a finished and tested change simply could not ship.
+          # The BROWSER comes from Playwright's own CDN and was never the
+          # problem; only the OS packages beside it were. The runner image
+          # already carries those libraries, so fall back to installing the
+          # browser alone rather than letting somebody else's mirror decide
+          # whether we deploy. A browser that then cannot start still fails
+          # the suite, loudly, on its own merits.
+          npx playwright install --with-deps chromium || {
+            echo "::warning::apt could not install browser deps; falling back to the browser alone"
+            npx playwright install chromium
+          }
 
       # Audit the seven e2e packages, but tell a VULNERABILITY apart from an
       # UNREACHABLE REGISTRY. Both exit 1, and while they sat in the install
