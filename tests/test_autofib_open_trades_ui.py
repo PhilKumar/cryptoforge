@@ -2,10 +2,17 @@
 The Open Trades table on the Auto-Cascade_Fib tab.
 
 Phil, 2026-08-23: "Add a open trade section in auto-cascade_fib tab same like
-cascade". It is the SAME renderer with this page's ids, not a second one — but
-with the Action column off, because that button posts to
-/api/cascade/campaigns/<id>/liquidate, the LIVE Cascade engine, which does not
-own a strategy's campaigns.
+cascade". It is the SAME renderer with this page's ids, not a second one, and
+it is still asked for with actions:false — a healthy sandbox position is not
+something to offer a market sell against.
+
+That USED to be justified by the button posting to the live Cascade engine,
+which does not own a strategy's campaigns. It no longer is: the route resolves
+the campaign to the engine that owns it (_engine_holding_campaign), and a
+STRANDED row — ended, still holding, no resting sell — is given its exit on
+any page. Without that, four stopped Cascade-Auto positions had no way out at
+all on 09-Sep-2026, the column being off here and the card that carries the
+button being drawn only for working ladders.
 
 Also pinned: the Cascade page's own ids are unchanged, since an e2e probe and
 the pager both address them.
@@ -53,12 +60,30 @@ class AutoFibOpenTradesTests(unittest.TestCase):
         self.assertIsNotNone(call, "the auto-fib table must be drawn without the Action column")
 
     def test_the_action_column_is_conditional_in_both_the_head_and_the_body(self):
-        self.assertIn("(actions ? '<th>Action</th>' : '')", self.js)
-        self.assertIn("(actions ? '<td>' + _cfCascadeTradeAction(c) + '</td>' : '')", self.js)
+        """Still conditional — but a STRANDED row now opens it.
 
-    def test_the_market_sell_button_still_posts_only_to_the_cascade_engine(self):
-        """If this ever stops being true, actions:false stops being the guard."""
+        It used to hang on `actions` alone, which meant a stopped Cascade-Auto
+        position holding coin had no exit anywhere: the column was off on this
+        page and the card that carries the button is only drawn for working
+        ladders. See tests/test_stranded_position_has_a_way_out.py.
+        """
+        self.assertIn("(showActions ? '<th>Action</th>' : '')", self.js)
+        self.assertIn("var showActions = actions || open.some(_cfTradeIsStranded);", self.js)
+        self.assertIn("actions || _cfTradeIsStranded(c) ? _cfCascadeTradeAction(c) : ''", self.js)
+
+    def test_a_sandbox_position_is_never_sold_through_the_LIVE_engine(self):
+        """`actions:false` used to be the guard. The server is the guard now.
+
+        The button posts to one path for every strategy, so the route has to
+        pick the engine that actually owns the campaign — otherwise a
+        Cascade-Auto position either answers "not found" or, far worse, is
+        matched against a live campaign of the same id.
+        """
         self.assertIn("'/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/liquidate'", self.js)
+        with open(os.path.join(_HERE, "app.py"), encoding="utf-8") as handle:
+            app_source = handle.read()
+        self.assertIn("eng, persist = _engine_holding_campaign(campaign_id)", app_source)
+        self.assertIn("def _engine_holding_campaign(campaign_id: str):", app_source)
 
     def test_the_cascade_page_keeps_its_original_ids(self):
         self.assertIn('id="cf-cascade-trades"', self.html)

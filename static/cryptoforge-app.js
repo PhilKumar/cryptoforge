@@ -10372,6 +10372,15 @@ function cfRenderCascadeTrades(campaigns, opts) {
     return;
   }
 
+  // A stranded row gets its way out WHEREVER it is shown. Cascade-Auto and
+  // V-Rule pass actions:false — their positions are the sandbox's business,
+  // not something to offer a market sell against on every row — but a stopped
+  // campaign holding coin with no resting sell has nothing left that will ever
+  // manage it. On 09-Sep-2026 four of those sat on the Auto page with the
+  // column switched off, so the only control that could clear them was on a
+  // card that no longer existed.
+  var showActions = actions || open.some(_cfTradeIsStranded);
+
   var totalCost = 0, totalNow = 0;
   var rows = open.map(function (c) {
     var fills = c.all_fills || [];
@@ -10420,7 +10429,7 @@ function cfRenderCascadeTrades(campaigns, opts) {
       // to act on: its engine is gone, so nothing will manage this position
       // again. Give it the way out rather than leaving the coin orphaned under
       // a dead campaign's name.
-      + (actions ? '<td>' + _cfCascadeTradeAction(c) + '</td>' : '')
+      + (showActions ? '<td>' + (actions || _cfTradeIsStranded(c) ? _cfCascadeTradeAction(c) : '') + '</td>' : '')
       + '</tr>';
   }).join('');
 
@@ -10431,7 +10440,7 @@ function cfRenderCascadeTrades(campaigns, opts) {
     + '<table class="trade-table" id="' + tableId + '"><thead><tr>'
     + '<th>Campaign</th><th>Symbol</th><th>Opened</th><th class="num">Avg entry</th>'
     + '<th class="num">Last</th><th class="num">Cost</th><th class="num">Unrealised</th>'
-    + '<th class="num">Target</th>' + (actions ? '<th>Action</th>' : '')
+    + '<th class="num">Target</th>' + (showActions ? '<th>Action</th>' : '')
     + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   // Run several instruments and this table is the first one to outgrow a
   // screen. The generic pager hides rows in place, so it costs nothing when
@@ -10449,6 +10458,15 @@ function cfRenderCascadeTrades(campaigns, opts) {
 // Shown only when the symbol has something to aggregate — two or more running
 // campaigns, or a capital group — so a lone ungrouped campaign keeps the flat
 // look it always had.
+// Ended, still holding, and nothing resting to sell it: this position is
+// orphaned and only a hand can close it.
+function _cfTradeIsStranded(c) {
+  if (!c) return false;
+  if (!(Number(c.filled_base_qty) > 0)) return false;
+  if (c.tp_order_id) return false;
+  return _cfCascadeCampaignHasEnded(c);
+}
+
 function _cfCascadeStackHeader(symbol, stack, count) {
   var tfs = (stack.timeframes || []).map(function(t) { return String(t).toUpperCase(); }).join(' + ');
   var pnl = Number(stack.realized_pnl_usd) || 0;

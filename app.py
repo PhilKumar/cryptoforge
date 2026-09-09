@@ -10954,6 +10954,41 @@ async def cascade_reconcile_ended():
     return result
 
 
+def _engine_holding_campaign(campaign_id: str):
+    """Which engine owns this campaign, and how to persist that engine.
+
+    The three strategies keep SEPARATE CascadeEngine instances, and every
+    campaign route looked only in the live one. So a Cascade-Auto or V-Rule
+    campaign could be drawn on screen, with buttons, and every one of those
+    buttons answered "not found" — which is how Phil ended up on 09-Sep-2026
+    with four stranded sandbox positions and no reachable way to sell them.
+
+    Falls back to the live engine, so an unknown id fails exactly as before.
+    """
+    candidates = (
+        (_get_cascade_engine, lambda eng: _persist_cascade_runtime_snapshot(eng)),
+        (_get_auto_fib_engine, lambda _eng: _save_auto_fib()),
+        (_get_vrule_engine, lambda _eng: _save_vrule()),
+    )
+    for getter, persist in candidates:
+        engine = None
+        try:
+            engine = getter()
+        except Exception as exc:
+            # A strategy that cannot start must not hide the others — but say
+            # so, or a campaign that lives in the engine that failed looks
+            # simply "not found".
+            _logger.warning(
+                "[CASCADE] %s is unavailable while locating campaign %s: %s",
+                getattr(getter, "__name__", "an engine"),
+                campaign_id,
+                exc,
+            )
+        if engine is not None and str(campaign_id) in (getattr(engine, "campaigns", None) or {}):
+            return engine, persist
+    return _get_cascade_engine(), lambda eng: _persist_cascade_runtime_snapshot(eng)
+
+
 @app.post("/api/cascade/campaigns/{campaign_id}/liquidate")
 async def cascade_liquidate_campaign(campaign_id: str):
     """Market-sell a stopped campaign's leftover position.
@@ -10962,11 +10997,11 @@ async def cascade_liquidate_campaign(campaign_id: str):
     double-submit would sell a position that is already flat.
     """
     check_rate_limit("cascade_liquidate", max_calls=2, window_sec=30)
-    eng = _get_cascade_engine()
+    eng, persist = _engine_holding_campaign(campaign_id)
     result = await eng.liquidate_campaign(campaign_id)
     if result.get("error"):
         raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
-    _persist_cascade_runtime_snapshot(eng)
+    persist(eng)
     alerter.alert(
         "Cascade position sold at market",
         f"Campaign {campaign_id} — sold {result.get('quantity')} at {result.get('price')}\n"
