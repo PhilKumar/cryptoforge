@@ -11233,13 +11233,31 @@ async function cfCascadeStartCampaign() {
   }
 }
 
+// Which strategy's status the visible page is drawn from. A campaign action
+// can be taken from any of the three, and each reads a different endpoint.
+function _cfRefreshStrategyInView() {
+  var onPage = function (id) {
+    var page = document.getElementById(id);
+    return !!(page && page.classList.contains('active-page'));
+  };
+  if (onPage('autofib-page') && typeof cfAfRefresh === 'function') return cfAfRefresh(false);
+  if (onPage('rule3070-page') && typeof cfVrRefresh === 'function') return cfVrRefresh(false);
+  return cfLoadCascadeStatus(false);
+}
+
 async function _cfCascadeAction(url, options, successMessage) {
   try {
     var response = await cfApiFetch(url, options);
     var data = await cfReadApiPayload(response);
     if (!response.ok || data.status === 'error') throw new Error(cfApiErrorDetail(data, 'Request failed'));
     if (successMessage) cfToast(successMessage, 'success');
-    cfLoadCascadeStatus(false);
+    // Repaint the page the action was taken ON. Every campaign control is
+    // shared by the three strategy pages, but this only ever refreshed the
+    // LIVE Cascade's status — so a Market Sell on Cascade-Auto succeeded,
+    // said so, and left the row sitting there until Phil reloaded by hand
+    // (09-Sep-2026: "It is not going off after selling it but it stays").
+    // The sandbox and V-Rule keep their own engines and their own endpoints.
+    _cfRefreshStrategyInView();
     return data;
   } catch (error) {
     cfToast(error.message, 'danger');
