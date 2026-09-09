@@ -561,12 +561,58 @@ class VRuleLive:
     # ── structure: what the locked simulator says was born ───────
 
     def _default_window_loader(self, book: Book):
-        if not book.exchange:
-            # The default venue: the paper book's own fetch, untouched.
-            from engine.rule3070_paper import fetch_window
+        """The book's replay window, fetched INCREMENTALLY on every venue.
 
-            return fetch_window(book.symbol, since_ts=book.history_start_ts)
-        return self._venue_window(book)
+        Binance used to be the exception: `fetch_window` was called with the
+        book's history_start_ts on every scan, so all thirty days came down
+        again — about nine paged calls and an 8,640-row frame built from
+        scratch, per book, every five minutes. On 09-Sep-2026 that showed as a
+        burst: /api/health idled at 8ms and jumped to 2.5-4.7s on the bar
+        boundary, because the fetch and the frame both hold the GIL.
+
+        A venue book already kept its window and asked only for the tail
+        (_venue_window). This gives the default venue the same treatment, and
+        the merge and the trim are now one shared step for both.
+        """
+        if book.exchange:
+            return self._venue_window(book)
+        from engine.rule3070_paper import fetch_window
+
+        cached = self._venue_windows.get(book.key)
+        have = cached is not None and len(cached) > 0
+        # A book turned off and on again moves history_start_ts FORWARD, and
+        # the trim in _merge_window handles that. A warm-up reaching further
+        # BACK than the cache cannot be served from it — take the lot again.
+        if have and int(book.history_start_ts) < int(cached.index[0].timestamp()):
+            have = False
+        # An hour of overlap, the same margin the venue path uses: enough that
+        # a bar revised after its close is refetched, cheap enough to be free.
+        since = int(cached.index[-1].timestamp()) - 3600 if have else int(book.history_start_ts)
+        fresh = fetch_window(book.symbol, since_ts=since)
+        return self._merge_window(book, cached if have else None, fresh)
+
+    def _merge_window(self, book: Book, cached, fresh):
+        """Fold a freshly fetched tail into the window this book keeps."""
+        import pandas as pd
+
+        have = cached is not None and len(cached) > 0
+        if fresh is None or not len(fresh):
+            return cached if have else fresh
+        merged = pd.concat([cached, fresh]) if have else fresh
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        # Trim to the book's CURRENT warm-up, not the one the cache was built
+        # under. Turning a book off and on again moves history_start_ts
+        # forward; without this the kept window still reaches back to the
+        # older start, so the locked simulator is handed a longer window than
+        # fetch_window would ever return for the same book on Binance — a
+        # different scan, and a window that grows for as long as the book
+        # lives.
+        floor_ts = int(book.history_start_ts)
+        if floor_ts > 0 and len(merged):
+            merged = merged[merged.index >= pd.Timestamp(floor_ts, unit="s", tz="UTC")]
+        merged.index.name = "datetime"
+        self._venue_windows[book.key] = merged
+        return merged
 
     def _venue_window(self, book: Book):
         """CLOSED 5m candles from the book's OWN venue, oldest first.
@@ -595,21 +641,7 @@ class VRuleLive:
             (int(ts.timestamp()) >= book.history_start_ts) and (int(ts.timestamp()) < now_bucket) for ts in fresh.index
         ]
         fresh = fresh[keep]
-        merged = pd.concat([cached, fresh]) if have else fresh
-        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
-        # Trim to the book's CURRENT warm-up, not the one the cache was built
-        # under. Turning a book off and on again moves history_start_ts
-        # forward; without this the kept window still reaches back to the
-        # older start, so the locked simulator is handed a longer window than
-        # fetch_window would ever return for the same book on Binance — a
-        # different scan, and a window that grows for as long as the book
-        # lives.
-        floor_ts = int(book.history_start_ts)
-        if floor_ts > 0 and len(merged):
-            merged = merged[merged.index >= pd.Timestamp(floor_ts, unit="s", tz="UTC")]
-        merged.index.name = "datetime"
-        self._venue_windows[book.key] = merged
-        return merged
+        return self._merge_window(book, cached if have else None, fresh)
 
     def _default_structure_scanner(self, book: Book, df):
         """Run the locked simulator read-only and return its campaigns.
