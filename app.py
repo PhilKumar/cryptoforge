@@ -10669,6 +10669,14 @@ async def auto_fib_set_book(request: Request):
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol is required")
     driver = _get_auto_fib()
+    # Read the book's CURRENT state before set_book overwrites it. An unknown
+    # venue raises in here too; let set_book below be the one that reports it,
+    # so the page still gets its 400 rather than a 500 from this lookup.
+    try:
+        key = f"{symbol}:{driver._normalise_exchange(str(body.get('exchange') or '').strip().lower())}".lower()
+        was_enabled = bool(getattr(driver.books.get(key), "enabled", False))
+    except Exception:
+        was_enabled = False
     try:
         book = driver.set_book(
             symbol,
@@ -10679,6 +10687,25 @@ async def auto_fib_set_book(request: Request):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # OFF has to mean off. Disabling only stopped the book SEEDING new lines;
+    # every ladder it had already started stayed in the engine and carried on
+    # being ticked, so Phil switched BTCUSDT off on 09-Sep-2026 and watched
+    # three of its lines keep working. Stopping them here is safe by
+    # construction: stop_campaign pulls the resting BUYS and, when coin is
+    # held, deliberately leaves the take-profit resting so the position still
+    # exits at its target (engine/cascade.py:2986). Nothing is stranded, and
+    # the rounds stay in the books.
+    stopped = []
+    if was_enabled and not book.enabled:
+        engine = _get_auto_fib_engine()
+        for campaign in driver._live_campaigns(book):
+            try:
+                await engine.stop_campaign(campaign.campaign_id)
+                stopped.append(campaign.campaign_id)
+            except Exception as exc:
+                _logger.warning("[AUTO-FIB] could not stop %s with its book: %s", campaign.campaign_id, exc)
+        if stopped:
+            _logger.info("[AUTO-FIB] %s switched off — stopped %d working line(s)", book.symbol, len(stopped))
     # The driver only runs inside its engine's monitor loop. On a book turned
     # on while nothing else is running — the ordinary case — the loop is
     # asleep, so the book would sit there looking armed and do nothing at all.
@@ -10686,7 +10713,7 @@ async def auto_fib_set_book(request: Request):
     if book.enabled:
         _get_auto_fib_engine().start()
     _save_auto_fib()
-    return {"status": "ok", **driver.status()}
+    return {"status": "ok", "stopped_campaigns": stopped, **driver.status()}
 
 
 # Geometry only a CARD or a chart draws. An ended campaign gets neither: the
