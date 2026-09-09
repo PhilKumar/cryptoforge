@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from starlette.requests import Request as StarletteRequest
+from state_quiesce import quiesce_state_writers
 
 from broker.binance import BinanceSpotClient
 from broker.coindcx_spot import CoinDCXSpotClient
@@ -314,6 +315,10 @@ class ScalpBrokerRouteIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self._restore)
 
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module._scalp_engine = None
         self.app_module._scalp_broker = self.app_module.get_broker_client("delta")
         self.app_module._persist_selected_scalp_broker_name("delta")

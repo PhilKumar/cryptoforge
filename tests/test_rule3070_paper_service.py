@@ -7,6 +7,7 @@ from importlib import import_module
 from unittest.mock import patch
 
 import httpx
+from state_quiesce import quiesce_state_writers
 
 from engine import rule3070_paper
 
@@ -245,6 +246,11 @@ class Rule3070RouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         for service in self.app_module._rule3070_services.values():
             service.stop()
+        # Before the path is restored and before self.tmp goes: stop the
+        # snapshot writer while _STATE_DB_FILE still names the temp database,
+        # so a queued write cannot recreate SQLite's sidecars mid-rmtree — nor
+        # land in the developer's real state DB once the path is put back.
+        quiesce_state_writers(self.app_module._STATE_DB_FILE)
         self.app_module._STATE_DB_FILE = self.original_db
         self.app_module.TOTP_SECRET = self.original_totp_secret
         if self.original_services is None:

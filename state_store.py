@@ -304,3 +304,19 @@ def get_json_store(db_path: str) -> SQLiteJSONStore:
             store = SQLiteJSONStore(resolved)
             _STORE_CACHE[resolved] = store
         return store
+
+
+def close_json_store(db_path: str) -> bool:
+    """Forget the store for this path. Returns whether one was held.
+
+    Connections are opened and closed per operation, so there is nothing to
+    close here — what this releases is the CACHE entry, which otherwise keeps
+    a store object pointing at a path that may since have been deleted. Tests
+    that put the database in a temporary directory need that: without it the
+    process keeps a live store for a directory it is about to remove, and a
+    write that lands in the gap recreates SQLite's -wal/-shm sidecars just as
+    the directory is being deleted.
+    """
+    resolved = os.path.abspath(os.path.expanduser(db_path))
+    with _STORE_CACHE_LOCK:
+        return _STORE_CACHE.pop(resolved, None) is not None

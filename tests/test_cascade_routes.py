@@ -10,6 +10,7 @@ from importlib import import_module
 from unittest.mock import patch
 
 import httpx
+from state_quiesce import quiesce_state_writers
 
 from tests.test_cascade_engine import _RECENT_TS, FakeCascadeBroker
 
@@ -25,6 +26,10 @@ class CascadeRouteTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._restore)
 
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module._rate_limits.clear()
         self.broker = FakeCascadeBroker()
         self.app_module.delta = self.broker
@@ -453,6 +458,10 @@ class FeedPublisherWiringTests(unittest.TestCase):
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._FEED_KEYSET_FILE = os.path.join(self._tmp.name, "feed_keyset.json")
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self._reset_publisher()
 
     def _restore(self):
@@ -661,6 +670,10 @@ class FeedStreamTests(unittest.IsolatedAsyncioTestCase):
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._FEED_KEYSET_FILE = os.path.join(self._tmp.name, "feed_keyset.json")
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module._cascade_feed_publisher = None
         self.app_module._cascade_feed_publisher_checked = False
         self.app_module._feed_streams.clear()
@@ -861,6 +874,10 @@ class FeedSubscriberRouteTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._tmp.cleanup)
         self._orig_db = self.app_module._STATE_DB_FILE
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.addCleanup(lambda: setattr(self.app_module, "_STATE_DB_FILE", self._orig_db))
         self.app_module._rate_limits.clear()
         self.app_module._feed_streams.clear()
@@ -1044,6 +1061,10 @@ class RazorpayWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._tmp.cleanup)
         self._orig_db = self.app_module._STATE_DB_FILE
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.addCleanup(lambda: setattr(self.app_module, "_STATE_DB_FILE", self._orig_db))
         self.app_module._rate_limits.clear()
         self.transport = httpx.ASGITransport(app=self.app_module.app)
@@ -1218,6 +1239,10 @@ class PublishedSymbolsRouteTests(unittest.IsolatedAsyncioTestCase):
         self._orig_file = self.app_module._FEED_UNPUBLISHED_FILE
         self._orig_cache = self.app_module._feed_unpublished_cache
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module._FEED_UNPUBLISHED_FILE = os.path.join(self._tmp.name, "unpublished.json")
         self.app_module._feed_unpublished_cache = None
         self.addCleanup(self._restore)

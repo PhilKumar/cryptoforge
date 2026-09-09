@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from importlib import import_module
 
 import httpx
+from state_quiesce import quiesce_state_writers
 
 
 class NotificationInboxTests(unittest.IsolatedAsyncioTestCase):
@@ -24,6 +25,10 @@ class NotificationInboxTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._restore)
 
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module._rate_limits.clear()
         self.transport = httpx.ASGITransport(app=self.app_module.app)
 

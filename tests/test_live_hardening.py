@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pandas as pd
 from starlette.requests import Request as StarletteRequest
+from state_quiesce import quiesce_state_writers
 
 import config
 from broker import get_broker_client
@@ -1880,6 +1881,10 @@ class BrokerSettingsRouteTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._restore_runtime)
 
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module.live_engines = {}
         self.app_module.paper_engines = {}
         self.app_module._scalp_engine = None
@@ -1978,6 +1983,10 @@ class SessionSecurityTests(unittest.TestCase):
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.addCleanup(self._restore_session_file)
 
     def _restore_session_file(self):
@@ -2025,6 +2034,10 @@ class AuthRouteSessionTests(unittest.IsolatedAsyncioTestCase):
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module._rate_limits.clear()
         self.app_module._login_state.clear()
         self.app_module._scalp_engine = None
@@ -2379,6 +2392,10 @@ class OpsStateRouteTests(unittest.IsolatedAsyncioTestCase):
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._SESSION_FILE = os.path.join(self._tmp.name, "sessions.json")
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module.live_engines.clear()
         self.app_module.paper_engines.clear()
         self.app_module._live_tasks.clear()
@@ -2567,6 +2584,10 @@ class ScalpRuntimePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self._orig_state_db_file = getattr(self.app_module, "_STATE_DB_FILE", "")
         self.app_module._STATE_DIR = self._tmp.name
         self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "cryptoforge_state.db")
+        # Registered here, AFTER _restore, so unittest's reverse order runs it
+        # FIRST — while the path still points at the temp dir. Stops the
+        # snapshot writer recreating SQLite's sidecars mid-rmtree.
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
         self.app_module._SCALP_RUNTIME_FILE = os.path.join(self._tmp.name, "scalp_runtime.json")
         self.app_module._rate_limits.clear()
         self.app_module._scalp_engine = None
