@@ -325,6 +325,50 @@ def test_state_survives_a_save_and_load():
     assert back.enabled is True
 
 
+def test_legacy_shared_profit_is_migrated_to_paper_not_live(monkeypatch):
+    """A current live toggle cannot prove the mode that earned old rounds."""
+    monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
+    legacy = {
+        "books": [
+            {
+                "symbol": "BTCUSDT",
+                "mode": "live",
+                "enabled": True,
+                "start_capital_usd": 2000.0,
+                "purse_usd": 2400.0,
+                "pocket_usd": 19.0,
+                "folds": 1,
+                "rounds_seen": {"old": 4},
+            }
+        ]
+    }
+    revived = AutoCascadeFib(FakeEngine(broker=FakeBroker(live_armed=True)))
+    revived.load(legacy)
+    book = revived.books["btcusdt:"]
+    assert book.mode == "live"
+    assert book.purse_usd == 2000.0
+    assert book.pocket_usd == 0.0
+    assert book.mode_ledgers["paper"]["pocket_usd"] == 19.0
+    assert book.mode_ledgers["paper"]["purse_usd"] == 2400.0
+
+
+def test_paper_and_live_rounds_are_banked_in_separate_ledgers(monkeypatch):
+    driver = _live_driver(monkeypatch)
+    book = _book(driver)
+    paper = driver.engine.add(FakeCampaign("paper", mode="paper", rounds=[FakeRound(pnl=25.0)]))
+    live = driver.engine.add(FakeCampaign("live", mode="live"))
+    # The first live pass establishes the migration watermark only.
+    driver._bank_and_fold(book)
+    assert book.pocket_usd == 0.0
+    assert book.mode_ledgers["paper"]["pocket_usd"] == 25.0
+    live.rounds.append(FakeRound(pnl=40.0))
+    paper.rounds.append(FakeRound(pnl=10.0))
+    driver._bank_and_fold(book)
+    assert book.pocket_usd == 40.0
+    assert book.mode_ledgers["live"]["pocket_usd"] == 40.0
+    assert book.mode_ledgers["paper"]["pocket_usd"] == 35.0
+
+
 # ── the swing-high anchor ─────────────────────────────────────────
 
 

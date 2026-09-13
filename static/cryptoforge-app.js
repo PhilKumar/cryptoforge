@@ -15046,15 +15046,21 @@ function _cfStatExposureTone(inCoin, cap) {
 
 function cfAfRenderStats(books) {
   var purse = 0, cap = 0, inCoin = 0, pocket = 0, foldAt = 0, lines = 0, working = 0;
+  var liveOn = books.filter(function (b) { return b.enabled && b.mode === 'live'; });
+  // The headline P&L belongs to one execution mode.  When any live books are
+  // on, showing paper rounds beside them would misstate real-money results.
+  var pocketBooks = liveOn.length ? liveOn : books.filter(function (b) { return b.enabled; });
   books.forEach(function (b) {
     if (!b.enabled) return;
     purse += Number(b.purse_usd || 0);
     cap += Number(b.wallet_cap_usd || 0);
     inCoin += Number(b.in_coin_usd || 0);
-    pocket += Number(b.pocket_usd || 0);
-    foldAt += Number(b.fold_threshold_usd || 0);
     lines += Number(b.campaigns || 0);
     if (b.working_line) working += 1;
+  });
+  pocketBooks.forEach(function (b) {
+    pocket += Number(b.pocket_usd || 0);
+    foldAt += Number(b.fold_threshold_usd || 0);
   });
   var on = books.filter(function (b) { return b.enabled; }).length;
   var set = function (id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
@@ -15062,8 +15068,9 @@ function cfAfRenderStats(books) {
   set('cf-af-stat-purse-sub', on === 1 ? 'one book on' : on + ' books on');
   set('cf-af-stat-incoin', _cfAfUsd(inCoin));
   set('cf-af-stat-incoin-sub', 'of a ' + _cfAfUsd(cap) + ' limit');
+  set('cf-af-stat-pocket-label', liveOn.length ? 'Live pocket' : 'Paper pocket');
   set('cf-af-stat-pocket', _cfAfUsd(pocket));
-  set('cf-af-stat-pocket-sub', 'folds at ' + _cfAfUsd(foldAt));
+  set('cf-af-stat-pocket-sub', (liveOn.length ? 'live rounds · ' : '') + 'folds at ' + _cfAfUsd(foldAt));
   set('cf-af-stat-lines', String(lines));
   set('cf-af-stat-lines-sub', working ? (working + ' working the near move') : 'none working');
   // Purse is just the size of the book — it has no good or bad, so no colour.

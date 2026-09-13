@@ -205,6 +205,10 @@ class Book:
     pocket_usd: float = 0.0  # realised profit not yet folded
     folds: int = 0
     rounds_seen: Dict[str, int] = field(default_factory=dict)
+    # Each execution mode owns its own realised-P&L ledger.  The scalar fields
+    # above mirror the selected mode for backwards-compatible callers and UI
+    # payloads; they must never be used to carry profit across paper/live.
+    mode_ledgers: Dict[str, dict] = field(default_factory=dict)
     graduated: List[str] = field(default_factory=list)
     # Anchor timestamps this book has already started a line on. An anchor is
     # used ONCE: re-seeding the same dead high every cycle is what the
@@ -231,7 +235,60 @@ class Book:
     def fold_threshold_usd(self) -> float:
         return round(self.purse_usd * FOLD_AT_FRACTION, 2)
 
+    def _ledger(self, mode: str) -> dict:
+        mode = "live" if str(mode).lower() == "live" else "paper"
+        if not self.mode_ledgers:
+            # Older snapshots had one shared balance.  It predates reliable
+            # per-round mode accounting, so preserve it as paper history and
+            # start the live ledger clean at the configured starting capital.
+            self.mode_ledgers = {
+                "paper": {
+                    "purse_usd": self.purse_usd,
+                    "pocket_usd": self.pocket_usd,
+                    "folds": self.folds,
+                    "rounds_seen": dict(self.rounds_seen),
+                    "cutover_pending": False,
+                },
+                "live": {
+                    "purse_usd": self.start_capital_usd,
+                    "pocket_usd": 0.0,
+                    "folds": 0,
+                    "rounds_seen": {},
+                    # The driver records existing live rounds as seen on its
+                    # first tick.  That prevents historical, unlabelled P&L
+                    # from appearing in the new live report after upgrade.
+                    "cutover_pending": True,
+                },
+            }
+        ledger = self.mode_ledgers.get(mode)
+        if not isinstance(ledger, dict):
+            ledger = {}
+            self.mode_ledgers[mode] = ledger
+        ledger["purse_usd"] = _positive(ledger.get("purse_usd"), self.start_capital_usd)
+        ledger["pocket_usd"] = float(ledger.get("pocket_usd") or 0.0)
+        ledger["folds"] = int(ledger.get("folds") or 0)
+        ledger["rounds_seen"] = {str(k): int(v) for k, v in (ledger.get("rounds_seen") or {}).items()}
+        ledger["cutover_pending"] = bool(ledger.get("cutover_pending"))
+        return ledger
+
+    def save_active_ledger(self) -> None:
+        ledger = self._ledger(self.mode)
+        ledger.update(
+            purse_usd=self.purse_usd,
+            pocket_usd=self.pocket_usd,
+            folds=self.folds,
+            rounds_seen=dict(self.rounds_seen),
+        )
+
+    def load_active_ledger(self) -> None:
+        ledger = self._ledger(self.mode)
+        self.purse_usd = float(ledger["purse_usd"])
+        self.pocket_usd = float(ledger["pocket_usd"])
+        self.folds = int(ledger["folds"])
+        self.rounds_seen = dict(ledger["rounds_seen"])
+
     def to_dict(self) -> dict:
+        self.save_active_ledger()
         return {
             "symbol": self.symbol,
             "exchange": self.exchange,
@@ -242,6 +299,7 @@ class Book:
             "pocket_usd": self.pocket_usd,
             "folds": self.folds,
             "rounds_seen": dict(self.rounds_seen),
+            "mode_ledgers": self.mode_ledgers,
             "graduated": list(self.graduated),
             "tried_anchors": list(self.tried_anchors),
             "next_seed_ts": self.next_seed_ts,
@@ -269,6 +327,14 @@ class Book:
         book.next_seed_ts = float(data.get("next_seed_ts") or 0.0)
         book.last_error = str(data.get("last_error") or "")
         book.note = str(data.get("note") or "")
+        saved_ledgers = data.get("mode_ledgers")
+        if isinstance(saved_ledgers, dict):
+            book.mode_ledgers = saved_ledgers
+        # _ledger migrates older shared balances to paper before loading the
+        # selected mode.  This is deliberately unconditional even when the
+        # old book currently said "live": that label did not identify the
+        # origin mode of the accumulated rounds.
+        book.load_active_ledger()
         return book
 
 
@@ -450,10 +516,14 @@ class AutoCascadeFib:
             )
         key = f"{symbol}:{exchange}".lower()
         book = self.books.get(key) or Book(symbol=symbol, exchange=exchange)
+        # Materialise the ledgers before changing the selected mode so any
+        # existing balance remains attached to the mode that earned it.
+        book.save_active_ledger()
         if enabled is not None:
             book.enabled = bool(enabled)
         if mode is not None:
             book.mode = "live" if wants_live else "paper"
+            book.load_active_ledger()
         if capital_usd is not None:
             fresh = _positive(capital_usd, book.start_capital_usd)
             # Changing the size before any profit has been folded resets the
@@ -462,6 +532,7 @@ class AutoCascadeFib:
             book.start_capital_usd = fresh
             if book.folds == 0 and book.pocket_usd <= 0:
                 book.purse_usd = fresh
+        book.save_active_ledger()
         self.books[key] = book
         return book
 
@@ -571,34 +642,52 @@ class AutoCascadeFib:
     # ── the money ────────────────────────────────────────────────
 
     def _bank_and_fold(self, book: Book) -> bool:
-        """Move newly closed profit into the pocket, and fold at 25%."""
+        """Bank each closed round in the ledger for the mode that ran it."""
         changed = False
-        for campaign in self._own_campaigns(book):
-            seen = book.rounds_seen.get(campaign.campaign_id, 0)
+        book.save_active_ledger()
+        campaigns = self._own_campaigns(book)
+        live_ledger = book._ledger("live")
+        if live_ledger["cutover_pending"]:
+            for campaign in campaigns:
+                if str(getattr(campaign, "mode", "paper")).lower() == "live":
+                    rounds = list(getattr(campaign, "rounds", []) or [])
+                    live_ledger["rounds_seen"][campaign.campaign_id] = len(rounds)
+            live_ledger["cutover_pending"] = False
+            changed = True
+        for campaign in campaigns:
+            mode = "live" if str(getattr(campaign, "mode", "paper")).lower() == "live" else "paper"
+            ledger = book._ledger(mode)
             rounds = list(getattr(campaign, "rounds", []) or [])
+            seen = ledger["rounds_seen"].get(campaign.campaign_id, 0)
             if len(rounds) <= seen:
                 continue
             gained = sum(float(getattr(r, "pnl", 0.0) or 0.0) for r in rounds[seen:])
-            book.rounds_seen[campaign.campaign_id] = len(rounds)
-            book.pocket_usd = round(book.pocket_usd + gained, 8)
+            ledger["rounds_seen"][campaign.campaign_id] = len(rounds)
+            ledger["pocket_usd"] = round(ledger["pocket_usd"] + gained, 8)
             changed = True
+        for mode in ("paper", "live"):
+            ledger = book._ledger(mode)
+            threshold = round(ledger["purse_usd"] * FOLD_AT_FRACTION, 2)
+            # See the note below: a single large round folds in whole.
+            if ledger["pocket_usd"] < threshold or threshold <= 0:
+                continue
+            ledger["purse_usd"] = round(ledger["purse_usd"] + ledger["pocket_usd"], 8)
+            ledger["pocket_usd"] = 0.0
+            ledger["folds"] += 1
+            changed = True
+            _log.info(
+                "[AUTO-FIB] %s %s profit folded in — purse now $%.2f",
+                book.symbol,
+                mode,
+                ledger["purse_usd"],
+            )
         # A pocket worth a quarter of the purse goes in WHOLE, and the wallet
         # cap grows with it. Whole, not in quarter-sized slices: Phil's rule is
         # "$100 purse, $25 profit, next trade sizes off $125". So one round
         # paying ten times the threshold still folds exactly once, and the
         # purse jumps by the full amount — there is never a remainder left
         # sitting in the pocket.
-        if book.pocket_usd >= book.fold_threshold_usd > 0:
-            book.purse_usd = round(book.purse_usd + book.pocket_usd, 8)
-            book.pocket_usd = 0.0
-            book.folds += 1
-            changed = True
-            _log.info(
-                "[AUTO-FIB] %s folded profit in — purse now $%.2f, wallet cap $%.2f",
-                book.symbol,
-                book.purse_usd,
-                book.wallet_cap_usd,
-            )
+        book.load_active_ledger()
         return changed
 
     def _apply_wallet_cap(self, book: Book) -> bool:

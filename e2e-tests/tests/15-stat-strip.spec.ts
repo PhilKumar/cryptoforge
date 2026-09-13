@@ -17,7 +17,7 @@ import { test, expect, Page } from '@playwright/test';
 const PIN = process.env.E2E_PIN || '123456';
 const USER = process.env.E2E_USER || 'admin';
 
-function autoBooks(inCoin: number, pocket: number) {
+function autoBooks(inCoin: number, pocket: number, mode: 'paper' | 'live' = 'paper') {
   return {
     armed: false,
     campaigns: [],
@@ -25,7 +25,7 @@ function autoBooks(inCoin: number, pocket: number) {
     exchanges: [],
     books: [
       {
-        symbol: 'BTCUSDT', enabled: true, purse_usd: 2000, pocket_usd: pocket,
+        symbol: 'BTCUSDT', mode, enabled: true, purse_usd: 2000, pocket_usd: pocket,
         wallet_cap_usd: 1000, fold_threshold_usd: 500, in_coin_usd: inCoin,
         campaigns: 3, working_line: true,
       },
@@ -98,6 +98,12 @@ test.describe('The header stat strip', () => {
     await openAuto(page, autoBooks(155.2, 8.5));   // $155 of a $1,000 limit
     await expect(page.locator('#cf-af-stat-incoin')).toHaveClass(/is-good/);
     await expect(page.locator('#cf-af-stat-pocket')).toHaveClass(/is-good/);
+  });
+
+  test('labels a live-only profit summary as live', async ({ page }) => {
+    await openAuto(page, autoBooks(155.2, 8.5, 'live'));
+    await expect(page.locator('#cf-af-stat-pocket-label')).toHaveText('Live pocket');
+    await expect(page.locator('#cf-af-stat-pocket-sub')).toContainText('live rounds');
   });
 
   test('exposure near its limit turns to a warning', async ({ page }) => {
