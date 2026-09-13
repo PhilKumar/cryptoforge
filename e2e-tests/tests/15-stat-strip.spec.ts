@@ -103,7 +103,7 @@ test.describe('The header stat strip', () => {
   test('labels a live-only profit summary as live', async ({ page }) => {
     await openAuto(page, autoBooks(155.2, 8.5, 'live'));
     await expect(page.locator('#cf-af-stat-pocket-label')).toHaveText('Live pocket');
-    await expect(page.locator('#cf-af-stat-pocket-sub')).toContainText('live rounds');
+    await expect(page.locator('#cf-af-stat-pocket-sub')).toHaveText('folds at $500.00');
   });
 
   test('exposure near its limit turns to a warning', async ({ page }) => {

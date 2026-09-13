@@ -356,17 +356,43 @@ def test_paper_and_live_rounds_are_banked_in_separate_ledgers(monkeypatch):
     driver = _live_driver(monkeypatch)
     book = _book(driver)
     paper = driver.engine.add(FakeCampaign("paper", mode="paper", rounds=[FakeRound(pnl=25.0)]))
-    live = driver.engine.add(FakeCampaign("live", mode="live"))
-    # The first live pass establishes the migration watermark only.
+    live = driver.engine.add(FakeCampaign("live", mode="live", rounds=[FakeRound(pnl=20.0)]))
     driver._bank_and_fold(book)
-    assert book.pocket_usd == 0.0
+    assert book.pocket_usd == 20.0
     assert book.mode_ledgers["paper"]["pocket_usd"] == 25.0
     live.rounds.append(FakeRound(pnl=40.0))
     paper.rounds.append(FakeRound(pnl=10.0))
     driver._bank_and_fold(book)
-    assert book.pocket_usd == 40.0
-    assert book.mode_ledgers["live"]["pocket_usd"] == 40.0
+    assert book.pocket_usd == 60.0
+    assert book.mode_ledgers["live"]["pocket_usd"] == 60.0
     assert book.mode_ledgers["paper"]["pocket_usd"] == 35.0
+
+
+def test_first_ledger_migration_is_repaired_for_explicit_live_rounds(monkeypatch):
+    monkeypatch.setattr(auto_fib, "LIVE_ARMED", True)
+    payload = {
+        "books": [
+            {
+                "symbol": "BTCUSDT",
+                "mode": "live",
+                "enabled": True,
+                "start_capital_usd": 2000.0,
+                "purse_usd": 2000.0,
+                "mode_ledgers": {
+                    "paper": {"purse_usd": 2000.0, "pocket_usd": 19.0, "folds": 0, "rounds_seen": {}},
+                    "live": {"purse_usd": 2000.0, "pocket_usd": 0.0, "folds": 0, "rounds_seen": {"live": 1}},
+                },
+            }
+        ]
+    }
+    engine = FakeEngine(broker=FakeBroker(live_armed=True))
+    engine.add(FakeCampaign("live", mode="live", rounds=[FakeRound(pnl=0.23)]))
+    driver = AutoCascadeFib(engine)
+    driver.load(payload)
+    book = _book(driver)
+    driver._bank_and_fold(book)
+    assert book.pocket_usd == 0.23
+    assert book.mode_ledgers["paper"]["pocket_usd"] == 19.0
 
 
 # ── the swing-high anchor ─────────────────────────────────────────

@@ -15070,7 +15070,7 @@ function cfAfRenderStats(books) {
   set('cf-af-stat-incoin-sub', 'of a ' + _cfAfUsd(cap) + ' limit');
   set('cf-af-stat-pocket-label', liveOn.length ? 'Live pocket' : 'Paper pocket');
   set('cf-af-stat-pocket', _cfAfUsd(pocket));
-  set('cf-af-stat-pocket-sub', (liveOn.length ? 'live rounds · ' : '') + 'folds at ' + _cfAfUsd(foldAt));
+  set('cf-af-stat-pocket-sub', 'folds at ' + _cfAfUsd(foldAt));
   set('cf-af-stat-lines', String(lines));
   set('cf-af-stat-lines-sub', working ? (working + ' working the near move') : 'none working');
   // Purse is just the size of the book — it has no good or bad, so no colour.

@@ -247,17 +247,12 @@ class Book:
                     "pocket_usd": self.pocket_usd,
                     "folds": self.folds,
                     "rounds_seen": dict(self.rounds_seen),
-                    "cutover_pending": False,
                 },
                 "live": {
                     "purse_usd": self.start_capital_usd,
                     "pocket_usd": 0.0,
                     "folds": 0,
                     "rounds_seen": {},
-                    # The driver records existing live rounds as seen on its
-                    # first tick.  That prevents historical, unlabelled P&L
-                    # from appearing in the new live report after upgrade.
-                    "cutover_pending": True,
                 },
             }
         ledger = self.mode_ledgers.get(mode)
@@ -268,7 +263,6 @@ class Book:
         ledger["pocket_usd"] = float(ledger.get("pocket_usd") or 0.0)
         ledger["folds"] = int(ledger.get("folds") or 0)
         ledger["rounds_seen"] = {str(k): int(v) for k, v in (ledger.get("rounds_seen") or {}).items()}
-        ledger["cutover_pending"] = bool(ledger.get("cutover_pending"))
         return ledger
 
     def save_active_ledger(self) -> None:
@@ -300,6 +294,9 @@ class Book:
             "folds": self.folds,
             "rounds_seen": dict(self.rounds_seen),
             "mode_ledgers": self.mode_ledgers,
+            # v2 counts completed rounds from campaigns explicitly tagged live.
+            # The first version incorrectly watermarked those rounds at upgrade.
+            "ledger_schema": 2,
             "graduated": list(self.graduated),
             "tried_anchors": list(self.tried_anchors),
             "next_seed_ts": self.next_seed_ts,
@@ -330,6 +327,11 @@ class Book:
         saved_ledgers = data.get("mode_ledgers")
         if isinstance(saved_ledgers, dict):
             book.mode_ledgers = saved_ledgers
+            if int(data.get("ledger_schema") or 0) < 2:
+                # Repair the first ledger migration: campaign.mode is durable
+                # provenance, so completed rounds tagged live belong in live
+                # Pocket even when they existed before the code upgrade.
+                book._ledger("live")["rounds_seen"] = {}
         # _ledger migrates older shared balances to paper before loading the
         # selected mode.  This is deliberately unconditional even when the
         # old book currently said "live": that label did not identify the
@@ -646,14 +648,6 @@ class AutoCascadeFib:
         changed = False
         book.save_active_ledger()
         campaigns = self._own_campaigns(book)
-        live_ledger = book._ledger("live")
-        if live_ledger["cutover_pending"]:
-            for campaign in campaigns:
-                if str(getattr(campaign, "mode", "paper")).lower() == "live":
-                    rounds = list(getattr(campaign, "rounds", []) or [])
-                    live_ledger["rounds_seen"][campaign.campaign_id] = len(rounds)
-            live_ledger["cutover_pending"] = False
-            changed = True
         for campaign in campaigns:
             mode = "live" if str(getattr(campaign, "mode", "paper")).lower() == "live" else "paper"
             ledger = book._ledger(mode)
