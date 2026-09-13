@@ -1,0 +1,1274 @@
+[
+  {
+    "path": ".claude/launch.json",
+    "bytes": 243
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "bytes": 3327
+  },
+  {
+    "path": ".github/workflows/deploy.yml",
+    "bytes": 5199
+  },
+  {
+    "path": ".github/workflows/playwright.yml",
+    "bytes": 10561
+  },
+  {
+    "path": ".github/workflows/release-executor.yml",
+    "bytes": 6713
+  },
+  {
+    "path": ".gitignore",
+    "bytes": 1336
+  },
+  {
+    "path": ".pre-commit-config.yaml",
+    "bytes": 907
+  },
+  {
+    "path": "ARCHITECTURE.md",
+    "bytes": 10848
+  },
+  {
+    "path": "AUDIT.md",
+    "bytes": 22214
+  },
+  {
+    "path": "CASCADE_BILLING.md",
+    "bytes": 7638
+  },
+  {
+    "path": "CASCADE_CHART_REWRITE_PLAN.md",
+    "bytes": 12990
+  },
+  {
+    "path": "CASCADE_EXECUTOR_RECOVERY.md",
+    "bytes": 14065
+  },
+  {
+    "path": "CASCADE_SIGNAL_FORMAT.md",
+    "bytes": 20601
+  },
+  {
+    "path": "README.md",
+    "bytes": 7122
+  },
+  {
+    "path": "RUNBOOK.md",
+    "bytes": 21445
+  },
+  {
+    "path": "accounts.py",
+    "bytes": 14563
+  },
+  {
+    "path": "alerter.py",
+    "bytes": 6530
+  },
+  {
+    "path": "app.py",
+    "bytes": 472539
+  },
+  {
+    "path": "broker/__init__.py",
+    "bytes": 1699
+  },
+  {
+    "path": "broker/base.py",
+    "bytes": 6170
+  },
+  {
+    "path": "broker/binance.py",
+    "bytes": 56517
+  },
+  {
+    "path": "broker/coindcx.py",
+    "bytes": 34457
+  },
+  {
+    "path": "broker/coindcx_spot.py",
+    "bytes": 39439
+  },
+  {
+    "path": "broker/delta.py",
+    "bytes": 44825
+  },
+  {
+    "path": "config.py",
+    "bytes": 7309
+  },
+  {
+    "path": "countdown",
+    "bytes": 0
+  },
+  {
+    "path": "data/trade_journal.json",
+    "bytes": 9210
+  },
+  {
+    "path": "deploy/DUAL_APP_DEPLOYMENT.md",
+    "bytes": 7091
+  },
+  {
+    "path": "deploy/cd-deploy.sh",
+    "bytes": 12890
+  },
+  {
+    "path": "deploy/cryptoforge.service",
+    "bytes": 2526
+  },
+  {
+    "path": "deploy/deploy.sh",
+    "bytes": 3357
+  },
+  {
+    "path": "deploy/nginx.conf",
+    "bytes": 7619
+  },
+  {
+    "path": "deploy/setup-cicd.sh",
+    "bytes": 3029
+  },
+  {
+    "path": "docs/assets/cascade-auto-tearsheet.html",
+    "bytes": 47261
+  },
+  {
+    "path": "docs/assets/cascade-hybrid-tearsheet.html",
+    "bytes": 28843
+  },
+  {
+    "path": "docs/assets/vrule-tearsheet.html",
+    "bytes": 288084
+  },
+  {
+    "path": "e2e-tests/package-lock.json",
+    "bytes": 3448
+  },
+  {
+    "path": "e2e-tests/package.json",
+    "bytes": 330
+  },
+  {
+    "path": "e2e-tests/playwright.config.ts",
+    "bytes": 507
+  },
+  {
+    "path": "e2e-tests/shoot_pwa.js",
+    "bytes": 1062
+  },
+  {
+    "path": "e2e-tests/tests/01-shell-audit.spec.ts",
+    "bytes": 7735
+  },
+  {
+    "path": "e2e-tests/tests/02-critical-path.spec.ts",
+    "bytes": 10549
+  },
+  {
+    "path": "e2e-tests/tests/03-status-and-portfolio.spec.ts",
+    "bytes": 4290
+  },
+  {
+    "path": "e2e-tests/tests/04-app-shell-navigation.spec.ts",
+    "bytes": 5187
+  },
+  {
+    "path": "e2e-tests/tests/05-site-audit.spec.ts",
+    "bytes": 18722
+  },
+  {
+    "path": "e2e-tests/tests/06-cascade-chart.spec.ts",
+    "bytes": 43754
+  },
+  {
+    "path": "e2e-tests/tests/07-trade-alerts.spec.ts",
+    "bytes": 8253
+  },
+  {
+    "path": "e2e-tests/tests/08-cascade-rounds.spec.ts",
+    "bytes": 29319
+  },
+  {
+    "path": "e2e-tests/tests/09-rule3070-console.spec.ts",
+    "bytes": 18199
+  },
+  {
+    "path": "e2e-tests/tests/10-logout-destination.spec.ts",
+    "bytes": 1785
+  },
+  {
+    "path": "e2e-tests/tests/11-cascade-event-merge.spec.ts",
+    "bytes": 5757
+  },
+  {
+    "path": "e2e-tests/tests/11-pwa-light-responsive.spec.ts",
+    "bytes": 9165
+  },
+  {
+    "path": "e2e-tests/tests/11-viewer-door.spec.ts",
+    "bytes": 8704
+  },
+  {
+    "path": "e2e-tests/tests/12-assets-tearsheets.spec.ts",
+    "bytes": 6288
+  },
+  {
+    "path": "e2e-tests/tests/13-alert-ack.spec.ts",
+    "bytes": 3795
+  },
+  {
+    "path": "e2e-tests/tests/14-vrule-status-strip.spec.ts",
+    "bytes": 4470
+  },
+  {
+    "path": "e2e-tests/tests/15-stat-strip.spec.ts",
+    "bytes": 6646
+  },
+  {
+    "path": "e2e-tests/tsconfig.json",
+    "bytes": 240
+  },
+  {
+    "path": "e2e-tests/verify_crypto_landing.js",
+    "bytes": 34473
+  },
+  {
+    "path": "e2e-tests/verify_dojima_dist.js",
+    "bytes": 22579
+  },
+  {
+    "path": "e2e-tests/verify_epigraph.js",
+    "bytes": 14886
+  },
+  {
+    "path": "engine/__init__.py",
+    "bytes": 243
+  },
+  {
+    "path": "engine/auto_cascade_fib.py",
+    "bytes": 37749
+  },
+  {
+    "path": "engine/backtest.py",
+    "bytes": 39638
+  },
+  {
+    "path": "engine/billing.py",
+    "bytes": 11577
+  },
+  {
+    "path": "engine/cascade.py",
+    "bytes": 391002
+  },
+  {
+    "path": "engine/cascade_feed.py",
+    "bytes": 51632
+  },
+  {
+    "path": "engine/data_downloader.py",
+    "bytes": 28727
+  },
+  {
+    "path": "engine/indicators.py",
+    "bytes": 31580
+  },
+  {
+    "path": "engine/live.py",
+    "bytes": 38005
+  },
+  {
+    "path": "engine/paper_trading.py",
+    "bytes": 24680
+  },
+  {
+    "path": "engine/rule3070_paper.py",
+    "bytes": 42440
+  },
+  {
+    "path": "engine/scalp.py",
+    "bytes": 119868
+  },
+  {
+    "path": "engine/trade_journal.py",
+    "bytes": 15578
+  },
+  {
+    "path": "engine/vrule_live.py",
+    "bytes": 48903
+  },
+  {
+    "path": "engine/ws_feed.py",
+    "bytes": 34429
+  },
+  {
+    "path": "error_handlers.py",
+    "bytes": 6791
+  },
+  {
+    "path": "executor/README.md",
+    "bytes": 19136
+  },
+  {
+    "path": "executor/__init__.py",
+    "bytes": 0
+  },
+  {
+    "path": "executor/__main__.py",
+    "bytes": 25440
+  },
+  {
+    "path": "executor/assets/fonts/README.md",
+    "bytes": 1551
+  },
+  {
+    "path": "executor/assets/fonts/core.css",
+    "bytes": 267453
+  },
+  {
+    "path": "executor/assets/fonts/editorial.css",
+    "bytes": 527745
+  },
+  {
+    "path": "executor/assets/fonts/grotesk.css",
+    "bytes": 323884
+  },
+  {
+    "path": "executor/assets/fonts/humanist.css",
+    "bytes": 280129
+  },
+  {
+    "path": "executor/assets/fonts/institutional.css",
+    "bytes": 189553
+  },
+  {
+    "path": "executor/assets/fonts/swiss.css",
+    "bytes": 357222
+  },
+  {
+    "path": "executor/assets/fonts/techno.css",
+    "bytes": 51051
+  },
+  {
+    "path": "executor/binance.py",
+    "bytes": 11097
+  },
+  {
+    "path": "executor/coindcx.py",
+    "bytes": 10673
+  },
+  {
+    "path": "executor/config.py",
+    "bytes": 13941
+  },
+  {
+    "path": "executor/exchange.py",
+    "bytes": 12758
+  },
+  {
+    "path": "executor/feed_client.py",
+    "bytes": 30852
+  },
+  {
+    "path": "executor/guide.html",
+    "bytes": 67418
+  },
+  {
+    "path": "executor/httpguard.py",
+    "bytes": 2353
+  },
+  {
+    "path": "executor/market.py",
+    "bytes": 8144
+  },
+  {
+    "path": "executor/model.py",
+    "bytes": 12840
+  },
+  {
+    "path": "executor/orders.py",
+    "bytes": 28407
+  },
+  {
+    "path": "executor/power.py",
+    "bytes": 6977
+  },
+  {
+    "path": "executor/pwa.py",
+    "bytes": 5991
+  },
+  {
+    "path": "executor/recovery.py",
+    "bytes": 12329
+  },
+  {
+    "path": "executor/report.py",
+    "bytes": 5622
+  },
+  {
+    "path": "executor/requirements.txt",
+    "bytes": 852
+  },
+  {
+    "path": "executor/runtime.py",
+    "bytes": 36134
+  },
+  {
+    "path": "executor/secrets.py",
+    "bytes": 7504
+  },
+  {
+    "path": "executor/setup.py",
+    "bytes": 29535
+  },
+  {
+    "path": "executor/singleton.py",
+    "bytes": 4561
+  },
+  {
+    "path": "executor/transport.py",
+    "bytes": 15452
+  },
+  {
+    "path": "executor/tray.py",
+    "bytes": 10417
+  },
+  {
+    "path": "executor/ui.py",
+    "bytes": 201602
+  },
+  {
+    "path": "installer/README.md",
+    "bytes": 2944
+  },
+  {
+    "path": "installer/app_entry.py",
+    "bytes": 5330
+  },
+  {
+    "path": "installer/cascade.spec",
+    "bytes": 3389
+  },
+  {
+    "path": "installer/make_icons.py",
+    "bytes": 2773
+  },
+  {
+    "path": "login.html",
+    "bytes": 6348
+  },
+  {
+    "path": "media/landing/CRYPTOFORGE_FILM_PROMPTS.md",
+    "bytes": 7721
+  },
+  {
+    "path": "media/landing/DOJIMA_FILM_PROMPTS.md",
+    "bytes": 17014
+  },
+  {
+    "path": "media/landing/DOJIMA_LANDING.html",
+    "bytes": 2697219
+  },
+  {
+    "path": "media/landing/build_dojima_dist.py",
+    "bytes": 12813
+  },
+  {
+    "path": "media/landing/cf-landing-standalone.html",
+    "bytes": 1802430
+  },
+  {
+    "path": "media/landing/film/clips/01_port_poster.jpg",
+    "bytes": 98190
+  },
+  {
+    "path": "media/landing/film/clips/01_port_web.mp4",
+    "bytes": 1268180
+  },
+  {
+    "path": "media/landing/film/clips/02_merchant_poster.jpg",
+    "bytes": 82820
+  },
+  {
+    "path": "media/landing/film/clips/02_merchant_web.mp4",
+    "bytes": 1099327
+  },
+  {
+    "path": "media/landing/film/clips/03_chalk_poster.jpg",
+    "bytes": 69319
+  },
+  {
+    "path": "media/landing/film/clips/03_chalk_web.mp4",
+    "bytes": 840872
+  },
+  {
+    "path": "media/landing/film/clips/04_candle_v2_poster.jpg",
+    "bytes": 45796
+  },
+  {
+    "path": "media/landing/film/clips/04_candle_v2_web.mp4",
+    "bytes": 589291
+  },
+  {
+    "path": "media/landing/film/clips/05_bridge_poster.jpg",
+    "bytes": 74429
+  },
+  {
+    "path": "media/landing/film/clips/05_bridge_web.mp4",
+    "bytes": 724069
+  },
+  {
+    "path": "media/landing/film/stage1/01_establishing_photoreal.png",
+    "bytes": 3234163
+  },
+  {
+    "path": "media/landing/film/stage1/02_merchant_photoreal.png",
+    "bytes": 2401596
+  },
+  {
+    "path": "media/landing/film/stage1/03_ledger_closeup_photoreal.png",
+    "bytes": 2273892
+  },
+  {
+    "path": "media/landing/film/stage1/04_transition_candle_photoreal.png",
+    "bytes": 2236411
+  },
+  {
+    "path": "media/landing/film/stage1/STAGE1_REVIEW.html",
+    "bytes": 4076
+  },
+  {
+    "path": "media/landing/philforge_favicon.png",
+    "bytes": 8507
+  },
+  {
+    "path": "media/landing/philforge_mark.png",
+    "bytes": 178512
+  },
+  {
+    "path": "options/HANDOFF.md",
+    "bytes": 6270
+  },
+  {
+    "path": "options/PROVENANCE_REVIEW.md",
+    "bytes": 2540
+  },
+  {
+    "path": "options/README.md",
+    "bytes": 3907
+  },
+  {
+    "path": "options/__init__.py",
+    "bytes": 378
+  },
+  {
+    "path": "options/adapters.py",
+    "bytes": 9071
+  },
+  {
+    "path": "options/audit.py",
+    "bytes": 7627
+  },
+  {
+    "path": "options/backfill.py",
+    "bytes": 6420
+  },
+  {
+    "path": "options/charges.py",
+    "bytes": 4834
+  },
+  {
+    "path": "options/dhan_client.py",
+    "bytes": 14817
+  },
+  {
+    "path": "options/dhan_listed.py",
+    "bytes": 10309
+  },
+  {
+    "path": "options/dhan_premiums.py",
+    "bytes": 18869
+  },
+  {
+    "path": "options/dhan_vs_upstox.py",
+    "bytes": 5277
+  },
+  {
+    "path": "options/store.py",
+    "bytes": 6144
+  },
+  {
+    "path": "pyproject.toml",
+    "bytes": 1005
+  },
+  {
+    "path": "requirements.txt",
+    "bytes": 273
+  },
+  {
+    "path": "scratch_reset_test.db-shm",
+    "bytes": 32768
+  },
+  {
+    "path": "scratch_reset_test.db-wal",
+    "bytes": 0
+  },
+  {
+    "path": "scratch_snap_test.db-shm",
+    "bytes": 32768
+  },
+  {
+    "path": "scratch_snap_test.db-wal",
+    "bytes": 0
+  },
+  {
+    "path": "scripts/_check_js.py",
+    "bytes": 1840
+  },
+  {
+    "path": "state_store.py",
+    "bytes": 12555
+  },
+  {
+    "path": "static/cryptoforge-account.js",
+    "bytes": 27363
+  },
+  {
+    "path": "static/cryptoforge-admin.js",
+    "bytes": 16196
+  },
+  {
+    "path": "static/cryptoforge-app.css",
+    "bytes": 319060
+  },
+  {
+    "path": "static/cryptoforge-app.js",
+    "bytes": 747420
+  },
+  {
+    "path": "static/cryptoforge-boot.js",
+    "bytes": 6544
+  },
+  {
+    "path": "static/cryptoforge-login.css",
+    "bytes": 23234
+  },
+  {
+    "path": "static/cryptoforge-login.js",
+    "bytes": 12572
+  },
+  {
+    "path": "static/cryptoforge-pwa.css",
+    "bytes": 7348
+  },
+  {
+    "path": "static/error-handler.css",
+    "bytes": 4996
+  },
+  {
+    "path": "static/error-handler.js",
+    "bytes": 22923
+  },
+  {
+    "path": "static/landing/crypto.css",
+    "bytes": 47432
+  },
+  {
+    "path": "static/landing/crypto.js",
+    "bytes": 30359
+  },
+  {
+    "path": "static/landing/film/clips/00_plate_poster.jpg",
+    "bytes": 14387
+  },
+  {
+    "path": "static/landing/film/clips/00_plate_web.mp4",
+    "bytes": 594330
+  },
+  {
+    "path": "static/landing/film/clips/01_night_poster.jpg",
+    "bytes": 25104
+  },
+  {
+    "path": "static/landing/film/clips/01_night_web.mp4",
+    "bytes": 592043
+  },
+  {
+    "path": "static/landing/film/clips/02_wall_poster.jpg",
+    "bytes": 30207
+  },
+  {
+    "path": "static/landing/film/clips/02_wall_web.mp4",
+    "bytes": 719160
+  },
+  {
+    "path": "static/landing/film/clips/03_nightshift_poster.jpg",
+    "bytes": 19233
+  },
+  {
+    "path": "static/landing/film/clips/03_nightshift_web.mp4",
+    "bytes": 392476
+  },
+  {
+    "path": "static/landing/film/clips/04_morning_poster.jpg",
+    "bytes": 20211
+  },
+  {
+    "path": "static/landing/film/clips/04_morning_web.mp4",
+    "bytes": 590379
+  },
+  {
+    "path": "static/landing/film/clips/05_hisday_poster.jpg",
+    "bytes": 22748
+  },
+  {
+    "path": "static/landing/film/clips/05_hisday_web.mp4",
+    "bytes": 556255
+  },
+  {
+    "path": "static/landing/img/mark_favicon.png",
+    "bytes": 8507
+  },
+  {
+    "path": "static/landing/img/mark_philforge.png",
+    "bytes": 178512
+  },
+  {
+    "path": "static/landing/img/mark_rungs.png",
+    "bytes": 9581
+  },
+  {
+    "path": "static/landing/img/mark_rungs_favicon.png",
+    "bytes": 3931
+  },
+  {
+    "path": "static/landing/img/mark_rungs_touch.png",
+    "bytes": 14985
+  },
+  {
+    "path": "static/landing/index.html",
+    "bytes": 34561
+  },
+  {
+    "path": "static/landing/og-crypto.jpg",
+    "bytes": 87001
+  },
+  {
+    "path": "static/manifest.webmanifest",
+    "bytes": 1534
+  },
+  {
+    "path": "static/pwa-icons/apple-touch-icon.png",
+    "bytes": 14985
+  },
+  {
+    "path": "static/pwa-icons/favicon-16.png",
+    "bytes": 599
+  },
+  {
+    "path": "static/pwa-icons/favicon-32.png",
+    "bytes": 1536
+  },
+  {
+    "path": "static/pwa-icons/icon-192.png",
+    "bytes": 16394
+  },
+  {
+    "path": "static/pwa-icons/icon-512.png",
+    "bytes": 61601
+  },
+  {
+    "path": "static/pwa-icons/icon-maskable-192.png",
+    "bytes": 8302
+  },
+  {
+    "path": "static/pwa-icons/icon-maskable-512.png",
+    "bytes": 33812
+  },
+  {
+    "path": "static/pwa-shots/cryptoforge-narrow.jpg",
+    "bytes": 92709
+  },
+  {
+    "path": "static/pwa-shots/cryptoforge-wide.jpg",
+    "bytes": 103668
+  },
+  {
+    "path": "static/pwa.js",
+    "bytes": 10968
+  },
+  {
+    "path": "static/sw.js",
+    "bytes": 3171
+  },
+  {
+    "path": "static/tearsheet-auto.css",
+    "bytes": 24390
+  },
+  {
+    "path": "static/tearsheet-hybrid.css",
+    "bytes": 24392
+  },
+  {
+    "path": "static/tearsheet-vrule.css",
+    "bytes": 24392
+  },
+  {
+    "path": "static/tearsheet.js",
+    "bytes": 5919
+  },
+  {
+    "path": "strategy.html",
+    "bytes": 226147
+  },
+  {
+    "path": "tests/conftest.py",
+    "bytes": 1365
+  },
+  {
+    "path": "tests/state_quiesce.py",
+    "bytes": 2256
+  },
+  {
+    "path": "tests/test_action_refreshes_its_own_page.py",
+    "bytes": 3199
+  },
+  {
+    "path": "tests/test_audit_hardening.py",
+    "bytes": 4613
+  },
+  {
+    "path": "tests/test_auth_hardening.py",
+    "bytes": 40166
+  },
+  {
+    "path": "tests/test_auto_cascade_fib.py",
+    "bytes": 30667
+  },
+  {
+    "path": "tests/test_auto_fib_off_stops_lines.py",
+    "bytes": 6354
+  },
+  {
+    "path": "tests/test_auto_fib_off_stops_orphans.py",
+    "bytes": 4283
+  },
+  {
+    "path": "tests/test_auto_fib_stray_sweep.py",
+    "bytes": 5898
+  },
+  {
+    "path": "tests/test_autofib_closed_panel.py",
+    "bytes": 4866
+  },
+  {
+    "path": "tests/test_autofib_open_trades_ui.py",
+    "bytes": 8596
+  },
+  {
+    "path": "tests/test_autofib_paper_journal.py",
+    "bytes": 6982
+  },
+  {
+    "path": "tests/test_autofib_shows_its_working_line.py",
+    "bytes": 4407
+  },
+  {
+    "path": "tests/test_autofib_status_slimming.py",
+    "bytes": 4424
+  },
+  {
+    "path": "tests/test_backtest_logic.py",
+    "bytes": 15336
+  },
+  {
+    "path": "tests/test_billing.py",
+    "bytes": 9941
+  },
+  {
+    "path": "tests/test_bnb_fees.py",
+    "bytes": 7836
+  },
+  {
+    "path": "tests/test_campaign_prune.py",
+    "bytes": 4397
+  },
+  {
+    "path": "tests/test_cascade_alert_headlines.py",
+    "bytes": 5963
+  },
+  {
+    "path": "tests/test_cascade_boot_wake.py",
+    "bytes": 8724
+  },
+  {
+    "path": "tests/test_cascade_engine.py",
+    "bytes": 365012
+  },
+  {
+    "path": "tests/test_cascade_feed.py",
+    "bytes": 44216
+  },
+  {
+    "path": "tests/test_cascade_foreign_claims.py",
+    "bytes": 3719
+  },
+  {
+    "path": "tests/test_cascade_ledger_js.py",
+    "bytes": 7879
+  },
+  {
+    "path": "tests/test_cascade_math.py",
+    "bytes": 25500
+  },
+  {
+    "path": "tests/test_cascade_per_campaign_settings.py",
+    "bytes": 7219
+  },
+  {
+    "path": "tests/test_cascade_real_fees.py",
+    "bytes": 17948
+  },
+  {
+    "path": "tests/test_cascade_routes.py",
+    "bytes": 60577
+  },
+  {
+    "path": "tests/test_cascade_runtime_snapshot.py",
+    "bytes": 2885
+  },
+  {
+    "path": "tests/test_cascade_snapshot_writer.py",
+    "bytes": 12510
+  },
+  {
+    "path": "tests/test_cascade_status_single_flight_js.py",
+    "bytes": 4266
+  },
+  {
+    "path": "tests/test_cascade_status_slimming.py",
+    "bytes": 3404
+  },
+  {
+    "path": "tests/test_chart_marker_anchor_js.py",
+    "bytes": 3820
+  },
+  {
+    "path": "tests/test_closed_campaign_claims_no_coin.py",
+    "bytes": 7115
+  },
+  {
+    "path": "tests/test_deploy_gate.py",
+    "bytes": 9139
+  },
+  {
+    "path": "tests/test_dhan_premiums.py",
+    "bytes": 12976
+  },
+  {
+    "path": "tests/test_event_loop_not_blocked.py",
+    "bytes": 3810
+  },
+  {
+    "path": "tests/test_executor_binance.py",
+    "bytes": 14041
+  },
+  {
+    "path": "tests/test_executor_exchange.py",
+    "bytes": 12725
+  },
+  {
+    "path": "tests/test_executor_feed_client.py",
+    "bytes": 31118
+  },
+  {
+    "path": "tests/test_executor_market.py",
+    "bytes": 4525
+  },
+  {
+    "path": "tests/test_executor_model.py",
+    "bytes": 11603
+  },
+  {
+    "path": "tests/test_executor_orders.py",
+    "bytes": 24066
+  },
+  {
+    "path": "tests/test_executor_platform.py",
+    "bytes": 29176
+  },
+  {
+    "path": "tests/test_executor_recovery.py",
+    "bytes": 9989
+  },
+  {
+    "path": "tests/test_executor_runtime.py",
+    "bytes": 46780
+  },
+  {
+    "path": "tests/test_executor_setup.py",
+    "bytes": 15862
+  },
+  {
+    "path": "tests/test_executor_singleton.py",
+    "bytes": 5000
+  },
+  {
+    "path": "tests/test_executor_transport.py",
+    "bytes": 18448
+  },
+  {
+    "path": "tests/test_executor_tray.py",
+    "bytes": 9547
+  },
+  {
+    "path": "tests/test_executor_ui.py",
+    "bytes": 58254
+  },
+  {
+    "path": "tests/test_filled_orders_time_and_pnl_label_js.py",
+    "bytes": 5031
+  },
+  {
+    "path": "tests/test_info_panels_ui.py",
+    "bytes": 2221
+  },
+  {
+    "path": "tests/test_journal_roi_chart_js.py",
+    "bytes": 3412
+  },
+  {
+    "path": "tests/test_journal_strategy_links.py",
+    "bytes": 3537
+  },
+  {
+    "path": "tests/test_kill_switch_mobile_css.py",
+    "bytes": 5110
+  },
+  {
+    "path": "tests/test_kill_switch_visibility_js.py",
+    "bytes": 4860
+  },
+  {
+    "path": "tests/test_landing_curve_matches_headline.py",
+    "bytes": 1462
+  },
+  {
+    "path": "tests/test_landing_ledger.py",
+    "bytes": 5787
+  },
+  {
+    "path": "tests/test_landing_ledger_refresh.py",
+    "bytes": 2400
+  },
+  {
+    "path": "tests/test_live_hardening.py",
+    "bytes": 172983
+  },
+  {
+    "path": "tests/test_market_rail_news.py",
+    "bytes": 10894
+  },
+  {
+    "path": "tests/test_market_rail_ui.py",
+    "bytes": 11852
+  },
+  {
+    "path": "tests/test_nav_order_mobile_css.py",
+    "bytes": 2126
+  },
+  {
+    "path": "tests/test_notifications.py",
+    "bytes": 10398
+  },
+  {
+    "path": "tests/test_options_data_layer.py",
+    "bytes": 16642
+  },
+  {
+    "path": "tests/test_paper_liquidation_always_has_a_price.py",
+    "bytes": 4148
+  },
+  {
+    "path": "tests/test_round_log_finds_every_book_js.py",
+    "bytes": 5130
+  },
+  {
+    "path": "tests/test_rule3070_paper_service.py",
+    "bytes": 13920
+  },
+  {
+    "path": "tests/test_rule3070_warmup_budget.py",
+    "bytes": 3770
+  },
+  {
+    "path": "tests/test_scalp_live_brokers.py",
+    "bytes": 16677
+  },
+  {
+    "path": "tests/test_shutdown_steps.py",
+    "bytes": 3946
+  },
+  {
+    "path": "tests/test_state_quiesce.py",
+    "bytes": 4093
+  },
+  {
+    "path": "tests/test_status_serialization.py",
+    "bytes": 3884
+  },
+  {
+    "path": "tests/test_stranded_position_has_a_way_out.py",
+    "bytes": 6294
+  },
+  {
+    "path": "tests/test_strategy_alerts.py",
+    "bytes": 9287
+  },
+  {
+    "path": "tests/test_tearsheet_invariants.py",
+    "bytes": 4460
+  },
+  {
+    "path": "tests/test_tearsheet_sheets.py",
+    "bytes": 12595
+  },
+  {
+    "path": "tests/test_trade_journal.py",
+    "bytes": 24045
+  },
+  {
+    "path": "tests/test_vrule_chart_stage_js.py",
+    "bytes": 5563
+  },
+  {
+    "path": "tests/test_vrule_live.py",
+    "bytes": 21991
+  },
+  {
+    "path": "tests/test_vrule_status_filter.py",
+    "bytes": 4976
+  },
+  {
+    "path": "tests/test_vrule_window_is_incremental.py",
+    "bytes": 5721
+  },
+  {
+    "path": "tools/audit_options_archive.py",
+    "bytes": 2723
+  },
+  {
+    "path": "tools/auto_fib_tape_replay.py",
+    "bytes": 7561
+  },
+  {
+    "path": "tools/cancel_duplicate_orders.py",
+    "bytes": 5662
+  },
+  {
+    "path": "tools/cascade_backtest.py",
+    "bytes": 14168
+  },
+  {
+    "path": "tools/cascade_depth_sweep.py",
+    "bytes": 59269
+  },
+  {
+    "path": "tools/cascade_feed_keyset.py",
+    "bytes": 7064
+  },
+  {
+    "path": "tools/cascade_feed_rootkey.py",
+    "bytes": 4552
+  },
+  {
+    "path": "tools/cascade_paper_prove.py",
+    "bytes": 20956
+  },
+  {
+    "path": "tools/cascade_reset.py",
+    "bytes": 4198
+  },
+  {
+    "path": "tools/coindcx_spot_check.py",
+    "bytes": 11367
+  },
+  {
+    "path": "tools/dhan_backfill.py",
+    "bytes": 3235
+  },
+  {
+    "path": "tools/exchange_parity_check.py",
+    "bytes": 7909
+  },
+  {
+    "path": "tools/fetch_5m_history.py",
+    "bytes": 4350
+  },
+  {
+    "path": "tools/rule3070_charts.py",
+    "bytes": 6493
+  },
+  {
+    "path": "tools/rule3070_paper.py",
+    "bytes": 988
+  },
+  {
+    "path": "tools/rule3070_pnl.py",
+    "bytes": 9602
+  },
+  {
+    "path": "tools/rule3070_sim.py",
+    "bytes": 28906
+  },
+  {
+    "path": "tools/run_coindcx_paper.sh",
+    "bytes": 943
+  },
+  {
+    "path": "tools/show_fills.py",
+    "bytes": 3953
+  },
+  {
+    "path": "tools/tearsheet/build_sheets.py",
+    "bytes": 29451
+  },
+  {
+    "path": "tools/tearsheet/data/auto_report_data.json",
+    "bytes": 13214
+  },
+  {
+    "path": "tools/tearsheet/data/hybrid_report_data.json",
+    "bytes": 9399
+  },
+  {
+    "path": "tools/tearsheet/data/vrule_report_data.json",
+    "bytes": 468351
+  },
+  {
+    "path": "tools/tearsheet/i18n.py",
+    "bytes": 6835
+  },
+  {
+    "path": "tools/tearsheet/run_backtests.py",
+    "bytes": 17298
+  },
+  {
+    "path": "tools/tearsheet/sheet_kit.py",
+    "bytes": 44909
+  },
+  {
+    "path": "tools/totp_setup.py",
+    "bytes": 4378
+  },
+  {
+    "path": "tools/vrule_live_parity.py",
+    "bytes": 11298
+  },
+  {
+    "path": "webauthn_auth.py",
+    "bytes": 13945
+  }
+]

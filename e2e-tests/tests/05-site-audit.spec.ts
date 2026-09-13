@@ -11,6 +11,7 @@ async function login(page: Page) {
   await page.fill('#password-input', PIN);
   await page.click('#unlock-btn');
   await page.waitForSelector('.nav-tab', { timeout: 10_000 });
+  await page.waitForFunction(() => typeof (window as any).showPage === 'function');
 }
 
 async function expectActivePage(page: Page, pageId: string, navId: string) {

@@ -1,0 +1,7 @@
+{
+  "bcrypt_version": "5.0.0",
+  "accepted_password_characters": 73,
+  "policy_error": null,
+  "hash_error": "ValueError: password cannot be longer than 72 bytes, truncate manually if necessary (e.g. my_password[:72])",
+  "scheduled_10ms_callback_actual_seconds": 0.2938218329945812
+}

@@ -24,6 +24,8 @@
     --red:        #fb7185;
     --red-bg:     rgba(251, 113, 133, 0.11);
     --yellow:     #fbbf24;
+    --amber:      var(--yellow);
+    --danger:     var(--red);
   }
   /* ══════════════════════════════════════════════════════
      PREMIUM LIGHT MODE — Ink Blue · Forest Emerald · Crimson Rose
@@ -55,6 +57,11 @@
     color: #0f172a;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* A shared keyboard indicator for controls without a component-specific one. */
+  :where(button, a[href], input, select, textarea, summary):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
   body {
     font-family: var(--font-body);
     background: var(--bg);
@@ -2405,6 +2412,17 @@
   .table-scroll {
     overflow-x: auto;
   }
+  .live-monitor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .live-monitor-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .live-monitor-grid > div,
+  .live-monitor-stats > div { min-width: 0; }
+  .live-monitor-header { flex-wrap: wrap; gap: 12px; }
+  .live-monitor-header > div { min-width: 0; flex-wrap: wrap; }
+  .live-monitor-header { overflow-wrap: anywhere; }
+  @media (max-width: 720px) {
+    .live-monitor-grid { grid-template-columns: minmax(0, 1fr); }
+    .live-monitor-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
   .table-surface .trade-table {
     min-width: 100%;
   }
@@ -3231,7 +3249,7 @@
     box-shadow: 0 2px 8px rgba(5,150,105,0.25) !important;
   }
   [data-theme="light"] .btn-danger {
-    background: linear-gradient(180deg, #e11d48 0%, #be123c 100%) !important;
+    background: var(--btn-bg) !important;
     color: #ffffff !important; border-color: #be123c !important;
     box-shadow: 0 2px 8px rgba(190,18,60,0.25) !important;
   }
@@ -4428,6 +4446,18 @@
   [data-theme="light"] .status-pill {
     box-shadow: 0 10px 18px rgba(15,23,42,0.06);
   }
+  [data-theme="light"] .status-pill-trade {
+    background: #fef3c7;
+    color: #92400e;
+  }
+  [data-theme="light"] .status-pill-running {
+    background: #ccfbf1;
+    color: #115e59;
+  }
+  [data-theme="light"] .status-pill-stopped {
+    background: #e2e8f0;
+    color: #334155;
+  }
   [data-theme="light"] .tag-blue { color: #1d4ed8; }
   [data-theme="light"] .tag-cyan { color: #0f766e; }
   /* ── Premium Light: Semantic Colors ── */
@@ -4682,9 +4712,10 @@
     .topbar-right {
       width: 100%;
       justify-content: flex-end;
+      flex-wrap: wrap;
     }
     .topbar-clock {
-      flex: 1 1 auto;
+      flex: 0 0 auto;
     }
     #scalp-page div[style*="grid-template-columns:1fr 1fr"][style*="gap:10px"] {
       grid-template-columns: 1fr !important;
@@ -5863,7 +5894,8 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.96);
 }
 
-[data-theme="light"] .trade-table {
+[data-theme="light"] .trade-table,
+[data-theme="light"] .table-surface .trade-table {
   background: transparent;
   border-color: rgba(15, 23, 42, 0.08);
   box-shadow: none;
@@ -5930,45 +5962,45 @@
 }
 
 [data-theme="light"] .filter-pill-all.active {
-  background: linear-gradient(180deg, var(--accent) 0%, #6d28d9 100%);
-  border-color: rgba(109, 40, 217, 0.38);
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent) 100%);
+  border-color: var(--border-acc);
   color: #ffffff;
 }
 
 [data-theme="light"] .filter-pill-backtest.active {
-  background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%);
+  background: linear-gradient(180deg, #1d4ed8 0%, #1e40af 100%);
   border-color: rgba(37, 99, 235, 0.34);
   color: #ffffff;
 }
 
 [data-theme="light"] .filter-pill-paper.active {
-  background: linear-gradient(180deg, #f59e0b 0%, #d97706 100%);
+  background: linear-gradient(180deg, #b45309 0%, #92400e 100%);
   border-color: rgba(217, 119, 6, 0.36);
   color: #ffffff;
 }
 
 [data-theme="light"] .filter-pill-live.active {
-  background: linear-gradient(180deg, #a855f7 0%, #7e22ce 100%);
+  background: linear-gradient(180deg, #7e22ce 0%, #6b21a8 100%);
   border-color: rgba(126, 34, 206, 0.36);
   color: #ffffff;
 }
 
 [data-theme="light"] .filter-pill-scalp.active {
-  background: linear-gradient(180deg, #22d3ee 0%, #0891b2 100%);
+  background: linear-gradient(180deg, #0e7490 0%, #155e75 100%);
   border-color: rgba(8, 145, 178, 0.34);
   color: #ffffff;
 }
 
 [data-theme="light"] .filter-pill-long.active,
 [data-theme="light"] .filter-pill-wins.active {
-  background: linear-gradient(180deg, #34d399 0%, #059669 100%);
+  background: linear-gradient(180deg, #0f766e 0%, #115e59 100%);
   border-color: rgba(5, 150, 105, 0.34);
   color: #ffffff;
 }
 
 [data-theme="light"] .filter-pill-short.active,
 [data-theme="light"] .filter-pill-losses.active {
-  background: linear-gradient(180deg, #fb7185 0%, #e11d48 100%);
+  background: linear-gradient(180deg, #be123c 0%, #9f1239 100%);
   border-color: rgba(225, 29, 72, 0.34);
   color: #ffffff;
 }
@@ -6857,11 +6889,10 @@ a.mr-news-item:hover { color: #ecfeff; }
 [data-theme="light"] .btn-primary,
 [data-theme="light"] .page-btn.active,
 [data-theme="light"] .filter-pill-all.active {
-  /* White on #06b6d4 measured 2.73:1. Deepening the ramp to cyan-700/800
-     keeps the button unmistakably cyan and gives white 5.4:1. */
-  --btn-bg: linear-gradient(180deg, #0e7490 0%, #155e75 100%);
+  /* The light-theme accent has a readable white-label pairing for each tint. */
+  --btn-bg: linear-gradient(180deg, var(--accent) 0%, var(--accent) 100%);
   --btn-color: #ffffff;
-  --btn-border: rgba(21,94,117,0.58);
+  --btn-border: var(--border-acc);
 }
 [data-theme="light"] .btn-success {
   /* White on #14b8a6 measured 3.15:1; teal-700/800 gives 5.5:1. */
@@ -6870,19 +6901,19 @@ a.mr-news-item:hover { color: #ecfeff; }
   --btn-border: rgba(17,94,89,0.46);
 }
 [data-theme="light"] .btn-warning {
-  --btn-bg: linear-gradient(180deg, #f59e0b 0%, #b45309 100%);
+  --btn-bg: linear-gradient(180deg, #b45309 0%, #92400e 100%);
   --btn-color: #ffffff;
   --btn-border: rgba(180,83,9,0.42);
 }
 [data-theme="light"] .btn-danger {
-  --btn-bg: linear-gradient(180deg, #fb7185 0%, #be123c 100%);
+  --btn-bg: linear-gradient(180deg, #be123c 0%, #9f1239 100%);
   --btn-color: #ffffff;
   --btn-border: rgba(190,18,60,0.42);
 }
 [data-theme="light"] .nav-tab.active {
-  color: #0891b2;
-  border-bottom-color: #0891b2;
-  background: linear-gradient(180deg, rgba(8,145,178,0.09), rgba(8,145,178,0.02));
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: linear-gradient(180deg, rgba(var(--tint-primary-rgb),0.09), rgba(var(--tint-primary-rgb),0.02));
 }
 [data-theme="light"] .mr-fx-rate { color: #0f172a; }
 [data-theme="light"] .mr-news-item { color: #334155; }

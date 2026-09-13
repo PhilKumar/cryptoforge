@@ -5846,10 +5846,10 @@ function renderLivePanel(d, idx) {
   var badgeHtml, statusText, statusColor;
   if (running && inTrade) {
     badgeHtml = '<span class="status-pill status-pill-trade">In Trade</span>';
-    statusText = 'In Trade'; statusColor = '#fbbf24';
+    statusText = 'In Trade'; statusColor = 'var(--yellow)';
   } else if (running) {
     badgeHtml = '<span class="status-pill status-pill-running">Scanning</span>';
-    statusText = 'Scanning'; statusColor = '#4ade80';
+    statusText = 'Scanning'; statusColor = 'var(--green)';
   } else {
     badgeHtml = '<span class="status-pill status-pill-stopped">Stopped</span>';
     statusText = 'Stopped'; statusColor = 'var(--muted)';
@@ -5863,7 +5863,7 @@ function renderLivePanel(d, idx) {
   var html = '';
 
   // ── Header bar
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:var(--card);border-bottom:1px solid var(--border);">';
+  html += '<div class="live-monitor-header" style="display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:var(--card);border-bottom:1px solid var(--border);">';
   html += '<div style="display:flex;align-items:center;gap:12px;">';
   html += '<span style="font-size:22px;">' + modeIcon + '</span>';
   html += '<div><div style="font-size:18px;font-weight:700;">' + name + '</div>';
@@ -5879,7 +5879,7 @@ function renderLivePanel(d, idx) {
   html += '</div></div>';
 
   // ── 4 Stat Cards
-  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:20px 28px 8px;">';
+  html += '<div class="live-monitor-stats" style="display:grid;gap:16px;padding:20px 28px 8px;">';
   html += '<div class="ti-item"><div class="ti-label">Total P&L</div><div class="ti-value" style="color:' + pnlColor + ';font-weight:700;">' + fmtINR(pnl) + '</div></div>';
   html += '<div class="ti-item"><div class="ti-label">Run Type</div><div class="ti-value" style="color:' + (mode === 'paper' ? 'var(--accent)' : 'var(--red)') + ';">' + modeIcon + ' ' + modeLabel + '</div></div>';
   html += '<div class="ti-item"><div class="ti-label">Trades Today</div><div class="ti-value">' + (d.trades_today || 0) + '</div></div>';
@@ -5887,12 +5887,12 @@ function renderLivePanel(d, idx) {
   html += '</div>';
 
   // ── 2-column grid: Signal/Indicators | Positions + Event Log
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:8px 28px 20px;">';
+  html += '<div class="live-monitor-grid" style="display:grid;gap:16px;padding:8px 28px 20px;">';
 
   // LEFT: Signal / Indicator table
   html += '<div>';
   html += '<h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📊 Signal / Indicator</h4>';
-  html += '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;overflow:hidden;">';
+  html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow-x:auto;">';
   html += '<table class="trade-table live-monitor-table" id="live-signal-table-' + panelKey + '" style="width:100%;font-size:12px;">';
 
   var candle = d.current_candle || {};
@@ -5923,7 +5923,7 @@ function renderLivePanel(d, idx) {
   // Open Positions
   var openTrades = d.open_trades || [];
   html += '<h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📈 Open Positions</h4>';
-  html += '<div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;overflow:hidden;margin-bottom:12px;">';
+  html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow-x:auto;margin-bottom:12px;">';
   html += '<table class="trade-table live-monitor-table" id="live-open-table-' + panelKey + '" style="width:100%;font-size:12px;">';
   html += '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.06);color:var(--muted);"><th style="padding:7px 10px;text-align:left;">Symbol</th><th style="text-align:right;padding:7px 10px;">Side</th><th style="text-align:right;padding:7px 10px;">Entry $</th><th style="text-align:right;padding:7px 10px;">Notional</th></tr></thead>';
   html += '<tbody>';
@@ -5945,7 +5945,7 @@ function renderLivePanel(d, idx) {
 
   // Event Log
   var events = (d.event_log || []).slice().reverse();
-  var evtColors = {signal:'#4ade80', error:'#f87171', warning:'#fbbf24', warn:'#fbbf24', stop:'#f87171', start:'#4ade80', entry:'#4ade80', exit:'#fbbf24', info:'var(--muted)'};
+  var evtColors = {signal:'var(--green)', error:'var(--red)', warning:'var(--yellow)', warn:'var(--yellow)', stop:'var(--red)', start:'var(--green)', entry:'var(--green)', exit:'var(--yellow)', info:'var(--muted)'};
   html += '<h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">📋 Event Log</h4>';
   html += '<div class="trade-log-panel" style="max-height:220px;">';
   if (!events.length) {
@@ -5999,7 +5999,7 @@ function renderLivePanel(d, idx) {
     return '<button class="filter-pill ' + _getFilterPillClass(def.key) + (active ? ' active' : '') + '" data-cf-click="_setLiveTradeFilter(\'' + safeRunId + '\',\'' + def.key + '\')">' + def.label + '</button>';
   }).join('');
   html += '</div>';
-  html += '<input class="table-search-input" type="text" value="' + _escapeHtml(tradeFilters.query || '') + '" data-cf-change="_setLiveTradeQuery(\'' + safeRunId + '\', this.value)" data-cf-keydown="if(event.key===\'Enter\'){_setLiveTradeQuery(\'' + safeRunId + '\', this.value)}" placeholder="Search symbol, date, reason">';
+  html += '<input class="table-search-input" aria-label="Search completed trades" type="text" value="' + _escapeHtml(tradeFilters.query || '') + '" data-cf-change="_setLiveTradeQuery(\'' + safeRunId + '\', this.value)" data-cf-keydown="if(event.key===\'Enter\'){_setLiveTradeQuery(\'' + safeRunId + '\', this.value)}" placeholder="Search symbol, date, reason">';
   html += '</div></div>';
   if (selectedCount > 0) {
     html += '<div class="table-selection-bar">';
@@ -6009,7 +6009,7 @@ function renderLivePanel(d, idx) {
     html += '<button class="btn btn-outline btn-sm" data-cf-click="_clearLiveTradeSelection(\'' + safeRunId + '\')" style="padding:5px 12px;font-size:11px;">Clear</button>';
     html += '</div></div>';
   }
-  html += '<div style="overflow:auto;max-height:420px;background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);border-radius:10px;">';
+  html += '<div style="overflow:auto;max-height:420px;background:var(--surface);border:1px solid var(--border);border-radius:10px;">';
   html += '<table class="trade-table live-monitor-table" id="live-completed-table-' + panelKey + '" style="width:100%;font-size:12px;min-width:1080px;">';
   html += '<thead><tr style="position:sticky;top:0;background:rgba(10,14,24,0.96);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,0.08);color:var(--muted);z-index:1;">';
   html += '<th style="padding:8px 10px;text-align:center;width:36px;"><input type="checkbox" class="tbl-chk" data-cf-change="_toggleAllLiveTradeChecks(\'' + safeRunId + '\', this.checked)"' + (visibleAllSelected ? ' checked' : '') + '></th>';
