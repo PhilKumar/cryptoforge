@@ -53,6 +53,10 @@ The IP and HTTPS helpers trust forwarding headers. The checked-in service binds 
 
 The checked-in workflow deploys on pushes to `main`, uses `FORCE_DEPLOY=1`, and can change a running trading service. Accordingly this branch has not been pushed or promoted.
 
+### P1 operational alert — production feed key set is expired
+
+The read-only health response at 03:03:43 UTC on 13 September 2026 reported `ready: true` together with `The feed key set has EXPIRED. Every executor has stopped opening campaigns.` This is a live operational condition, not a code-scan result. It may be intentional, but if campaigns are expected to open, an authorized operator must rotate or publish the feed-key set and verify executor status. No key, executor, order or production configuration was changed during this review.
+
 ## Validation
 
 - Source inventory: tracked baseline paths listed in `evidence/source-inventory.json`; this is an inventory, not a per-file manual-review attestation.
@@ -62,6 +66,11 @@ The checked-in workflow deploys on pushes to `main`, uses `FORCE_DEPLOY=1`, and 
 - Focused audit/live-hardening tests: 165/165 passed.
 - Ten static JavaScript files passed syntax checks; the edited app file was rechecked after the final markup-only edit.
 - Final browser suite: **110 passed, 1 skipped, 0 failed** in 5.1 minutes using one worker. The skipped case needs a real campaign, deliberately absent from the isolated test account. Full output: `evidence/e2e-final-results.txt`.
+- Mocked exchange-failure coverage: **208/208 passed** across live hardening, exchange intents and Binance adapter tests. This includes rejected reduce-only exits, rejected scale-ins, broker timeouts, circuit-breaker recovery, duplicate-order handling and continuation after one intent fails. It uses fake brokers and temporary state; no exchange request was made.
+- Full Git-history secret scan: Gitleaks scanned **803 commits / 19.77 MB** and reported no leaks. Its redacted empty report is `evidence/gitleaks-full-history.json`.
+- Read-only production configuration review: the active service binds only to `127.0.0.1:9000`; nginx alone listens on public ports 80/443, terminates TLS 1.2/1.3, and forwards the standard host, client-IP and forwarded-protocol headers. The systemd unit enables `NoNewPrivileges`, private `/tmp`, a restrictive umask and a memory limit. This verifies the observed host configuration only; it is not an external attack simulation.
+- Firefox: the authenticated shell and both themes passed in an isolated browser session. Nine Cascade renderer cases also passed before two reload cases timed out waiting for Firefox's navigation completion. The renderer output itself was not implicated by that timeout.
+- WebKit: its Playwright runtime could not complete even `DOMContentLoaded` for the isolated localhost page, despite Chromium and Firefox succeeding. Disabling service workers did not change that result. This is recorded as an environment-level test limitation, not evidence of a Safari defect.
 - New regression cases cover populated Live tables at 320px in both themes, login at 320×360, and gradient-endpoint text contrast across six tints. Existing mobile checks cover 390px and 768px, dialogs, labels and navigation.
 - Two existing test helpers now wait for the deferred application script, rather than acting on shell markup before `showPage` exists. Initial concurrent and sequential runs exposed both startup timing failures and the genuine populated-table overflow above; failures were investigated rather than omitted.
 
@@ -69,7 +78,7 @@ The contrast checks use the 4.5:1 normal-text criterion from [WCAG 2.2](https://
 
 ## Remaining verification limits
 
-No production penetration test, exchange-failure simulation against live orders, historical secret scan, independent security review, real-device iOS/Android test, or Safari/Firefox matrix was performed. Browser evidence uses Chromium and isolated/fake trading state; it cannot certify real-money safety. Existing business behavior and the two authentication concerns above were intentionally not changed.
+The source-history scan, mocked exchange-failure suite, production configuration review and Firefox check are complete. They do not replace a production penetration test, a live-exchange failure simulation, an independent security review, physical iOS/Android testing, or a Safari-device test. This desktop does not have Safari or attached mobile devices, and Playwright WebKit cannot load the isolated localhost site in this environment. Browser evidence still uses isolated/fake trading state and cannot certify real-money safety. Existing business behavior and the two authentication concerns above were intentionally not changed.
 
 ## Visual evidence
 

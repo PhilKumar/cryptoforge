@@ -1,5 +1,22 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const requestedBrowser = process.env.E2E_BROWSER;
+if (requestedBrowser && !['chromium', 'firefox', 'webkit'].includes(requestedBrowser)) {
+  throw new Error(`Unsupported E2E_BROWSER: ${requestedBrowser}`);
+}
+const browserName = requestedBrowser as 'chromium' | 'firefox' | 'webkit' | undefined;
+const crossBrowserUse = browserName
+  ? { ...devices['Desktop Chrome'], browserName, serviceWorkers: 'block' as const }
+  : null;
+const projects = browserName
+  ? [{ name: `cryptoforge-${browserName}`, use: crossBrowserUse }]
+  : [
+      {
+        name: 'cryptoforge',
+        use: { ...devices['Desktop Chrome'] },
+      },
+    ];
+
 export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
@@ -11,10 +28,5 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
-  projects: [
-    {
-      name: 'cryptoforge',
-      use: { ...devices['Desktop Chrome'] },
-    },
-  ],
+  projects,
 });
