@@ -9133,6 +9133,15 @@ html[data-theme="light"] .journal-entry-notes section {
   gap: 7px;
   margin: 0 0 14px;
 }
+.cf-info-document-tabs {
+  column-span: all;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 14px;
+}
+.cf-info-document-tabs .cf-info-language-tabs { margin: 0; }
 .cf-info-language-button {
   appearance: none;
   padding: 6px 13px;
@@ -9151,6 +9160,26 @@ html[data-theme="light"] .journal-entry-notes section {
   background: rgba(var(--tint-primary-rgb), 0.12);
   color: var(--text);
   outline: none;
+}
+.cf-info-tearsheet-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 29px;
+  padding: 6px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font: 700 10.5px/1.2 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: 0.45px;
+  text-decoration: none;
+}
+.cf-info-tearsheet-link:hover,
+.cf-info-tearsheet-link:focus-visible {
+  border-color: rgba(var(--tint-primary-rgb), 0.72);
+  background: rgba(var(--tint-primary-rgb), 0.12);
+  color: var(--text);
+  outline: none;
+  text-decoration: none;
 }
 .cf-info-language { display: none; }
 .cf-info-language.is-active { display: contents; }

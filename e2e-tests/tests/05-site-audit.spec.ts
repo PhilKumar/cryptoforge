@@ -351,6 +351,20 @@ test.describe('Comprehensive Site Audit', () => {
     await expect(strategyButton).toHaveAttribute('aria-expanded', 'true');
     await expect(strategyPanel.locator('[data-cf-info-language="en"]')).toHaveClass(/is-active/);
 
+    // The published backtest belongs with the strategy manual, beside its
+    // language choices. It must not consume header space beside the live
+    // strategy status.
+    for (const [pageId, panelId, doc] of [
+      ['autofib-page', 'cf-af-strategy-info', 'auto'],
+      ['rule3070-page', 'cf-vrule-strategy-info', 'vrule'],
+      ['cascade-page', 'cf-cascade-strategy-info', 'hybrid'],
+    ]) {
+      const strategyPage = page.locator('#' + pageId);
+      await expect(strategyPage.locator('.allocator-header .cf-tearsheet-link')).toHaveCount(0);
+      await expect(page.locator('#' + panelId + ' .cf-info-document-tabs .cf-info-tearsheet-link'))
+        .toHaveAttribute('href', '/assets/tearsheet?doc=' + doc);
+    }
+
     const panelLayout = await strategyPanel.evaluate((panel) => {
       const style = getComputedStyle(panel as HTMLElement);
       const rect = panel.getBoundingClientRect();

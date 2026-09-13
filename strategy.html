@@ -1317,11 +1317,6 @@
       <h2>Cascade-Auto <button type="button" class="cf-info" tabindex="0"
         data-cf-info-target="cf-af-strategy-info" aria-controls="cf-af-strategy-info"
         aria-expanded="false" aria-label="Read the complete Cascade Auto strategy in English or Tamil">i</button></h2>
-      <!-- The published book for this strategy: every 5m bar Binance holds,
-           run through the SHIPPED configuration. Built by
-           tools/tearsheet/build_sheets.py, served by /assets/tearsheet. -->
-      <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=auto"
-         title="The Cascade-Auto book, measured over every coin's whole history">Tearsheet</a>
     </div>
     <div class="cf-stat-strip" id="cf-af-stats">
       <div class="stat-box">
@@ -1354,11 +1349,15 @@
 
   <div id="cf-af-strategy-info" class="cf-info-panel cf-info-doc" role="region"
        aria-label="Cascade Auto strategy explanation" hidden>
-    <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
-      <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
-              role="tab" aria-selected="true">English</button>
-      <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
-              role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+    <div class="cf-info-document-tabs">
+      <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
+        <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
+                role="tab" aria-selected="true">English</button>
+        <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
+                role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+      </div>
+      <a class="cf-info-tearsheet-link" href="/assets/tearsheet?doc=auto"
+         title="Open the Cascade-Auto backtest tearsheet">Tearsheet</a>
     </div>
     <div class="cf-info-language is-active" data-cf-info-language="en">
       <p class="cf-info-lede">Cascade-Auto is the self-running Cascade book. It identifies its own mother candles, keeps one fast line working near price, graduates older structures into slower lines, and manages paper or live orders in its <strong>own engine and capital book</strong>. Cascade-Hybrid campaigns are never altered.</p>
@@ -1602,11 +1601,6 @@
       <h2>The V-Rule <button type="button" class="cf-info" tabindex="0"
         data-cf-info-target="cf-vrule-strategy-info" aria-controls="cf-vrule-strategy-info"
         aria-expanded="false" aria-label="Read the complete V-Rule strategy in English or Tamil">i</button></h2>
-      <!-- The published book for this strategy: every 5m bar Binance holds,
-           run through the SHIPPED configuration. Built by
-           tools/tearsheet/build_sheets.py, served by /assets/tearsheet. -->
-      <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=vrule"
-         title="The V-Rule book, measured over every coin's whole history">Tearsheet</a>
     </div>
     <div class="cf-stat-strip" id="cf-vr-stats">
       <div class="stat-box">
@@ -1634,11 +1628,15 @@
 
   <div id="cf-vrule-strategy-info" class="cf-info-panel cf-info-doc" role="region"
        aria-label="V-Rule strategy explanation" hidden>
-    <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
-      <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
-              role="tab" aria-selected="true">English</button>
-      <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
-              role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+    <div class="cf-info-document-tabs">
+      <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
+        <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
+                role="tab" aria-selected="true">English</button>
+        <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
+                role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+      </div>
+      <a class="cf-info-tearsheet-link" href="/assets/tearsheet?doc=vrule"
+         title="Open the V-Rule backtest tearsheet">Tearsheet</a>
     </div>
     <div class="cf-info-language is-active" data-cf-info-language="en">
       <p class="cf-info-lede">The V-Rule waits for a measured fall below a mother candle, confirms that the fall has begun to turn, then builds one controlled ladder. The paper console uses the same bar-by-bar engine used by the nine-year backtest, and the separate real-money driver is held to that rule; Cascade-Hybrid and Cascade-Auto remain untouched.</p>
@@ -2137,11 +2135,6 @@
       <h2>Cascade-Hybrid Campaigns <button type="button" class="cf-info" tabindex="0"
         data-cf-info-target="cf-cascade-strategy-info" aria-controls="cf-cascade-strategy-info"
         aria-expanded="false" aria-label="Read the complete Cascade Hybrid strategy in English or Tamil">i</button></h2>
-      <!-- The published book for this strategy: every 5m bar Binance holds,
-           run through the SHIPPED configuration. Built by
-           tools/tearsheet/build_sheets.py, served by /assets/tearsheet. -->
-      <a class="btn btn-outline btn-sm cf-tearsheet-link" href="/assets/tearsheet?doc=hybrid"
-         title="The Cascade Hybrid book, measured over every coin's whole history">Tearsheet</a>
     </div>
     <div class="cf-engine-chip" id="cf-cascade-engine-chip" data-state="idle">
       <span class="cf-engine-dot" aria-hidden="true"></span>
@@ -2152,11 +2145,15 @@
 
   <div id="cf-cascade-strategy-info" class="cf-info-panel cf-info-doc" role="region"
        aria-label="Cascade Hybrid strategy explanation" hidden>
-    <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
-      <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
-              role="tab" aria-selected="true">English</button>
-      <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
-              role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+    <div class="cf-info-document-tabs">
+      <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
+        <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
+                role="tab" aria-selected="true">English</button>
+        <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
+                role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+      </div>
+      <a class="cf-info-tearsheet-link" href="/assets/tearsheet?doc=hybrid"
+         title="Open the Cascade-Hybrid backtest tearsheet">Tearsheet</a>
     </div>
     <div class="cf-info-language is-active" data-cf-info-language="en">
       <p class="cf-info-lede">Cascade-Hybrid is the operator-anchored mother-candle campaign. You choose the exchange, symbol, capital and starting mother; the engine then follows the trendline structure, funds the fib ladder, manages entries and maintains one basket target autonomously around the clock.</p>
