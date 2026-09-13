@@ -3288,7 +3288,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260824-bilingual-info-panels" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260913-canvas-only-charts" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 
@@ -3330,16 +3330,6 @@
         <div class="cf-tf-toggle" role="radiogroup" aria-label="Chart timeframe" id="cf-cascade-chart-tf">
           <button type="button" class="cf-tf-option is-active" data-tf="auto" role="radio" aria-checked="true"
                   data-cf-click="cfCascadeSetTimeframe('auto')" title="Pick the timeframe that fits the whole campaign">Auto</button>
-        </div>
-        <!-- Canvas is the chart. Classic is the original SVG renderer, kept as
-             a one-click second opinion; the pick sticks in localStorage.
-             `is-active` here only avoids a flash before the script marks the
-             real selection — cfCascadeSetEngine/_cfCascadeMarkEngine own it. -->
-        <div class="cf-tf-toggle" role="radiogroup" aria-label="Chart renderer" id="cf-cascade-chart-engine">
-          <button type="button" class="cf-tf-option" data-engine="classic" role="radio" aria-checked="false"
-                  data-cf-click="cfCascadeSetEngine('classic')" title="The original SVG chart">Classic</button>
-          <button type="button" class="cf-tf-option is-active" data-engine="canvas" role="radio" aria-checked="true"
-                  data-cf-click="cfCascadeSetEngine('canvas')" title="The canvas chart (default)">Canvas</button>
         </div>
         <div class="cf-tf-toggle" role="group" aria-label="Chart zoom" id="cf-cascade-zoom-group">
           <!-- Named functions, not an expression. data-cf-click only parses plain

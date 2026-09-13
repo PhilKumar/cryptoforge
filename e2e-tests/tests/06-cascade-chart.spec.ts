@@ -219,18 +219,6 @@ async function openChart(page: Page, mode?: string) {
   await expect(page.locator('#cf-cascade-chart-overlay')).toBeVisible();
 }
 
-// Did the chart actually PAINT? Each renderer gets the strongest check its
-// medium allows: structural for the SVG (a blank chart has no candle bodies),
-// and a real pixel sample for the canvas.
-async function svgIsPainted(page: Page, minCandles: number, where = 'svg') {
-  const svg = page.locator('#cf-cascade-chart-body svg');
-  await expect(svg, where).toBeVisible();
-  // One <rect> per candle body. `pal is not defined` threw before the first
-  // one was appended, and this is the assertion that would have said so.
-  expect(await svg.locator('rect').count(), `${where}: candle bodies`).toBeGreaterThanOrEqual(minCandles);
-  expect(await svg.locator('text').count(), `${where}: labels`).toBeGreaterThan(0);
-}
-
 async function canvasIsPainted(page: Page, where = 'canvas', minCandles = 1) {
   await expect(page.locator('#cf-chart-canvas-host'), where).toBeVisible();
   const info = await page.evaluate(() => {
@@ -263,22 +251,20 @@ test.describe('Cascade chart', () => {
     await login(page);
   });
 
-  // Every payload shape is walked inside ONE test per engine rather than one
+  // Every payload shape is walked inside one Canvas test rather than one
   // test each. Each test logs in, and at a test per scenario this suite's login
   // volume alone tripped the server's rate limiter hard enough to fail
   // unrelated specs running beside it. The coverage is identical; the scenario
   // name rides on each assertion so a failure still says which shape broke.
-  for (const engine of ['classic', 'canvas'] as const) {
-    test(`${engine}: renders every payload shape without errors`, async ({ page }) => {
+  test('Canvas renders every payload shape without errors', async ({ page }) => {
       const watch = watchErrors(page);
       const serve = await serveFixture(page, SCENARIOS[0].payload);
-      await page.evaluate((e) => (window as any).cfCascadeSetEngine(e), engine);
 
       for (const scenario of SCENARIOS) {
         serve(scenario.payload);
         await openChart(page);
 
-        const where = `${engine} · ${scenario.name}`;
+        const where = `Canvas · ${scenario.name}`;
         const n = (scenario.payload.candles as unknown[]).length;
         if (!scenario.drawsGeometry) {
           // No candles is a legitimate state, not a failure — it must say so in
@@ -289,68 +275,12 @@ test.describe('Cascade chart', () => {
           // The legend is part of the chart: without its colour key the drawing
           // cannot be read at all.
           await expect(page.locator('.cf-cascade-chart-legend'), where).toBeVisible();
-          if (engine === 'canvas') await canvasIsPainted(page, where, n);
-          else await svgIsPainted(page, n, where);
+          await canvasIsPainted(page, where, n);
         }
 
         expect(watch.take(), `console/page errors while rendering ${where}`).toEqual([]);
         await page.evaluate(() => (window as any).cfCascadeHideChart());
       }
-    });
-  }
-
-  // The things the chart exists to SAY, rather than merely that it drew. One
-  // test, four subjects, for the same login-volume reason as the sweeps.
-  test('classic: says what the drawing means', async ({ page }) => {
-    const watch = watchErrors(page);
-    const serve = await serveFixture(page, chartPayload());
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
-    await openChart(page);
-
-    const body = page.locator('#cf-cascade-chart-body');
-    // The left gutter carries the levels. These are the labels the chart exists
-    // to show — the mother high, both fib anchors, and each funded buy level
-    // with the dollars resting on it.
-    await expect(body, 'gutter labels').toContainText('MOTHER');
-    await expect(body, 'gutter labels').toContainText('AVG ENTRY');
-    await expect(body, 'gutter labels').toContainText('TARGET');
-    await expect(body.locator('svg text', { hasText: /^\d+ \(/ }).first(), 'fib level labels').toBeVisible();
-    await expect(body.locator('svg text', { hasText: /\$/ }).first(), 'dollars on funded levels').toBeVisible();
-    // The active trendline is starred so it can be told from the retired ones.
-    await expect(body.locator('svg text', { hasText: '★' }), 'active trendline mark').toHaveCount(1);
-
-    // Journal mode: the picture of the trade, without the live detail tables.
-    await page.evaluate(() => (window as any).cfCascadeHideChart());
-    await openChart(page, 'journal');
-    await expect(page.locator('#cf-cascade-chart-overlay')).toHaveClass(/cf-chart-journal/);
-    await expect(page.locator('.cf-cascade-chart-tables'), 'journal drops the tables').toHaveCount(0);
-    await svgIsPainted(page, 80, 'journal');
-    await page.evaluate(() => (window as any).cfCascadeHideChart());
-
-    // A chart that quietly drops structures is worse than a busy one, because
-    // there is no way to tell that it happened.
-    serve(chartPayload({
-      trendlines: [1, 2, 3, 4, 5].map((i) => trendline(i, i === 5)),
-      legs: [1, 2, 3, 4, 5].map((i) => leg(i, 60900 - i * 90, 60300 - i * 90)),
-    }));
-    await openChart(page);
-    await expect(page.locator('.cf-cascade-chart-legend'), 'draw cap is declared').toContainText('older hidden');
-    // Everything is still listed below, drawn or not.
-    await expect(page.locator('.cf-cascade-chart-tables'), 'hidden structures still listed')
-      .toContainText('Trendline 5');
-    await page.evaluate(() => (window as any).cfCascadeHideChart());
-
-    // Without the badge a closed trade reads as a live chart that has stopped
-    // updating — the same picture with the opposite meaning.
-    serve(chartPayload({
-      state: 'ENDED', frozen: true, snapshot: true,
-      exits: [{ t: T0 + 12000, price: 60800, round: 1, pnl: 42.5, avg_entry: 60500 }],
-    }));
-    await openChart(page);
-    await expect(page.locator('.cf-cascade-chart-legend'), 'frozen badge').toContainText('FROZEN RECORD');
-    await expect(page.locator('#cf-cascade-chart-body'), 'frozen exit label').toContainText('SOLD AT');
-
-    expect(watch.take()).toEqual([]);
   });
 
   test('canvas: paints the same chart structures and labels', async ({ page }) => {
@@ -394,7 +324,7 @@ test.describe('Cascade chart', () => {
     expect(watch.take()).toEqual([]);
   });
 
-  test('canvas: carries the Classic chart states through journal, draw-cap, fullscreen and theme changes', async ({ page }) => {
+  test('Canvas carries chart state through journal, draw-cap, fullscreen and theme changes', async ({ page }) => {
     const watch = watchErrors(page);
     const serve = await serveFixture(page, chartPayload());
     await page.evaluate(() => (window as any).cfCascadeSetEngine('canvas'));
@@ -432,32 +362,19 @@ test.describe('Cascade chart', () => {
     expect(watch.take()).toEqual([]);
   });
 
-  test('Canvas and Classic can be compared on the same fixture in both themes', async ({ page }, testInfo) => {
+  test('Canvas paints the same fixture in both themes', async ({ page }, testInfo) => {
     const serve = await serveFixture(page, chartPayload());
     const body = page.locator('#cf-cascade-chart-body');
     for (const theme of ['dark', 'light']) {
-      // A screenshot is useful only when both renderers received the identical
-      // payload. The fixture route remains installed while the engine flips.
       await page.evaluate(([nextTheme]) => document.documentElement.setAttribute('data-theme', nextTheme), [theme]);
-      for (const engine of ['classic', 'canvas'] as const) {
-        await page.evaluate((nextEngine) => (window as any).cfCascadeSetEngine(nextEngine), engine);
-        await openChart(page);
-        const path = testInfo.outputPath(`cascade-${theme}-${engine}.png`);
-        await body.screenshot({ path });
-        await testInfo.attach(`cascade ${theme} ${engine}`, { path, contentType: 'image/png' });
-        // Assert, do not merely photograph. Without this the test passed while
-        // the Canvas renderer was crashing — it captured four pictures of a
-        // blank panel and reported success, which is worse than no test at all.
-        if (engine === 'canvas') await canvasIsPainted(page, `${theme} canvas`);
-        else await svgIsPainted(page, 80, `${theme} classic`);
-        await page.evaluate(() => (window as any).cfCascadeHideChart());
-      }
+      await openChart(page);
+      const path = testInfo.outputPath(`cascade-${theme}.png`);
+      await body.screenshot({ path });
+      await testInfo.attach(`cascade ${theme}`, { path, contentType: 'image/png' });
+      await canvasIsPainted(page, `${theme} canvas`);
+      await page.evaluate(() => (window as any).cfCascadeHideChart());
     }
-    // Keep the rest of the suite independent from this visual exercise.
-    await page.evaluate(() => {
-      document.documentElement.setAttribute('data-theme', 'auto');
-      (window as any).cfCascadeSetEngine('classic');
-    });
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'auto'));
     serve(chartPayload());
   });
 
@@ -690,88 +607,23 @@ test.describe('Cascade chart', () => {
       'poll leaves journal snapshot untouched').toBe(journalBefore);
   });
 
-  test('the engine toggle switches renderers and sticks', async ({ page }) => {
+  test('Canvas is the only chart renderer', async ({ page }) => {
     const watch = watchErrors(page);
     await serveFixture(page, chartPayload());
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
     await openChart(page);
-
-    await expect(page.locator('#cf-cascade-chart-body svg')).toBeVisible();
-    await expect(page.locator('#cf-cascade-zoom-group')).toBeVisible();
-
-    await page.locator('#cf-cascade-chart-engine [data-engine="canvas"]').click();
     await canvasIsPainted(page);
     await expect(page.locator('#cf-cascade-chart-body svg')).toHaveCount(0);
-    // Canvas owns compatible centre zoom and fit actions, so the shared
-    // controls stay available rather than sitting there dead.
+    await expect(page.locator('#cf-cascade-chart-engine')).toHaveCount(0);
     await expect(page.locator('#cf-cascade-zoom-group')).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem('cf-chart-engine-v2'))).toBe('canvas');
 
-    // Closing must release the canvas, or every open leaks a ResizeObserver
-    // onto a detached node.
     await page.evaluate(() => (window as any).cfCascadeHideChart());
     expect(await page.evaluate(() => (window as any)._cfChartCanvas === null)).toBe(true);
-
-    // Errors are checked HERE, before the reload below: navigating away aborts
-    // whatever the app had in flight, and its loaders log those rejections.
-    // That is this test moving the page, not the chart failing.
-    expect(watch.take()).toEqual([]);
-
-    // The choice survives a reload — that is what makes flipping back instant.
-    await page.reload();
-    await page.waitForFunction(() => typeof (window as any).cfCascadeShowChart === 'function');
-    expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('canvas');
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
-  });
-
-  test('Canvas is the default, and a stale Classic pick cannot pin you to it', async ({ page }) => {
-    const watch = watchErrors(page);
-    await serveFixture(page, chartPayload());
-
-    // This test is built out of reloads, and a navigation aborts whatever the
-    // app had in flight — its loaders log those rejections. Discard the buffer
-    // after each reload so the assertion at the end covers the CHART, which is
-    // what this test is about, rather than this test moving the page.
-    async function reload() {
-      await page.reload();
-      await page.waitForFunction(() => typeof (window as any).cfCascadeShowChart === 'function');
-      watch.take();
-    }
-
-    // Fresh session, nothing stored: Canvas draws the chart.
-    await page.evaluate(() => { localStorage.removeItem('cf-chart-engine-v2'); });
-    await reload();
-    expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('canvas');
-    await openChart(page);
-    await canvasIsPainted(page, 'default engine');
-    await expect(page.locator('#cf-cascade-chart-body svg')).toHaveCount(0);
-    await page.evaluate(() => (window as any).cfCascadeHideChart());
-
-    // The whole reason the key is versioned: 'classic' stored under the old v1
-    // key was an answer to "do you want to opt in?", a question no longer being
-    // asked. It must not outrank the new default and strand someone on Classic.
-    await page.evaluate(() => {
-      localStorage.setItem('cf-chart-engine', 'classic');
-      localStorage.removeItem('cf-chart-engine-v2');
-    });
-    await reload();
-    expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('canvas');
-
-    // A Classic pick made from here on is stored under v2 and IS honoured —
-    // the escape hatch has to keep working, or the toggle is decoration.
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
-    await reload();
-    expect(await page.evaluate(() => (window as any)._CF_CHART_ENGINE)).toBe('classic');
-    await openChart(page);
-    await svgIsPainted(page, 80, 'explicit Classic pick');
-
     expect(watch.take()).toEqual([]);
   });
 
   test('refresh and timeframe changes redraw cleanly', async ({ page }) => {
     const watch = watchErrors(page);
     await serveFixture(page, chartPayload());
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
     await openChart(page);
 
     // The buttons are rebuilt from what the campaign can actually be drawn at.
@@ -781,19 +633,18 @@ test.describe('Cascade chart', () => {
     // renderer leaves behind must not accumulate.
     for (let i = 0; i < 3; i++) {
       await page.evaluate(() => (window as any).cfCascadeRefreshChart());
-      await svgIsPainted(page, 80);
+      await canvasIsPainted(page, 'refresh', 80);
     }
-    expect(await page.locator('#cf-cascade-chart-body svg').count()).toBe(1);
 
     await page.locator('#cf-cascade-chart-tf [data-tf="15m"]').click();
-    await svgIsPainted(page, 80);
+    await canvasIsPainted(page, '15m', 80);
     await page.locator('#cf-cascade-chart-tf [data-tf="auto"]').click();
-    await svgIsPainted(page, 80);
+    await canvasIsPainted(page, 'auto', 80);
 
     // Expanding must not throw, and must leave a chart on screen.
     await page.locator('#cf-cascade-fullscreen-btn').click();
     await expect(page.locator('#cf-cascade-chart-panel')).toHaveClass(/cf-cascade-chart-fs/);
-    await svgIsPainted(page, 80);
+    await canvasIsPainted(page, 'fullscreen', 80);
     await page.locator('#cf-cascade-fullscreen-btn').click();
 
     expect(watch.take()).toEqual([]);
@@ -811,9 +662,8 @@ test.describe('Cascade chart', () => {
       drilled_in: true,
       timeframe_options: ['5m', '15m', '1h', '4h', '1d'],
     }));
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
     await openChart(page);
-    await svgIsPainted(page, 80);
+    await canvasIsPainted(page, 'drilled in', 80);
 
     const meta = page.locator('#cf-cascade-chart-meta');
     await expect(meta).toContainText('mother candle is off-screen left');
@@ -827,7 +677,7 @@ test.describe('Cascade chart', () => {
     // And a normal payload must not pick up the drilled-in wording.
     await serveFixture(page, chartPayload());
     await page.evaluate(() => (window as any).cfCascadeRefreshChart());
-    await svgIsPainted(page, 80);
+    await canvasIsPainted(page, 'normal range', 80);
     await expect(meta).toContainText('since mother candle');
     await expect(meta).not.toContainText('off-screen left');
 
@@ -843,7 +693,6 @@ test.describe('Cascade chart', () => {
         body: JSON.stringify({ status: 'error', message: 'Campaign gone not found' }),
       }),
     );
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
     await openChart(page);
     await expect(page.locator('#cf-cascade-chart-body')).toContainText('not found');
     expect(watch.take()).toEqual([]);
@@ -866,22 +715,14 @@ test.describe('Cascade chart', () => {
       || (status.closed_campaigns || [])[0]?.campaign_id;
     test.skip(!id, 'no cascade campaign on this box to chart');
 
-    for (const engine of ['classic', 'canvas'] as const) {
-      await page.evaluate((e) => (window as any).cfCascadeSetEngine(e), engine);
-      await page.evaluate((cid) => (window as any).cfCascadeShowChart(cid), id!);
-      await expect(page.locator('#cf-cascade-chart-overlay')).toBeVisible();
-
-      const body = page.locator('#cf-cascade-chart-body');
-      // A campaign with no candles yet is a legitimate answer; anything else
-      // must be a drawn chart.
-      if (!(await body.innerText()).includes('No candles replayed yet')) {
-        await expect(page.locator('.cf-cascade-chart-legend')).toBeVisible();
-        if (engine === 'canvas') await canvasIsPainted(page);
-        else await svgIsPainted(page, 1);
-      }
-      await page.evaluate(() => (window as any).cfCascadeHideChart());
+    await page.evaluate((cid) => (window as any).cfCascadeShowChart(cid), id!);
+    await expect(page.locator('#cf-cascade-chart-overlay')).toBeVisible();
+    const body = page.locator('#cf-cascade-chart-body');
+    if (!(await body.innerText()).includes('No candles replayed yet')) {
+      await expect(page.locator('.cf-cascade-chart-legend')).toBeVisible();
+      await canvasIsPainted(page, 'real campaign');
     }
-    await page.evaluate(() => (window as any).cfCascadeSetEngine('classic'));
+    await page.evaluate(() => (window as any).cfCascadeHideChart());
     expect(watch.take()).toEqual([]);
   });
 });

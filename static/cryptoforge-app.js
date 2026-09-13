@@ -9158,7 +9158,7 @@ async function _cfLoadCascadeStatusOnce(showToast) {
     cfRenderCascadeStatus(data);
     // The status poll is the source of live Cascade changes. Canvas is the
     // only renderer whose refresh preserves its own viewport, so refresh an
-    // open full chart from this same poll without altering Classic's established
+    // open full chart from this same poll without altering the established
     // SVG behaviour or journal snapshots.
     await _cfCascadeRefreshOpenCanvasChartFromPoll();
     if (showToast) cfToast('Cascade status refreshed', 'success');
@@ -11530,61 +11530,23 @@ function _cfChartPalette() {
   return theme === 'light' ? _CF_CHART_LIGHT : _CF_CHART_DARK;
 }
 
-// ── Chart engine: Classic (SVG) or Canvas ────────────────────
-// Two renderers live side by side and take the identical payload. Classic is
-// the fixed-viewBox SVG that has always drawn this chart; Canvas is the
-// device-pixel-ratio-aware rewrite, built up phase by phase. Nothing is shared
-// between them but the payload and the palette.
-//
-// Canvas is THE chart as of 2026-07-30, after Phil accepted it on production.
-// Classic is kept — not as a fallback anyone should need, but because a chart
-// is how the engine's geometry gets verified against the real market, and
-// having a second opinion one click away costs nothing.
-//
-// The storage key is deliberately versioned. While Canvas was opt-in, choosing
-// Classic wrote 'classic' under the v1 key — and that stored choice would have
-// silently outranked this new default, leaving anyone who had ever pressed
-// Classic pinned to it with no sign that anything had changed. Bumping the key
-// retires those answers to a question that is no longer being asked; a Classic
-// pick made from here on is stored under v2 and is honoured.
-var _CF_CHART_ENGINES = ['classic', 'canvas'];
-var _CF_CHART_ENGINE_KEY = 'cf-chart-engine-v2';
-var _CF_CHART_ENGINE = (function () {
-  try {
-    var saved = localStorage.getItem(_CF_CHART_ENGINE_KEY);
-    if (_CF_CHART_ENGINES.indexOf(saved) >= 0) return saved;
-  } catch (err) { /* Safari private mode throws on localStorage */ }
-  return 'canvas';
-})();
+// ── Chart renderer: Canvas ──────────────────────────────────
+// Campaign windows use one device-pixel-ratio-aware Canvas renderer.
+var _CF_CHART_ENGINE = 'canvas';
 
 // The payload of the chart currently on screen. Flipping the engine redraws
 // from this rather than refetching: the two renderers have to be compared on
 // the SAME data, and a fresh fetch between them would defeat the comparison.
 var _cfCascadeChartData = null;
 
-function cfCascadeSetEngine(engine) {
-  var picked = _CF_CHART_ENGINES.indexOf(engine) >= 0 ? engine : 'classic';
-  _CF_CHART_ENGINE = picked;
-  try { localStorage.setItem(_CF_CHART_ENGINE_KEY, picked); } catch (err) {}
-  _cfCascadeMarkEngine();
+// Retained as a harmless compatibility entry point for stale page scripts.
+// Canvas remains the only renderer regardless of the requested value.
+function cfCascadeSetEngine() {
+  _CF_CHART_ENGINE = 'canvas';
   _cfCascadeRedrawChart();
 }
 
-function _cfCascadeMarkEngine() {
-  var options = document.querySelectorAll('#cf-cascade-chart-engine .cf-tf-option[data-engine]');
-  for (var i = 0; i < options.length; i++) {
-    var on = options[i].getAttribute('data-engine') === _CF_CHART_ENGINE;
-    options[i].classList.toggle('is-active', on);
-    options[i].setAttribute('aria-checked', on ? 'true' : 'false');
-  }
-  // Canvas now owns compatible centre-zoom / fit actions, so keep the shared
-  // controls visible. The implementation below dispatches by engine; neither
-  // renderer receives the other's viewport logic.
-  var zoom = document.getElementById('cf-cascade-zoom-group');
-  if (zoom) zoom.style.display = '';
-}
-
-// Redraw what is already on screen with whatever renderer is selected.
+// Redraw what is already on screen with Canvas.
 function _cfCascadeRedrawChart() {
   var body = document.getElementById('cf-cascade-chart-body');
   if (!body || !_cfCascadeChartData) return;
@@ -11593,16 +11555,9 @@ function _cfCascadeRedrawChart() {
   _cfChartMountRenderer(_cfCascadeChartData);
 }
 
-// Everything a renderer needs done AFTER its markup is in the DOM. Every path
-// that writes the chart body goes through here, so neither engine can be left
-// half-wired by a code path that forgot one of its setup calls.
+// Every path that writes the chart body mounts the same Canvas renderer.
 function _cfChartMountRenderer(d) {
-  if (_CF_CHART_ENGINE === 'canvas') {
-    _cfChartCanvasMount(d);
-    return;
-  }
-  _cfChartBindZoom();
-  cfCascadeZoomReset();
+  _cfChartCanvasMount(d);
 }
 
 function _cfCascadeChartSvg(d) {
@@ -11998,7 +11953,7 @@ function _cfChartCanvasStructures(d) {
   var legs = allLegs.slice(-_CF_CHART_MAX_STRUCTURES);
   var allTls = Array.isArray(d.trendlines) ? d.trendlines : [];
   var tls = allTls.slice(-_CF_CHART_MAX_STRUCTURES);
-  // Preserve Classic's one important exception: the active line is never
+  // Preserve the important exception: the active line is never
   // hidden just because later, retired structures filled the three-line cap.
   var active = allTls.filter(function (tl) { return tl && tl.active; })[0];
   if (active && tls.indexOf(active) === -1) tls = [active].concat(tls).slice(-_CF_CHART_MAX_STRUCTURES);
@@ -12017,7 +11972,7 @@ function _cfChartCanvasBarSeconds(d, candles) {
   return Math.max(Number(match[1]) * units[match[2]], 1);
 }
 
-// Initial fit is intentionally the same price rule as Classic: candles,
+// Initial fit uses the established price rule: candles,
 // mother high, displayed leg touch highs/lows and target, then 6% breathing
 // room. Price and time are stored separately so later axis dragging is real,
 // independent scaling rather than a viewBox trick.
@@ -12137,7 +12092,7 @@ function _cfCascadeRefreshCanvasBody(d, saved) {
 function _cfChartCanvasProjection(c) {
   var v = c.viewport;
   if (!v) return null;
-  // Classic's 150/62/26/34 gutters live in a 1440×660 viewBox. Scale that
+// The established 150/62/26/34 gutters live in a 1440×660 viewBox. Scale that
   // exact geometry to the real Canvas surface (rather than retaining 150 CSS
   // pixels at every width), so both engines put the same payload in the same
   // horizontal lane. The floors keep labels readable on a narrow screen.
@@ -12393,7 +12348,7 @@ function _cfChartCanvasLabels(c, p, labels) {
     if (label.kind === 'gutter') {
       var y = label.y;
       // Do not "clean this up" into an exact 10px shift. The 0.5px overshoot
-      // is the Classic ETH-freeze fix: exact 10 can remain 9.9999999998 apart
+      // is the ETH-freeze fix: exact 10 can remain 9.9999999998 apart
       // in floating point and loop forever in the next collision check.
       for (var pass = 0, moved = true; moved && pass <= slots.length; pass++) {
         moved = false;
@@ -12724,16 +12679,11 @@ function _cfCascadeChartHtml(d) {
     // and the fib-colour key that only matter alongside the live detail tables.
     + (journal ? '' : ('<br>Fib 1 is blue, 2 green, 3 red — only the newest three are drawn. The purple MC column is the mother candle.'
       + ' Labels are on the left, and each funded buy level carries the dollars resting on it.'
-      + (_CF_CHART_ENGINE === 'canvas'
-        // Canvas is the chart now, so its controls are described as the way the
-        // chart works — not as a feature list for an alternative renderer.
-        ? ' Drag to pan and the wheel zooms time about the cursor. Drag the price or time axis to stretch that'
-          + ' axis alone; double-click an axis to reset it, or the chart to fit everything. Live refreshes keep'
-          + ' wherever you have panned to, and only follow the latest bar if you were already at the right edge.'
-        : ' Classic (SVG): the wheel zooms about the cursor, the +/&minus; buttons zoom about the centre, and'
-          + ' dragging pans once zoomed in. Every refresh resets the view — Canvas is the one that does not.')))
+      + ' Drag to pan and the wheel zooms time about the cursor. Drag the price or time axis to stretch that'
+      + ' axis alone; double-click an axis to reset it, or the chart to fit everything. Live refreshes keep'
+      + ' wherever you have panned to, and only follow the latest bar if you were already at the right edge.'))
     + '</div>';
-  var html = legend + (_CF_CHART_ENGINE === 'canvas' ? _cfCascadeChartCanvasHtml() : _cfCascadeChartSvg(d));
+  var html = legend + _cfCascadeChartCanvasHtml();
   // The journal wants just the picture of how the trade was taken — the
   // trendline / leg / order tables belong to the live cascade view only.
   if (!journal) html += '<div class="cf-cascade-chart-tables">' + _cfCascadeChartTables(d) + '</div>';
@@ -12834,10 +12784,8 @@ function _cfChartApplyZoom() {
 
 function cfCascadeZoom(factor, resetPan, anchor) {
   if (_CF_CHART_ENGINE === 'canvas') {
-    // Classic stores a magnification (1.4 means a smaller viewBox); Canvas
-    // stores the visible time span (so the same action is its reciprocal).
-    // Convert at this shared-control boundary and leave cursor-wheel Canvas
-    // factors in their native time-span convention below.
+    // Canvas stores the visible time span, so the toolbar magnification is
+    // converted to its reciprocal at this shared-control boundary.
     _cfChartCanvasZoom(factor === 0 ? 0 : 1 / Number(factor), resetPan, anchor);
     return;
   }
@@ -13052,14 +13000,12 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
   document.body.classList.add('cf-chart-fs-open');
   // A Canvas refresh keeps its real host mounted through the fetch. Every other
   // open/re-render retains the established teardown-before-replace behaviour.
-  var keepCanvas = !!(canvasRefreshState && _CF_CHART_ENGINE === 'canvas'
+  var keepCanvas = !!(canvasRefreshState
     && _cfChartCanvas && _cfChartCanvas.host && _cfChartCanvas.host.isConnected);
   if (!keepCanvas) _cfChartCanvasTeardown();
-  _cfCascadeMarkEngine();
   if (!keepCanvas) body.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">Loading chart…</div>';
   try {
-    // One chart, two engines feeding it. The 30-70 speaks the same payload, so
-    // it gets the same crosshair, zoom, timeframes and every future fix.
+    // The 30-70 uses the same Canvas payload, crosshair, zoom and timeframes.
     var url = _cfChartSource === 'rule3070'
       ? '/api/rule3070/chart?mother=' + encodeURIComponent(campaignId)
         + '&symbol=' + encodeURIComponent(_cfR37ActiveSymbol || 'BTCUSDT')
@@ -13122,17 +13068,14 @@ async function cfCascadeShowChart(campaignId, mode, canvasRefreshState, endTs) {
 
 function cfCascadeRefreshChart() {
   if (!_cfCascadeChartId) return;
-  // Classic keeps its established refresh semantics. Canvas refreshes capture
-  // only view state, never payload/engine state, before fetching the new chart.
-  var saved = _CF_CHART_ENGINE === 'canvas' ? _cfChartCanvasRefreshState() : null;
+  var saved = _cfChartCanvasRefreshState();
   return cfCascadeShowChart(_cfCascadeChartId, _cfCascadeChartMode, saved);
 }
 
 function _cfCascadeRefreshOpenCanvasChartFromPoll() {
   var overlay = document.getElementById('cf-cascade-chart-overlay');
   var canvas = _cfChartCanvas;
-  if (_cfCascadePollChartRefreshInFlight || _CF_CHART_ENGINE !== 'canvas'
-    || !_cfCascadeChartId || _cfCascadeChartMode === 'journal'
+  if (_cfCascadePollChartRefreshInFlight || !_cfCascadeChartId || _cfCascadeChartMode === 'journal'
     || !overlay || overlay.style.display === 'none'
     || !canvas || !canvas.host || !canvas.host.isConnected) {
     return Promise.resolve(false);
@@ -14799,7 +14742,7 @@ function _cfR37ChartHtml(d, P) {
     + '<span style="color:' + P.sellMark + ';">▼ sold</span>'
     + (d.frozen ? ' &nbsp; <span class="admin-pill" data-state="info">FROZEN RECORD</span>' : '')
     + '</div>';
-  var html = legend + (_CF_CHART_ENGINE === 'canvas' ? _cfCascadeChartCanvasHtml() : _cfCascadeChartSvg(d));
+  var html = legend + _cfCascadeChartCanvasHtml();
   var buys = (r.buys || []).map(function (b) {
     return '<tr><td>' + _escapeHtml(b.when) + '</td><td>' + _escapeHtml(b.label) + '</td>'
       + '<td class="num">' + Number(b.price).toLocaleString('en-US') + '</td>'
