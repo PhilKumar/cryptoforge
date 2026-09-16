@@ -6619,9 +6619,19 @@ class CascadeEngine:
             parent.escalates and parent.start_timeframe == BASE_TIMEFRAME and candle.timeframe == BASE_TIMEFRAME
         )
         self._candles[child.campaign_id] = [candle] if seed_from_break else []
+        # "start" is one of the three levels app.py forwards to the phone. The
+        # barren-chain suppression below only ever silenced _alert, so every
+        # suppressed restart STILL pushed two notifications — this line and the
+        # "alert suppressed" line under it — and the dedupe key could not catch
+        # either, because the campaign number and the restart count make every
+        # message text unique. 17-Sep-2026: Telegram and the site alert stack
+        # were being flooded by exactly the chain this code says it silences.
+        # A suppressed restart is logged at a level nothing forwards, so it
+        # still appears in the campaign's event log and on the Cascade page.
+        restart_level = "start" if barren < 2 else "restart"
         self._log_event(
             child,
-            "start",
+            restart_level,
             f"Auto-started from the break of campaign #{parent.seq} — new mother candle "
             f"high {candle.high:,.2f} / low {candle.low:,.2f} ({child.mode.upper()}, "
             f"generation {child.generation}), restarting on {restart_timeframe}"
@@ -6654,7 +6664,7 @@ class CascadeEngine:
         else:
             self._log_event(
                 child,
-                "start",
+                restart_level,
                 f"Restart {barren} of a barren chain on this move — alert suppressed; "
                 f"nothing has drawn a fib since campaign #{child.seq - barren + 1}.",
             )
