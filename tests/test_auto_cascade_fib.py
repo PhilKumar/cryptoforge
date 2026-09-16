@@ -83,7 +83,7 @@ class FakeBroker:
 
 
 class FakeEngine:
-    def __init__(self, candles=None, candles_1m=None, broker=None):
+    def __init__(self, candles=None, candles_1m=None, broker=None, ticker_price=None):
         self.campaigns: Dict[str, FakeCampaign] = {}
         self.capital_groups: Dict[str, float] = {}
         self.broker = broker or FakeBroker()
@@ -102,6 +102,13 @@ class FakeEngine:
             last = self._candles[-1]
             candles_1m = [FakeCandle(last.timestamp, last.close, last.close, last.close, last.close)]
         self._candles_1m = candles_1m or []
+        # The ticker lane: the guard's SECOND observation. None means "no
+        # ticker", which together with an empty 1m lane is the only state that
+        # blocks a start. Defaults to the last 5m close for the same reason the
+        # 1m lane does — a readable tape is the normal case.
+        if ticker_price is None and self._candles:
+            ticker_price = float(self._candles[-1].close)
+        self.ticker_price = ticker_price
         self.start_error: Optional[str] = None
         self.fetched_from = None
 
@@ -120,6 +127,11 @@ class FakeEngine:
         if timeframe == "1m":
             return self._candles_1m
         return self._candles
+
+    async def _get_price(self, symbol, max_age: float = 4.0, venue=None):
+        if self.ticker_price is None:
+            raise RuntimeError("no ticker")
+        return float(self.ticker_price)
 
     async def start_campaign(self, **kwargs):
         if self.start_error:

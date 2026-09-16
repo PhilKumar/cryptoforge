@@ -88,6 +88,10 @@ LIVE_CEILING_USD = float(os.getenv("CRYPTOFORGE_AUTO_FIB_LIVE_MAX", "") or 2000.
 DISARMED_NOTE = "disarmed by CRYPTOFORGE_AUTO_FIB=0 on the server"
 
 SEED_COOLDOWN_SEC = 300  # one full 5m bar between starts — the churn brake
+# How far back the freshness guard will look for a 1m candle. Wide on purpose:
+# an illiquid pair (PAXG) prints no 1m candle in a minute with no trade, so a
+# short window reads as "unreadable" and would block the book for ever.
+TAPE_LOOKBACK_SEC = 6 * 3600
 TRIED_ANCHOR_LIMIT = 50  # how many used anchors a book remembers
 
 
@@ -728,30 +732,56 @@ class AutoCascadeFib:
             )
         return changed
 
-    async def _latest_1m_high(self, book: Book) -> Optional[float]:
-        """The last closed 1m candle's high — the freshest price we can hold.
+    async def _latest_tape_high(self, book: Book) -> float:
+        """The highest price the tape can be shown to have reached, right now.
 
-        The engine judges mother breaks on the live 1m tape, so an anchor is
-        only honest if it still stands above THIS, not merely above a 5m close
-        that can be five minutes stale. That gap is how the runaway's anchor
-        was already broken before its campaign existed.
+        The engine judges mother breaks on the live price, so an anchor is only
+        honest if it still stands above THAT, not merely above a 5m close that
+        can be five minutes stale. That gap is how the runaway's anchor was
+        already broken before its campaign existed.
 
-        Raises rather than returning None on a failed read. It used to swallow
-        everything and answer None, and the caller's guard was written
-        `if fresh_high is not None and ...` — so a single failed 1m fetch
-        turned the check OFF and let exactly the born-broken anchor through
-        that this method exists to stop. 17-Sep-2026: PAXGUSDT anchored a LIVE
-        line on a 4,303.43 high with the tape at ~4,357, then marched through
-        six generations replaying eight hours of history. Nothing was logged,
-        because the bare `except` said nothing. A guard that cannot read its
-        input must block, not wave the trade through.
+        Two independent observations, and the HIGHER wins, because either one
+        reaching the anchor is enough to make it broken:
+
+          · the newest closed 1m candle's high, over a wide window;
+          · the live ticker.
+
+        Raises only when NEITHER can be read. It used to swallow everything and
+        answer None, and the caller was written `if fresh_high is not None
+        and ...` — so one unreadable 1m fetch turned the check OFF and let
+        exactly the born-broken anchor through that this exists to stop.
+        17-Sep-2026: PAXGUSDT anchored a LIVE line on a 4,303.43 high with the
+        tape at ~4,357 and marched through six generations replaying eight
+        hours of history, silently, because the bare `except` said nothing.
+
+        The window is wide and the ticker is consulted for a second reason,
+        found the moment the strict version reached prod: PAXG is illiquid, so
+        a minute with no trade prints NO 1m candle at all, and "no candle in
+        the last 10 minutes" is its NORMAL state, not a fault. Demanding a
+        fresh 1m candle blocked that book permanently — a strategy that never
+        trades, which is a regression, not a fix. The ticker always answers.
         """
-        rows = await self.engine._fetch_closed_candles(
-            book.symbol, int(time.time()) - 600, timeframe="1m", venue=self._venue_broker(book.exchange)
-        )
-        if not rows:
-            raise RuntimeError(f"no closed 1m candle for {book.symbol} in the last 10 minutes")
-        return float(rows[-1].high)
+        observations: List[float] = []
+        venue = self._venue_broker(book.exchange)
+        try:
+            rows = await self.engine._fetch_closed_candles(
+                book.symbol, int(time.time()) - TAPE_LOOKBACK_SEC, timeframe="1m", venue=venue
+            )
+        except Exception as exc:
+            rows = []
+            _log.warning("[AUTO-FIB] %s: 1m tape unreadable (%s) — falling back to the ticker", book.symbol, exc)
+        if rows:
+            observations.append(float(rows[-1].high))
+        try:
+            price = float(await self.engine._get_price(book.symbol, venue=venue) or 0.0)
+        except Exception as exc:
+            price = 0.0
+            _log.warning("[AUTO-FIB] %s: ticker unreadable: %s", book.symbol, exc)
+        if price > 0:
+            observations.append(price)
+        if not observations:
+            raise RuntimeError(f"no 1m candle and no ticker price for {book.symbol} — the tape cannot be read")
+        return max(observations)
 
     def _line_timeframe(self, book: Book) -> str:
         """What a fresh line actually runs on: 5m, or the venue's floor —
@@ -806,15 +836,15 @@ class AutoCascadeFib:
                 book.note = f"live wallet cap ${book.wallet_cap_usd:,.0f} is over the ${LIVE_CEILING_USD:,.0f} ceiling"
                 return False
         try:
-            fresh_high = await self._latest_1m_high(book)
+            fresh_high = await self._latest_tape_high(book)
         except Exception as exc:
             # Cannot prove the anchor still stands above the tape, so it does
             # not get started. Waiting costs one monitor cycle; starting blind
             # costs a born-broken campaign that replays history generation by
             # generation. The anchor is NOT blacklisted — it may be fine next
             # tick — and the reason is said out loud rather than swallowed.
-            book.note = "cannot read the 1m tape — not starting a line until it is readable"
-            _log.warning("[AUTO-FIB] %s: no fresh 1m high, refusing to seed a line: %s", book.symbol, exc)
+            book.note = "cannot read the tape — not starting a line until it is readable"
+            _log.warning("[AUTO-FIB] %s: no readable tape, refusing to seed a line: %s", book.symbol, exc)
             return False
         if anchor.high <= fresh_high:
             # The 1m tape has already reached the anchor. Starting now would be

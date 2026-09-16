@@ -63,10 +63,41 @@ def test_an_honest_anchor_still_seeds():
 
 def test_a_tape_that_cannot_be_read_blocks_the_start():
     """THE BUG: no 1m candles used to mean "skip the check"."""
-    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[])
+    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[], ticker_price=0.0)
     driver = _driver(engine)
     assert asyncio.run(driver._seed_working_line(_book(driver))) is False
     assert engine.started == [], "a line was started without proving its anchor still stands"
+
+
+def test_an_illiquid_pair_with_no_recent_1m_candle_still_trades():
+    """The regression the strict version shipped, caught on prod within a minute.
+
+    PAXG prints NO 1m candle in a minute with no trade, so "no candle in the
+    last 10 minutes" is its NORMAL state. Demanding one blocked the live book
+    for ever — a strategy that never trades. The ticker is the second
+    observation, and it always answers.
+    """
+    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[], ticker_price=100.0)
+    driver = _driver(engine)
+    assert asyncio.run(driver._seed_working_line(_book(driver))) is True
+    assert engine.started, "an honest anchor must still seed when only the ticker can be read"
+
+
+def test_the_ticker_alone_can_condemn_an_anchor():
+    """No 1m candle, but the ticker is already above the anchor: still refused."""
+    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[], ticker_price=111.0)
+    driver = _driver(engine)
+    assert asyncio.run(driver._seed_working_line(_book(driver))) is False
+    assert engine.started == [], "the ticker had already passed the anchor"
+
+
+def test_the_higher_of_the_two_observations_wins():
+    """A stale 1m candle below the anchor must not excuse a ticker above it."""
+    engine = FakeEngine(_rising_to_a_failed_high(), ticker_price=115.0)
+    engine._candles_1m = [FakeCandle(0, 100.0, 100.5, 99.5, 100.0)]  # stale, below
+    driver = _driver(engine)
+    assert asyncio.run(driver._seed_working_line(_book(driver))) is False
+    assert engine.started == [], "either observation reaching the anchor breaks it"
 
 
 def test_a_failing_1m_fetch_blocks_the_start():
@@ -79,6 +110,7 @@ def test_a_failing_1m_fetch_blocks_the_start():
         return engine._candles
 
     engine._fetch_closed_candles = boom
+    engine.ticker_price = None  # and the ticker is down too — nothing readable
     driver = _driver(engine)
     assert asyncio.run(driver._seed_working_line(_book(driver))) is False
     assert engine.started == []
@@ -86,20 +118,21 @@ def test_a_failing_1m_fetch_blocks_the_start():
 
 def test_the_refusal_says_why_and_does_not_blacklist_the_anchor():
     """A transient read failure must not burn a good anchor for ever."""
-    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[])
+    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[], ticker_price=0.0)
     driver = _driver(engine)
     book = _book(driver)
     asyncio.run(driver._seed_working_line(book))
-    assert "1m" in book.note, f"the note must explain the refusal, got {book.note!r}"
+    assert "tape" in book.note, f"the note must explain the refusal, got {book.note!r}"
     assert book.tried_anchors == [], "a tape failure is not the anchor's fault"
 
 
 def test_the_anchor_is_seeded_once_the_tape_comes_back():
     """Blocking is a WAIT, not a stop: the next readable tick starts the line."""
-    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[])
+    engine = FakeEngine(_rising_to_a_failed_high(), candles_1m=[], ticker_price=0.0)
     driver = _driver(engine)
     book = _book(driver)
     assert asyncio.run(driver._seed_working_line(book)) is False
+    engine.ticker_price = 100.0
     last = engine._candles[-1]
     engine._candles_1m = [FakeCandle(last.timestamp, last.close, last.close, last.close, last.close)]
     book.next_seed_ts = 0  # the cooldown is not what is under test
