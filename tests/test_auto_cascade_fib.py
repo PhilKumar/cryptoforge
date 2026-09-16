@@ -89,8 +89,18 @@ class FakeEngine:
         self.broker = broker or FakeBroker()
         self.started: List[dict] = []
         self._candles = candles or []
-        # The 1m lane feeds the freshness guard. Empty means "no 1m data",
-        # which skips the guard — most tests are not about it.
+        # The 1m lane feeds the freshness guard. It used to default to EMPTY,
+        # and an empty read answered None, which switched the guard OFF — so
+        # every test here passed with no freshness check running at all, and
+        # the fail-open that caused the 17-Sep PAXGUSDT runaway was invisible.
+        # The guard now REFUSES when it cannot read the tape, so the default
+        # has to be a readable tape: one candle sitting at the last 5m close.
+        # latest_swing_high only ever returns a high ABOVE that close, so an
+        # honest anchor still seeds; a test that wants the guard to trip
+        # passes its own 1m candle with a high at or above the anchor.
+        if candles_1m is None and self._candles:
+            last = self._candles[-1]
+            candles_1m = [FakeCandle(last.timestamp, last.close, last.close, last.close, last.close)]
         self._candles_1m = candles_1m or []
         self.start_error: Optional[str] = None
         self.fetched_from = None

@@ -735,14 +735,23 @@ class AutoCascadeFib:
         only honest if it still stands above THIS, not merely above a 5m close
         that can be five minutes stale. That gap is how the runaway's anchor
         was already broken before its campaign existed.
+
+        Raises rather than returning None on a failed read. It used to swallow
+        everything and answer None, and the caller's guard was written
+        `if fresh_high is not None and ...` — so a single failed 1m fetch
+        turned the check OFF and let exactly the born-broken anchor through
+        that this method exists to stop. 17-Sep-2026: PAXGUSDT anchored a LIVE
+        line on a 4,303.43 high with the tape at ~4,357, then marched through
+        six generations replaying eight hours of history. Nothing was logged,
+        because the bare `except` said nothing. A guard that cannot read its
+        input must block, not wave the trade through.
         """
-        try:
-            rows = await self.engine._fetch_closed_candles(
-                book.symbol, int(time.time()) - 600, timeframe="1m", venue=self._venue_broker(book.exchange)
-            )
-        except Exception:
-            return None
-        return float(rows[-1].high) if rows else None
+        rows = await self.engine._fetch_closed_candles(
+            book.symbol, int(time.time()) - 600, timeframe="1m", venue=self._venue_broker(book.exchange)
+        )
+        if not rows:
+            raise RuntimeError(f"no closed 1m candle for {book.symbol} in the last 10 minutes")
+        return float(rows[-1].high)
 
     def _line_timeframe(self, book: Book) -> str:
         """What a fresh line actually runs on: 5m, or the venue's floor —
@@ -796,8 +805,18 @@ class AutoCascadeFib:
             if book.wallet_cap_usd > LIVE_CEILING_USD:
                 book.note = f"live wallet cap ${book.wallet_cap_usd:,.0f} is over the ${LIVE_CEILING_USD:,.0f} ceiling"
                 return False
-        fresh_high = await self._latest_1m_high(book)
-        if fresh_high is not None and anchor.high <= fresh_high:
+        try:
+            fresh_high = await self._latest_1m_high(book)
+        except Exception as exc:
+            # Cannot prove the anchor still stands above the tape, so it does
+            # not get started. Waiting costs one monitor cycle; starting blind
+            # costs a born-broken campaign that replays history generation by
+            # generation. The anchor is NOT blacklisted — it may be fine next
+            # tick — and the reason is said out loud rather than swallowed.
+            book.note = "cannot read the 1m tape — not starting a line until it is readable"
+            _log.warning("[AUTO-FIB] %s: no fresh 1m high, refusing to seed a line: %s", book.symbol, exc)
+            return False
+        if anchor.high <= fresh_high:
             # The 1m tape has already reached the anchor. Starting now would be
             # born broken — the runaway's opening move. Do not blacklist it:
             # if price falls back below, this high becomes honest again.
