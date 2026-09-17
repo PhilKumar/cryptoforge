@@ -175,6 +175,9 @@ async def _shutdown_runtime_engines() -> None:
     scalp_engine = globals().get("_scalp_engine")
     if scalp_engine is not None:
         await _shutdown_step("scalp engine", scalp_engine.shutdown)
+        # Routine Scalp saves are queued now, so the last word is written here,
+        # straight from the engine, before the process goes.
+        await _shutdown_step("persist scalp runtime", lambda: _persist_scalp_runtime_snapshot(scalp_engine))
     cascade_engine = globals().get("_cascade_engine")
     if cascade_engine is not None:
         # Stop the coalescing writer FIRST so it cannot be mid-write against
@@ -7977,6 +7980,9 @@ def _snapshot_scalp_runtime(status: dict) -> dict:
 
 def _persist_scalp_runtime_snapshot(engine: ScalpEngine, symbol_hint: str = "") -> None:
     try:
+        # A deliberate write goes through, and drops any older queued copy so the
+        # writer cannot land it on top of this one afterwards.
+        _drop_pending_snapshot(_BUCKET_SCALP_RUNTIME)
         _save_scalp_runtime(_snapshot_scalp_runtime(engine.get_status(symbol_hint)))
     except Exception as exc:
         _logger.error("[SCALP] Failed to persist runtime snapshot: %s", exc)
@@ -8114,7 +8120,12 @@ def _scalp_persist_trade(trade: dict) -> None:
 
 async def _broadcast_scalp_update(status: dict) -> None:
     try:
-        _save_scalp_runtime(_snapshot_scalp_runtime(status))
+        # Queued, not written. This runs on every Scalp update, on the ONE event
+        # loop, and the SQLite write was the single biggest thing holding it on
+        # 17-Sep-2026: 7 of 40 py-spy samples of the main thread sat in
+        # _save_scalp_runtime -> store.put, while /api/health took 9 s. The
+        # coalescing writer keeps only the newest document, off the loop.
+        _queue_runtime_snapshot(_BUCKET_SCALP_RUNTIME, _snapshot_scalp_runtime(status))
     except Exception as exc:
         _logger.error("[SCALP] Failed to persist runtime state: %s", exc)
     payload = {"source": "scalp", "type": "scalp_status", "status": status}
@@ -9018,21 +9029,72 @@ def _cascade_persist_closed(campaign: dict) -> None:
 # announced every paper fill would bury the one alert worth waking up for.
 
 
+# What the AUTOMATIC strategies (Cascade-Auto, V-Rule) may interrupt Phil for.
+# They start, restart, escalate and retire campaigns by themselves all day, and
+# every one of those used to reach the phone and the alert stack as if it were a
+# trade. 17-Sep-2026, Phil: "I am getting wrong telegram alerts that it is
+# cascade trade" — in the hour before, every alert was a Cascade-Auto campaign
+# starting, restarting or "Closed on mother break" with Avg entry — : nothing
+# had been bought. Only money moving (a fill, a target, a failed order or sale,
+# a position that vanished) and the engine-wide alarms reach the phone now. The
+# hand-driven Cascade is unchanged: Phil starts those campaigns himself.
+_STRATEGY_QUIET_ALERTS = frozenset(
+    {
+        "Auto-restarted",
+        "Minor MC retired at the break",
+        "Escalated timeframe",
+        "Restart chain stopped",
+    }
+)
+_STRATEGY_EVENT_LEVELS = frozenset({"error"})
+
+
 def _strategy_event(event: dict) -> None:
-    """A strategy engine's event log line. Notified only when money moved.
+    """A strategy engine's event log line. Notified only when something FAILED.
+
+    Its "start" and "stop" lines are the strategy running itself — they stay in
+    the campaign's own event log, which the strategy's page reads, and never
+    reach the alert stack.
 
     Deliberately does NOT append to _BUCKET_CASCADE_EVENTS: that bucket is the
-    Cascade page's own log. The line is already kept on the campaign's
-    `event_log`, which the strategy's page reads.
+    Cascade page's own log.
     """
-    if str((event or {}).get("mode") or "") != "live":
+    event = event or {}
+    if str(event.get("mode") or "") != "live":
+        return
+    if str(event.get("level") or "").lower() not in _STRATEGY_EVENT_LEVELS:
         return
     _cascade_notify(event)
 
 
+def _strategy_alert(title: str, body: str, level: str = "warn") -> None:
+    """A strategy engine's alert, minus the ones about its own bookkeeping."""
+    what = str(title or "").rsplit(" — ", 1)[-1].strip()
+    if what in _STRATEGY_QUIET_ALERTS:
+        _logger.info("[STRATEGY] not alerting (bookkeeping, no money moved): %s", title)
+        return
+    _cascade_alert(title, body, level)
+
+
+def _campaign_ever_traded(campaign: dict) -> bool:
+    """Did this campaign ever hold coin? A close with nothing bought is not a trade."""
+    campaign = campaign or {}
+    if campaign.get("rounds") or campaign.get("all_fills"):
+        return True
+    for field in ("filled_base_qty", "residual_base_qty", "realized_pnl"):
+        try:
+            if abs(float(campaign.get(field) or 0.0)) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _strategy_closed(campaign: dict) -> None:
-    """A strategy engine's campaign ended — announce it if it was real money."""
+    """A strategy engine's campaign ended — announce it only if real money traded."""
     if str((campaign or {}).get("mode") or "") != "live":
+        return
+    if not _campaign_ever_traded(campaign):
         return
     _cascade_closed_alert(campaign)
 
@@ -9400,7 +9462,7 @@ def _get_auto_fib_engine() -> "CascadeEngine":
         eng = CascadeEngine(
             PaperOnlyBroker(delta),
             on_update=_persist_auto_fib_update,
-            on_alert=_cascade_alert,
+            on_alert=_strategy_alert,
             on_event=_strategy_event,
             on_campaign_closed=_strategy_closed,
             alerts_live_only=True,
@@ -9483,7 +9545,7 @@ def _get_vrule_engine() -> "CascadeEngine":
         eng = CascadeEngine(
             PaperOnlyBroker(delta, live_armed=LIVE_ARMED, arm_hint=LIVE_ARM_HINT),
             on_update=_persist_vrule_update,
-            on_alert=_cascade_alert,
+            on_alert=_strategy_alert,
             on_event=_strategy_event,
             on_campaign_closed=_strategy_closed,
             alerts_live_only=True,
@@ -11136,6 +11198,80 @@ async def cascade_liquidate_campaign(campaign_id: str):
         level="warn",
     )
     return result
+
+
+_LIQUIDATE_MANY_MAX = 50
+
+
+@app.post("/api/cascade/liquidate-many")
+async def cascade_liquidate_many(request: Request):
+    """Market-sell several stranded positions in one request.
+
+    17-Sep-2026, Phil, looking at 18 stopped V-Rule positions: "I want to
+    market sell all of this... I am not having a select all". One click per
+    row was the only way, and the single-sale route allows two sales per 30
+    seconds — eighteen rows was nine minutes of clicking.
+
+    Each id is sold by the engine that owns it, through the same
+    liquidate_campaign as the single button, so every refusal that protects a
+    sale (not ended, nothing held, exchange already flat) still applies per
+    row. One row failing never stops the rest; the answer lists each outcome.
+    """
+    check_rate_limit("cascade_liquidate_many", max_calls=2, window_sec=30)
+    body = await _read_json_body(request)
+    raw = body.get("campaign_ids")
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=400, detail="campaign_ids must be a non-empty list")
+    ids: List[str] = []
+    for item in raw:
+        cid = str(item or "").strip()
+        if cid and cid not in ids:
+            ids.append(cid)
+    if not ids:
+        raise HTTPException(status_code=400, detail="campaign_ids must be a non-empty list")
+    if len(ids) > _LIQUIDATE_MANY_MAX:
+        raise HTTPException(status_code=400, detail=f"At most {_LIQUIDATE_MANY_MAX} positions per request")
+    results = []
+    touched = {}
+    live_sold = []
+    for cid in ids:
+        eng, persist = _engine_holding_campaign(cid)
+        campaign = eng.campaigns.get(cid)
+        if campaign is None:
+            results.append({"campaign_id": cid, "ok": False, "error": f"Campaign {cid} not found"})
+            continue
+        mode = str(getattr(campaign, "mode", "") or "")
+        try:
+            result = await eng.liquidate_campaign(cid)
+        except Exception as exc:  # one bad row must not strand the rest
+            _logger.error("[CASCADE] bulk market sell of %s failed: %s", cid, exc)
+            result = {"error": str(exc)}
+        if result.get("error"):
+            results.append({"campaign_id": cid, "ok": False, "mode": mode, "error": result["error"]})
+            continue
+        touched[id(eng)] = (eng, persist)
+        row = {
+            "campaign_id": cid,
+            "ok": True,
+            "mode": mode,
+            "quantity": result.get("quantity"),
+            "price": result.get("price"),
+        }
+        results.append(row)
+        if mode == "live":
+            live_sold.append(f"{getattr(campaign, 'symbol', '')} #{getattr(campaign, 'seq', '')}")
+    for eng, persist in touched.values():
+        persist(eng)
+    sold = sum(1 for r in results if r["ok"])
+    # One message for the batch, and only when real money moved — paper sales
+    # are bookkeeping and were half of what flooded the phone.
+    if live_sold:
+        alerter.alert(
+            f"Cascade: {len(live_sold)} position(s) sold at market",
+            "Requested by hand with Sell all.\n" + "\n".join(live_sold),
+            level="warn",
+        )
+    return {"status": "ok", "requested": len(ids), "sold": sold, "failed": len(ids) - sold, "results": results}
 
 
 @app.post("/api/cascade/campaigns/{campaign_id}/mode")

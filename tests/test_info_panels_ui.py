@@ -50,4 +50,4 @@ def test_language_choice_is_global_and_remembered():
 
 def test_asset_versions_change_with_the_new_css_and_javascript():
     assert "/static/cryptoforge-app.css?v=20260917-four-strategy-cards" in HTML
-    assert "/static/cryptoforge-app.js?v=20260917-option-seller-paper" in HTML
+    assert "/static/cryptoforge-app.js?v=20260917-sell-all-stopped" in HTML

@@ -180,7 +180,9 @@ def test_a_paper_event_raises_no_notification(monkeypatch):
     assert rec.push == []
 
 
-def test_a_live_event_does(monkeypatch):
+def test_a_live_start_is_the_strategy_running_itself_not_an_alert(monkeypatch):
+    """17-Sep-2026, Phil: "wrong telegram alerts that it is cascade trade" —
+    every one was Cascade-Auto starting or restarting a line with nothing bought."""
     rec = Recorder(monkeypatch)
     app_module._strategy_event(
         {
@@ -193,7 +195,23 @@ def test_a_live_event_does(monkeypatch):
             "seq": 40,
         }
     )
-    assert rec.push[0][0] == "Cascade-Auto · SOLUSDT #40 — Campaign started"
+    assert rec.push == []
+
+
+def test_a_live_failure_does_and_names_the_book(monkeypatch):
+    rec = Recorder(monkeypatch)
+    app_module._strategy_event(
+        {
+            "level": "error",
+            "symbol": "SOLUSDT",
+            "message": "Failed to place the buy stop",
+            "campaign_id": "c1",
+            "mode": "live",
+            "strategy": AUTO_FIB,
+            "seq": 40,
+        }
+    )
+    assert rec.push[0][0] == "Cascade-Auto · SOLUSDT #40 — Cascade error"
 
 
 def test_an_event_with_no_mode_is_treated_as_paper(monkeypatch):

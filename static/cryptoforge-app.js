@@ -10388,6 +10388,12 @@ function cfRenderCascadeTrades(campaigns, opts) {
   // column switched off, so the only control that could clear them was on a
   // card that no longer existed.
   var showActions = actions || open.some(_cfTradeIsStranded);
+  // Every row nothing will ever sell, for the one "Sell all" control. 17-Sep-
+  // 2026: eighteen stopped V-Rule positions, one rate-limited click each.
+  var stranded = open.filter(function (c) { return _cfTradeIsStranded(c) && !_cfCascadeConfirmedGone(c); });
+  _cfStrandedByMount[mountId] = stranded.map(function (c) {
+    return { id: String(c.campaign_id || ''), seq: c.seq, symbol: c.symbol, mode: String(c.mode || 'paper') };
+  });
 
   var totalCost = 0, totalNow = 0;
   var rows = open.map(function (c) {
@@ -10458,7 +10464,58 @@ function cfRenderCascadeTrades(campaigns, opts) {
     meta.innerHTML = open.length + ' open · $' + _cfCascadeUsd(totalCost) + ' invested · '
       + '<strong style="color:' + totalTone + ';">'
       + (totalPnl >= 0 ? '+' : '\u2212') + '$' + _cfCascadeUsd(Math.abs(totalPnl))
-      + '</strong> unrealised. Nothing here is sold yet — each sells itself at its target.';
+      + '</strong> unrealised. '
+      + (stranded.length
+          ? stranded.length + ' stopped with no resting sell — ' + (stranded.length === 1 ? 'it' : 'they') + ' will not sell on '
+            + (stranded.length === 1 ? 'its' : 'their') + ' own.'
+          : 'Nothing here is sold yet — each sells itself at its target.')
+      + (stranded.length >= 2
+          ? ' <button type="button" class="btn btn-danger btn-sm cf-sell-all-btn read-only-hide"'
+            + ' data-cf-click="cfCascadeLiquidateAll(\'' + _escapeHtml(mountId) + '\')">Sell all '
+            + stranded.length + ' stopped</button>'
+          : '');
+  }
+}
+
+var _cfStrandedByMount = {};
+
+// Sell every stopped position this table shows, in ONE request. Each is still
+// sold by its own engine through the same checks as the single button.
+async function cfCascadeLiquidateAll(mountId) {
+  var rows = (_cfStrandedByMount[mountId] || []).slice();
+  if (!rows.length) return;
+  var live = rows.filter(function (r) { return r.mode === 'live'; }).length;
+  var ok = await cfConfirm(
+    '<p>Sell <strong>all ' + rows.length + '</strong> stopped positions at <strong>market</strong>?</p>'
+    + (live
+        ? '<p><strong>' + live + ' of them ' + (live === 1 ? 'is' : 'are') + ' LIVE</strong> — real coin sold at '
+          + 'the best price on the book, which may be well below target.</p>'
+        : '<p>All of them are <strong>paper</strong> — each is booked at the latest price.</p>')
+    + '<p>' + rows.map(function (r) { return _escapeHtml(r.symbol) + ' #' + _escapeHtml(String(r.seq)); }).join(', ') + '</p>'
+    + '<p><strong>This cannot be undone.</strong></p>',
+    'Sell all ' + rows.length, '⚠️', true
+  );
+  if (!ok) return;
+  document.querySelectorAll('.cf-sell-all-btn').forEach(function (b) { b.disabled = true; b.textContent = 'Selling…'; });
+  try {
+    var response = await cfApiFetch('/api/cascade/liquidate-many', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaign_ids: rows.map(function (r) { return r.id; }) }),
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Sell all failed'));
+    if (data.failed) {
+      var first = (data.results || []).filter(function (r) { return !r.ok; })[0] || {};
+      cfToast('Sold ' + data.sold + ' of ' + data.requested + '. ' + data.failed + ' not sold'
+        + (first.error ? ' — ' + first.error : ''), 'error');
+    } else {
+      cfToast('Sold all ' + data.sold + ' at market', 'success');
+    }
+  } catch (err) {
+    cfToast(String(err.message || err), 'error');
+  } finally {
+    _cfRefreshStrategyInView();
   }
 }
 
