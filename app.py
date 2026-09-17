@@ -10929,11 +10929,11 @@ async def cascade_stop_campaign(campaign_id: str, request: Request):
     check_rate_limit("cascade_stop", max_calls=6, window_sec=10)
     body = await _read_json_body(request)
     cancel_orders = bool(body.get("cancel_orders", True))
-    eng = _get_cascade_engine()
+    eng, persist = _engine_holding_campaign(campaign_id)
     result = await eng.stop_campaign(campaign_id, cancel_orders=cancel_orders)
     if result.get("error"):
         raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
-    _persist_cascade_runtime_snapshot(eng)
+    persist(eng)
     return result
 
 
@@ -11015,11 +11015,11 @@ async def cascade_liquidate_campaign(campaign_id: str):
 async def cascade_set_mode(campaign_id: str, request: Request):
     check_rate_limit("cascade_mode", max_calls=3, window_sec=10)
     body = await _read_json_body(request)
-    eng = _get_cascade_engine()
+    eng, persist = _engine_holding_campaign(campaign_id)
     result = await eng.set_mode(campaign_id, str(body.get("mode") or ""))
     if result.get("error"):
         raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
-    _persist_cascade_runtime_snapshot(eng)
+    persist(eng)
     return result
 
 
@@ -11027,30 +11027,31 @@ async def cascade_set_mode(campaign_id: str, request: Request):
 async def cascade_set_mc_kind(campaign_id: str, request: Request):
     check_rate_limit("cascade_mc_kind", max_calls=6, window_sec=10)
     body = await _read_json_body(request)
-    eng = _get_cascade_engine()
+    eng, persist = _engine_holding_campaign(campaign_id)
     result = eng.set_mc_kind(campaign_id, str(body.get("mc_kind") or ""))
     if result.get("error"):
         raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
-    _persist_cascade_runtime_snapshot(eng)
+    persist(eng)
     return result
 
 
 @app.post("/api/cascade/campaigns/{campaign_id}/recalculate")
 async def cascade_recalculate_campaign(campaign_id: str):
     check_rate_limit("cascade_recalc", max_calls=4, window_sec=10)
-    eng = _get_cascade_engine()
-    if not eng.campaigns:
-        _restore_cascade_runtime(eng)
+    live = _get_cascade_engine()
+    if not live.campaigns:
+        _restore_cascade_runtime(live)
+    eng, persist = _engine_holding_campaign(campaign_id)
     result = await eng.recalculate_campaign(campaign_id)
     if result.get("error"):
         raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
-    _persist_cascade_runtime_snapshot(eng)
+    persist(eng)
     return result
 
 
 @app.get("/api/cascade/campaigns/{campaign_id}/chart")
 async def cascade_campaign_chart(campaign_id: str, timeframe: str = "auto", end_ts: int = 0):
-    eng = _get_cascade_engine()
+    eng, _persist = _engine_holding_campaign(campaign_id)
     if not eng.campaigns:
         _restore_cascade_runtime(eng)
     # A sandbox campaign is charted by the SANDBOX engine — one renderer, one
@@ -11108,18 +11109,18 @@ async def cascade_restructure_campaign(campaign_id: str, apply: bool = False):
     read before anything moves, because this touches a live ladder."""
     if apply:
         check_rate_limit("cascade_restructure", max_calls=4, window_sec=30)
-    eng = _get_cascade_engine()
+    eng, persist = _engine_holding_campaign(campaign_id)
     result = await eng.restructure_campaign(campaign_id, apply=apply)
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     if apply:
-        _persist_cascade_runtime_snapshot(eng)
+        persist(eng)
     return result
 
 
 @app.get("/api/cascade/campaigns/{campaign_id}/events")
 async def cascade_campaign_events(campaign_id: str):
-    eng = _get_cascade_engine()
+    eng, _persist = _engine_holding_campaign(campaign_id)
     campaign = eng.campaigns.get(campaign_id)
     campaign_events = list(campaign.event_log) if campaign else []
     persisted = [e for e in _load_cascade_events() if e.get("campaign_id") == campaign_id]
@@ -11129,7 +11130,7 @@ async def cascade_campaign_events(campaign_id: str):
 @app.delete("/api/cascade/campaigns/{campaign_id}")
 async def cascade_delete_campaign(campaign_id: str):
     check_rate_limit("cascade_delete", max_calls=6, window_sec=10)
-    eng = _get_cascade_engine()
+    eng, persist = _engine_holding_campaign(campaign_id)
     campaign = eng.campaigns.get(campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -11138,8 +11139,12 @@ async def cascade_delete_campaign(campaign_id: str):
     result = eng.delete_campaign(campaign_id)
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
-    _cascade_persist_closed_list(eng)
-    _persist_cascade_runtime_snapshot(eng)
+    # The closed-campaign bucket belongs to the LIVE engine alone. Writing a
+    # strategy engine's closed list into it would publish sandbox campaigns as
+    # live history; each strategy persists its own inside `persist`.
+    if eng is _get_cascade_engine():
+        _cascade_persist_closed_list(eng)
+    persist(eng)
     return {"status": "ok", "campaign_id": campaign_id}
 
 

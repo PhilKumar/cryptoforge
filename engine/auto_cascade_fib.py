@@ -640,9 +640,35 @@ class AutoCascadeFib:
         return sum(float(getattr(c, "spent_usd", 0.0) or 0.0) for c in self._own_campaigns(book))
 
     def _working_line_id(self, book: Book) -> str:
+        """The line this book is currently working, recognised by WHAT IT IS.
+
+        It used to ask only whether `mc_kind == "minor"`, and that label is not
+        reliable: a restart INHERITS its parent's mc_kind (engine/cascade.py
+        _spawn_child), so a chain whose parent had graduated to major produces
+        children stamped "major" while they restart back down at 5m.
+
+        17-Sep-2026 that deadlocked the live PAXGUSDT book. #359 was running at
+        5m stamped "major" and not in `book.graduated`, so this method answered
+        "no working line"; the book then tried to seed one, `latest_swing_high`
+        picked 4,373.52 — the very candle #359 was sitting on — and the engine
+        refused it as a duplicate mother. A duplicate-mother refusal is NOT
+        transient, so the anchor was never blacklisted and the same start was
+        retried every cooldown, for ever. Phil saw the refusal as the book's
+        standing error and asked why.
+
+        A line has graduated when the book SAYS so (`book.graduated`) or when
+        its own timeframe has actually reached GRADUATE_TIMEFRAME. Anything
+        live and below that is the working line, whatever its pill reads.
+        """
+        from engine.cascade import timeframe_seconds
+
+        threshold = timeframe_seconds(GRADUATE_TIMEFRAME)
         for campaign in self._live_campaigns(book):
-            if str(campaign.mc_kind or "major").lower() == "minor":
-                return campaign.campaign_id
+            if campaign.campaign_id in book.graduated:
+                continue
+            if timeframe_seconds(str(campaign.timeframe or "5m")) >= threshold:
+                continue
+            return campaign.campaign_id
         return ""
 
     # ── the money ────────────────────────────────────────────────
