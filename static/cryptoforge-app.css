@@ -8161,7 +8161,9 @@ html[data-theme="light"] .journal-entry-notes section {
     z-index: 1;
   }
   .cf-strat-tab {
-    flex: 0 1 320px;
+    /* 260px, not 320px: four strategies (17-Sep-2026, the Option Seller) must
+       still sit on one row at 1280px with room left for a fifth. */
+    flex: 0 1 260px;
     min-width: 0;
     min-height: 66px;
     display: flex;

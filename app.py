@@ -6,6 +6,7 @@ Production-ready: multi-engine, market feed, portfolio history, full CRUD.
 
 import asyncio
 import base64
+import fcntl
 import functools
 import hashlib
 import html
@@ -98,6 +99,7 @@ from engine.cascade_feed import (
     verify_subscriber_handshake,
 )
 from engine.live import LiveEngine
+from engine.option_seller_paper import OptionSellerPaper
 from engine.paper_trading import PaperTradingEngine
 from engine.scalp import PendingScalpEntry, ScalpEngine, ScalpTrade, normalize_scalp_order_type
 from engine.trade_journal import merge_with_sheet, pair_fills_into_trades
@@ -188,6 +190,9 @@ async def _shutdown_runtime_engines() -> None:
     if vrule_engine is not None:
         await _shutdown_step("persist V-Rule runtime", _save_vrule_runtime)
         await _shutdown_step("V-Rule live engine", vrule_engine.shutdown)
+    # The option seller saves on every change, so shutdown only hands its lock
+    # over promptly to the incoming blue-green instance.
+    await _shutdown_step("option seller lock", _release_option_seller_lock)
     rule3070_services = globals().get("_rule3070_services") or {}
     legacy_rule3070 = globals().get("_rule3070_service")
     if legacy_rule3070 is not None:
@@ -386,6 +391,9 @@ async def _app_lifespan(_: FastAPI):
     ledger_task = asyncio.create_task(_refresh_landing_ledger_periodically())
     _inflight_tasks.add(ledger_task)
     ledger_task.add_done_callback(_inflight_tasks.discard)
+    option_seller_task = asyncio.create_task(_option_seller_loop())
+    _inflight_tasks.add(option_seller_task)
+    option_seller_task.add_done_callback(_inflight_tasks.discard)
     try:
         yield
     finally:
@@ -1195,6 +1203,9 @@ _BUCKET_AUTO_FIB = "auto_cascade_fib"
 _BUCKET_AUTO_FIB_RUNTIME = "auto_fib_runtime"
 _BUCKET_VRULE = "vrule_live"
 _BUCKET_VRULE_RUNTIME = "vrule_runtime"
+# The 4 PM option seller: PAPER ONLY. Its whole state — switch, size, every
+# day's decision and trade — is one small document.
+_BUCKET_OPTION_SELLER = "option_seller"
 # One frozen chart payload per campaign, keyed by campaign_id — the permanent,
 # static "how the trade was taken" record shown from the journal.
 _BUCKET_CASCADE_CHART_SNAP = "cascade_chart_snap"
@@ -10625,6 +10636,122 @@ async def cascade_feed_keys():
     response = JSONResponse(frame)
     response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
     return response
+
+
+# ── The 4 PM option seller (PAPER ONLY) ────────────────────────────
+# engine/option_seller_paper.py reads Delta's public prices and places nothing.
+# The store is the source of truth: settings changed on the page are written
+# straight to it, and the one instance that holds the lock reloads it every
+# cycle before it moves the day forward. That keeps a settings change made on
+# the OTHER blue-green instance from being lost or overwritten with stale days.
+_option_seller: Optional[OptionSellerPaper] = None
+_option_seller_lock_handle = None
+_OPTION_SELLER_FAST_SEC = 15
+_OPTION_SELLER_IDLE_SEC = 60
+_OPTION_SELLER_FIRST_DELAY_SEC = 20
+
+
+def _get_option_seller() -> OptionSellerPaper:
+    global _option_seller
+    if _option_seller is None:
+        _option_seller = OptionSellerPaper()
+    return _option_seller
+
+
+def _load_option_seller_state() -> dict:
+    return _get_state_store().get(_BUCKET_OPTION_SELLER, "state", default={}) or {}
+
+
+def _put_option_seller_state(state: dict) -> None:
+    _get_state_store().put(_BUCKET_OPTION_SELLER, "state", state)
+
+
+def _option_seller_lock_path() -> str:
+    return os.path.join(_STATE_DIR, "option_seller.lock")
+
+
+def _hold_option_seller_lock() -> bool:
+    """Only one process moves the paper book forward, as with every engine."""
+    global _option_seller_lock_handle
+    if _option_seller_lock_handle is not None:
+        return True
+    try:
+        handle = open(_option_seller_lock_path(), "a+")
+    except OSError as exc:
+        _logger.warning("[OPTION-SELLER] lock file unusable, not ticking: %s", exc)
+        return False
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return False
+    _option_seller_lock_handle = handle
+    return True
+
+
+def _release_option_seller_lock() -> None:
+    global _option_seller_lock_handle
+    if _option_seller_lock_handle is None:
+        return
+    try:
+        fcntl.flock(_option_seller_lock_handle.fileno(), fcntl.LOCK_UN)
+        _option_seller_lock_handle.close()
+    except OSError:
+        pass
+    _option_seller_lock_handle = None
+
+
+async def _option_seller_cycle() -> bool:
+    """One pass: reload from the store, move the day on, save if it moved."""
+    if not _hold_option_seller_lock():
+        return False
+    seller = _get_option_seller()
+    seller.load(await asyncio.to_thread(_load_option_seller_state))
+    if not seller.enabled and not seller.status()["open"]:
+        return False
+    changed = await seller.tick()
+    if changed:
+        await asyncio.to_thread(_put_option_seller_state, seller.dump())
+    return changed
+
+
+async def _option_seller_loop() -> None:
+    await asyncio.sleep(_OPTION_SELLER_FIRST_DELAY_SEC)
+    while True:
+        busy = False
+        try:
+            await _option_seller_cycle()
+            seller = _get_option_seller()
+            busy = seller.enabled or bool(seller.status()["open"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # a paper book must never take the app down
+            _logger.error("[OPTION-SELLER] cycle failed: %s", exc)
+        await asyncio.sleep(_OPTION_SELLER_FAST_SEC if busy else _OPTION_SELLER_IDLE_SEC)
+
+
+@app.get("/api/option-seller/status")
+async def option_seller_status():
+    seller = OptionSellerPaper()  # a fresh reader: this instance may not be the writer
+    seller.load(await asyncio.to_thread(_load_option_seller_state))
+    out = seller.status()
+    out["writer"] = _option_seller_lock_handle is not None
+    return out
+
+
+@app.post("/api/option-seller/settings")
+async def option_seller_settings(request: Request):
+    """Switch the paper book on or off, or change its paper size."""
+    check_rate_limit("option_seller_settings", max_calls=6, window_sec=10)
+    body = await _read_json_body(request)
+    seller = OptionSellerPaper()
+    seller.load(await asyncio.to_thread(_load_option_seller_state))
+    try:
+        seller.configure(enabled=body.get("enabled"), size_btc=body.get("size_btc"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await asyncio.to_thread(_put_option_seller_state, seller.dump())
+    return seller.status()
 
 
 @app.get("/api/auto-fib/status")

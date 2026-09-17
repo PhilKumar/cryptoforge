@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260824-bilingual-info-panels">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260917-four-strategy-cards">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -228,6 +228,12 @@
           data-cf-click="showPage('rule3070-page', document.getElementById('nav-strategies'))">
     <span class="cf-strat-icon cf-strat-icon-vrule" aria-hidden="true">V</span>
     <span><strong>V-Rule</strong><small>Paper &middot; the 30-70 rule</small></span>
+  </button>
+  <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
+          data-cf-strat-page="optsell-page"
+          data-cf-click="showPage('optsell-page', document.getElementById('nav-strategies'))">
+    <span class="cf-strat-icon cf-strat-icon-optsell" aria-hidden="true">&#9719;</span>
+    <span><strong>Option Seller</strong><small>Paper &middot; Delta, 4 PM</small></span>
   </button>
 </div>
 </div><!-- /sticky-shell -->
@@ -2129,6 +2135,136 @@
 
 </div>
 
+<!-- The 4 PM option seller. PAPER ONLY: engine/option_seller_paper.py reads
+     Delta's public prices and has no order code at all. It exists to find out
+     whether the live tape matches the 405-day backtest, so every trade shows
+     two results — at the mark (what the backtest used) and at the real quotes
+     (what an order would have got). -->
+<div id="optsell-page" class="page-section">
+  <div class="allocator-header">
+    <div>
+      <h2 style="white-space:nowrap;">Option Seller <button type="button" class="cf-info" tabindex="0"
+        data-cf-info-target="cf-os-strategy-info" aria-controls="cf-os-strategy-info"
+        aria-expanded="false" aria-label="Read the complete Option Seller strategy in English or Tamil">i</button></h2>
+    </div>
+    <div class="cf-stat-strip" id="cf-os-stats">
+      <div class="stat-box">
+        <div class="stat-label">Paper result</div>
+        <div class="stat-value" id="cf-os-stat-pnl">$0.00</div>
+        <div class="stat-sub" id="cf-os-stat-pnl-sub">at the real quotes: —</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Trades</div>
+        <div class="stat-value" id="cf-os-stat-trades">0</div>
+        <div class="stat-sub" id="cf-os-stat-trades-sub">0 won &middot; 0 stopped</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Worst losing run</div>
+        <div class="stat-value" id="cf-os-stat-dd">$0.00</div>
+        <div class="stat-sub" id="cf-os-stat-dd-sub">at the mark</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Next decision</div>
+        <div class="stat-value" id="cf-os-stat-next">16:00</div>
+        <div class="stat-sub" id="cf-os-stat-next-sub">IST</div>
+      </div>
+    </div>
+    <div class="cf-engine-chip" id="cf-os-engine-chip" data-state="idle">
+      <span class="cf-engine-dot" aria-hidden="true"></span>
+      <span class="cf-engine-label">Paper</span>
+      <strong id="cf-os-engine-state">Off</strong>
+    </div>
+  </div>
+
+  <div id="cf-os-strategy-info" class="cf-info-panel cf-info-doc" role="region"
+       aria-label="Option Seller strategy explanation" hidden>
+    <div class="cf-info-document-tabs">
+      <div class="cf-info-language-tabs" role="tablist" aria-label="Explanation language">
+        <button type="button" class="cf-info-language-button is-active" data-cf-info-language-button="en"
+                role="tab" aria-selected="true">English</button>
+        <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
+                role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
+      </div>
+    </div>
+    <div class="cf-info-language is-active" data-cf-info-language="en">
+      <p class="cf-info-lede">Once a day, at 4 PM IST, this checks whether Bitcoin has made a strong move in one direction and, if it has, sells a same-day Bitcoin option on Delta Exchange into that move. It runs on <strong>paper only</strong> — it reads Delta's public prices and cannot place an order.</p>
+      <section><h4>1 · The check at 4 PM</h4><p>It measures Bitcoin's move over the last 2, 3, 4, 6, 8 and 12 hours on Delta's own index. Each window counts as a vote when its move is big enough — 0.75% for 6 hours, a little less for shorter windows and a little more for longer ones.</p></section>
+      <section><h4>2 · When it trades</h4><p>Only when <strong>at least 5 of the 6 windows agree</strong>. Up moves sell the at-the-money <strong>call</strong>; down moves sell the at-the-money <strong>put</strong>, of the option that settles at 5:30 PM the same day. At most one trade a day. On most days it does nothing.</p></section>
+      <section><h4>3 · How it gets out</h4><p>It buys the option back if its price <strong>doubles</strong> (the stop), or at <strong>5:25 PM</strong>, five minutes before settlement. The profit is the premium that decayed in between.</p></section>
+      <section><h4>4 · Two results for every trade</h4><p>The backtest used Delta's mark price. A real order sells at the bid and buys back at the ask. Both are shown, so the gap between the test and real trading is visible. The stop is also checked against 1-minute candles, so a stop the 15-second price check missed is flagged.</p></section>
+      <section><h4>5 · What the test showed</h4><p>On 405 days of Delta's real prices, tuned on the first half and judged on the second, it made about +1,710 per 1 BTC over 30 unseen trades, with a worst losing run of 308. That is a small sample — the reason this runs on paper first.</p></section>
+      <section><h4>6 · Size</h4><p>The paper size is in BTC; one Delta contract is 0.001 BTC. 0.1 BTC is 100 contracts. Selling needs margin of about 0.5–1% of the Bitcoin value, so live trading would need roughly $150 of account per 0.1 BTC.</p></section>
+    </div>
+    <div class="cf-info-language" data-cf-info-language="ta">
+      <p class="cf-info-lede">தினமும் ஒருமுறை, இந்திய நேரம் மாலை 4 மணிக்கு, Bitcoin ஒரே திசையில் வலுவாக நகர்ந்திருக்கிறதா என்று இது பார்க்கும். நகர்ந்திருந்தால், அதே நாள் முடியும் Bitcoin option-ஐ Delta Exchange-இல் அந்த நகர்வின் திசையில் விற்கும். இது <strong>paper மட்டுமே</strong> — Delta-வின் பொது விலைகளைப் படிக்கும்; order போட முடியாது.</p>
+      <section><h4>1 · மாலை 4 மணி சோதனை</h4><p>Delta-வின் சொந்த index-இல் கடந்த 2, 3, 4, 6, 8, 12 மணி நேர Bitcoin நகர்வை அளக்கும். நகர்வு போதுமான அளவு இருந்தால் ஒவ்வொரு நேர அளவும் ஒரு வாக்கு — 6 மணிக்கு 0.75%, குறைந்த நேரத்திற்குச் சற்று குறைவு, அதிக நேரத்திற்குச் சற்று அதிகம்.</p></section>
+      <section><h4>2 · எப்போது trade செய்யும்</h4><p><strong>6-இல் குறைந்தது 5 நேர அளவுகள் ஒப்புக்கொண்டால்</strong> மட்டும். மேல் நகர்வுக்கு at-the-money <strong>call</strong>, கீழ் நகர்வுக்கு at-the-money <strong>put</strong> — அதே நாள் மாலை 5:30-க்கு settle ஆகும் option. நாளுக்கு அதிகபட்சம் ஒரு trade. பெரும்பாலான நாட்களில் எதுவும் செய்யாது.</p></section>
+      <section><h4>3 · எப்படி வெளியேறும்</h4><p>Option விலை <strong>இரட்டிப்பானால்</strong> (stop) அல்லது settlement-க்கு ஐந்து நிமிடம் முன் <strong>மாலை 5:25-க்கு</strong> திரும்ப வாங்கும். இடையில் குறைந்த premium தான் லாபம்.</p></section>
+      <section><h4>4 · ஒவ்வொரு trade-க்கும் இரண்டு முடிவுகள்</h4><p>Backtest Delta-வின் mark விலையைப் பயன்படுத்தியது. உண்மையான order bid-இல் விற்று ask-இல் திரும்ப வாங்கும். இரண்டும் காட்டப்படும்; test-க்கும் உண்மையான trading-க்கும் உள்ள இடைவெளி தெரியும். 15-வினாடி விலை சோதனை தவறவிட்ட stop-ஐ 1-நிமிட candle மூலம் சரிபார்த்துக் குறிக்கும்.</p></section>
+      <section><h4>5 · Test காட்டியது</h4><p>Delta-வின் 405 நாள் உண்மையான விலைகளில், முதல் பாதியில் அமைத்து இரண்டாம் பாதியில் சோதித்ததில், பார்க்காத 30 trade-களில் 1 BTC-க்கு சுமார் +1,710, மோசமான தொடர் இழப்பு 308. இது சிறிய மாதிரி — அதனால் தான் முதலில் paper.</p></section>
+      <section><h4>6 · அளவு</h4><p>Paper அளவு BTC-இல்; Delta-வின் ஒரு contract 0.001 BTC. 0.1 BTC = 100 contract. விற்பதற்கு Bitcoin மதிப்பில் சுமார் 0.5–1% margin தேவை; live-க்கு 0.1 BTC-க்கு சுமார் $150 கணக்கில் இருக்க வேண்டும்.</p></section>
+    </div>
+  </div>
+
+  <div class="allocator-grid" id="cf-os-grid">
+  <section class="card allocator-input-panel" aria-labelledby="cf-os-title">
+    <h3 id="cf-os-title">Paper book</h3>
+    <div class="cf-cascade-form">
+      <div class="input-group">
+        <label for="cf-os-size">Size (BTC)</label>
+        <input id="cf-os-size" type="number" min="0.001" max="10" step="0.001" value="0.1" inputmode="decimal">
+      </div>
+      <div class="input-group">
+        <label id="cf-os-contracts-label">Contracts</label>
+        <div class="cf-af-derived" id="cf-os-contracts" aria-labelledby="cf-os-contracts-label">100</div>
+      </div>
+      <div class="cf-cascade-form-note">Paper only. Nothing is sent to Delta except requests for public prices. Every trade is recorded at the mark and at the real bid and ask.</div>
+    </div>
+    <div class="cf-af-state" id="cf-os-state-line">
+      <span class="tp-badge idle" id="cf-os-state-badge">Off</span>
+      <span id="cf-os-state-text">Switch it on to start recording paper trades from the next 4 PM.</span>
+    </div>
+    <div class="allocator-actions">
+      <button type="button" id="cf-os-on-btn" class="read-only-hide btn btn-primary" data-cf-click="cfOsSave(true)">Turn on</button>
+      <button type="button" id="cf-os-save-btn" class="read-only-hide btn btn-outline" data-cf-click="cfOsSave(null)" hidden>Save size</button>
+      <button type="button" id="cf-os-off-btn" class="read-only-hide btn btn-danger" data-cf-click="cfOsSave(false)" hidden>Turn off</button>
+      <button type="button" id="cf-os-refresh-btn" class="btn btn-outline" data-cf-click="cfOsRefresh(true)">Refresh</button>
+    </div>
+    <div class="allocator-error" id="cf-os-error" role="alert" aria-live="polite"></div>
+  </section>
+
+  <section class="card allocator-result-panel" aria-labelledby="cf-os-today-title">
+    <h3 id="cf-os-today-title">Today</h3>
+    <div id="cf-os-today">
+      <div class="cf-table-empty-cell" style="padding:16px;">Nothing decided yet today.</div>
+    </div>
+  </section>
+  </div>
+
+  <section class="card table-panel" id="cf-os-days-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Every day</h3>
+        <div class="table-meta">What it decided each day, and what each paper trade made — at the mark and at the real quotes.</div>
+      </div>
+    </div>
+    <div id="cf-os-days">
+      <div class="cf-table-empty-cell" style="padding:14px;">No days recorded yet.</div>
+    </div>
+  </section>
+
+  <section class="card table-panel" id="cf-os-events-panel">
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Event log</h3>
+      </div>
+    </div>
+    <div id="cf-os-events" class="cf-scalp-log-panel" style="max-height:280px;overflow-y:auto;padding:10px 14px;">
+      <div class="cf-scalp-event-empty">Nothing yet.</div>
+    </div>
+  </section>
+</div>
+
 <div id="cascade-page" class="page-section">
   <div class="allocator-header">
     <div>
@@ -3288,7 +3424,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260913-canvas-only-charts" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260917-option-seller-paper" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 

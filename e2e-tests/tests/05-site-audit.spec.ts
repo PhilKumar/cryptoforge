@@ -284,13 +284,14 @@ test.describe('Comprehensive Site Audit', () => {
     // the nav instead of scrolling away with the page — and it must read the
     // same, and stay visible, wherever among the three you are standing.
     // Phil's order, 09-Sep-2026: Auto leads, it is the one going live.
-    const STRATEGIES = ['Cascade-Auto', 'Cascade-Hybrid', 'V-Rule'];
+    // 17-Sep-2026: the paper Option Seller (Delta, 4 PM) joins at the end.
+    const STRATEGIES = ['Cascade-Auto', 'Cascade-Hybrid', 'V-Rule', 'Option Seller'];
     await expect(page.locator('.cf-strat-subnav'), 'one switcher, not one per page').toHaveCount(1);
     await expect(
       page.locator('.sticky-shell .cf-strat-subnav'),
       'the switcher must live in the header shell',
     ).toHaveCount(1);
-    for (const pageId of ['cascade-page', 'rule3070-page', 'autofib-page']) {
+    for (const pageId of ['cascade-page', 'rule3070-page', 'autofib-page', 'optsell-page']) {
       await page.evaluate((id) => (window as any).showPage(id), pageId);
       const bar = page.locator('#cf-strat-subnav');
       await expect(bar, `${pageId} selector visible`).toBeVisible();

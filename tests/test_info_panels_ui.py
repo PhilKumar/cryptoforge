@@ -8,20 +8,21 @@ JS = (ROOT / "static" / "cryptoforge-app.js").read_text(encoding="utf-8")
 CSS = (ROOT / "static" / "cryptoforge-app.css").read_text(encoding="utf-8")
 
 
-def test_all_three_strategy_manuals_are_bilingual_fold_down_panels():
+def test_every_strategy_manual_is_a_bilingual_fold_down_panel():
     targets = (
         "cf-cascade-strategy-info",
         "cf-vrule-strategy-info",
         "cf-af-strategy-info",
+        "cf-os-strategy-info",
     )
     for target in targets:
         assert f'data-cf-info-target="{target}"' in HTML
         assert f'id="{target}" class="cf-info-panel cf-info-doc"' in HTML
 
-    assert HTML.count('data-cf-info-language="en"') == 3
-    assert HTML.count('data-cf-info-language="ta"') == 3
-    assert HTML.count('data-cf-info-language-button="en"') == 3
-    assert HTML.count('data-cf-info-language-button="ta"') == 3
+    assert HTML.count('data-cf-info-language="en"') == len(targets)
+    assert HTML.count('data-cf-info-language="ta"') == len(targets)
+    assert HTML.count('data-cf-info-language-button="en"') == len(targets)
+    assert HTML.count('data-cf-info-language-button="ta"') == len(targets)
     assert "தமிழ்" in HTML
 
 
@@ -48,5 +49,5 @@ def test_language_choice_is_global_and_remembered():
 
 
 def test_asset_versions_change_with_the_new_css_and_javascript():
-    assert "/static/cryptoforge-app.css?v=20260824-bilingual-info-panels" in HTML
-    assert "/static/cryptoforge-app.js?v=20260913-canvas-only-charts" in HTML
+    assert "/static/cryptoforge-app.css?v=20260917-four-strategy-cards" in HTML
+    assert "/static/cryptoforge-app.js?v=20260917-option-seller-paper" in HTML

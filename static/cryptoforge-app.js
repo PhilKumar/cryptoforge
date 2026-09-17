@@ -1296,10 +1296,18 @@ function cfPageTabName(pageId) {
   return String(pageId || 'journal-page').replace(/-page$/, '');
 }
 
+// Every page that lives under the ONE Strategies nav tab. A list, so a new
+// strategy is added in one place instead of four copies of the same test.
+var _CF_STRATEGY_PAGES = ['autofib-page', 'cascade-page', 'rule3070-page', 'optsell-page'];
+
+function _cfIsStrategyPage(pageId) {
+  return _CF_STRATEGY_PAGES.indexOf(pageId) !== -1;
+}
+
 function cfNavButtonForPage(pageId) {
   // Cascade and the V-Rule live as two pages under ONE nav tab (Phil,
   // 2026-08-11: "Make strategy as a single tab").
-  if (pageId === 'cascade-page' || pageId === 'rule3070-page' || pageId === 'autofib-page') {
+  if (_cfIsStrategyPage(pageId)) {
     return document.getElementById('nav-strategies');
   }
   return document.getElementById('nav-' + cfPageTabName(pageId));
@@ -1382,7 +1390,7 @@ function cfSyncAssetsTheme() {
 
 function cfOpenStrategies(btn) {
   var last = localStorage.getItem('cf-strat-sub');
-  if (last !== 'cascade-page' && last !== 'rule3070-page' && last !== 'autofib-page') last = 'cascade-page';
+  if (!_cfIsStrategyPage(last)) last = 'cascade-page';
   showPage(last, btn);
 }
 
@@ -1443,7 +1451,7 @@ function cfScrollActiveTabIntoView(btn) {
 function cfSyncStrategySubnav(pageId) {
   var bar = document.getElementById('cf-strat-subnav');
   if (!bar) return;
-  var onStrategy = pageId === 'cascade-page' || pageId === 'rule3070-page' || pageId === 'autofib-page';
+  var onStrategy = _cfIsStrategyPage(pageId);
   bar.hidden = !onStrategy;
   bar.querySelectorAll('.cf-strat-tab').forEach(function (tab) {
     var mine = tab.getAttribute('data-cf-strat-page') === pageId;
@@ -1483,7 +1491,7 @@ function showPage(pageId, btn, options) {
   window.scrollTo(0, 0);
   // Persist active tab
   localStorage.setItem('cf_active_tab', tabName);
-  if (pageId === 'cascade-page' || pageId === 'rule3070-page' || pageId === 'autofib-page') {
+  if (_cfIsStrategyPage(pageId)) {
     localStorage.setItem('cf-strat-sub', pageId);
   }
   cfSyncPageHistory(pageId, opts);
@@ -15236,4 +15244,247 @@ showPage = function (pageId, btn, options) {
   }
   _cfAfOrigShowPage(pageId, btn, options);
   if (pageId === 'autofib-page') cfInitAutoFibPage();
+};
+
+// ── Option Seller (paper) ──────────────────────────────────────────
+// The 4 PM Delta option seller. PAPER ONLY — the server engine reads Delta's
+// public prices and has no order code. Every trade carries two results: at
+// the mark (what the backtest used) and at the real bid/ask (what an order
+// would have got), so the gap between the two is always on screen.
+var _cfOsPollTimer = null;
+var _cfOsBusy = false;
+var _cfOsLast = null;
+
+function _cfOsUsd(value) {
+  if (value == null || value === '' || !isFinite(Number(value))) return '—';
+  var num = Number(value);
+  return (num < 0 ? '−' : num > 0 ? '+' : '') + '$' + Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _cfOsPx(value) {
+  if (value == null || !isFinite(Number(value)) || Number(value) <= 0) return '—';
+  return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _cfOsTime(ts) {
+  if (!ts) return '—';
+  return new Date(Number(ts) * 1000).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }) + ' IST';
+}
+
+function _cfOsSetError(msg) {
+  var node = document.getElementById('cf-os-error');
+  if (node) node.textContent = msg || '';
+}
+
+function _cfOsText(id, text) {
+  var node = document.getElementById(id);
+  if (node) node.textContent = text;
+}
+
+function _cfOsSide(side) {
+  return side === 'C' ? 'call' : side === 'P' ? 'put' : '—';
+}
+
+function _cfOsStatusLabel(day) {
+  var st = (day && day.status) || '';
+  if (st === 'open') return 'Holding';
+  if (st === 'closed') return day.exit_why === 'stop' ? 'Stopped' : 'Closed 17:25';
+  if (st === 'skipped') return 'No trade';
+  if (st === 'missed') return 'Missed';
+  if (st === 'error') return 'Error';
+  return st || '—';
+}
+
+function _cfOsVotes(day) {
+  if (!day || !day.votes) return '—';
+  return (day.votes.C || 0) + ' up · ' + (day.votes.P || 0) + ' down';
+}
+
+function cfOsRenderToday(data) {
+  var host = document.getElementById('cf-os-today');
+  if (!host) return;
+  var day = data.open || data.today;
+  if (!day) {
+    host.innerHTML = '<div class="cf-table-empty-cell" style="padding:16px;">'
+      + (data.enabled ? 'Waiting for 4 PM. Next decision: ' + _escapeHtml(data.next_decision_ist) + '.'
+        : 'Switched off — nothing will be decided.')
+      + '</div>';
+    return;
+  }
+  var rows = [
+    ['Date', _escapeHtml(day.date)],
+    ['Result', _escapeHtml(_cfOsStatusLabel(day))],
+  ];
+  if (day.votes) rows.push(['Windows', _escapeHtml(_cfOsVotes(day)) + ' <span class="table-meta">(5 needed)</span>']);
+  if (day.reason) rows.push(['Why', _escapeHtml(day.reason)]);
+  if (day.symbol) {
+    rows.push(['Sold', _escapeHtml(String(day.contracts || '')) + ' × ' + _escapeHtml(day.symbol) + ' (' + _cfOsSide(day.side) + ')']);
+    rows.push(['Entry', 'mark ' + _cfOsPx(day.entry_mark) + ' · bid ' + _cfOsPx(day.entry_bid) + ' · at ' + _cfOsTime(day.entry_seen_ts)]);
+    rows.push(['Stop', _cfOsPx(day.stop_px) + ' (twice the entry mark)']);
+  }
+  if (day.status === 'open') {
+    rows.push(['Now', 'mark ' + _cfOsPx(day.last_mark) + ' · seen ' + _cfOsTime(day.last_seen_ts)]);
+  }
+  if (day.status === 'closed') {
+    rows.push(['Exit', 'mark ' + _cfOsPx(day.exit_mark) + ' · ask ' + _cfOsPx(day.exit_ask) + ' · at ' + _cfOsTime(day.exit_ts)]);
+    rows.push(['Made', _cfOsUsd(day.pnl_usd_mark) + ' at the mark · ' + _cfOsUsd(day.pnl_usd_quote) + ' at the real quotes']);
+    if (day.stop_touched_by_candle && day.exit_why !== 'stop') {
+      rows.push(['Note', 'A 1-minute candle touched the stop that the 15-second check did not see.']);
+    }
+  }
+  host.innerHTML = '<table class="trade-table"><tbody>'
+    + rows.map(function (r) { return '<tr><td class="table-meta">' + r[0] + '</td><td>' + r[1] + '</td></tr>'; }).join('')
+    + '</tbody></table>';
+}
+
+function cfOsRenderDays(data) {
+  var host = document.getElementById('cf-os-days');
+  if (!host) return;
+  var days = data.days || [];
+  if (!days.length) {
+    host.innerHTML = '<div class="cf-table-empty-cell" style="padding:14px;">No days recorded yet.</div>';
+    return;
+  }
+  var body = days.map(function (d) {
+    return '<tr>'
+      + '<td>' + _escapeHtml(d.date) + '</td>'
+      + '<td>' + _escapeHtml(_cfOsStatusLabel(d)) + '</td>'
+      + '<td>' + _escapeHtml(_cfOsVotes(d)) + '</td>'
+      + '<td>' + _escapeHtml(d.symbol || '—') + '</td>'
+      + '<td class="num">' + _cfOsPx(d.entry_mark) + '</td>'
+      + '<td class="num">' + _cfOsPx(d.exit_mark) + '</td>'
+      + '<td class="num">' + _cfOsUsd(d.pnl_usd_mark) + '</td>'
+      + '<td class="num">' + _cfOsUsd(d.pnl_usd_quote) + '</td>'
+      + '</tr>';
+  }).join('');
+  host.innerHTML = '<div class="table-surface"><div class="table-scroll" tabindex="0" role="region" aria-label="Option Seller days, scrollable">'
+    + '<table class="trade-table"><thead><tr><th>Date</th><th>Result</th><th>Windows</th><th>Option</th>'
+    + '<th class="num">Entry</th><th class="num">Exit</th><th class="num">At mark</th><th class="num">At quotes</th></tr></thead>'
+    + '<tbody>' + body + '</tbody></table></div></div>';
+}
+
+function cfOsRenderEvents(data) {
+  var host = document.getElementById('cf-os-events');
+  if (!host) return;
+  var events = data.events || [];
+  if (!events.length) {
+    host.innerHTML = '<div class="cf-scalp-event-empty">Nothing yet.</div>';
+    return;
+  }
+  host.innerHTML = events.map(function (e) {
+    return '<div class="cf-scalp-event-row"><span class="cf-scalp-event-time">' + _escapeHtml(e.time || '') + '</span>'
+      + '<span class="cf-scalp-event-msg" data-level="' + _escapeHtml(e.level || '') + '">' + _escapeHtml(e.message || '') + '</span></div>';
+  }).join('');
+}
+
+function cfOsRenderStatus(data) {
+  _cfOsLast = data;
+  var t = data.totals || {};
+  _cfOsText('cf-os-stat-pnl', _cfOsUsd(t.pnl_usd_mark == null ? 0 : t.pnl_usd_mark));
+  _cfOsText('cf-os-stat-pnl-sub', 'at the real quotes: ' + _cfOsUsd(t.pnl_usd_quote));
+  _cfOsText('cf-os-stat-trades', String(t.trades || 0));
+  _cfOsText('cf-os-stat-trades-sub', (t.wins || 0) + ' won · ' + (t.stops || 0) + ' stopped'
+    + (t.poll_missed_stops ? ' · ' + t.poll_missed_stops + ' stop missed by the poll' : ''));
+  _cfOsText('cf-os-stat-dd', _cfOsUsd(-(t.worst_run_usd_mark || 0)));
+  var next = String(data.next_decision_ist || '');
+  _cfOsText('cf-os-stat-next', next.slice(11, 16) || '16:00');
+  _cfOsText('cf-os-stat-next-sub', next.slice(0, 10) + ' IST');
+  var chip = document.getElementById('cf-os-engine-chip');
+  var holding = !!data.open;
+  if (chip) chip.setAttribute('data-state', data.enabled || holding ? 'running' : 'idle');
+  _cfOsText('cf-os-engine-state', holding ? 'Holding' : data.enabled ? 'On' : 'Off');
+  var badge = document.getElementById('cf-os-state-badge');
+  if (badge) {
+    badge.textContent = data.enabled ? 'On · paper' : 'Off';
+    badge.className = 'tp-badge ' + (data.enabled ? 'running' : 'idle');
+  }
+  _cfOsText('cf-os-state-text', data.enabled
+    ? 'Deciding every day at 4 PM IST at ' + data.size_btc + ' BTC (' + data.contracts + ' contracts).'
+    : (holding ? 'Off — the open paper position is still managed to its exit.' : 'Switch it on to start recording paper trades from the next 4 PM.'));
+  var on = document.getElementById('cf-os-on-btn');
+  var off = document.getElementById('cf-os-off-btn');
+  var save = document.getElementById('cf-os-save-btn');
+  if (on) on.hidden = !!data.enabled;
+  if (off) off.hidden = !data.enabled;
+  if (save) save.hidden = !data.enabled;
+  var size = document.getElementById('cf-os-size');
+  if (size && document.activeElement !== size) size.value = data.size_btc;
+  cfOsUpdateContracts();
+  cfOsRenderToday(data);
+  cfOsRenderDays(data);
+  cfOsRenderEvents(data);
+}
+
+function cfOsUpdateContracts() {
+  var size = Number((document.getElementById('cf-os-size') || {}).value || 0);
+  _cfOsText('cf-os-contracts', size > 0 ? String(Math.round(size / 0.001)) : '—');
+}
+
+async function cfOsRefresh(showToast) {
+  try {
+    var response = await cfApiFetch('/api/option-seller/status', { cache: 'no-store' });
+    if (response.status === 404) return;  // the server is not on this build yet
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Option Seller status unavailable'));
+    _cfOsSetError('');
+    cfOsRenderStatus(data);
+    if (showToast) cfToast('Option Seller refreshed', 'success');
+  } catch (err) {
+    _cfOsSetError(String(err.message || err));
+  }
+}
+
+async function cfOsSave(enabled) {
+  if (_cfOsBusy) return;
+  var size = Number((document.getElementById('cf-os-size') || {}).value || 0);
+  if (!(size >= 0.001 && size <= 10)) { _cfOsSetError('Size must be between 0.001 and 10 BTC'); return; }
+  var body = { size_btc: size };
+  if (enabled !== null) body.enabled = enabled;
+  _cfOsBusy = true;
+  ['cf-os-on-btn', 'cf-os-off-btn', 'cf-os-save-btn'].forEach(function (id) {
+    var node = document.getElementById(id);
+    if (node) node.disabled = true;
+  });
+  try {
+    var response = await cfApiFetch('/api/option-seller/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the Option Seller'));
+    _cfOsSetError('');
+    cfOsRenderStatus(data);
+    cfToast(enabled === true ? 'Option Seller paper book is on'
+      : enabled === false ? 'Option Seller paper book is off' : 'Size saved', 'success');
+  } catch (err) {
+    _cfOsSetError(String(err.message || err));
+  } finally {
+    _cfOsBusy = false;
+    ['cf-os-on-btn', 'cf-os-off-btn', 'cf-os-save-btn'].forEach(function (id) {
+      var node = document.getElementById(id);
+      if (node) node.disabled = false;
+    });
+  }
+}
+
+function cfInitOptionSellerPage() {
+  var size = document.getElementById('cf-os-size');
+  if (size && !size.dataset.cfOsBound) {
+    size.dataset.cfOsBound = '1';
+    size.addEventListener('input', cfOsUpdateContracts);
+  }
+  cfOsRefresh(false);
+  if (_cfOsPollTimer) clearInterval(_cfOsPollTimer);
+  _cfOsPollTimer = setInterval(function () { cfOsRefresh(false); }, 15000);
+}
+
+var _cfOsOrigShowPage = showPage;
+showPage = function (pageId, btn, options) {
+  if (pageId !== 'optsell-page' && _cfOsPollTimer) {
+    clearInterval(_cfOsPollTimer);
+    _cfOsPollTimer = null;
+  }
+  _cfOsOrigShowPage(pageId, btn, options);
+  if (pageId === 'optsell-page') cfInitOptionSellerPage();
 };
