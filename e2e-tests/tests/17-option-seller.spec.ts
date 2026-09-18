@@ -194,6 +194,24 @@ test.describe('Option Seller — paper', () => {
     await page.locator('#cf-os-days tbody tr').nth(2).getByRole('button', { name: 'Chart' }).click();
     await expect.poll(() => (page as any).__osCharts.slice(-1)[0]).toBe('2026-09-15');
     await expect(page.locator('#cf-os-days tbody tr').nth(2)).toHaveClass(/cf-os-row-shown/);
+    await expect(page.locator('#cf-os-days tbody tr').nth(2).getByRole('button')).toHaveText('Chart ↑');
+  });
+
+  test('the Chart button brings the chart title into view, below the pinned menu', async ({ page }) => {
+    await openOptionSeller(page, holding());
+    await expect(page.locator('#cf-os-chart-panel .cf-os-line-option')).toHaveCount(1);
+    await page.locator('#cf-os-events-panel').scrollIntoViewIfNeeded();
+    await page.locator('#cf-os-days').getByRole('button', { name: /Chart/ }).first().click();
+    const title = page.locator('#cf-os-chart-panel .table-title');
+    await expect.poll(async () => {
+      const box = await title.boundingBox();
+      if (!box) return 'none';
+      const hit = await page.evaluate(
+        ([x, y]) => document.elementFromPoint(x, y)?.closest('#cf-os-chart-panel') ? 'visible' : 'covered',
+        [box.x + 5, box.y + box.height / 2],
+      );
+      return hit;
+    }, { timeout: 5000 }).toBe('visible');
   });
 
   test('the manual opens in English and Tamil', async ({ page }) => {

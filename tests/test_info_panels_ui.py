@@ -49,5 +49,5 @@ def test_language_choice_is_global_and_remembered():
 
 
 def test_asset_versions_change_with_the_new_css_and_javascript():
-    assert "/static/cryptoforge-app.css?v=20260918-option-seller-chart" in HTML
-    assert "/static/cryptoforge-app.js?v=20260918-option-seller-chart" in HTML
+    assert "/static/cryptoforge-app.css?v=20260918-chart-button" in HTML
+    assert "/static/cryptoforge-app.js?v=20260918-chart-button" in HTML

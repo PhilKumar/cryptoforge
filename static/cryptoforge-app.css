@@ -9516,3 +9516,6 @@ html[data-theme="light"] .journal-entry-notes section {
 .cf-os-svg .cf-os-hit { fill: transparent; cursor: crosshair; }
 #cf-os-today .trade-table { min-width: 0; width: 100%; }
 #cf-os-today .trade-table td:last-child { white-space: normal; overflow-wrap: anywhere; }
+#cf-os-chart-panel.cf-os-flash { animation: cf-os-flash 1.2s ease-out; }
+@keyframes cf-os-flash { 0% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 2px transparent; } }
+@media (prefers-reduced-motion: reduce) { #cf-os-chart-panel.cf-os-flash { animation: none; } }

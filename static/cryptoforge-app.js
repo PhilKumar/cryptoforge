@@ -15450,7 +15450,7 @@ function cfOsRenderDays(data) {
   var body = days.map(function (d) {
     var v = d.view || {};
     var open = d.status === 'open';
-    var shown = d.symbol && d.date === _cfOsChartDate;
+    var shown = d.symbol && d.date === (_cfOsChartDate || (_cfOsChartData && _cfOsChartData.date));
     return '<tr' + (shown ? ' class="cf-os-row-shown"' : '') + '>'
       + '<td>' + _escapeHtml(d.date) + '</td>'
       + '<td>' + _escapeHtml(_cfOsStatusLabel(d)) + '</td>'
@@ -15461,7 +15461,9 @@ function cfOsRenderDays(data) {
       + '<td class="num">' + (v.capital_usd != null ? _cfOsUsd(v.capital_usd).replace('+', '') : '—') + '</td>'
       + '<td class="num">' + _cfOsMoneySpan(open ? v.pnl_usd_mark_now : d.pnl_usd_mark) + '</td>'
       + '<td class="num">' + _cfOsMoneySpan(open ? v.pnl_usd_quote_now : d.pnl_usd_quote) + '</td>'
-      + '<td>' + (d.symbol ? '<button type="button" class="btn btn-outline btn-sm cf-os-chart-btn" data-cf-click="cfOsShowChart(\'' + _escapeHtml(d.date) + '\')">Chart</button>' : '') + '</td>'
+      + '<td>' + (d.symbol ? '<button type="button" class="btn btn-outline btn-sm cf-os-chart-btn"'
+        + (shown ? ' aria-pressed="true"' : '')
+        + ' data-cf-click="cfOsShowChart(\'' + _escapeHtml(d.date) + '\')">' + (shown ? 'Chart ↑' : 'Chart') + '</button>' : '') + '</td>'
       + '</tr>';
   }).join('');
   host.innerHTML = '<div class="table-surface"><div class="table-scroll" tabindex="0" role="region" aria-label="Option Seller days, scrollable">'
@@ -15546,8 +15548,29 @@ function cfOsShowChart(date) {
   _cfOsChartAt = 0;
   cfOsLoadChart();
   if (_cfOsLast) cfOsRenderDays(_cfOsLast);
+  // The chart sits ABOVE this table. 'nearest' scrolled only far enough to
+  // show its lower edge under the sticky menu, and the default chart was
+  // already this trade — so the button looked dead (Phil, 18-Sep-2026).
+  // Bring the whole panel to the top and flash it.
   var panel = document.getElementById('cf-os-chart-panel');
-  if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  if (panel) {
+    // Land below whatever is pinned to the top (menu, strategy switcher).
+    // Measured, not guessed: the pinned stack differs by page width. One
+    // pass over the page on a click is cheap.
+    var pinned = 0;
+    var tall = window.innerHeight * 0.6;
+    document.querySelectorAll('body *').forEach(function (el) {
+      var pos = getComputedStyle(el).position;
+      if (pos !== 'sticky' && pos !== 'fixed') return;
+      var r = el.getBoundingClientRect();
+      if (r.height > 0 && r.height < tall && r.top < 400 && r.bottom > pinned) pinned = r.bottom;
+    });
+    var top = panel.getBoundingClientRect().top + window.scrollY - pinned - 12;
+    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    panel.classList.remove('cf-os-flash');
+    void panel.offsetWidth;
+    panel.classList.add('cf-os-flash');
+  }
 }
 
 function cfOsMaybeRefreshChart(data) {
@@ -15572,6 +15595,7 @@ async function cfOsLoadChart() {
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
     _cfOsChartData = data;
     cfOsRenderChart(data);
+    if (_cfOsLast) cfOsRenderDays(_cfOsLast);
   } catch (err) {
     var host = document.getElementById('cf-os-chart');
     if (host) host.innerHTML = '<div class="cf-table-empty-cell" style="padding:14px;">' + _escapeHtml(String(err.message || err)) + '</div>';
