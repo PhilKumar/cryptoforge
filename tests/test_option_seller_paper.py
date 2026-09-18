@@ -64,6 +64,7 @@ class FakeDelta:
                     {
                         "symbol": f"{kind}-BTC-{k}-180926",
                         "strike_price": str(k),
+                        "initial_margin": "0.5",
                         "settlement_time": SETTLE_ISO,
                         "underlying_asset": {"symbol": "BTC"},
                     }
@@ -245,7 +246,8 @@ def test_the_stop_fires_when_the_mark_doubles():
     s, clock = seller(delta)
     run(s.tick())  # open at 500
     clock.t += 15
-    assert run(s.tick()) is False  # 700: still open
+    assert run(s.tick()) is True  # 700: still open, and the new price is saved
+    assert s.days[DAY.isoformat()]["status"] == "open"
     clock.t += 15
     assert run(s.tick()) is True  # 1001: stopped
     rec = s.days[DAY.isoformat()]
@@ -312,6 +314,126 @@ def test_a_failed_quote_before_settlement_just_retries():
     clock.t += 15
     assert run(s.tick()) is False
     assert s.days[DAY.isoformat()]["status"] == "open"
+
+
+# ── what the page shows about a position (18-Sep-2026) ───────────
+# "I want to know open positions, current price or P&L change, how much
+# capital used and a chart" — the page showed the 16:00 price all afternoon,
+# because a check that did not close the trade was never saved.
+
+
+def test_every_check_saves_the_live_price_so_the_page_sees_it():
+    delta = FakeDelta(marks=[500.0, 430.0])
+    s, clock = seller(delta)
+    run(s.tick())
+    clock.t += 15
+    assert run(s.tick()) is True, "a new price must be written, or the page never sees it"
+    reloaded = osp.OptionSellerPaper(fetch_json=delta, clock=clock)
+    reloaded.load(s.dump())
+    rec = reloaded.days[DAY.isoformat()]
+    assert rec["last_mark"] == 430.0 and rec["last_bid"] == 425.0 and rec["last_ask"] == 435.0
+    assert rec["last_seen_ts"] == clock.t
+
+
+def test_the_open_position_shows_pnl_capital_and_risk():
+    delta = FakeDelta(marks=[500.0, 400.0])
+    s, clock = seller(delta)
+    run(s.tick())
+    clock.t += 60
+    run(s.tick())
+    view = s.status()["open"]["view"]
+    spot, size = 100_000.0, 0.1
+    fees = osp.fee_per_btc(500.0, spot) + osp.fee_per_btc(400.0, spot)
+    assert view["pnl_usd_mark_now"] == pytest.approx(round((500.0 - 400.0 - fees) * size, 2))
+    q_fees = osp.fee_per_btc(495.0, spot) + osp.fee_per_btc(405.0, spot)
+    assert view["pnl_usd_quote_now"] == pytest.approx(round((495.0 - 405.0 - q_fees) * size, 2))
+    assert view["mark_change_pct"] == pytest.approx(-20.0)
+    assert view["stop_distance_pct"] == pytest.approx(150.0), "stop 1000 is 150% above 400"
+    # capital: Delta's listed 0.5% of $10,000 of Bitcoin, plus the $50 premium
+    assert view["im_pct"] == 0.5 and view["im_pct_is_default"] is False
+    assert view["margin_usd"] == pytest.approx(50.0)
+    assert view["capital_usd"] == pytest.approx(100.0)
+    stop_fees = osp.fee_per_btc(500.0, spot) + osp.fee_per_btc(1000.0, spot)
+    assert view["max_loss_usd"] == pytest.approx(round((500.0 + stop_fees) * size, 2))
+    assert view["minutes_left"] == 84
+    assert s.status()["today"]["view"]["capital_usd"] == view["capital_usd"]
+
+
+def test_a_call_seller_is_told_when_bitcoin_is_past_the_strike():
+    rec = {
+        "date": DAY.isoformat(),
+        "status": "open",
+        "symbol": "C-BTC-100000-180926",
+        "side": "C",
+        "strike": 100_000.0,
+        "size_btc": 0.1,
+        "spot": 100_000.0,
+        "entry_mark": 500.0,
+        "stop_px": 1000.0,
+        "last_mark": 600.0,
+        "last_spot": 100_250.0,
+        "last_seen_ts": ENTRY + 60,
+    }
+    assert osp.position_view(rec, ENTRY + 60)["view"]["btc_past_strike_usd"] == 250.0
+    put = dict(rec, side="P", symbol="P-BTC-100000-180926")
+    assert osp.position_view(put, ENTRY + 60)["view"]["btc_past_strike_usd"] == -250.0
+
+
+def test_a_trade_recorded_before_the_margin_rate_uses_deltas_listed_default():
+    rec = {
+        "date": DAY.isoformat(),
+        "status": "closed",
+        "symbol": "C-BTC-100000-180926",
+        "size_btc": 0.1,
+        "spot": 100_000.0,
+        "entry_mark": 500.0,
+        "stop_px": 1000.0,
+        "pnl_usd_mark": 20.0,
+    }
+    view = osp.position_view(rec, ENTRY)["view"]
+    assert view["im_pct"] == osp.DEFAULT_IM_PCT and view["im_pct_is_default"] is True
+    assert view["return_on_capital_pct"] == pytest.approx(20.0)
+
+
+def test_a_day_without_a_trade_has_no_money_block():
+    assert "view" not in osp.position_view({"date": "2026-09-17", "status": "missed"}, ENTRY)
+
+
+def test_the_chart_draws_the_open_trade_oldest_first():
+    delta = FakeDelta(marks=[500.0])
+    s, clock = seller(delta)
+    run(s.tick())
+    clock.t += 300
+    delta.mark_candles = [
+        {"time": int(ENTRY) + 120, "close": 480.0},
+        {"time": int(ENTRY) + 60, "close": 490.0},
+        {"time": int(ENTRY), "close": "bad"},
+    ]
+    out = run(s.chart())
+    assert out["date"] == DAY.isoformat() and out["trade"]["status"] == "open"
+    assert out["option"] == [[int(ENTRY) + 60, 490.0], [int(ENTRY) + 120, 480.0]]
+    assert out["index"], "Bitcoin is drawn under the option"
+    asked = [p for path, p in delta.calls if path == "/history/candles" and p["symbol"].startswith("MARK:")]
+    assert asked[-1]["end"] <= clock.t + 60, "never asks for candles from the future"
+
+
+def test_the_chart_of_an_unknown_day_is_empty_not_another_day():
+    s, _ = seller(FakeDelta())
+    out = run(s.chart("2026-01-01"))
+    assert out["trade"] is None and out["option"] == []
+
+
+def test_a_chart_delta_will_not_serve_is_empty_not_an_error():
+    delta = FakeDelta(marks=[500.0])
+    s, _ = seller(delta)
+    run(s.tick())
+
+    async def down(path, params):
+        raise RuntimeError("delta down")
+
+    s._fetch = down
+    out = run(s.chart())
+    assert out["trade"]["symbol"] and out["option"] == [] and out["index"] == []
 
 
 # ── settings, state, safety ───────────────────────────────────────

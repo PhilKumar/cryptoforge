@@ -42,8 +42,44 @@ function status(over: Record<string, unknown> = {}) {
   };
 }
 
-async function openOptionSeller(page: Page) {
-  let state = status();
+// An open trade, as the server reports it at 16:30 IST with the money block.
+function holding() {
+  const open = {
+    date: '2026-09-18', status: 'open', side: 'C', votes: { C: 5, P: 0 }, strike: 78200,
+    symbol: 'C-BTC-78200-180926', contracts: 100, size_btc: 0.1, spot: 78150,
+    entry_ts: 1789727400, entry_seen_ts: 1789727407, entry_mark: 155.39, entry_bid: 154, stop_px: 310.78,
+    last_mark: 130, last_bid: 128, last_ask: 132, last_spot: 78260, last_seen_ts: 1789729200,
+    view: {
+      notional_usd: 7815, premium_usd: 15.54, margin_usd: 39.08, capital_usd: 54.62, im_pct: 0.5,
+      im_pct_is_default: false, max_loss_usd: 17.46, pnl_usd_mark_now: 1.35, pnl_usd_quote_now: 0.97,
+      mark_change_pct: -16.34, stop_distance_pct: 139.06, minutes_left: 55, seen_sec_ago: 12,
+      btc_past_strike_usd: 60,
+    },
+  };
+  return status({ enabled: true, open, today: open, days: [open] });
+}
+
+function chart() {
+  const t0 = 1789727400;
+  return {
+    date: '2026-09-18',
+    trade: {
+      date: '2026-09-18', status: 'open', symbol: 'C-BTC-78200-180926', side: 'C', strike: 78200,
+      entry_ts: t0, entry_mark: 155.39, stop_px: 310.78, exit_ts: null, exit_mark: null,
+    },
+    option: [0, 1, 2, 3].map((i) => [t0 + i * 60, 155 - i * 8]),
+    index: [-2, -1, 0, 1, 2, 3].map((i) => [t0 + i * 60, 78150 + i * 30]),
+  };
+}
+
+async function openOptionSeller(page: Page, initial = status()) {
+  let state = initial;
+  const charts: string[] = [];
+  await page.route('**/api/option-seller/chart**', (route) => {
+    charts.push(new URL(route.request().url()).searchParams.get('date') || '');
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(chart()) });
+  });
+  (page as any).__osCharts = charts;
   const posted: unknown[] = [];
   await page.route('**/api/option-seller/status', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state) }),
@@ -62,7 +98,7 @@ async function openOptionSeller(page: Page) {
   await page.waitForFunction(() => typeof (window as any).showPage === 'function');
   await page.evaluate(() => (window as any).showPage('optsell-page', document.getElementById('nav-strategies')));
   await expect(page.locator('#optsell-page')).toBeVisible();
-  await expect(page.locator('#cf-os-stat-trades')).toHaveText('2', { timeout: 10_000 });
+  await expect(page.locator('#cf-os-stat-trades')).toHaveText(String((initial as any).totals.trades), { timeout: 10_000 });
   return posted;
 }
 
@@ -123,6 +159,41 @@ test.describe('Option Seller — paper', () => {
     await openOptionSeller(page);
     await page.fill('#cf-os-size', '0.25');
     await expect(page.locator('#cf-os-contracts')).toHaveText('250');
+  });
+
+  test('an open trade shows its price now, P&L, risk and capital', async ({ page }) => {
+    await openOptionSeller(page, holding());
+    await expect(page.locator('#cf-os-stat-open')).toHaveText('+$1.35');
+    await expect(page.locator('#cf-os-stat-open-sub')).toContainText('$54.62');
+    const today = page.locator('#cf-os-today');
+    await expect(today).toContainText('Price now');
+    await expect(today).toContainText('130.00');
+    await expect(today).toContainText('−16.3%');
+    await expect(today).toContainText('+$0.97');
+    await expect(today).toContainText('above the strike');
+    await expect(today).toContainText('−$17.46');
+    await expect(today).toContainText('55 min left');
+    await expect(today).toContainText('≈ $54.62');
+    await expect(page.locator('#cf-os-days tbody tr').first()).toContainText('130.00 now');
+  });
+
+  test('the trade chart draws the option and Bitcoin, with the stop and the entry', async ({ page }) => {
+    await openOptionSeller(page, holding());
+    const panel = page.locator('#cf-os-chart-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel.locator('.cf-os-line-option')).toHaveCount(1);
+    await expect(panel.locator('.cf-os-line-index')).toHaveCount(1);
+    await expect(panel.locator('.cf-os-stop-text')).toContainText('310.78');
+    await expect(panel.locator('.cf-os-strike-text')).toContainText('78,200');
+    await expect(panel.locator('#cf-os-readout')).toContainText('Bitcoin');
+  });
+
+  test("a day's Chart button draws that day", async ({ page }) => {
+    await openOptionSeller(page);
+    await expect(page.locator('#cf-os-chart-panel')).toBeVisible();
+    await page.locator('#cf-os-days tbody tr').nth(2).getByRole('button', { name: 'Chart' }).click();
+    await expect.poll(() => (page as any).__osCharts.slice(-1)[0]).toBe('2026-09-15');
+    await expect(page.locator('#cf-os-days tbody tr').nth(2)).toHaveClass(/cf-os-row-shown/);
   });
 
   test('the manual opens in English and Tamil', async ({ page }) => {

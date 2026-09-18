@@ -65,6 +65,10 @@ FEE_NOTIONAL = 0.0003
 FEE_PREMIUM_CAP = 0.035
 GST = 1.18
 
+# Delta lists an initial margin of 0.5% of the Bitcoin value for its daily BTC
+# options. Used when a trade was recorded before the product's own figure was.
+DEFAULT_IM_PCT = 0.5
+
 DEFAULT_SIZE_BTC = 0.1
 MAX_SIZE_BTC = 10.0
 EVENT_LIMIT = 200
@@ -102,6 +106,60 @@ def count_votes(p0: float, refs: Dict[int, float]) -> Dict[str, object]:
             votes["C" if move > 0 else "P"] += 1
     sides = [s for s, v in votes.items() if v >= MIN_VOTES]
     return {"moves": moves, "votes": votes, "side": sides[0] if len(sides) == 1 else ""}
+
+
+def position_view(rec: dict, now: float) -> dict:
+    """A day's record plus the money a person asks about: what it is making
+    right now, what it put at risk, and how much account it would tie up.
+
+    Returns a copy with a "view" block; records without a trade get none.
+    The capital is an ESTIMATE of what Delta would block for the short option
+    — its listed initial margin on the Bitcoin value, plus the premium — since
+    paper trading never asks Delta for a margin figure.
+    """
+    out = dict(rec)
+    if not rec.get("symbol") or not rec.get("entry_mark"):
+        return out
+    size = float(rec.get("size_btc") or 0)
+    spot = float(rec.get("spot") or 0)
+    entry = float(rec["entry_mark"])
+    stop = float(rec.get("stop_px") or entry * STOP_MULT)
+    im_pct = float(rec.get("im_pct") or DEFAULT_IM_PCT)
+    notional = spot * size
+    premium = entry * size
+    margin = notional * im_pct / 100.0
+    view = {
+        "notional_usd": round(notional, 2),
+        "premium_usd": round(premium, 2),
+        "margin_usd": round(margin, 2),
+        "capital_usd": round(margin + premium, 2),
+        "im_pct": im_pct,
+        "im_pct_is_default": not rec.get("im_pct"),
+        "max_loss_usd": round((stop - entry + fee_per_btc(entry, spot) + fee_per_btc(stop, spot)) * size, 2),
+    }
+    if rec.get("status") == "open":
+        last = float(rec.get("last_mark") or entry)
+        fees = fee_per_btc(entry, spot) + fee_per_btc(last, spot)
+        view["pnl_usd_mark_now"] = round((entry - last - fees) * size, 2)
+        bid, ask = rec.get("entry_bid"), rec.get("last_ask")
+        if bid and ask:
+            q_fees = fee_per_btc(bid, spot) + fee_per_btc(ask, spot)
+            view["pnl_usd_quote_now"] = round((bid - ask - q_fees) * size, 2)
+        else:
+            view["pnl_usd_quote_now"] = None
+        view["mark_change_pct"] = round((last - entry) / entry * 100.0, 2)
+        view["stop_distance_pct"] = round((stop - last) / last * 100.0, 2) if last > 0 else None
+        day = dt.date.fromisoformat(rec["date"])
+        view["minutes_left"] = max(0, round((_utc(day, EXIT_UTC).timestamp() - now) / 60))
+        view["seen_sec_ago"] = max(0, round(now - float(rec.get("last_seen_ts") or now)))
+        if rec.get("last_spot") and rec.get("strike"):
+            # Positive = the option is in the money, the side that hurts a seller.
+            sign = 1 if rec.get("side") == "C" else -1
+            view["btc_past_strike_usd"] = round((float(rec["last_spot"]) - float(rec["strike"])) * sign, 2)
+    elif rec.get("status") == "closed" and rec.get("pnl_usd_mark") is not None and view["capital_usd"] > 0:
+        view["return_on_capital_pct"] = round(rec["pnl_usd_mark"] / view["capital_usd"] * 100.0, 2)
+    out["view"] = view
+    return out
 
 
 def _utc(day: dt.date, hm) -> dt.datetime:
@@ -291,8 +349,12 @@ class OptionSellerPaper:
             entry_bid=quote["bid"],
             entry_ask=quote["ask"],
             spot=quote["spot"] or p0,
+            im_pct=contract.get("im_pct") or DEFAULT_IM_PCT,
             stop_px=mark * STOP_MULT,
             last_mark=mark,
+            last_bid=quote["bid"],
+            last_ask=quote["ask"],
+            last_spot=quote["spot"] or p0,
             last_seen_ts=self._clock(),
         )
         self.days[key] = rec
@@ -326,13 +388,19 @@ class OptionSellerPaper:
             return False
         mark = quote["mark"]
         if mark > 0:
+            # Saved on every check, not only at the exit: the page reads the
+            # store, so an unsaved price is a price the page never shows.
             rec["last_mark"] = mark
+            rec["last_bid"] = quote["bid"]
+            rec["last_ask"] = quote["ask"]
+            if quote["spot"]:
+                rec["last_spot"] = quote["spot"]
             rec["last_seen_ts"] = now
         if mark >= rec["stop_px"]:
             return await self._close(rec, "stop", quote, now)
         if now >= exit_ts:
             return await self._close(rec, "time", quote, now)
-        return False
+        return mark > 0
 
     async def _close(self, rec: dict, why: str, quote: dict, now: float, note: str = "") -> bool:
         exit_mark = quote["mark"] if quote["mark"] > 0 else rec["last_mark"]
@@ -395,6 +463,68 @@ class OptionSellerPaper:
             return None
         return any(float(c["high"]) >= rec["stop_px"] for c in rows)
 
+    # ── the chart ────────────────────────────────────────────────────
+
+    async def chart(self, date: str = "") -> dict:
+        """One trade's picture: the option's mark and Bitcoin, minute by minute.
+
+        Read from Delta's public 1-minute candles, so it draws a trade in full
+        even when it was opened before the page was looking. Without a date it
+        shows the open trade, else the most recent one.
+        """
+        traded = sorted((d for d in self.days.values() if d.get("symbol")), key=lambda d: d["date"])
+        rec = next((d for d in traded if d["date"] == date), None) if date else None
+        if rec is None and not date:
+            rec = next((d for d in traded if d.get("status") == "open"), None) or (traded[-1] if traded else None)
+        if rec is None:
+            return {"date": date, "trade": None, "option": [], "index": []}
+        now = self._clock()
+        day = dt.date.fromisoformat(rec["date"])
+        entry_ts = int(rec.get("entry_ts") or _utc(day, ENTRY_UTC).timestamp())
+        end_ts = int(rec["exit_ts"]) if rec.get("exit_ts") else int(min(now, _utc(day, EXIT_UTC).timestamp()))
+        end_ts = max(end_ts, entry_ts + 60)
+        option = await self._candles(MARK_PREFIX + rec["symbol"], entry_ts, end_ts + 60)
+        index = await self._candles(UNDERLYING, entry_ts - 1800, end_ts + 60)
+        trade = {
+            k: rec.get(k)
+            for k in (
+                "date",
+                "status",
+                "symbol",
+                "side",
+                "strike",
+                "entry_ts",
+                "entry_mark",
+                "stop_px",
+                "exit_ts",
+                "exit_mark",
+                "exit_why",
+                "last_mark",
+                "last_seen_ts",
+            )
+        }
+        return {"date": rec["date"], "trade": trade, "option": option, "index": index}
+
+    async def _candles(self, symbol: str, start: int, end: int) -> List[list]:
+        """[[time, close], ...] oldest first; empty when Delta will not say."""
+        try:
+            payload = await self._fetch(
+                "/history/candles", {"resolution": "1m", "symbol": symbol, "start": int(start), "end": int(end)}
+            )
+        except Exception as exc:
+            _log.warning("[OPTION-SELLER] chart candles for %s failed: %s", symbol, exc)
+            return []
+        rows = []
+        for c in payload.get("result") or []:
+            try:
+                t, close = int(c["time"]), float(c["close"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start <= t <= end and math.isfinite(close) and close > 0:
+                rows.append([t, close])
+        rows.sort()
+        return rows
+
     # ── market data ──────────────────────────────────────────────────
 
     async def _atm_contract(self, today: dt.date, side: str, spot: float) -> dict:
@@ -423,7 +553,11 @@ class OptionSellerPaper:
                         continue
                     if when != settle:
                         continue
-                    rows.append({"symbol": p["symbol"], "strike": float(p.get("strike_price") or 0)})
+                    try:
+                        im_pct = float(p.get("initial_margin") or 0)
+                    except (TypeError, ValueError):
+                        im_pct = 0.0
+                    rows.append({"symbol": p["symbol"], "strike": float(p.get("strike_price") or 0), "im_pct": im_pct})
                 after = (page.get("meta") or {}).get("after")
                 if not after:
                     break
@@ -471,7 +605,9 @@ class OptionSellerPaper:
             eq += d.get("pnl_usd_mark") or 0.0
             peak = max(peak, eq)
             dd = max(dd, peak - eq)
-        days = sorted(self.days.values(), key=lambda d: d["date"], reverse=True)
+        days = [position_view(d, now) for d in sorted(self.days.values(), key=lambda d: d["date"], reverse=True)]
+        open_rec = next((d for d in days if d.get("status") == "open"), None)
+        today_rec = self.days.get(today.isoformat())
         return {
             "strategy": STRATEGY,
             "paper_only": True,
@@ -487,8 +623,8 @@ class OptionSellerPaper:
                 "exit_ist": "17:25",
             },
             "next_decision_ist": entry.astimezone(IST).strftime("%Y-%m-%d %H:%M IST"),
-            "today": self.days.get(today.isoformat()),
-            "open": next((d for d in days if d.get("status") == "open"), None),
+            "today": position_view(today_rec, now) if today_rec else None,
+            "open": open_rec,
             "totals": {
                 "trades": len(closed),
                 "wins": sum(1 for d in closed if (d.get("pnl_usd_mark") or 0) > 0),

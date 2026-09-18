@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260917-four-strategy-cards">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260918-option-seller-chart">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -2154,6 +2154,11 @@
         <div class="stat-sub" id="cf-os-stat-pnl-sub">at the real quotes: —</div>
       </div>
       <div class="stat-box">
+        <div class="stat-label">Open trade</div>
+        <div class="stat-value is-idle" id="cf-os-stat-open">None</div>
+        <div class="stat-sub" id="cf-os-stat-open-sub">nothing held</div>
+      </div>
+      <div class="stat-box">
         <div class="stat-label">Trades</div>
         <div class="stat-value" id="cf-os-stat-trades">0</div>
         <div class="stat-sub" id="cf-os-stat-trades-sub">0 won &middot; 0 stopped</div>
@@ -2240,6 +2245,21 @@
     </div>
   </section>
   </div>
+
+  <section class="card table-panel" id="cf-os-chart-panel" hidden>
+    <div class="table-toolbar">
+      <div class="table-title-group">
+        <h3 class="table-title">Trade chart</h3>
+        <div class="table-meta" id="cf-os-chart-meta">The option price and Bitcoin, minute by minute.</div>
+      </div>
+      <div class="table-actions">
+        <button type="button" class="btn btn-outline btn-sm" data-cf-click="cfOsShowChart('')">Latest trade</button>
+      </div>
+    </div>
+    <div id="cf-os-chart" class="cf-os-chart">
+      <div class="cf-table-empty-cell" style="padding:14px;">Loading…</div>
+    </div>
+  </section>
 
   <section class="card table-panel" id="cf-os-days-panel">
     <div class="table-toolbar">
@@ -3424,7 +3444,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260917-sell-all-stopped" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260918-option-seller-chart" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 

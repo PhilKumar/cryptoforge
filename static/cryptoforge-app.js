@@ -15357,6 +15357,25 @@ function _cfOsVotes(day) {
   return (day.votes.C || 0) + ' up · ' + (day.votes.P || 0) + ' down';
 }
 
+function _cfOsPctText(value) {
+  if (value == null || !isFinite(Number(value))) return '—';
+  var num = Number(value);
+  return (num < 0 ? '−' : num > 0 ? '+' : '') + Math.abs(num).toFixed(1) + '%';
+}
+
+// A seller profits when the option price FALLS, so a rising price is shown red.
+function _cfOsPctSpan(value, riseIsBad) {
+  if (value == null || !isFinite(Number(value))) return '';
+  var bad = riseIsBad ? Number(value) > 0 : Number(value) < 0;
+  return '<span class="' + (Number(value) === 0 ? '' : bad ? 'cf-os-bad' : 'cf-os-good') + '">(' + _cfOsPctText(value) + ')</span>';
+}
+
+function _cfOsMoneySpan(value) {
+  if (value == null || !isFinite(Number(value))) return '—';
+  var num = Number(value);
+  return '<span class="' + (num > 0 ? 'cf-os-good' : num < 0 ? 'cf-os-bad' : '') + '">' + _cfOsUsd(num) + '</span>';
+}
+
 function cfOsRenderToday(data) {
   var host = document.getElementById('cf-os-today');
   if (!host) return;
@@ -15374,20 +15393,46 @@ function cfOsRenderToday(data) {
   ];
   if (day.votes) rows.push(['Windows', _escapeHtml(_cfOsVotes(day)) + ' <span class="table-meta">(5 needed)</span>']);
   if (day.reason) rows.push(['Why', _escapeHtml(day.reason)]);
+  var v = day.view || {};
   if (day.symbol) {
-    rows.push(['Sold', _escapeHtml(String(day.contracts || '')) + ' × ' + _escapeHtml(day.symbol) + ' (' + _cfOsSide(day.side) + ')']);
+    rows.push(['Sold', _escapeHtml(String(day.contracts || '')) + ' × ' + _escapeHtml(day.symbol)
+      + ' <span class="table-meta">(' + _cfOsSide(day.side) + ', strike ' + _cfOsPx(day.strike) + ')</span>']);
     rows.push(['Entry', 'mark ' + _cfOsPx(day.entry_mark) + ' · bid ' + _cfOsPx(day.entry_bid) + ' · at ' + _cfOsTime(day.entry_seen_ts)]);
-    rows.push(['Stop', _cfOsPx(day.stop_px) + ' (twice the entry mark)']);
   }
   if (day.status === 'open') {
-    rows.push(['Now', 'mark ' + _cfOsPx(day.last_mark) + ' · seen ' + _cfOsTime(day.last_seen_ts)]);
+    var ago = v.seen_sec_ago == null ? '' : v.seen_sec_ago < 90 ? v.seen_sec_ago + 's ago' : Math.round(v.seen_sec_ago / 60) + ' min ago';
+    rows.push(['Price now', '<strong>' + _cfOsPx(day.last_mark) + '</strong> '
+      + _cfOsPctSpan(v.mark_change_pct, true)
+      + ' · bid ' + _cfOsPx(day.last_bid) + ' / ask ' + _cfOsPx(day.last_ask)
+      + (ago ? ' <span class="table-meta">· ' + ago + '</span>' : '')]);
+    rows.push(['P&amp;L now', _cfOsMoneySpan(v.pnl_usd_mark_now) + ' at the mark · '
+      + _cfOsMoneySpan(v.pnl_usd_quote_now) + ' if bought back at the ask now']);
+    if (v.btc_past_strike_usd != null) {
+      var past = Number(v.btc_past_strike_usd);
+      rows.push(['Bitcoin now', _cfOsPx(day.last_spot) + ' <span class="table-meta">· '
+        + '$' + Math.abs(past).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' '
+        + (day.side === 'C' ? (past >= 0 ? 'above' : 'below') : (past >= 0 ? 'below' : 'above'))
+        + ' the strike — ' + (past > 0 ? 'against this trade' : 'in its favour') + '</span>']);
+    }
+    rows.push(['Stop', _cfOsPx(day.stop_px) + ' <span class="table-meta">· twice the entry'
+      + (v.stop_distance_pct != null ? '; the price must rise ' + Number(v.stop_distance_pct).toFixed(0) + '% more to hit it' : '') + '</span>']);
+    rows.push(['Worst case', _cfOsMoneySpan(v.max_loss_usd == null ? null : -v.max_loss_usd) + ' <span class="table-meta">if the stop is hit, fees included</span>']);
+    rows.push(['Closes', '17:25 IST' + (v.minutes_left != null ? ' <span class="table-meta">· ' + v.minutes_left + ' min left</span>' : '')]);
+  } else if (day.symbol) {
+    rows.push(['Stop', _cfOsPx(day.stop_px) + ' <span class="table-meta">(twice the entry mark)</span>']);
   }
   if (day.status === 'closed') {
     rows.push(['Exit', 'mark ' + _cfOsPx(day.exit_mark) + ' · ask ' + _cfOsPx(day.exit_ask) + ' · at ' + _cfOsTime(day.exit_ts)]);
-    rows.push(['Made', _cfOsUsd(day.pnl_usd_mark) + ' at the mark · ' + _cfOsUsd(day.pnl_usd_quote) + ' at the real quotes']);
+    rows.push(['Made', _cfOsMoneySpan(day.pnl_usd_mark) + ' at the mark · ' + _cfOsMoneySpan(day.pnl_usd_quote) + ' at the real quotes'
+      + (v.return_on_capital_pct != null ? ' <span class="table-meta">· ' + _cfOsPctText(v.return_on_capital_pct) + ' on the capital</span>' : '')]);
     if (day.stop_touched_by_candle && day.exit_why !== 'stop') {
       rows.push(['Note', 'A 1-minute candle touched the stop that the 15-second check did not see.']);
     }
+  }
+  if (v.capital_usd != null) {
+    rows.push(['Capital used', '<strong>≈ ' + _cfOsUsd(v.capital_usd).replace('+', '') + '</strong> <span class="table-meta">· margin '
+      + _cfOsUsd(v.margin_usd).replace('+', '') + ' (' + v.im_pct + '% of ' + _cfOsUsd(v.notional_usd).replace('+', '') + ' of Bitcoin)'
+      + ' + premium ' + _cfOsUsd(v.premium_usd).replace('+', '') + '. An estimate — paper never asks Delta.</span>']);
   }
   host.innerHTML = '<table class="trade-table"><tbody>'
     + rows.map(function (r) { return '<tr><td class="table-meta">' + r[0] + '</td><td>' + r[1] + '</td></tr>'; }).join('')
@@ -15403,20 +15448,25 @@ function cfOsRenderDays(data) {
     return;
   }
   var body = days.map(function (d) {
-    return '<tr>'
+    var v = d.view || {};
+    var open = d.status === 'open';
+    var shown = d.symbol && d.date === _cfOsChartDate;
+    return '<tr' + (shown ? ' class="cf-os-row-shown"' : '') + '>'
       + '<td>' + _escapeHtml(d.date) + '</td>'
       + '<td>' + _escapeHtml(_cfOsStatusLabel(d)) + '</td>'
       + '<td>' + _escapeHtml(_cfOsVotes(d)) + '</td>'
       + '<td>' + _escapeHtml(d.symbol || '—') + '</td>'
       + '<td class="num">' + _cfOsPx(d.entry_mark) + '</td>'
-      + '<td class="num">' + _cfOsPx(d.exit_mark) + '</td>'
-      + '<td class="num">' + _cfOsUsd(d.pnl_usd_mark) + '</td>'
-      + '<td class="num">' + _cfOsUsd(d.pnl_usd_quote) + '</td>'
+      + '<td class="num">' + (open ? _cfOsPx(d.last_mark) + ' <span class="table-meta">now</span>' : _cfOsPx(d.exit_mark)) + '</td>'
+      + '<td class="num">' + (v.capital_usd != null ? _cfOsUsd(v.capital_usd).replace('+', '') : '—') + '</td>'
+      + '<td class="num">' + _cfOsMoneySpan(open ? v.pnl_usd_mark_now : d.pnl_usd_mark) + '</td>'
+      + '<td class="num">' + _cfOsMoneySpan(open ? v.pnl_usd_quote_now : d.pnl_usd_quote) + '</td>'
+      + '<td>' + (d.symbol ? '<button type="button" class="btn btn-outline btn-sm cf-os-chart-btn" data-cf-click="cfOsShowChart(\'' + _escapeHtml(d.date) + '\')">Chart</button>' : '') + '</td>'
       + '</tr>';
   }).join('');
   host.innerHTML = '<div class="table-surface"><div class="table-scroll" tabindex="0" role="region" aria-label="Option Seller days, scrollable">'
     + '<table class="trade-table"><thead><tr><th>Date</th><th>Result</th><th>Windows</th><th>Option</th>'
-    + '<th class="num">Entry</th><th class="num">Exit</th><th class="num">At mark</th><th class="num">At quotes</th></tr></thead>'
+    + '<th class="num">Entry</th><th class="num">Exit</th><th class="num">Capital</th><th class="num">At mark</th><th class="num">At quotes</th><th></th></tr></thead>'
     + '<tbody>' + body + '</tbody></table></div></div>';
 }
 
@@ -15443,6 +15493,16 @@ function cfOsRenderStatus(data) {
   _cfOsText('cf-os-stat-trades-sub', (t.wins || 0) + ' won · ' + (t.stops || 0) + ' stopped'
     + (t.poll_missed_stops ? ' · ' + t.poll_missed_stops + ' stop missed by the poll' : ''));
   _cfOsText('cf-os-stat-dd', _cfOsUsd(-(t.worst_run_usd_mark || 0)));
+  var openView = (data.open && data.open.view) || null;
+  var openNode = document.getElementById('cf-os-stat-open');
+  if (openNode) {
+    var openPnl = openView ? Number(openView.pnl_usd_mark_now) : null;
+    openNode.textContent = openView ? _cfOsUsd(openPnl) : 'None';
+    openNode.className = 'stat-value' + (!openView ? ' is-idle' : openPnl > 0 ? ' is-good' : openPnl < 0 ? ' is-bad' : '');
+  }
+  _cfOsText('cf-os-stat-open-sub', openView
+    ? '≈ ' + _cfOsUsd(openView.capital_usd).replace('+', '') + ' used'
+    : 'nothing held');
   var next = String(data.next_decision_ist || '');
   _cfOsText('cf-os-stat-next', next.slice(11, 16) || '16:00');
   _cfOsText('cf-os-stat-next-sub', next.slice(0, 10) + ' IST');
@@ -15470,6 +15530,183 @@ function cfOsRenderStatus(data) {
   cfOsRenderToday(data);
   cfOsRenderDays(data);
   cfOsRenderEvents(data);
+  cfOsMaybeRefreshChart(data);
+}
+
+// ── the trade chart ──
+// The option's mark (top) and Bitcoin (bottom), one point a minute, from
+// Delta's public candles. Plain SVG: nothing else on this page needs a library.
+var _cfOsChartDate = '';      // '' = the open trade, else the latest one
+var _cfOsChartData = null;
+var _cfOsChartAt = 0;
+var _cfOsChartBusy = false;
+
+function cfOsShowChart(date) {
+  _cfOsChartDate = date || '';
+  _cfOsChartAt = 0;
+  cfOsLoadChart();
+  if (_cfOsLast) cfOsRenderDays(_cfOsLast);
+  var panel = document.getElementById('cf-os-chart-panel');
+  if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function cfOsMaybeRefreshChart(data) {
+  var anyTrade = (data.days || []).some(function (d) { return !!d.symbol; });
+  var panel = document.getElementById('cf-os-chart-panel');
+  if (panel) panel.hidden = !anyTrade;
+  if (!anyTrade) return;
+  var showingOpen = !_cfOsChartDate || (data.open && data.open.date === _cfOsChartDate);
+  var age = Date.now() - _cfOsChartAt;
+  if (!_cfOsChartData || (showingOpen && data.open && age > 55000)) cfOsLoadChart();
+}
+
+async function cfOsLoadChart() {
+  if (_cfOsChartBusy) return;
+  _cfOsChartBusy = true;
+  _cfOsChartAt = Date.now();
+  try {
+    var url = '/api/option-seller/chart' + (_cfOsChartDate ? '?date=' + encodeURIComponent(_cfOsChartDate) : '');
+    var response = await cfApiFetch(url, { cache: 'no-store' });
+    if (response.status === 404) return;
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Chart unavailable'));
+    _cfOsChartData = data;
+    cfOsRenderChart(data);
+  } catch (err) {
+    var host = document.getElementById('cf-os-chart');
+    if (host) host.innerHTML = '<div class="cf-table-empty-cell" style="padding:14px;">' + _escapeHtml(String(err.message || err)) + '</div>';
+  } finally {
+    _cfOsChartBusy = false;
+  }
+}
+
+function _cfOsScale(lo, hi, a, b) {
+  var span = hi - lo || 1;
+  return function (v) { return a + (v - lo) / span * (b - a); };
+}
+
+function cfOsRenderChart(data) {
+  var host = document.getElementById('cf-os-chart');
+  var meta = document.getElementById('cf-os-chart-meta');
+  if (!host) return;
+  var tr = data.trade;
+  var opt = data.option || [];
+  var idx = data.index || [];
+  if (!tr) { host.innerHTML = '<div class="cf-table-empty-cell" style="padding:14px;">No trade to draw yet.</div>'; return; }
+  if (meta) {
+    meta.textContent = tr.date + ' · ' + tr.symbol + ' · ' + (tr.status === 'open' ? 'open, updates every minute' : _cfOsStatusLabel(tr))
+      + ' · top: the option price (a seller wants it to FALL) · bottom: Bitcoin';
+  }
+  if (opt.length < 2) {
+    host.innerHTML = '<div class="cf-table-empty-cell" style="padding:14px;">Delta has not printed enough 1-minute prices for this option yet.</div>';
+    return;
+  }
+  var W = 1000, L = 64, R = 76, H1 = 230, G = 26, H2 = 120, T = 12;
+  // The whole trade window, 16:00 to 17:25 IST, with a short lead-in, so the
+  // time still to run is visible rather than the line filling the width.
+  var entryTs = tr.entry_ts || opt[0][0];
+  var t0 = entryTs - 1800;
+  var t1 = Math.max(opt[opt.length - 1][0], tr.exit_ts || 0, entryTs + 85 * 60);
+  idx = idx.filter(function (p) { return p[0] >= t0; });
+  var x = _cfOsScale(t0, t1, L, W - R);
+  var oVals = opt.map(function (p) { return p[1]; }).concat([tr.entry_mark, tr.stop_px]).filter(function (v) { return v > 0; });
+  var oLo = Math.min.apply(null, oVals), oHi = Math.max.apply(null, oVals);
+  var pad = (oHi - oLo) * 0.08 || 1;
+  var yo = _cfOsScale(oLo - pad, oHi + pad, T + H1, T);
+  var top2 = T + H1 + G;
+  var iVals = idx.map(function (p) { return p[1]; }).concat(tr.strike ? [tr.strike] : []);
+  var iLo = iVals.length ? Math.min.apply(null, iVals) : 0, iHi = iVals.length ? Math.max.apply(null, iVals) : 1;
+  var ipad = (iHi - iLo) * 0.1 || 1;
+  var yi = _cfOsScale(iLo - ipad, iHi + ipad, top2 + H2, top2);
+  function path(rows, ys) {
+    return rows.map(function (p, i) { return (i ? 'L' : 'M') + x(p[0]).toFixed(1) + ',' + ys(p[1]).toFixed(1); }).join('');
+  }
+  function hline(y, cls, label, value) {
+    return '<line class="' + cls + '" x1="' + L + '" x2="' + (W - R) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) + '"/>'
+      + '<text class="cf-os-ax-label ' + cls + '-text" x="' + (W - R + 6) + '" y="' + (y + 4).toFixed(1) + '">' + label + ' ' + value + '</text>';
+  }
+  function hhmm(ts) {
+    return new Date(ts * 1000).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  var svg = '';
+  // time grid every 15 minutes
+  var step = 900;
+  for (var g = Math.ceil(t0 / step) * step; g <= t1; g += step) {
+    svg += '<line class="cf-os-grid" x1="' + x(g).toFixed(1) + '" x2="' + x(g).toFixed(1) + '" y1="' + T + '" y2="' + (top2 + H2) + '"/>'
+      + '<text class="cf-os-ax-label" text-anchor="middle" x="' + x(g).toFixed(1) + '" y="' + (top2 + H2 + 16) + '">' + hhmm(g) + '</text>';
+  }
+  // option panel
+  svg += '<text class="cf-os-ax-label" x="' + L + '" y="' + (T - 1) + '" dy="-2">Option mark</text>';
+  [oLo, (oLo + oHi) / 2, oHi].forEach(function (v) {
+    svg += '<text class="cf-os-ax-label" text-anchor="end" x="' + (L - 6) + '" y="' + (yo(v) + 4).toFixed(1) + '">' + v.toFixed(0) + '</text>';
+  });
+  svg += hline(yo(tr.stop_px), 'cf-os-stop', 'stop', _cfOsPx(tr.stop_px));
+  svg += hline(yo(tr.entry_mark), 'cf-os-entry', 'sold', _cfOsPx(tr.entry_mark));
+  svg += '<path class="cf-os-line-option" d="' + path(opt, yo) + '"/>';
+  if (tr.entry_ts) {
+    svg += '<line class="cf-os-entry-time" x1="' + x(tr.entry_ts).toFixed(1) + '" x2="' + x(tr.entry_ts).toFixed(1) + '" y1="' + T + '" y2="' + (top2 + H2) + '"/>';
+  }
+  if (tr.exit_ts && tr.exit_mark) {
+    svg += '<circle class="cf-os-exit-dot" cx="' + x(tr.exit_ts).toFixed(1) + '" cy="' + yo(tr.exit_mark).toFixed(1) + '" r="5"/>';
+  }
+  var lastO = opt[opt.length - 1];
+  svg += '<circle class="cf-os-last-dot" cx="' + x(lastO[0]).toFixed(1) + '" cy="' + yo(lastO[1]).toFixed(1) + '" r="3.5"/>';
+  // bitcoin panel
+  if (idx.length > 1) {
+    svg += '<text class="cf-os-ax-label" x="' + L + '" y="' + (top2 - 4) + '">Bitcoin (Delta index)</text>';
+    [iLo, iHi].forEach(function (v) {
+      svg += '<text class="cf-os-ax-label" text-anchor="end" x="' + (L - 6) + '" y="' + (yi(v) + 4).toFixed(1) + '">' + Math.round(v).toLocaleString('en-US') + '</text>';
+    });
+    if (tr.strike) svg += hline(yi(tr.strike), 'cf-os-strike', 'strike', Math.round(tr.strike).toLocaleString('en-US'));
+    svg += '<path class="cf-os-line-index" d="' + path(idx, yi) + '"/>';
+  }
+  svg += '<line class="cf-os-cursor" id="cf-os-cursor" x1="0" x2="0" y1="' + T + '" y2="' + (top2 + H2) + '" hidden/>';
+  var HT = top2 + H2 + 24;
+  host.innerHTML = '<div class="cf-os-readout" id="cf-os-readout">' + _cfOsReadout(lastO[0]) + '</div>'
+    + '<svg class="cf-os-svg" viewBox="0 0 ' + W + ' ' + HT + '" role="img" aria-label="Option price and Bitcoin price during the trade">'
+    + svg + '<rect class="cf-os-hit" x="' + L + '" y="' + T + '" width="' + (W - L - R) + '" height="' + (top2 + H2 - T) + '"/></svg>';
+  var svgNode = host.querySelector('svg');
+  var hit = host.querySelector('.cf-os-hit');
+  if (hit && svgNode) {
+    hit.addEventListener('mousemove', function (ev) {
+      var box = svgNode.getBoundingClientRect();
+      var px = (ev.clientX - box.left) / box.width * W;
+      var ts = t0 + (px - L) / (W - R - L) * (t1 - t0);
+      var cur = document.getElementById('cf-os-cursor');
+      if (cur) { cur.setAttribute('x1', px); cur.setAttribute('x2', px); cur.removeAttribute('hidden'); }
+      var out = document.getElementById('cf-os-readout');
+      if (out) out.innerHTML = _cfOsReadout(ts);
+    });
+    hit.addEventListener('mouseleave', function () {
+      var cur = document.getElementById('cf-os-cursor');
+      if (cur) cur.setAttribute('hidden', '');
+      var out = document.getElementById('cf-os-readout');
+      if (out) out.innerHTML = _cfOsReadout(lastO[0]);
+    });
+  }
+}
+
+function _cfOsNearest(rows, ts) {
+  var best = null;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i][0] <= ts + 30) best = rows[i];
+    else break;
+  }
+  return best;
+}
+
+function _cfOsReadout(ts) {
+  var d = _cfOsChartData || {};
+  var tr = d.trade || {};
+  var o = _cfOsNearest(d.option || [], ts);
+  var b = _cfOsNearest(d.index || [], ts);
+  var parts = ['<span class="table-meta">' + _cfOsTime(ts) + '</span>'];
+  if (o) {
+    var chg = tr.entry_mark ? (o[1] - tr.entry_mark) / tr.entry_mark * 100 : null;
+    parts.push('option <strong>' + _cfOsPx(o[1]) + '</strong> ' + _cfOsPctSpan(chg, true));
+  }
+  if (b) parts.push('Bitcoin <strong>' + Math.round(b[1]).toLocaleString('en-US') + '</strong>');
+  return parts.join(' &nbsp;·&nbsp; ');
 }
 
 function cfOsUpdateContracts() {

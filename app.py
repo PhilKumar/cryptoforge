@@ -10801,6 +10801,39 @@ async def option_seller_status():
     return out
 
 
+_option_seller_chart_cache: Dict[str, tuple] = {}
+_OPTION_SELLER_CHART_OPEN_TTL = 30
+_OPTION_SELLER_CHART_CLOSED_TTL = 6 * 3600
+
+
+@app.get("/api/option-seller/chart")
+async def option_seller_chart(date: str = ""):
+    """The option's mark and Bitcoin for one paper trade, from Delta's public
+    1-minute candles. Cached, so a page left open does not become a stream of
+    requests to Delta: 30 s while the trade is open, hours once it is closed."""
+    date = str(date or "").strip()
+    if date:
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    seller = OptionSellerPaper()
+    seller.load(await asyncio.to_thread(_load_option_seller_state))
+    now = time.time()
+    hit = _option_seller_chart_cache.get(date)
+    if hit and hit[0] > now:
+        return hit[1]
+    out = await seller.chart(date)
+    trade = out.get("trade") or {}
+    # Only a named, closed day is final; "the latest trade" changes at 4 PM.
+    final = bool(date) and trade.get("status") == "closed" and out["option"]
+    ttl = _OPTION_SELLER_CHART_CLOSED_TTL if final else _OPTION_SELLER_CHART_OPEN_TTL
+    if len(_option_seller_chart_cache) > 64:
+        _option_seller_chart_cache.clear()
+    _option_seller_chart_cache[date] = (now + ttl, out)
+    return out
+
+
 @app.post("/api/option-seller/settings")
 async def option_seller_settings(request: Request):
     """Switch the paper book on or off, or change its paper size."""

@@ -9490,3 +9490,29 @@ html[data-theme="light"] .journal-entry-notes section {
   .cf-assets-frame-card { margin-bottom: 14px; }
   .cf-assets-frame { height: 70dvh; min-height: 360px; }
 }
+
+/* ── Option Seller: position colours and the trade chart (18-Sep-2026) ── */
+.cf-os-good { color: var(--green); }
+.cf-os-bad { color: var(--red); }
+.cf-stat-strip .stat-value.is-bad { color: var(--red); }
+#optsell-page .cf-os-row-shown td { background: var(--green-bg); }
+.cf-os-chart { padding: 6px 14px 14px; }
+.cf-os-readout { font-size: 13px; min-height: 20px; padding: 2px 0 6px; color: var(--text-dim); }
+.cf-os-svg { display: block; width: 100%; height: auto; }
+.cf-os-svg .cf-os-grid { stroke: var(--border); stroke-width: 1; }
+.cf-os-svg .cf-os-ax-label { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.cf-os-svg .cf-os-line-option { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.cf-os-svg .cf-os-line-index { fill: none; stroke: var(--text-dim); stroke-width: 1.5; stroke-linejoin: round; }
+.cf-os-svg .cf-os-entry { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 5 4; }
+.cf-os-svg .cf-os-entry-text { fill: var(--text-dim); }
+.cf-os-svg .cf-os-stop { stroke: var(--red); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.cf-os-svg .cf-os-stop-text { fill: var(--red); }
+.cf-os-svg .cf-os-strike { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; }
+.cf-os-svg .cf-os-strike-text { fill: var(--muted); }
+.cf-os-svg .cf-os-entry-time { stroke: var(--border-acc); stroke-width: 1; }
+.cf-os-svg .cf-os-last-dot { fill: var(--accent); }
+.cf-os-svg .cf-os-exit-dot { fill: none; stroke: var(--text); stroke-width: 2; }
+.cf-os-svg .cf-os-cursor { stroke: var(--text-dim); stroke-width: 1; }
+.cf-os-svg .cf-os-hit { fill: transparent; cursor: crosshair; }
+#cf-os-today .trade-table { min-width: 0; width: 100%; }
+#cf-os-today .trade-table td:last-child { white-space: normal; overflow-wrap: anywhere; }

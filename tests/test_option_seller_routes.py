@@ -127,6 +127,20 @@ class OptionSellerRouteTests(unittest.IsolatedAsyncioTestCase):
         await app._option_seller_cycle()
         self.assertEqual(seen, [True])
 
+    async def test_the_chart_route_refuses_a_bad_date_and_draws_nothing_when_empty(self):
+        self.app_module._option_seller_chart_cache.clear()
+        async with self._client() as client:
+            bad = await client.get("/api/option-seller/chart", params={"date": "18-09-2026"})
+            empty = await client.get("/api/option-seller/chart")
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(empty.status_code, 200, empty.text)
+        self.assertIsNone(empty.json()["trade"])
+
+    async def test_the_chart_route_needs_a_login(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            r = await client.get("/api/option-seller/chart")
+        self.assertIn(r.status_code, (401, 403))
+
     async def test_the_loop_is_started_with_the_app(self):
         src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")).read()
         life = src[src.index("async def _app_lifespan") :]
