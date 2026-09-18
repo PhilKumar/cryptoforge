@@ -2874,6 +2874,8 @@ _TEARSHEET_DOCS = {
     "hybrid": os.path.join(_HERE, "docs", "assets", "cascade-hybrid-tearsheet.html"),
     "auto": os.path.join(_HERE, "docs", "assets", "cascade-auto-tearsheet.html"),
     "vrule": os.path.join(_HERE, "docs", "assets", "vrule-tearsheet.html"),
+    # Built by tools/tearsheet/build_option_seller.py, not build_sheets.py.
+    "optsell": os.path.join(_HERE, "docs", "assets", "option-seller-tearsheet.html"),
 }
 
 

@@ -30,10 +30,15 @@ SHEETS = {
     "auto": "cascade-auto-tearsheet.html",
     "vrule": "vrule-tearsheet.html",
 }
+# The fourth sheet (18-Sep-2026) shares the look, the reader, the shell and the
+# route, but not the Cascade family's book: it has a stop, no bag and no coins.
+# Structural tests run over ALL_SHEETS; the ladder-book tests stay on SHEETS.
+OPTSELL = {"optsell": "option-seller-tearsheet.html"}
+ALL_SHEETS = {**SHEETS, **OPTSELL}
 
 
 def _published(key):
-    path = os.path.join(DOCS, SHEETS[key])
+    path = os.path.join(DOCS, ALL_SHEETS[key])
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as handle:
@@ -68,7 +73,7 @@ class SheetKitTests(unittest.TestCase):
 
     def test_each_sheet_gets_its_own_accent(self):
         seen = {}
-        for key in SHEETS:
+        for key in ALL_SHEETS:
             css = self.kit.recolour(self.kit.STYLE, key)
             light = re.search(r"--accent:(#[0-9a-f]{6})", css).group(1)
             self.assertNotIn(light, seen, f"{key} shares its accent with {seen.get(light)}")
@@ -87,7 +92,7 @@ class PublishedSheetTests(unittest.TestCase):
         """READER_JS reads #document-body and #document-toc and builds the rail
         from `.shead h2`; LANG_JS reads #langbar. Miss one and the document
         looks fine and does nothing."""
-        for key in SHEETS:
+        for key in ALL_SHEETS:
             html = _published(key)
             if html is None:
                 continue
@@ -101,7 +106,7 @@ class PublishedSheetTests(unittest.TestCase):
     def test_every_section_can_reach_the_contents_rail(self):
         """The rail is built from sections that have a `.shead h2`; one without
         is a section no reader can navigate to."""
-        for key in SHEETS:
+        for key in ALL_SHEETS:
             html = _published(key)
             if html is None:
                 continue
@@ -197,7 +202,7 @@ class ContentSecurityPolicyTests(unittest.TestCase):
         self.assertNotIn("style-src-elem 'self' 'unsafe-inline'", policy)
 
     def test_no_sheet_carries_an_inline_style_or_script(self):
-        for key in SHEETS:
+        for key in ALL_SHEETS:
             html = _published(key)
             if html is None:
                 continue
@@ -208,7 +213,7 @@ class ContentSecurityPolicyTests(unittest.TestCase):
     def test_the_look_and_the_reader_ship_as_static_files(self):
         static = os.path.join(_HERE, "static")
         self.assertTrue(os.path.exists(os.path.join(static, "tearsheet.js")))
-        for key in SHEETS:
+        for key in ALL_SHEETS:
             with self.subTest(key):
                 self.assertTrue(os.path.exists(os.path.join(static, f"tearsheet-{key}.css")))
 
@@ -231,17 +236,87 @@ class TearsheetRouteTests(unittest.TestCase):
         """An unregistered key falls back to Cascade Hybrid silently, so the
         registry and the pages that link into it must agree."""
         registry = self.app_module._TEARSHEET_DOCS
-        self.assertEqual(set(registry), set(SHEETS))
+        self.assertEqual(set(registry), set(ALL_SHEETS))
         with open(os.path.join(_HERE, "strategy.html"), encoding="utf-8") as handle:
             page = handle.read()
-        for key in SHEETS:
+        for key in ALL_SHEETS:
             with self.subTest(key):
                 self.assertIn(f"/assets/tearsheet?doc={key}", page)
 
     def test_the_route_points_at_the_files_the_builder_writes(self):
-        for key, filename in SHEETS.items():
+        for key, filename in ALL_SHEETS.items():
             with self.subTest(key):
                 self.assertTrue(self.app_module._TEARSHEET_DOCS[key].endswith(filename))
+
+    def test_the_assets_page_offers_every_sheet(self):
+        with open(os.path.join(_HERE, "static", "cryptoforge-app.js"), encoding="utf-8") as handle:
+            js = handle.read()
+        docs = re.search(r"var _CF_ASSET_DOCS = \[([^\]]*)\]", js).group(1)
+        with open(os.path.join(_HERE, "strategy.html"), encoding="utf-8") as handle:
+            page = handle.read()
+        for key in ALL_SHEETS:
+            with self.subTest(key):
+                self.assertIn(f"'{key}'", docs, "the Assets page silently falls back to Hybrid for an unknown key")
+                self.assertIn(f'data-cf-assets-doc="{key}"', page)
+
+
+class OptionSellerSheetTests(unittest.TestCase):
+    """The Option Seller sheet: its own sections, its own honesty notes, and
+    numbers that are the verified research numbers, not a re-derivation."""
+
+    def setUp(self):
+        self.html = _published("optsell")
+        if self.html is None:
+            self.skipTest("option seller sheet not built in this checkout")
+        path = os.path.join(_HERE, "tools", "tearsheet", "data", "optsell_report_data.json")
+        with open(path, encoding="utf-8") as handle:
+            self.book = json.load(handle)
+
+    def test_every_class_its_builder_draws_is_styled(self):
+        builder = import_module("build_option_seller")
+        source = open(builder.__file__, encoding="utf-8").read()
+        names = {c for group in re.findall(r"class='([a-z0-9 \-]+)'", source) for c in group.split()} - {"tr"}
+        styled = import_module("sheet_kit").STYLE + builder.LANG_CSS + builder.SHEET_CSS
+        for name in sorted(names):
+            with self.subTest(name):
+                self.assertIn(f".{name}", styled, f".{name} is drawn but never styled")
+
+    def test_the_monthly_book_sums_to_the_total(self):
+        self.assertAlmostEqual(sum(self.book["monthly"].values()), self.book["totals"]["net"], places=1)
+        self.assertAlmostEqual(sum(t["net"] for t in self.book["trades"]), self.book["totals"]["net"], places=1)
+
+    def test_every_trade_obeys_the_engines_rule(self):
+        from engine import option_seller_paper as osp
+
+        self.assertEqual(self.book["rule"]["min_votes"], osp.MIN_VOTES)
+        self.assertEqual(self.book["rule"]["stop_mult"], osp.STOP_MULT)
+        self.assertEqual(self.book["rule"]["lookbacks_min"], list(osp.LOOKBACKS_MIN))
+        days = [t["day"] for t in self.book["trades"]]
+        self.assertEqual(len(days), len(set(days)), "at most one trade a day")
+        for t in self.book["trades"]:
+            with self.subTest(t["day"]):
+                self.assertGreaterEqual(t["votes"], osp.MIN_VOTES)
+                if t["why"] == "stop":
+                    # prices are stored to 4 decimals
+                    self.assertGreaterEqual(t["exit"], t["entry"] * osp.STOP_MULT - 1e-3)
+
+    def test_the_unseen_half_is_the_verified_number(self):
+        """+1,709.59 over 30 trades after 2026-02-27, worst run 308.47 — the
+        figures that passed all five checks on 17-Sep-2026."""
+        after = self.book["splits"][0]["after"]
+        self.assertEqual(self.book["splits"][0]["cut"], "2026-02-27")
+        self.assertEqual(after["trades"], 30)
+        self.assertAlmostEqual(after["net"], 1709.59, places=1)
+        self.assertAlmostEqual(after["worst_run"], 308.47, places=1)
+
+    def test_the_page_says_what_it_does_not_show(self):
+        for needed in ("A small sample", "first half flattered", "not the real quotes", "1-minute candles"):
+            with self.subTest(needed):
+                self.assertIn(needed, self.html)
+
+    def test_the_page_shows_the_skipped_days(self):
+        self.assertIn("The days it skips", self.html)
+        self.assertIn("Calm — no window moved enough", self.html)
 
 
 if __name__ == "__main__":

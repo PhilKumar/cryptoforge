@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260918-chart-button">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260918-optsell-tearsheet">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -2190,6 +2190,8 @@
         <button type="button" class="cf-info-language-button" data-cf-info-language-button="ta"
                 role="tab" aria-selected="false" tabindex="-1">தமிழ்</button>
       </div>
+      <a class="cf-info-tearsheet-link" href="/assets/tearsheet?doc=optsell"
+         title="Open the Option Seller backtest tearsheet">Tearsheet</a>
     </div>
     <div class="cf-info-language is-active" data-cf-info-language="en">
       <p class="cf-info-lede">Once a day, at 4 PM IST, this checks whether Bitcoin has made a strong move in one direction and, if it has, sells a same-day Bitcoin option on Delta Exchange into that move. It runs on <strong>paper only</strong> — it reads Delta's public prices and cannot place an order.</p>
@@ -2937,7 +2939,7 @@
 
 
 <!-- ═══════════════════════════════════════════════════════
-     PAGE: ASSETS — the three strategy tearsheets
+     PAGE: ASSETS — the four strategy tearsheets
      ═══════════════════════════════════════════════════════
      One page, three documents. The sheets are complete published
      documents with their own stylesheet, reader and element ids, so
@@ -2955,7 +2957,7 @@
   <div class="page-header">
     <div>
       <h1 class="page-title">Assets</h1>
-      <p class="page-subtitle">The backtest tearsheet behind each strategy, over every bar Binance holds.</p>
+      <p class="page-subtitle">The backtest tearsheet behind each strategy — Binance history for the Cascade family, Delta option history for the Option Seller.</p>
     </div>
   </div>
 
@@ -2974,6 +2976,11 @@
             data-cf-assets-doc="auto" data-cf-click="cfShowAssetDoc('auto')">
       <span class="cf-strat-icon cf-strat-icon-autofib" aria-hidden="true">&#8600;</span>
       <span><strong>Cascade-Auto</strong><small>Automatic &middot; sells at half</small></span>
+    </button>
+    <button type="button" class="cf-strat-tab" role="tab" aria-selected="false" tabindex="-1"
+            data-cf-assets-doc="optsell" data-cf-click="cfShowAssetDoc('optsell')">
+      <span class="cf-strat-icon cf-strat-icon-optsell" aria-hidden="true">&#9719;</span>
+      <span><strong>Option Seller</strong><small>Delta &middot; 4 PM options</small></span>
     </button>
   </div>
 
@@ -3444,7 +3451,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260918-chart-button" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260918-optsell-tearsheet" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 

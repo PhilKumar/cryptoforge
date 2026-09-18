@@ -1324,7 +1324,7 @@ function cfNavButtonForPage(pageId) {
 // given rather than deciding for itself, or the embed fights the page around
 // it. Resolved the same way the chart palette resolves it, so a sheet and a
 // chart never disagree about what "auto" means.
-var _CF_ASSET_DOCS = ['hybrid', 'vrule', 'auto'];
+var _CF_ASSET_DOCS = ['hybrid', 'vrule', 'auto', 'optsell'];
 
 function _cfAssetsTheme() {
   var theme = document.documentElement.getAttribute('data-theme');

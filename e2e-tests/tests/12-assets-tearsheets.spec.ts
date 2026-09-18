@@ -35,11 +35,11 @@ async function openAssets(page: Page) {
 }
 
 test.describe('Assets — the strategy tearsheets', () => {
-  test('the tab opens and carries all three sheets', async ({ page }) => {
+  test('the tab opens and carries all four sheets', async ({ page }) => {
     await login(page);
     await openAssets(page);
-    await expect(page.locator('#cf-assets-subnav [data-cf-assets-doc]')).toHaveCount(3);
-    for (const doc of ['hybrid', 'vrule', 'auto']) {
+    await expect(page.locator('#cf-assets-subnav [data-cf-assets-doc]')).toHaveCount(4);
+    for (const doc of ['hybrid', 'vrule', 'auto', 'optsell']) {
       await expect(page.locator(`[data-cf-assets-doc="${doc}"]`)).toHaveCount(1);
     }
   });
@@ -71,6 +71,13 @@ test.describe('Assets — the strategy tearsheets', () => {
     await page.click('[data-cf-assets-doc="auto"]');
     await expect(page.frameLocator('#cf-assets-frame').locator('h1').first())
       .toContainText(/Cascade-Auto/i, { timeout: 20_000 });  // hyphen is the enforced name
+
+    await page.click('[data-cf-assets-doc="optsell"]');
+    const frame = page.frameLocator('#cf-assets-frame');
+    await expect(frame.locator('h1').first()).toContainText(/Option Seller/i, { timeout: 20_000 });
+    // Styled and read, not raw markup: the reader builds the contents rail.
+    await expect(frame.locator('#document-toc a')).toHaveCount(9, { timeout: 10_000 });
+    await expect(frame.locator('#ledger tbody tr')).toHaveCount(54);
   });
 
   test('the page has an even rhythm and the tabs span to the panel edge', async ({ page }) => {

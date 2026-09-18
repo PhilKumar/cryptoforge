@@ -609,6 +609,7 @@ ACCENTS = {
     "hybrid": ("#0e7490", "#22d3ee"),  # cyan — the hand-driven book
     "auto": ("#92400e", "#f59e0b"),  # amber — the one that drives itself
     "vrule": ("#0f766e", "#2dd4bf"),  # teal — the ladder
+    "optsell": ("#1d4ed8", "#60a5fa"),  # blue — the option seller, 7.0:1
 }
 
 

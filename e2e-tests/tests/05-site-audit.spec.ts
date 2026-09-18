@@ -359,6 +359,7 @@ test.describe('Comprehensive Site Audit', () => {
       ['autofib-page', 'cf-af-strategy-info', 'auto'],
       ['rule3070-page', 'cf-vrule-strategy-info', 'vrule'],
       ['cascade-page', 'cf-cascade-strategy-info', 'hybrid'],
+      ['optsell-page', 'cf-os-strategy-info', 'optsell'],
     ]) {
       const strategyPage = page.locator('#' + pageId);
       await expect(strategyPage.locator('.allocator-header .cf-tearsheet-link')).toHaveCount(0);
