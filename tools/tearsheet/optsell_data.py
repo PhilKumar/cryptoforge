@@ -11,6 +11,8 @@ re-prices a trade.
     python3 tools/tearsheet/optsell_data.py ~/Documents/delta-momentum-research
 
 Inputs, both written by the research harness:
+  mom_sell_weekendcalm_slip0.json  the calm-weekend trades (19-Sep-2026), as
+                                 rebuilt and checked by weekend_verify.py
   mom_sell_consensus_slip0.json  the 54 consensus trades, as rebuilt by
                                  momentum_bt.run_day and passed through all five
                                  checks by consensus_verify.py
@@ -76,32 +78,46 @@ def build(research: pathlib.Path) -> dict:
         if r["stop"] == osp.STOP_MULT:
             by_day.setdefault(r["day"], {})[r["lb"]] = r
 
+    def row(tr, votes, leg):
+        spot = float(tr["underlying_at_entry"])
+        return {
+            "day": tr["day"],
+            "leg": leg,
+            "side": tr["side"],
+            "symbol": tr["symbol"],
+            "strike": tr["strike"],
+            "btc": round(spot, 2),
+            "votes": votes,
+            "entry": round(tr["entry"], 4),
+            "exit": round(tr["exit"], 4),
+            "why": tr["why"],
+            "fees": round(tr["fees"], 4),
+            "net": round(tr["net"], 4),
+            # Capital a live seller would tie up per 1 BTC: Delta's listed
+            # 0.5% initial margin on the Bitcoin value, plus the premium.
+            "capital": round(spot * osp.DEFAULT_IM_PCT / 100.0 + tr["entry"], 2),
+        }
+
     trades = []
     for tr in sorted(harness["trades"], key=lambda x: x["day"]):
         up, down = _votes(by_day[tr["day"]])
         agreed = up if tr["side"] == "C" else down
         if agreed < osp.MIN_VOTES:
             raise SystemExit(f"{tr['day']}: only {agreed} windows agree — not the engine's rule")
-        spot = float(tr["underlying_at_entry"])
-        trades.append(
-            {
-                "day": tr["day"],
-                "side": tr["side"],
-                "symbol": tr["symbol"],
-                "strike": tr["strike"],
-                "btc": round(spot, 2),
-                "votes": agreed,
-                "entry": round(tr["entry"], 4),
-                "exit": round(tr["exit"], 4),
-                "why": tr["why"],
-                "fees": round(tr["fees"], 4),
-                "net": round(tr["net"], 4),
-                # Capital a live seller would tie up per 1 BTC: Delta's listed
-                # 0.5% initial margin on the Bitcoin value, plus the premium.
-                "capital": round(spot * osp.DEFAULT_IM_PCT / 100.0 + tr["entry"], 2),
-            }
-        )
+        trades.append(row(tr, agreed, "strong"))
+    strong_days = {x["day"] for x in trades}
 
+    weekend = []
+    wpath = research / "mom_sell_weekendcalm_slip0.json"
+    if wpath.exists():
+        for tr in sorted(json.load(open(wpath, encoding="utf-8"))["trades"], key=lambda x: x["day"]):
+            up, down = _votes(by_day[tr["day"]])
+            if dt.date.fromisoformat(tr["day"]).weekday() < 5 or up + down or tr["day"] in strong_days:
+                raise SystemExit(f"{tr['day']}: not a calm weekend day — not the engine's weekend rule")
+            weekend.append(row(tr, 0, "weekend-calm"))
+
+    strong = trades
+    trades = sorted(strong + weekend, key=lambda x: x["day"])
     cut = days[len(days) // 2]
     third, two_thirds = days[len(days) // 3], days[2 * len(days) // 3]
     splits = []
@@ -115,28 +131,49 @@ def build(research: pathlib.Path) -> dict:
                 "label_en": label_en,
                 "label_ta": label_ta,
                 "cut": at,
-                "before": _stats([x for x in trades if x["day"] < at]),
-                "after": _stats([x for x in trades if x["day"] >= at]),
+                "before": _stats([x for x in strong if x["day"] < at]),
+                "after": _stats([x for x in strong if x["day"] >= at]),
             }
         )
 
-    # What the days it SKIPPED would have made, selling the same way.
-    groups = {"strong": [], "mixed": [], "calm": []}
+    weekend_splits = [
+        {
+            "label_en": "Calm weekends, split at the half",
+            "label_ta": "அமைதியான வார இறுதிகள், பாதியில் பிரித்தால்",
+            "cut": cut,
+            "before": _stats([x for x in weekend if x["day"] < cut]),
+            "after": _stats([x for x in weekend if x["day"] >= cut]),
+        }
+    ]
+
+    # Every kind of day at 4 PM, and what selling the same way made on it.
+    groups = {"mixed": [], "calm_weekday": []}
     for day, rows in by_day.items():
         if not all(lb in rows for lb in osp.LOOKBACKS_MIN):
             continue
         up, down = _votes(rows)
         if up >= osp.MIN_VOTES or down >= osp.MIN_VOTES:
-            continue  # the traded days are the ledger itself
-        groups["calm" if up + down == 0 else "mixed"].append(rows[120])
+            continue  # traded by the strong rule
+        if up + down == 0:
+            if dt.date.fromisoformat(day).weekday() >= 5:
+                continue  # traded by the weekend rule
+            groups["calm_weekday"].append(rows[120])
+        else:
+            groups["mixed"].append(rows[120])
+
+    def prem(rows):
+        return round(sum(x["entry"] for x in rows) / max(1, len(rows)), 1)
+
     day_kinds = {
-        "strong": _stats(trades),
+        "strong": _stats(strong),
+        "weekend_calm": _stats(weekend),
         "mixed": _stats(groups["mixed"]),
-        "calm": _stats(groups["calm"]),
+        "calm_weekday": _stats(groups["calm_weekday"]),
         "avg_premium": {
-            "strong": round(sum(x["entry"] for x in trades) / len(trades), 1),
-            "mixed": round(sum(x["entry"] for x in groups["mixed"]) / max(1, len(groups["mixed"])), 1),
-            "calm": round(sum(x["entry"] for x in groups["calm"]) / max(1, len(groups["calm"])), 1),
+            "strong": prem(strong),
+            "weekend_calm": prem(weekend),
+            "mixed": prem(groups["mixed"]),
+            "calm_weekday": prem(groups["calm_weekday"]),
         },
     }
 
@@ -154,12 +191,16 @@ def build(research: pathlib.Path) -> dict:
             "thresholds_pct": {str(lb): round(osp.threshold_pct(lb), 3) for lb in osp.LOOKBACKS_MIN},
             "min_votes": osp.MIN_VOTES,
             "stop_mult": osp.STOP_MULT,
+            "weekend_calm": True,
             "im_pct": osp.DEFAULT_IM_PCT,
         },
         "totals": _stats(trades),
         "avg_capital": round(sum(x["capital"] for x in trades) / len(trades), 2),
         "fees": round(sum(x["fees"] for x in trades), 2),
         "splits": splits,
+        "weekend_splits": weekend_splits,
+        "strong_totals": _stats(strong),
+        "weekend_totals": _stats(weekend),
         "day_kinds": day_kinds,
         "monthly": monthly,
         "trades": trades,

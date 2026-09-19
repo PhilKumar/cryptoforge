@@ -229,9 +229,16 @@ class OptionSellerSheetTests(unittest.TestCase):
         self.assertEqual(self.book["rule"]["lookbacks_min"], list(osp.LOOKBACKS_MIN))
         days = [t["day"] for t in self.book["trades"]]
         self.assertEqual(len(days), len(set(days)), "at most one trade a day")
+        import datetime as dt
+
         for t in self.book["trades"]:
             with self.subTest(t["day"]):
-                self.assertGreaterEqual(t["votes"], osp.MIN_VOTES)
+                if t.get("leg") == "weekend-calm":
+                    # 19-Sep-2026: a calm Saturday or Sunday, no window voting
+                    self.assertGreaterEqual(dt.date.fromisoformat(t["day"]).weekday(), 5)
+                    self.assertEqual(t["votes"], 0)
+                else:
+                    self.assertGreaterEqual(t["votes"], osp.MIN_VOTES)
                 if t["why"] == "stop":
                     # prices are stored to 4 decimals
                     self.assertGreaterEqual(t["exit"], t["entry"] * osp.STOP_MULT - 1e-3)
@@ -244,6 +251,19 @@ class OptionSellerSheetTests(unittest.TestCase):
         self.assertEqual(after["trades"], 30)
         self.assertAlmostEqual(after["net"], 1709.59, places=1)
         self.assertAlmostEqual(after["worst_run"], 308.47, places=1)
+
+    def test_the_calm_weekend_rule_is_the_verified_number(self):
+        """79 trades, +2,749.10 per 1 BTC, worst run 224.32 — weekend_verify.py,
+        all five checks passed on 19-Sep-2026. Both halves paid."""
+        w = self.book["weekend_totals"]
+        self.assertEqual(w["trades"], 79)
+        self.assertAlmostEqual(w["net"], 2749.10, places=1)
+        self.assertAlmostEqual(w["worst_run"], 224.32, places=1)
+        half = self.book["weekend_splits"][0]
+        self.assertGreater(half["before"]["net"], 0)
+        self.assertGreater(half["after"]["net"], 0)
+        self.assertIn("Calm Saturday or Sunday (traded)", self.html)
+        self.assertIn("Calm weekday (skipped)", self.html)
 
     def test_its_own_sections_survive(self):
         for needed in ("Chosen on one half, tested on the other", "The days it skips", "Every trade"):

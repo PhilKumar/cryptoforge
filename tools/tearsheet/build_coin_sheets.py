@@ -486,6 +486,15 @@ STRATEGIES = {
                 ),
             ),
             (
+                ("Calm weekends", "அமைதியான வார இறுதி"),
+                (
+                    "On a Saturday or Sunday when no window moved enough, it also sells the at-the-money option, in "
+                    "the direction of the last 2 hours. Calm weekdays are skipped.",
+                    "சனி அல்லது ஞாயிறு அன்று எந்த நேர அளவும் போதுமான அளவு நகரவில்லை என்றால், கடந்த 2 மணி நேர "
+                    "திசையில் at-the-money option-ஐயும் விற்கும். அமைதியான வார நாட்கள் தவிர்க்கப்படும்.",
+                ),
+            ),
+            (
                 ("Stop", "Stop"),
                 (
                     "Buy it back at once if its price reaches twice what it was sold for.",
@@ -986,6 +995,8 @@ def best_worst(book, noun):
         out = ""
         for x in items:
             side = t("call", "call") if x["side"] == "C" else t("put", "put")
+            if x.get("leg") == "weekend-calm":
+                side += " · " + t("calm weekend", "அமைதி வார இறுதி")
             why = t("stop", "stop") if x["why"] == "stop" else t("5:25 PM", "மாலை 5:25")
             out += (
                 f"<tr><th scope='row'>{x['day']}</th><td>{side} {x['strike']:,}</td>"
@@ -1355,6 +1366,11 @@ def option_sheet(book, coin_en, coin_ta, available):
     b = book
     raw = b["raw"]
     oos = raw["splits"][0]
+    wk = raw.get("weekend_splits", [None])[0]
+    wk_tot = raw.get("weekend_totals") or {"trades": 0, "net": 0.0, "win_pct": 0.0, "worst_run": 0.0}
+    st_tot = raw.get("strong_totals") or raw["totals"]
+    unseen_net = oos["after"]["net"] + (wk["after"]["net"] if wk else 0.0)
+    unseen_n = oos["after"]["trades"] + (wk["after"]["trades"] if wk else 0)
     noun = ("Trades", "டிரேடுகள்")
     chips = [
         (("Window", "காலம்"), (f"{b['first']} → {b['last']}", f"{b['first']} → {b['last']}")),
@@ -1380,14 +1396,18 @@ def option_sheet(book, coin_en, coin_ta, available):
     finding = note(
         "The finding that matters most",
         "மிக முக்கியமான கண்டுபிடிப்பு",
-        f"On the days the rule was chosen on it made {sgn(oos['before']['per_trade'])} a trade; on the {oos['after']['trades']} "
-        f"days it had never seen it made {sgn(oos['after']['per_trade'])} — {sgn(oos['after']['net'], 0)} in all. Plan "
-        f"on the second number. And the waiting is the edge: the same sale made on every other day earned almost "
-        f"nothing ({sgn(raw['day_kinds']['calm']['per_trade'])} a day on calm days).",
-        f"விதி தேர்வான நாட்களில் ஒரு டிரேடுக்கு {sgn(oos['before']['per_trade'])}; அது பார்க்காத {oos['after']['trades']} "
-        f"நாட்களில் {sgn(oos['after']['per_trade'])} — மொத்தம் {sgn(oos['after']['net'], 0)}. இரண்டாவது எண்ணை வைத்தே "
-        f"திட்டமிடுங்கள். காத்திருப்பதுதான் பலம்: மற்ற ஒவ்வொரு நாளும் இதே விற்பனை கிட்டத்தட்ட எதுவும் தரவில்லை "
-        f"(அமைதி நாட்களில் நாளுக்கு {sgn(raw['day_kinds']['calm']['per_trade'])}).",
+        f"Two rules, and when they pay. The strong-move rule made {sgn(oos['before']['per_trade'])} a trade on the days "
+        f"it was chosen on and {sgn(oos['after']['per_trade'])} on the {oos['after']['trades']} days it had never seen — "
+        f"plan on the second. The calm-weekend rule, added on 19-Sep-2026, made {sgn(wk_tot['net'], 0)} over "
+        f"{wk_tot['trades']} Saturdays and Sundays. A calm WEEKDAY is the opposite: the same sale lost "
+        f"{sgn(raw['day_kinds']['calm_weekday']['net'], 0)} over {raw['day_kinds']['calm_weekday']['trades']} days, "
+        f"which is why it is skipped.",
+        f"இரண்டு விதிகள், எப்போது பலன் தருகின்றன. வலுவான நகர்வு விதி தேர்வான நாட்களில் டிரேடுக்கு "
+        f"{sgn(oos['before']['per_trade'])}, அது பார்க்காத {oos['after']['trades']} நாட்களில் {sgn(oos['after']['per_trade'])} — "
+        f"இரண்டாவதை வைத்துத் திட்டமிடுங்கள். 19-செப்-2026 அன்று சேர்த்த அமைதியான வார இறுதி விதி {wk_tot['trades']} "
+        f"சனி, ஞாயிறுகளில் {sgn(wk_tot['net'], 0)} ஈட்டியது. அமைதியான வார நாள் நேர்மாறானது: அதே விற்பனை "
+        f"{raw['day_kinds']['calm_weekday']['trades']} நாட்களில் {sgn(raw['day_kinds']['calm_weekday']['net'], 0)} — "
+        f"அதனால்தான் தவிர்க்கப்படுகிறது.",
         warn=True,
     )
     pf = f"{b['pf']:.2f}" if b["pf"] else "—"
@@ -1401,11 +1421,11 @@ def option_sheet(book, coin_en, coin_ta, available):
         ),
         (
             ("On days it never saw", "பார்க்காத நாட்களில்"),
-            sgn(oos["after"]["net"]),
-            cls(oos["after"]["net"]),
+            sgn(unseen_net),
+            cls(unseen_net),
             (
-                f"{oos['after']['trades']} trades from {oos['cut']}",
-                f"{oos['cut']} முதல் {oos['after']['trades']} டிரேடுகள்",
+                f"{unseen_n} trades from {oos['cut']}, both rules",
+                f"{oos['cut']} முதல் {unseen_n} டிரேடுகள், இரு விதிகளும்",
             ),
         ),
         (
@@ -1468,7 +1488,7 @@ def option_sheet(book, coin_en, coin_ta, available):
         ),
     ]
     split_rows = ""
-    for s in raw["splits"]:
+    for s in raw["splits"] + raw.get("weekend_splits", []):
         for i, (part_en, part_ta, st) in enumerate(
             (
                 (f"before {s['cut']}", f"{s['cut']}-க்கு முன்", s["before"]),
@@ -1502,18 +1522,21 @@ def option_sheet(book, coin_en, coin_ta, available):
             split_rows,
         ),
         (
-            "The settings were chosen on the first half of the days only. The second half is what the rule made on days "
-            "it had never seen. Moving the split to one third or two thirds keeps the second part profitable.",
-            "அமைப்புகள் முதல் பாதி நாட்களில் மட்டுமே தேர்வானவை. இரண்டாம் பாதி — விதி பார்க்காத நாட்கள் — உண்மையான சோதனை. "
-            "பிரிவை மூன்றில் ஒன்று அல்லது இரண்டுக்கு நகர்த்தினாலும் இரண்டாம் பகுதி லாபத்திலேயே இருக்கிறது.",
+            "The strong-move rule's settings were chosen on the first half of the days only; the second half is what it made "
+            "on days it had never seen, and moving the split to one third or two thirds keeps that part profitable. The "
+            "calm-weekend rule was stated before any variant was looked at, and both of its halves paid.",
+            "வலுவான நகர்வு விதியின் அமைப்புகள் முதல் பாதி நாட்களில் மட்டுமே தேர்வானவை; இரண்டாம் பாதி அது பார்க்காத "
+            "நாட்கள். பிரிவை மூன்றில் ஒன்று அல்லது இரண்டுக்கு நகர்த்தினாலும் அது லாபத்தில் இருக்கிறது. அமைதியான வார இறுதி "
+            "விதி எந்த மாற்றத்தையும் பார்க்கும் முன் வரையறுக்கப்பட்டது; அதன் இரு பாதிகளும் லாபம் தந்தன.",
         ),
     )
     k = raw["day_kinds"]
     kinds = ""
     for key, en, ta in (
         ("strong", "Strong move — 5 or 6 windows agree (traded)", "வலுவான நகர்வு — 5 அல்லது 6 ஒப்புதல் (டிரேடு)"),
+        ("weekend_calm", "Calm Saturday or Sunday (traded)", "அமைதியான சனி அல்லது ஞாயிறு (டிரேடு)"),
         ("mixed", "Mixed — 1 to 4 windows (skipped)", "கலப்பு — 1 முதல் 4 (தவிர்க்கப்பட்டது)"),
-        ("calm", "Calm — no window moved enough (skipped)", "அமைதி — போதுமான நகர்வு இல்லை (தவிர்க்கப்பட்டது)"),
+        ("calm_weekday", "Calm weekday (skipped)", "அமைதியான வார நாள் (தவிர்க்கப்பட்டது)"),
     ):
         st = k[key]
         kinds += (
@@ -1540,10 +1563,12 @@ def option_sheet(book, coin_en, coin_ta, available):
             kinds,
         ),
         (
-            "Why it waits: after a strong move the option is dearer, so there is more premium to keep in the same 85 "
-            "minutes. On a calm day the premium is small, fees take most of it, and the stop still fires about one day in three.",
-            "ஏன் காத்திருக்கிறது: வலுவான நகர்வுக்குப் பின் option விலை அதிகம்; அதே 85 நிமிடத்தில் அதிக premium கிடைக்கும். "
-            "அமைதி நாளில் premium சிறியது, கட்டணம் பெரும்பகுதியை எடுக்கும், stop மூன்றில் ஒரு நாள் அடிக்கும்.",
+            "Every kind of day at 4 PM, and what the same sale made on it. After a strong move the option is dearer, so "
+            "there is more premium to keep. A calm weekend stays calm, so a small premium is still kept. A calm weekday "
+            "is often a pause before a move, and the stop fires on half of them.",
+            "மாலை 4 மணியின் ஒவ்வொரு நாள் வகையும், அதே விற்பனை அதில் ஈட்டியதும். வலுவான நகர்வுக்குப் பின் option விலை "
+            "அதிகம்; வைத்துக்கொள்ள அதிக premium. அமைதியான வார இறுதி அமைதியாகவே இருக்கும்; சிறிய premium-உம் "
+            "கிடைக்கும். அமைதியான வார நாள் பெரும்பாலும் ஒரு நகர்வுக்கு முன் இடைவெளி; அவற்றில் பாதியில் stop அடிக்கிறது.",
         ),
     )
     prem = raw["day_kinds"]["avg_premium"]["strong"]
@@ -1591,7 +1616,7 @@ def option_sheet(book, coin_en, coin_ta, available):
         size_rows += (
             f"<tr><th scope='row'>{sz:g} BTC</th><td class='num'>{int(round(sz / 0.001))}</td>"
             f"<td class='num'>{usd(b['capital'] * sz, 0)}</td>"
-            f"<td class='num {cls(oos['after']['net'])}'>{sgn(oos['after']['net'] * sz, 0)}</td>"
+            f"<td class='num {cls(unseen_net)}'>{sgn(unseen_net * sz, 0)}</td>"
             f"<td class='num neg'>{usd(-b['dd'] * sz, 0)}</td>"
             f"<td class='num {cls(b['worst']['net'])}'>{sgn(b['worst']['net'] * sz, 0)}</td></tr>"
         )
@@ -1604,7 +1629,7 @@ def option_sheet(book, coin_en, coin_ta, available):
                 ("Size", "அளவு"),
                 ("Contracts", "Contracts"),
                 ("Capital per trade", "டிரேடுக்கு மூலதனம்"),
-                ("Unseen half made", "பார்க்காத பாதி"),
+                ("Unseen half made, both rules", "பார்க்காத பாதி, இரு விதிகளும்"),
                 ("Worst losing run", "மோசமான தொடர் இழப்பு"),
                 ("Worst single trade", "மோசமான ஒற்றை டிரேடு"),
             ),
@@ -1663,6 +1688,8 @@ def option_sheet(book, coin_en, coin_ta, available):
     trade_rows = ""
     for x in reversed(raw["trades"]):
         side = t("call", "call") if x["side"] == "C" else t("put", "put")
+        if x.get("leg") == "weekend-calm":
+            side += " · " + t("calm weekend", "அமைதி வார இறுதி")
         why = t("stop", "stop") if x["why"] == "stop" else t("5:25 PM", "மாலை 5:25")
         trade_rows += (
             f"<tr data-year='{x['day'][:4]}'><th scope='row'>{x['day']}</th><td>{side} {x['strike']:,}</td>"
