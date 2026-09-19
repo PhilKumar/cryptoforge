@@ -9519,3 +9519,6 @@ html[data-theme="light"] .journal-entry-notes section {
 #cf-os-chart-panel.cf-os-flash { animation: cf-os-flash 1.2s ease-out; }
 @keyframes cf-os-flash { 0% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 2px transparent; } }
 @media (prefers-reduced-motion: reduce) { #cf-os-chart-panel.cf-os-flash { animation: none; } }
+.cf-os-toggle { display:flex; gap:10px; align-items:flex-start; margin:4px 0 10px; cursor:pointer; }
+.cf-os-toggle input { margin-top:3px; width:16px; height:16px; accent-color:var(--accent); }
+.cf-os-toggle small { color:var(--text-dim); }

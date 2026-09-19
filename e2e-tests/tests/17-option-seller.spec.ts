@@ -88,6 +88,7 @@ async function openOptionSeller(page: Page, initial = status()) {
     const body = route.request().postDataJSON();
     posted.push(body);
     if (typeof body.enabled === 'boolean') state = status({ enabled: body.enabled, size_btc: body.size_btc });
+    if (typeof body.weekend_calm === 'boolean') state = { ...state, weekend_calm: body.weekend_calm };
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state) });
   });
   await page.goto('/app');
@@ -212,6 +213,17 @@ test.describe('Option Seller — paper', () => {
       );
       return hit;
     }, { timeout: 5000 }).toBe('visible');
+  });
+
+  test('the calm-weekend switch sends a real boolean and stays where it was put', async ({ page }) => {
+    const posted = await openOptionSeller(page);
+    const box = page.locator('#cf-os-weekend');
+    await expect(box).toBeChecked();
+    await box.uncheck();
+    await expect.poll(() => posted.length).toBe(1);
+    expect(posted[0]).toEqual({ weekend_calm: false });
+    await expect(box).not.toBeChecked();
+    await expect(page.locator('#optsell-page [data-cf-info-language="en"]')).toContainText('Calm weekends');
   });
 
   test('the manual opens in English and Tamil', async ({ page }) => {

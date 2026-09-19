@@ -59,6 +59,15 @@ class OptionSellerRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(again["contracts"], 250)
         self.assertIn("switched ON", again["events"][0]["message"])
 
+    async def test_the_weekend_switch_persists(self):
+        async with self._client() as client:
+            r = await client.post("/api/option-seller/settings", json={"weekend_calm": False}, headers=self.headers)
+            self.assertEqual(r.status_code, 200, r.text)
+            again = (await client.get("/api/option-seller/status")).json()
+            bad = await client.post("/api/option-seller/settings", json={"weekend_calm": "no"}, headers=self.headers)
+        self.assertFalse(again["weekend_calm"])
+        self.assertEqual(bad.status_code, 400)
+
     async def test_bad_settings_are_a_400(self):
         async with self._client() as client:
             for body in ({"size_btc": -1}, {"enabled": "yes"}, {"size_btc": 99}):

@@ -436,6 +436,115 @@ def test_a_chart_delta_will_not_serve_is_empty_not_an_error():
     assert out["trade"]["symbol"] and out["option"] == [] and out["index"] == []
 
 
+# ── calm weekends (19-Sep-2026) ───────────────────────────────────
+# "Why not option seller taken on Saturday and sunday... it will be calm". On a
+# Saturday or Sunday with NO window voting, it sells in the 2-hour direction.
+# Calm weekdays lose in the research, so a calm Friday must still be skipped.
+
+SAT = dt.date(2026, 9, 19)
+SUN = dt.date(2026, 9, 20)
+
+
+class DayDelta(FakeDelta):
+    """FakeDelta moved to another date: the index, the listing and its expiry."""
+
+    def __init__(self, day, **kw):
+        super().__init__(**kw)
+        self.day = day
+        self.entry = dt.datetime(day.year, day.month, day.day, 10, 30, tzinfo=dt.timezone.utc).timestamp()
+
+    async def __call__(self, path, params):
+        shift = int(self.entry - ENTRY)
+        if path == "/history/candles" and params["symbol"] == osp.UNDERLYING:
+            out = await super().__call__(path, params)
+            for row in out["result"]:
+                row["time"] += shift
+            return out
+        if path == "/products":
+            out = await super().__call__(path, params)
+            tag = self.day.strftime("%d%m%y")
+            for row in out["result"]:
+                if row["settlement_time"] == SETTLE_ISO:
+                    row["settlement_time"] = f"{self.day.isoformat()}T12:00:00Z"
+                    row["symbol"] = row["symbol"].replace("180926", tag)
+            return out
+        return await super().__call__(path, params)
+
+
+def calm(two_hour=0.1):
+    moves = {lb: 0.05 for lb in osp.LOOKBACKS_MIN}
+    moves[120] = two_hour
+    return moves
+
+
+def on(day, delta):
+    s = osp.OptionSellerPaper(fetch_json=delta, clock=Clock(delta.entry + 30))
+    s.enabled = True
+    return s
+
+
+def test_a_calm_saturday_sells_in_the_two_hour_direction():
+    delta = DayDelta(SAT, moves=calm(0.1), marks=[80.0])
+    s = on(SAT, delta)
+    assert run(s.tick()) is True
+    rec = s.days[SAT.isoformat()]
+    assert rec["status"] == "open" and rec["leg"] == "weekend-calm"
+    assert rec["side"] == "C" and rec["symbol"] == "C-BTC-100000-190926"
+    assert rec["votes"] == {"C": 0, "P": 0}
+    assert "calm weekend" in s.events[-1]["message"]
+
+
+def test_a_calm_sunday_after_a_small_dip_sells_the_put():
+    delta = DayDelta(SUN, moves=calm(-0.1), marks=[80.0])
+    s = on(SUN, delta)
+    run(s.tick())
+    rec = s.days[SUN.isoformat()]
+    assert rec["leg"] == "weekend-calm" and rec["side"] == "P"
+
+
+def test_a_calm_friday_is_still_skipped():
+    """Calm WEEKDAYS lost -2,558 per 1 BTC in the research."""
+    s, _ = seller(FakeDelta(moves=calm(0.1)))
+    run(s.tick())
+    assert s.days[DAY.isoformat()]["status"] == "skipped"
+
+
+def test_a_weekend_with_some_votes_is_not_calm():
+    moves = calm(0.1)
+    moves[720] = 5.0  # one window voted up: mixed, not calm
+    s = on(SAT, DayDelta(SAT, moves=moves))
+    run(s.tick())
+    assert s.days[SAT.isoformat()]["status"] == "skipped"
+
+
+def test_a_strong_weekend_is_the_ordinary_rule():
+    s = on(SAT, DayDelta(SAT, marks=[500.0]))
+    run(s.tick())
+    rec = s.days[SAT.isoformat()]
+    assert rec["status"] == "open" and rec["leg"] == "strong" and rec["votes"]["C"] == 6
+
+
+def test_the_weekend_leg_can_be_switched_off_alone():
+    delta = DayDelta(SAT, moves=calm(0.1))
+    s = on(SAT, delta)
+    s.configure(weekend_calm=False)
+    run(s.tick())
+    assert s.days[SAT.isoformat()]["status"] == "skipped"
+    assert "switched OFF" in s.events[0]["message"]
+
+
+def test_the_weekend_leg_is_on_for_a_book_saved_before_it_existed():
+    s = osp.OptionSellerPaper()
+    s.load({"enabled": True, "size_btc": 0.1, "days": {}})
+    assert s.weekend_calm is True
+    s.configure(weekend_calm=False)
+    again = osp.OptionSellerPaper()
+    again.load(s.dump())
+    assert again.weekend_calm is False and again.status()["weekend_calm"] is False
+    with pytest.raises(ValueError):
+        s.configure(weekend_calm="yes")
+
+
 # ── settings, state, safety ───────────────────────────────────────
 
 

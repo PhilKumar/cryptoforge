@@ -10856,7 +10856,9 @@ async def option_seller_settings(request: Request):
     seller = OptionSellerPaper()
     seller.load(await asyncio.to_thread(_load_option_seller_state))
     try:
-        seller.configure(enabled=body.get("enabled"), size_btc=body.get("size_btc"))
+        seller.configure(
+            enabled=body.get("enabled"), size_btc=body.get("size_btc"), weekend_calm=body.get("weekend_calm")
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     await asyncio.to_thread(_put_option_seller_state, seller.dump())

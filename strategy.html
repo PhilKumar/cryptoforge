@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260918-optsell-tearsheet">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260919-weekend-calm">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -2200,7 +2200,8 @@
       <section><h4>3 · How it gets out</h4><p>It buys the option back if its price <strong>doubles</strong> (the stop), or at <strong>5:25 PM</strong>, five minutes before settlement. The profit is the premium that decayed in between.</p></section>
       <section><h4>4 · Two results for every trade</h4><p>The backtest used Delta's mark price. A real order sells at the bid and buys back at the ask. Both are shown, so the gap between the test and real trading is visible. The stop is also checked against 1-minute candles, so a stop the 15-second price check missed is flagged.</p></section>
       <section><h4>5 · What the test showed</h4><p>On 405 days of Delta's real prices, tuned on the first half and judged on the second, it made about +1,710 per 1 BTC over 30 unseen trades, with a worst losing run of 308. That is a small sample — the reason this runs on paper first.</p></section>
-      <section><h4>6 · Size</h4><p>The paper size is in BTC; one Delta contract is 0.001 BTC. 0.1 BTC is 100 contracts. Selling needs margin of about 0.5–1% of the Bitcoin value, so live trading would need roughly $150 of account per 0.1 BTC.</p></section>
+      <section><h4>6 · Calm weekends</h4><p>On a <strong>Saturday or Sunday</strong> when none of the six windows moved enough, it also sells the at-the-money option, in the direction of the last 2 hours. Calm weekdays lose money — a quiet 4 PM on a weekday is often a pause before a move — but calm weekends paid: 79 trades, 77% won, +$2,749 per 1 BTC, worst losing run $224, and all five checks passed. It has its own switch in the Paper book.</p></section>
+      <section><h4>7 · Size</h4><p>The paper size is in BTC; one Delta contract is 0.001 BTC. 0.1 BTC is 100 contracts. Selling needs margin of about 0.5–1% of the Bitcoin value, so live trading would need roughly $150 of account per 0.1 BTC.</p></section>
     </div>
     <div class="cf-info-language" data-cf-info-language="ta">
       <p class="cf-info-lede">தினமும் ஒருமுறை, இந்திய நேரம் மாலை 4 மணிக்கு, Bitcoin ஒரே திசையில் வலுவாக நகர்ந்திருக்கிறதா என்று இது பார்க்கும். நகர்ந்திருந்தால், அதே நாள் முடியும் Bitcoin option-ஐ Delta Exchange-இல் அந்த நகர்வின் திசையில் விற்கும். இது <strong>paper மட்டுமே</strong> — Delta-வின் பொது விலைகளைப் படிக்கும்; order போட முடியாது.</p>
@@ -2209,7 +2210,8 @@
       <section><h4>3 · எப்படி வெளியேறும்</h4><p>Option விலை <strong>இரட்டிப்பானால்</strong> (stop) அல்லது settlement-க்கு ஐந்து நிமிடம் முன் <strong>மாலை 5:25-க்கு</strong> திரும்ப வாங்கும். இடையில் குறைந்த premium தான் லாபம்.</p></section>
       <section><h4>4 · ஒவ்வொரு trade-க்கும் இரண்டு முடிவுகள்</h4><p>Backtest Delta-வின் mark விலையைப் பயன்படுத்தியது. உண்மையான order bid-இல் விற்று ask-இல் திரும்ப வாங்கும். இரண்டும் காட்டப்படும்; test-க்கும் உண்மையான trading-க்கும் உள்ள இடைவெளி தெரியும். 15-வினாடி விலை சோதனை தவறவிட்ட stop-ஐ 1-நிமிட candle மூலம் சரிபார்த்துக் குறிக்கும்.</p></section>
       <section><h4>5 · Test காட்டியது</h4><p>Delta-வின் 405 நாள் உண்மையான விலைகளில், முதல் பாதியில் அமைத்து இரண்டாம் பாதியில் சோதித்ததில், பார்க்காத 30 trade-களில் 1 BTC-க்கு சுமார் +1,710, மோசமான தொடர் இழப்பு 308. இது சிறிய மாதிரி — அதனால் தான் முதலில் paper.</p></section>
-      <section><h4>6 · அளவு</h4><p>Paper அளவு BTC-இல்; Delta-வின் ஒரு contract 0.001 BTC. 0.1 BTC = 100 contract. விற்பதற்கு Bitcoin மதிப்பில் சுமார் 0.5–1% margin தேவை; live-க்கு 0.1 BTC-க்கு சுமார் $150 கணக்கில் இருக்க வேண்டும்.</p></section>
+      <section><h4>6 · அமைதியான வார இறுதி</h4><p><strong>சனி அல்லது ஞாயிறு</strong> அன்று ஆறு நேர அளவுகளில் எதுவும் போதுமான அளவு நகரவில்லை என்றால், கடந்த 2 மணி நேர திசையில் at-the-money option-ஐயும் விற்கும். அமைதியான வார நாட்கள் நஷ்டம் — வார நாளின் அமைதியான மாலை 4 பெரும்பாலும் ஒரு நகர்வுக்கு முன் இடைவெளி — ஆனால் அமைதியான வார இறுதிகள் லாபம்: 79 டிரேடுகள், 77% வெற்றி, 1 BTC-க்கு +$2,749, மோசமான தொடர் இழப்பு $224; ஐந்து சோதனைகளும் தேறின. Paper book-இல் இதற்கென தனி switch உள்ளது.</p></section>
+      <section><h4>7 · அளவு</h4><p>Paper அளவு BTC-இல்; Delta-வின் ஒரு contract 0.001 BTC. 0.1 BTC = 100 contract. விற்பதற்கு Bitcoin மதிப்பில் சுமார் 0.5–1% margin தேவை; live-க்கு 0.1 BTC-க்கு சுமார் $150 கணக்கில் இருக்க வேண்டும்.</p></section>
     </div>
   </div>
 
@@ -2225,6 +2227,11 @@
         <label id="cf-os-contracts-label">Contracts</label>
         <div class="cf-af-derived" id="cf-os-contracts" aria-labelledby="cf-os-contracts-label">100</div>
       </div>
+      <label class="cf-os-toggle" for="cf-os-weekend">
+        <input id="cf-os-weekend" type="checkbox" class="read-only-hide" checked data-cf-change="cfOsSaveWeekend(this.checked)">
+        <span><strong>Also sell calm Saturdays and Sundays</strong><br>
+        <small>When no window moved enough at 4 PM on a weekend. Tested: 79 trades, 77% won, +$2,749 per 1 BTC.</small></span>
+      </label>
       <div class="cf-cascade-form-note">Paper only. Nothing is sent to Delta except requests for public prices. Every trade is recorded at the mark and at the real bid and ask.</div>
     </div>
     <div class="cf-af-state" id="cf-os-state-line">
@@ -3451,7 +3458,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260918-optsell-tearsheet" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260919-weekend-calm" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 

@@ -11,6 +11,15 @@ proj_delta_momentum_option_backtest):
   Buy it back when its mark price doubles (the stop), or at 17:25 IST, five
   minutes before the 17:30 IST settlement. At most one trade a day.
 
+WEEKEND CALM LEG (19-Sep-2026, Phil: "it will be calm and no much movement even
+at 4 PM"). On a Saturday or Sunday when NO window moved enough to vote, it also
+sells the at-the-money option, in the direction of the 2-hour move. Calm
+WEEKDAYS lose (-2,558 per 1 BTC over 83 days) — a quiet 4 PM on a weekday is
+often a pause before a move — but calm weekends paid on both halves, on each
+day, and in 27 of 27 neighbouring settings: 79 trades, 77% won, +2,749 per
+1 BTC, worst run 224, all five checks passed (weekend_verify.py in the research
+folder). It can be switched off on its own.
+
 Tested on 405 days of Delta's real marks, chosen on the first half only and
 scored on the second: +1,710 per 1 BTC over 30 unseen trades with a worst
 losing run of 308 — about the same money as the best single setting with a
@@ -190,6 +199,7 @@ class OptionSellerPaper:
         self._clock = clock
         self.enabled = False
         self.size_btc = DEFAULT_SIZE_BTC
+        self.weekend_calm = True
         self.days: Dict[str, dict] = {}
         self.events: List[dict] = []
         self._products_cache: Dict[str, List[dict]] = {}
@@ -200,6 +210,7 @@ class OptionSellerPaper:
         return {
             "enabled": self.enabled,
             "size_btc": self.size_btc,
+            "weekend_calm": self.weekend_calm,
             "days": self.days,
             "events": self.events[-EVENT_LIMIT:],
         }
@@ -211,6 +222,8 @@ class OptionSellerPaper:
             self.size_btc = self._clean_size(state.get("size_btc", DEFAULT_SIZE_BTC))
         except ValueError:
             self.size_btc = DEFAULT_SIZE_BTC
+        # Absent in a book saved before the leg existed: on, as Phil asked.
+        self.weekend_calm = bool(state.get("weekend_calm", True))
         self.days = dict(state.get("days") or {})
         self.events = list(state.get("events") or [])[-EVENT_LIMIT:]
 
@@ -228,7 +241,7 @@ class OptionSellerPaper:
             raise ValueError("size_btc must be at least one contract (0.001 BTC)")
         return round(size, 3)
 
-    def configure(self, enabled=None, size_btc=None) -> None:
+    def configure(self, enabled=None, size_btc=None, weekend_calm=None) -> None:
         if size_btc is not None:
             size = self._clean_size(size_btc)
             if size != self.size_btc:
@@ -236,6 +249,11 @@ class OptionSellerPaper:
                 self._event("info", f"Paper size set to {size:g} BTC ({round(size / CONTRACT_BTC)} contracts)")
         if enabled is not None and not isinstance(enabled, bool):
             raise ValueError("enabled must be true or false")
+        if weekend_calm is not None and not isinstance(weekend_calm, bool):
+            raise ValueError("weekend_calm must be true or false")
+        if weekend_calm is not None and weekend_calm != self.weekend_calm:
+            self.weekend_calm = weekend_calm
+            self._event("info", "Calm-weekend selling switched " + ("ON" if weekend_calm else "OFF"))
         if enabled is not None and enabled != self.enabled:
             self.enabled = bool(enabled)
             self._event("info", "Paper trading switched ON" if self.enabled else "Paper trading switched OFF")
@@ -311,6 +329,17 @@ class OptionSellerPaper:
             self._event("warn", f"{key}: index history incomplete, no trade")
             self._trim()
             return True
+        leg = "strong"
+        if not decision["side"] and self.weekend_calm and today.weekday() >= 5:
+            votes = decision["votes"]
+            two_hour = decision["moves"].get(LOOKBACKS_MIN[0], 0.0)
+            if votes["C"] == 0 and votes["P"] == 0 and two_hour:
+                # Calm weekend: sell in the direction of the 2-hour move, exactly
+                # as the research harness did (its lookback-120 row).
+                decision = dict(decision, side="C" if two_hour > 0 else "P")
+                leg = "weekend-calm"
+        rec["leg"] = leg
+        rec["side"] = decision["side"]
         if not decision["side"]:
             votes = decision["votes"]
             rec.update(
@@ -361,8 +390,13 @@ class OptionSellerPaper:
         self._event(
             "trade",
             f"{key}: SOLD {rec['contracts']} x {contract['symbol']} (paper) at mark {mark:,.2f}"
-            f" (bid {self._px(quote['bid'])}) — {decision['votes'][decision['side']]} of 6 windows agreed;"
-            f" stop at {rec['stop_px']:,.2f}",
+            f" (bid {self._px(quote['bid'])}) — "
+            + (
+                "calm weekend, no window moved enough;"
+                if leg == "weekend-calm"
+                else f"{decision['votes'][decision['side']]} of 6 windows agreed;"
+            )
+            + f" stop at {rec['stop_px']:,.2f}",
         )
         self._trim()
         return True
@@ -613,12 +647,14 @@ class OptionSellerPaper:
             "paper_only": True,
             "enabled": self.enabled,
             "size_btc": self.size_btc,
+            "weekend_calm": self.weekend_calm,
             "contracts": round(self.size_btc / CONTRACT_BTC),
             "rule": {
                 "lookbacks_min": list(LOOKBACKS_MIN),
                 "thresholds_pct": {str(lb): round(threshold_pct(lb), 3) for lb in LOOKBACKS_MIN},
                 "min_votes": MIN_VOTES,
                 "stop_mult": STOP_MULT,
+                "weekend_calm": self.weekend_calm,
                 "entry_ist": "16:00",
                 "exit_ist": "17:25",
             },

@@ -15344,8 +15344,11 @@ function _cfOsSide(side) {
 
 function _cfOsStatusLabel(day) {
   var st = (day && day.status) || '';
-  if (st === 'open') return 'Holding';
-  if (st === 'closed') return day.exit_why === 'stop' ? 'Stopped' : 'Closed 17:25';
+  if (st === 'open') return day.leg === 'weekend-calm' ? 'Holding · calm weekend' : 'Holding';
+  if (st === 'closed') {
+    var how = day.exit_why === 'stop' ? 'Stopped' : 'Closed 17:25';
+    return day.leg === 'weekend-calm' ? how + ' · calm weekend' : how;
+  }
   if (st === 'skipped') return 'No trade';
   if (st === 'missed') return 'Missed';
   if (st === 'error') return 'Error';
@@ -15391,7 +15394,10 @@ function cfOsRenderToday(data) {
     ['Date', _escapeHtml(day.date)],
     ['Result', _escapeHtml(_cfOsStatusLabel(day))],
   ];
-  if (day.votes) rows.push(['Windows', _escapeHtml(_cfOsVotes(day)) + ' <span class="table-meta">(5 needed)</span>']);
+  if (day.votes) {
+    rows.push(['Windows', _escapeHtml(_cfOsVotes(day)) + ' <span class="table-meta">'
+      + (day.leg === 'weekend-calm' ? '(calm weekend — the weekend rule sells when nothing moved)' : '(5 needed)') + '</span>']);
+  }
   if (day.reason) rows.push(['Why', _escapeHtml(day.reason)]);
   var v = day.view || {};
   if (day.symbol) {
@@ -15528,6 +15534,8 @@ function cfOsRenderStatus(data) {
   if (save) save.hidden = !data.enabled;
   var size = document.getElementById('cf-os-size');
   if (size && document.activeElement !== size) size.value = data.size_btc;
+  var weekend = document.getElementById('cf-os-weekend');
+  if (weekend && !_cfOsBusy) weekend.checked = data.weekend_calm !== false;
   cfOsUpdateContracts();
   cfOsRenderToday(data);
   cfOsRenderDays(data);
@@ -15731,6 +15739,30 @@ function _cfOsReadout(ts) {
   }
   if (b) parts.push('Bitcoin <strong>' + Math.round(b[1]).toLocaleString('en-US') + '</strong>');
   return parts.join(' &nbsp;·&nbsp; ');
+}
+
+async function cfOsSaveWeekend(on) {
+  if (_cfOsBusy) return;
+  _cfOsBusy = true;
+  try {
+    var response = await cfApiFetch('/api/option-seller/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ weekend_calm: !!on }),
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the weekend setting'));
+    _cfOsSetError('');
+    _cfOsBusy = false;
+    cfOsRenderStatus(data);
+    cfToast(on ? 'Calm weekends: on' : 'Calm weekends: off', 'success');
+  } catch (err) {
+    _cfOsSetError(String(err.message || err));
+    var box = document.getElementById('cf-os-weekend');
+    if (box) box.checked = !on;
+  } finally {
+    _cfOsBusy = false;
+  }
 }
 
 function cfOsUpdateContracts() {
