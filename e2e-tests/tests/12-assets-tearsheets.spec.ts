@@ -63,6 +63,10 @@ test.describe('Assets — the strategy tearsheets', () => {
   test('each sub-tab swaps the document', async ({ page }) => {
     await login(page);
     await openAssets(page);
+    // Let the first sheet finish loading before switching, or the click races
+    // the frame's own navigation and the old document can win.
+    await expect(page.frameLocator('#cf-assets-frame').locator('h1').first())
+      .toContainText(/Cascade-Hybrid/i, { timeout: 20_000 });
 
     await page.click('[data-cf-assets-doc="vrule"]');
     await expect(page.frameLocator('#cf-assets-frame').locator('h1').first())
@@ -78,7 +82,8 @@ test.describe('Assets — the strategy tearsheets', () => {
     // Styled and read, not raw markup: the reader builds the contents rail.
     await expect(frame.locator('#document-toc a').first()).toBeVisible({ timeout: 10_000 });
     expect(await frame.locator('#document-toc a').count()).toBeGreaterThanOrEqual(15);
-    await expect(frame.locator('#ledger tbody tr')).toHaveCount(54);
+    // One row per trade day: 54 strong-move days plus 79 calm weekends (19-Sep-2026).
+    await expect(frame.locator('#ledger tbody tr')).toHaveCount(133);
   });
 
   test('each coin is its own sheet, reached from the coin buttons', async ({ page }) => {
