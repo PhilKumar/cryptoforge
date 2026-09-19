@@ -141,3 +141,113 @@
       (y === 'all' ? lg.dataset.total : lg.querySelectorAll('tbody tr[data-year="' + y + '"]').length);
   });
 })();
+
+
+
+(function () {
+  var cv = document.getElementById('cycle'), tip = document.getElementById('cycle-tip');
+  if (!cv) return;
+  var DATA = [];
+  try { DATA = JSON.parse(cv.getAttribute('data-series') || '[]'); } catch (e) { DATA = []; }
+  if (DATA.length < 2) return;
+  var box = cv.parentNode, hover = -1, geom = null;
+  function tok(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function ta() { return document.documentElement.getAttribute('data-lang') === 'ta'; }
+  function money(v) {
+    var s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return (v < 0 ? '-' : '') + '$' + s;
+  }
+  function short(v) {
+    var a = Math.abs(v);
+    var s = a >= 1000 ? (a / 1000).toFixed(a >= 10000 ? 0 : 1) + 'k' : a.toFixed(0);
+    return (v < 0 ? '-' : '') + '$' + s;
+  }
+  function draw() {
+    var dpr = window.devicePixelRatio || 1;
+    var w = box.clientWidth, h = 340;
+    cv.width = w * dpr; cv.height = h * dpr; cv.style.height = h + 'px';
+    var g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    var padL = 66, padR = 14, padT = 14, padB = 108;
+    var iw = w - padL - padR, ih = h - padT - padB;
+    var cums = DATA.map(function (d) { return d[2]; });
+    var days = DATA.map(function (d) { return d[1]; });
+    var cMin = Math.min(0, Math.min.apply(null, cums)), cMax = Math.max.apply(null, cums);
+    var dMax = Math.max.apply(null, days.map(Math.abs));
+    var line = tok('--curve'), muted = tok('--muted'), grid = tok('--line');
+    var pos = tok('--pos-fill'), neg = tok('--neg-fill');
+    var X = function (i) { return padL + i / (DATA.length - 1) * iw; };
+    var Y = function (v) { return padT + (cMax - v) / ((cMax - cMin) || 1) * ih; };
+    g.font = '10px ui-monospace, Menlo, monospace';
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    for (var s = 0; s <= 5; s++) {
+      var v = cMin + (cMax - cMin) * s / 5, y = Y(v);
+      g.strokeStyle = grid; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(padL, y + 0.5); g.lineTo(w - padR, y + 0.5); g.stroke();
+      g.fillStyle = muted; g.fillText(short(v), padL - 8, y);
+    }
+    var bw = Math.max(1, iw / DATA.length * 0.7), barH = 38, barZero = h - 46;
+    g.strokeStyle = grid; g.beginPath(); g.moveTo(padL, barZero + 0.5); g.lineTo(w - padR, barZero + 0.5); g.stroke();
+    for (var i = 0; i < DATA.length; i++) {
+      var p = DATA[i][1];
+      if (!p) continue;
+      var hgt = Math.abs(p) / (dMax || 1) * barH;
+      g.fillStyle = 'rgba(' + (p > 0 ? pos : neg) + ',' + (i === hover ? 0.95 : 0.45) + ')';
+      g.fillRect(X(i) - bw / 2, p > 0 ? barZero - hgt : barZero, bw, hgt);
+    }
+    g.fillStyle = muted; g.fillText(ta() ? 'நாள்' : 'day', padL - 8, barZero);
+    g.beginPath();
+    for (var j = 0; j < DATA.length; j++) { var x = X(j), yy = Y(DATA[j][2]); j ? g.lineTo(x, yy) : g.moveTo(x, yy); }
+    g.strokeStyle = line; g.lineWidth = 1.8; g.lineJoin = 'round'; g.stroke();
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    var seen = {};
+    for (var k = 0; k < DATA.length; k++) {
+      var yr = DATA[k][0].slice(0, 4);
+      if (seen[yr]) continue;
+      seen[yr] = 1;
+      g.strokeStyle = grid; g.beginPath(); g.moveTo(X(k) + 0.5, padT); g.lineTo(X(k) + 0.5, h - padB); g.stroke();
+      g.fillStyle = muted; g.fillText(yr, X(k), h - padB + 6);
+    }
+    if (hover >= 0) {
+      g.strokeStyle = muted; g.lineWidth = 1; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(X(hover) + 0.5, padT); g.lineTo(X(hover) + 0.5, h - padB); g.stroke();
+      g.setLineDash([]); g.fillStyle = line;
+      g.beginPath(); g.arc(X(hover), Y(DATA[hover][2]), 3.5, 0, 6.284); g.fill();
+    }
+    geom = { padL: padL, iw: iw, X: X, Y: Y };
+  }
+  function at(ev) {
+    var rect = cv.getBoundingClientRect();
+    var x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+    return Math.max(0, Math.min(DATA.length - 1, Math.round((x - geom.padL) / geom.iw * (DATA.length - 1))));
+  }
+  function show(ev) {
+    hover = at(ev); draw();
+    var d = DATA[hover], n = d[3], word = cv.getAttribute(ta() ? 'data-noun-ta' : 'data-noun-en') || '';
+    tip.innerHTML = '<b>' + d[0] + '</b>' + (ta() ? 'நாள் ' : 'day ') + money(d[1]) + ' &middot; ' + n + ' ' + word +
+      '<br>' + (ta() ? 'மொத்தம் ' : 'running ') + money(d[2]);
+    tip.style.opacity = 1;
+    tip.style.left = Math.min(box.clientWidth - 20, Math.max(70, geom.X(hover))) + 'px';
+    tip.style.top = (geom.Y(d[2]) - 12) + 'px';
+  }
+  function hide() { hover = -1; tip.style.opacity = 0; draw(); }
+  cv.addEventListener('mousemove', show);
+  cv.addEventListener('mouseleave', hide);
+  cv.addEventListener('touchstart', show, { passive: true });
+  cv.addEventListener('touchmove', show, { passive: true });
+  cv.addEventListener('touchend', hide);
+  window.addEventListener('resize', draw);
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-lang'] });
+  draw();
+})();
+
+/* The coin buttons open a sibling sheet. Inside the Assets frame the workspace
+   passes ?theme=; carrying it across keeps the next coin in the same skin. */
+(function () {
+  var theme = new URLSearchParams(location.search).get('theme');
+  if (!theme) return;
+  [].forEach.call(document.querySelectorAll('.coin-switch a'), function (a) {
+    a.href = a.getAttribute('href') + '&theme=' + encodeURIComponent(theme);
+  });
+})();

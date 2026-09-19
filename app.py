@@ -2864,19 +2864,23 @@ async def serve_frontend(request: Request):
     return HTMLResponse("<h2>strategy.html not found</h2>")
 
 
-# The three strategy tearsheets, each a FRAGMENT built by
-# tools/tearsheet/build_sheets.py from tools/tearsheet/run_backtests.py's
-# measurements. They are stored exactly as they were published: a document that
-# quietly re-rendered itself against today's data would not be a record of
-# anything. An unregistered key falls back to the Cascade Hybrid sheet
-# SILENTLY, so a doc is registered here before anything links to it.
+# The strategy tearsheets, ONE PER STRATEGY PER COIN (19-Sep-2026: "separate
+# coins separate results and don't merge all in one"), each a FRAGMENT built by
+# tools/tearsheet/build_coin_sheets.py from the measurements in
+# tools/tearsheet/data. They are stored exactly as they were published: a
+# document that quietly re-rendered itself against today's data would not be a
+# record of anything. A bare strategy key ("hybrid") opens its Bitcoin sheet, so
+# every link written before the split still lands; an unknown key falls back to
+# Cascade-Hybrid on Bitcoin.
+_TEARSHEET_COINS = ("btc", "eth", "sol", "paxg")
 _TEARSHEET_DOCS = {
-    "hybrid": os.path.join(_HERE, "docs", "assets", "cascade-hybrid-tearsheet.html"),
-    "auto": os.path.join(_HERE, "docs", "assets", "cascade-auto-tearsheet.html"),
-    "vrule": os.path.join(_HERE, "docs", "assets", "vrule-tearsheet.html"),
-    # Built by tools/tearsheet/build_option_seller.py, not build_sheets.py.
-    "optsell": os.path.join(_HERE, "docs", "assets", "option-seller-tearsheet.html"),
+    f"{strategy}-{coin}": os.path.join(_HERE, "docs", "assets", f"{strategy}-{coin}-tearsheet.html")
+    for strategy in ("hybrid", "auto", "vrule")
+    for coin in _TEARSHEET_COINS
 }
+# Delta lists daily options on Bitcoin, so the option seller has one sheet.
+_TEARSHEET_DOCS["optsell-btc"] = os.path.join(_HERE, "docs", "assets", "optsell-btc-tearsheet.html")
+_TEARSHEET_ALIASES = {"hybrid": "hybrid-btc", "auto": "auto-btc", "vrule": "vrule-btc", "optsell": "optsell-btc"}
 
 
 @app.get("/assets/tearsheet", response_class=HTMLResponse)
@@ -2892,7 +2896,11 @@ async def serve_assets_tearsheet(request: Request, doc: str = "hybrid"):
     token = _get_session_token(request)
     if not _validate_session(token, request=request):
         return RedirectResponse("/app", status_code=307)
-    path = _TEARSHEET_DOCS.get(str(doc).lower(), _TEARSHEET_DOCS["hybrid"])
+    key = str(doc).lower()
+    key = _TEARSHEET_ALIASES.get(key, key)
+    if key not in _TEARSHEET_DOCS:
+        key = "hybrid-btc"
+    path = _TEARSHEET_DOCS[key]
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Tearsheet document not found")
     with open(path, encoding="utf-8") as handle:
@@ -2904,7 +2912,7 @@ async def serve_assets_tearsheet(request: Request, doc: str = "hybrid"):
     # inline <style> or <script> is dropped by the browser and the document
     # renders as raw unstyled HTML with a dead contents rail. PhilForge carries
     # its sheets inline because it has no such policy; this one cannot.
-    sheet = str(doc).lower() if str(doc).lower() in _TEARSHEET_DOCS else "hybrid"
+    sheet = key.split("-", 1)[0]  # one stylesheet per strategy, shared by its coins
     css_href = f"/static/tearsheet-{sheet}.css"
     js_src = "/static/tearsheet.js"
     css_v = _asset_version(css_href)

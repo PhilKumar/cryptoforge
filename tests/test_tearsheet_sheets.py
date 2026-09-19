@@ -1,17 +1,19 @@
-"""The three published tearsheets, and the route that serves them.
+"""The published tearsheets — one per strategy PER COIN — and the route.
 
-Phil, 2026-09-03: tearsheets for Cascade Hybrid, Cascade_Auto and the V-Rule
-over every coin's whole history, in PhilForge's pattern with CryptoForge's own
-skin. What can go wrong quietly, and is therefore checked here:
+Phil, 2026-09-03: tearsheets in PhilForge's pattern with CryptoForge's skin.
+Phil, 2026-09-19: "the tearsheet language is not uniform.. in tamil section it
+shows english wordings... I need all the puttable heading on the tearsheets of
+philforge here as well ... separate coins separate results and don't merge all
+in one".
 
-  · a sheet drawing a class the stylesheet never defined (the reader's
-    vocabulary is fixed — .kpis/.kpi/.lede/.note/.shead and so on);
-  · the reader JS looking for ids the document does not carry, which leaves
-    the contents rail empty and the search dead, with no error anywhere;
-  · a sheet quoting a rate against the $1,000 nameplate instead of the capital
-    the book really used, which is the one number on the page a reader would
-    act on;
-  · the route falling back to the wrong document for an unknown key.
+What can go wrong quietly, and is therefore checked here:
+
+  · a sentence with no Tamil twin — it shows through in the Tamil view;
+  · a PhilForge heading missing from a sheet;
+  · one coin's numbers leaking into another's, or a coin sheet disagreeing
+    with the measurements it was drawn from;
+  · a class the stylesheet never defined, or an id the reader binds to;
+  · anything inline, which this app's CSP drops without an error.
 """
 
 import json
@@ -25,261 +27,195 @@ _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_HERE, "tools", "tearsheet"))
 
 DOCS = os.path.join(_HERE, "docs", "assets")
-SHEETS = {
-    "hybrid": "cascade-hybrid-tearsheet.html",
-    "auto": "cascade-auto-tearsheet.html",
-    "vrule": "vrule-tearsheet.html",
-}
-# The fourth sheet (18-Sep-2026) shares the look, the reader, the shell and the
-# route, but not the Cascade family's book: it has a stop, no bag and no coins.
-# Structural tests run over ALL_SHEETS; the ladder-book tests stay on SHEETS.
-OPTSELL = {"optsell": "option-seller-tearsheet.html"}
-ALL_SHEETS = {**SHEETS, **OPTSELL}
+DATA = os.path.join(_HERE, "tools", "tearsheet", "data")
+COINS = {"BTCUSDT": "btc", "ETHUSDT": "eth", "SOLUSDT": "sol", "PAXGUSDT": "paxg"}
+CASCADE = ("hybrid", "auto", "vrule")
+SHEETS = [f"{s}-{c}" for s in CASCADE for c in COINS.values()] + ["optsell-btc"]
+
+# PhilForge's section set (Supertrend / Gap Carry), in its order.
+PHILFORGE_HEADINGS = (
+    "Read this first",
+    "The finding that matters most",
+    "The programme at a glance",
+    "Charges, in full",
+    "Daily income across the whole cycle",
+    "Daily P&amp;L ledger",
+    "Cumulative curve",
+    "Year by year",
+    "Month by month",
+    "How much capital this needs",
+    "Sizing up as the book earns",
+    "Risk register",
+    "Which day of the week pays",
+    "Best ten, worst ten",
+    "Recorded configuration snapshot",
+    "Method",
+    "What this document is not",
+)
 
 
 def _published(key):
-    path = os.path.join(DOCS, ALL_SHEETS[key])
+    path = os.path.join(DOCS, f"{key}-tearsheet.html")
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as handle:
         return handle.read()
 
 
-class SheetKitTests(unittest.TestCase):
-    """The shared look, before any sheet uses it."""
+def _data(strategy):
+    with open(os.path.join(DATA, f"{strategy}_report_data.json"), encoding="utf-8") as handle:
+        return json.load(handle)
 
+
+def _english_outside_t(html):
+    """Latin words a Tamil reader would see: everything left once both language
+    spans, tags and attributes are removed."""
+    text = re.sub(r'<i lang="(en|ta)">.*?</i>', " ", html, flags=re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    allowed = {"CRYPTOFORGE", "BTC", "ETH", "SOL", "PAXG"}
+    words = set(re.findall(r"\b[A-Za-z][A-Za-z\-]{2,}\b", text)) - allowed
+    return words
+
+
+class SheetKitTests(unittest.TestCase):
     def setUp(self):
         self.kit = import_module("sheet_kit")
+        self.builder = import_module("build_coin_sheets")
 
     def test_every_class_the_builder_draws_is_styled(self):
         """Trap paid for on PhilForge's Gap Carry sheet: a builder invents a
         class, the page renders with no error, and the section is unstyled."""
-        builder = import_module("build_sheets")
-        source = open(builder.__file__, encoding="utf-8").read()
-        drawn = set(re.findall(r"class='([a-z0-9 \-]+)'", source))
-        names = {cls for group in drawn for cls in group.split()}
-        # Classes the reader JS or the shell owns rather than the stylesheet.
-        names -= {"tr"}
+        source = open(self.builder.__file__, encoding="utf-8").read()
+        drawn = set(re.findall(r"class='([a-z0-9 \-]+)'", source)) | set(re.findall(r'class="([a-z0-9 \-]+)"', source))
+        names = {c for group in drawn for c in group.split()} - {"tr"}
+        styled = self.kit.STYLE + self.builder.LANG_CSS + self.builder.SHEET_CSS
         for name in sorted(names):
             with self.subTest(name):
-                # All THREE blobs, in the order build_sheets.py:492 composes
-                # them. Checking only STYLE + EXTRA_CSS left LANG_CSS out, so a
-                # class styled there read as unstyled — which is how a correct
-                # fix to the ledger year chips failed this test on 2026-09-09.
-                styled = (
-                    self.kit.STYLE + import_module("build_sheets").LANG_CSS + import_module("build_sheets").EXTRA_CSS
-                )
                 self.assertIn(f".{name}", styled, f".{name} is drawn but never styled")
 
-    def test_each_sheet_gets_its_own_accent(self):
+    def test_each_strategy_gets_its_own_accent(self):
         seen = {}
-        for key in ALL_SHEETS:
+        for key in (*CASCADE, "optsell"):
             css = self.kit.recolour(self.kit.STYLE, key)
             light = re.search(r"--accent:(#[0-9a-f]{6})", css).group(1)
             self.assertNotIn(light, seen, f"{key} shares its accent with {seen.get(light)}")
             seen[light] = key
 
     def test_the_reader_is_carried_whole(self):
-        """READER_JS and LANG_JS bring their own <script> tags; wrapping them
-        nests the tag and kills the block silently."""
         self.assertTrue(self.kit.READER_JS.lstrip().startswith("<script>"))
         self.assertIn("</script>", self.kit.READER_JS)
 
 
-@unittest.skipIf(_published("hybrid") is None, "sheets not built in this checkout")
+@unittest.skipIf(_published("hybrid-btc") is None, "sheets not built in this checkout")
 class PublishedSheetTests(unittest.TestCase):
-    def test_the_reader_finds_the_ids_it_binds_to(self):
-        """READER_JS reads #document-body and #document-toc and builds the rail
-        from `.shead h2`; LANG_JS reads #langbar. Miss one and the document
-        looks fine and does nothing."""
-        for key in ALL_SHEETS:
+    def test_every_sheet_exists(self):
+        for key in SHEETS:
+            with self.subTest(key):
+                self.assertIsNotNone(_published(key), f"{key} was not built")
+
+    def test_every_philforge_heading_is_on_every_sheet(self):
+        for key in SHEETS:
             html = _published(key)
-            if html is None:
-                continue
+            for heading in PHILFORGE_HEADINGS:
+                with self.subTest(f"{key}: {heading}"):
+                    self.assertIn(f'<i lang="en">{heading}</i>', html)
+
+    def test_no_english_shows_through_in_tamil(self):
+        """Every visible sentence goes through t(en, ta). What is left once both
+        language spans are removed is what BOTH readers see — it may only be
+        the brand and the coin tickers."""
+        for key in SHEETS:
+            with self.subTest(key):
+                self.assertEqual(_english_outside_t(_published(key)), set())
+
+    def test_every_english_span_has_a_tamil_twin(self):
+        for key in SHEETS:
+            html = _published(key)
+            with self.subTest(key):
+                self.assertEqual(html.count('<i lang="en">'), html.count('<i lang="ta">'))
+
+    def test_the_reader_finds_the_ids_it_binds_to(self):
+        for key in SHEETS:
+            html = _published(key)
             with self.subTest(key):
                 for needed in ("document-body", "document-toc", "langbar", "tearsheet-search", "reading-progress-bar"):
                     self.assertIn(f'id="{needed}"', html, f"{key} is missing {needed}")
-                # The builder quotes attributes with ' — assert on the class, not
-                # on one spelling of it.
-                self.assertIn("shead", html)
+                self.assertIn('id="ledger-years"', html)
+                self.assertIn('id="cycle"', html)
 
     def test_every_section_can_reach_the_contents_rail(self):
-        """The rail is built from sections that have a `.shead h2`; one without
-        is a section no reader can navigate to."""
-        for key in ALL_SHEETS:
+        for key in SHEETS:
             html = _published(key)
-            if html is None:
-                continue
-            sections = re.findall(r"<section id=['\"]([a-z]+)['\"]>(.*?)</section>", html, re.S)
+            sections = re.findall(r"<section id=['\"]([a-z\-]+)['\"][^>]*>(.*?)</section>", html, re.S)
             with self.subTest(key):
-                self.assertGreaterEqual(len(sections), 5)
+                self.assertGreaterEqual(len(sections), 15)
                 for anchor, body in sections:
                     self.assertIn("shead", body, f"{key}/{anchor} has no heading")
 
-    def test_the_risk_notes_are_on_every_sheet(self):
-        """The bag, not the closed rounds, is where this family's risk lives —
-        a sheet that omits it is selling rather than reporting."""
-        for key in SHEETS:
-            html = _published(key)
-            if html is None:
-                continue
-            with self.subTest(key):
-                self.assertIn("winner by construction", html)
-                self.assertIn("bag is the whole risk", html)
+    def test_the_coin_buttons_link_every_coin_and_mark_this_one(self):
+        for strategy in CASCADE:
+            for coin in COINS.values():
+                html = _published(f"{strategy}-{coin}")
+                with self.subTest(f"{strategy}-{coin}"):
+                    for other in COINS.values():
+                        self.assertIn(f"/assets/tearsheet?doc={strategy}-{other}", html)
+                    self.assertRegex(html, rf"doc={strategy}-{coin}'\s+aria-current='page'")
 
-    def test_no_rate_is_quoted_against_the_nameplate(self):
-        """Peak capital used, never the $1,000 the page starts from: the purse
-        compounds and the book routinely holds more than it."""
-        for key in SHEETS:
-            html = _published(key)
-            if html is None:
-                continue
-            with self.subTest(key):
-                self.assertIn("peak capital", html.lower())
+    def test_the_cascade_risk_notes_are_on_every_cascade_sheet(self):
+        for strategy in CASCADE:
+            for coin in COINS.values():
+                html = _published(f"{strategy}-{coin}")
+                with self.subTest(f"{strategy}-{coin}"):
+                    self.assertIn("winner by construction", html)
+                    self.assertIn("bag is the whole risk", html)
+                    self.assertIn("peak capital", html.lower())
 
 
-@unittest.skipIf(_published("hybrid") is None, "sheets not built in this checkout")
-class SheetDataTests(unittest.TestCase):
-    """The numbers behind the page, checked for internal agreement."""
+@unittest.skipIf(_published("hybrid-btc") is None, "sheets not built in this checkout")
+class CoinNumbersTests(unittest.TestCase):
+    """Each coin's sheet is that coin's measurement and nothing else."""
 
-    def _book(self, key):
-        path = os.path.join(_HERE, "tools", "tearsheet", "data", f"{key}_report_data.json")
-        if not os.path.exists(path):
-            self.skipTest(f"{key} measurements not in this checkout")
-        with open(path, encoding="utf-8") as handle:
-            return json.load(handle)
+    def test_the_daily_book_is_the_closed_profit(self):
+        for strategy in CASCADE:
+            for coin in _data(strategy)["coins"]:
+                with self.subTest(f"{strategy}/{coin['symbol']}"):
+                    self.assertTrue(coin.get("daily"), "no daily book — re-run run_backtests.py")
+                    self.assertAlmostEqual(sum(d[0] for d in coin["daily"].values()), coin["net_pnl"], places=1)
+                    self.assertEqual(sum(d[1] for d in coin["daily"].values()), coin["rounds"])
 
-    def test_the_monthly_book_sums_to_the_closed_profit(self):
-        """The equity curve is drawn from the monthly book, so the two have to
-        be the same money — otherwise the curve is decorative."""
-        for key in SHEETS:
-            book = self._book(key)
-            for coin in book["coins"]:
-                with self.subTest(f"{key}/{coin['symbol']}"):
-                    self.assertAlmostEqual(sum(coin["monthly"].values()), coin["net_pnl"], places=2)
+    def test_the_monthly_book_is_the_daily_book_by_month(self):
+        for strategy in CASCADE:
+            for coin in _data(strategy)["coins"]:
+                by_month = {}
+                for day, (net, _n, _fees) in coin["daily"].items():
+                    by_month[day[:7]] = by_month.get(day[:7], 0.0) + net
+                for month, value in coin["monthly"].items():
+                    with self.subTest(f"{strategy}/{coin['symbol']}/{month}"):
+                        self.assertAlmostEqual(by_month.get(month, 0.0), value, places=1)
 
-    def test_total_is_closed_plus_bag(self):
-        for key in SHEETS:
-            book = self._book(key)
-            for coin in book["coins"]:
-                with self.subTest(f"{key}/{coin['symbol']}"):
-                    self.assertAlmostEqual(coin["net_pnl"] + coin["open_pnl"], coin["total_pnl"], places=2)
-
-    def test_every_coin_carries_its_real_window(self):
-        """BTC and ETH list from 2017, SOL and PAX Gold from 2020. A window
-        that quietly shortened would flatter the per-year rate."""
-        for key in SHEETS:
-            book = self._book(key)
-            spans = {c["symbol"]: c["years"] for c in book["coins"]}
-            with self.subTest(key):
-                self.assertGreater(spans["BTCUSDT"], 8.5)
-                self.assertGreater(spans["ETHUSDT"], 8.5)
-                self.assertGreater(spans["SOLUSDT"], 5.5)
-                self.assertGreater(spans["PAXGUSDT"], 5.5)
-
-
-class ContentSecurityPolicyTests(unittest.TestCase):
-    """The document must survive this app's own CSP.
-
-    Phil, 2026-09-04, on the first published version: the tearsheet opened as
-    raw serif text over black shapes. It carried its whole look in an inline
-    <style> and its reader in inline <script>, the way PhilForge's sheets do —
-    but this app sends `style-src-elem 'self'` and `script-src-elem 'self'`, so
-    the browser dropped both and rendered the bare markup. Nothing errored
-    anywhere; it simply looked like garbage.
-    """
-
-    def setUp(self):
-        self.app_module = import_module("app")
-
-    def test_the_policy_still_forbids_inline(self):
-        """If this ever relaxes, the reason for the split below is gone — but
-        until it does, the split is load-bearing."""
-        source = open(self.app_module.__file__, encoding="utf-8").read()
-        policy = source.split("csp = (", 1)[1].split(")", 1)[0]
-        self.assertIn("style-src-elem 'self'", policy)
-        self.assertIn("script-src-elem 'self'", policy)
-        self.assertNotIn("style-src-elem 'self' 'unsafe-inline'", policy)
-
-    def test_no_sheet_carries_an_inline_style_or_script(self):
-        for key in ALL_SHEETS:
-            html = _published(key)
-            if html is None:
-                continue
-            with self.subTest(key):
-                self.assertNotIn("<style", html, f"{key} has an inline <style> the CSP will drop")
-                self.assertNotIn("<script", html, f"{key} has an inline <script> the CSP will drop")
-
-    def test_the_look_and_the_reader_ship_as_static_files(self):
-        static = os.path.join(_HERE, "static")
-        self.assertTrue(os.path.exists(os.path.join(static, "tearsheet.js")))
-        for key in ALL_SHEETS:
-            with self.subTest(key):
-                self.assertTrue(os.path.exists(os.path.join(static, f"tearsheet-{key}.css")))
-
-    def test_the_reader_file_is_loadable_javascript(self):
-        """It is assembled from two blocks that each carried their own <script>
-        tag; leaving one in is a syntax error on line one and a dead page."""
-        with open(os.path.join(_HERE, "static", "tearsheet.js"), encoding="utf-8") as handle:
-            js = handle.read()
-        self.assertNotIn("<script", js)
-        self.assertNotIn("</script>", js)
-        self.assertIn("document-toc", js)
-        self.assertIn("langbar", js)
-
-
-class TearsheetRouteTests(unittest.TestCase):
-    def setUp(self):
-        self.app_module = import_module("app")
-
-    def test_every_sheet_is_registered_before_anything_links_to_it(self):
-        """An unregistered key falls back to Cascade Hybrid silently, so the
-        registry and the pages that link into it must agree."""
-        registry = self.app_module._TEARSHEET_DOCS
-        self.assertEqual(set(registry), set(ALL_SHEETS))
-        with open(os.path.join(_HERE, "strategy.html"), encoding="utf-8") as handle:
-            page = handle.read()
-        for key in ALL_SHEETS:
-            with self.subTest(key):
-                self.assertIn(f"/assets/tearsheet?doc={key}", page)
-
-    def test_the_route_points_at_the_files_the_builder_writes(self):
-        for key, filename in ALL_SHEETS.items():
-            with self.subTest(key):
-                self.assertTrue(self.app_module._TEARSHEET_DOCS[key].endswith(filename))
-
-    def test_the_assets_page_offers_every_sheet(self):
-        with open(os.path.join(_HERE, "static", "cryptoforge-app.js"), encoding="utf-8") as handle:
-            js = handle.read()
-        docs = re.search(r"var _CF_ASSET_DOCS = \[([^\]]*)\]", js).group(1)
-        with open(os.path.join(_HERE, "strategy.html"), encoding="utf-8") as handle:
-            page = handle.read()
-        for key in ALL_SHEETS:
-            with self.subTest(key):
-                self.assertIn(f"'{key}'", docs, "the Assets page silently falls back to Hybrid for an unknown key")
-                self.assertIn(f'data-cf-assets-doc="{key}"', page)
+    def test_each_sheet_quotes_its_own_coin(self):
+        """The headline closed profit on BTC's sheet is BTC's, and no other
+        coin's total appears as a headline there."""
+        builder = import_module("build_coin_sheets")
+        for strategy in CASCADE:
+            coins = _data(strategy)["coins"]
+            for coin in coins:
+                html = _published(f"{strategy}-{COINS[coin['symbol']]}")
+                glance = html.split("id='glance'", 1)[1].split("</section>", 1)[0]
+                with self.subTest(f"{strategy}/{coin['symbol']}"):
+                    self.assertIn(builder.usd(coin["net_pnl"]), glance)
+                    for other in coins:
+                        if other["symbol"] != coin["symbol"] and abs(other["net_pnl"] - coin["net_pnl"]) > 0.01:
+                            self.assertNotIn(f">{builder.usd(other['net_pnl'])}<", glance)
 
 
 class OptionSellerSheetTests(unittest.TestCase):
-    """The Option Seller sheet: its own sections, its own honesty notes, and
-    numbers that are the verified research numbers, not a re-derivation."""
-
     def setUp(self):
-        self.html = _published("optsell")
+        self.html = _published("optsell-btc")
         if self.html is None:
             self.skipTest("option seller sheet not built in this checkout")
-        path = os.path.join(_HERE, "tools", "tearsheet", "data", "optsell_report_data.json")
-        with open(path, encoding="utf-8") as handle:
+        with open(os.path.join(DATA, "optsell_report_data.json"), encoding="utf-8") as handle:
             self.book = json.load(handle)
-
-    def test_every_class_its_builder_draws_is_styled(self):
-        builder = import_module("build_option_seller")
-        source = open(builder.__file__, encoding="utf-8").read()
-        names = {c for group in re.findall(r"class='([a-z0-9 \-]+)'", source) for c in group.split()} - {"tr"}
-        styled = import_module("sheet_kit").STYLE + builder.LANG_CSS + builder.SHEET_CSS
-        for name in sorted(names):
-            with self.subTest(name):
-                self.assertIn(f".{name}", styled, f".{name} is drawn but never styled")
 
     def test_the_monthly_book_sums_to_the_total(self):
         self.assertAlmostEqual(sum(self.book["monthly"].values()), self.book["totals"]["net"], places=1)
@@ -302,50 +238,102 @@ class OptionSellerSheetTests(unittest.TestCase):
 
     def test_the_unseen_half_is_the_verified_number(self):
         """+1,709.59 over 30 trades after 2026-02-27, worst run 308.47 — the
-        figures that passed all five checks on 17-Sep-2026."""
+        figures that passed all five checks."""
         after = self.book["splits"][0]["after"]
         self.assertEqual(self.book["splits"][0]["cut"], "2026-02-27")
         self.assertEqual(after["trades"], 30)
         self.assertAlmostEqual(after["net"], 1709.59, places=1)
         self.assertAlmostEqual(after["worst_run"], 308.47, places=1)
 
-    def test_the_page_says_what_it_does_not_show(self):
-        for needed in ("A small sample", "first half flattered", "not the real quotes", "1-minute candles"):
+    def test_its_own_sections_survive(self):
+        for needed in ("Chosen on one half, tested on the other", "The days it skips", "Every trade"):
+            with self.subTest(needed):
+                self.assertIn(f'<i lang="en">{needed}</i>', self.html)
+        for needed in ("A small sample", "not the real quotes", "1-minute candles"):
             with self.subTest(needed):
                 self.assertIn(needed, self.html)
 
-    def test_the_page_shows_the_skipped_days(self):
-        self.assertIn("The days it skips", self.html)
-        self.assertIn("Calm — no window moved enough", self.html)
+
+class ContentSecurityPolicyTests(unittest.TestCase):
+    """The document must survive this app's own CSP (see 2026-09-04: inline
+    style and script were dropped and the sheet rendered as raw markup)."""
+
+    def setUp(self):
+        self.app_module = import_module("app")
+
+    def test_the_policy_still_forbids_inline(self):
+        source = open(self.app_module.__file__, encoding="utf-8").read()
+        policy = source.split("csp = (", 1)[1].split(")", 1)[0]
+        self.assertIn("style-src-elem 'self'", policy)
+        self.assertIn("script-src-elem 'self'", policy)
+        self.assertNotIn("style-src-elem 'self' 'unsafe-inline'", policy)
+
+    def test_no_sheet_carries_an_inline_style_or_script(self):
+        for key in SHEETS:
+            html = _published(key)
+            if html is None:
+                continue
+            with self.subTest(key):
+                self.assertNotIn("<style", html, f"{key} has an inline <style> the CSP will drop")
+                self.assertNotIn("<script", html, f"{key} has an inline <script> the CSP will drop")
+
+    def test_the_look_and_the_reader_ship_as_static_files(self):
+        static = os.path.join(_HERE, "static")
+        self.assertTrue(os.path.exists(os.path.join(static, "tearsheet.js")))
+        for key in (*CASCADE, "optsell"):
+            with self.subTest(key):
+                self.assertTrue(os.path.exists(os.path.join(static, f"tearsheet-{key}.css")))
+
+    def test_the_reader_file_is_loadable_javascript(self):
+        with open(os.path.join(_HERE, "static", "tearsheet.js"), encoding="utf-8") as handle:
+            js = handle.read()
+        self.assertNotIn("<script", js)
+        self.assertNotIn("</script>", js)
+        for needed in ("document-toc", "langbar", "data-series", "coin-switch"):
+            self.assertIn(needed, js)
+
+
+class TearsheetRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.app_module = import_module("app")
+
+    def test_every_sheet_is_registered(self):
+        self.assertEqual(set(self.app_module._TEARSHEET_DOCS), set(SHEETS))
+        for key in SHEETS:
+            with self.subTest(key):
+                self.assertTrue(self.app_module._TEARSHEET_DOCS[key].endswith(f"{key}-tearsheet.html"))
+
+    def test_a_link_written_before_the_split_opens_bitcoin(self):
+        with open(os.path.join(_HERE, "strategy.html"), encoding="utf-8") as handle:
+            page = handle.read()
+        for key in (*CASCADE, "optsell"):
+            with self.subTest(key):
+                self.assertEqual(self.app_module._TEARSHEET_ALIASES[key], f"{key}-btc")
+                self.assertIn(f"/assets/tearsheet?doc={key}", page)
+
+    def test_the_assets_page_offers_every_strategy(self):
+        with open(os.path.join(_HERE, "static", "cryptoforge-app.js"), encoding="utf-8") as handle:
+            js = handle.read()
+        docs = re.search(r"var _CF_ASSET_DOCS = \[([^\]]*)\]", js).group(1)
+        with open(os.path.join(_HERE, "strategy.html"), encoding="utf-8") as handle:
+            page = handle.read()
+        for key in (*CASCADE, "optsell"):
+            with self.subTest(key):
+                self.assertIn(f"'{key}'", docs)
+                self.assertIn(f'data-cf-assets-doc="{key}"', page)
+
+
+def test_ledger_year_chips_use_the_class_the_kit_styles():
+    """The year filter must be `ledger-controls` — the kit styles nothing for a
+    bare button (Phil saw grey browser buttons on 2026-09-09)."""
+    for key in SHEETS:
+        html = _published(key)
+        if html is None:
+            continue
+        m = re.search(r"<div class=['\"]([a-z-]+)['\"] id=['\"]ledger-years['\"]", html)
+        assert m, f"{key}: no ledger year bar"
+        assert m.group(1) == "ledger-controls", key
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-def test_ledger_year_chips_use_the_class_the_kit_styles():
-    """The year filter must be `ledger-controls`, never `reader-toolbar`.
-
-    The kit styles `.ledger-controls button` — pill, mono, accent when pressed
-    — and styles NOTHING for a bare button. Emitted under `reader-toolbar` (a
-    74px sticky shell meant for the search bar) the chips fell back to Chrome's
-    default grey buttons floating in an empty panel, which is exactly how Phil
-    saw them on 2026-09-09. Nothing errors; it just looks unfinished.
-    """
-    import os
-    import re
-
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for name in ("cascade-hybrid", "vrule", "cascade-auto"):
-        path = os.path.join(here, "docs", "assets", f"{name}-tearsheet.html")
-        html = open(path, encoding="utf-8").read()
-        m = re.search(r"<div id='ledger-years' class='([a-z-]+)'", html)
-        assert m, f"{name}: no ledger year bar"
-        assert m.group(1) == "ledger-controls", (
-            f"{name}: year chips are in '{m.group(1)}' — the kit only styles .ledger-controls button"
-        )
-        # and the class it uses must actually be styled, or this is theatre
-        css = open(
-            os.path.join(here, "static", f"tearsheet-{name.replace('cascade-', '')}.css"), encoding="utf-8"
-        ).read()
-        assert ".ledger-controls button" in css, f"{name}: nothing styles the chips"

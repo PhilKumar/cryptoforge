@@ -398,6 +398,9 @@ class RunResult:
     per_level_fills: Dict[str, int] = field(default_factory=dict)
     per_level_usd: Dict[str, float] = field(default_factory=dict)
     monthly: Dict[str, float] = field(default_factory=dict)
+    # Per IST closing day: [net, rounds, fees]. The tearsheets' daily ledger,
+    # weekday and best/worst-day tables are drawn from it; monthly is its sum.
+    daily: Dict[str, list] = field(default_factory=dict)
     seconds: float = 0.0
 
     @property
@@ -772,8 +775,13 @@ class Replay:
             result.worst_round = min(result.worst_round, rnd.pnl)
             if rnd.opened_ts and rnd.closed_ts and rnd.closed_ts > rnd.opened_ts:
                 self._holds.append((rnd.closed_ts - rnd.opened_ts) / 3600.0)
-            month = datetime.fromtimestamp(rnd.closed_ts or 0, IST).strftime("%Y-%m")
+            closed_at = datetime.fromtimestamp(rnd.closed_ts or 0, IST)
+            month = closed_at.strftime("%Y-%m")
             result.monthly[month] = round(result.monthly.get(month, 0.0) + rnd.pnl, 4)
+            day = result.daily.setdefault(closed_at.strftime("%Y-%m-%d"), [0.0, 0, 0.0])
+            day[0] = round(day[0] + rnd.pnl, 4)
+            day[1] += 1
+            day[2] = round(day[2] + rnd.fees_usd, 4)
             for fill in rnd.fills:
                 result.fills += 1
                 key = str(fill.get("level"))

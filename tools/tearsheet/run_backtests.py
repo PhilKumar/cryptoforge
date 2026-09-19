@@ -191,6 +191,7 @@ def _vrule(symbol: str) -> dict:
 
     closed, open_, events, holds, per_round = [], [], [], [], []
     monthly: dict = {}
+    daily: dict = {}  # IST closing day -> [net, rounds, fees], as the cascade harness keeps it
     for c in campaigns:
         if not c.fills:
             continue
@@ -206,7 +207,13 @@ def _vrule(symbol: str) -> dict:
             closed.append((c, cost, net, days))
             holds.append(days)
             per_round.append(net)
-            monthly[c.target_ts.strftime("%Y-%m")] = round(monthly.get(c.target_ts.strftime("%Y-%m"), 0.0) + net, 4)
+            # IST, like the cascade harness and every other date on the sheets.
+            closed_at = c.target_ts.tz_convert("Asia/Kolkata") if c.target_ts.tzinfo else c.target_ts
+            monthly[closed_at.strftime("%Y-%m")] = round(monthly.get(closed_at.strftime("%Y-%m"), 0.0) + net, 4)
+            day = daily.setdefault(closed_at.strftime("%Y-%m-%d"), [0.0, 0, 0.0])
+            day[0] = round(day[0] + net, 4)
+            day[1] += 1
+            day[2] = round(day[2] + FEE * (cost + qty * c.target), 4)
         else:
             open_.append((c, cost, qty * last_close - cost))
 
@@ -262,6 +269,7 @@ def _vrule(symbol: str) -> dict:
         # $8,128: overstated by the exact size of the bag it left out.
         "final_capital": round(CAPITAL + net_closed + bag_value - bag_cost, 4),
         "monthly": monthly,
+        "daily": daily,
         "equity": equity,
         "seconds": round(time.time() - started, 2),
     }
@@ -309,7 +317,7 @@ def _shape(payload: dict, symbol: str, strategy: str) -> dict:
     row["per_year_on_peak_pct"] = round(total / years / peak * 100, 3) if peak else 0.0
     row["first_day"] = datetime.fromtimestamp(row["first_ts"], timezone.utc).strftime("%Y-%m-%d")
     row["last_day"] = datetime.fromtimestamp(row["last_ts"], timezone.utc).strftime("%Y-%m-%d")
-    for key in ("equity", "monthly", "per_level_fills", "per_level_usd"):
+    for key in ("equity", "monthly", "daily", "per_level_fills", "per_level_usd"):
         row.setdefault(key, [] if key == "equity" else {})
     return row
 

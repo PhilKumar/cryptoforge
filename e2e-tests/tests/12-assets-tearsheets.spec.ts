@@ -56,7 +56,7 @@ test.describe('Assets — the strategy tearsheets', () => {
 
     // Content, not the element: an empty frame satisfies every selector.
     const heading = page.frameLocator('#cf-assets-frame').locator('h1').first();
-    await expect(heading).toContainText(/Cascade Hybrid/i, { timeout: 20_000 });
+    await expect(heading).toContainText(/Cascade-Hybrid/i, { timeout: 20_000 });
     expect(blocked, `CSP blocked the frame:\n${blocked.join('\n')}`).toEqual([]);
   });
 
@@ -76,8 +76,44 @@ test.describe('Assets — the strategy tearsheets', () => {
     const frame = page.frameLocator('#cf-assets-frame');
     await expect(frame.locator('h1').first()).toContainText(/Option Seller/i, { timeout: 20_000 });
     // Styled and read, not raw markup: the reader builds the contents rail.
-    await expect(frame.locator('#document-toc a')).toHaveCount(9, { timeout: 10_000 });
+    await expect(frame.locator('#document-toc a').first()).toBeVisible({ timeout: 10_000 });
+    expect(await frame.locator('#document-toc a').count()).toBeGreaterThanOrEqual(15);
     await expect(frame.locator('#ledger tbody tr')).toHaveCount(54);
+  });
+
+  test('each coin is its own sheet, reached from the coin buttons', async ({ page }) => {
+    await login(page);
+    await openAssets(page);
+    const frame = page.frameLocator('#cf-assets-frame');
+    await expect(frame.locator('h1').first()).toContainText(/Bitcoin/, { timeout: 20_000 });
+    await expect(frame.locator('.coin-switch a')).toHaveCount(4);
+    await frame.locator('.coin-switch a', { hasText: 'ETH' }).click();
+    await expect(frame.locator('h1').first()).toContainText(/Ether/, { timeout: 20_000 });
+    await expect(frame.locator('.coin-switch a[aria-current="page"]')).toContainText('ETH');
+    // The daily chart is drawn from the canvas's own data, not an inline script.
+    expect(await frame.locator('#cycle').evaluate((c: HTMLCanvasElement) => c.width)).toBeGreaterThan(0);
+  });
+
+  test('the Tamil view has no English sentence left in it', async ({ page }) => {
+    await login(page);
+    await openAssets(page);
+    const frame = page.frameLocator('#cf-assets-frame');
+    await expect(frame.locator('h1').first()).toBeVisible({ timeout: 20_000 });
+    await frame.locator('#langbar [data-lang="ta"]').click();
+    // Every visible word must come from a Tamil span. Outside one, only
+    // numbers, dates, tickers and the brand may show.
+    const leftover = await frame.locator('.wrap').evaluate((root) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const words: string[] = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const el = n.parentElement as HTMLElement;
+        if (!el || !el.getClientRects().length) continue;
+        if (el.closest('i[lang="ta"]') || el.closest('.langbar') || el.closest('.system-sigil')) continue;
+        words.push(...((n.textContent || '').match(/[A-Za-z]{4,}/g) || []));
+      }
+      return words.filter((w) => !['CRYPTOFORGE', 'PAXG'].includes(w));
+    });
+    expect(leftover).toEqual([]);
   });
 
   test('the page has an even rhythm and the tabs span to the panel edge', async ({ page }) => {
