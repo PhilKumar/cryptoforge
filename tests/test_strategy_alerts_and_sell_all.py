@@ -27,8 +27,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class _Campaign:
-    def __init__(self, symbol, seq, mode="paper"):
-        self.symbol, self.seq, self.mode = symbol, seq, mode
+    def __init__(self, symbol, seq, mode="paper", strategy=""):
+        self.symbol, self.seq, self.mode, self.strategy = symbol, seq, mode, strategy
 
 
 class SellAllRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -59,7 +59,15 @@ class SellAllRouteTests(unittest.IsolatedAsyncioTestCase):
 
         self.live = Engine("live", {"L1": _Campaign("BTCUSDT", 1, "live")})
         self.auto = Engine("auto", {"A1": _Campaign("ETHUSDT", 2)})
-        self.vrule = Engine("vrule", {"V1": _Campaign("SOLUSDT", 3), "V2": _Campaign("SOLUSDT", 4)}, refuse={"V2"})
+        self.vrule = Engine(
+            "vrule",
+            {
+                "V1": _Campaign("SOLUSDT", 3, strategy="v-rule"),
+                "V2": _Campaign("SOLUSDT", 4, strategy="v-rule"),
+                "V3": _Campaign("ETHUSDT", 5, "live", strategy="v-rule"),
+            },
+            refuse={"V2"},
+        )
         for attr, value in (
             ("_get_cascade_engine", lambda: self.live),
             ("_get_auto_fib_engine", lambda: self.auto),
@@ -113,6 +121,25 @@ class SellAllRouteTests(unittest.IsolatedAsyncioTestCase):
         await self._sell(["L1"])
         self.assertEqual(len(self.alerts), 1)
         self.assertIn("1 position(s) sold", self.alerts[0])
+
+    async def test_a_v_rule_sale_is_called_a_v_rule_sale(self):
+        """19-Sep-2026: "I had given a market sell but the telegram alert shows
+        as cascade position sold" — it was a V-Rule position."""
+        async with self._client() as client:
+            r = await client.post("/api/cascade/campaigns/V3/liquidate", headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.alerts, ["V-Rule · ETHUSDT #5 — sold at market"])
+
+    async def test_a_single_paper_sale_sends_no_telegram(self):
+        async with self._client() as client:
+            r = await client.post("/api/cascade/campaigns/V1/liquidate", headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.alerts, [], "a paper sale moved no money")
+
+    async def test_sell_all_names_the_books_it_sold_from(self):
+        await self._sell(["V3", "L1"])
+        self.assertEqual(len(self.alerts), 1)
+        self.assertTrue(self.alerts[0].startswith("Cascade-Hybrid + V-Rule: 2 position(s)"), self.alerts[0])
 
     async def test_bad_requests_are_refused(self):
         async with self._client() as client:
@@ -201,6 +228,15 @@ class StrategyAlertTests(unittest.TestCase):
     def test_the_hand_driven_cascade_keeps_every_alert(self):
         src = open(os.path.join(ROOT, "app.py"), encoding="utf-8").read()
         self.assertIn("on_event=_cascade_persist_event", src)
+
+
+class TelegramTokenStaysOutOfTheLogTests(unittest.TestCase):
+    def test_httpx_does_not_log_request_urls(self):
+        """Telegram's URL carries the bot token; httpx logs URLs at INFO."""
+        import logging
+
+        import_module("app")
+        self.assertGreaterEqual(logging.getLogger("httpx").getEffectiveLevel(), logging.WARNING)
 
 
 class ScalpSaveIsOffTheLoopTests(unittest.IsolatedAsyncioTestCase):

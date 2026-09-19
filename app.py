@@ -38,6 +38,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 _logger = logging.getLogger("cryptoforge")
+# httpx logs every request URL at INFO, and Telegram's URL CARRIES THE BOT
+# TOKEN (/bot<token>/sendMessage) — so every alert wrote the secret into the
+# journal (found 19-Sep-2026). Its warnings and errors still come through.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import pandas as pd
 
@@ -11230,17 +11234,33 @@ async def cascade_liquidate_campaign(campaign_id: str):
     """
     check_rate_limit("cascade_liquidate", max_calls=2, window_sec=30)
     eng, persist = _engine_holding_campaign(campaign_id)
+    campaign = eng.campaigns.get(str(campaign_id))
     result = await eng.liquidate_campaign(campaign_id)
     if result.get("error"):
         raise HTTPException(status_code=404 if "not found" in result["error"] else 409, detail=result["error"])
     persist(eng)
-    alerter.alert(
-        "Cascade position sold at market",
-        f"Campaign {campaign_id} — sold {result.get('quantity')} at {result.get('price')}\n"
-        f"Requested by hand from the Open Trades table.",
-        level="warn",
-    )
+    # Named by the book that OWNS the campaign — Phil, 19-Sep-2026: "I had given
+    # a market sell but the telegram alert shows as cascade position sold" for
+    # a V-Rule row. And, like Sell all, only a LIVE sale reaches the phone: a
+    # paper sale moved no money.
+    if campaign is not None and str(getattr(campaign, "mode", "") or "") == "live":
+        alerter.alert(
+            _sale_headline(campaign, "sold at market"),
+            f"Sold {result.get('quantity')} at {result.get('price')}\nRequested by hand from the Open Trades table.",
+            level="warn",
+        )
     return result
+
+
+def _sale_headline(campaign, what: str) -> str:
+    """ "V-Rule · SOLUSDT #412 — sold at market": the owning book, never a
+    blanket "Cascade"."""
+    return _cascade_headline(
+        what,
+        getattr(campaign, "strategy", "") or "",
+        str(getattr(campaign, "symbol", "") or ""),
+        getattr(campaign, "seq", None),
+    )
 
 
 _LIQUIDATE_MANY_MAX = 50
@@ -11302,15 +11322,16 @@ async def cascade_liquidate_many(request: Request):
         }
         results.append(row)
         if mode == "live":
-            live_sold.append(f"{getattr(campaign, 'symbol', '')} #{getattr(campaign, 'seq', '')}")
+            live_sold.append(_sale_headline(campaign, "sold"))
     for eng, persist in touched.values():
         persist(eng)
     sold = sum(1 for r in results if r["ok"])
     # One message for the batch, and only when real money moved — paper sales
     # are bookkeeping and were half of what flooded the phone.
     if live_sold:
+        books = sorted({line.split(" · ", 1)[0] for line in live_sold})
         alerter.alert(
-            f"Cascade: {len(live_sold)} position(s) sold at market",
+            f"{' + '.join(books)}: {len(live_sold)} position(s) sold at market",
             "Requested by hand with Sell all.\n" + "\n".join(live_sold),
             level="warn",
         )
