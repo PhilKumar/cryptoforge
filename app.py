@@ -2719,7 +2719,10 @@ async def apple_touch_icon():
     return FileResponse(
         os.path.join(_HERE, "static", "pwa-icons", "apple-touch-icon.png"),
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=604800, immutable"},
+        # NOT immutable: Safari also asks for this bare, stable URL on its own,
+        # and a week-long "never recheck" kept the pre-August icon on a Mac
+        # (Phil, 22-Sep-2026: "it still shows old icon"). A day, then recheck.
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 

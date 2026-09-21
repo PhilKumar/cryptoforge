@@ -10,7 +10,11 @@
 // that points at them is cached here CACHE-FIRST under a stable URL, so a new
 // ?v= token on the images alone would never have been seen by an installed
 // app. This bump is what evicts the old manifest.
-const CACHE_NAME = 'cryptoforge-shell-v89';
+// v90 (22-Sep-2026): the Mac's installed app still showed the pre-August icon.
+// The pages linked it with July/June ?v= tokens and the server marked it
+// immutable for a week; both are fixed, and this bump evicts the precached
+// /apple-touch-icon.png and the manifest held under their stable URLs.
+const CACHE_NAME = 'cryptoforge-shell-v90';
 
 // Scripts and stylesheets are requested with a content-hash ?v= token that the
 // server computes at render time, so their URLs cannot be known here — listing
