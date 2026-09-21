@@ -1471,6 +1471,7 @@ function cfSetActivePageShell(pageId, btn) {
 }
 
 function showPage(pageId, btn, options) {
+  if (typeof cfUntuckShell === 'function') cfUntuckShell();  // a new page opens with its header showing
   if (!document.getElementById(pageId)) return;
   var opts = options || {};
   var tabName = cfPageTabName(pageId);
@@ -7006,8 +7007,36 @@ function cfSyncShellHeight() {
   window.addEventListener('resize', apply);
 }
 
+// On a phone the header slides away while reading DOWN and returns on the first
+// scroll UP, the way a phone app's bars do (22-Sep-2026: "I am viewing the main
+// content only on the last 20% of the screen"). Desktop never tucks.
+function cfInitShellTuck() {
+  var root = document.documentElement;
+  var phone = window.matchMedia ? window.matchMedia('(max-width: 760px)') : null;
+  var last = window.scrollY || 0;
+  var onScroll = function () {
+    var y = window.scrollY || 0;
+    if (!phone || !phone.matches || y < 80) {
+      root.classList.remove('cf-shell-tucked');
+      last = y;
+      return;
+    }
+    var dy = y - last;
+    if (Math.abs(dy) < 8) return;  // a thumb rests; only a real move decides
+    root.classList.toggle('cf-shell-tucked', dy > 0);
+    last = y;
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  if (phone && phone.addEventListener) phone.addEventListener('change', onScroll);
+}
+
+function cfUntuckShell() {
+  document.documentElement.classList.remove('cf-shell-tucked');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   cfSyncShellHeight();
+  cfInitShellTuck();
   cfInitBrandMotion();
   cfLoadAuthContext();
   _cfPageHistoryDepth = Math.max(0, Number(window.history && window.history.state && window.history.state.cfDepth) || 0);

@@ -9522,3 +9522,58 @@ html[data-theme="light"] .journal-entry-notes section {
 .cf-os-toggle { display:flex; gap:10px; align-items:flex-start; margin:4px 0 10px; cursor:pointer; }
 .cf-os-toggle input { margin-top:3px; width:16px; height:16px; accent-color:var(--accent); }
 .cf-os-toggle small { color:var(--text-dim); }
+
+/* ── Phone: an app-sized header (22-Sep-2026) ─────────────────────────
+   Phil: "all the headings and tab heading completely occupy the page and I
+   am viewing the main content only on the last 20% of the screen". On a
+   375x812 phone the pinned .sticky-shell was 549px: a 197px topbar (logo,
+   price tiles and icons stacked), the news rail, the page tabs and four
+   strategy cards stacked 251px deep. Now it is one compact row, a one-line
+   price strip, the rail, the tabs, and the strategy cards as ONE swipeable
+   row — and the whole stack slides away while reading down and comes back on
+   the first scroll up (html.cf-shell-tucked, set by cfInitShellTuck). */
+@media (max-width: 760px) {
+  .sticky-shell { transition: transform 0.22s ease; }
+  html.cf-shell-tucked .sticky-shell { transform: translateY(-100%); }
+  @media (prefers-reduced-motion: reduce) { .sticky-shell { transition: none; } }
+
+  .sticky-shell .app-topbar { flex-wrap: wrap; padding: 6px 10px !important; gap: 6px 8px; }
+  /* The logo only opens the Dashboard, which has its own tab: on a phone it
+     cost a whole row, so the buttons take the top row alone. */
+  .sticky-shell .topbar-brand { display: none; }
+  .sticky-shell .topbar-right {
+    order: 2; width: 100%; margin-left: 0; gap: 4px; justify-content: space-between;
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-width: 0;
+  }
+  .sticky-shell .topbar-right::-webkit-scrollbar { display: none; }
+  .sticky-shell .topbar-icon-btn { flex: 0 0 30px; width: 30px; height: 30px; }
+  .sticky-shell .topbar-clock { font-size: 10px; padding: 4px 6px; }
+
+  /* Prices: one line — ticker, price, change — instead of four stacked lines. */
+  .sticky-shell .topbar-ticker { order: 3; width: 100%; padding: 0; border-radius: 10px; }
+  /* Each price keeps its natural width and the strip swipes sideways, so a
+     long price never runs into the next one. */
+  .sticky-shell .ticker-cell {
+    flex: 0 0 auto; width: auto; min-width: 0; display: flex; align-items: baseline;
+    gap: 5px; padding: 5px 10px; white-space: nowrap;
+  }
+  .sticky-shell .ticker-cell .tc-label,
+  .sticky-shell .ticker-cell .tc-price,
+  .sticky-shell .ticker-cell .tc-change { margin: 0; }
+  .sticky-shell .ticker-cell .tc-usd { display: none; }
+
+  .sticky-shell .market-rail { padding: 4px 10px !important; }
+  .sticky-shell .nav-tab { padding: 7px 10px !important; }
+
+  /* The strategy switcher: one swipeable row of compact chips. */
+  .sticky-shell #cf-strat-subnav {
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 6px;
+    padding-bottom: 6px; scroll-snap-type: x proximity;
+  }
+  .sticky-shell #cf-strat-subnav::-webkit-scrollbar { display: none; }
+  .sticky-shell #cf-strat-subnav .cf-strat-tab {
+    flex: 0 0 auto; min-height: 0; padding: 7px 12px; gap: 8px; scroll-snap-align: start;
+  }
+  .sticky-shell #cf-strat-subnav .cf-strat-tab small { display: none; }
+  .sticky-shell #cf-strat-subnav .cf-strat-icon { flex: 0 0 22px; width: 22px; height: 22px; font-size: 11px; }
+}
