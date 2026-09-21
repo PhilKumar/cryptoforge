@@ -9601,17 +9601,25 @@ function _cfCascadeMcKindPill(campaign) {
   // second line behind the one still running (Phil, 2026-08-23: "which one is
   // minor and which is major.... The lables are not mentioned properly").
   if (owner === 'auto-cascade-fib') {
-    if (!minor) {
+    // GRADUATED is decided the way the engine decides it (auto_cascade_fib
+    // _working_line_id): the book lists the line as graduated, or the line's
+    // own timeframe has reached 1h. NOT by mc_kind — a restart inherits its
+    // parent's "major", so a line back down at 5m read GRADUATED · 1H (Phil,
+    // 22-Sep-2026: "Why it is showing graduated 1H even if it is at 5m?").
+    var afBook = (typeof _cfAfBookFor === 'function') ? _cfAfBookFor(campaign.symbol) : null;
+    var tfName = String(campaign.timeframe || '5m').toLowerCase();
+    var tfRank = { '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '1d': 1440, '1w': 10080 };
+    var listed = !!(afBook && (afBook.graduated || []).map(String).indexOf(String(campaign.campaign_id)) !== -1);
+    if (listed || (tfRank[tfName] || 5) >= 60) {
       return '<span class="admin-pill" data-state="info" title="'
         + _escapeHtml('GRADUATED · 1H — this line climbed from 5m to the 1h rung, so Cascade-Auto '
           + 'left it to run on its own and started a fresh 5m working line behind it.')
         + '">GRADUATED &middot; 1H</span>';
     }
     // The book names its working line outright, so say WORKING LINE only when
-    // it is confirmed to be that one. Everything else is honestly just a 5m
-    // line — an ended one, or (until the successor fix landed) a duplicate the
-    // book was not feeding. Never claim the strong label from a guess.
-    var afBook = (typeof _cfAfBookFor === 'function') ? _cfAfBookFor(campaign.symbol) : null;
+    // it is confirmed to be that one. Everything else is honestly just a line
+    // on its own timeframe — an ended one, or one the book is not feeding.
+    // Never claim the strong label from a guess.
     var isWorking = !!(afBook && afBook.working_line
       && String(afBook.working_line) === String(campaign.campaign_id));
     return '<span class="admin-pill" data-state="' + (isWorking ? 'ok' : 'info') + '" title="'
@@ -9619,9 +9627,9 @@ function _cfCascadeMcKindPill(campaign) {
         ? 'WORKING LINE — the 5m line Cascade-Auto is feeding right now. There is one per '
           + 'symbol: the strategy finds it by this mark, and starts a fresh one only once this '
           + 'line has graduated to the 1h rung.'
-        : '5M LINE — a 5m line of this book that the strategy is not feeding right now. Either it '
-          + 'has ended, or the book is working a different line on this symbol.')
-      + '">' + (isWorking ? 'WORKING LINE' : '5M LINE') + '</span>';
+        : tfName.toUpperCase() + ' LINE — a line of this book below the 1h rung that the strategy is not '
+          + 'feeding right now. Either it has ended, or the book is working a different line on this symbol.')
+      + '">' + (isWorking ? 'WORKING LINE' : _escapeHtml(tfName.toUpperCase()) + ' LINE') + '</span>';
   }
   if (owner) {
     return '<span class="admin-pill" data-state="' + (minor ? 'warn' : 'ok') + '" title="'

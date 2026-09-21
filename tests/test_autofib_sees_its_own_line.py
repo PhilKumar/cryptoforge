@@ -110,3 +110,20 @@ def test_a_graduated_line_lets_a_fresh_one_start():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_the_page_decides_graduated_the_way_the_engine_does():
+    """22-Sep-2026: "Why it is showing graduated 1H even if it is at 5m?" —
+    #459 BTCUSDT, a 33rd-generation restart at 5m that inherited "major". The
+    pill must use the book's graduated list or the line's own timeframe, never
+    mc_kind alone."""
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(root, "static", "cryptoforge-app.js"), encoding="utf-8").read()
+    body = re.search(r"function _cfCascadeMcKindPill\(.*?\n\}\n", js, re.S).group(0)
+    auto = body[body.index("owner === 'auto-cascade-fib'") :]
+    auto = auto[: auto.index("if (owner) {")]
+    assert "afBook.graduated" in auto
+    assert "campaign.timeframe" in auto
+    assert "if (!minor)" not in auto, "mc_kind alone must not decide GRADUATED"
