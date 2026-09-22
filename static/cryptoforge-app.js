@@ -15464,6 +15464,18 @@ function cfOsRenderToday(data) {
   } else if (day.symbol) {
     rows.push(['Stop', _cfOsPx(day.stop_px) + ' <span class="table-meta">(twice the entry mark)</span>']);
   }
+  if (day.live) {
+    var lv = day.live;
+    var liveText = {
+      open: 'SOLD ' + lv.contracts + ' at ' + _cfOsPx(lv.entry_fill) + ' · stop resting on Delta at ' + _cfOsPx(lv.stop_price),
+      exiting: 'buying back…',
+      closed: 'closed (' + _escapeHtml(lv.exit_why || '') + ') at ' + _cfOsPx(lv.exit_fill) + ' — ' + _cfOsMoneySpan(lv.pnl_usd) + ' real, after fees',
+      not_filled: 'sale did not fill — no position',
+      blocked: 'skipped — ' + _escapeHtml(lv.reason || ''),
+      error: 'FAILED — ' + _escapeHtml(lv.reason || ''),
+    }[lv.status] || _escapeHtml(lv.status || '');
+    rows.push(['<strong>Live</strong>', liveText]);
+  }
   if (day.status === 'closed') {
     rows.push(['Exit', 'mark ' + _cfOsPx(day.exit_mark) + ' · ask ' + _cfOsPx(day.exit_ask) + ' · at ' + _cfOsTime(day.exit_ts)]);
     rows.push(['Made', _cfOsMoneySpan(day.pnl_usd_mark) + ' at the mark · ' + _cfOsMoneySpan(day.pnl_usd_quote) + ' at the real quotes'
@@ -15571,6 +15583,23 @@ function cfOsRenderStatus(data) {
   if (save) save.hidden = !data.enabled;
   var size = document.getElementById('cf-os-size');
   if (size && document.activeElement !== size) size.value = data.size_btc;
+  var live = data.mode === 'live';
+  var modeBadge = document.getElementById('cf-os-mode-badge');
+  if (modeBadge) {
+    modeBadge.textContent = live ? 'LIVE' : 'Paper';
+    modeBadge.className = 'tp-badge ' + (live ? 'live' : 'idle');
+  }
+  var lt = data.live_totals || {};
+  _cfOsText('cf-os-live-text', live
+    ? 'LIVE — real orders on Delta at ' + data.contracts + ' contracts, with a resting stop at twice the premium. '
+      + (lt.trades ? lt.trades + ' real trades so far, ' + _cfOsUsd(lt.pnl_usd) + ' after fees.' : 'No real trade yet.')
+    : (data.live_ready
+      ? 'Paper. Live is available on this server — switching sends real orders from the next decision.'
+      : 'Paper. Live is locked: ' + (data.live_blocked_reason || 'not available') + '.'));
+  var liveBtn = document.getElementById('cf-os-live-btn');
+  var paperBtn = document.getElementById('cf-os-paper-btn');
+  if (liveBtn) { liveBtn.hidden = live; liveBtn.disabled = !data.live_ready; }
+  if (paperBtn) paperBtn.hidden = !live;
   var weekend = document.getElementById('cf-os-weekend');
   if (weekend && !_cfOsBusy) weekend.checked = data.weekend_calm !== false;
   cfOsUpdateContracts();
@@ -15776,6 +15805,51 @@ function _cfOsReadout(ts) {
   }
   if (b) parts.push('Bitcoin <strong>' + Math.round(b[1]).toLocaleString('en-US') + '</strong>');
   return parts.join(' &nbsp;·&nbsp; ');
+}
+
+async function cfOsLiveCheck() {
+  var out = document.getElementById('cf-os-livecheck-result');
+  if (out) out.textContent = 'Checking…';
+  try {
+    var response = await cfApiFetch('/api/option-seller/live-check', { cache: 'no-store' });
+    var d = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(d, 'Check failed'));
+    var parts = [d.ok ? 'Delta accepted the keys — available ' + _cfOsUsd(d.available).replace('+', '') + ' ' + (d.asset || '') : 'Not ready: ' + (d.detail || 'unknown')];
+    parts.push(d.armed ? 'server armed for live' : 'server NOT armed (' + d.arm_hint + ')');
+    parts.push('size cap ' + d.max_contracts + ' contracts');
+    if (out) out.textContent = parts.join(' · ');
+  } catch (err) {
+    if (out) out.textContent = String(err.message || err);
+  }
+}
+
+async function cfOsSetMode(mode) {
+  if (_cfOsBusy) return;
+  if (mode === 'live') {
+    var size = (_cfOsLast && _cfOsLast.contracts) || '?';
+    var ok = await cfConfirm(
+      'From the next 4 PM decision, the Option Seller will place REAL orders on Delta: it will SELL '
+        + size + ' contracts of the day\'s option and rest a stop-loss at twice the premium. '
+        + 'A stopped trade can lose about the premium again, plus fees. Switch to LIVE?',
+      'Real money', '⚠️');
+    if (!ok) return;
+  }
+  _cfOsBusy = true;
+  try {
+    var response = await cfApiFetch('/api/option-seller/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: mode }),
+    });
+    var data = await cfReadApiPayload(response);
+    if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not change the mode'));
+    _cfOsSetError('');
+    _cfOsBusy = false;
+    cfOsRenderStatus(data);
+    cfToast(mode === 'live' ? 'Option Seller is LIVE' : 'Option Seller is back on paper', mode === 'live' ? 'warning' : 'success');
+  } catch (err) {
+    _cfOsSetError(String(err.message || err));
+  } finally {
+    _cfOsBusy = false;
+  }
 }
 
 async function cfOsSaveWeekend(on) {

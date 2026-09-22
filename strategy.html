@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260922-graduated-pill">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260922-option-live">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -2245,6 +2245,18 @@
       <button type="button" id="cf-os-refresh-btn" class="btn btn-outline" data-cf-click="cfOsRefresh(true)">Refresh</button>
     </div>
     <div class="allocator-error" id="cf-os-error" role="alert" aria-live="polite"></div>
+    <div class="cf-os-live" id="cf-os-live">
+      <div class="cf-af-state">
+        <span class="tp-badge idle" id="cf-os-mode-badge">Paper</span>
+        <span id="cf-os-live-text">Paper only. Real orders need the server armed, working Delta keys and a small size.</span>
+      </div>
+      <div class="allocator-actions">
+        <button type="button" id="cf-os-livecheck-btn" class="btn btn-outline btn-sm" data-cf-click="cfOsLiveCheck()">Check Delta connection</button>
+        <button type="button" id="cf-os-live-btn" class="read-only-hide btn btn-danger btn-sm" data-cf-click="cfOsSetMode('live')">Switch to LIVE</button>
+        <button type="button" id="cf-os-paper-btn" class="read-only-hide btn btn-outline btn-sm" data-cf-click="cfOsSetMode('paper')" hidden>Back to paper</button>
+      </div>
+      <div class="table-meta" id="cf-os-livecheck-result"></div>
+    </div>
   </section>
 
   <section class="card allocator-result-panel" aria-labelledby="cf-os-today-title">
@@ -3458,7 +3470,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260922-graduated-pill" defer></script>
+<script src="/static/cryptoforge-app.js?v=20260922-option-live" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 

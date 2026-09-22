@@ -194,9 +194,22 @@ async def _requests_fetch(path: str, params: dict) -> dict:
 class OptionSellerPaper:
     """One book, one trade a day at most, paper only."""
 
-    def __init__(self, fetch_json: Optional[FetchJson] = None, clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        fetch_json: Optional[FetchJson] = None,
+        clock: Callable[[], float] = time.time,
+        executor=None,
+        on_alert: Optional[Callable[[str, str, str], None]] = None,
+    ):
         self._fetch = fetch_json or _requests_fetch
         self._clock = clock
+        # LIVE (22-Sep-2026). This module still sends no order of its own: a
+        # live book hands each step to `executor` (engine/option_seller_live.py),
+        # which holds the keys and the order calls. With no executor, or with
+        # mode "paper", nothing here can reach an account.
+        self._executor = executor
+        self._on_alert = on_alert
+        self.mode = "paper"
         self.enabled = False
         self.size_btc = DEFAULT_SIZE_BTC
         self.weekend_calm = True
@@ -211,6 +224,7 @@ class OptionSellerPaper:
             "enabled": self.enabled,
             "size_btc": self.size_btc,
             "weekend_calm": self.weekend_calm,
+            "mode": self.mode,
             "days": self.days,
             "events": self.events[-EVENT_LIMIT:],
         }
@@ -224,6 +238,11 @@ class OptionSellerPaper:
             self.size_btc = DEFAULT_SIZE_BTC
         # Absent in a book saved before the leg existed: on, as Phil asked.
         self.weekend_calm = bool(state.get("weekend_calm", True))
+        # Live only survives a reload while this process can still trade; a
+        # server that lost its arming or keys comes back as paper, and says so.
+        self.mode = "live" if state.get("mode") == "live" else "paper"
+        if self.mode == "live" and self._live_blocked(round(self.size_btc / CONTRACT_BTC)):
+            self.mode = "paper"
         self.days = dict(state.get("days") or {})
         self.events = list(state.get("events") or [])[-EVENT_LIMIT:]
 
@@ -241,9 +260,20 @@ class OptionSellerPaper:
             raise ValueError("size_btc must be at least one contract (0.001 BTC)")
         return round(size, 3)
 
-    def configure(self, enabled=None, size_btc=None, weekend_calm=None) -> None:
+    def _live_blocked(self, contracts: int) -> str:
+        if self._executor is None:
+            return "this server has no live executor"
+        return self._executor.why_not_live(int(contracts))
+
+    def configure(self, enabled=None, size_btc=None, weekend_calm=None, mode=None) -> None:
+        if mode is not None and mode not in ("paper", "live"):
+            raise ValueError("mode must be paper or live")
         if size_btc is not None:
             size = self._clean_size(size_btc)
+            if (mode or self.mode) == "live":
+                why = self._live_blocked(round(size / CONTRACT_BTC))
+                if why:
+                    raise ValueError(f"Cannot trade live: {why}")
             if size != self.size_btc:
                 self.size_btc = size
                 self._event("info", f"Paper size set to {size:g} BTC ({round(size / CONTRACT_BTC)} contracts)")
@@ -254,9 +284,21 @@ class OptionSellerPaper:
         if weekend_calm is not None and weekend_calm != self.weekend_calm:
             self.weekend_calm = weekend_calm
             self._event("info", "Calm-weekend selling switched " + ("ON" if weekend_calm else "OFF"))
+        if mode is not None and mode != self.mode:
+            if mode == "live":
+                why = self._live_blocked(round(self.size_btc / CONTRACT_BTC))
+                if why:
+                    raise ValueError(f"Cannot trade live: {why}")
+            self.mode = mode
+            self._event(
+                "warn" if mode == "live" else "info",
+                "LIVE trading switched ON — real orders on Delta from the next decision"
+                if mode == "live"
+                else "Switched back to PAPER — no new real orders",
+            )
         if enabled is not None and enabled != self.enabled:
             self.enabled = bool(enabled)
-            self._event("info", "Paper trading switched ON" if self.enabled else "Paper trading switched OFF")
+            self._event("info", "Trading switched ON" if self.enabled else "Trading switched OFF")
 
     # ── the tick ─────────────────────────────────────────────────────
 
@@ -273,6 +315,11 @@ class OptionSellerPaper:
         # must not orphan yesterday's position.
         for held in [d for d in self.days.values() if d.get("status") == "open"]:
             changed = await self._manage(held, now) or changed
+        # A real position is managed on its own clock: the paper record can
+        # close on a 15-second check while Delta's resting stop has not fired,
+        # or the other way round. Neither may leave the other orphaned.
+        for held in [d for d in self.days.values() if self._live_open(d)]:
+            changed = await self._manage_live(held, now) or changed
         rec = self.days.get(key)
         if rec and rec.get("status") == "open":
             return changed
@@ -387,6 +434,8 @@ class OptionSellerPaper:
             last_seen_ts=self._clock(),
         )
         self.days[key] = rec
+        if self.mode == "live":
+            await self._open_live(rec, quote)
         self._event(
             "trade",
             f"{key}: SOLD {rec['contracts']} x {contract['symbol']} (paper) at mark {mark:,.2f}"
@@ -477,6 +526,168 @@ class OptionSellerPaper:
             + (" — a 1m candle HAD touched the stop earlier" if rec["stop_touched_by_candle"] and why != "stop" else "")
             + (f" ({note})" if note else ""),
         )
+        return True
+
+    # ── the live leg (22-Sep-2026) ───────────────────────────────────
+    # Everything a real order does is recorded under rec["live"], beside the
+    # paper figures, so the page can show what Delta actually filled next to
+    # what the mark and the quotes said.
+
+    @staticmethod
+    def _live_open(rec: dict) -> bool:
+        return (rec.get("live") or {}).get("status") in ("open", "exiting")
+
+    def _alert(self, title: str, body: str, level: str = "warn") -> None:
+        if self._on_alert:
+            try:
+                self._on_alert(f"Option Seller LIVE — {title}", body, level)
+            except Exception as exc:  # an alert must never break a trade
+                _log.warning("[OPTION-SELLER] alert failed: %s", exc)
+
+    async def _open_live(self, rec: dict, quote: dict) -> None:
+        contracts = int(rec["contracts"])
+        live = {"status": "blocked", "contracts": 0}
+        rec["live"] = live
+        why = self._live_blocked(contracts)
+        if why:
+            live["reason"] = why
+            self._event("error", f"{rec['date']}: LIVE sale skipped — {why}")
+            self._alert("sale skipped", why, "error")
+            return
+        ex = self._executor
+        try:
+            sold = await ex.sell_open(rec["symbol"], contracts, quote["bid"] or rec["entry_mark"], rec["date"])
+        except Exception as exc:
+            live.update(status="error", reason=f"sell order failed: {exc}")
+            self._event("error", f"{rec['date']}: LIVE sell of {rec['symbol']} failed — {exc}")
+            self._alert("sell FAILED", f"{rec['symbol']}: {exc}", "error")
+            return
+        live.update(product_id=sold["product_id"], sell_order_id=sold["order_id"], sell_limit=sold["limit"])
+        if not sold["filled"]:
+            live.update(status="not_filled", reason=f"no fill at or above {sold['limit']}")
+            self._event("warn", f"{rec['date']}: LIVE sell did not fill at or above {sold['limit']} — no position")
+            self._alert("sell not filled", f"{rec['symbol']} at or above {sold['limit']}: no position taken")
+            return
+        live.update(status="open", contracts=sold["filled"], entry_fill=sold["avg_price"], opened_ts=self._clock())
+        tick = (await ex.product(rec["symbol"]))["tick"]
+        stop = None
+        for attempt in (1, 2):
+            try:
+                stop = await ex.place_stop(sold["product_id"], sold["filled"], rec["stop_px"], tick, rec["date"])
+                break
+            except Exception as exc:
+                live["stop_error"] = str(exc)
+                _log.warning("[OPTION-SELLER] stop attempt %d failed: %s", attempt, exc)
+        if stop is None:
+            # A short option with no stop is the one state this must never be
+            # left in: buy it straight back and say so loudly.
+            self._event("error", f"{rec['date']}: LIVE stop could not be placed — buying back at once")
+            self._alert("NO STOP — bought back", f"{rec['symbol']}: {live.get('stop_error')}", "error")
+            await self._exit_live(rec, "no-stop")
+            return
+        live.update(stop_order_id=stop["order_id"], stop_price=stop["stop_price"])
+        msg = (
+            f"SOLD {sold['filled']} x {rec['symbol']} at {sold['avg_price']:,.2f}; "
+            f"stop resting on Delta at {stop['stop_price']:,.2f} (mark)"
+        )
+        self._event("trade", f"{rec['date']}: LIVE {msg}")
+        self._alert("sold", msg)
+
+    async def _manage_live(self, rec: dict, now: float) -> bool:
+        live = rec["live"]
+        ex = self._executor
+        if ex is None:
+            return False
+        day = dt.date.fromisoformat(rec["date"])
+        exit_ts = _utc(day, EXIT_UTC).timestamp()
+        settle_ts = _utc(day, SETTLE_UTC).timestamp()
+        if live.get("status") == "open" and live.get("stop_order_id"):
+            try:
+                order = await ex.order(live["stop_order_id"])
+            except Exception as exc:
+                _log.warning("[OPTION-SELLER] could not read the live stop: %s", exc)
+                order = {}
+            state = str(order.get("state") or "")
+            if state == "closed" and float(order.get("average_fill_price") or 0) > 0:
+                return self._book_live_exit(rec, "stop", float(order["average_fill_price"]), now)
+            if state == "cancelled" and now < exit_ts:
+                # Cancelled outside this book (by hand on Delta?). Flat means
+                # the position was closed there too; still short means it is
+                # naked, so the stop goes straight back on.
+                try:
+                    held = await ex.position_size(live["product_id"])
+                except Exception:
+                    return False
+                if held >= 0:
+                    return self._book_live_exit(rec, "manual", float(rec.get("last_mark") or 0), now)
+                tick = (await ex.product(rec["symbol"]))["tick"]
+                try:
+                    stop = await ex.place_stop(live["product_id"], abs(held), rec["stop_px"], tick, rec["date"])
+                except Exception as exc:
+                    self._alert("stop was cancelled and could not be replaced", str(exc), "error")
+                    return await self._exit_live(rec, "no-stop")
+                live.update(stop_order_id=stop["order_id"], stop_price=stop["stop_price"])
+                self._event(
+                    "warn",
+                    f"{rec['date']}: LIVE stop was cancelled on Delta — placed again at {stop['stop_price']:,.2f}",
+                )
+                self._alert("stop replaced", f"{rec['symbol']}: the resting stop was cancelled; placed again")
+                return True
+        if now >= settle_ts + 120:
+            # Delta has cash-settled the contract; nothing is left to buy back.
+            return self._book_live_exit(rec, "settled", float(rec.get("last_mark") or 0), now)
+        if now >= exit_ts:
+            return await self._exit_live(rec, "time")
+        return False
+
+    async def _exit_live(self, rec: dict, why: str) -> bool:
+        live = rec["live"]
+        ex = self._executor
+        live["status"] = "exiting"
+        pid = live["product_id"]
+        if live.get("stop_order_id"):
+            await ex.cancel(live["stop_order_id"], pid)
+            try:
+                stop = await ex.order(live["stop_order_id"])
+                if str(stop.get("state") or "") == "closed" and float(stop.get("average_fill_price") or 0) > 0:
+                    return self._book_live_exit(rec, "stop", float(stop["average_fill_price"]), self._clock())
+            except Exception:
+                pass
+        try:
+            held = await ex.position_size(pid)
+        except Exception as exc:
+            self._event("error", f"{rec['date']}: LIVE exit could not read the position — retrying ({exc})")
+            return True
+        if held >= 0:
+            # Already flat: the stop, a manual close or settlement took it.
+            return self._book_live_exit(
+                rec, why, float(live.get("exit_fill") or rec.get("last_mark") or 0), self._clock()
+            )
+        try:
+            bought = await ex.buy_close(pid, abs(held), rec["date"])
+        except Exception as exc:
+            self._event("error", f"{rec['date']}: LIVE buy-back failed — retrying next check ({exc})")
+            self._alert("buy-back FAILED, retrying", f"{rec['symbol']}: {exc}", "error")
+            return True
+        live["exit_fill"] = bought["avg_price"]
+        return self._book_live_exit(rec, why, bought["avg_price"], self._clock())
+
+    def _book_live_exit(self, rec: dict, why: str, price: float, now: float) -> bool:
+        live = rec["live"]
+        size = int(live.get("contracts") or 0) * CONTRACT_BTC
+        entry = float(live.get("entry_fill") or 0)
+        spot = float(rec.get("spot") or 0)
+        fees = fee_per_btc(entry, spot) + fee_per_btc(price, spot)
+        live.update(
+            status="closed",
+            exit_why=why,
+            exit_fill=price,
+            closed_ts=now,
+            pnl_usd=round((entry - price - fees) * size, 2),
+        )
+        msg = f"bought back {rec['symbol']} ({why}) at {price:,.2f} — {self._money(live['pnl_usd'])} after fees"
+        self._event("trade", f"{rec['date']}: LIVE {msg}")
+        self._alert("closed", msg, "info" if live["pnl_usd"] >= 0 else "warn")
         return True
 
     async def _candle_touched_stop(self, rec: dict, now: float) -> Optional[bool]:
@@ -648,6 +859,11 @@ class OptionSellerPaper:
             "enabled": self.enabled,
             "size_btc": self.size_btc,
             "weekend_calm": self.weekend_calm,
+            "mode": self.mode,
+            "live_ready": not self._live_blocked(round(self.size_btc / CONTRACT_BTC)),
+            "live_blocked_reason": self._live_blocked(round(self.size_btc / CONTRACT_BTC)),
+            "live_open": any(self._live_open(d) for d in self.days.values()),
+            "live_totals": self._live_totals(),
             "contracts": round(self.size_btc / CONTRACT_BTC),
             "rule": {
                 "lookbacks_min": list(LOOKBACKS_MIN),
@@ -676,6 +892,14 @@ class OptionSellerPaper:
             },
             "days": days[:60],
             "events": list(reversed(self.events[-60:])),
+        }
+
+    def _live_totals(self) -> dict:
+        closed = [d["live"] for d in self.days.values() if (d.get("live") or {}).get("status") == "closed"]
+        return {
+            "trades": len(closed),
+            "pnl_usd": round(sum(x.get("pnl_usd") or 0 for x in closed), 2),
+            "stops": sum(1 for x in closed if x.get("exit_why") == "stop"),
         }
 
     def _event(self, level: str, message: str) -> None:

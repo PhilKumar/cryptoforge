@@ -9577,3 +9577,4 @@ html[data-theme="light"] .journal-entry-notes section {
   .sticky-shell #cf-strat-subnav .cf-strat-tab small { display: none; }
   .sticky-shell #cf-strat-subnav .cf-strat-icon { flex: 0 0 22px; width: 22px; height: 22px; font-size: 11px; }
 }
+.cf-os-live { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); display: grid; gap: 8px; }

@@ -226,6 +226,23 @@ test.describe('Option Seller — paper', () => {
     await expect(page.locator('#optsell-page [data-cf-info-language="en"]')).toContainText('Calm weekends');
   });
 
+  test('live is locked until the server allows it, and says why', async ({ page }) => {
+    await openOptionSeller(
+      page,
+      status({ mode: 'paper', live_ready: false, live_blocked_reason: 'the server is not armed for live option selling' }),
+    );
+    await expect(page.locator('#cf-os-mode-badge')).toHaveText('Paper');
+    await expect(page.locator('#cf-os-live-btn')).toBeDisabled();
+    await expect(page.locator('#cf-os-live-text')).toContainText('not armed');
+  });
+
+  test('switching to live asks first and sends mode=live only after yes', async ({ page }) => {
+    const posted = await openOptionSeller(page, status({ mode: 'paper', live_ready: true, live_blocked_reason: '' }));
+    await page.click('#cf-os-live-btn');
+    await expect(page.locator('.cf-modal').filter({ hasText: 'REAL orders' })).toBeVisible();
+    expect(posted).toEqual([]);
+  });
+
   test('the manual opens in English and Tamil', async ({ page }) => {
     await openOptionSeller(page);
     await page.locator('#optsell-page .allocator-header h2 .cf-info').click();

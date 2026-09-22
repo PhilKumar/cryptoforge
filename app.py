@@ -10730,10 +10730,33 @@ _OPTION_SELLER_IDLE_SEC = 60
 _OPTION_SELLER_FIRST_DELAY_SEC = 20
 
 
+_option_seller_executor = None
+
+
+def _get_option_seller_executor():
+    """The live executor (engine/option_seller_live.py). It refuses every order
+    until the server is armed, the keys work and the book is set to live."""
+    global _option_seller_executor
+    if _option_seller_executor is None:
+        from engine.option_seller_live import DeltaOptionExecutor
+
+        _option_seller_executor = DeltaOptionExecutor()
+    return _option_seller_executor
+
+
+def _option_seller_alert(title: str, body: str, level: str = "warn") -> None:
+    # Live events only reach this callback, and each one is real money.
+    alerter.alert(title, body, level=level)
+
+
+def _new_option_seller() -> OptionSellerPaper:
+    return OptionSellerPaper(executor=_get_option_seller_executor(), on_alert=_option_seller_alert)
+
+
 def _get_option_seller() -> OptionSellerPaper:
     global _option_seller
     if _option_seller is None:
-        _option_seller = OptionSellerPaper()
+        _option_seller = _new_option_seller()
     return _option_seller
 
 
@@ -10786,7 +10809,8 @@ async def _option_seller_cycle() -> bool:
         return False
     seller = _get_option_seller()
     seller.load(await asyncio.to_thread(_load_option_seller_state))
-    if not seller.enabled and not seller.status()["open"]:
+    status = seller.status()
+    if not seller.enabled and not status["open"] and not status["live_open"]:
         return False
     changed = await seller.tick()
     if changed:
@@ -10801,7 +10825,8 @@ async def _option_seller_loop() -> None:
         try:
             await _option_seller_cycle()
             seller = _get_option_seller()
-            busy = seller.enabled or bool(seller.status()["open"])
+            st = seller.status()
+            busy = seller.enabled or bool(st["open"]) or bool(st["live_open"])
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # a paper book must never take the app down
@@ -10811,7 +10836,7 @@ async def _option_seller_loop() -> None:
 
 @app.get("/api/option-seller/status")
 async def option_seller_status():
-    seller = OptionSellerPaper()  # a fresh reader: this instance may not be the writer
+    seller = _new_option_seller()  # a fresh reader: this instance may not be the writer
     seller.load(await asyncio.to_thread(_load_option_seller_state))
     out = seller.status()
     out["writer"] = _option_seller_lock_handle is not None
@@ -10851,16 +10876,38 @@ async def option_seller_chart(date: str = ""):
     return out
 
 
+@app.get("/api/option-seller/live-check")
+async def option_seller_live_check():
+    """Read-only: do the Delta keys work from this server? Places nothing."""
+    check_rate_limit("option_seller_live_check", max_calls=4, window_sec=30)
+    ex = _get_option_seller_executor()
+    from engine.option_seller_live import ARM_HINT, MAX_LIVE_CONTRACTS
+
+    out = {"armed": ex.armed, "arm_hint": ARM_HINT, "configured": ex.configured(), "max_contracts": MAX_LIVE_CONTRACTS}
+    if not ex.configured():
+        return {**out, "ok": False, "detail": "Delta API keys are not configured on the server"}
+    try:
+        return {**out, **(await ex.balance_check())}
+    except Exception as exc:
+        text = str(exc)
+        if "ip_not_whitelisted" in text:
+            text = "Delta refused this server's address — add its IP to the API key's whitelist on Delta"
+        return {**out, "ok": False, "detail": text[:300]}
+
+
 @app.post("/api/option-seller/settings")
 async def option_seller_settings(request: Request):
     """Switch the paper book on or off, or change its paper size."""
     check_rate_limit("option_seller_settings", max_calls=6, window_sec=10)
     body = await _read_json_body(request)
-    seller = OptionSellerPaper()
+    seller = _new_option_seller()
     seller.load(await asyncio.to_thread(_load_option_seller_state))
     try:
         seller.configure(
-            enabled=body.get("enabled"), size_btc=body.get("size_btc"), weekend_calm=body.get("weekend_calm")
+            enabled=body.get("enabled"),
+            size_btc=body.get("size_btc"),
+            weekend_calm=body.get("weekend_calm"),
+            mode=body.get("mode"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
