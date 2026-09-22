@@ -47,3 +47,10 @@ def test_the_manifest_icons_are_the_current_mark():
     manifest = _read("static", "manifest.webmanifest")
     for size in ("192", "512"):
         assert f"/static/pwa-icons/icon-{size}.png?v=" in manifest
+
+
+def test_installing_from_the_front_page_uses_the_app_manifest():
+    """Phil's Mac app was installed from crypto.philforge.in/ — a page with no
+    manifest — so Chrome made it from its remembered, pre-August favicon."""
+    landing = _read("static", "landing", "index.html")
+    assert _token(landing, "manifest") == _token(_read("strategy.html"), "manifest")
