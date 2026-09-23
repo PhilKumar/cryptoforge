@@ -4852,7 +4852,7 @@
    three times taller than the numbers they hold (Phil, 23-Sep-2026). */
 .table-field-pair {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -4876,10 +4876,11 @@
 .table-field-label {
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
   line-height: 1;
+  white-space: nowrap;
 }
 .table-field-meta {
   font-size: 10px;
@@ -4987,15 +4988,17 @@
   gap: 6px;
   margin-top: 8px;
   min-width: 0;
-  max-width: 300px;
+  max-width: 260px;
 }
 .cf-scalp-trade-exec .cf-scalp-exec-stage-row {
   gap: 6px;
   flex-wrap: wrap;
 }
 .cf-scalp-trade-exec .cf-scalp-exec-chip {
-  padding: 3px 8px;
-  font-size: 10px;
+  padding: 2px 6px;
+  min-height: 18px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
 }
 .cf-scalp-trade-exec .cf-scalp-exec-note {
   font-size: 10px;

@@ -7635,8 +7635,8 @@ function cfScalpTradeAddConfig(trade) {
     : Number((trade && (trade.qty_value || trade.qty_usdt || trade.margin_usd)) || 1000);
   return {
     mode: mode,
-    label: mode === 'base' ? 'Add Qty' : 'Add Margin $',
-    helper: mode === 'base' ? 'same unit as entry' : 'margin before leverage',
+    label: mode === 'base' ? 'Qty' : '$',
+    helper: '',
     step: mode === 'base' ? '0.0001' : '1',
     min: mode === 'base' ? '0.000001' : '1',
     value: cfFormatQtyValue(seedValue, mode),
@@ -7709,7 +7709,7 @@ function cfScalpExecDetailHtml(execMetrics, options) {
       return '<span class="cf-scalp-exec-chip" data-state="' + _escapeHtml(stage.tone) + '">' + _escapeHtml(stage.label) + '</span>';
     }).join('') + '</div>';
   }
-  html += '<div class="cf-scalp-exec-note">' + _escapeHtml(detail) + '</div>';
+  if (detail) html += '<div class="cf-scalp-exec-note">' + _escapeHtml(detail) + '</div>';
   return html;
 }
 
@@ -8359,8 +8359,9 @@ function cfScalpExecSummary(execMetrics) {
   const phase = cfScalpPhaseLabel(meta.phase || '');
   const symbol = cfPrettyScalpSymbol(meta.symbol || '—');
   const lifecycle = cfScalpLifecycleLabel(meta.order_lifecycle || meta.fill_status || '');
-  const latency = Number(meta.latency_ms) > 0 ? cfFormatLatency(meta.latency_ms) : (meta.verified === false ? 'unverified' : 'pending');
-  return [phase, symbol, lifecycle || latency].filter(Boolean).join(' • ');
+  // the chips underneath already say the lifecycle, so don't say it twice
+  const state = meta.verified === false ? 'unverified' : (lifecycle ? '' : cfFormatLatency(meta.latency_ms));
+  return [phase, symbol, state].filter(Boolean).join(' • ');
 }
 
 function cfCompactCount(value) {
@@ -8388,8 +8389,8 @@ function cfScalpExecDetail(execMetrics, options) {
     seen.add(value.toLowerCase());
     bits.push(value);
   };
+  // the line above already names the phase and the symbol
   if (!opts.short) {
-    push(cfScalpPhaseLabel(meta.phase || ''));
     if (meta.trade_id) push('#' + meta.trade_id);
     else if (meta.order_id) push('order ' + meta.order_id);
   }
@@ -8397,14 +8398,18 @@ function cfScalpExecDetail(execMetrics, options) {
   // disagrees with them is worth a word here.
   if (meta.exchange_state && meta.exchange_state !== meta.fill_status) push('exchange ' + cfScalpLifecycleLabel(meta.exchange_state));
   if (meta.verified === false) push('unverified');
-  if (Number(meta.requested_size) > 0) push(meta.requested_size + ' contracts');
-  else if (Number(meta.position_size) > 0) push('size ' + meta.position_size);
-  if (Number(meta.latency_ms) > 0) push(cfFormatLatency(meta.latency_ms));
-  else if (Number(meta.ack_ms) > 0) push(cfFormatLatency(meta.ack_ms));
+  // a row's own Qty column already carries the size, so a healthy row is
+  // just its chips — nothing is written twice
+  if (!opts.short) {
+    if (Number(meta.requested_size) > 0) push(meta.requested_size + ' contracts');
+    else if (Number(meta.position_size) > 0) push('size ' + meta.position_size);
+    if (Number(meta.latency_ms) > 0) push(cfFormatLatency(meta.latency_ms));
+    else if (Number(meta.ack_ms) > 0) push(cfFormatLatency(meta.ack_ms));
+  }
   if (meta.error) push(cfTrimUiText(meta.error, opts.short ? 48 : 72));
-  else push(cfTrimUiText(meta.verification_summary || meta.note || '', opts.short ? 40 : 64));
-  if (!bits.length) return meta.verified === false ? 'verification failed' : 'awaiting broker metrics';
-  return bits.slice(0, opts.short ? 3 : 5).join(' • ');
+  else if (meta.verified === false) push(cfTrimUiText(meta.verification_summary || meta.note || 'verification failed', 64));
+  if (!bits.length) return opts.short ? '' : 'awaiting broker metrics';
+  return bits.slice(0, opts.short ? 2 : 4).join(' • ');
 }
 
 function cfScalpMarkMeta(trade) {
@@ -8731,12 +8736,12 @@ function cfRenderActivePositions(open, execMetrics) {
         <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">#${tid || '—'} • ${_escapeHtml(t.broker_label || t.broker_name || 'Broker')} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div><div class="cf-scalp-trade-exec" id="cf-trade-exec-${tid}" data-state="neutral"></div><div class="cf-scalp-trade-sync" id="cf-trade-sync-${tid}" data-state="idle"></div></td>
         <td>${sideTag}</td>
         <td><div class="table-value-stack"><div class="table-value-main">${qtyMain}</div><div class="table-value-sub">${qtySub}</div></div></td>
-        <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div><div class="table-value-sub">entry</div></div></td>
+        <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div></div></td>
         <td data-field="mark"><div class="table-value-stack"><div class="table-value-main">$${(t.mark_price || t.current_price || 0).toFixed(4)}</div><div class="table-value-sub">${cfScalpMarkMeta(t)}</div></div></td>
-        <td data-field="pnl"><div class="table-value-stack"><div class="table-value-main ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div><div class="table-value-sub ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">unrealized</div></div></td>
+        <td data-field="pnl"><div class="table-value-stack"><div class="table-value-main ${isProfit ? 'positive' : isLoss ? 'negative' : ''}">${pnl >= 0 ? '+' : ''}${fmtINR(pnl)}</div></div></td>
         <td><div class="table-edit-stack table-edit-stack-pairs"><label class="table-field-pair"><span class="table-field-label">TP $</span><input type="number" class="table-input-sm" id="cf-tp-usd-${tid}" value="${t.target_usd || 0}" step="1" min="0" placeholder="TP $"></label><label class="table-field-pair"><span class="table-field-label">TP Px</span><input type="number" class="table-input-sm" id="cf-tp-price-${tid}" value="${t.target_price || 0}" step="0.1" min="0" placeholder="TP price"></label></div></td>
         <td><div class="table-edit-stack table-edit-stack-pairs"><label class="table-field-pair"><span class="table-field-label">SL $</span><input type="number" class="table-input-sm" id="cf-sl-usd-${tid}" value="${t.sl_usd || 0}" step="1" min="0" placeholder="SL $"></label><label class="table-field-pair"><span class="table-field-label">SL Px</span><input type="number" class="table-input-sm" id="cf-sl-price-${tid}" value="${t.sl_price || 0}" step="0.1" min="0" placeholder="SL price"></label></div></td>
-        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack" data-qty-mode="${addConfig.mode}"><label class="table-field-pair table-field-pair-compact"><span class="table-field-label">${addConfig.label}</span><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="${addConfig.value}" step="${addConfig.step}" min="${addConfig.min}" data-default-qty="${addConfig.value}" data-qty-mode="${addConfig.mode}" placeholder="${addConfig.value}"></label><div class="table-field-meta">${addConfig.helper}</div><button class="btn btn-outline btn-sm table-add-btn" id="cf-add-btn-${tid}" data-cf-click="cfAddScalpQuantity('${tid}')">Scale In</button></div></td>
+        <td><div class="table-inline-actions table-inline-actions-stack table-add-stack" data-qty-mode="${addConfig.mode}"><label class="table-field-pair table-field-pair-compact"><span class="table-field-label">${addConfig.label}</span><input type="number" class="table-input-sm table-add-input" id="cf-add-qty-${tid}" value="${addConfig.value}" step="${addConfig.step}" min="${addConfig.min}" data-default-qty="${addConfig.value}" data-qty-mode="${addConfig.mode}" placeholder="${addConfig.value}"></label><button class="btn btn-outline btn-sm table-add-btn" id="cf-add-btn-${tid}" data-cf-click="cfAddScalpQuantity('${tid}')">Scale In</button></div></td>
         <td><div class="table-inline-actions table-action-stack"><button class="btn btn-success btn-sm" id="cf-set-btn-${tid}" data-cf-click="cfModifyScalpTrade('${tid}')">Save</button><button class="btn btn-danger btn-sm" id="cf-exit-btn-${tid}" data-cf-click="cfExitScalpTrade('${tid}')">Exit</button></div></td>
       </tr>`;
     }).join('');
@@ -8755,7 +8760,7 @@ function cfRenderActivePositions(open, execMetrics) {
       }
       if (pnlCell) {
         const pnlClass = isProfit ? 'positive' : isLoss ? 'negative' : '';
-        pnlCell.innerHTML = '<div class="table-value-stack"><div class="table-value-main ' + pnlClass + '">' + (pnl >= 0 ? '+' : '') + fmtINR(pnl) + '</div><div class="table-value-sub ' + pnlClass + '">unrealized</div></div>';
+        pnlCell.innerHTML = '<div class="table-value-stack"><div class="table-value-main ' + pnlClass + '">' + (pnl >= 0 ? '+' : '') + fmtINR(pnl) + '</div></div>';
       }
       row.dataset.pnlState = isProfit ? 'profit' : (isLoss ? 'loss' : 'flat');
     });
