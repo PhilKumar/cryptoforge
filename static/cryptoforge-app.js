@@ -7698,11 +7698,11 @@ function cfScalpExecTone(execMetrics) {
   return 'active';
 }
 
-function cfScalpExecDetailHtml(execMetrics) {
+function cfScalpExecDetailHtml(execMetrics, options) {
   var meta = execMetrics || {};
   if (!meta.phase) return '<span class="cf-scalp-exec-note">Awaiting next broker action</span>';
   var stages = cfScalpExecStages(meta);
-  var detail = cfScalpExecDetail(meta);
+  var detail = cfScalpExecDetail(meta, options);
   var html = '';
   if (stages.length) {
     html += '<div class="cf-scalp-exec-stage-row">' + stages.map(function(stage) {
@@ -8341,19 +8341,16 @@ function cfScalpFeedDetail(feed) {
   const connectionState = String(meta.connection_state || '').trim();
   bits.push(meta.ws_connected ? (meta.authenticated ? 'WS auth' : 'WS live') : 'WS idle');
   if (connectionState && connectionState !== 'connected') bits.push(connectionState);
-  bits.push(String(Number(meta.messages_received) || 0) + ' msgs');
-  bits.push(String(Number(meta.reconnect_count) || 0) + ' reconnects');
-  bits.push(String(Number(meta.rest_fallbacks) || 0) + ' REST');
-  if (Number.isFinite(Number(meta.last_message_age_ms)) && Number(meta.last_message_age_ms) >= 0) {
-    bits.push('last msg ' + cfFormatLatency(meta.last_message_age_ms));
-  }
-  const active = Array.isArray(meta.subscribed_channels) && meta.subscribed_channels.length ? meta.subscribed_channels[0] : '';
-  if (active) bits.push(cfTrimUiText(active, 28));
+  bits.push(cfCompactCount(meta.messages_received) + ' msgs');
+  const reconnects = Number(meta.reconnect_count) || 0;
+  if (reconnects) bits.push(reconnects + ' reconn');
+  const restFallbacks = Number(meta.rest_fallbacks) || 0;
+  if (restFallbacks) bits.push(restFallbacks + ' REST');
   const disconnect = String(meta.last_disconnect_reason || '').trim();
-  if (disconnect) bits.push('drop ' + cfTrimUiText(disconnect, 40));
+  if (disconnect) bits.push('drop ' + cfTrimUiText(disconnect, 28));
   const error = String(meta.last_error || '').trim();
-  if (error) bits.push(cfTrimUiText(error, 56));
-  return bits.join(' • ');
+  if (error) bits.push(cfTrimUiText(error, 40));
+  return bits.slice(0, 4).join(' • ');
 }
 
 function cfScalpExecSummary(execMetrics) {
@@ -8366,29 +8363,48 @@ function cfScalpExecSummary(execMetrics) {
   return [phase, symbol, lifecycle || latency].filter(Boolean).join(' • ');
 }
 
-function cfScalpExecDetail(execMetrics) {
+function cfCompactCount(value) {
+  const n = Number(value) || 0;
+  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 10000) return Math.round(n / 1000) + 'k';
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(n);
+}
+
+/* The one line under the SUBMITTED/ACKED/FILLED chips.
+   It used to repeat itself — "Filled • Filled", then the same note twice —
+   and re-say what the chips already said (Phil, 23-Sep-2026: "Too much of
+   texts"). Now every bit is unique, the chips are not echoed, and a row's
+   line is shorter still because the row already names the trade. */
+function cfScalpExecDetail(execMetrics, options) {
   const meta = execMetrics || {};
   if (!meta.phase) return 'Awaiting next broker action';
+  const opts = options || {};
   const bits = [];
-  const phase = cfScalpPhaseLabel(meta.phase || '');
-  if (phase) bits.push(phase);
-  if (meta.trade_id) bits.push('trade #' + meta.trade_id);
-  if (meta.order_id) bits.push('order ' + meta.order_id);
-  if (meta.fill_status) bits.push(cfScalpLifecycleLabel(meta.fill_status));
-  if (meta.order_lifecycle && meta.order_lifecycle !== meta.fill_status) bits.push(cfScalpLifecycleLabel(meta.order_lifecycle));
-  if (meta.exchange_state && meta.exchange_state !== meta.fill_status) bits.push('exchange ' + cfScalpLifecycleLabel(meta.exchange_state));
-  if (meta.verification_state && meta.verification_state !== meta.order_lifecycle) bits.push('verify ' + cfScalpLifecycleLabel(meta.verification_state));
-  if (Number(meta.ack_ms) > 0) bits.push('ack ' + cfFormatLatency(meta.ack_ms));
-  if (Number(meta.latency_ms) > 0) bits.push('verify ' + cfFormatLatency(meta.latency_ms));
-  if (Number(meta.verified_at_attempt) > 0) bits.push('attempt ' + String(meta.verified_at_attempt));
-  if (Number(meta.requested_size) > 0) bits.push('contracts ' + String(meta.requested_size));
-  if (Number(meta.requested_qty_value) > 0) bits.push('qty ' + String(meta.requested_qty_value));
-  else if (Number(meta.position_size) > 0) bits.push('size ' + String(meta.position_size));
-  if (meta.verification_summary) bits.push(cfTrimUiText(meta.verification_summary, 84));
-  if (meta.note) bits.push(cfTrimUiText(meta.note, 72));
-  if (meta.error) bits.push(cfTrimUiText(meta.error, 84));
+  const seen = new Set();
+  const push = function(text) {
+    const value = String(text === null || text === undefined ? '' : text).trim();
+    if (!value || seen.has(value.toLowerCase())) return;
+    seen.add(value.toLowerCase());
+    bits.push(value);
+  };
+  if (!opts.short) {
+    push(cfScalpPhaseLabel(meta.phase || ''));
+    if (meta.trade_id) push('#' + meta.trade_id);
+    else if (meta.order_id) push('order ' + meta.order_id);
+  }
+  // fill_status and order_lifecycle ARE the chips above; only a state that
+  // disagrees with them is worth a word here.
+  if (meta.exchange_state && meta.exchange_state !== meta.fill_status) push('exchange ' + cfScalpLifecycleLabel(meta.exchange_state));
+  if (meta.verified === false) push('unverified');
+  if (Number(meta.requested_size) > 0) push(meta.requested_size + ' contracts');
+  else if (Number(meta.position_size) > 0) push('size ' + meta.position_size);
+  if (Number(meta.latency_ms) > 0) push(cfFormatLatency(meta.latency_ms));
+  else if (Number(meta.ack_ms) > 0) push(cfFormatLatency(meta.ack_ms));
+  if (meta.error) push(cfTrimUiText(meta.error, opts.short ? 48 : 72));
+  else push(cfTrimUiText(meta.verification_summary || meta.note || '', opts.short ? 40 : 64));
   if (!bits.length) return meta.verified === false ? 'verification failed' : 'awaiting broker metrics';
-  return bits.join(' • ');
+  return bits.slice(0, opts.short ? 3 : 5).join(' • ');
 }
 
 function cfScalpMarkMeta(trade) {
@@ -8657,7 +8673,7 @@ function cfRenderScalpTradeExecHtml(trade, execMetrics) {
       + '</div>'
       + '<div class="cf-scalp-exec-note">' + _escapeHtml(cfScalpMarkMeta(trade)) + '</div>';
   }
-  return cfScalpExecDetailHtml(meta);
+  return cfScalpExecDetailHtml(meta, { short: true });
 }
 
 function cfSyncScalpTradeExecUi(trade, execMetrics) {
@@ -8712,7 +8728,7 @@ function cfRenderActivePositions(open, execMetrics) {
         : ((t.base_qty ? Number(t.base_qty).toFixed(6) + ' qty' : 'margin'));
       const addConfig = cfScalpTradeAddConfig(t);
       return `<tr data-tid="${tid}" data-pnl-state="${pnlState}">
-        <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">trade #${tid || '—'} • ${_escapeHtml(t.broker_label || t.broker_name || 'Broker')} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div><div class="cf-scalp-trade-exec" id="cf-trade-exec-${tid}" data-state="neutral"></div><div class="cf-scalp-trade-sync" id="cf-trade-sync-${tid}" data-state="idle"></div></td>
+        <td><div class="table-row-label">${prettySymbol}</div><div class="table-note">#${tid || '—'} • ${_escapeHtml(t.broker_label || t.broker_name || 'Broker')} • ${(t.leverage || 1)}x • ${(t.mode || 'paper').toUpperCase()}</div><div class="cf-scalp-trade-exec" id="cf-trade-exec-${tid}" data-state="neutral"></div><div class="cf-scalp-trade-sync" id="cf-trade-sync-${tid}" data-state="idle"></div></td>
         <td>${sideTag}</td>
         <td><div class="table-value-stack"><div class="table-value-main">${qtyMain}</div><div class="table-value-sub">${qtySub}</div></div></td>
         <td><div class="table-value-stack"><div class="table-value-main">$${(t.entry_price || 0).toFixed(4)}</div><div class="table-value-sub">entry</div></div></td>

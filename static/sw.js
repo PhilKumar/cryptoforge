@@ -14,7 +14,7 @@
 // The pages linked it with July/June ?v= tokens and the server marked it
 // immutable for a week; both are fixed, and this bump evicts the precached
 // /apple-touch-icon.png and the manifest held under their stable URLs.
-const CACHE_NAME = 'cryptoforge-shell-v90';
+const CACHE_NAME = 'cryptoforge-shell-v91';
 
 // Scripts and stylesheets are requested with a content-hash ?v= token that the
 // server computes at render time, so their URLs cannot be known here — listing

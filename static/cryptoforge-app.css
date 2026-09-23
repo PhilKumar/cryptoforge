@@ -3539,11 +3539,13 @@
   }
   .cf-scalp-entry-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* four small boxes, not four stretched banners */
+    grid-template-columns: repeat(auto-fit, minmax(0, 190px));
+    justify-content: start;
     gap: 8px;
   }
   .cf-scalp-entry-metric {
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-radius: 12px;
     border: 1px solid rgba(148,163,184,0.14);
     background: rgba(15,23,42,0.36);
@@ -4842,30 +4844,34 @@
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  min-height: 42px;
-  padding: 8px 12px;
+  min-height: 34px;
+  padding: 6px 10px;
   font-size: 12px;
 }
+/* The label sits BESIDE its box, not above it: the TP/SL/Scale cells were
+   three times taller than the numbers they hold (Phil, 23-Sep-2026). */
 .table-field-pair {
   display: grid;
-  gap: 6px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 .table-field-pair-compact {
-  gap: 6px;
+  gap: 8px;
 }
 .table-edit-stack {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
-  min-width: 176px;
-  max-width: 188px;
+  gap: 6px;
+  min-width: 118px;
+  max-width: 130px;
 }
 .table-edit-stack-labeled {
   gap: 6px;
 }
 .table-edit-stack-pairs {
-  gap: 10px;
+  gap: 6px;
 }
 .table-field-label {
   font-size: 10px;
@@ -4883,9 +4889,9 @@
 .table-inline-actions-stack {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
-  min-width: 172px;
-  max-width: 184px;
+  gap: 6px;
+  min-width: 118px;
+  max-width: 130px;
 }
 .table-add-stack {
   align-items: stretch;
@@ -4901,18 +4907,18 @@
 }
 .table-add-btn {
   width: 100%;
-  min-height: 42px;
+  min-height: 34px;
 }
 .table-action-stack {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
-  min-width: 124px;
-  max-width: 136px;
+  gap: 6px;
+  min-width: 88px;
+  max-width: 100px;
 }
 
 .cf-scalp-active-trade-table {
-  min-width: 1480px;
+  min-width: 1180px;
 }
 .cf-scalp-active-trade-table td {
   vertical-align: top;
@@ -4967,7 +4973,7 @@
 }
 .cf-scalp-active-trade-table .table-inline-actions .btn,
 .cf-scalp-active-trade-table .table-inline-actions-stack .btn {
-  min-width: 108px;
+  min-width: 76px;
 }
 .cf-scalp-active-trade-table .table-value-main {
   white-space: nowrap;
@@ -4979,9 +4985,9 @@
 .cf-scalp-trade-exec {
   display: grid;
   gap: 6px;
-  margin-top: 10px;
+  margin-top: 8px;
   min-width: 0;
-  max-width: 360px;
+  max-width: 300px;
 }
 .cf-scalp-trade-exec .cf-scalp-exec-stage-row {
   gap: 6px;
