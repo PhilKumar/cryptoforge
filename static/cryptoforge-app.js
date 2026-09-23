@@ -8332,7 +8332,7 @@ function cfScalpFeedSummary(feed) {
   const age = meta.age_ms !== undefined && meta.age_ms !== null ? cfFormatLatency(meta.age_ms) : '—';
   if (!symbol && !meta.ws_connected) return 'Awaiting ticks';
   if (!symbol) return meta.ws_connected ? (stateLabel + ' • WS ready') : 'Waiting for price';
-  return stateLabel + ' • ' + source + ' • ' + cfPrettyScalpSymbol(symbol) + ' • ' + age;
+  return stateLabel + ' • ' + source + ' • ' + age;
 }
 
 function cfScalpFeedDetail(feed) {
@@ -8559,7 +8559,9 @@ function cfApplyScalpStatus(d) {
     const feedDetail = cfEl('cf-scalp-feed-detail');
     if (feedDetail) {
       const feedState = feed.last_error ? 'error' : (String(feed.state || '').toLowerCase() || 'waiting');
-      feedDetail.textContent = cfScalpFeedDetail(feed);
+      const healthy = feedState === 'fresh' && feed.ws_connected && !feed.last_error && !feed.last_disconnect_reason;
+      feedDetail.textContent = healthy ? '' : cfScalpFeedDetail(feed);
+      feedDetail.hidden = !feedDetail.textContent;
       feedDetail.dataset.state = feedState;
     }
 
@@ -8571,7 +8573,7 @@ function cfApplyScalpStatus(d) {
     }
     const execDetail = cfEl('cf-scalp-exec-detail');
     if (execDetail) {
-      execDetail.innerHTML = cfScalpExecDetailHtml(exec);
+      execDetail.innerHTML = cfScalpExecDetailHtml(exec, { short: true });
       execDetail.dataset.state = cfScalpExecTone(exec);
     }
 
