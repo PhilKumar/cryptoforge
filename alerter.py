@@ -84,6 +84,38 @@ async def _send_telegram(text: str) -> None:
         _log.warning("Telegram error: %s", e)
 
 
+async def check_telegram_credentials() -> dict:
+    """Ask Telegram whether this token still works, and say so out loud.
+
+    Phil, 25-Sep-2026: "now cryptoforge telegram alerts are not coming". The
+    token had been revoked on 19-Sep when a new one was issued for the bot
+    PhilForge shares, and NOTHING said a word for six days — a send is only
+    attempted when there is something to alert about, and there was nothing
+    alert-worthy in between. So this runs once at startup, sends no message,
+    and leaves a line in the log either way. getMe never reveals the token.
+    """
+    if not _TELEGRAM_OK:
+        _log.warning("[ALERTS] Telegram is not configured — no alerts will be sent")
+        return {"ok": False, "reason": "not configured"}
+    try:
+        resp = await _get_client().get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe")
+        body = resp.json() if resp.content else {}
+    except Exception as exc:  # network, DNS, timeout
+        _log.warning("[ALERTS] Could not reach Telegram to check the bot: %s", exc)
+        return {"ok": False, "reason": str(exc)[:200]}
+    if resp.status_code == 200 and body.get("ok"):
+        name = (body.get("result") or {}).get("username") or "?"
+        _log.info("[ALERTS] Telegram ready — alerts will come from @%s", name)
+        return {"ok": True, "bot": name}
+    reason = body.get("description") or f"HTTP {resp.status_code}"
+    _log.error(
+        "[ALERTS] TELEGRAM REJECTED THE BOT TOKEN (%s) — NO ALERTS WILL REACH YOU. "
+        "Issue a fresh token in BotFather and put it in .env as TELEGRAM_BOT_TOKEN.",
+        reason,
+    )
+    return {"ok": False, "reason": reason}
+
+
 async def _send_discord(text: str) -> None:
     if not _DISCORD_OK:
         return

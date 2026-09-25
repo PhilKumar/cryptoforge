@@ -401,6 +401,9 @@ async def _app_lifespan(_: FastAPI):
     option_seller_task = asyncio.create_task(_option_seller_loop())
     _inflight_tasks.add(option_seller_task)
     option_seller_task.add_done_callback(_inflight_tasks.discard)
+    alert_check_task = asyncio.create_task(alerter.check_telegram_credentials())
+    _inflight_tasks.add(alert_check_task)
+    alert_check_task.add_done_callback(_inflight_tasks.discard)
     try:
         yield
     finally:
