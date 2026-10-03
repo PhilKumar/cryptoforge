@@ -101,7 +101,7 @@ def test_the_v_rule_book_names_itself_too():
 def test_an_engine_wide_alarm_stays_quiet_while_every_book_is_paper():
     """A stall matters because orders are resting on an exchange and nothing is
     stepping them. With every book in paper there is nothing to go wrong — and
-    Cascade-Auto sits above MAX_ACTIVE_BEFORE_ALERT (10) on paper alone, so
+    Cascade-Auto sits above MAX_ACTIVE_BEFORE_ALERT (15) on paper alone, so
     without this it would raise "Campaign count high" hourly about nothing."""
     sent = []
     eng = _engine(True, sent)

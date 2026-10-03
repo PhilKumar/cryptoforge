@@ -1688,6 +1688,18 @@ class CascadeAlertTests(unittest.TestCase):
         self.engine.campaigns[cid] = c
         return c
 
+    def test_the_cap_is_fifteen(self):
+        """Phil, 03-Oct-2026: "Make this alert more than 10 campaigns to 15".
+
+        Pinned as a number, not just used symbolically, because the value IS
+        the decision: three live books auto-restarting on every mother break
+        sat above ten on an ordinary morning, and an alert that fires on an
+        ordinary morning is one you learn to ignore.
+        """
+        from engine.cascade import MAX_ACTIVE_BEFORE_ALERT
+
+        self.assertEqual(MAX_ACTIVE_BEFORE_ALERT, 15)
+
     def test_alerts_once_the_campaign_count_passes_the_cap(self):
         from engine.cascade import MAX_ACTIVE_BEFORE_ALERT
 

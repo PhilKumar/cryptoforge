@@ -428,7 +428,12 @@ def strategy_label(strategy: str) -> str:
     return STRATEGY_LABELS.get(name) or name
 
 
-MAX_ACTIVE_BEFORE_ALERT = 10
+# How many campaigns may be open before the engine says so. Raised from 10 to
+# 15 on 03-Oct-2026: three live books (BTC, SOL, PAXG) auto-restart on every
+# mother break, and a barren chain can restart six times in half a day, so ten
+# was the ordinary size of a quiet morning rather than a number worth a
+# message. An alert that fires on a normal day teaches you to ignore it.
+MAX_ACTIVE_BEFORE_ALERT = 15
 STALL_ALERT_SEC = 15 * 60
 # How many closed campaigns stay in memory. This was written as a bare 50 in
 # _archive_campaign while _adopt_ended_campaigns, load_closed_campaigns and the
