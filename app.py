@@ -85,6 +85,7 @@ from engine.billing import (
     summarize,
     verify_signature,
 )
+from engine.buyer_reports import REPORT_EVERY_SEC, REPORT_FRESH_SEC, BuyerReports, ReportRefused, verify_report
 from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
 from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine, strategy_label
 from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
@@ -2108,6 +2109,9 @@ async def require_auth(request: Request):
         # Razorpay is the caller and has no session. Its own signature over the
         # raw body is the authentication.
         "/api/billing/razorpay/webhook",
+        # A buyer's executor reporting on itself. Same reasoning as the feed
+        # socket: somebody else's machine, authenticated by its own signature.
+        "/api/cascade/feed/report",
         "/login",
         "/",
         "/robots.txt",
@@ -2157,6 +2161,7 @@ async def auth_middleware(request: Request, call_next):
         "/api/health",
         "/api/cascade/feed/keys",
         "/api/billing/razorpay/webhook",
+        "/api/cascade/feed/report",
         "/robots.txt",
         "/sitemap.xml",
         "/favicon.ico",
@@ -10321,8 +10326,15 @@ _feed_streams: dict = {}  # buyer_id -> the one WebSocket that buyer may hold
 _feed_nonces: dict = {}
 
 
+_feed_report_nonces: dict = {}
+
+
 def _get_feed_subscribers() -> FeedSubscribers:
     return FeedSubscribers(_get_state_store())
+
+
+def _get_buyer_reports() -> BuyerReports:
+    return BuyerReports(_get_state_store())
 
 
 @app.websocket("/ws/cascade-feed")
@@ -10481,6 +10493,7 @@ async def cascade_feed_subscribers():
     """Who may connect, whether their stream is live, and how long they're paid up."""
     now = time.time()
     rows = _get_feed_subscribers().list()
+    reports = _get_buyer_reports().mapping()
     for row in rows:
         row["connected"] = row.get("buyer_id") in _feed_streams
         expires = row.get("expires_at")
@@ -10488,7 +10501,14 @@ async def cascade_feed_subscribers():
         # without arithmetic. Negative means the entitlement has already ended,
         # which the executor enforces regardless of the status word.
         row["days_left"] = round((int(expires) - now) / 86400, 1) if expires else None
-    return {"subscribers": rows}
+        # What their own machine last said about itself. Absent is meaningful:
+        # a buyer connected but never reporting is running an old executor.
+        record = reports.get(row.get("buyer_id")) or {}
+        row["report"] = record.get("report") or None
+        row["reported_at"] = record.get("received_at")
+        row["report_age_sec"] = round(now - int(record["received_at"])) if record.get("received_at") else None
+        row["report_fresh"] = bool(row["report_age_sec"] is not None and row["report_age_sec"] <= REPORT_FRESH_SEC)
+    return {"subscribers": rows, "report_every_sec": REPORT_EVERY_SEC, "report_fresh_sec": REPORT_FRESH_SEC}
 
 
 @app.post("/api/cascade/feed/subscribers")
@@ -10586,6 +10606,33 @@ async def cascade_feed_published_symbols_set(request: Request):
     return await cascade_feed_published_symbols()
 
 
+@app.post("/api/cascade/feed/report")
+async def cascade_feed_report(request: Request):
+    """A buyer's executor tells us how it is doing, and what it holds.
+
+    Public, like the webhook and the feed socket itself: the caller is somebody
+    else's machine with no session, and its ed25519 signature over the body IS
+    the authentication. Unregistered, unsigned, replayed or clock-skewed
+    reports are refused and stored nowhere.
+
+    A refusal answers 400 and the executor simply tries again next minute. It
+    must never be able to stop trading because the desk would not take a
+    status update — reporting is observation, not permission.
+    """
+    check_rate_limit("feed_report", max_calls=120, window_sec=60)
+    body = await _read_json_body(request)
+    try:
+        verified = verify_report(body, _get_feed_subscribers(), seen_nonces=_feed_report_nonces)
+    except ReportRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _get_buyer_reports().put(
+        verified["buyer_id"],
+        verified["report"],
+        clock_skew_sec=verified["clock_skew_sec"],
+    )
+    return {"status": "ok", "every_sec": REPORT_EVERY_SEC}
+
+
 @app.delete("/api/cascade/feed/subscribers/{buyer_id}")
 async def cascade_feed_subscriber_delete(buyer_id: str):
     """
@@ -10602,6 +10649,9 @@ async def cascade_feed_subscriber_delete(buyer_id: str):
         record = _get_feed_subscribers().remove(buyer_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"{buyer_id} is not registered")
+    # Forgetting a buyer forgets what their machine told us about itself too:
+    # a deleted row must not leave their positions sitting in our database.
+    _get_buyer_reports().remove(buyer_id)
     return {"status": "ok", "removed": record.get("buyer_id"), "was": record.get("status")}
 
 

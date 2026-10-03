@@ -1047,6 +1047,126 @@ class FeedSubscriberRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bad.status_code, 400)
 
 
+class BuyerReportRouteTests(unittest.IsolatedAsyncioTestCase):
+    """The reverse direction: a buyer's machine telling the desk how it is doing.
+
+    Public, because the caller is somebody else's computer with no session —
+    its signature is the authentication. The rule that matters is that a report
+    which does not verify changes nothing and never reaches the admin list.
+    """
+
+    async def asyncSetUp(self):
+        self.app_module = import_module("app")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_db = self.app_module._STATE_DB_FILE
+        self.app_module._STATE_DB_FILE = os.path.join(self._tmp.name, "state.db")
+        self.addCleanup(quiesce_state_writers, self.app_module._STATE_DB_FILE)
+        self.addCleanup(lambda: setattr(self.app_module, "_STATE_DB_FILE", self._orig_db))
+        self.app_module._rate_limits.clear()
+        self.app_module._feed_streams.clear()
+        self.app_module._feed_report_nonces.clear()
+        self.transport = httpx.ASGITransport(app=self.app_module.app)
+
+        from engine.cascade_feed import FeedSigner
+
+        self.key = FeedSigner.generate("buyer-7")
+
+    @asynccontextmanager
+    async def _client(self):
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as client:
+            await client.post("/api/auth/login", json={"password": self.app_module.AUTH_PIN})
+            self._headers = {
+                "X-CSRF-Token": client.cookies.get("cryptoforge_csrf") or "",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            yield client
+
+    async def _register(self, client):
+        await client.post(
+            "/api/cascade/feed/subscribers",
+            json={"buyer_id": "buyer-7", "public_key": self.key.public_key_b64(), "label": "Anita"},
+            headers=self._headers,
+        )
+
+    def _payload(self, nonce="n1", **over):
+        from engine.buyer_reports import sign_report
+
+        body = {
+            "app_version": "1.4.0",
+            "exchange": "binance",
+            "running": True,
+            "balance_usd": 1480.22,
+            "positions": [{"symbol": "SOLUSDT", "qty": 3.5, "avg_entry": 148.2, "mark": 144.6}],
+        }
+        body.update(over)
+        return sign_report("buyer-7", self.key, body, nonce=nonce)
+
+    async def _report(self, payload):
+        """Posted the way a real executor does: no cookie, no CSRF header, just
+        a signature. A logged-in browser posting this is CSRF-refused, which is
+        the point of that middleware and not something to work around here."""
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as machine:
+            return await machine.post("/api/cascade/feed/report", json=payload)
+
+    async def test_a_signed_report_reaches_the_buyer_list(self):
+        async with self._client() as client:
+            await self._register(client)
+            posted = await self._report(self._payload())
+            self.assertEqual(posted.status_code, 200)
+            rows = (await client.get("/api/cascade/feed/subscribers")).json()["subscribers"]
+        row = rows[0]
+        self.assertTrue(row["report_fresh"])
+        self.assertAlmostEqual(row["report"]["balance_usd"], 1480.22)
+        self.assertEqual(row["report"]["positions"][0]["symbol"], "SOLUSDT")
+
+    async def test_a_logged_in_browser_cannot_forge_a_report(self):
+        """CSRF still applies to anything carrying a session cookie."""
+        async with self._client() as client:
+            await self._register(client)
+            forged = await client.post("/api/cascade/feed/report", json=self._payload(nonce="n9"))
+        self.assertEqual(forged.status_code, 403)
+
+    async def test_reporting_needs_no_session_but_does_need_a_signature(self):
+        async with self._client() as client:
+            await self._register(client)
+        async with httpx.AsyncClient(transport=self.transport, base_url="http://testserver.local") as public:
+            unsigned = await public.post(
+                "/api/cascade/feed/report",
+                json={"buyer_id": "buyer-7", "nonce": "x", "timestamp": 1, "report": {}},
+            )
+            self.assertEqual(unsigned.status_code, 400)
+            signed = await public.post("/api/cascade/feed/report", json=self._payload(nonce="n2"))
+            self.assertEqual(signed.status_code, 200)
+
+    async def test_a_stranger_cannot_report(self):
+        from engine.buyer_reports import sign_report
+        from engine.cascade_feed import FeedSigner
+
+        stranger = FeedSigner.generate("buyer-nobody")
+        async with self._client() as client:
+            await self._register(client)
+        response = await self._report(sign_report("buyer-nobody", stranger, {"running": True}, nonce="n3"))
+        self.assertEqual(response.status_code, 400)
+
+    async def test_a_buyer_who_never_reported_simply_has_none(self):
+        async with self._client() as client:
+            await self._register(client)
+            rows = (await client.get("/api/cascade/feed/subscribers")).json()["subscribers"]
+        self.assertIsNone(rows[0]["report"])
+        self.assertFalse(rows[0]["report_fresh"])
+
+    async def test_forgetting_a_buyer_forgets_their_numbers(self):
+        """Their positions must not outlive their row in our database."""
+        async with self._client() as client:
+            await self._register(client)
+            await self._report(self._payload())
+            await client.delete("/api/cascade/feed/subscribers/buyer-7", headers=self._headers)
+            await self._register(client)
+            rows = (await client.get("/api/cascade/feed/subscribers")).json()["subscribers"]
+        self.assertIsNone(rows[0]["report"])
+
+
 class RazorpayWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
     """The webhook, end to end, against the real subscriber record.
 
