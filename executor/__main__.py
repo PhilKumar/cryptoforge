@@ -38,6 +38,7 @@ from executor.config import SAMPLE, ConfigError, ExecutorConfig, build_adapter, 
 from executor.market import ExchangeMarketData, MarketStrip
 from executor.power import SleepInhibitor, detect, sync_inhibitor
 from executor.report import irreducible_risk
+from executor.reporting import ReportSender, build_report
 from executor.runtime import ExecutorRuntime, RuntimeConfig
 from executor.singleton import AlreadyRunning, InstanceLock, lock_path
 from executor.transport import ExecutorIdentity, FeedTransport, KeySetStore, TransportStopped
@@ -103,6 +104,12 @@ class Executor:
             source_exchanges=config.signal_exchanges,
         )
         self.runtime: Optional[ExecutorRuntime] = None
+        # Once a minute this tells the desk how this machine is doing. It can
+        # neither delay a tick nor stop one: see executor/reporting.py.
+        self.reporter = ReportSender(base_url=config.server_url, identity=self.identity)
+        self._started_at = time.time()
+        self._feed_state = "starting"
+        self._last_error = ""
         self.inhibitor = SleepInhibitor()
         self._stopping = asyncio.Event()
         self._ui_state = None  # set by ui.wire() when the page is on
@@ -114,6 +121,10 @@ class Executor:
     def _on_status(self, kind: str, detail: dict) -> None:
         if kind in ("connected", "synced", "stopped", "clock_warning", "halt", "bad_signature", "disconnected"):
             _say(f"[{kind}] {json.dumps(detail, default=str)[:300]}")
+        if kind in ("connected", "synced", "stopped", "disconnected"):
+            self._feed_state = kind
+        if kind in ("halt", "bad_signature", "clock_warning"):
+            self._last_error = f"{kind}: {json.dumps(detail, default=str)[:120]}"
         # The joined set is written AS campaigns join, not at shutdown — a
         # crash is exactly when the file matters, and one written on a clean
         # exit would be missing in the one case it exists for.
@@ -230,6 +241,7 @@ class Executor:
                 # Last, so what is on disk is the book as it stood after this
                 # pass placed and noticed everything it was going to.
                 self._save_book()
+                self._report_in(status)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -237,6 +249,25 @@ class Executor:
                 # next one re-reads the exchange, which is the source of truth.
                 _log.exception("tick failed")
                 _say(f"[tick failed] {exc}")
+
+    def _report_in(self, status: dict) -> None:
+        """Tell the desk how this machine is doing — at most once a minute,
+        and never in a way that can break a tick. Built lazily so the ticks
+        that are not due assemble nothing."""
+        from executor.ui import portfolio_view
+
+        self.reporter.maybe_send(
+            lambda: build_report(
+                runtime=self.runtime,
+                adapter=self.adapter,
+                config=self.config,
+                status=status,
+                portfolio=portfolio_view(self.runtime, self.adapter),
+                feed_state=self._feed_state,
+                started_at=self._started_at,
+                last_error=self._last_error,
+            )
+        )
 
     def _note(self, line: str) -> None:
         _say(line)
