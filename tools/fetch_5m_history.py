@@ -16,6 +16,7 @@ Writes tools/.history_cache/<SYMBOL>_5m.json: a list of
 from __future__ import annotations
 
 import argparse
+import calendar
 import io
 import json
 import os
@@ -27,6 +28,7 @@ import requests
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".history_cache")
 BASE = "https://data.binance.vision/data/spot/monthly/klines/{sym}/5m/{sym}-5m-{ym}.zip"
+DAILY = "https://data.binance.vision/data/spot/daily/klines/{sym}/5m/{sym}-5m-{day}.zip"
 
 
 def months_back(count: int, end: date) -> List[str]:
@@ -47,14 +49,9 @@ def _to_seconds(raw: str) -> int:
     return value // 1_000_000 if value > 10**14 else value // 1000
 
 
-def fetch_month(symbol: str, ym: str) -> List[Tuple[int, float, float, float, float]]:
-    url = BASE.format(sym=symbol, ym=ym)
-    resp = requests.get(url, timeout=120)
-    if resp.status_code == 404:
-        return []
-    resp.raise_for_status()
+def _read_zip(content: bytes) -> List[Tuple[int, float, float, float, float]]:
     rows: List[Tuple[int, float, float, float, float]] = []
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
         name = archive.namelist()[0]
         with archive.open(name) as handle:
             for line in io.TextIOWrapper(handle, encoding="utf-8"):
@@ -62,6 +59,33 @@ def fetch_month(symbol: str, ym: str) -> List[Tuple[int, float, float, float, fl
                 if not parts or not parts[0] or parts[0][0].isalpha():
                     continue  # 2025+ files carry a header row
                 rows.append((_to_seconds(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])))
+    return rows
+
+
+def fetch_month(symbol: str, ym: str) -> List[Tuple[int, float, float, float, float]]:
+    """One month of 5m bars: the monthly file, or its daily files until it exists.
+
+    Binance publishes a month's file a few days after the month ends. Until
+    then the month is only in daily files, and a refetch that read only the
+    monthly ones silently dropped the latest month: on 02-Oct-2026 a tearsheet
+    run rewrote every coin's cache back to 31 August because September's
+    monthly file was still a 404.
+    """
+    resp = requests.get(BASE.format(sym=symbol, ym=ym), timeout=120)
+    if resp.status_code != 404:
+        resp.raise_for_status()
+        return _read_zip(resp.content)
+    year, month = (int(x) for x in ym.split("-"))
+    today = date.today()
+    if (today.year * 12 + today.month) - (year * 12 + month) > 2:
+        return []  # an old month with no file is a month before the symbol listed
+    rows: List[Tuple[int, float, float, float, float]] = []
+    for day in range(1, calendar.monthrange(year, month)[1] + 1):
+        daily = requests.get(DAILY.format(sym=symbol, day=f"{ym}-{day:02d}"), timeout=120)
+        if daily.status_code == 404:
+            continue  # not published yet, or before the symbol listed
+        daily.raise_for_status()
+        rows.extend(_read_zip(daily.content))
     return rows
 
 
