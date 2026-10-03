@@ -266,7 +266,13 @@ class Executor:
                 feed_state=self._feed_state,
                 started_at=self._started_at,
                 last_error=self._last_error,
-            )
+            ),
+            # The buyer sees the exact message that went, on their own page.
+            on_sent=(
+                (lambda report, at, result: self._ui_state.set_desk_report(report, at=at, result=result))
+                if self._ui_state is not None
+                else None
+            ),
         )
 
     def _note(self, line: str) -> None:

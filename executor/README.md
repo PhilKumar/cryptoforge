@@ -14,9 +14,19 @@ This little program is your side. It sits on your computer, listens to what
 we've worked out, and places the buy and sell orders on **your own exchange
 account** — in your name, with your money, under your control.
 
-Your money never comes to us. We can't move it, and we can't see it. If you
-stop paying, the program stops getting our signal, and that's the whole of what
-we can do to you.
+Your money never comes to us, and we can't move it. We hold none of your
+exchange keys, so nothing we have could place an order, withdraw a coin or
+touch your account. If you stop paying, the program stops getting our signal,
+and that's the whole of what we can do to you.
+
+We *can* see what this program is doing. Once a minute it sends us a short
+status: whether it's running, whether your exchange is answering it, which
+coins it is holding for you, what they cost and what they're worth now, and
+anything that has gone wrong. That is how we can tell a machine that is stuck
+from a market that is quiet — and how we can ring you before you notice. It
+never sends your API key, your password, or anything that would let us act on
+your account. You can see the exact message your machine sends, as it sends
+it, on your own dashboard.
 
 A few things that are worth knowing up front:
 

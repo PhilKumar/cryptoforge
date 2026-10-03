@@ -175,16 +175,26 @@ class ReportSender:
             _log.debug("status report refused: HTTP %s", code)
         return code == 200
 
-    def maybe_send(self, build, *, now: Optional[float] = None) -> bool:
+    def maybe_send(self, build, *, now: Optional[float] = None, on_sent=None) -> bool:
         """Build and send only when due. `build` is a callable so a report is
-        never assembled on the ticks that would throw it away."""
+        never assembled on the ticks that would throw it away.
+
+        `on_sent(report, at, result)` is handed the exact message that went, so
+        the buyer's own dashboard can show them what we were told."""
         if not self.due(now):
             return False
+        stamp = time.time() if now is None else now
         try:
             report = build()
         except Exception as exc:
             self.last_result = f"not built: {exc}"[:200]
             _log.debug("status report not built: %s", exc)
-            self._last_sent = time.time() if now is None else now
+            self._last_sent = stamp
             return False
-        return self.send(report, now=now)
+        sent = self.send(report, now=now)
+        if on_sent is not None:
+            try:
+                on_sent(report, stamp, self.last_result)
+            except Exception:  # a dashboard must never break the sender
+                _log.debug("report callback failed", exc_info=True)
+        return sent

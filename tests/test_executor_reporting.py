@@ -256,3 +256,60 @@ class SenderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DisclosureTests(unittest.TestCase):
+    """A buyer must be able to read the exact message their machine sent.
+
+    The guide now tells them their executor reports its positions once a
+    minute (03-Oct-2026). A promise about what is sent is worth less than the
+    message itself, sitting on the sender's own screen — so the page shows the
+    report verbatim, and these tests are what stop that quietly disappearing.
+    """
+
+    def test_the_state_carries_the_last_report(self):
+        from executor.ui import UIState
+
+        state = UIState()
+        self.assertEqual(state.snapshot()["desk_report"], {})
+        state.set_desk_report({"running": True, "balance_usd": 10}, at=1790000000, result="HTTP 200")
+        shown = state.snapshot()["desk_report"]
+        self.assertEqual(shown["at"], 1790000000)
+        self.assertEqual(shown["result"], "HTTP 200")
+        self.assertTrue(shown["report"]["running"])
+
+    def test_the_page_shows_it_and_says_when(self):
+        import executor.ui as ui
+
+        self.assertIn('id="desk-body"', ui.PAGE if hasattr(ui, "PAGE") else _page_source())
+        self.assertIn("What this machine tells CryptoForge", _page_source())
+
+    def test_the_sender_hands_the_page_what_it_sent(self):
+        seen = {}
+        sender = ReportSender(
+            base_url="https://x",
+            identity=_Identity(),
+            post=lambda url, payload: 200,
+        )
+        sender.maybe_send(
+            lambda: {"running": True},
+            now=1000,
+            on_sent=lambda report, at, result: seen.update(report=report, at=at, result=result),
+        )
+        self.assertEqual(seen["report"], {"running": True})
+        self.assertEqual(seen["result"], "HTTP 200")
+
+    def test_a_broken_dashboard_cannot_break_the_sender(self):
+        def explode(*_args):
+            raise RuntimeError("page is gone")
+
+        sender = ReportSender(base_url="https://x", identity=_Identity(), post=lambda url, payload: 200)
+        self.assertTrue(sender.maybe_send(lambda: {"running": True}, now=1000, on_sent=explode))
+
+
+def _page_source() -> str:
+    import os
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "executor", "ui.py")
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()

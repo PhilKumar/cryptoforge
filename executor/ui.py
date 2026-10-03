@@ -133,6 +133,10 @@ class UIState:
         self._journal: dict = {}
         self._portfolio: dict = {}
         self._market: dict = {}
+        # The last thing this machine told the desk, kept so the buyer can read
+        # it themselves. A promise about what we send is worth less than the
+        # message itself, sitting on their own screen.
+        self._desk_report: dict = {}
         self._power = power
 
     def set_status(
@@ -153,6 +157,10 @@ class UIState:
                 self._journal = dict(journal)
             if portfolio is not None:
                 self._portfolio = dict(portfolio)
+
+    def set_desk_report(self, report: dict, *, at: float, result: str) -> None:
+        with self._lock:
+            self._desk_report = {"report": dict(report or {}), "at": int(at), "result": str(result or "")}
 
     def set_market(self, market: dict) -> None:
         """The top strip's quotes. Its own setter because it is on its own
@@ -193,6 +201,7 @@ class UIState:
                 "events": list(self._events),
                 "wake_message": self._wake_message,
                 "connection": dict(self._connection),
+                "desk_report": dict(self._desk_report),
                 "disclosure": irreducible_risk(),
                 "advice": (
                     suspend_advice(self._power, armed_exposure_usd=float(status.get("armed_exposure_usd") or 0))
@@ -2126,6 +2135,15 @@ PAGE = "".join(
     <div class="stat"><div class="l">Subscribed to</div><div class="v" id="su-following" style="font-size:12.5px;font-weight:400;color:var(--dim)">—</div></div>
     <div class="stat"><div class="l">Platform note</div><div class="v" id="su-advice" style="font-size:12.5px;font-weight:400;color:var(--dim)">—</div></div>
   </div>
+  <!-- What we are told about you, shown to you. The guide says this machine
+       sends a status once a minute; a promise about what is sent is worth less
+       than the message itself, on the sender's own screen. -->
+  <div class="section-h"><h2>What this machine tells CryptoForge</h2><span style="color:var(--muted);font-size:12.5px">
+    once a minute, so they can see if this machine is stuck — never your keys</span></div>
+  <div class="panel" style="padding:14px 18px">
+    <div class="line" id="desk-when">Nothing has been sent yet.</div>
+    <pre id="desk-body" style="margin:10px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--dim)"></pre>
+  </div>
   <div class="section-h"><h2>Settings</h2></div>
   <!-- Venue first, left: it is the more fundamental of the two and the one
        that cannot be changed on a whim, so it reads before the choice that
@@ -2417,6 +2435,17 @@ function render(s) {
   $("h-pnl").className = "v " + (net > 0 ? "up" : net < 0 ? "down" : "");
   $("h-conn").textContent = c.state || "—";
   $("h-conn").className = "v " + (live ? "up" : c.state === "stopped" ? "down" : "");
+
+  /* what the desk was told — the exact message, not a description of it */
+  const desk = s.desk_report || {};
+  if (desk.at) {
+    const ago = Math.max(0, (s.now || 0) - desk.at);
+    const when = ago < 90 ? Math.round(ago) + "s ago" : Math.round(ago / 60) + "m ago";
+    const ok = String(desk.result || "").indexOf("200") >= 0;
+    $("desk-when").textContent = "Last sent " + when + (ok ? "" : " — not delivered (" + desk.result + ")");
+    $("desk-when").className = "line" + (ok ? "" : " bad");
+    $("desk-body").textContent = JSON.stringify(desk.report || {}, null, 2);
+  }
 
   /* console */
   $("exposure").textContent = money(exp);
