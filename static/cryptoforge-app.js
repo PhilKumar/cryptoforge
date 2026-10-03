@@ -6608,7 +6608,7 @@ function _cfJournalRoiSvg(allTrades) {
   // to being a bar when it closes and its own result is known.
   var trades = (allTrades || []).filter(function(t) { return String(t.status || '') === 'Closed'; });
   if (!trades.length) return '<div class="cf-table-empty-cell">No closed trades yet.</div>';
-  var W = 640, H = 220, padL = 44, padR = 52, padT = 16, padB = 56;
+  var W = 640, H = 220, padL = 44, padR = 52, padT = 16, padB = 48;
   var rois = trades.map(function(t) { return Number(t.roi_pct) || 0; });
   var maxV = Math.max.apply(null, rois.concat([0])) * 1.15 || 1;
   var minV = Math.min.apply(null, rois.concat([0]));
@@ -6654,10 +6654,66 @@ function _cfJournalRoiSvg(allTrades) {
       + '" height="' + h.toFixed(2) + '" rx="2" fill="' + colour + '" fill-opacity="0.85">'
       + '<title>' + _escapeHtml(t.trade_id) + ' — ' + _escapeHtml(_cfJournalPct(v, 2)) + ' ('
       + _escapeHtml(_cfJournalUsd(t.pnl_usd)) + ') · cumulative ' + _escapeHtml(_cfJournalUsd(cums[idx]))
-      + '</title></rect>'
-      + '<text x="' + cx.toFixed(2) + '" y="' + (H - padB + 14) + '" text-anchor="end" font-size="8.5"'
-      + ' fill="currentColor" fill-opacity="0.6" transform="rotate(-45 ' + cx.toFixed(2) + ' '
-      + (H - padB + 14) + ')">' + _escapeHtml(t.coin.replace('USDT', '')) + '</text>';
+      + '</title></rect>';
+  }).join('');
+
+  // ── the x axis ────────────────────────────────────────────────
+  // One rotated coin name per bar was unreadable past about thirty trades —
+  // ninety of them became a grey scribble (Phil, 03-Oct-2026: "the letters are
+  // not visible anymore"). Trades are chronological and arrive in runs of the
+  // same coin, so the axis now says the two things the picture is actually
+  // about: WHICH coin this stretch of bars was, and WHEN it happened. Both
+  // rows draw a label only where one fits, and silence beats a smudge.
+  var axisY = H - padB + 15;
+  var runs = [];
+  trades.forEach(function(t, idx) {
+    var name = String(t.coin || '?').replace('USDT', '');
+    var last = runs[runs.length - 1];
+    if (last && last.coin === name) last.end = idx;
+    else runs.push({ coin: name, start: idx, end: idx });
+  });
+  var axis = runs.map(function(run) {
+    var x0 = padL + slot * run.start + slot * 0.12;
+    var x1 = padL + slot * (run.end + 1) - slot * 0.12;
+    var width = x1 - x0;
+    // A bracket under every run, however narrow: the grouping is information
+    // even where the name cannot be printed.
+    var out = '<line x1="' + x0.toFixed(2) + '" y1="' + (H - padB + 5) + '" x2="' + x1.toFixed(2)
+      + '" y2="' + (H - padB + 5) + '" stroke="currentColor" stroke-opacity="0.22" stroke-width="2"'
+      + ' stroke-linecap="round"><title>' + _escapeHtml(run.coin) + ' — '
+      + (run.end - run.start + 1) + ' trade' + (run.end === run.start ? '' : 's') + '</title></line>';
+    // ~5.4px per character at 9px: printing a name wider than its own run is
+    // how the labels collided in the first place.
+    if (width >= run.coin.length * 5.4 + 6) {
+      out += '<text x="' + ((x0 + x1) / 2).toFixed(2) + '" y="' + axisY + '" text-anchor="middle"'
+        + ' font-size="9" fill="currentColor" fill-opacity="0.72">' + _escapeHtml(run.coin) + '</text>';
+    }
+    return out;
+  }).join('');
+
+  // Row two: when. The first trade, the last, and each month that starts in
+  // between — skipped whenever it would land on top of its neighbour.
+  var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var stampOf = function(t) {
+    var d = String(t.date || '');
+    if (d.length < 7) return '';
+    var m = Number(d.slice(5, 7));
+    return (monthNames[m - 1] || d.slice(5, 7)) + " '" + d.slice(2, 4);
+  };
+  var marks = [];
+  trades.forEach(function(t, idx) {
+    var stamp = stampOf(t);
+    if (!stamp) return;
+    if (!idx || stamp !== stampOf(trades[idx - 1])) {
+      marks.push({ at: padL + slot * idx + slot / 2, text: stamp });
+    }
+  });
+  var lastLabelX = -1e9;
+  axis += marks.map(function(mark) {
+    if (mark.at - lastLabelX < 46) return '';   // 46px is the width of "Sep '26" plus air
+    lastLabelX = mark.at;
+    return '<text x="' + mark.at.toFixed(2) + '" y="' + (axisY + 15) + '" text-anchor="middle"'
+      + ' font-size="9" fill="currentColor" fill-opacity="0.5">' + _escapeHtml(mark.text) + '</text>';
   }).join('');
 
   var line = cums.map(function(v, idx) {
@@ -6676,7 +6732,7 @@ function _cfJournalRoiSvg(allTrades) {
     + grid
     + '<line x1="' + padL + '" y1="' + zeroY + '" x2="' + (W - padR) + '" y2="' + zeroY
     + '" stroke="currentColor" stroke-opacity="0.32"/>'
-    + bars + cumLine + '</svg>';
+    + bars + axis + cumLine + '</svg>';
 }
 
 function _cfJournalCoinsSvg(byCoin) {

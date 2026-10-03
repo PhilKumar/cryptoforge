@@ -8,6 +8,12 @@ closed, and yet drawn on a card titled "every closed trade". And: "make this
 as a cumulative profit as Binance does" -- a running net-P&L line over the
 bars, on its own dollar axis.
 
+And 03-Oct-2026, on ninety trades' worth of rotated coin names collapsing
+into a grey smear: "See x axis... the letters are not visible anymore". A
+label per bar cannot survive a dense book, so the axis groups consecutive
+trades of the same coin and names the run, with months underneath — and
+prints neither where it would not fit.
+
 Runs the real renderer out of static/cryptoforge-app.js under Node.
 """
 
@@ -48,6 +54,42 @@ const trades = [
 ];
 const svg = _cfJournalRoiSvg(trades);
 const rects = (svg.match(/<rect /g) || []).length;
+
+// The axis, at the density that broke it: 90 trades in runs of one coin.
+const coins = ['SOLUSDT', 'ETHUSDT', 'BTCUSDT'];
+const many = [];
+for (let i = 0; i < 90; i++) {
+  const month = 5 + Math.floor(i / 30);
+  many.push({
+    trade_id: 'T-' + i,
+    coin: coins[Math.floor(i / 30)],
+    status: 'Closed',
+    roi_pct: 0.5,
+    pnl_usd: 0.1,
+    date: '2026-0' + month + '-' + String((i % 28) + 1).padStart(2, '0'),
+  });
+}
+const dense = _cfJournalRoiSvg(many);
+// Text nodes that are neither an axis percentage nor a dollar figure. The
+// month labels carry an escaped apostrophe (May &#39;26), so matching a raw
+// one finds nothing — which is a test bug, not a missing label.
+const labelsOf = (s) =>
+  (s.match(/<text[^>]*>([^<]+)<\/text>/g) || [])
+    .map((m) => m.replace(/<[^>]*>/g, ''))
+    .filter((t) => !t.includes('%') && !t.includes('$'));
+// One coin, 300 trades, fifty months: the thinning case.
+const long = [];
+for (let i = 0; i < 300; i++) {
+  long.push({
+    trade_id: 'L-' + i,
+    coin: 'BTCUSDT',
+    status: 'Closed',
+    roi_pct: 0.4,
+    pnl_usd: 0.1,
+    date: '20' + String(24 + Math.floor(i / 60)) + '-' + String((i % 12) + 1).padStart(2, '0') + '-05',
+  });
+}
+const longSvg = _cfJournalRoiSvg(long);
 const reds = (svg.match(/var\(--red/g) || []).length;
 const paths = (svg.match(/<path d="M/g) || []).length;
 console.log(JSON.stringify({
@@ -55,6 +97,10 @@ console.log(JSON.stringify({
   hasOpenId: svg.includes('BTCUSDT-3'),
   lastCumulative: (svg.match(/cumulative net P&amp;L ([^ ]+) after 3 closed trades/) || [])[1] || null,
   emptyMessage: _cfJournalRoiSvg([{ status: 'Open', roi_pct: 1, pnl_usd: 1, coin: 'X', trade_id: 'x' }]),
+  rotated: (dense.match(/rotate\(/g) || []).length,
+  denseLabels: labelsOf(dense),
+  denseBrackets: (dense.match(/stroke-width="2"/g) || []).length,
+  longLabels: labelsOf(longSvg),
 }));
 """
 
@@ -77,6 +123,26 @@ class JournalRoiChartTests(unittest.TestCase):
 
     def test_an_all_open_book_says_so_instead_of_drawing_nothing(self):
         self.assertIn("No closed trades yet", self.out["emptyMessage"])
+
+    def test_ninety_trades_do_not_print_ninety_labels(self):
+        """The smear. One label per bar at 6px a bar is unreadable by
+        construction, whatever it is rotated to."""
+        self.assertEqual(self.out["rotated"], 0, "nothing on this axis is rotated any more")
+        self.assertLessEqual(len(self.out["denseLabels"]), 12, "an axis you can read has a handful of labels")
+
+    def test_the_axis_names_the_coin_runs_and_the_months(self):
+        labels = self.out["denseLabels"]
+        for coin in ("SOL", "ETH", "BTC"):
+            self.assertIn(coin, labels, "each stretch of trades says which coin it was")
+        self.assertTrue(any("26" in text and "&#39;" in text for text in labels), "and roughly when it happened")
+        self.assertEqual(self.out["denseBrackets"], 3, "one bracket per run, even where the name does not fit")
+
+    def test_month_labels_thin_out_rather_than_collide(self):
+        """300 trades across four years: printing every month start would be
+        the same smear in a different alphabet."""
+        months = [text for text in self.out["longLabels"] if "&#39;" in text]
+        self.assertGreater(len(months), 2, "the axis still says when")
+        self.assertLessEqual(len(months), 12, "but not every month of four years")
 
 
 if __name__ == "__main__":
