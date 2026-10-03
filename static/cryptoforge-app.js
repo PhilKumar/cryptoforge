@@ -113,6 +113,7 @@ const _CF_VIEWER_BLOCKED = new Set([
   'cfCascadeDeleteCampaign', 'cfCascadeRecalculate', 'cfCascadeReconcile', 'cfCascadeRestructure',
   'cfCascadePurgeClosed', 'cfCascadeSetMcKind', 'cfCascadeSaveCapitalGroup',
   'cfFeedBuyerFormToggle', 'cfFeedBuyerSubmit', 'cfFeedBuyerDelete', 'cfFeedBuyerSetStatus',
+  'cfFeedBuyersLoad', 'cfBuyersAutoToggle',
   'cfFeedCatalogToggle', 'cfR37Start', 'cfR37Stop', 'cfR37Reset', 'cfR37SelectSymbol',
   'cfOpenAdminConsole', 'cfAdminSave', 'cfAdminSwitchBroker', 'cfAdminTestActive',
   'cfAdminCreateUser', 'cfAdminToggleUser', 'cfAdminResetPassword', 'cfAdminSetRole', 'cfAdminDeleteUser',
@@ -9115,9 +9116,12 @@ function cfInitCascadePage() {
   if (!_cfCascadePollTimer) {
     _cfCascadePollTimer = setInterval(function() { if (!document.hidden) cfLoadCascadeStatus(false); }, 3000);
   }
-  // Once, on open — deliberately not on the 3s poll. Nothing here changes tick
-  // to tick, and repainting it would wipe a half-typed registration.
+  // Buyers refresh on their own minute, not on the 3s cascade poll: a machine
+  // reports once a minute, so anything faster is six wasted requests that once
+  // ate every browser socket on this site. The form is left alone while it is
+  // open, so a repaint cannot wipe a half-typed registration.
   if (typeof cfFeedBuyersLoad === 'function') cfFeedBuyersLoad();
+  cfBuyersAutoToggle();
   if (typeof cfFeedCatalogLoad === 'function') cfFeedCatalogLoad();
 }
 
@@ -9127,6 +9131,10 @@ showPage = function(pageId, btn, options) {
     if (_cfCascadePollTimer) {
       clearInterval(_cfCascadePollTimer);
       _cfCascadePollTimer = null;
+    }
+    if (_cfBuyersPollTimer) {
+      clearInterval(_cfBuyersPollTimer);
+      _cfBuyersPollTimer = null;
     }
     // Never leave the chart dialog pinned over another page.
     if (typeof cfCascadeHideChart === 'function') cfCascadeHideChart();
@@ -13606,6 +13614,26 @@ window.addEventListener('resize', function () {
    halfway through filling in. */
 
 var _cfFeedBuyersLoading = false;
+var _cfBuyersPollTimer = null;
+
+/* The Live tick. One request a minute, skipped while the tab is hidden, while
+   a request is still in flight, and while the registration form is open. */
+function cfBuyersAutoToggle() {
+  var box = document.getElementById('cf-buyers-auto');
+  if (_cfBuyersPollTimer) {
+    clearInterval(_cfBuyersPollTimer);
+    _cfBuyersPollTimer = null;
+  }
+  if (!box || !box.checked) return;
+  _cfBuyersPollTimer = setInterval(function() {
+    if (document.hidden) return;
+    var form = document.getElementById('cf-feed-buyer-form');
+    if (form && !form.hidden) return;
+    var page = document.getElementById('cascade-page');
+    if (page && page.style.display === 'none') return;
+    cfFeedBuyersLoad();
+  }, 60000);
+}
 
 function _cfFeedBuyerStatusPill(row) {
   var status = String(row.status || '');
@@ -13618,6 +13646,22 @@ function _cfFeedBuyerStatusPill(row) {
         : 'Not paid up. Anything they already hold is still looked after.');
   return '<span class="cf-feed-pill is-' + tone + '" title="' + _escapeHtml(title) + '">'
     + _escapeHtml(label) + '</span>';
+}
+
+function _cfFeedBuyerDaysText(row) {
+  var days = row.days_left;
+  if (days === null || days === undefined) return 'free look';
+  var n = Number(days);
+  return n <= 0 ? 'expired' : n + 'd';
+}
+
+function _cfFeedBuyerDaysTone(row) {
+  var days = row.days_left;
+  if (days === null || days === undefined) return '';
+  var n = Number(days);
+  // Negative is not a display quirk: the executor stops on the date whatever
+  // the status word says, so an expired row is already off the feed.
+  return n <= 0 ? 'bad' : (n <= 5 ? 'warn' : 'ok');
 }
 
 function _cfFeedBuyerDaysCell(row) {
@@ -13653,28 +13697,179 @@ function _cfFeedBuyerActions(row) {
   return '<div class="admin-inline-actions">' + bits.join('') + '</div>';
 }
 
+function _cfBuyerMoney(value, places) {
+  var n = Number(value);
+  if (value === null || value === undefined || !isFinite(n)) return '--';
+  return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(places === undefined ? 2 : places);
+}
+
+/* A price needs as many decimals as the coin is worth: four on SOL at 148,
+   two on BTC at 86,000. Four on both turns a terminal into a wall of zeroes. */
+function _cfBuyerPrice(value) {
+  var n = Number(value);
+  if (value === null || value === undefined || !isFinite(n)) return '--';
+  return '$' + n.toFixed(Math.abs(n) >= 1000 ? 2 : 4);
+}
+
+function _cfBuyerAgo(seconds) {
+  var n = Number(seconds);
+  if (n === null || n === undefined || !isFinite(n)) return 'never';
+  if (n < 90) return Math.max(0, Math.round(n)) + 's ago';
+  if (n < 5400) return Math.round(n / 60) + 'm ago';
+  if (n < 172800) return Math.round(n / 3600) + 'h ago';
+  return Math.round(n / 86400) + 'd ago';
+}
+
+function _cfBuyerUptime(seconds) {
+  var n = Number(seconds) || 0;
+  if (n < 3600) return Math.round(n / 60) + 'm';
+  if (n < 172800) return Math.round(n / 3600) + 'h';
+  return Math.round(n / 86400) + 'd';
+}
+
+/* Which colour the card's edge gets. Deliberately only four states, and the
+   two that matter are the ones a glance must find: a machine that cannot
+   reach its exchange, and one that has stopped reporting while still being
+   paid up and connected. */
+function _cfBuyerHealth(row) {
+  var report = row.report;
+  if (row.status === 'revoked') return 'idle';
+  if (!report) return row.connected ? 'warn' : 'idle';
+  if (!row.report_fresh) return row.connected ? 'warn' : 'idle';
+  if (!report.exchange_ok) return 'bad';
+  if (report.last_error) return 'warn';
+  return 'ok';
+}
+
+function _cfBuyerFact(label, value, tone, title) {
+  return '<div' + (title ? ' title="' + _escapeHtml(title) + '"' : '') + '>'
+    + '<span>' + _escapeHtml(label) + '</span>'
+    + '<strong' + (tone ? ' class="is-' + tone + '"' : '') + '>' + _escapeHtml(String(value)) + '</strong>'
+    + '</div>';
+}
+
+function _cfBuyerPositions(report) {
+  var rows = (report && report.positions) || [];
+  if (!rows.length) {
+    return '<div class="cf-buyer-note">Holding nothing right now.</div>';
+  }
+  var body = rows.slice(0, 6).map(function(p) {
+    var pnl = Number(p.unrealized_usd);
+    var cls = isFinite(pnl) ? (pnl > 0 ? 'positive' : (pnl < 0 ? 'negative' : '')) : '';
+    return '<tr>'
+      + '<td>' + _escapeHtml(String(p.symbol || '--')) + '</td>'
+      + '<td class="num">' + _escapeHtml(String(p.qty === null || p.qty === undefined ? '--' : p.qty)) + '</td>'
+      + '<td class="num">' + _escapeHtml(_cfBuyerPrice(p.avg_entry)) + '</td>'
+      + '<td class="num">' + _escapeHtml(_cfBuyerPrice(p.mark)) + '</td>'
+      + '<td class="num ' + cls + '">' + _escapeHtml(_cfBuyerMoney(p.unrealized_usd)) + '</td>'
+      + '</tr>';
+  }).join('');
+  var more = rows.length > 6 ? '<div class="cf-buyer-note">and ' + (rows.length - 6) + ' more</div>' : '';
+  return '<table class="cf-buyer-positions"><thead><tr>'
+    + '<th>Coin</th><th class="num">Qty</th><th class="num">Entry</th><th class="num">Mark</th><th class="num">P&amp;L</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>' + more;
+}
+
+function _cfBuyerCard(row) {
+  var id = String(row.buyer_id || '');
+  var label = String(row.label || '') || id;
+  var report = row.report;
+  var facts = [];
+
+  facts.push(_cfBuyerFact('Paid up', _cfFeedBuyerDaysText(row),
+    _cfFeedBuyerDaysTone(row), 'Entitlement is re-checked every 30 seconds'));
+  facts.push(_cfBuyerFact('Stream', row.connected ? 'live' : 'off',
+    row.connected ? 'ok' : '', row.connected
+      ? 'Their executor is holding the feed socket right now.'
+      : 'Not connected. Normal if they have it switched off.'));
+
+  if (report) {
+    facts.push(_cfBuyerFact('Reported', _cfBuyerAgo(row.report_age_sec),
+      row.report_fresh ? 'ok' : 'warn',
+      'A machine reports once a minute. Older than three minutes means it stopped.'));
+    facts.push(_cfBuyerFact('Exchange', report.exchange_ok ? (report.exchange || 'ok') : 'unreachable',
+      report.exchange_ok ? '' : 'bad', 'Whether their own exchange answered the last check.'));
+    facts.push(_cfBuyerFact('Following', report.campaigns_following || 0, ''));
+    facts.push(_cfBuyerFact('Running for', _cfBuyerUptime(report.uptime_sec), ''));
+    facts.push(_cfBuyerFact('Cash', _cfBuyerMoney(report.balance_usd), ''));
+    facts.push(_cfBuyerFact('In the market', _cfBuyerMoney(report.committed_usd), ''));
+    var unreal = Number(report.unrealized_usd);
+    facts.push(_cfBuyerFact('Open P&L', _cfBuyerMoney(report.unrealized_usd),
+      isFinite(unreal) ? (unreal > 0 ? 'ok' : (unreal < 0 ? 'bad' : '')) : ''));
+    facts.push(_cfBuyerFact('Banked', _cfBuyerMoney(report.realized_usd), ''));
+    facts.push(_cfBuyerFact('Version', report.app_version || '?', ''));
+  } else {
+    facts.push(_cfBuyerFact('Reported', 'never', 'warn',
+      'This machine has never reported. Either it has not run since this was built, or it is on an older executor.'));
+  }
+
+  var note = '';
+  if (report && report.last_error) {
+    note = '<div class="cf-buyer-note is-bad">' + _escapeHtml(report.last_error) + '</div>';
+  } else if (!report) {
+    note = '<div class="cf-buyer-note">Registered ' + _escapeHtml(_cfFeedBuyerWhen(row.created_at)) + '.</div>';
+  }
+
+  return '<div class="cf-buyer-card" data-health="' + _cfBuyerHealth(row) + '" data-buyer="' + _escapeHtml(id) + '">'
+    + '<div class="cf-buyer-head">'
+      + '<span class="cf-buyer-name">' + _escapeHtml(label) + '</span>'
+      + (label !== id ? '<span class="cf-buyer-id">' + _escapeHtml(id) + '</span>' : '')
+      + _cfFeedBuyerStatusPill(row)
+    + '</div>'
+    + '<div class="cf-buyer-facts">' + facts.join('') + '</div>'
+    + (report ? _cfBuyerPositions(report) : '')
+    + note
+    + _cfFeedBuyerActions(row)
+    + '</div>';
+}
+
 function _cfFeedBuyersRender(rows) {
   var body = document.getElementById('cf-feed-buyers-body');
   if (!body) return;
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">'
-      + 'No buyers registered yet. Register one once they send you the key their executor printed.</td></tr>';
+    body.innerHTML = '<div class="cf-buyers-empty">'
+      + 'No buyers registered yet. Register one once they send you the key their executor printed.</div>';
     return;
   }
-  body.innerHTML = rows.map(function(row) {
-    var id = String(row.buyer_id || '');
-    var label = String(row.label || '');
-    return '<tr>'
-      + '<td><strong>' + _escapeHtml(id) + '</strong>'
-        + (label ? '<div class="table-note">' + _escapeHtml(label) + '</div>' : '') + '</td>'
-      + '<td>' + _cfFeedBuyerStatusPill(row) + '</td>'
-      + '<td>' + (row.connected
-          ? '<span class="cf-feed-pill is-ok" title="Their executor is connected right now">Live</span>'
-          : '<span class="table-meta" title="Not connected. This is normal — they may simply have it switched off.">--</span>') + '</td>'
-      + '<td class="num">' + _cfFeedBuyerDaysCell(row) + '</td>'
-      + '<td>' + _escapeHtml(_cfFeedBuyerWhen(row.created_at)) + '</td>'
-      + '<td>' + _cfFeedBuyerActions(row) + '</td>'
-      + '</tr>';
+  // Trouble first: a machine that cannot reach its exchange, then one that has
+  // gone quiet, then everyone who is simply fine.
+  var order = { bad: 0, warn: 1, ok: 2, idle: 3 };
+  var sorted = rows.slice().sort(function(a, b) {
+    return (order[_cfBuyerHealth(a)] - order[_cfBuyerHealth(b)])
+      || String(a.label || a.buyer_id).localeCompare(String(b.label || b.buyer_id));
+  });
+  body.innerHTML = sorted.map(_cfBuyerCard).join('');
+}
+
+function _cfFeedBuyersSummary(rows) {
+  var host = document.getElementById('cf-buyers-summary');
+  if (!host) return;
+  if (!rows.length) { host.innerHTML = ''; return; }
+  var connected = rows.filter(function(r) { return r.connected; }).length;
+  var reporting = rows.filter(function(r) { return r.report_fresh; }).length;
+  var trouble = rows.filter(function(r) {
+    var h = _cfBuyerHealth(r);
+    return h === 'bad' || h === 'warn';
+  }).length;
+  var soon = rows.filter(function(r) {
+    return r.days_left !== null && r.days_left !== undefined
+      && Number(r.days_left) > 0 && Number(r.days_left) <= 5;
+  }).length;
+  var committed = rows.reduce(function(sum, r) {
+    var n = r.report && Number(r.report.committed_usd);
+    return sum + (isFinite(n) ? n : 0);
+  }, 0);
+  var cards = [
+    { label: 'Buyers', value: rows.length, tone: '' },
+    { label: 'Connected', value: connected, tone: '' },
+    { label: 'Reporting', value: reporting, tone: '' },
+    { label: 'Needs a look', value: trouble, tone: trouble ? 'bad' : '' },
+    { label: 'Expiring', value: soon, tone: soon ? 'warn' : '' },
+    { label: 'Their money at work', value: _cfBuyerMoney(committed), tone: '' }
+  ];
+  host.innerHTML = cards.map(function(c) {
+    return '<div class="cf-buyers-stat"' + (c.tone ? ' data-tone="' + c.tone + '"' : '') + '>'
+      + '<span>' + _escapeHtml(c.label) + '</span><strong>' + _escapeHtml(String(c.value)) + '</strong></div>';
   }).join('');
 }
 
@@ -13784,11 +13979,11 @@ async function cfFeedBuyersLoad() {
     if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Could not read the buyer list'));
     var rows = Array.isArray(data.subscribers) ? data.subscribers : [];
     _cfFeedBuyersRender(rows);
+    _cfFeedBuyersSummary(rows);
     _cfFeedBuyersMeta(rows);
   } catch (err) {
     if (body) {
-      body.innerHTML = '<tr><td colspan="6" class="cf-table-empty-cell">'
-        + _escapeHtml(String(err.message || err)) + '</td></tr>';
+      body.innerHTML = '<div class="cf-buyers-empty">' + _escapeHtml(String(err.message || err)) + '</div>';
     }
   } finally {
     _cfFeedBuyersLoading = false;

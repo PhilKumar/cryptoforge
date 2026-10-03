@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20260923-scalp-bar">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20261003-buyers-terminal">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -2598,10 +2598,11 @@
   <section class="card table-panel" id="cf-feed-buyers-panel">
     <div class="table-toolbar">
       <div class="table-title-group">
-        <h3 class="table-title">Feed Buyers</h3>
+        <h3 class="table-title">Buyers</h3>
         <div class="table-meta" id="cf-feed-buyers-meta">Who may connect their executor to the signal feed. We hold their public key and nothing else.</div>
       </div>
       <div class="admin-inline-actions">
+        <label class="cf-buyers-auto" title="Re-reads every minute while this page is open, which is how often a machine reports."><input type="checkbox" id="cf-buyers-auto" data-cf-change="cfBuyersAutoToggle()" checked><span>Live</span></label>
         <button class="btn btn-outline btn-sm" data-cf-click="cfFeedBuyersLoad()"><svg class="cf-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> Refresh</button>
         <button class="read-only-hide btn btn-primary btn-sm" data-cf-click="cfFeedBuyerFormToggle()" id="cf-feed-buyer-add-btn">Register a buyer</button>
       </div>
@@ -2642,24 +2643,14 @@
       </div>
     </div>
 
-    <div class="table-surface">
-      <div class="table-scroll">
-        <table class="trade-table">
-          <thead>
-            <tr>
-              <th>Buyer</th>
-              <th>Status</th>
-              <th>Stream</th>
-              <th class="num">Days Left</th>
-              <th>Registered</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="cf-feed-buyers-body">
-            <tr><td colspan="6" class="cf-table-empty-cell">Not loaded yet</td></tr>
-          </tbody>
-        </table>
-      </div>
+    <!-- The terminal, 03-Oct-2026. A table of names answered "who may connect"
+         and nothing else; these cards answer "is anyone stuck", because each
+         buyer's own executor now reports what it is doing and holding. A card
+         that shows only the registration half is a machine that has never
+         reported — which is itself the thing worth seeing. -->
+    <div class="cf-buyers-summary" id="cf-buyers-summary"></div>
+    <div class="cf-buyers-grid" id="cf-feed-buyers-body">
+      <div class="cf-buyers-empty">Not loaded yet</div>
     </div>
   </section>
 </div>
@@ -3470,7 +3461,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20260923-scalp-bar" defer></script>
+<script src="/static/cryptoforge-app.js?v=20261003-buyers-terminal" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 
