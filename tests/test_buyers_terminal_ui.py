@@ -77,3 +77,38 @@ def test_every_value_on_a_card_is_escaped():
     card = JS[JS.index("function _cfBuyerCard(") : JS.index("function _cfFeedBuyersRender(")]
     for raw in re.findall(r"\+ (?:String\()?(?:row|report)\.[a-z_]+", card):
         assert False, f"unescaped value on the card: {raw}"
+
+
+def test_the_card_says_when_a_buyer_is_on_an_old_build():
+    card = JS[JS.index("function _cfBuyerCard(") : JS.index("function _cfFeedBuyersRender(")]
+    assert "row.outdated" in card, "the server marks it; the card must show it"
+    assert "Version — old" in card
+
+
+def test_the_summary_counts_the_out_of_date_ones():
+    body = JS[JS.index("function _cfFeedBuyersSummary(") :][:2000]
+    assert "Out of date" in body
+    assert "r.outdated" in body
+
+
+def test_the_terminal_knows_what_old_is_measured_against():
+    assert "_cfBuyersCurrentVersion" in JS
+    assert "data.current_version" in JS
+
+
+def test_the_buyers_nudge_cannot_change_what_the_executor_does():
+    """The buyer's own page may say a newer build exists. It may not gate,
+    pause or alter trading — an out-of-date executor keeps working."""
+    ui = _read("executor", "ui.py")
+    nudge = ui[ui.index('id="update-nudge"') - 400 : ui.index('id="update-nudge"') + 200]
+    assert "never enforced" in nudge or "Shown, never" in nudge
+    body = ui[ui.index('const nudge = $("update-nudge")') :][:900]
+    # Code only — block comments and all. The comment above this very block
+    # uses these words to promise the opposite, so a line-wise filter is not
+    # enough: a /* ... */ spans lines that look like ordinary prose.
+    code = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    code = code[: code.index("if (desk.at)")]
+    for forbidden in ("stop", "pause", "halt", "disable", "fetch(", "post("):
+        assert forbidden not in code.lower(), f"the nudge must not {forbidden} anything"
+    # All it may touch is its own line on the page.
+    assert "nudge.hidden" in code and "nudge.textContent" in code

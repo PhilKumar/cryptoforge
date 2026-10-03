@@ -85,7 +85,15 @@ from engine.billing import (
     summarize,
     verify_signature,
 )
-from engine.buyer_reports import REPORT_EVERY_SEC, REPORT_FRESH_SEC, BuyerReports, ReportRefused, verify_report
+from engine.buyer_reports import (
+    CURRENT_EXECUTOR_VERSION,
+    REPORT_EVERY_SEC,
+    REPORT_FRESH_SEC,
+    BuyerReports,
+    ReportRefused,
+    is_outdated,
+    verify_report,
+)
 from engine.cascade import ACTIVE_STATES as CASCADE_ACTIVE_STATES
 from engine.cascade import CLOSED_HISTORY_LIMIT, CascadeEngine, strategy_label
 from engine.cascade import FINAL_STATES as CASCADE_FINAL_STATES
@@ -10508,7 +10516,13 @@ async def cascade_feed_subscribers():
         row["reported_at"] = record.get("received_at")
         row["report_age_sec"] = round(now - int(record["received_at"])) if record.get("received_at") else None
         row["report_fresh"] = bool(row["report_age_sec"] is not None and row["report_age_sec"] <= REPORT_FRESH_SEC)
-    return {"subscribers": rows, "report_every_sec": REPORT_EVERY_SEC, "report_fresh_sec": REPORT_FRESH_SEC}
+        row["outdated"] = is_outdated((row["report"] or {}).get("app_version", ""))
+    return {
+        "subscribers": rows,
+        "report_every_sec": REPORT_EVERY_SEC,
+        "report_fresh_sec": REPORT_FRESH_SEC,
+        "current_version": CURRENT_EXECUTOR_VERSION,
+    }
 
 
 @app.post("/api/cascade/feed/subscribers")
@@ -10630,7 +10644,10 @@ async def cascade_feed_report(request: Request):
         verified["report"],
         clock_skew_sec=verified["clock_skew_sec"],
     )
-    return {"status": "ok", "every_sec": REPORT_EVERY_SEC}
+    # The answer carries the current version: this is the only moment a
+    # buyer's machine hears from the desk about itself, and it is how an old
+    # build learns it is old without anyone making a phone call.
+    return {"status": "ok", "every_sec": REPORT_EVERY_SEC, "current_version": CURRENT_EXECUTOR_VERSION}
 
 
 @app.delete("/api/cascade/feed/subscribers/{buyer_id}")

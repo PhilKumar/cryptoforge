@@ -269,7 +269,14 @@ class Executor:
             ),
             # The buyer sees the exact message that went, on their own page.
             on_sent=(
-                (lambda report, at, result: self._ui_state.set_desk_report(report, at=at, result=result))
+                (
+                    lambda report, at, result: self._ui_state.set_desk_report(
+                        report,
+                        at=at,
+                        result=result,
+                        update_to=self.reporter.current_version if self.reporter.update_available() else "",
+                    )
+                )
                 if self._ui_state is not None
                 else None
             ),

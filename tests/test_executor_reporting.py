@@ -313,3 +313,51 @@ def _page_source() -> str:
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "executor", "ui.py")
     with open(path, encoding="utf-8") as handle:
         return handle.read()
+
+
+class UpdateNudgeTests(unittest.TestCase):
+    """How a buyer learns their program is old, without anything polling."""
+
+    def _sender(self, answer):
+        return ReportSender(
+            base_url="https://x",
+            identity=_Identity(),
+            post=lambda url, payload: answer,
+        )
+
+    def test_the_desk_naming_a_newer_build_raises_the_nudge(self):
+        sender = self._sender((200, {"current_version": "9.9"}))
+        sender.send({"running": True}, now=1000)
+        self.assertEqual(sender.current_version, "9.9")
+        self.assertTrue(sender.update_available())
+
+    def test_the_current_build_raises_nothing(self):
+        sender = self._sender((200, {"current_version": APP_VERSION}))
+        sender.send({"running": True}, now=1000)
+        self.assertFalse(sender.update_available())
+
+    def test_a_silent_desk_never_warns_the_buyer(self):
+        """Unknown is not 'out of date'. A desk that is down must not put a
+        warning on someone's screen."""
+        sender = self._sender((200, {}))
+        sender.send({"running": True}, now=1000)
+        self.assertFalse(sender.update_available())
+
+    def test_an_answer_of_just_a_status_code_still_works(self):
+        sender = self._sender(200)
+        self.assertTrue(sender.send({"running": True}, now=1000))
+        self.assertFalse(sender.update_available())
+
+    def test_versions_compare_as_numbers(self):
+        from executor.reporting import _older
+
+        self.assertTrue(_older("1.9", "1.10"))
+        self.assertFalse(_older("1.10", "1.9"))
+        self.assertFalse(_older("2.0", "1.10"))
+
+    def test_the_page_can_be_told_which_version_to_offer(self):
+        from executor.ui import UIState
+
+        state = UIState()
+        state.set_desk_report({"app_version": "1.0"}, at=1, result="HTTP 200", update_to="1.1")
+        self.assertEqual(state.snapshot()["desk_report"]["update_to"], "1.1")

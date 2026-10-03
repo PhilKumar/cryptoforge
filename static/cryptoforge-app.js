@@ -13615,6 +13615,9 @@ window.addEventListener('resize', function () {
 
 var _cfFeedBuyersLoading = false;
 var _cfBuyersPollTimer = null;
+/* The build the server says buyers should be on. Named in the list payload so
+   the cards can say what "old" is measured against. */
+var _cfBuyersCurrentVersion = '';
 
 /* The Live tick. One request a minute, skipped while the tab is hidden, while
    a request is still in flight, and while the registration form is open. */
@@ -13797,7 +13800,13 @@ function _cfBuyerCard(row) {
     facts.push(_cfBuyerFact('Open P&L', _cfBuyerMoney(report.unrealized_usd),
       isFinite(unreal) ? (unreal > 0 ? 'ok' : (unreal < 0 ? 'bad' : '')) : ''));
     facts.push(_cfBuyerFact('Banked', _cfBuyerMoney(report.realized_usd), ''));
-    facts.push(_cfBuyerFact('Version', report.app_version || '?', ''));
+    facts.push(_cfBuyerFact(
+      row.outdated ? 'Version — old' : 'Version',
+      report.app_version || '?',
+      row.outdated ? 'warn' : '',
+      row.outdated
+        ? 'Behind the current build (' + (_cfBuyersCurrentVersion || '?') + '). They keep trading; send them the new folder.'
+        : 'The build their machine is running.'));
   } else {
     facts.push(_cfBuyerFact('Reported', 'never', 'warn',
       'This machine has never reported. Either it has not run since this was built, or it is on an older executor.'));
@@ -13859,11 +13868,13 @@ function _cfFeedBuyersSummary(rows) {
     var n = r.report && Number(r.report.committed_usd);
     return sum + (isFinite(n) ? n : 0);
   }, 0);
+  var old = rows.filter(function(r) { return r.outdated; }).length;
   var cards = [
     { label: 'Buyers', value: rows.length, tone: '' },
     { label: 'Connected', value: connected, tone: '' },
     { label: 'Reporting', value: reporting, tone: '' },
     { label: 'Needs a look', value: trouble, tone: trouble ? 'bad' : '' },
+    { label: 'Out of date', value: old, tone: old ? 'warn' : '' },
     { label: 'Expiring', value: soon, tone: soon ? 'warn' : '' },
     { label: 'Their money at work', value: _cfBuyerMoney(committed), tone: '' }
   ];
@@ -13978,6 +13989,7 @@ async function cfFeedBuyersLoad() {
     var data = await cfReadApiPayload(res);
     if (!res.ok) throw new Error(cfApiErrorDetail(data, 'Could not read the buyer list'));
     var rows = Array.isArray(data.subscribers) ? data.subscribers : [];
+    _cfBuyersCurrentVersion = String(data.current_version || '');
     _cfFeedBuyersRender(rows);
     _cfFeedBuyersSummary(rows);
     _cfFeedBuyersMeta(rows);

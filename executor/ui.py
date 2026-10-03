@@ -158,9 +158,16 @@ class UIState:
             if portfolio is not None:
                 self._portfolio = dict(portfolio)
 
-    def set_desk_report(self, report: dict, *, at: float, result: str) -> None:
+    def set_desk_report(self, report: dict, *, at: float, result: str, update_to: str = "") -> None:
         with self._lock:
-            self._desk_report = {"report": dict(report or {}), "at": int(at), "result": str(result or "")}
+            self._desk_report = {
+                "report": dict(report or {}),
+                "at": int(at),
+                "result": str(result or ""),
+                # Named only when the desk said so and it is newer than this
+                # build. An unanswered desk never puts a warning on the page.
+                "update_to": str(update_to or ""),
+            }
 
     def set_market(self, market: dict) -> None:
         """The top strip's quotes. Its own setter because it is on its own
@@ -1849,6 +1856,12 @@ PAGE = "".join(
   <button class="nav-tab" data-page="setup"><span>Setup<span class="nav-more"> &amp; guide</span></span></button>
 </div></div></div>
 
+<!-- One line, above every page: the only thing this program ever says about
+     itself needing attention. Shown, never enforced — an out-of-date executor
+     keeps trading exactly as it did, and nothing about a version can stop a
+     fill. -->
+<div class="wrap"><div class="line warn" id="update-nudge" hidden style="margin:12px auto 0"></div></div>
+
 <!-- ══════════ HOME ══════════ -->
 <section class="page on" id="page-home">
   <div class="hero">
@@ -2438,6 +2451,17 @@ function render(s) {
 
   /* what the desk was told — the exact message, not a description of it */
   const desk = s.desk_report || {};
+  const nudge = $("update-nudge");
+  if (nudge) {
+    /* Shown, never enforced: an out-of-date executor keeps trading exactly as
+       it did. Nothing here can stop or change what this machine is doing. */
+    nudge.hidden = !desk.update_to;
+    if (desk.update_to) {
+      nudge.textContent = "A newer version of this program is available ("
+        + desk.update_to + "). You are running " + (desk.report && desk.report.app_version || "an older build")
+        + ". Ask CryptoForge for the new folder — your key, your settings and anything you are holding are kept.";
+    }
+  }
   if (desk.at) {
     const ago = Math.max(0, (s.now || 0) - desk.at);
     const when = ago < 90 ? Math.round(ago) + "s ago" : Math.round(ago / 60) + "m ago";

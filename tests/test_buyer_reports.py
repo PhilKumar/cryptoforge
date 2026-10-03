@@ -187,3 +187,52 @@ class StoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VersionTests(unittest.TestCase):
+    """Who is behind, and the comparison that decides it.
+
+    Phil, 03-Oct-2026, after asking how a buyer's machine gets updated: mark
+    the out-of-date ones AND nudge the buyer on their own screen. Nothing on a
+    buyer's machine polls for versions — it learns from the desk's answer to
+    its own report, which is the only moment the desk speaks to it at all.
+    """
+
+    def test_an_older_build_is_outdated(self):
+        from engine.buyer_reports import CURRENT_EXECUTOR_VERSION, is_outdated
+
+        self.assertTrue(is_outdated("0.9"))
+        self.assertFalse(is_outdated(CURRENT_EXECUTOR_VERSION))
+
+    def test_version_numbers_compare_as_numbers_not_text(self):
+        """The trap: "1.10" < "1.9" as strings, which would tell every
+        up-to-date buyer they are behind."""
+        import engine.buyer_reports as mod
+
+        original = mod.CURRENT_EXECUTOR_VERSION
+        try:
+            mod.CURRENT_EXECUTOR_VERSION = "1.10"
+            self.assertTrue(mod.is_outdated("1.9"))
+            self.assertFalse(mod.is_outdated("1.10"))
+            self.assertFalse(mod.is_outdated("2.0"))
+        finally:
+            mod.CURRENT_EXECUTOR_VERSION = original
+
+    def test_a_machine_that_never_reported_is_not_called_out_of_date(self):
+        from engine.buyer_reports import is_outdated
+
+        self.assertFalse(is_outdated(""))
+        self.assertFalse(is_outdated(None))
+
+    def test_a_nonsense_version_does_not_raise(self):
+        from engine.buyer_reports import is_outdated
+
+        self.assertIsInstance(is_outdated("beta-two"), bool)
+
+    def test_the_two_halves_name_the_same_version(self):
+        """engine/ and executor/ hold the number apart on purpose — the
+        executor imports nothing from engine/. This is what keeps them equal."""
+        from engine.buyer_reports import CURRENT_EXECUTOR_VERSION
+        from executor.reporting import APP_VERSION
+
+        self.assertEqual(APP_VERSION, CURRENT_EXECUTOR_VERSION)

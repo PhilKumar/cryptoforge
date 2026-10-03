@@ -34,6 +34,35 @@ from engine.cascade_feed import _frame_bytes, verify_frame
 
 REPORT_BUCKET = "feed_buyer_reports"
 
+# The executor build buyers should be on. Nothing on a buyer's machine checks
+# for updates by itself, so this is how one finds out it is behind: the desk's
+# answer to its own minute-ly report carries this, and the executor shows the
+# buyer a line. It must equal executor/reporting.py's APP_VERSION — the two
+# live apart because the executor imports nothing from engine/, and a test
+# holds them together.
+CURRENT_EXECUTOR_VERSION = "1.0"
+
+
+def is_outdated(version: str) -> bool:
+    """Compared piecewise as numbers, so 1.10 is newer than 1.9 — the trap in
+    comparing version strings, and the one that would quietly tell every
+    up-to-date buyer they are behind."""
+
+    def parts(text: str):
+        out = []
+        for chunk in str(text or "").split("."):
+            digits = "".join(c for c in chunk if c.isdigit())
+            out.append(int(digits) if digits else 0)
+        return out
+
+    if not str(version or "").strip():
+        return False  # never reported is its own state, not an old build
+    mine, current = parts(version), parts(CURRENT_EXECUTOR_VERSION)
+    mine += [0] * (len(current) - len(mine))
+    current += [0] * (len(mine) - len(current))
+    return mine < current
+
+
 # A report older than this is stale: shown as "last seen", never as truth.
 REPORT_FRESH_SEC = 180
 

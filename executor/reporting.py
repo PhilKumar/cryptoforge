@@ -42,6 +42,23 @@ MAX_POSITIONS = 40
 MAX_FILLS = 25
 
 
+def _older(mine: str, theirs: str) -> bool:
+    """Piecewise and numeric, so 1.10 is newer than 1.9 rather than older.
+    Mirrors engine/buyer_reports.is_outdated; a test holds the two together."""
+
+    def parts(text: str):
+        out = []
+        for chunk in str(text or "").split("."):
+            digits = "".join(c for c in chunk if c.isdigit())
+            out.append(int(digits) if digits else 0)
+        return out
+
+    a, b = parts(mine), parts(theirs)
+    a += [0] * (len(b) - len(a))
+    b += [0] * (len(a) - len(b))
+    return a < b
+
+
 def _round(value, places: int = 6) -> Optional[float]:
     try:
         number = float(value)
@@ -141,12 +158,29 @@ class ReportSender:
         self._post = post or self._httpx_post
         self._last_sent = 0.0
         self.last_result = ""
+        # What the desk says the current build is. Learned from the answer to
+        # this machine's own report — nothing here polls for updates, and no
+        # version check can ever be a reason trading stops.
+        self.current_version = ""
 
     @staticmethod
-    def _httpx_post(url: str, payload: dict) -> int:
+    def _httpx_post(url: str, payload: dict):
         import httpx
 
-        return httpx.post(url, json=payload, timeout=10).status_code
+        response = httpx.post(url, json=payload, timeout=10)
+        try:
+            body = response.json()
+        except Exception:
+            body = {}
+        return response.status_code, body
+
+    def update_available(self) -> bool:
+        """True only when the desk named a build and it is newer than this one.
+        Unknown is never 'out of date': a desk that has not answered must not
+        put a warning on a buyer's screen."""
+        if not self.current_version:
+            return False
+        return _older(APP_VERSION, self.current_version)
 
     def due(self, now: Optional[float] = None) -> bool:
         stamp = time.time() if now is None else now
@@ -165,11 +199,16 @@ class ReportSender:
         # than a machine spending its time on HTTP instead of fills.
         self._last_sent = stamp
         try:
-            code = self._post(self._url, payload)
+            answer = self._post(self._url, payload)
         except Exception as exc:
             self.last_result = f"not sent: {exc}"[:200]
             _log.debug("status report not sent: %s", exc)
             return False
+        # A post may answer with a code alone or with the body beside it; an
+        # older stub returning just the code must keep working.
+        code, body = answer if isinstance(answer, tuple) else (answer, {})
+        if isinstance(body, dict) and body.get("current_version"):
+            self.current_version = str(body["current_version"])[:20]
         self.last_result = f"HTTP {code}"
         if code != 200:
             _log.debug("status report refused: HTTP %s", code)
