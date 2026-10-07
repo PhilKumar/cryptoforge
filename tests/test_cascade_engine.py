@@ -14,6 +14,7 @@ from engine import cascade as cascade_module
 from engine.cascade import (
     ANCHOR_CLOSE_TOLERANCE_PCT,
     CAMPAIGN_START_TIMEFRAMES,
+    MAX_ACTIVE_BEFORE_ALERT,
     MIN_LEG_SEPARATION_PCT,
     MODEL_VERSION,
     RESTRUCTURE_REPLAY_PREFIX,
@@ -1675,7 +1676,7 @@ class CascadeAlertTests(unittest.TestCase):
         self.engine = _mk_engine()
         self.engine.on_alert = lambda t, b, lvl: self.sent.append((t, lvl))
 
-    def _campaign(self, cid, mode="paper"):
+    def _campaign(self, cid, mode="paper", spent=25.0):
         c = Campaign(
             campaign_id=cid,
             symbol="BTCUSDT",
@@ -1685,6 +1686,12 @@ class CascadeAlertTests(unittest.TestCase):
             mother_timestamp=0,
             mode=mode,
         )
+        # Funded by default: the count alert is about money at work, and a
+        # campaign holding nothing is deliberately not counted. spent_usd is
+        # derived from the open position's fills, so funding one means giving
+        # it a fill — which is also what makes the test honest.
+        if spent:
+            c.all_fills.append(Fill(price=spent, quantity=1.0, level=2, leg_id=1, timestamp=0))
         self.engine.campaigns[cid] = c
         return c
 
@@ -1699,6 +1706,29 @@ class CascadeAlertTests(unittest.TestCase):
         from engine.cascade import MAX_ACTIVE_BEFORE_ALERT
 
         self.assertEqual(MAX_ACTIVE_BEFORE_ALERT, 15)
+
+    def test_empty_campaigns_are_not_counted(self):
+        """Phil, 07-Oct-2026: "only 10 are opened now still I am getting
+        alerts". The engine had 16 open and 13 had never spent a dollar, so
+        the alert was counting shells — and firing on an ordinary morning.
+        """
+        for i in range(MAX_ACTIVE_BEFORE_ALERT * 3):
+            self._campaign(f"empty{i}", spent=0.0)
+        self.engine._check_watchdogs()
+        self.assertEqual(self.sent, [], "a campaign holding nothing is not capital to keep track of")
+
+    def test_the_message_still_says_how_many_are_open_in_total(self):
+        """Not counted is not the same as hidden: the total is the context
+        that explains why the funded ones look few."""
+        body = {}
+        self.engine.on_alert = lambda t, b, lvl: body.update(text=b)
+        for i in range(MAX_ACTIVE_BEFORE_ALERT + 1):
+            self._campaign(f"c{i}", spent=10.0)
+        for i in range(7):
+            self._campaign(f"empty{i}", spent=0.0)
+        self.engine._check_watchdogs()
+        self.assertIn("holding money", body["text"])
+        self.assertIn(f"{MAX_ACTIVE_BEFORE_ALERT + 8} are open in total", body["text"])
 
     def test_alerts_once_the_campaign_count_passes_the_cap(self):
         from engine.cascade import MAX_ACTIVE_BEFORE_ALERT
@@ -7714,3 +7744,116 @@ class CascadeVenueTimeframeFloorTests(unittest.IsolatedAsyncioTestCase):
         floor_default = engine.venue_min_timeframe("")
         restart_default = base if engine._timeframe_is_slower_or_equal(base, floor_default) else floor_default
         self.assertEqual(restart_default, "5m")
+
+
+class StaleEmptyCampaignTests(unittest.IsolatedAsyncioTestCase):
+    """Retiring campaigns that have held a slot for a week and bought nothing.
+
+    Phil, 07-Oct-2026, shown that 13 of 16 open campaigns had never spent a
+    dollar and one was waiting on a 27-day-old mother: "do both".
+
+    The tests that matter here are the refusals. This cancels resting buys on
+    live books, so the cost of it being too eager is real money's orders being
+    pulled — every campaign that holds, or has ever held, a position must come
+    through untouched.
+    """
+
+    def setUp(self):
+        self.sent = []
+        self.engine = _mk_engine()
+        self.engine.on_alert = lambda t, b, lvl: self.sent.append((t, lvl))
+        self.stopped = []
+
+        async def _stop(cid, cancel_orders=True):
+            self.stopped.append((cid, cancel_orders))
+            campaign = self.engine.campaigns[cid]
+            campaign.state = "STOPPED"
+            return {"status": "ok"}
+
+        self.engine.stop_campaign = _stop
+
+    def _campaign(self, cid, *, days_old, spent=0.0, qty=0.0, rounds=0):
+        from datetime import datetime, timedelta, timezone
+
+        ist = timezone(timedelta(hours=5, minutes=30))
+        c = Campaign(
+            campaign_id=cid,
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=65068.0,
+            mother_low=64934.0,
+            mother_timestamp=0,
+            mode="live",
+        )
+        c.created_at = (datetime.now(ist) - timedelta(days=days_old)).strftime("%Y-%m-%d %H:%M:%S")
+        if spent:
+            c.all_fills.append(Fill(price=spent, quantity=1.0, level=2, leg_id=1, timestamp=0))
+        c.filled_base_qty = qty
+        for _ in range(rounds):
+            c.rounds.append(
+                Round(round_id=1, leg_id=1, avg_entry=1.0, quantity=1.0, invested_usd=1.0, exit_price=2.0, pnl=1.0)
+            )
+        self.engine.campaigns[cid] = c
+        return c
+
+    async def test_an_empty_campaign_a_week_old_is_retired(self):
+        self._campaign("old-empty", days_old=9)
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual([cid for cid, _ in self.stopped], ["old-empty"])
+        self.assertEqual([t for t, _ in self.sent], ["Idle campaigns retired"])
+        self.assertTrue(all(cancel for _, cancel in self.stopped), "its resting buys are the point")
+
+    async def test_a_campaign_holding_coin_is_never_touched(self):
+        """The expensive mistake: cancelling the orders of a live position."""
+        self._campaign("holding", days_old=90, spent=120.0, qty=0.4)
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual(self.stopped, [])
+
+    async def test_a_campaign_that_has_traded_before_is_left_alone(self):
+        """Between rounds, not idle: it bought, sold at target, and is waiting
+        to buy again. Its position is empty at this instant and that is normal."""
+        self._campaign("between-rounds", days_old=30, rounds=2)
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual(self.stopped, [])
+
+    async def test_a_young_empty_campaign_is_left_alone(self):
+        self._campaign("young", days_old=2)
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual(self.stopped, [])
+
+    async def test_a_campaign_with_no_readable_birthday_is_left_alone(self):
+        """No evidence of age is not evidence of being old."""
+        c = self._campaign("undated", days_old=40)
+        c.created_at = ""
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual(self.stopped, [])
+
+    async def test_only_a_handful_go_in_one_pass(self):
+        from engine.cascade import STALE_EMPTY_PER_PASS
+
+        for i in range(STALE_EMPTY_PER_PASS * 3):
+            self._campaign(f"shell{i}", days_old=20 + i)
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual(len(self.stopped), STALE_EMPTY_PER_PASS)
+
+    async def test_the_oldest_go_first(self):
+        self._campaign("newer", days_old=8)
+        self._campaign("oldest", days_old=60)
+        self.engine.campaigns["newer"].seq = 2
+        self.engine.campaigns["oldest"].seq = 1
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual(self.stopped[0][0], "oldest")
+
+    async def test_nothing_stale_means_no_alert_at_all(self):
+        self._campaign("young", days_old=1)
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertEqual(self.sent, [])
+
+    async def test_a_retired_campaign_does_not_auto_restart(self):
+        """ "stopped" is not a restart reason, so the book does not immediately
+        re-open what was just retired."""
+        from engine.cascade import RESTART_REASONS
+
+        self._campaign("old-empty", days_old=9)
+        await self.engine._retire_stale_empty_campaigns()
+        self.assertNotIn(self.engine.campaigns["old-empty"].close_reason, RESTART_REASONS)

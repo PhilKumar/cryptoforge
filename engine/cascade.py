@@ -428,12 +428,31 @@ def strategy_label(strategy: str) -> str:
     return STRATEGY_LABELS.get(name) or name
 
 
-# How many campaigns may be open before the engine says so. Raised from 10 to
-# 15 on 03-Oct-2026: three live books (BTC, SOL, PAXG) auto-restart on every
-# mother break, and a barren chain can restart six times in half a day, so ten
-# was the ordinary size of a quiet morning rather than a number worth a
-# message. An alert that fires on a normal day teaches you to ignore it.
+# How many campaigns may be FUNDED before the engine says so.
+#
+# Raised from 10 to 15 on 03-Oct-2026, and on 07-Oct changed from counting
+# every open campaign to counting only the ones holding money. Phil: "only 10
+# are opened now still I am getting alerts" — the engine really had 16 open,
+# and 13 of them had never spent a dollar. An empty campaign waiting for its
+# first fill is not what the message is about: the text asks about capital
+# committed and about how much one person can keep track of, and neither is
+# true of a campaign holding nothing. Counting shells taught the alert to fire
+# on an ordinary morning, which is how an alert stops being read.
 MAX_ACTIVE_BEFORE_ALERT = 15
+# A campaign that has held a book slot this long without ever buying anything
+# is retired. Phil, 07-Oct-2026, on finding 13 of 16 open campaigns empty and
+# some of them weeks old: "do both" — stop counting shells, and deal with the
+# shells themselves.
+#
+# Seven days is chosen to be obviously past "waiting for a dip": the ladder's
+# first rung is 2% below the mother, and a week without touching it means the
+# market left that structure behind. The rule is deliberately narrow — see
+# _retire_stale_empty_campaigns for the three things it refuses to touch.
+STALE_EMPTY_DAYS = 7
+# At most this many go in one pass, so a book that has accumulated thirty
+# shells cancels its way out over several minutes rather than firing thirty
+# cancels at an exchange in one breath.
+STALE_EMPTY_PER_PASS = 5
 STALL_ALERT_SEC = 15 * 60
 # How many closed campaigns stay in memory. This was written as a bare 50 in
 # _archive_campaign while _adopt_ended_campaigns, load_closed_campaigns and the
@@ -2248,13 +2267,15 @@ class CascadeEngine:
         closed candle is the proof the alarm is actually asking for.
         """
         active = self.active_campaigns
-        if len(active) > MAX_ACTIVE_BEFORE_ALERT:
-            live = sum(1 for c in active if c.mode == "live")
-            deployed = sum(c.spent_usd for c in active)
+        funded = [c for c in active if _coerce_float(c.spent_usd, 0.0) > 0]
+        if len(funded) > MAX_ACTIVE_BEFORE_ALERT:
+            live = sum(1 for c in funded if c.mode == "live")
+            deployed = sum(_coerce_float(c.spent_usd, 0.0) for c in funded)
             self._alert(
                 "Campaign count high",
-                f"{len(active)} campaigns are active ({live} live).\n"
-                f"Capital committed right now: ${deployed:,.2f}\n\n"
+                f"{len(funded)} campaigns are holding money ({live} live).\n"
+                f"Capital committed right now: ${deployed:,.2f}\n"
+                f"{len(active)} are open in total; the rest hold nothing yet.\n\n"
                 f"Auto-restart keeps opening a new one on every mother break.",
                 level="warn",
                 dedupe_sec=3600,
@@ -2980,6 +3001,68 @@ class CascadeEngine:
         self.start()
         self._emit_update()
         return {"status": "ok", "campaign": campaign.to_dict()}
+
+    async def _retire_stale_empty_campaigns(self) -> None:
+        """Close campaigns that have held a slot for a week and bought nothing.
+
+        Phil, 07-Oct-2026: three live books had 16 campaigns open between them,
+        13 of which had never spent a dollar — one waiting on a mother 27 days
+        old. They cost nothing directly, but they are what makes the open count
+        meaningless, and each one keeps a slot and a pending buy alive against
+        structure the market has long since left.
+
+        Three things this will not touch, and they are the whole safety of it:
+
+          1. **anything holding coin.** The test is the position itself —
+             `spent_usd` and `filled_base_qty` both zero — not "no fill since",
+             so a campaign that bought and sold and is waiting to buy again is
+             not a shell and is left alone.
+          2. **anything young.** Seven days, measured from when the campaign
+             was created, not from its mother's candle.
+          3. **more than a handful at once.** A book with thirty shells is
+             cleared over several passes rather than in one burst of cancels.
+
+        Retiring one cancels its resting buys — that is the point — and closes
+        it as "stopped", which is NOT a restart reason, so nothing re-opens in
+        its place until the market actually breaks a mother again.
+        """
+        cutoff = datetime.now(_IST) - timedelta(days=STALE_EMPTY_DAYS)
+        stale = []
+        for campaign in self.active_campaigns:
+            if _coerce_float(campaign.spent_usd, 0.0) > 0 or _coerce_float(campaign.filled_base_qty, 0.0) > 0:
+                continue
+            if campaign.rounds:
+                continue  # it has traded before; it is between rounds, not idle
+            try:
+                born = datetime.strptime(campaign.created_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_IST)
+            except (TypeError, ValueError):
+                continue  # no readable birthday is not evidence of age
+            if born <= cutoff:
+                stale.append((born, campaign))
+        if not stale:
+            return
+        stale.sort(key=lambda row: row[0])
+        retired = []
+        for _, campaign in stale[:STALE_EMPTY_PER_PASS]:
+            try:
+                await self.stop_campaign(campaign.campaign_id, cancel_orders=True)
+            except Exception as exc:
+                _log.warning("[CASCADE] could not retire %s: %s", campaign.campaign_id, exc)
+                continue
+            campaign.close_reason = "stale_empty"
+            retired.append(campaign)
+        if not retired:
+            return
+        names = ", ".join(f"{c.symbol} #{c.seq}" for c in retired)
+        _log.info("[CASCADE] retired %d empty campaign(s) older than %dd: %s", len(retired), STALE_EMPTY_DAYS, names)
+        self._alert(
+            "Idle campaigns retired",
+            f"{len(retired)} campaign(s) had been open {STALE_EMPTY_DAYS}+ days without buying anything:\n"
+            f"{names}\n\n"
+            f"Their resting buys were cancelled. Nothing was held, so nothing was sold.",
+            level="info",
+            dedupe_sec=3600,
+        )
 
     async def stop_campaign(self, campaign_id: str, cancel_orders: bool = True) -> dict:
         campaign = self.campaigns.get(campaign_id)
@@ -4741,6 +4824,10 @@ class CascadeEngine:
                         await self.reconcile_ended_positions()
                     except Exception as exc:
                         _log.warning("[CASCADE] ended-position sweep failed: %s", exc)
+                try:
+                    await self._retire_stale_empty_campaigns()
+                except Exception as exc:
+                    _log.warning("[CASCADE] stale-campaign sweep failed: %s", exc)
                 self._check_watchdogs()
             except asyncio.CancelledError:
                 return
