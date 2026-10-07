@@ -10656,6 +10656,16 @@ function _cfTradeIsStranded(c) {
   return _cfCascadeCampaignHasEnded(c);
 }
 
+function _cfCascadeStackCount(shown, stack) {
+  var open = Number(stack.active_count) || 0;
+  var live = Number(stack.live_count) || 0;
+  var word = ' campaign' + (open === 1 ? '' : 's') + ' open';
+  if (open && shown < open) {
+    return shown + ' of ' + open + word + (live === open ? ' (all live)' : ' (' + live + ' live)');
+  }
+  return (open || shown) + word + (live ? (live === open ? ' (all live)' : ' (' + live + ' live)') : '');
+}
+
 function _cfCascadeStackHeader(symbol, stack, count) {
   var tfs = (stack.timeframes || []).map(function(t) { return String(t).toUpperCase(); }).join(' + ');
   var pnl = Number(stack.realized_pnl_usd) || 0;
@@ -10671,8 +10681,11 @@ function _cfCascadeStackHeader(symbol, stack, count) {
   // floating above the cards rather than as the lid of the group they sit in.
   return '<div class="cf-cascade-stack-head">'
     + '<strong>' + _escapeHtml(symbol) + '</strong>'
-    + '<span class="table-meta">' + count + ' campaign' + (count === 1 ? '' : 's')
-    + (stack.live_count ? ' (' + stack.live_count + ' live)' : '')
+    // `count` is how many cards are drawn below; `active_count` is how many
+    // the engine holds open. They differ whenever a ladder is open with
+    // nothing armed, and printing "7 campaigns (8 live)" made one sentence out
+    // of two different populations.
+    + '<span class="table-meta">' + _cfCascadeStackCount(count, stack)
     + (tfs ? ' · ' + _escapeHtml(tfs) : '')
     + ' · $' + _cfCascadeUsd(stack.in_position_usd) + ' in position'
     + ' · $' + _cfCascadeUsd(stack.committed_usd) + ' funded'
@@ -15482,10 +15495,23 @@ function cfAfRenderLines(data) {
   );
   var afNote = document.getElementById('cf-af-watching');
   if (afNote) {
-    afNote.textContent = afWatching
-      ? ('Showing ' + afWorking.length + ' working ladder' + (afWorking.length === 1 ? '' : 's')
-         + ' · ' + afWatching.toLocaleString('en-US') + ' more are watching or finished — their rounds stay in the books below.')
-      : '';
+    // "Watching or finished" lumped two very different things together, and
+    // that is why the page and the engine's own alert disagreed: the page
+    // showed 10 working ladders while the engine counted 16 OPEN — the six in
+    // between being open, idle, and invisible here (Phil, 07-Oct-2026: "You
+    // told 16 but it shows only 10"). Open-but-waiting now has its own number,
+    // so the two counts can be reconciled by reading one line.
+    var afIdle = afAll.filter(function (c) {
+      return !_cfCascadeCampaignHasEnded(c) && !_cfCascadeCampaignWorking(c);
+    }).length;
+    var afDone = afWatching - afIdle;
+    var bits = ['Showing ' + afWorking.length + ' working ladder' + (afWorking.length === 1 ? '' : 's')];
+    if (afIdle) bits.push(afIdle.toLocaleString('en-US') + ' open but waiting for an entry');
+    if (afDone) bits.push(afDone.toLocaleString('en-US') + ' finished — their rounds stay in the books below');
+    if (afIdle) {
+      bits.push('<strong>' + (afWorking.length + afIdle) + ' open in total</strong>');
+    }
+    afNote.innerHTML = afWatching ? bits.join(' · ') : '';
     afNote.hidden = !afWatching;
   }
 }
