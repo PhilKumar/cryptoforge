@@ -1873,6 +1873,27 @@ def compute_tp_price(campaign: Campaign) -> Optional[float]:
     return max(geometric, floor)
 
 
+def target_net_usd(campaign: Campaign) -> Optional[float]:
+    """Net profit if the position held now sold at its target, fees both ways.
+
+    None while nothing is held, or for a campaign that has already ended —
+    its target no longer rests on anything this engine will act on.
+    """
+    if campaign.state in FINAL_STATES:
+        return None
+    qty = _coerce_float(campaign.filled_base_qty, 0.0)
+    avg = _coerce_float(campaign.avg_entry_price, 0.0)
+    if qty <= 0 or avg <= 0:
+        return None
+    tp = compute_tp_price(campaign)
+    if not tp:
+        return None
+    rate = campaign_fee_pct(campaign) / 100.0
+    cost = avg * qty
+    proceeds = tp * qty
+    return round(proceeds - cost - (cost + proceeds) * rate, 4)
+
+
 def build_fib_ladder_and_pool(campaign: Campaign, leg: Leg, group_remaining_usd: Optional[float] = None) -> None:
     if leg.touch_high >= campaign.mother_high:
         raise CascadeModelError(
@@ -3751,6 +3772,11 @@ class CascadeEngine:
             # sleeps. Computed here rather than in the browser so the page and
             # the engine cannot disagree about what 25% means.
             payload["hand_exit"] = self.hand_exit_view(campaign)
+            # What this position would bank if it sold at its own target now,
+            # after commission both ways (Phil, 09-Oct-2026: "how much money
+            # I'll earn on the open positions if it hits the target"). The
+            # engine does the arithmetic so the page and the fee model agree.
+            payload["target_net_usd"] = target_net_usd(campaign)
             price_meta = self._price_cache.get(self._price_key(campaign))
             last_price = price_meta[0] if price_meta else None
             payload["last_price"] = last_price

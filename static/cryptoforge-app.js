@@ -15459,12 +15459,11 @@ function _cfStatExposureTone(inCoin, cap) {
   return inCoin / cap >= 0.75 ? 'is-watch' : 'is-good';
 }
 
-function cfAfRenderStats(books) {
-  var purse = 0, cap = 0, inCoin = 0, pocket = 0, foldAt = 0, lines = 0, working = 0;
-  var liveOn = books.filter(function (b) { return b.enabled && b.mode === 'live'; });
+function cfAfRenderStats(books, campaigns) {
+  var purse = 0, cap = 0, inCoin = 0, lines = 0, working = 0;
   // The headline P&L belongs to one execution mode.  When any live books are
-  // on, showing paper rounds beside them would misstate real-money results.
-  var pocketBooks = liveOn.length ? liveOn : books.filter(function (b) { return b.enabled; });
+  // on, showing paper positions beside them would misstate real-money results.
+  var liveOn = books.filter(function (b) { return b.enabled && b.mode === 'live'; });
   books.forEach(function (b) {
     if (!b.enabled) return;
     purse += Number(b.purse_usd || 0);
@@ -15473,9 +15472,17 @@ function cfAfRenderStats(books) {
     lines += Number(b.campaigns || 0);
     if (b.working_line) working += 1;
   });
-  pocketBooks.forEach(function (b) {
-    pocket += Number(b.pocket_usd || 0);
-    foldAt += Number(b.fold_threshold_usd || 0);
+  // What the open positions bank if each sells at its target, after fees —
+  // the engine's own number per campaign, summed. Same mode rule as before:
+  // with live books on, paper positions are not counted beside real money.
+  var wantMode = liveOn.length ? 'live' : null;
+  var toTarget = 0, holding = 0;
+  (campaigns || []).forEach(function (c) {
+    var net = c && c.target_net_usd;
+    if (net === null || net === undefined || !isFinite(Number(net))) return;
+    if (wantMode && String(c.mode || '') !== wantMode) return;
+    toTarget += Number(net);
+    holding += 1;
   });
   var on = books.filter(function (b) { return b.enabled; }).length;
   var set = function (id, text) { var n = document.getElementById(id); if (n) n.textContent = text; };
@@ -15483,14 +15490,16 @@ function cfAfRenderStats(books) {
   set('cf-af-stat-purse-sub', on === 1 ? 'one book on' : on + ' books on');
   set('cf-af-stat-incoin', _cfAfUsd(inCoin));
   set('cf-af-stat-incoin-sub', 'of a ' + _cfAfUsd(cap) + ' limit');
-  set('cf-af-stat-pocket-label', liveOn.length ? 'Live pocket' : 'Paper pocket');
-  set('cf-af-stat-pocket', _cfAfUsd(pocket));
-  set('cf-af-stat-pocket-sub', 'folds at ' + _cfAfUsd(foldAt));
+  set('cf-af-stat-target-label', liveOn.length ? 'If targets hit' : 'If targets hit (paper)');
+  set('cf-af-stat-target', holding ? ((toTarget >= 0 ? '+' : '\u2212') + _cfAfUsd(Math.abs(toTarget))) : _cfAfUsd(0));
+  set('cf-af-stat-target-sub', holding
+    ? (holding + ' open position' + (holding === 1 ? '' : 's') + ' · after fees')
+    : 'no open positions');
   set('cf-af-stat-lines', String(lines));
   set('cf-af-stat-lines-sub', working ? (working + ' working the near move') : 'none working');
   // Purse is just the size of the book — it has no good or bad, so no colour.
   _cfStatTone('cf-af-stat-incoin', _cfStatExposureTone(inCoin, cap));
-  _cfStatTone('cf-af-stat-pocket', pocket > 0 ? 'is-good' : 'is-idle');
+  _cfStatTone('cf-af-stat-target', holding && toTarget > 0 ? 'is-good' : 'is-idle');
   _cfStatTone('cf-af-stat-lines', lines > 0 ? null : 'is-idle');
 }
 
@@ -15594,7 +15603,7 @@ async function cfAfRefresh(showToast) {
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Cascade-Auto status unavailable'));
     _cfAfSetError('');
     cfAfRenderStatus(data);
-    cfAfRenderStats((data && data.books) || []);
+    cfAfRenderStats((data && data.books) || [], (data && data.campaigns) || []);
     cfAfRenderLines(data);
     if (showToast) cfToast('Cascade-Auto refreshed', 'success');
   } catch (err) {
@@ -15614,7 +15623,7 @@ async function _cfAfPostBook(payload, actingId) {
     if (!response.ok) throw new Error(cfApiErrorDetail(data, 'Could not save the book'));
     _cfAfSetError('');
     cfAfRenderStatus(data);
-    cfAfRenderStats((data && data.books) || []);
+    cfAfRenderStats((data && data.books) || [], (data && data.campaigns) || []);
     cfAfRenderLines(data);
     return true;
   } catch (err) {

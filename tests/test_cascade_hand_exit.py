@@ -255,3 +255,60 @@ class HandExitPlacementTests(unittest.TestCase):
         src = self._js()
         body = src[src.index("function cfRenderCascadeTrades(") :][:4000]
         self.assertIn("c.hand_exit && Number(c.hand_exit.held_qty) > 0", body)
+
+
+class TargetNetTests(unittest.TestCase):
+    """What an open position banks if it sells at its own target, after fees.
+
+    Phil, 09-Oct-2026: "how much money I'll earn on the open positions if it
+    hits the target" — shown on the Cascade-Auto strip as "If targets hit" in
+    place of "Live pocket · folds at".
+    """
+
+    def _campaign(self, *, avg, qty, mother, state="TRENDLINE_ACTIVE", level=None):
+        c = Campaign(
+            campaign_id="c1",
+            symbol="BTCUSDT",
+            capital_usd=2000.0,
+            mother_high=mother,
+            mother_low=mother * 0.9,
+            mother_timestamp=0,
+            mode="live",
+        )
+        c.state = state
+        c.tp_fib_level = level
+        if qty:
+            c.all_fills.append(Fill(price=avg, quantity=qty, level=2, leg_id=1, timestamp=0))
+            c.filled_base_qty = qty
+            recompute_avg_entry_price(c)
+        return c
+
+    def test_it_is_the_target_less_cost_less_fees_both_ways(self):
+        from engine.cascade import compute_tp_price, target_net_usd
+
+        c = self._campaign(avg=100.0, qty=2.0, mother=200.0, level=0.5)
+        tp = compute_tp_price(c)
+        rate = campaign_fee_pct(c) / 100.0
+        expected = tp * 2 - 200.0 - (200.0 + tp * 2) * rate
+        self.assertAlmostEqual(target_net_usd(c), round(expected, 4))
+        self.assertGreater(target_net_usd(c), 0)
+
+    def test_nothing_held_is_none_not_zero(self):
+        """Zero would read as "this position makes nothing"; None says there is
+        no position, and the page counts only real ones."""
+        from engine.cascade import target_net_usd
+
+        self.assertIsNone(target_net_usd(self._campaign(avg=100.0, qty=0.0, mother=200.0)))
+
+    def test_an_ended_campaign_has_no_target_ahead(self):
+        from engine.cascade import target_net_usd
+
+        self.assertIsNone(target_net_usd(self._campaign(avg=100.0, qty=1.0, mother=200.0, state="STOPPED")))
+
+    def test_the_status_payload_carries_it(self):
+        engine = _mk_engine()
+        c = self._campaign(avg=100.0, qty=1.0, mother=200.0)
+        engine.campaigns["c1"] = c
+        row = next(r for r in engine.get_status()["campaigns"] if r["campaign_id"] == "c1")
+        self.assertIn("target_net_usd", row)
+        self.assertGreater(row["target_net_usd"], 0)

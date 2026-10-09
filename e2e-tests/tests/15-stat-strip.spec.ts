@@ -17,15 +17,20 @@ import { test, expect, Page } from '@playwright/test';
 const PIN = process.env.E2E_PIN || '123456';
 const USER = process.env.E2E_USER || 'admin';
 
-function autoBooks(inCoin: number, pocket: number, mode: 'paper' | 'live' = 'paper') {
+// `toTarget` is what the open positions would bank at their targets — the
+// tile that replaced "pocket · folds at" on 09-Oct-2026. One campaign carries
+// it, in the same mode as the book, because live books do not count paper.
+function autoBooks(inCoin: number, toTarget: number, mode: 'paper' | 'live' = 'paper') {
   return {
     armed: false,
-    campaigns: [],
+    campaigns: toTarget
+      ? [{ campaign_id: 'c1', symbol: 'BTCUSDT', mode, state: 'TRENDLINE_ACTIVE', target_net_usd: toTarget }]
+      : [],
     closed_campaigns: [],
     exchanges: [],
     books: [
       {
-        symbol: 'BTCUSDT', mode, enabled: true, purse_usd: 2000, pocket_usd: pocket,
+        symbol: 'BTCUSDT', mode, enabled: true, purse_usd: 2000, pocket_usd: 0,
         wallet_cap_usd: 1000, fold_threshold_usd: 500, in_coin_usd: inCoin,
         campaigns: 3, working_line: true,
       },
@@ -94,16 +99,19 @@ test.describe('The header stat strip', () => {
     expect(h).toBeLessThan(50);
   });
 
-  test('comfortable exposure and earned profit read good', async ({ page }) => {
+  test('comfortable exposure and profit ahead read good', async ({ page }) => {
     await openAuto(page, autoBooks(155.2, 8.5));   // $155 of a $1,000 limit
     await expect(page.locator('#cf-af-stat-incoin')).toHaveClass(/is-good/);
-    await expect(page.locator('#cf-af-stat-pocket')).toHaveClass(/is-good/);
+    await expect(page.locator('#cf-af-stat-target')).toHaveClass(/is-good/);
   });
 
-  test('labels a live-only profit summary as live', async ({ page }) => {
+  test('says what the open positions bank at their targets', async ({ page }) => {
+    // Phil, 09-Oct-2026: "how much money I'll earn on the open positions if
+    // it hits the target" — and "remove that live pocket folds and add this".
     await openAuto(page, autoBooks(155.2, 8.5, 'live'));
-    await expect(page.locator('#cf-af-stat-pocket-label')).toHaveText('Live pocket');
-    await expect(page.locator('#cf-af-stat-pocket-sub')).toHaveText('folds at $500.00');
+    await expect(page.locator('#cf-af-stat-target-label')).toHaveText('If targets hit');
+    await expect(page.locator('#cf-af-stat-target')).toHaveText('+$8.50');
+    await expect(page.locator('#cf-af-stat-target-sub')).toHaveText('1 open position · after fees');
   });
 
   test('exposure near its limit turns to a warning', async ({ page }) => {
@@ -114,7 +122,8 @@ test.describe('The header stat strip', () => {
   test('a book holding nothing reads idle, not good', async ({ page }) => {
     await openAuto(page, autoBooks(0, 0));
     await expect(page.locator('#cf-af-stat-incoin')).toHaveClass(/is-idle/);
-    await expect(page.locator('#cf-af-stat-pocket')).toHaveClass(/is-idle/);
+    await expect(page.locator('#cf-af-stat-target')).toHaveClass(/is-idle/);
+    await expect(page.locator('#cf-af-stat-target-sub')).toHaveText('no open positions');
   });
 
   test('purse is never coloured — it has no good or bad', async ({ page }) => {
@@ -128,7 +137,7 @@ test.describe('The header stat strip', () => {
     for (const theme of ['dark', 'light']) {
       await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
       await page.waitForTimeout(200);
-      for (const id of ['cf-af-stat-incoin', 'cf-af-stat-pocket']) {
+      for (const id of ['cf-af-stat-incoin', 'cf-af-stat-target']) {
         const ratio = await page.locator('#' + id).evaluate((el, dark) => {
           const box = el.closest('.stat-box') as HTMLElement;
           const lum = (c: string) => {

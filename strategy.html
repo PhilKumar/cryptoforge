@@ -15,7 +15,7 @@
 <title>CryptoForge — Perpetual Futures Algo Platform</title>
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20261009-exit-on-trades">
+<link rel="stylesheet" href="/static/cryptoforge-app.css?v=20261009-if-targets-hit">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -1336,9 +1336,12 @@
         <div class="stat-sub" id="cf-af-stat-incoin-sub">of a $0.00 limit</div>
       </div>
       <div class="stat-box">
-        <div class="stat-label" id="cf-af-stat-pocket-label">Paper pocket</div>
-        <div class="stat-value" id="cf-af-stat-pocket">$0.00</div>
-        <div class="stat-sub" id="cf-af-stat-pocket-sub">folds at $0.00</div>
+        <!-- Was "Live pocket · folds at": profit already banked, waiting to be
+             reinvested. Phil, 09-Oct-2026, wanted the number ahead instead —
+             what the open positions bank if each one sells at its target. -->
+        <div class="stat-label" id="cf-af-stat-target-label">If targets hit</div>
+        <div class="stat-value" id="cf-af-stat-target">$0.00</div>
+        <div class="stat-sub" id="cf-af-stat-target-sub">no open positions</div>
       </div>
       <div class="stat-box">
         <div class="stat-label">Lines running</div>
@@ -3461,7 +3464,7 @@
     </div><!-- end scrollable body -->
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
-<script src="/static/cryptoforge-app.js?v=20261009-exit-on-trades" defer></script>
+<script src="/static/cryptoforge-app.js?v=20261009-if-targets-hit" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 
