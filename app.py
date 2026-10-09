@@ -11295,6 +11295,25 @@ async def cascade_stop_campaign(campaign_id: str, request: Request):
     return result
 
 
+@app.post("/api/cascade/campaigns/{campaign_id}/hand-exit")
+async def cascade_hand_exit_campaign(campaign_id: str):
+    """Sell a running campaign's position at market, by hand.
+
+    Phil, 09-Oct-2026, wanting out of a live ladder before its own target:
+    allowed only once price has reached 25% of the way from the average entry
+    back toward the mother high. The engine re-checks that gate itself — a
+    page can be seconds stale and this spends real money.
+    """
+    check_rate_limit("cascade_hand_exit", max_calls=4, window_sec=10)
+    eng, persist = _engine_holding_campaign(campaign_id)
+    result = await eng.hand_exit_campaign(campaign_id)
+    if result.get("error"):
+        status = 404 if "not found" in result["error"] else 409
+        raise HTTPException(status_code=status, detail=result["error"])
+    persist(eng)
+    return result
+
+
 @app.post("/api/cascade/reconcile-ended")
 async def cascade_reconcile_ended():
     """Re-check ended campaigns that still show a position against Binance.

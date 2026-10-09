@@ -82,6 +82,11 @@ LEVEL_ALLOCATION = {2: 0.20, 4: 0.30, 8: 0.50}
 BASE_TIMEFRAME = "5m"
 ESCALATION_THRESHOLD_PCT = 1.0
 TP_FIB_LEVEL = 0.25
+# Where the hand-exit button wakes up: 25% of the way from the average entry
+# back toward the mother high. Phil, 09-Oct-2026, wanting a way out of a live
+# ladder before its own 0.5 target — the same shape the book's target uses, a
+# quarter of the way instead of half.
+HAND_EXIT_FIB_LEVEL = 0.25
 # A target that does not clear its own commission is not a target. Measured
 # falls run 2.8-4.6%, well past the 0.80% crossing point, so this floor is
 # dormant on real geometry — it exists to stop the pathological shallow round,
@@ -3355,6 +3360,97 @@ class CascadeEngine:
         )
         return True
 
+    def hand_exit_view(self, campaign: Campaign) -> dict:
+        """Whether a hand exit is allowed on this campaign right now, and why not.
+
+        Phil, 09-Oct-2026: "I need a exit button on the live trades enabled
+        once it reaches atleast 25% of the average entry" — 25% of the way from
+        the average entry back toward the mother high, the house TP shape, which
+        his auto books ride past at 0.5.
+
+        The gate is the SAME price the engine would rest a sell at if its level
+        were 0.25, fee floor and all. Offering a button at the bare geometric
+        level would be offering a sale that can lose money after commission on
+        a shallow entry, which is the exact trap `compute_tp_price` was given a
+        floor for.
+        """
+        held = _coerce_float(campaign.filled_base_qty, 0.0)
+        anchor = _coerce_float(campaign.avg_entry_price, 0.0)
+        view = {
+            "ready": False,
+            "held_qty": held,
+            "avg_entry": anchor,
+            "trigger_price": None,
+            "mark": None,
+            "reason": "",
+        }
+        if held <= 0 or anchor <= 0:
+            view["reason"] = "Nothing held yet — there is nothing to exit."
+            return view
+        geometric = anchor + HAND_EXIT_FIB_LEVEL * (campaign.mother_high - anchor)
+        floor = tp_breakeven_price(anchor, campaign_fee_pct(campaign)) * (1.0 + TP_MIN_NET_PCT / 100.0)
+        trigger = max(geometric, floor) if TP_MUST_CLEAR_FEES else geometric
+        view["trigger_price"] = trigger
+        price_meta = self._price_cache.get(self._price_key(campaign))
+        mark = _coerce_float(price_meta[0] if price_meta else 0.0)
+        view["mark"] = mark or None
+        if mark <= 0:
+            view["reason"] = "No live price for this symbol yet."
+            return view
+        if mark < trigger:
+            short_by = (trigger - mark) / trigger * 100
+            view["reason"] = f"{short_by:.2f}% below the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}"
+            return view
+        view["ready"] = True
+        view["reason"] = f"At or above the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}"
+        return view
+
+    async def hand_exit_campaign(self, campaign_id: str) -> dict:
+        """Sell a RUNNING campaign's position by hand, at market, right now.
+
+        `liquidate_campaign` refuses a running campaign for a good reason: a
+        ladder that is still armed would buy straight back into a position it
+        believes it still holds. So this does the two steps in the order that
+        keeps that true — stop the campaign first, which cancels the pending
+        buys, and only then sell what is held.
+
+        It will not sell below the 25% mark. The button is drawn disabled until
+        then, but a page can be stale by seconds and the price moves, so the
+        check is made again here against the engine's own mark. The UI decides
+        what to show; this decides what may happen.
+        """
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            return {"error": f"Campaign {campaign_id} not found"}
+        if campaign.state in FINAL_STATES:
+            # Already ended: this is exactly what liquidate is for, and it
+            # knows how to settle against the exchange first.
+            return await self.liquidate_campaign(campaign_id)
+        gate = self.hand_exit_view(campaign)
+        if not gate["ready"]:
+            return {"error": f"Not yet: {gate['reason']}"}
+        stopped = await self.stop_campaign(campaign_id, cancel_orders=True)
+        if stopped.get("error"):
+            return stopped
+        result = await self.liquidate_campaign(campaign_id)
+        if result.get("error"):
+            # The stop stands — its pending buys are cancelled and that is the
+            # safe half. Say plainly that the coin is still held.
+            return {
+                "error": (
+                    f"Stopped, but the sell did not go through: {result['error']} "
+                    "The position is still held; use Market Sell on the ended row."
+                )
+            }
+        result["hand_exit"] = {"trigger_price": gate["trigger_price"], "mark": gate["mark"]}
+        self._log_event(
+            campaign,
+            "stop",
+            f"Exited by hand at market — mark {gate['mark']:,.4f} was at or above the "
+            f"{HAND_EXIT_FIB_LEVEL:.0%} mark of {gate['trigger_price']:,.4f}",
+        )
+        return result
+
     async def liquidate_campaign(self, campaign_id: str) -> dict:
         """Sell a stopped campaign's remaining position at market, now.
 
@@ -3651,6 +3747,10 @@ class CascadeEngine:
             payload["pending_stop_price"] = campaign.pending_stop_price
             payload["pending_limit_price"] = campaign.pending_limit_price
             payload["rung_usd"] = rung_size_usd(campaign)
+            # Whether the hand-exit button is awake, and what to say while it
+            # sleeps. Computed here rather than in the browser so the page and
+            # the engine cannot disagree about what 25% means.
+            payload["hand_exit"] = self.hand_exit_view(campaign)
             price_meta = self._price_cache.get(self._price_key(campaign))
             last_price = price_meta[0] if price_meta else None
             payload["last_price"] = last_price

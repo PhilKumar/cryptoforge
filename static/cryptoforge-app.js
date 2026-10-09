@@ -110,6 +110,7 @@ const _CF_VIEWER_BLOCKED = new Set([
   'cfReconcileScalpBroker', 'cfToggleScalpExitEditors', 'cfUpdateScalpBroker',
   'cfCheckScalpBroker', 'cfCancelScalpPending', 'cfKillScalp',
   'cfCascadeStartCampaign', 'cfCascadeStopCampaign', 'cfCascadeLiquidate', 'cfCascadeSetLive',
+  'cfCascadeHandExit',
   'cfCascadeDeleteCampaign', 'cfCascadeRecalculate', 'cfCascadeReconcile', 'cfCascadeRestructure',
   'cfCascadePurgeClosed', 'cfCascadeSetMcKind', 'cfCascadeSaveCapitalGroup',
   'cfFeedBuyerFormToggle', 'cfFeedBuyerSubmit', 'cfFeedBuyerDelete', 'cfFeedBuyerSetStatus',
@@ -9925,6 +9926,7 @@ function _cfCascadeCampaignCard(campaign) {
     // permanent scroll.
     + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
+    + _cfCascadeExitButton(cid, campaign)
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
     + '<div class="cf-cascade-more' + (menuOpen ? ' is-open' : '') + '">'
       + '<button class="btn btn-outline btn-sm cf-cascade-more-btn" aria-haspopup="menu"'
@@ -11467,6 +11469,44 @@ async function _cfCascadeAction(url, options, successMessage) {
   }
 }
 
+/* Take profit by hand, once price is 25% of the way from the average entry
+   back toward the mother high (Phil, 09-Oct-2026). The engine computes the
+   gate and re-checks it when the button is pressed — the browser only draws
+   what it was told, because a page can be seconds stale and this sells real
+   coin. A campaign holding nothing shows no button at all; one that is
+   holding but short of the mark shows it disabled, saying how far short. */
+function _cfCascadeExitButton(cid, campaign) {
+  var gate = (campaign || {}).hand_exit;
+  if (!gate || !(Number(gate.held_qty) > 0)) return '';
+  if (!gate.ready) {
+    return '<button class="btn btn-outline btn-sm" disabled'
+      + ' title="' + _escapeHtml(String(gate.reason || 'Not at the 25% mark yet')) + '">Exit</button>';
+  }
+  return '<button class="btn btn-success btn-sm"'
+    + ' title="' + _escapeHtml(String(gate.reason || '')) + '"'
+    + ' data-cf-click="cfCascadeHandExit(\'' + cid + '\')">Exit</button>';
+}
+
+async function cfCascadeHandExit(campaignId) {
+  var campaign = _cfCascadeFindCampaign(campaignId) || {};
+  var gate = campaign.hand_exit || {};
+  var ok = await cfConfirm(
+    '<p>Exit campaign <strong>#' + _escapeHtml(campaignId) + '</strong> at <strong>market</strong>, by hand?</p>'
+    + '<p>Price is ' + _escapeHtml(_cfCascadeFmt(gate.mark)) + ', at or above the 25% mark of '
+    + _escapeHtml(_cfCascadeFmt(gate.trigger_price)) + ' from your average entry of '
+    + _escapeHtml(_cfCascadeFmt(gate.avg_entry)) + '.</p>'
+    + '<p>The campaign is stopped first — its resting buys are cancelled — and then the whole '
+    + 'holding is sold at the best price on the book. <strong>This cannot be undone.</strong></p>',
+    'Exit at market', '💰', true
+  );
+  if (!ok) return;
+  _cfCascadeAction(
+    '/api/cascade/campaigns/' + encodeURIComponent(campaignId) + '/hand-exit',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    'Exited at market'
+  );
+}
+
 async function cfCascadeStopCampaign(campaignId) {
   var ok = await cfConfirm(
     '<p>Stop campaign <strong>#' + _escapeHtml(campaignId) + '</strong>?</p>'
@@ -11550,6 +11590,27 @@ function cfCascadeReconcile() {
 
 
 // ═══ CASCADE CLOSED-ROUND TRADE LOG ═════════════════════════════
+
+/* The same pool walk _cfCascadeFindRound does, stopping at the campaign. Used
+   by the hand-exit confirmation, which has to quote the numbers the engine
+   gated on — the live Cascade, the sandbox and the auto books each keep their
+   own status, and a card can come from any of them. */
+function _cfCascadeFindCampaign(campaignId) {
+  var pools = [];
+  var live = _cfCascadeLastStatus || {};
+  pools.push(live.campaigns || [], live.closed_campaigns || []);
+  Object.keys(_cfCascadeStatusPools).forEach(function(key) {
+    var status = _cfCascadeStatusPools[key] || {};
+    if (status === live) return;
+    pools.push(status.campaigns || [], status.closed_campaigns || []);
+  });
+  for (var p = 0; p < pools.length; p++) {
+    for (var i = 0; i < pools[p].length; i++) {
+      if (String(pools[p][i].campaign_id) === String(campaignId)) return pools[p][i];
+    }
+  }
+  return null;
+}
 
 function _cfCascadeFindRound(campaignId, roundId) {
   var pools = [];
