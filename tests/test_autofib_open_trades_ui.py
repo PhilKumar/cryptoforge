@@ -67,9 +67,15 @@ class AutoFibOpenTradesTests(unittest.TestCase):
         page and the card that carries the button is only drawn for working
         ladders. See tests/test_stranded_position_has_a_way_out.py.
         """
+        # And since 09-Oct-2026 a RUNNING row that is holding opens it too, for
+        # the hand-exit button Phil asked to have on Open Trades. That one is
+        # gated at the 25% mark and reaches the right engine on its own.
         self.assertIn("(showActions ? '<th>Action</th>' : '')", self.js)
-        self.assertIn("var showActions = actions || open.some(_cfTradeIsStranded);", self.js)
-        self.assertIn("actions || _cfTradeIsStranded(c) ? _cfCascadeTradeAction(c) : ''", self.js)
+        self.assertIn("var showActions = actions || open.some(_cfTradeIsStranded) || open.some(", self.js)
+        self.assertIn(
+            "actions || _cfTradeIsStranded(c) || !_cfCascadeCampaignHasEnded(c) ? _cfCascadeTradeAction(c) : ''",
+            self.js,
+        )
 
     def test_a_sandbox_position_is_never_sold_through_the_LIVE_engine(self):
         """`actions:false` used to be the guard. The server is the guard now.

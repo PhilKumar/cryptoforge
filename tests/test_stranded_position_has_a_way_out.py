@@ -35,7 +35,9 @@ class StrandedRowShowsItsExitTests(unittest.TestCase):
             cls.js = handle.read()
 
     def test_the_column_is_drawn_when_any_row_is_stranded(self):
-        self.assertIn("var showActions = actions || open.some(_cfTradeIsStranded);", self.js)
+        # Still true; since 09-Oct-2026 the column ALSO shows when a running row
+        # is holding, for the hand-exit button (see tests/test_cascade_hand_exit.py).
+        self.assertIn("var showActions = actions || open.some(_cfTradeIsStranded) || open.some(", self.js)
         self.assertNotIn("+ (actions ? '<th>Action</th>' : '')", self.js)
 
     def test_a_stranded_row_is_ended_holding_and_unsold(self):
@@ -45,8 +47,24 @@ class StrandedRowShowsItsExitTests(unittest.TestCase):
         self.assertIn("_cfCascadeCampaignHasEnded", body)
 
     def test_a_healthy_row_on_a_read_only_page_still_gets_no_button(self):
-        """actions:false pages must not sprout a market sell on every row."""
-        self.assertIn("actions || _cfTradeIsStranded(c) ? _cfCascadeTradeAction(c) : ''", self.js)
+        """actions:false pages must not sprout a market sell on every row.
+
+        The guard is unchanged for ENDED rows: on a read-only page a stopped
+        row that still has its resting sell gets nothing. What 09-Oct-2026
+        added is the third clause — a RUNNING row reaches _cfCascadeTradeAction,
+        which gives it the hand-exit button, not a market sell. That button is
+        gated at the 25% mark and its route finds the campaign in whichever
+        engine holds it, which is the reason Market Sell was kept off these
+        pages in the first place.
+        """
+        self.assertIn(
+            "actions || _cfTradeIsStranded(c) || !_cfCascadeCampaignHasEnded(c) ? _cfCascadeTradeAction(c) : ''",
+            self.js,
+        )
+        action = self.js[self.js.index("function _cfCascadeTradeAction(") :][:700]
+        running = action[: action.index("var cid")]
+        self.assertIn("_cfCascadeExitButton", running, "a running row gets the gated exit")
+        self.assertNotIn("cfCascadeLiquidate", running, "never a market sell on a running row")
 
 
 class LiquidateFindsTheRightEngineTests(unittest.IsolatedAsyncioTestCase):
