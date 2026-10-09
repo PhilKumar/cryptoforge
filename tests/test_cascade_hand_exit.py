@@ -223,3 +223,35 @@ class HandExitButtonTests(unittest.TestCase):
         for shown in ("gate.mark", "gate.trigger_price", "gate.avg_entry"):
             self.assertIn(shown, confirm)
         self.assertIn("cannot be undone", confirm)
+
+
+class HandExitPlacementTests(unittest.TestCase):
+    """Phil, 09-Oct-2026: "I need the exit button on the open trades not on the
+    lines". Open Trades is the table that lists positions, so it is where a
+    position is closed; the Lines cards keep Chart and Stop."""
+
+    @staticmethod
+    def _js():
+        import os
+
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(here, "static", "cryptoforge-app.js"), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_lines_card_no_longer_carries_it(self):
+        src = self._js()
+        card_actions = src[src.index('<div class="cf-cascade-actions" data-cf-stop="1"') :][:900]
+        self.assertNotIn("_cfCascadeExitButton", card_actions)
+
+    def test_a_running_row_in_open_trades_offers_it(self):
+        src = self._js()
+        action = src[src.index("function _cfCascadeTradeAction(") :][:900]
+        self.assertIn("_cfCascadeExitButton", action)
+
+    def test_the_column_shows_on_strategy_pages_too(self):
+        """The Cascade-Auto table hides its action column because Market Sell
+        only ever reached the live engine. Hand-exit finds the campaign in
+        whichever engine holds it, so its rows must not be hidden with them."""
+        src = self._js()
+        body = src[src.index("function cfRenderCascadeTrades(") :][:4000]
+        self.assertIn("c.hand_exit && Number(c.hand_exit.held_qty) > 0", body)

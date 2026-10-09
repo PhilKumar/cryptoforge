@@ -9926,7 +9926,6 @@ function _cfCascadeCampaignCard(campaign) {
     // permanent scroll.
     + '<div class="cf-cascade-actions" data-cf-stop="1" onclick="event.stopPropagation()">'
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeShowChart(\'' + cid + '\')">Chart</button>'
-    + _cfCascadeExitButton(cid, campaign)
     + '<button class="btn btn-outline btn-sm" data-cf-click="cfCascadeStopCampaign(\'' + cid + '\')">Stop</button>'
     + '<div class="cf-cascade-more' + (menuOpen ? ' is-open' : '') + '">'
       + '<button class="btn btn-outline btn-sm cf-cascade-more-btn" aria-haspopup="menu"'
@@ -10456,7 +10455,14 @@ function _cfCascadeConfirmedGone(c) {
 }
 
 function _cfCascadeTradeAction(c) {
-  if (!_cfCascadeCampaignHasEnded(c)) return '<span class="table-meta">running</span>';
+  // A running campaign exits by hand here, once it reaches the 25% mark
+  // (Phil, 09-Oct-2026: "I need the exit button on the open trades not on
+  // the lines"). This is the table that lists positions, so it is where a
+  // position is closed.
+  if (!_cfCascadeCampaignHasEnded(c)) {
+    return _cfCascadeExitButton(_escapeHtml(String(c.campaign_id || '')), c)
+      || '<span class="table-meta">running</span>';
+  }
   var cid = _escapeHtml(String(c.campaign_id || ''));
   var onExchange = c.exchange_qty;
   var checked = c.position_checked_at ? ' Last checked ' + _escapeHtml(String(c.position_checked_at)) + '.' : '';
@@ -10513,7 +10519,9 @@ function cfRenderCascadeTrades(campaigns, opts) {
   // manage it. On 09-Sep-2026 four of those sat on the Auto page with the
   // column switched off, so the only control that could clear them was on a
   // card that no longer existed.
-  var showActions = actions || open.some(_cfTradeIsStranded);
+  var showActions = actions || open.some(_cfTradeIsStranded) || open.some(function (c) {
+    return !_cfCascadeCampaignHasEnded(c) && c.hand_exit && Number(c.hand_exit.held_qty) > 0;
+  });
   // Every row nothing will ever sell, for the one "Sell all" control. 17-Sep-
   // 2026: eighteen stopped V-Rule positions, one rate-limited click each.
   var stranded = open.filter(function (c) { return _cfTradeIsStranded(c) && !_cfCascadeConfirmedGone(c); });
@@ -10569,7 +10577,9 @@ function cfRenderCascadeTrades(campaigns, opts) {
       // to act on: its engine is gone, so nothing will manage this position
       // again. Give it the way out rather than leaving the coin orphaned under
       // a dead campaign's name.
-      + (showActions ? '<td>' + (actions || _cfTradeIsStranded(c) ? _cfCascadeTradeAction(c) : '') + '</td>' : '')
+      + (showActions
+          ? '<td>' + (actions || _cfTradeIsStranded(c) || !_cfCascadeCampaignHasEnded(c) ? _cfCascadeTradeAction(c) : '') + '</td>'
+          : '')
       + '</tr>';
   }).join('');
 
