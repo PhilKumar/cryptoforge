@@ -39,7 +39,11 @@ jobs:
           # and fails checks that pass locally. Bump both together.
           # pyarrow is a TEST dependency: options/store.py writes parquet, but the
           # app never imports that package, so it stays out of requirements.txt.
-          pip install ruff==0.15.5 bandit pip-audit pytest pyarrow
+          # PINNED for the same reason ruff is. Unpinned, CI took pyarrow 26.0.0
+          # on 09-Oct-2026 — which the pinned pandas 2.2.1 cannot drive — and
+          # four options tests failed on a push that had not touched them.
+          # Bump this with pandas, not on its own.
+          pip install ruff==0.15.5 bandit pip-audit pytest pyarrow==25.0.1
 
       - name: Ruff lint
         run: ruff check .

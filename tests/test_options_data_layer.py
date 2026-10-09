@@ -33,8 +33,30 @@ from options.store import OptionStore, SeriesKey
 # test-time dependency only -- the app never imports this package -- so it is
 # not in requirements.txt. Without it these skip and say so, rather than
 # failing with an ImportError that looks like a broken store.
-HAS_PARQUET = importlib.util.find_spec("pyarrow") is not None
-NEEDS_PARQUET = unittest.skipUnless(HAS_PARQUET, "pyarrow not installed")
+#
+# The question is whether pandas can actually WRITE one, not whether pyarrow
+# can be found. On 09-Oct-2026 CI installed pyarrow 26.0.0 beside pandas
+# 2.2.1: importable, discoverable, and unusable — so these four tests failed
+# the whole gate on a push that had not touched the options layer. Ask the
+# engine instead of the package, and a version pair that cannot work skips
+# with its reason instead of reading as a broken store.
+
+
+def _parquet_reason() -> str:
+    if importlib.util.find_spec("pyarrow") is None:
+        return "pyarrow not installed"
+    try:
+        from pandas.io.parquet import get_engine
+
+        get_engine("auto")
+    except Exception as exc:  # an installed but unusable engine
+        return f"pandas cannot use the installed parquet engine: {str(exc)[:80]}"
+    return ""
+
+
+PARQUET_REASON = _parquet_reason()
+HAS_PARQUET = not PARQUET_REASON
+NEEDS_PARQUET = unittest.skipUnless(HAS_PARQUET, PARQUET_REASON or "parquet unavailable")
 
 
 class FakeResponse:
