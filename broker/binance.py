@@ -1133,7 +1133,7 @@ class BinanceSpotClient(BaseBroker):
         self._history_ts = now
         return list(trades)
 
-    def get_convert_history(self, days: int = 30) -> list:
+    def get_convert_history(self, days: int = 30, raise_on_error: bool = False) -> list:
         """
         Binance Convert trades. Convert is an OTC quote engine, NOT the
         orderbook — its fills never appear in /api/v3/myTrades, so a position
@@ -1160,6 +1160,10 @@ class BinanceSpotClient(BaseBroker):
                 )
             except Exception as exc:
                 _binance_log.warning("[BINANCE SPOT] Convert history error: %s", exc)
+                # A caller keeping a permanent archive must know the reach was
+                # cut short, or it records "done" over a hole it can never see.
+                if raise_on_error:
+                    raise
                 break
             batch = (payload or {}).get("list") or []
             for raw in batch:

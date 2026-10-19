@@ -10131,6 +10131,79 @@ def _link_trades_to_campaigns(trades: list) -> None:
                 break
 
 
+_BUCKET_JOURNAL_CONVERTS = "journal_converts"
+_JOURNAL_CONVERT_BACKFILL_DAYS = 400
+_journal_convert_backfill_lock = asyncio.Lock()
+
+
+def _convert_key(row: dict) -> str:
+    oid = str(row.get("order_id") or "").strip()
+    if oid and oid != "None":
+        return oid
+    # No order id is unusual, but a Convert is still uniquely its moment and
+    # its two amounts — never key it on something that two rows could share.
+    return f"{row.get('time')}:{row.get('from_asset')}:{row.get('from_amount')}:{row.get('to_asset')}"
+
+
+def _call_convert_history_strict(days: int) -> list:
+    """The backfill must fail loudly if it was cut short, so the archive is
+    never marked complete over a gap. Brokers without the flag just answer."""
+    fn = delta.get_convert_history
+    try:
+        strict = "raise_on_error" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        strict = False
+    return fn(days, raise_on_error=True) if strict else fn(days)
+
+
+async def _journal_convert_archive(recent: list) -> list:
+    """Every Convert exit this account has ever made, kept as it is seen.
+
+    Binance answers Convert history only in 30-day pages and the journal asks
+    for 90 days, so an exit older than that was simply not there any more. A
+    Convert, once done, never changes — so each one is stored the first time it
+    is fetched and kept for good, and the fetch only has to cover what is new.
+
+    The first time this runs on an account it also reaches back a year, ONCE,
+    to recover exits that had already aged past the window. That backfill is
+    remembered, and a rate-limit part-way through simply leaves the rest for
+    the next load rather than hammering an endpoint Binance weighs heavily.
+    """
+    store = _get_state_store()
+    try:
+        saved = store.get_mapping(_BUCKET_JOURNAL_CONVERTS) or {}
+    except Exception as exc:
+        _logger.warning("[JOURNAL] convert archive unreadable: %s", exc)
+        saved = {}
+    archive = {k: v for k, v in saved.items() if isinstance(v, dict) and not k.startswith("__")}
+
+    fresh = list(recent or [])
+    if not saved.get("__backfilled__") and _broker_is_configured():
+        async with _journal_convert_backfill_lock:
+            try:
+                fresh += await asyncio.to_thread(_call_convert_history_strict, _JOURNAL_CONVERT_BACKFILL_DAYS)
+                store.put(_BUCKET_JOURNAL_CONVERTS, "__backfilled__", {"at": int(time.time())})
+            except Exception as exc:
+                _logger.warning("[JOURNAL] convert backfill deferred: %s", exc)
+
+    added = 0
+    for row in fresh:
+        if not isinstance(row, dict):
+            continue
+        key = _convert_key(row)
+        if key in archive:
+            continue
+        archive[key] = row
+        try:
+            store.put(_BUCKET_JOURNAL_CONVERTS, key, row)
+            added += 1
+        except Exception as exc:
+            _logger.warning("[JOURNAL] could not keep convert %s: %s", key, exc)
+    if added:
+        _logger.info("[JOURNAL] kept %d new Convert exit(s); %d on file", added, len(archive))
+    return list(archive.values())
+
+
 @app.get("/api/journal/trades")
 async def journal_trades(convert_days: int = 90, include_broker: bool = True):
     doc = _load_trade_journal()
@@ -10150,7 +10223,15 @@ async def journal_trades(convert_days: int = 90, include_broker: bool = True):
             convert_error = str(exc)
             _logger.warning("[JOURNAL] convert history unavailable: %s", exc)
 
-    broker_trades, broker_error = ([], "") if not include_broker else await _broker_journal_trades(converts)
+    # Pair against EVERY Convert exit ever seen, not just the window fetched.
+    # Phil, 19-Oct-2026: "why suddenly my PL gone down from $16 to $10?" —
+    # thirty closed trades had been exited through Convert, and as each exit
+    # passed 90 days old it left the window, its trade fell back to "open",
+    # and its profit dropped out of Realised P&L. Nothing was sold or lost;
+    # the journal simply forgot how those positions ended.
+    all_converts = await _journal_convert_archive(converts)
+
+    broker_trades, broker_error = ([], "") if not include_broker else await _broker_journal_trades(all_converts)
     account_value = await _journal_account_value_usd() if include_broker else None
     trades = merge_with_sheet(sheet_trades, broker_trades) if include_broker else sheet_trades
     # Link each paired round to the Cascade campaign that placed it (by shared
