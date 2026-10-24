@@ -9077,6 +9077,14 @@ _STRATEGY_QUIET_ALERTS = frozenset(
         "Minor MC retired at the break",
         "Escalated timeframe",
         "Restart chain stopped",
+        # "Cascade entry held — no new low": the engine DECLINED to arm a buy
+        # because price had already bounced above the trigger. Nothing was
+        # placed, nothing filled, no money moved — the alert's own body says
+        # "this is normal". Phil, 24-Oct-2026: "Why I am getting lot of noises
+        # on my telegram alerts?" — it was 11 of the last day's 11 alerts and
+        # 22 of the week's 26, one per campaign every time price drifted back
+        # up. It stays in the campaign's event log; it just stops ringing.
+        "no new low",
     }
 )
 _STRATEGY_EVENT_LEVELS = frozenset({"error"})

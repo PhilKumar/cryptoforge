@@ -179,6 +179,20 @@ class StrategyAlertTests(unittest.TestCase):
         self.assertEqual(self.telegram, [])
         self.assertEqual(self.pushed, [])
 
+    def test_a_held_entry_is_not_an_alert(self):
+        """Phil, 24-Oct-2026: "Why I am getting lot of noises on my telegram
+        alerts?" — 11 of the day's 11 were this. The engine declined to arm a
+        buy because price had bounced; nothing was placed and no money moved."""
+        self.app._strategy_alert("Cascade entry held — no new low", "PAXGUSDT #713 (LIVE)", "warn")
+        self.assertEqual(self.telegram, [])
+        self.assertEqual(self.pushed, [])
+
+    def test_a_triggered_stop_that_did_not_fill_still_rings(self):
+        """The neighbouring case is NOT bookkeeping: an order reached the
+        exchange, triggered, and came back unfilled. That one keeps alerting."""
+        self.app._strategy_alert("Cascade entry held — fill missed, not chasing", "body", "warn")
+        self.assertEqual(len(self.telegram), 1)
+
     def test_money_and_failures_still_reach_the_phone(self):
         for what in (
             "ENTRY filled",
