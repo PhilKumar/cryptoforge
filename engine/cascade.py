@@ -2159,6 +2159,10 @@ class CascadeEngine:
         # short of it. Cleared the moment a read shows enough — which is what
         # happens when one of the open positions sells at its target.
         self._waiting_on_cash: set = set()
+        # campaign_id -> the position (round count + average entry) whose 25%
+        # mark has already been announced. One alert per position: a price
+        # hovering on the mark must not ring the phone every time it crosses.
+        self._exit_ready_told: Dict[str, tuple] = {}
         # broker id -> (free quote balance, monotonic time). One wallet read
         # serves every campaign in the same loop, not one each.
         self._free_quote_cache: Dict[int, tuple] = {}
@@ -3462,6 +3466,54 @@ class CascadeEngine:
         view["ready"] = True
         view["reason"] = f"At or above the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}"
         return view
+
+    def _announce_exit_ready(self) -> None:
+        """Tell the phone once when a position reaches its 25% mark.
+
+        Phil, 25-Oct-2026: "I need a telegram alert when I reach 25% target and
+        the sell button enabled on the console". The button and this alert read
+        the same `hand_exit_view`, so the phone rings exactly when the Exit
+        button turns green — never on a different idea of 25%.
+
+        Once per POSITION, keyed on its round count and average entry. A price
+        sitting on the mark crosses it again and again; that is one event, not
+        a stream. Buying another rung moves the average and the mark with it,
+        and closing a round starts a new position — either earns a new alert.
+        """
+        for campaign in self.active_campaigns:
+            if campaign.mode != "live":
+                continue
+            gate = self.hand_exit_view(campaign)
+            if not gate["ready"]:
+                continue
+            position = (len(campaign.rounds), round(_coerce_float(campaign.avg_entry_price, 0.0), 8))
+            if self._exit_ready_told.get(campaign.campaign_id) == position:
+                continue
+            self._exit_ready_told[campaign.campaign_id] = position
+            qty = _coerce_float(gate["held_qty"], 0.0)
+            avg = _coerce_float(gate["avg_entry"], 0.0)
+            mark = _coerce_float(gate["mark"], 0.0)
+            rate = campaign_fee_pct(campaign) / 100.0
+            net_now = (mark - avg) * qty - (avg * qty + mark * qty) * rate
+            target = target_net_usd(campaign)
+            self._log_event(
+                campaign,
+                "order",
+                f"25% mark reached — price {mark:,.4f} is at or above {gate['trigger_price']:,.4f}. "
+                f"The Exit button is live.",
+            )
+            self._alert(
+                "25% mark reached — Exit is live",
+                f"{campaign.symbol} #{campaign.seq} (LIVE)\n"
+                f"Price {mark:,.4f} reached the 25% mark of {gate['trigger_price']:,.4f} "
+                f"(average entry {avg:,.4f}).\n\n"
+                f"Exit now: about {'+' if net_now >= 0 else '-'}${abs(net_now):,.2f} after fees."
+                + (f"\nAt its own target: about +${target:,.2f}." if target is not None else "")
+                + "\n\nThe Exit button on Open Trades is enabled. Nothing sells unless you press it.",
+                level="success",
+                dedupe_key=f"exit-ready:{campaign.campaign_id}:{position[0]}:{position[1]}",
+                campaign=campaign,
+            )
 
     async def hand_exit_campaign(self, campaign_id: str) -> dict:
         """Sell a RUNNING campaign's position by hand, at market, right now.
@@ -4991,6 +5043,10 @@ class CascadeEngine:
                     await self._retire_stale_empty_campaigns()
                 except Exception as exc:
                     _log.warning("[CASCADE] stale-campaign sweep failed: %s", exc)
+                try:
+                    self._announce_exit_ready()
+                except Exception as exc:
+                    _log.warning("[CASCADE] exit-ready check failed: %s", exc)
                 self._check_watchdogs()
             except asyncio.CancelledError:
                 return

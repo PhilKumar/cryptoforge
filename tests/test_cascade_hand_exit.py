@@ -312,3 +312,93 @@ class TargetNetTests(unittest.TestCase):
         row = next(r for r in engine.get_status()["campaigns"] if r["campaign_id"] == "c1")
         self.assertIn("target_net_usd", row)
         self.assertGreater(row["target_net_usd"], 0)
+
+
+class ExitReadyAlertTests(unittest.TestCase):
+    """Phil, 25-Oct-2026: "I need a telegram alert when I reach 25% target and
+    the sell button enabled on the console". The alert reads the same gate as
+    the button, so the phone rings exactly when Exit turns green."""
+
+    def setUp(self):
+        self.engine = _mk_engine()
+        self.alerts = []
+        self.engine.on_alert = lambda title, body, level: self.alerts.append((title, body, level))
+
+    def _campaign(self, *, mark, avg=100.0, mother=200.0, qty=1.0, mode="live", cid="c1"):
+        c = Campaign(
+            campaign_id=cid,
+            symbol="PAXGUSDT",
+            capital_usd=2000.0,
+            mother_high=mother,
+            mother_low=mother * 0.9,
+            mother_timestamp=0,
+            mode=mode,
+        )
+        c.state = "TRENDLINE_ACTIVE"
+        c.all_fills.append(Fill(price=avg, quantity=qty, level=2, leg_id=1, timestamp=0))
+        c.filled_base_qty = qty
+        recompute_avg_entry_price(c)
+        self.engine.campaigns[cid] = c
+        self.engine._price_cache[self.engine._price_key(c)] = (mark, 0.0)
+        return c
+
+    def _titles(self):
+        return [t for t, _, _ in self.alerts]
+
+    def test_it_rings_when_the_mark_is_reached(self):
+        self._campaign(mark=126.0)
+        self.engine._announce_exit_ready()
+        self.assertEqual(len(self.alerts), 1)
+        title, body, level = self.alerts[0]
+        self.assertIn("25% mark reached", title)
+        self.assertIn("PAXGUSDT", title, "the coin leads the headline")
+        self.assertIn("Exit button", body)
+        self.assertIn("Nothing sells unless you press it", body)
+        self.assertEqual(level, "success")
+
+    def test_it_stays_quiet_below_the_mark(self):
+        self._campaign(mark=124.0)
+        self.engine._announce_exit_ready()
+        self.assertEqual(self.alerts, [])
+
+    def test_a_price_hovering_on_the_mark_rings_once(self):
+        c = self._campaign(mark=126.0)
+        for price in (126.0, 124.0, 126.5, 124.5, 127.0):
+            self.engine._price_cache[self.engine._price_key(c)] = (price, 0.0)
+            self.engine._announce_exit_ready()
+        self.assertEqual(len(self.alerts), 1)
+
+    def test_buying_another_rung_earns_a_new_alert(self):
+        """A new average is a new position with a new mark."""
+        c = self._campaign(mark=126.0)
+        self.engine._announce_exit_ready()
+        c.all_fills.append(Fill(price=60.0, quantity=1.0, level=4, leg_id=1, timestamp=0))
+        c.filled_base_qty = 2.0
+        recompute_avg_entry_price(c)
+        self.engine._announce_exit_ready()
+        self.assertEqual(len(self.alerts), 2)
+
+    def test_paper_positions_never_ring(self):
+        self._campaign(mark=150.0, mode="paper")
+        self.engine._announce_exit_ready()
+        self.assertEqual(self.alerts, [])
+
+    def test_two_coins_ring_separately(self):
+        self._campaign(mark=126.0, cid="a")
+        self._campaign(mark=126.0, cid="b")
+        self.engine._announce_exit_ready()
+        self.assertEqual(len(self.alerts), 2)
+
+    def test_the_alert_and_the_button_agree(self):
+        """Same gate, same instant: if the button is green, the phone has rung."""
+        c = self._campaign(mark=125.0)
+        self.assertTrue(self.engine.hand_exit_view(c)["ready"])
+        self.engine._announce_exit_ready()
+        self.assertEqual(len(self.alerts), 1)
+
+    def test_it_is_not_filtered_as_bookkeeping(self):
+        import importlib
+
+        app = importlib.import_module("app")
+        what = "25% mark reached — Exit is live".rsplit(" — ", 1)[-1]
+        self.assertNotIn(what, app._STRATEGY_QUIET_ALERTS)
