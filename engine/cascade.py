@@ -494,6 +494,10 @@ _MAX_SAME_TRIGGER_PLACEMENTS = 3
 # once). Fifteen minutes still catches cash that arrives the same hour, at a
 # fortieth of the rate.
 NO_CASH_WAIT_SEC = 15 * 60
+# How long one read of the account's free cash is trusted. Short enough that a
+# target filling frees its cash for the next buy within a sync or two; long
+# enough that every waiting campaign in one loop shares a single wallet read.
+FREE_CASH_CACHE_SEC = 8.0
 # Every trendline starts at the same point — the mother high — so two of them
 # are the same line whenever their second anchors are close. Drawn on the chart
 # they overlap into one thick smear, which is not what gets drawn by hand: the
@@ -2151,6 +2155,13 @@ class CascadeEngine:
         # campaign_id -> monotonic time before which its buy is not retried,
         # because the exchange last said the account could not pay for it.
         self._no_cash_until: Dict[str, float] = {}
+        # Campaigns whose buy is paused because the account's free cash is
+        # short of it. Cleared the moment a read shows enough — which is what
+        # happens when one of the open positions sells at its target.
+        self._waiting_on_cash: set = set()
+        # broker id -> (free quote balance, monotonic time). One wallet read
+        # serves every campaign in the same loop, not one each.
+        self._free_quote_cache: Dict[int, tuple] = {}
         self._loop_interval_sec = 5.0
         # 30s left a fill un-hedged for up to half a minute before the TP
         # went up. Weight cost at 10s is trivial against Binance's budget.
@@ -6948,6 +6959,36 @@ class CascadeEngine:
                 result[str(row["orderId"])] = row
         return result
 
+    async def _free_quote_balance(self, campaign: Campaign) -> Optional[float]:
+        """Free cash in the quote asset (USDT) on this campaign's venue.
+
+        Cached for a few seconds per venue so ten waiting campaigns cost one
+        wallet read, not ten. None when it cannot be read — the caller then
+        lets the order go out and the exchange decides, as it always did.
+        """
+        broker = self.broker_for(campaign)
+        key = id(broker)
+        cached = self._free_quote_cache.get(key)
+        now = time.monotonic()
+        if cached and now - cached[1] < FREE_CASH_CACHE_SEC:
+            return cached[0]
+        try:
+            product = await asyncio.to_thread(broker.get_product_by_symbol, campaign.symbol)
+            wallet = await asyncio.to_thread(broker.get_wallet)
+        except Exception as exc:
+            _log.warning("[CASCADE] free-cash lookup failed for %s: %s", campaign.symbol, exc)
+            return None
+        quote = str((product or {}).get("quote_asset") or "").upper()
+        if not quote or not isinstance(wallet, list):
+            return None
+        free = 0.0
+        for row in wallet:
+            if str(row.get("asset_symbol") or "").upper() == quote:
+                free = _coerce_float(row.get("free_balance"), 0.0)
+                break
+        self._free_quote_cache[key] = (free, now)
+        return free
+
     async def _free_base_balance(self, campaign: Campaign) -> Optional[float]:
         """How much of the base asset is actually free to sell, per the exchange.
 
@@ -7199,6 +7240,41 @@ class CascadeEngine:
         # each refused order still spends rate limit.
         if time.monotonic() < self._no_cash_until.get(campaign.campaign_id, 0.0):
             return False
+        # Look before asking. Phil, 25-Oct-2026, not adding money: "let it pause
+        # the future buys till it makes the target". A buy the account cannot
+        # pay for is not sent at all — no refused order, no rate limit spent —
+        # and it goes out by itself on the first sync after a target sells and
+        # the cash comes back. A balance that cannot be read does not block:
+        # the order goes out and the exchange decides, as before.
+        if campaign.mode == "live":
+            free = await self._free_quote_balance(campaign)
+            if free is not None and free < campaign.pending_usd:
+                if campaign.campaign_id not in self._waiting_on_cash:
+                    self._waiting_on_cash.add(campaign.campaign_id)
+                    self._log_event(
+                        campaign,
+                        "warn",
+                        f"Buy of ${campaign.pending_usd:,.2f} paused — ${free:,.2f} free cash in the account. "
+                        f"It goes out by itself once an open position sells at its target and the cash is back.",
+                    )
+                    self._alert(
+                        "Buys paused until cash is back",
+                        f"{campaign.symbol} campaign #{campaign.seq} (LIVE) wants to buy "
+                        f"${campaign.pending_usd:,.2f}; the account has ${free:,.2f} free.\n\n"
+                        f"Nothing is sent to the exchange while that is true. Open positions keep "
+                        f"their targets, and as each one sells, waiting buys resume by themselves.",
+                        level="info",
+                        dedupe_sec=6 * 3600,
+                        dedupe_key="entry-no-cash",
+                    )
+                return False
+            if campaign.campaign_id in self._waiting_on_cash:
+                self._waiting_on_cash.discard(campaign.campaign_id)
+                self._log_event(
+                    campaign,
+                    "order",
+                    f"Cash is back (${free:,.2f} free) — resuming the ${campaign.pending_usd:,.2f} buy.",
+                )
         stop = campaign.pending_stop_price
         limit = campaign.pending_limit_price
         if not stop or not limit:
@@ -7381,6 +7457,9 @@ class CascadeEngine:
             campaign.pending_order_id = order_id
             self._stale_pot_held.discard(campaign.campaign_id)
             self._no_cash_until.pop(campaign.campaign_id, None)
+            # That buy just spent cash: the next campaign in this loop must not
+            # judge itself against the balance from before it.
+            self._free_quote_cache.pop(id(self.broker_for(campaign)), None)
             if raised:
                 self._log_event(
                     campaign,

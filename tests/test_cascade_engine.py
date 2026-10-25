@@ -4509,6 +4509,91 @@ class CascadeNoCashTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.campaign.campaign_id, self.engine._no_cash_until)
 
 
+class CascadePauseUntilCashTests(unittest.IsolatedAsyncioTestCase):
+    """Buys the account cannot pay for are not sent at all, and resume by
+    themselves when a target sells and the cash comes back.
+
+    Phil, 25-Oct-2026, not adding money: "let it pause the future buys till it
+    makes the target". The refusal handling (CascadeNoCashTests) is the safety
+    net; this is the front door — look at the free cash before asking.
+    """
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        real_product = self.broker.get_product_by_symbol
+        self.broker.get_product_by_symbol = lambda s: {**real_product(s), "quote_asset": "USDT"}
+        self.broker.free_balances = {"USDT": 8.60}
+        self.engine = _mk_engine(self.broker)
+        self.alerts = []
+        self.engine.on_alert = lambda title, body, level: self.alerts.append(title)
+        self.campaign = _mk_campaign(self.engine, mode="live")
+        self.campaign.state = "TRENDLINE_ACTIVE"
+        leg = Leg(leg_id=1, trendline_id=1, low=99.5, touch_high=102.0, touch_timestamp=1200)
+        self.campaign.legs.append(leg)
+        build_fib_ladder_and_pool(self.campaign, leg)
+        plan_leg_orders(self.campaign, leg)
+        self.campaign.pending_usd = 40.0
+        self.campaign.collected = [[1, 2, 16.0, 97.0]]
+        self.campaign.pending_line = 96.0
+        self.campaign.pending_stop_price = 96.5
+        self.campaign.pending_limit_price = 96.55
+        self.campaign.pending_rev = 1
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 95.0}
+
+    def _buys(self):
+        return [o for o in self.broker.placed_orders if o["side"] == "buy"]
+
+    async def test_a_buy_the_account_cannot_pay_for_is_never_sent(self):
+        for _ in range(10):
+            await self.engine._place_pending_stop(self.campaign)
+        self.assertEqual(self._buys(), [], "nothing reaches the exchange while cash is short")
+        self.assertIsNone(self.campaign.pending_order_id)
+
+    async def test_it_resumes_by_itself_once_a_target_frees_the_cash(self):
+        await self.engine._place_pending_stop(self.campaign)
+        self.assertEqual(self._buys(), [])
+        # A take-profit sells; the cash is back. The cache ages out on its own.
+        self.broker.free_balances = {"USDT": 52.30}
+        self.engine._free_quote_cache.clear()
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        self.assertEqual(len(self._buys()), 1)
+        lines = [str(e.get("message")) for e in self.campaign.event_log]
+        self.assertTrue(any("Cash is back" in line for line in lines))
+
+    async def test_the_phone_hears_once(self):
+        for _ in range(5):
+            await self.engine._place_pending_stop(self.campaign)
+        self.assertEqual(self.alerts.count("Buys paused until cash is back"), 1)
+        self.assertNotIn("Order FAILED", self.alerts)
+
+    async def test_the_campaign_log_says_it_once_not_every_tick(self):
+        for _ in range(5):
+            await self.engine._place_pending_stop(self.campaign)
+        paused = [e for e in self.campaign.event_log if "paused" in str(e.get("message"))]
+        self.assertEqual(len(paused), 1)
+
+    async def test_an_unreadable_balance_never_blocks_a_buy(self):
+        """The check is a courtesy to the exchange, not a new way to stop trading.
+        If the wallet cannot be read, the order goes out as it always did."""
+        self.broker.free_balances = None  # get_wallet returns a non-list
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+
+    async def test_paper_campaigns_are_not_judged_against_the_real_wallet(self):
+        self.campaign.mode = "paper"
+        await self.engine._place_pending_stop(self.campaign)
+        self.assertNotIn(self.campaign.campaign_id, self.engine._waiting_on_cash)
+
+    async def test_ten_waiting_campaigns_cost_one_wallet_read(self):
+        reads = []
+        real_wallet = self.broker.get_wallet
+        self.broker.get_wallet = lambda: (reads.append(1), real_wallet())[1]
+        for _ in range(10):
+            await self.engine._place_pending_stop(self.campaign)
+        self.assertEqual(len(reads), 1)
+
+
 class CascadeStalePotHoldTests(unittest.IsolatedAsyncioTestCase):
     """The late/left-anchored start bug (BTCUSDT #3, 2026-07-24): a campaign
     started 2+ days after its mother candle replayed a fall that had already
