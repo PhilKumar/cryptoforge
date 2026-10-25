@@ -14,3 +14,13 @@ cryptography==50.0.0
 pyotp==2.9.0
 bcrypt>=4.0
 segno>=1.6
+# Floors for libraries the ones above pull in. Unpinned, prod kept whatever
+# version its virtualenv was built with, and on 25-Oct-2026 pip-audit of the
+# box found published vulnerabilities in each (CI audits this file, not the
+# box): certifi still trusted a compromised CA root, urllib3 could forward
+# headers on a cross-site redirect, multidict leaked memory to remote input.
+urllib3>=2.8.0
+certifi>=2026.10.19
+anyio>=4.14.2
+idna>=3.15
+multidict>=6.9.1
