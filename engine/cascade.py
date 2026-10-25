@@ -488,6 +488,12 @@ MIN_LEG_SEPARATION_PCT = 0.0003
 # walking down a real fall changes price every time and is never throttled;
 # only a trigger that will not stay resting hits this.
 _MAX_SAME_TRIGGER_PLACEMENTS = 3
+# How long a campaign waits after the exchange says the account cannot pay for
+# its buy. Retrying every sync sent ~700 refused orders an hour at Binance for
+# two days (Phil, 25-Oct-2026: "3" — stop retrying, wait for cash, tell me
+# once). Fifteen minutes still catches cash that arrives the same hour, at a
+# fortieth of the rate.
+NO_CASH_WAIT_SEC = 15 * 60
 # Every trendline starts at the same point — the mother high — so two of them
 # are the same line whenever their second anchors are close. Drawn on the chart
 # they overlap into one thick smear, which is not what gets drawn by hand: the
@@ -1766,11 +1772,28 @@ def _is_trigger_immediately_error(error) -> bool:
     """True for Binance -2010 'Stop price would trigger immediately'.
 
     A deterministic, market-relative rejection — the trigger is at or below the
-    current price — not a fault to alert on. Matched on both the code and the
-    text so a wording change on either side does not turn it back into noise.
+    current price — not a fault to alert on.
+
+    Matched on the TEXT, not the code. -2010 is Binance's whole NEW_ORDER_
+    REJECTED family: "would trigger immediately" is one member, and "Account has
+    insufficient balance" is another. Matching the bare code filed every
+    no-cash refusal as this harmless race — silent, uncounted by the churn
+    brake, retried every sync — 33,020 times between 23 and 25 Oct 2026 before
+    anyone could see it.
+    """
+    return "would trigger immediately" in str(error or "").lower()
+
+
+def _is_insufficient_balance_error(error) -> bool:
+    """True when the exchange refused an order because the account cannot pay.
+
+    Binance says "Account has insufficient balance for requested action";
+    CoinDCX and others say "insufficient funds". Either way the order was never
+    created and no money moved — and asking again in ten seconds will get the
+    same answer until cash actually arrives.
     """
     text = str(error or "").lower()
-    return "-2010" in text or "would trigger immediately" in text
+    return "insufficient balance" in text or "insufficient funds" in text
 
 
 def timeframe_for_level(campaign: Campaign, leg: Leg, level: int) -> str:
@@ -2125,6 +2148,9 @@ class CascadeEngine:
         # campaign_id -> ((stop, limit), attempts) — see the churn brake in
         # _place_pending_stop. In memory only: a restart is a fresh chance.
         self._place_attempts: Dict[str, tuple] = {}
+        # campaign_id -> monotonic time before which its buy is not retried,
+        # because the exchange last said the account could not pay for it.
+        self._no_cash_until: Dict[str, float] = {}
         self._loop_interval_sec = 5.0
         # 30s left a fill un-hedged for up to half a minute before the TP
         # went up. Weight cost at 10s is trivial against Binance's budget.
@@ -7168,6 +7194,11 @@ class CascadeEngine:
         fall has collected so far, at the trigger the last red set."""
         if campaign.pending_order_id or campaign.pending_usd <= 0:
             return False
+        # The account could not pay for this buy last time. Ask again only
+        # after the wait: the answer cannot change until cash arrives, and
+        # each refused order still spends rate limit.
+        if time.monotonic() < self._no_cash_until.get(campaign.campaign_id, 0.0):
+            return False
         stop = campaign.pending_stop_price
         limit = campaign.pending_limit_price
         if not stop or not limit:
@@ -7349,6 +7380,7 @@ class CascadeEngine:
                 return False
             campaign.pending_order_id = order_id
             self._stale_pot_held.discard(campaign.campaign_id)
+            self._no_cash_until.pop(campaign.campaign_id, None)
             if raised:
                 self._log_event(
                     campaign,
@@ -7396,6 +7428,31 @@ class CascadeEngine:
         # trigger.
         if _is_trigger_immediately_error(error):
             self._place_attempts.pop(campaign.campaign_id, None)
+            return False
+        # Not enough cash. Nothing was created and nothing moved; wait, say
+        # so once in the campaign's log, and tell the phone once for the
+        # whole engine rather than once per campaign per tick.
+        if _is_insufficient_balance_error(error):
+            self._place_attempts.pop(campaign.campaign_id, None)
+            self._no_cash_until[campaign.campaign_id] = time.monotonic() + NO_CASH_WAIT_SEC
+            self._log_event(
+                campaign,
+                "warn",
+                f"Buy of ${campaign.pending_usd:,.2f} at {stop:,.2f} refused — the account does not have "
+                f"enough free cash. Not retrying for {NO_CASH_WAIT_SEC // 60} minutes; the money stays "
+                f"collected and the buy goes out as soon as the cash is there.",
+            )
+            self._alert(
+                "Buys waiting on cash",
+                f"{campaign.symbol} campaign #{campaign.seq} (LIVE) wanted to buy "
+                f"${campaign.pending_usd:,.2f}, and the exchange said the account cannot pay for it.\n\n"
+                f"Nothing was bought. Campaigns now wait {NO_CASH_WAIT_SEC // 60} minutes between tries "
+                f"instead of asking every few seconds. Add funds, or shrink the books' budgets, "
+                f"to let these buys through.",
+                level="warn",
+                dedupe_sec=6 * 3600,
+                dedupe_key="entry-no-cash",
+            )
             return False
         self._log_event(campaign, "error", f"Failed to place the buy stop: {error}")
         self._alert(

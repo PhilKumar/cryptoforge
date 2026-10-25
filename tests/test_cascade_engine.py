@@ -4411,6 +4411,104 @@ class CascadeTriggerImmediatelyTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(buys[0]["stop_price"], 96.5)
 
 
+class CascadeNoCashTests(unittest.IsolatedAsyncioTestCase):
+    """A buy the account cannot pay for waits, instead of asking every tick.
+
+    Phil, 25-Oct-2026. Between 23 and 25 Oct Binance refused 33,020 of these
+    buys — "Account has insufficient balance", ~700 an hour — and nothing in the
+    app said so. The cause was the classifier above: it matched the bare -2010
+    code, so a no-cash refusal was filed as the harmless "would trigger
+    immediately" race and retried silently every sync.
+    """
+
+    def setUp(self):
+        self.broker = FakeCascadeBroker()
+        self.engine = _mk_engine(self.broker)
+        self.alerts = []
+        self.engine.on_alert = lambda title, body, level: self.alerts.append(title)
+        self.campaign = _mk_campaign(self.engine, mode="live")
+        self.campaign.state = "TRENDLINE_ACTIVE"
+        leg = Leg(leg_id=1, trendline_id=1, low=99.5, touch_high=102.0, touch_timestamp=1200)
+        self.campaign.legs.append(leg)
+        build_fib_ladder_and_pool(self.campaign, leg)
+        plan_leg_orders(self.campaign, leg)
+        self.campaign.pending_usd = 40.0
+        self.campaign.collected = [[1, 2, 16.0, 97.0]]
+        self.campaign.pending_line = 96.0
+        self.campaign.pending_stop_price = 96.5
+        self.campaign.pending_limit_price = 96.55
+        self.campaign.pending_rev = 1
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 95.0}
+        self.calls = 0
+
+        def refuse(*_a, **_k):
+            self.calls += 1
+            return {"error": "Binance -2010: Account has insufficient balance for requested action."}
+
+        self.broker.place_order = refuse
+
+    def test_the_classifier_tells_the_two_2010s_apart(self):
+        from engine.cascade import _is_insufficient_balance_error, _is_trigger_immediately_error
+
+        no_cash = "Binance -2010: Account has insufficient balance for requested action."
+        race = "Binance -2010: Stop price would trigger immediately."
+        self.assertFalse(_is_trigger_immediately_error(no_cash), "the bug: this was filed as the harmless race")
+        self.assertTrue(_is_trigger_immediately_error(race))
+        self.assertTrue(_is_insufficient_balance_error(no_cash))
+        self.assertFalse(_is_insufficient_balance_error(race))
+        self.assertTrue(_is_insufficient_balance_error("CoinDCX: Insufficient funds"))
+
+    async def test_a_refused_buy_is_not_asked_again_every_tick(self):
+        for _ in range(20):
+            await self.engine._place_pending_stop(self.campaign)
+        self.assertEqual(self.calls, 1, "one refusal, then the campaign waits")
+        self.assertIsNone(self.campaign.pending_order_id)
+
+    async def test_it_tries_again_after_the_wait(self):
+        import engine.cascade as cascade_mod
+
+        await self.engine._place_pending_stop(self.campaign)
+        self.engine._no_cash_until[self.campaign.campaign_id] = 0.0  # the wait has run out
+        await self.engine._place_pending_stop(self.campaign)
+        self.assertEqual(self.calls, 2)
+        self.assertGreaterEqual(cascade_mod.NO_CASH_WAIT_SEC, 60)
+
+    async def test_the_phone_hears_once_not_per_campaign_per_tick(self):
+        other = _mk_campaign(self.engine, mode="live")
+        for attr in (
+            "state",
+            "legs",
+            "pending_usd",
+            "collected",
+            "pending_line",
+            "pending_stop_price",
+            "pending_limit_price",
+            "pending_rev",
+        ):
+            setattr(other, attr, getattr(self.campaign, attr))
+        await self.engine._place_pending_stop(self.campaign)
+        await self.engine._place_pending_stop(other)
+        self.assertEqual(self.alerts.count("Buys waiting on cash"), 1)
+        self.assertNotIn("Order FAILED", self.alerts, "no money moved; it is a wait, not a failure")
+
+    async def test_the_campaign_log_says_why_it_is_waiting(self):
+        await self.engine._place_pending_stop(self.campaign)
+        lines = [str(e.get("message")) for e in self.campaign.event_log]
+        self.assertTrue(any("enough free cash" in line for line in lines))
+
+    async def test_a_refusal_does_not_count_toward_the_wont_rest_brake(self):
+        await self.engine._place_pending_stop(self.campaign)
+        self.assertNotIn(self.campaign.campaign_id, self.engine._place_attempts)
+
+    async def test_once_cash_arrives_the_buy_goes_out_and_the_wait_clears(self):
+        await self.engine._place_pending_stop(self.campaign)
+        self.broker.place_order = lambda *a, **k: {"id": "B-1", "orderId": "B-1", "status": "NEW"}
+        self.engine._no_cash_until[self.campaign.campaign_id] = 0.0
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        self.assertNotIn(self.campaign.campaign_id, self.engine._no_cash_until)
+
+
 class CascadeStalePotHoldTests(unittest.IsolatedAsyncioTestCase):
     """The late/left-anchored start bug (BTCUSDT #3, 2026-07-24): a campaign
     started 2+ days after its mother candle replayed a fall that had already
