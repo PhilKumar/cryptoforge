@@ -16,7 +16,10 @@ concurrency:
 jobs:
   e2e-cryptoforge:
     name: E2E — CryptoForge
-    runs-on: ubuntu-latest
+    # Pinned (25-Oct-2026): ubuntu-latest moved to 26.04, which this Playwright
+    # cannot drive ("does not support chromium on ubuntu26.04-x64"), and a
+    # newer Playwright brings a newer browser that redraws every screenshot.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -161,7 +164,10 @@ jobs:
     name: Deploy — CryptoForge
     needs: [e2e-cryptoforge]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
+    # Pinned (25-Oct-2026): ubuntu-latest moved to 26.04, which this Playwright
+    # cannot drive ("does not support chromium on ubuntu26.04-x64"), and a
+    # newer Playwright brings a newer browser that redraws every screenshot.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
       group: deploy-cryptoforge
