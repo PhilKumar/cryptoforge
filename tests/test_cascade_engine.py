@@ -4594,6 +4594,118 @@ class CascadePauseUntilCashTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(reads), 1)
 
 
+class CascadeFreshTurnAfterCashTests(unittest.IsolatedAsyncioTestCase):
+    """A buy that waited for cash waits for a FRESH turn before it buys.
+
+    Phil, 26-Oct-2026. BTC #586's level was 80,154. BTC dipped under it from
+    09:30 to ~14:05 and turned up — the turn it was built for — but there was
+    no cash. Cash returned at 18:02; at 18:33 BTC slid back to $10 above the
+    level, the engine raised the stop over the market, a $1.60 uptick filled
+    it, and BTC kept falling. "it has gone already really bad" — "yes please".
+    """
+
+    def setUp(self):
+        import pandas as pd
+
+        self.pd = pd
+        self.broker = FakeCascadeBroker()
+        real_product = self.broker.get_product_by_symbol
+        self.broker.get_product_by_symbol = lambda s: {**real_product(s), "quote_asset": "USDT"}
+        self.broker.free_balances = {"USDT": 5.0}
+        self.engine = _mk_engine(self.broker)
+        self.engine.on_alert = lambda *a: None
+        self.campaign = _mk_campaign(self.engine, mode="live")
+        self.campaign.state = "TRENDLINE_ACTIVE"
+        leg = Leg(leg_id=1, trendline_id=1, low=99.5, touch_high=102.0, touch_timestamp=1200)
+        self.campaign.legs.append(leg)
+        build_fib_ladder_and_pool(self.campaign, leg)
+        plan_leg_orders(self.campaign, leg)
+        self.campaign.pending_usd = 20.0
+        self.campaign.collected = [[1, 2, 16.0, 97.0]]
+        self.campaign.pending_line = 96.0
+        self.campaign.pending_stop_price = 96.5
+        self.campaign.pending_limit_price = 96.55
+        self.campaign.pending_rev = 1
+
+    async def _pause_then_fund(self, *, market):
+        """No cash: the buy pauses. Then cash arrives with price at `market`."""
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": market}
+        await self.engine._place_pending_stop(self.campaign)
+        self.assertIn(self.campaign.campaign_id, self.engine._waiting_on_cash)
+        self.broker.free_balances = {"USDT": 200.0}
+        self.engine._free_quote_cache.clear()
+
+    def _buys(self):
+        return [o for o in self.broker.placed_orders if o["side"] == "buy"]
+
+    async def test_drifting_back_to_the_level_is_not_a_turn(self):
+        """The 18:33 buy: funded, price a hair above the trigger, no fresh dip."""
+        await self._pause_then_fund(market=96.51)
+        self.broker.candles_df = None  # no fresh 1m evidence of a dip
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertFalse(placed)
+        self.assertEqual(self._buys(), [])
+
+    async def test_a_fresh_dip_and_turn_after_the_cash_is_bought(self):
+        await self._pause_then_fund(market=96.51)
+        # First sync with cash: no dip seen yet, so it waits — and starts the clock.
+        self.assertFalse(await self.engine._place_pending_stop(self.campaign))
+        since = self.engine._needs_fresh_turn[self.campaign.campaign_id]
+        # Then a closed 1m bar, opened after the cash came back, trades under 96.5.
+        index = self.pd.to_datetime([since + 60], unit="s", utc=True)
+        self.broker.candles_df = self.pd.DataFrame(
+            [{"open": 96.6, "high": 96.7, "low": 96.40, "close": 96.55}], index=index
+        )
+        with patch("engine.cascade.time.time", lambda: since + 600):
+            placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        self.assertNotIn(self.campaign.campaign_id, self.engine._needs_fresh_turn)
+
+    async def test_a_dip_from_before_the_cash_does_not_count(self):
+        """BTC #586's morning dip happened while it had no cash. It must not
+        license a buy hours later."""
+        await self._pause_then_fund(market=96.51)
+        self.assertFalse(await self.engine._place_pending_stop(self.campaign))
+        since = self.engine._needs_fresh_turn[self.campaign.campaign_id]
+        index = self.pd.to_datetime([since - 3600], unit="s", utc=True)  # an hour BEFORE the cash
+        self.broker.candles_df = self.pd.DataFrame(
+            [{"open": 96.6, "high": 96.7, "low": 95.0, "close": 96.55}], index=index
+        )
+        with patch("engine.cascade.time.time", lambda: since + 600):
+            self.assertFalse(await self.engine._place_pending_stop(self.campaign))
+        self.assertEqual(self._buys(), [])
+
+    async def test_funded_with_price_under_the_level_rests_the_stop_as_normal(self):
+        """Below the trigger nothing has turned yet: a buy stop rests above the
+        market and Binance itself waits for the up-cross. That IS a fresh turn."""
+        await self._pause_then_fund(market=95.0)
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed)
+        self.assertAlmostEqual(self._buys()[0]["stop_price"], 96.5)
+
+    async def test_no_candles_means_wait_not_buy(self):
+        await self._pause_then_fund(market=96.51)
+
+        async def broken(*_a, **_k):
+            raise RuntimeError("candle fetch failed")
+
+        self.broker.async_get_candles = broken
+        self.assertFalse(await self.engine._place_pending_stop(self.campaign))
+
+    async def test_a_new_trigger_from_new_structure_is_already_fresh(self):
+        await self._pause_then_fund(market=96.51)
+        self.engine._set_pending_stop(
+            self.campaign, 96.40, Candle(timestamp=5000, open=96.6, high=96.7, low=96.3, close=96.4, timeframe="5m")
+        )
+        self.assertNotIn(self.campaign.campaign_id, self.engine._needs_fresh_turn)
+
+    async def test_a_buy_that_never_waited_for_cash_behaves_exactly_as_before(self):
+        self.broker.free_balances = {"USDT": 200.0}
+        self.broker.get_ticker = lambda s: {"symbol": s, "last_price": 96.52}
+        placed = await self.engine._place_pending_stop(self.campaign)
+        self.assertTrue(placed, "the live-cross raise still works when no pause happened")
+
+
 class CascadeStalePotHoldTests(unittest.IsolatedAsyncioTestCase):
     """The late/left-anchored start bug (BTCUSDT #3, 2026-07-24): a campaign
     started 2+ days after its mother candle replayed a fall that had already

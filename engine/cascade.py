@@ -2163,6 +2163,10 @@ class CascadeEngine:
         # mark has already been announced. One alert per position: a price
         # hovering on the mark must not ring the phone every time it crosses.
         self._exit_ready_told: Dict[str, tuple] = {}
+        # campaign_id -> epoch second its cash came back after a pause. Until a
+        # FRESH dip below the trigger is seen after that moment, the buy may not
+        # be raised just above the market — see _fresh_turn_seen.
+        self._needs_fresh_turn: Dict[str, int] = {}
         # broker id -> (free quote balance, monotonic time). One wallet read
         # serves every campaign in the same loop, not one each.
         self._free_quote_cache: Dict[int, tuple] = {}
@@ -3466,6 +3470,27 @@ class CascadeEngine:
         view["ready"] = True
         view["reason"] = f"At or above the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}"
         return view
+
+    async def _fresh_turn_seen(self, campaign: Campaign, stop: float) -> bool:
+        """Has price been back at or under the trigger since the cash returned?
+
+        Read from closed 1m candles opened after that moment. Unknown is "no":
+        without the candles there is no evidence of a turn, and waiting costs a
+        sync or two, while buying a fall costs money. A dip that has not closed
+        its minute yet is seen on the next sync.
+        """
+        since = self._needs_fresh_turn.get(campaign.campaign_id)
+        if since is None:
+            return True
+        try:
+            bars = await self._recent_closed_candles(campaign.symbol, "1m", since, venue=self.broker_for(campaign))
+        except Exception as exc:
+            _log.warning("[CASCADE] fresh-turn check failed for %s: %s", campaign.symbol, exc)
+            return False
+        if any(bar.low <= stop for bar in bars):
+            self._needs_fresh_turn.pop(campaign.campaign_id, None)
+            return True
+        return False
 
     def _announce_exit_ready(self) -> None:
         """Tell the phone once when a position reaches its 25% mark.
@@ -6111,6 +6136,8 @@ class CascadeEngine:
         campaign.pending_stop_price = stop
         campaign.pending_limit_price = limit
         campaign.pending_stop_ts = probe.timestamp
+        # A new trigger comes from new structure, so it is already fresh.
+        self._needs_fresh_turn.pop(campaign.campaign_id, None)
         # The trigger just moved — a new low re-armed the pot lower. Whatever
         # hold was in place is stale; let the next placement re-evaluate against
         # the fresh trigger (and re-log a hold if the market is still far above).
@@ -7326,10 +7353,20 @@ class CascadeEngine:
                 return False
             if campaign.campaign_id in self._waiting_on_cash:
                 self._waiting_on_cash.discard(campaign.campaign_id)
+                # The turn this buy was waiting for may have come and gone while
+                # it had no cash. Do not buy merely because price wandered back
+                # to the old level: wait for a fresh dip under it and a move up.
+                self._needs_fresh_turn[campaign.campaign_id] = int(time.time())
+                # `free` is None when the wallet could not be read; the buy
+                # then goes out and the exchange decides, and the message
+                # must not be the thing that breaks the attempt.
+                cash_note = f"${free:,.2f} free" if free is not None else "balance not readable"
                 self._log_event(
                     campaign,
                     "order",
-                    f"Cash is back (${free:,.2f} free) — resuming the ${campaign.pending_usd:,.2f} buy.",
+                    f"Cash is back ({cash_note}) — the ${campaign.pending_usd:,.2f} buy resumes, "
+                    f"and waits for a fresh turn at {campaign.pending_stop_price or 0:,.2f} rather than "
+                    f"buying where price happens to be now.",
                 )
         stop = campaign.pending_stop_price
         limit = campaign.pending_limit_price
@@ -7365,6 +7402,15 @@ class CascadeEngine:
         # preserved: the entry never fills on a downward move.
         eff_stop, eff_limit = stop, limit
         raised = bool(market and market >= stop)
+        if raised and campaign.campaign_id in self._needs_fresh_turn:
+            # Paused for cash, now funded, and price is above the trigger. That
+            # is not a turn — it is price drifting back to an old level, often
+            # on the way DOWN (BTC #586, 26-Oct-2026: missed the 14:05 turn for
+            # lack of cash, then bought at 18:33 as price slid back to the level
+            # and kept falling). Raise only if price has been back UNDER the
+            # trigger since the cash returned; otherwise wait.
+            if not await self._fresh_turn_seen(campaign, stop):
+                return False
         if raised:
             # How far above the trigger is the market? A legitimate raise is a
             # live cross — price ticked just over a freshly-set trigger within
@@ -7513,6 +7559,7 @@ class CascadeEngine:
             campaign.pending_order_id = order_id
             self._stale_pot_held.discard(campaign.campaign_id)
             self._no_cash_until.pop(campaign.campaign_id, None)
+            self._needs_fresh_turn.pop(campaign.campaign_id, None)
             # That buy just spent cash: the next campaign in this loop must not
             # judge itself against the balance from before it.
             self._free_quote_cache.pop(id(self.broker_for(campaign)), None)
@@ -7570,6 +7617,9 @@ class CascadeEngine:
         if _is_insufficient_balance_error(error):
             self._place_attempts.pop(campaign.campaign_id, None)
             self._no_cash_until[campaign.campaign_id] = time.monotonic() + NO_CASH_WAIT_SEC
+            # So that when cash does arrive, "Cash is back" fires and the buy
+            # waits for a fresh turn like any other paused buy.
+            self._waiting_on_cash.add(campaign.campaign_id)
             self._log_event(
                 campaign,
                 "warn",
