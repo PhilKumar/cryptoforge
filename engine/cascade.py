@@ -2167,6 +2167,10 @@ class CascadeEngine:
         # FRESH dip below the trigger is seen after that moment, the buy may not
         # be raised just above the market — see _fresh_turn_seen.
         self._needs_fresh_turn: Dict[str, int] = {}
+        # campaign_id -> the position (round count, average entry) that has
+        # reached its 25% mark. Once reached, Exit stays usable for that
+        # position while a sale still clears fees — see hand_exit_view.
+        self._exit_mark_reached: Dict[str, tuple] = {}
         # broker id -> (free quote balance, monotonic time). One wallet read
         # serves every campaign in the same loop, not one each.
         self._free_quote_cache: Dict[int, tuple] = {}
@@ -3463,12 +3467,32 @@ class CascadeEngine:
         if mark <= 0:
             view["reason"] = "No live price for this symbol yet."
             return view
-        if mark < trigger:
-            short_by = (trigger - mark) / trigger * 100
-            view["reason"] = f"{short_by:.2f}% below the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}"
+        # The mark is reached once per POSITION, and then Exit stays usable.
+        # Phil, 27-Oct-2026, PAXG #548: the alert fired at 4,059.20 against a
+        # mark of 4,059.14, he pressed Exit 37 seconds later, and was refused
+        # twice — "0.00% below the mark" — because price had slipped a few
+        # cents under it; the third press sold. A line that was crossed, alerted
+        # on and shown green must not switch off over cents. What it may never
+        # do is sell at a loss, so after the mark has been reached the only
+        # thing that disables Exit again is price falling below the level where
+        # a sale stops clearing fees and the minimum net.
+        position = (len(campaign.rounds), round(anchor, 8))
+        if mark >= trigger:
+            self._exit_mark_reached[campaign.campaign_id] = position
+            view["ready"] = True
+            view["reason"] = f"At or above the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}"
             return view
-        view["ready"] = True
-        view["reason"] = f"At or above the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}"
+        if self._exit_mark_reached.get(campaign.campaign_id) == position and mark >= floor:
+            view["ready"] = True
+            view["reason"] = (
+                f"Reached the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f}; price {mark:,.4f} is a little "
+                f"under it now but a sale still clears fees"
+            )
+            return view
+        view["reason"] = (
+            f"price {mark:,.4f} is under the {HAND_EXIT_FIB_LEVEL:.0%} mark of {trigger:,.4f} "
+            f"({(trigger - mark) / trigger * 100:.3f}% short)"
+        )
         return view
 
     async def _fresh_turn_seen(self, campaign: Campaign, stop: float) -> bool:

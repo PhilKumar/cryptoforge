@@ -64,7 +64,37 @@ class HandExitGateTests(unittest.TestCase):
         c = self._campaign(avg=100.0, mother=200.0, mark=124.9)
         view = self.engine.hand_exit_view(c)
         self.assertFalse(view["ready"])
-        self.assertIn("below", view["reason"])
+        # Prices, not a rounded "0.00% below" that tells nobody anything.
+        self.assertIn("124.9000", view["reason"])
+        self.assertIn("125.0000", view["reason"])
+
+    def test_once_reached_a_dip_of_cents_does_not_switch_it_off(self):
+        """Phil, 27-Oct-2026, PAXG #548: alerted at 4,059.20 over a mark of
+        4,059.14, refused twice 37 seconds later at a few cents under it."""
+        c = self._campaign(avg=100.0, mother=200.0, mark=125.2)
+        self.assertTrue(self.engine.hand_exit_view(c)["ready"])
+        self.engine._price_cache[self.engine._price_key(c)] = (124.95, 0.0)
+        view = self.engine.hand_exit_view(c)
+        self.assertTrue(view["ready"])
+        self.assertIn("clears fees", view["reason"])
+
+    def test_once_reached_it_still_never_sells_at_a_loss(self):
+        """The latch has a floor: below break-even after fees, Exit is off."""
+        c = self._campaign(avg=100.0, mother=200.0, mark=125.2)
+        self.engine.hand_exit_view(c)
+        self.engine._price_cache[self.engine._price_key(c)] = (100.05, 0.0)  # under fees both ways
+        self.assertFalse(self.engine.hand_exit_view(c)["ready"])
+
+    def test_a_new_position_has_to_reach_its_own_mark(self):
+        """Buying another rung makes a new average and a new mark; the old
+        latch does not carry over to it."""
+        c = self._campaign(avg=100.0, mother=200.0, mark=125.2)
+        self.engine.hand_exit_view(c)
+        c.all_fills.append(Fill(price=60.0, quantity=1.0, level=4, leg_id=1, timestamp=0))
+        c.filled_base_qty = 2.0
+        recompute_avg_entry_price(c)  # avg 80 -> mark 110
+        self.engine._price_cache[self.engine._price_key(c)] = (105.0, 0.0)
+        self.assertFalse(self.engine.hand_exit_view(c)["ready"])
 
     def test_a_shallow_entry_still_may_not_sell_at_a_loss(self):
         """The fee trap the resting target already has a floor for: a quarter
