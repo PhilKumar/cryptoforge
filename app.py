@@ -70,6 +70,7 @@ import config  # must be first — calls load_dotenv()
 import webauthn_auth as _webauthn_mod
 from broker import get_broker_client, get_broker_name, get_supported_brokers
 from broker.delta import get_candles_binance
+from engine import scalp_chart as _scalp_chart_mod
 from engine.auto_cascade_fib import AutoCascadeFib, PaperOnlyBroker
 from engine.backtest import run_backtest
 from engine.billing import (
@@ -8161,6 +8162,7 @@ async def _broadcast_scalp_update(status: dict) -> None:
         _queue_runtime_snapshot(_BUCKET_SCALP_RUNTIME, _snapshot_scalp_runtime(status))
     except Exception as exc:
         _logger.error("[SCALP] Failed to persist runtime state: %s", exc)
+    _scalp_check_alarms(status)
     payload = {"source": "scalp", "type": "scalp_status", "status": status}
     for ws in ws_clients.copy():
         try:
@@ -8340,6 +8342,173 @@ async def kill_scalp(request: Request):
     _persist_scalp_runtime_snapshot(eng)
     payload = _attach_scalp_runtime_metrics(result, eng)
     return JSONResponse(payload, status_code=200 if result.get("status") == "ok" else 502)
+
+
+# ── THE SCALP DESK'S CHART ─────────────────────────────────────────────────
+# Phil, 2026-11-04: "Please create the same kinda scalp page for cryptoforge as
+# well same as that of philforge". The chart beside the order form draws the
+# coin the form is on, from the Scalp broker's own history (the same market the
+# engine prices from), with a 20-EMA and each UTC day's CPR. The page grows the
+# forming bar from the engine's live price, so this is asked for only on a new
+# coin or timeframe and every 20 seconds -- and cached, so two tabs cost one.
+_SCALP_CHART_CACHE: Dict[tuple, tuple] = {}
+_SCALP_CHART_TTL_SEC = 10.0
+_SCALP_CHART_DAILY_TTL_SEC = 300.0
+# How far back a broker that fetches FROM a date is asked to reach. Binance is
+# asked for its newest 1000 bars instead: given a start it returns the 1000
+# OLDEST from there, which on 1m would stop hours short of now.
+_SCALP_CHART_LOOKBACK_DAYS = {"1m": 1, "3m": 3, "5m": 5, "15m": 12, "1h": 45, "1d": 20}
+
+
+def _scalp_chart_frame(client, symbol: str, resolution: str):
+    name = _normalize_scalp_broker_name(getattr(client, "broker_name", None))
+    frame = None
+    try:
+        if name == "binance":
+            frame = client.get_candles(symbol, resolution=resolution)
+        else:
+            days = _SCALP_CHART_LOOKBACK_DAYS.get(resolution, 5)
+            start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+            frame = client.get_candles(symbol, resolution=resolution, start=start)
+    except Exception as exc:
+        _logger.warning("[SCALP CHART] %s %s %s candles failed: %s", name, symbol, resolution, exc)
+    if frame is not None and not getattr(frame, "empty", True):
+        return frame
+    # Binance's public history, for a coin the broker could not chart.
+    pair = "PAXGUSDT" if symbol == "PAXGUSD" else symbol
+    if not pair.endswith("USDT"):
+        return frame
+    days = _SCALP_CHART_LOOKBACK_DAYS.get(resolution, 5)
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    try:
+        return get_candles_binance(pair, resolution, start=start)
+    except Exception as exc:
+        _logger.warning("[SCALP CHART] Binance fallback %s %s failed: %s", pair, resolution, exc)
+        return frame
+
+
+async def _scalp_chart_candles(client, symbol: str, resolution: str, ttl: float) -> list:
+    key = (_normalize_scalp_broker_name(getattr(client, "broker_name", None)), symbol, resolution)
+    cached = _SCALP_CHART_CACHE.get(key)
+    now = time.monotonic()
+    if cached and now - cached[0] < ttl:
+        return cached[1]
+    frame = await asyncio.to_thread(_scalp_chart_frame, client, symbol, resolution)
+    candles = _scalp_chart_mod.frame_to_candles(frame)
+    if candles:
+        _SCALP_CHART_CACHE[key] = (now, candles)
+    elif cached:
+        return cached[1]  # a failed refresh keeps the last good bars on screen
+    return candles
+
+
+@app.get("/api/scalp/chart")
+async def scalp_chart(symbol: str = "BTCUSDT", timeframe: str = "5m"):
+    symbol = _normalize_scalp_symbol(symbol)
+    timeframe = str(timeframe or "5m").strip()
+    if timeframe not in _scalp_chart_mod.TF_SECONDS:
+        raise HTTPException(
+            status_code=422, detail=f"timeframe must be one of {', '.join(_scalp_chart_mod.CHART_TIMEFRAMES)}"
+        )
+    client = _scalp_broker_client()
+    candles = await _scalp_chart_candles(client, symbol, timeframe, _SCALP_CHART_TTL_SEC)
+    if not candles:
+        return JSONResponse(
+            {"status": "error", "detail": f"No {timeframe} candles for {symbol} from the Scalp broker right now"},
+            status_code=502,
+        )
+    try:
+        daily = await _scalp_chart_candles(client, symbol, "1d", _SCALP_CHART_DAILY_TTL_SEC)
+    except Exception:
+        daily = []
+    payload = _scalp_chart_mod.build_chart_payload(symbol, timeframe, candles, daily)
+    payload["broker"] = _normalize_scalp_broker_name(getattr(client, "broker_name", None))
+    return payload
+
+
+# ── PRICE ALARMS on the Scalp chart ─────────────────────────────────────────
+# Right-click the chart for an alarm at that price. Kept here so it rings with
+# the page shut: every status the Scalp engine pushes (each tick of the watched
+# coin and of each open trade) is checked against the list, and the page also
+# reports a level its own candles reached between two ticks. Rung once each --
+# Telegram, and on any open page a beep and a banner.
+_BUCKET_SCALP_ALARMS = "scalp_alarms"
+_scalp_alarm_books: Dict[str, object] = {}
+
+
+def _scalp_alarms():
+    db = str(_STATE_DB_FILE)
+    book = _scalp_alarm_books.get(db)
+    if book is None:
+        book = _scalp_chart_mod.AlarmBook(
+            load=lambda: _get_state_store().get(_BUCKET_SCALP_ALARMS, "book", default={}),
+            save=lambda data: _get_state_store().put(_BUCKET_SCALP_ALARMS, "book", data),
+        )
+        _scalp_alarm_books.clear()
+        _scalp_alarm_books[db] = book
+    return book
+
+
+def _scalp_alarm_rang(rung: dict) -> None:
+    title, body = _scalp_chart_mod.alarm_text(rung)
+    try:
+        alerter.alert(title, body, level="info")
+    except Exception as exc:
+        _logger.warning("[ALARM] Telegram failed: %s", exc)
+    _logger.info("[ALARM] %s %s rung at %s", rung.get("symbol"), rung.get("price"), rung.get("hit"))
+
+
+def _scalp_check_alarms(status: dict) -> None:
+    try:
+        book = _scalp_alarms()
+        if not book.count():
+            return
+        for rung in book.check(_scalp_chart_mod.prices_from_status(status)):
+            _scalp_alarm_rang(rung)
+    except Exception:
+        _logger.exception("[ALARM] check failed")
+
+
+@app.get("/api/scalp/alarms")
+async def scalp_alarms_list():
+    return _scalp_alarms().listing()
+
+
+@app.post("/api/scalp/alarms")
+async def scalp_alarm_add(request: Request):
+    check_rate_limit("scalp_alarm_add", max_calls=20, window_sec=30, client_ip=_client_ip(request))
+    body = await request.json()
+    symbol = _normalize_scalp_symbol((body or {}).get("symbol"))
+    try:
+        price = float((body or {}).get("price") or 0)
+        now_price = float((body or {}).get("now") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="price must be a number")
+    try:
+        alarm = _scalp_alarms().add(symbol, price, now_price)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"status": "ok", "alarm": alarm}
+
+
+@app.delete("/api/scalp/alarms/{alarm_id}")
+async def scalp_alarm_remove(alarm_id: str):
+    return {"status": "ok", "removed": _scalp_alarms().remove(str(alarm_id))}
+
+
+@app.post("/api/scalp/alarms/{alarm_id}/fire")
+async def scalp_alarm_fire(alarm_id: str, request: Request):
+    """The page saw the level reached first (a candle's high or low between two
+    ticks): rung here, so Telegram hears of it once and the list forgets it."""
+    body = await request.json()
+    try:
+        price = float((body or {}).get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    rung = _scalp_alarms().fire(str(alarm_id), price)
+    if rung:
+        _scalp_alarm_rang(rung)
+    return {"status": "ok", "fired": rung}
 
 
 @app.post("/api/scalp/enter")

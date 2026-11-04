@@ -7557,7 +7557,9 @@ function cfSyncScalpLogPanelHeight() {
     var logCard = document.querySelector('.cf-scalp-log-card');
     var logEl = document.getElementById('cf-scalp-event-log');
     if (!formCard || !logCard || !logEl) return;
-    if (!scalpPage || !scalpPage.classList.contains('active-page') || window.innerWidth <= 1180) {
+    // Beside the chart the log sits UNDER the form, so it is not stretched
+    // to the form's height (the Scalp desk, 2026-11-04).
+    if (!scalpPage || !scalpPage.classList.contains('active-page') || window.innerWidth <= 1180 || logCard.closest('.cf-scalp-desk')) {
       logCard.style.height = '';
       logEl.style.height = '';
       return;

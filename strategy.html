@@ -16,6 +16,7 @@
 <script src="/static/cryptoforge-boot.js?v=20260720-18"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/cryptoforge-app.css?v=20261009-if-targets-hit">
+<link rel="stylesheet" href="/static/cryptoforge-scalp-desk.css?v=20261104-scalp-desk">
 <link rel="stylesheet" href="/static/cryptoforge-pwa.css?v=20260823-responsive-1">
 <link rel="stylesheet" href="/static/error-handler.css?v=20260720-18">
 <script src="/static/error-handler.js?v=20260720-18" defer></script>
@@ -2760,7 +2761,49 @@
     <div class="pagination-bar" id="cf-scalp-active-pagination" style="display:none;"></div>
   </div>
 
-  <div class="cf-scalp-workbench cf-scalp-workbench-wide">
+  <!-- THE SCALP DESK (Phil, 2026-11-04: "the same kinda scalp page for
+       cryptoforge as well same as that of philforge"): the form's coin charted
+       beside the form, with B and S on the chart. Wired by
+       static/cryptoforge-scalp-desk.js; drawn by cryptoforge-scalp-chart.js. -->
+  <div class="cf-scalp-desk">
+  <section class="card cf-desk-dock" id="cf-scalp-dock" aria-label="Scalp chart">
+    <div class="cf-desk-toolbar">
+      <div class="cf-desk-title">
+        <h3 id="cf-scalp-dock-title">Chart</h3>
+        <div id="cf-scalp-dock-meta">The coin in the form</div>
+      </div>
+      <div class="cf-desk-actions" id="cf-scalp-dock-actions"></div>
+    </div>
+    <div id="cf-scalp-dock-body" class="cf-desk-body"><div class="cf-desk-empty">Loading the chart…</div></div>
+    <div class="cf-desk-hud" id="cf-scalp-dock-hud" hidden>
+      <div class="cf-desk-ticket" id="cf-desk-ticket" role="group" aria-label="Trade this coin">
+        <button type="button" class="cf-desk-ticket-more" id="cf-desk-ticket-more" aria-expanded="false" aria-controls="cf-desk-ticket-row" aria-label="Show mode and order type" title="Show mode and order type">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="1.5" y="1.5" width="5.2" height="5.2" rx="1.2"/><rect x="9.3" y="1.5" width="5.2" height="5.2" rx="1.2"/><rect x="1.5" y="9.3" width="5.2" height="5.2" rx="1.2"/><rect x="9.3" y="9.3" width="5.2" height="5.2" rx="1.2"/></svg>
+        </button>
+        <button type="button" class="read-only-hide cf-desk-ticket-btn is-buy" id="cf-desk-ticket-buy">B</button>
+        <div class="cf-desk-ticket-size" role="group" aria-label="Size">
+          <button type="button" class="cf-desk-ticket-step" data-desk-step="-1" aria-label="Smaller" title="Smaller">&minus;</button>
+          <button type="button" class="cf-desk-ticket-unit" id="cf-desk-ticket-unit" data-desk-unit="1">$</button>
+          <input type="number" class="cf-desk-ticket-input" id="cf-desk-ticket-size" min="0" step="any" aria-label="Size" title="Size: the form's size">
+          <button type="button" class="cf-desk-ticket-step" data-desk-step="1" aria-label="Larger" title="Larger">+</button>
+        </div>
+        <button type="button" class="read-only-hide cf-desk-ticket-btn is-sell" id="cf-desk-ticket-sell">S</button>
+        <div class="cf-desk-ticket-row" id="cf-desk-ticket-row" hidden>
+          <div class="cf-desk-seg" role="group" aria-label="Mode">
+            <button type="button" data-desk-mode="paper" aria-pressed="false">Paper</button>
+            <button type="button" class="read-only-hide" data-desk-mode="live" aria-pressed="false">Live</button>
+          </div>
+          <span class="cf-desk-chip" id="cf-desk-ticket-mode">PAPER</span>
+          <span class="cf-desk-chip" id="cf-desk-ticket-order" title="The form's order type">MARKET</span>
+        </div>
+        <span class="cf-desk-ticket-status" id="cf-desk-ticket-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="cf-desk-ohlc" id="cf-desk-ohlc" aria-live="off"></div>
+      <div class="cf-desk-pills" id="cf-desk-pills"></div>
+    </div>
+  </section>
+
+  <div class="cf-scalp-workbench cf-scalp-workbench-wide cf-desk-rail">
 
     <div class="card cf-scalp-form-card">
       <h3 class="cf-scalp-panel-title">Velocity Entry</h3>
@@ -2916,6 +2959,7 @@
       </div>
     </div>
   </div>
+  </div><!-- /cf-scalp-desk -->
 
   <div class="card table-panel">
     <div class="table-toolbar">
@@ -3465,6 +3509,8 @@
   </div><!-- end modal panel -->
 </div><!-- end #run-detail-modal -->
 <script src="/static/cryptoforge-app.js?v=20261009-if-targets-hit" defer></script>
+<script src="/static/cryptoforge-scalp-chart.js?v=20261104-scalp-desk" defer></script>
+<script src="/static/cryptoforge-scalp-desk.js?v=20261104-scalp-desk" defer></script>
 <script src="/static/cryptoforge-admin.js?v=20260720-18" defer></script>
 <script src="/static/cryptoforge-account.js?v=20260817-1" defer></script>
 
