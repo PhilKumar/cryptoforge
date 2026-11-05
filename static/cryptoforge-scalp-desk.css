@@ -27,6 +27,8 @@
 /* The size field carries a mode select AND the number; at the rail's width
    half a row cut 10000 to "100". It takes the whole row. */
 .cf-desk-rail .cf-scalp-field:has(#cf-scalp-qty) { grid-column: 1 / -1; }
+/* Leverage and order type share a row, rather than leverage alone on one. */
+.cf-desk-rail .cf-scalp-field-full:has(#cf-scalp-order-type) { grid-column: auto; }
 .cf-desk-rail .cf-scalp-event-log { max-height: 340px; }
 @media (max-width: 1180px) {
   .cf-scalp-desk { grid-template-columns: minmax(0, 1fr); }
@@ -341,10 +343,71 @@ body.cf-desk-full #cf-scalp-dock .cf-desk-toolbar { padding-right: 140px; }
 [data-theme="light"] .cf-desk-tools .cf-desk-magnet.is-on,
 [data-theme="light"] .cf-desk-tools .is-armed { color: #b45309; }
 
-@media (max-width: 640px) {
-  .cf-desk-dock { padding: 12px 10px; }
-  #cf-scalp-dock .pf-bench-canvas-host { height: min(62vh, 480px); min-height: 320px; }
-  .cf-desk-empty { min-height: 320px; }
+/* ── THE PHONE (Phil, 2026-11-05: "the mobile view is awkward and no
+   alignment and no proper view"). One column, in the order a scalper reads
+   it: the engine line, the CHART, the open positions, the order form, and
+   only then the entry-lane detail and the history. The status bar stops
+   being three full-width slabs; the chart's toolbar is one row (pinch zooms,
+   so the zoom buttons go); the plot takes the whole width. ── */
+@media (max-width: 760px) {
+  #scalp-page.active-page { display: flex; flex-direction: column; }
+  #scalp-page > .cf-scalp-desk { display: contents; }
+  #scalp-page > .cf-scalp-status-bar { order: 1; }
+  #scalp-page #cf-scalp-dock { order: 2; margin-bottom: 12px; }
+  #scalp-page > .table-panel:has(#cf-scalp-active-table) { order: 3; }
+  #scalp-page > #cf-scalp-pending-wrap { order: 4; }
+  #scalp-page .cf-desk-rail { order: 5; margin-bottom: 12px; gap: 12px; }
+  #scalp-page > .cf-scalp-entry-lane { order: 6; }
+  #scalp-page > .table-panel:has(#cf-scalp-history-table) { order: 7; }
+  #scalp-page > .card { margin-bottom: 12px !important; }
+
+  /* The engine line: state and P&L on top, feed and execution side by side,
+     the three actions as one row of small buttons. */
+  #scalp-page .cf-scalp-status-bar { padding: 10px 12px; gap: 8px; }
+  #scalp-page .cf-scalp-status-main { justify-content: space-between; gap: 8px; }
+  #scalp-page .cf-scalp-status-meta { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; }
+  #scalp-page .cf-scalp-status-meta .cf-status-main { font-size: 11px; }
+  #scalp-page .cf-scalp-meta-detail { font-size: 10.5px; }
+  #scalp-page .cf-scalp-status-actions { grid-column: 1 / -1; gap: 8px; }
+  #scalp-page .cf-scalp-status-button-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  #scalp-page .cf-scalp-status-button-row .btn { min-height: 34px; padding: 6px 4px; font-size: 11.5px; gap: 4px; }
+
+  /* The entry lane's four readings, two by two and small. */
+  #scalp-page .cf-scalp-entry-lane { padding: 12px; }
+  #scalp-page .cf-scalp-entry-top { flex-direction: row; align-items: center; }
+  #scalp-page .cf-scalp-entry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #scalp-page .cf-scalp-entry-metric { padding: 8px 10px; }
+
+  /* The chart. */
+  .cf-desk-dock { padding: 10px 8px 8px; }
+  .cf-desk-toolbar { gap: 8px; padding: 0 2px 8px; }
+  .cf-desk-title { display: flex; align-items: baseline; gap: 8px; }
+  .cf-desk-title h3 { font-size: 15px; margin: 0; }
+  .cf-desk-studio { margin-right: 0; margin-left: auto; }
+  .cf-desk-actions { flex: 1 1 100%; justify-content: stretch; }
+  #cf-scalp-dock .pf-chart-strip { flex: 1 1 auto; flex-wrap: nowrap; justify-content: space-between; gap: 6px; }
+  #cf-scalp-dock .pf-chart-strip-zoom { display: none; }
+  #cf-scalp-dock .pf-chart-strip-tfs { flex: 1 1 auto; justify-content: space-between; }
+  #cf-scalp-dock .terminal-cascade-tf-option { flex: 1 1 0; min-height: 30px; padding: 4px 0; }
+  #cf-scalp-dock .pf-bench-canvas-host { height: clamp(380px, calc(100svh - 220px), 560px); min-height: 0; }
+  .cf-desk-empty { min-height: 380px; }
+  .cf-desk-ohlc.is-legend { font-size: 10px; }
+  .cf-desk-studio-tray.is-row.is-open { max-height: 200px; }
+  .cf-desk-tools { gap: 5px; }
+  .cf-desk-tools .cf-desk-control { flex: 1 0 auto; height: 32px; }
+
+  /* The order form: two fields a row, the help lines gone (the status line
+     under BUY/SELL still says what went wrong), BUY and SELL side by side. */
+  #scalp-page .cf-desk-rail .cf-scalp-form-card { padding: 14px 12px; }
+  #scalp-page .cf-desk-rail .cf-scalp-panel-title { margin-bottom: 10px; }
+  #scalp-page .cf-desk-rail .cf-scalp-form-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+  #scalp-page .cf-desk-rail .cf-scalp-field-full { grid-column: 1 / -1; }
+  #scalp-page .cf-desk-rail .cf-scalp-field-full:has(#cf-scalp-order-type) { grid-column: auto; }
+  #scalp-page .cf-desk-rail .cf-scalp-field label { font-size: 10.5px; }
+  #scalp-page .cf-desk-rail .cf-scalp-form-card .cf-scalp-input { min-height: 42px; padding-top: 6px; padding-bottom: 6px; }
+  #scalp-page .cf-desk-rail .cf-scalp-form-card .cf-scalp-help:not(#cf-scalp-mode-help):not(#cf-scalp-broker-help) { display: none; }
+  #scalp-page .cf-desk-rail .cf-scalp-actions-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  #scalp-page .cf-desk-rail .cf-scalp-log-card { padding: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .cf-desk-studio-tray, .cf-desk-studio-tray.is-open, .cf-desk-studio-arrow { transition: none !important; }

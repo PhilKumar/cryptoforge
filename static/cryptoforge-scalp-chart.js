@@ -748,8 +748,11 @@ function _pfChartCanvasProjection(c) {
   // exact geometry to the real Canvas surface (rather than retaining 150 CSS
   // pixels at every width), so both engines put the same payload in the same
   // horizontal lane. The floors keep labels readable on a narrow screen.
-  var padL = Math.max(86, 150 * c.w / 1440);
-  var padR = Math.max(42, 62 * c.w / 1440);
+  // payload.padLeft: a phone's chart gives its candles the room the 86px
+  // label gutter would take (the Scalp desk, 2026-11-05: on a 390px screen
+  // that gutter left the candles a 200px strip).
+  var padL = Number(c.data && c.data.padLeft) > 0 ? Number(c.data.padLeft) : Math.max(86, 150 * c.w / 1440);
+  var padR = Number(c.data && c.data.padRight) > 0 ? Number(c.data.padRight) : Math.max(42, 62 * c.w / 1440);
   // A chart that lays a row of controls over its top asks for room for it
   // (payload.padTop), so the plot's first line starts below them.
   var padT = Math.max(18, 26 * c.h / 660, Number((c.data && c.data.padTop) || 0) || 0);
@@ -832,7 +835,10 @@ function _pfChartCanvasGridAxes(c, p, PAL) {
     var y = p.yOf(price);
     ctx.strokeStyle = PAL.grid;
     ctx.beginPath(); ctx.moveTo(p.padL, y); ctx.lineTo(p.padL + p.plotW, y); ctx.stroke();
-    _pfChartCanvasText(ctx, _pfChartPrice(price),
+    // Gridline prices are round numbers on a big coin, a coin's own fixed
+    // decimals on a small one -- never a mix of "79,523.5" and "78,591.38".
+    var axisText = Math.abs(price) >= 1000 ? Math.round(price).toLocaleString('en-US') : _pfChartPrice(price, true);
+    _pfChartCanvasText(ctx, axisText,
       p.padL + p.plotW + 6, y, PAL.axis, 9.5, 'left', null, p.fontScale);
     labels++;
   }
@@ -846,8 +852,12 @@ function _pfChartCanvasGridAxes(c, p, PAL) {
     var ticks = Math.min(6, Math.max(2, Math.floor(p.plotW / 95)), to - from + 1);
     for (var i = 0; i < ticks; i++) {
       var ci = Math.round(from + (to - from) * (i / Math.max(ticks - 1, 1)));
-      _pfChartCanvasText(ctx, _pfChartIst(candles[ci].t), p.xOf(candles[ci].t), c.h - 8,
-        PAL.axis, 9.5, 'center', null, p.fontScale);
+      // Kept whole inside the canvas: on a narrow gutter the first and last
+      // labels, centred on their bars, ran off the edges.
+      ctx.font = '400 ' + (9.5 * (p.fontScale || 1)) + 'px monospace';
+      var tickText = _pfChartIst(candles[ci].t), half = ctx.measureText(tickText).width / 2 + 2;
+      var tickX = Math.min(Math.max(p.xOf(candles[ci].t), half), c.w - half);
+      _pfChartCanvasText(ctx, tickText, tickX, c.h - 8, PAL.axis, 9.5, 'center', null, p.fontScale);
       labels++;
     }
   }

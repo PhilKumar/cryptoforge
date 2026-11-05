@@ -213,6 +213,17 @@
     return out;
   }
 
+  // A phone: the dock is narrower than the desktop ticket row.
+  function narrowDock() {
+    var dock = $('cf-scalp-dock');
+    return !!dock && dock.getBoundingClientRect().width > 0 && dock.getBoundingClientRect().width < 600;
+  }
+  // On a phone a level is named, not priced: "R4 (80,810.00)" over a 300px
+  // plot covered the candles. The price is on the axis and under the crosshair.
+  function shortLabel(label, narrow) {
+    return narrow ? String(label || '').replace(/\s*\(.*\)$/, '') : label;
+  }
+
   function isEma(ov) { return !!ov && (ov.group === 'ema' || /^EMA\b/.test(String(ov.label || ''))); }
 
   // ── drawings, per coin ───────────────────────────────────────
@@ -325,14 +336,16 @@
     } else {
       data.indicators = data._base.indicators;
     }
+    var narrow = narrowDock();
     var valued = function (label, pts) {
       var last = Array.isArray(pts) && pts.length ? Number(pts[pts.length - 1].price) : NaN;
-      return isFinite(last) ? label + ' (' + price(last, true) + ')' : label;
+      return isFinite(last) && !narrow ? label + ' (' + price(last, true) + ')' : label;
     };
     var overlays = data._base.overlays.filter(function (ov) {
       return (cprOn || !ov || ov.group !== 'cpr') && (emaOn || !isEma(ov));
     }).map(function (ov) {
-      return isEma(ov) && ov.label ? Object.assign({}, ov, { label: valued(String(ov.label).replace(/\s*\(.*\)$/, ''), ov.points) }) : ov;
+      if (isEma(ov) && ov.label) return Object.assign({}, ov, { label: valued(String(ov.label).replace(/\s*\(.*\)$/, ''), ov.points) });
+      return narrow && ov && ov.label ? Object.assign({}, ov, { label: shortLabel(ov.label, true) }) : ov;
     });
     var lines = data._base.lines.slice();
     if (stOn) {
@@ -358,8 +371,10 @@
     if (!(drawingNow && Array.isArray(data.drawings))) data.drawings = drawingsFor(key);
     data.onDrawingsChange = function (list, meta) { keepDrawings(key, list, meta); };
     data.onDraw = function () { hudTrades(); };
-    data.fontFloor = 1.05;
+    data.fontFloor = narrow ? 0.95 : 1.05;
     data.padTop = 43;
+    data.padLeft = narrow ? 24 : 0;
+    data.padRight = narrow ? 58 : 0;
     data.rsiPaneH = Number(stored('cf_scalp_rsi_pane_h')) || 0;
     data.onRsiResize = function (h) { store('cf_scalp_rsi_pane_h', String(h)); };
     data.magnet = magnetOn;
@@ -533,9 +548,18 @@
       tray.style.left = tray.style.top = tray.style.maxWidth = '';
     }
   }
+  var wasNarrow = null, narrowTimer = 0;
   window.addEventListener('resize', function () {
     var drawer = document.querySelector('#cf-scalp-dock .cf-desk-studio');
     if (drawer) placeStudio(drawer);
+    // Turning a phone, or a window dragged across the phone width: the labels
+    // and the left gutter follow.
+    clearTimeout(narrowTimer);
+    narrowTimer = setTimeout(function () {
+      var now = narrowDock();
+      if (wasNarrow !== null && now !== wasNarrow) redecorate();
+      wasNarrow = now;
+    }, 150);
   });
   var studioTimer = null;
   function studioDrawer(tools) {

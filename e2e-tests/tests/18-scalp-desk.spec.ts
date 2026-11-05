@@ -109,4 +109,31 @@ test.describe('The Scalp desk', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#cf-desk-alarm-menu')).toHaveCount(0);
   });
+
+  // Phil, 2026-11-05: "the mobile view is awkward and no alignment and no
+  // proper view". On a phone the chart comes straight after the engine line,
+  // fills the width, and nothing pushes the page sideways.
+  test('on a phone the chart comes first and fits', async ({ page }) => {
+    await openDesk(page, []);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(600);
+    const at = await page.evaluate(() => {
+      const top = (s: string) => document.querySelector(s)!.getBoundingClientRect().top;
+      const host = document.querySelector('#cf-scalp-dock #pf-bench-canvas-host')!.getBoundingClientRect();
+      const tfs = [...document.querySelectorAll('#cf-scalp-dock [data-strip-tf]')].map((b) => Math.round(b.getBoundingClientRect().top));
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        chart: top('#cf-scalp-dock'), positions: top('#cf-scalp-active-table'), form: top('.cf-scalp-form-card'),
+        status: top('.cf-scalp-status-bar'), hostWidth: host.width, oneRow: new Set(tfs).size === 1,
+        padLeft: (window as any).cfScalpDesk.state().shown.data.padLeft,
+      };
+    });
+    expect(at.overflow).toBeLessThanOrEqual(1);
+    expect(at.status).toBeLessThan(at.chart);
+    expect(at.chart).toBeLessThan(at.positions);
+    expect(at.positions).toBeLessThan(at.form);
+    expect(at.hostWidth).toBeGreaterThan(320);
+    expect(at.oneRow).toBe(true);
+    expect(at.padLeft).toBeLessThan(40);
+  });
 });
